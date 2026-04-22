@@ -10,6 +10,9 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+mod master_clock;
+pub use master_clock::*;
+
 #[derive(Clone, Copy, Debug)]
 pub enum Timestamp {
     Instant(Instant),

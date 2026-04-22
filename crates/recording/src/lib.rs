@@ -21,6 +21,7 @@ pub use resolution_limits::{H264_MAX_DIMENSION, calculate_gpu_compatible_size};
 pub mod test_sources;
 
 pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};
+pub use output_pipeline::oop_muxer;
 pub use output_pipeline::*;
 pub use sources::screen_capture;
 

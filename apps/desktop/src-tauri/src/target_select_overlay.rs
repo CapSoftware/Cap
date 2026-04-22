@@ -172,25 +172,21 @@ pub async fn open_target_select_overlays(
         let app = app.clone();
 
         async move {
-            loop {
-                let Some((display, window)) = read_target_under_cursor(
-                    || crate::app_is_exiting(&app),
-                    || {
-                        focused_target
-                            .as_ref()
-                            .map(|v| v.display())
-                            .unwrap_or_else(scap_targets::Display::get_containing_cursor)
-                    },
-                    || {
-                        focused_target
-                            .as_ref()
-                            .map(|v| v.window().and_then(|id| scap_targets::Window::from_id(&id)))
-                            .unwrap_or_else(scap_targets::Window::get_topmost_at_cursor)
-                    },
-                ) else {
-                    break;
-                };
-
+            while let Some((display, window)) = read_target_under_cursor(
+                || crate::app_is_exiting(&app),
+                || {
+                    focused_target
+                        .as_ref()
+                        .map(|v| v.display())
+                        .unwrap_or_else(scap_targets::Display::get_containing_cursor)
+                },
+                || {
+                    focused_target
+                        .as_ref()
+                        .map(|v| v.window().and_then(|id| scap_targets::Window::from_id(&id)))
+                        .unwrap_or_else(scap_targets::Window::get_topmost_at_cursor)
+                },
+            ) {
                 let _ = TargetUnderCursor {
                     display_id: display.map(|d| d.id()),
                     window: window.and_then(|w| {

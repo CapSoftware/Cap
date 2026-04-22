@@ -612,37 +612,53 @@ impl MP4Encoder {
             return Err(QueueFrameError::NotReadyForMore);
         }
 
-        let processed_frame: std::borrow::Cow<'_, frame::Audio> =
-            if let Some(resampler) = &mut self.audio_resampler {
-                let mut resampled = frame::Audio::empty();
-                match resampler.run(frame, &mut resampled) {
-                    Ok(_) => {
-                        resampled.set_rate(self.audio_output_rate);
-                        if resampled.samples() == 0 {
-                            warn!(
-                                input_samples = frame.samples(),
-                                input_rate = frame.rate(),
-                                output_rate = self.audio_output_rate,
-                                "Audio resampling produced 0 samples"
-                            );
-                            return Ok(());
-                        }
-                        std::borrow::Cow::Owned(resampled)
-                    }
-                    Err(e) => {
-                        error!(
-                            error = %e,
+        let processed_frame: std::borrow::Cow<'_, frame::Audio> = if let Some(resampler) =
+            &mut self.audio_resampler
+        {
+            let target = *resampler.output();
+            let src_rate = resampler.input().rate.max(1) as u64;
+            let dst_rate = target.rate.max(1) as u64;
+            let pending_output_samples = resampler
+                .delay()
+                .map(|d| d.output.max(0) as u64)
+                .unwrap_or(0);
+            let resampled_from_input = (frame.samples() as u64)
+                .saturating_mul(dst_rate)
+                .div_ceil(src_rate);
+            let capacity = pending_output_samples
+                .saturating_add(resampled_from_input)
+                .saturating_add(16)
+                .min(i32::MAX as u64) as usize;
+
+            let mut resampled = frame::Audio::new(target.format, capacity, target.channel_layout);
+            match resampler.run(frame, &mut resampled) {
+                Ok(_) => {
+                    resampled.set_rate(self.audio_output_rate);
+                    if resampled.samples() == 0 {
+                        warn!(
                             input_samples = frame.samples(),
                             input_rate = frame.rate(),
                             output_rate = self.audio_output_rate,
-                            "Audio resampling failed"
+                            "Audio resampling produced 0 samples"
                         );
-                        return Err(QueueFrameError::ResamplingFailed(e));
+                        return Ok(());
                     }
+                    std::borrow::Cow::Owned(resampled)
                 }
-            } else {
-                std::borrow::Cow::Borrowed(frame)
-            };
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        input_samples = frame.samples(),
+                        input_rate = frame.rate(),
+                        output_rate = self.audio_output_rate,
+                        "Audio resampling failed"
+                    );
+                    return Err(QueueFrameError::ResamplingFailed(e));
+                }
+            }
+        } else {
+            std::borrow::Cow::Borrowed(frame)
+        };
 
         let frame = processed_frame.as_ref();
 

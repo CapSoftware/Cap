@@ -1,13 +1,13 @@
 use crate::{
     feeds::microphone::{self, MicrophoneFeedLock},
     output_pipeline::{AudioFrame, AudioSource, PipelineHealthEvent, emit_health},
+    sources::audio_mixer::AudioMixer,
 };
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cpal::SampleFormat;
 use futures::{SinkExt, channel::mpsc};
 use kameo::error::SendError;
 use std::{
-    borrow::Cow,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -103,9 +103,31 @@ impl MicResampler {
         );
 
         let input_frame = source_info.wrap_frame(data);
-        let mut output = ffmpeg::frame::Audio::empty();
+        let input_samples = input_frame.samples();
+
+        let target = *self.context.output();
+        let src_rate = source_rate.max(1) as u64;
+        let dst_rate = target.rate.max(1) as u64;
+        let pending_output_samples = self
+            .context
+            .delay()
+            .map(|d| d.output.max(0) as u64)
+            .unwrap_or(0);
+        let resampled_from_input = (input_samples as u64)
+            .saturating_mul(dst_rate)
+            .div_ceil(src_rate);
+        let capacity = pending_output_samples
+            .saturating_add(resampled_from_input)
+            .saturating_add(16)
+            .min(i32::MAX as u64) as usize;
+
+        let mut output = ffmpeg::frame::Audio::new(target.format, capacity, target.channel_layout);
 
         if self.context.run(&input_frame, &mut output).is_err() {
+            return None;
+        }
+
+        if output.samples() == 0 {
             return None;
         }
 
@@ -128,9 +150,11 @@ impl AudioSource for Microphone {
         let health_tx = ctx.health_tx().clone();
         async move {
             let source_info = feed_lock.audio_info();
-            let audio_info = source_info.with_max_channels(MICROPHONE_TARGET_CHANNELS);
-            let source_channels = source_info.channels;
-            let target_channels = audio_info.channels;
+            let audio_info = source_info
+                .with_max_channels(MICROPHONE_TARGET_CHANNELS)
+                .with_sample_rate(AudioMixer::INFO.sample_rate)
+                .with_sample_format(AudioMixer::INFO.sample_format)
+                .with_channels(MICROPHONE_TARGET_CHANNELS as usize);
             let is_wireless = source_info.is_wireless_transport;
             let device_name = feed_lock.device_name().to_string();
             let cancel = CancellationToken::new();
@@ -143,7 +167,11 @@ impl AudioSource for Microphone {
             };
 
             feed_lock
-                .ask(microphone::AddSender(tx))
+                .ask(microphone::AddRecordingSender {
+                    sender: tx,
+                    health_tx: health_tx.clone(),
+                    label: "microphone-feed:recording".to_string(),
+                })
                 .await
                 .map_err(|err| match err {
                     SendError::ActorNotRunning(_) => MicrophoneSourceError::ActorNotRunning,
@@ -163,8 +191,16 @@ impl AudioSource for Microphone {
             let silence_chunk_samples =
                 (audio_info.rate() as f64 * SILENCE_CHUNK_DURATION.as_secs_f64()).ceil() as usize;
 
-            let original_rate = source_info.sample_rate;
-            let original_channels = source_info.channels as u16;
+            info!(
+                device = %device_name,
+                source_rate = source_info.sample_rate,
+                source_channels = source_info.channels,
+                source_format = ?source_info.sample_format,
+                target_rate = audio_info.sample_rate,
+                target_channels = audio_info.channels,
+                target_format = ?audio_info.sample_format,
+                "Microphone source configured"
+            );
 
             tokio::spawn({
                 let frame_counter = mic_frame_counter.clone();
@@ -183,6 +219,7 @@ impl AudioSource for Microphone {
                     let mut next_reconnect_after = MIC_RECONNECT_AFTER;
                     let mut last_timestamp: Option<cap_timestamp::Timestamp> = None;
                     let mut last_frame_duration = SILENCE_CHUNK_DURATION;
+                    let mut logged_current_source: Option<(u32, u16, SampleFormat)> = None;
 
                     loop {
                         let recv_result = tokio::select! {
@@ -207,68 +244,64 @@ impl AudioSource for Microphone {
                                     emit_health(&health_tx, PipelineHealthEvent::SourceRestarted);
                                 }
 
-                                let format_changed = frame.sample_rate != original_rate
-                                    || frame.channels != original_channels;
+                                let target_matches_source = frame.sample_rate
+                                    == audio_info.sample_rate
+                                    && frame.channels as usize == audio_info.channels
+                                    && ffmpeg_sample_format_for(frame.format)
+                                        == Some(audio_info.sample_format);
 
-                                let needs_resampling = if format_changed {
-                                    match &resampler {
-                                        Some(r)
-                                            if r.matches(
-                                                frame.sample_rate,
-                                                frame.channels,
-                                                frame.format,
-                                            ) =>
-                                        {
-                                            true
-                                        }
-                                        Some(_) | None => {
-                                            info!(
-                                                old_rate = original_rate,
-                                                new_rate = frame.sample_rate,
-                                                old_channels = original_channels,
-                                                new_channels = frame.channels,
-                                                "Microphone format changed, creating resampler"
-                                            );
-                                            resampler = MicResampler::create(
-                                                frame.sample_rate,
-                                                frame.channels,
-                                                frame.format,
-                                                &audio_info,
-                                            );
-                                            resampler.is_some()
-                                        }
-                                    }
-                                } else {
-                                    if resampler.is_some() {
+                                let resampler_matches = resampler.as_ref().is_some_and(|r| {
+                                    r.matches(frame.sample_rate, frame.channels, frame.format)
+                                });
+
+                                if !target_matches_source && !resampler_matches {
+                                    let previous_source = logged_current_source;
+                                    let new_source =
+                                        (frame.sample_rate, frame.channels, frame.format);
+                                    if previous_source.is_none() {
                                         info!(
-                                            "Microphone format restored to original, dropping resampler"
+                                            source_rate = new_source.0,
+                                            source_channels = new_source.1,
+                                            source_format = ?new_source.2,
+                                            target_rate = audio_info.sample_rate,
+                                            target_channels = audio_info.channels,
+                                            target_format = ?audio_info.sample_format,
+                                            "Microphone: creating resampler for source→target"
                                         );
-                                        resampler = None;
-                                    }
-                                    false
-                                };
-
-                                let audio_frame = if needs_resampling {
-                                    if let Some(ref mut ctx) = resampler {
-                                        ctx.resample(
-                                            &frame.data,
-                                            frame.sample_rate,
-                                            frame.channels,
-                                            frame.format,
-                                            frame.timestamp,
-                                        )
                                     } else {
-                                        None
+                                        info!(
+                                            old = ?previous_source,
+                                            new = ?new_source,
+                                            "Microphone format changed mid-stream, rebuilding resampler"
+                                        );
                                     }
-                                } else {
-                                    let packed = maybe_downmix_channels(
-                                        &frame.data,
+                                    resampler = MicResampler::create(
+                                        frame.sample_rate,
+                                        frame.channels,
                                         frame.format,
-                                        source_channels,
-                                        target_channels,
+                                        &audio_info,
                                     );
+                                    logged_current_source = Some(new_source);
+                                } else if target_matches_source && resampler.is_some() {
+                                    info!(
+                                        "Microphone source now matches target, dropping resampler"
+                                    );
+                                    resampler = None;
+                                    logged_current_source =
+                                        Some((frame.sample_rate, frame.channels, frame.format));
+                                }
+
+                                let audio_frame = if let Some(ref mut ctx) = resampler {
+                                    ctx.resample(
+                                        &frame.data,
+                                        frame.sample_rate,
+                                        frame.channels,
+                                        frame.format,
+                                        frame.timestamp,
+                                    )
+                                } else {
                                     Some(AudioFrame::new(
-                                        audio_info.wrap_frame(packed.as_ref()),
+                                        audio_info.wrap_frame(&frame.data),
                                         frame.timestamp,
                                     ))
                                 };
@@ -484,196 +517,119 @@ fn create_silence_frame(info: &AudioInfo, sample_count: usize) -> ffmpeg::frame:
     frame
 }
 
-fn maybe_downmix_channels<'a>(
-    data: &'a [u8],
-    format: SampleFormat,
-    source_channels: usize,
-    target_channels: usize,
-) -> Cow<'a, [u8]> {
-    if target_channels == 0 || source_channels == 0 || target_channels >= source_channels {
-        return Cow::Borrowed(data);
-    }
-
-    if target_channels == 1 {
-        if let Some(samples) = downmix_to_mono(data, format, source_channels) {
-            Cow::Owned(samples)
-        } else {
-            Cow::Borrowed(data)
-        }
-    } else {
-        Cow::Borrowed(data)
-    }
-}
-
-fn downmix_to_mono(data: &[u8], format: SampleFormat, source_channels: usize) -> Option<Vec<u8>> {
-    let sample_size = sample_format_size(format)?;
-
-    let frame_size = sample_size.checked_mul(source_channels)?;
-    if frame_size == 0 || !data.len().is_multiple_of(frame_size) {
-        return None;
-    }
-
-    let frame_count = data.len() / frame_size;
-    let mut out = vec![0u8; frame_count * sample_size];
-
-    for (frame_idx, frame) in data.chunks(frame_size).enumerate() {
-        let mono = average_frame_sample(format, frame, sample_size, source_channels)?;
-        let start = frame_idx * sample_size;
-        write_sample_from_f64(format, mono, &mut out[start..start + sample_size]);
-    }
-
-    Some(out)
-}
-
-fn sample_format_size(format: SampleFormat) -> Option<usize> {
-    Some(match format {
-        SampleFormat::I8 | SampleFormat::U8 => 1,
-        SampleFormat::I16 | SampleFormat::U16 => 2,
-        SampleFormat::I32 | SampleFormat::U32 | SampleFormat::F32 => 4,
-        SampleFormat::I64 | SampleFormat::U64 | SampleFormat::F64 => 8,
-        _ => return None,
-    })
-}
-
-fn average_frame_sample(
-    format: SampleFormat,
-    frame: &[u8],
-    sample_size: usize,
-    channels: usize,
-) -> Option<f64> {
-    let mut sum = 0.0;
-    for ch in 0..channels {
-        let start = ch * sample_size;
-        let end = start + sample_size;
-        sum += sample_to_f64(format, &frame[start..end])?;
-    }
-
-    Some(sum / channels as f64)
-}
-
-fn sample_to_f64(format: SampleFormat, bytes: &[u8]) -> Option<f64> {
-    match format {
-        SampleFormat::I8 => bytes.first().copied().map(|v| v as i8 as f64),
-        SampleFormat::U8 => bytes.first().copied().map(|v| v as f64),
-        SampleFormat::I16 => {
-            let mut buf = [0u8; 2];
-            buf.copy_from_slice(bytes);
-            Some(i16::from_ne_bytes(buf) as f64)
-        }
-        SampleFormat::U16 => {
-            let mut buf = [0u8; 2];
-            buf.copy_from_slice(bytes);
-            Some(u16::from_ne_bytes(buf) as f64)
-        }
-        SampleFormat::I32 => {
-            let mut buf = [0u8; 4];
-            buf.copy_from_slice(bytes);
-            Some(i32::from_ne_bytes(buf) as f64)
-        }
-        SampleFormat::U32 => {
-            let mut buf = [0u8; 4];
-            buf.copy_from_slice(bytes);
-            Some(u32::from_ne_bytes(buf) as f64)
-        }
-        SampleFormat::I64 => {
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(bytes);
-            Some(i64::from_ne_bytes(buf) as f64)
-        }
-        SampleFormat::U64 => {
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(bytes);
-            Some(u64::from_ne_bytes(buf) as f64)
-        }
-        SampleFormat::F32 => {
-            let mut buf = [0u8; 4];
-            buf.copy_from_slice(bytes);
-            Some(f32::from_ne_bytes(buf) as f64)
-        }
-        SampleFormat::F64 => {
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(bytes);
-            Some(f64::from_ne_bytes(buf))
-        }
-        _ => None,
-    }
-}
-
-fn write_sample_from_f64(format: SampleFormat, value: f64, out: &mut [u8]) {
-    match format {
-        SampleFormat::I8 => {
-            let sample = value.round().clamp(i8::MIN as f64, i8::MAX as f64) as i8;
-            out[0] = sample as u8;
-        }
-        SampleFormat::U8 => {
-            let sample = value.round().clamp(u8::MIN as f64, u8::MAX as f64) as u8;
-            out[0] = sample;
-        }
-        SampleFormat::I16 => {
-            let sample = value.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16;
-            out.copy_from_slice(&sample.to_ne_bytes());
-        }
-        SampleFormat::U16 => {
-            let sample = value.round().clamp(u16::MIN as f64, u16::MAX as f64) as u16;
-            out.copy_from_slice(&sample.to_ne_bytes());
-        }
-        SampleFormat::I32 => {
-            let sample = value.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
-            out.copy_from_slice(&sample.to_ne_bytes());
-        }
-        SampleFormat::U32 => {
-            let sample = value.round().clamp(u32::MIN as f64, u32::MAX as f64) as u32;
-            out.copy_from_slice(&sample.to_ne_bytes());
-        }
-        SampleFormat::I64 => {
-            let sample = value.round().clamp(i64::MIN as f64, i64::MAX as f64) as i64;
-            out.copy_from_slice(&sample.to_ne_bytes());
-        }
-        SampleFormat::U64 => {
-            let sample = value.round().clamp(u64::MIN as f64, u64::MAX as f64) as u64;
-            out.copy_from_slice(&sample.to_ne_bytes());
-        }
-        SampleFormat::F32 => {
-            let sample = value as f32;
-            out.copy_from_slice(&sample.to_ne_bytes());
-        }
-        SampleFormat::F64 => {
-            out.copy_from_slice(&value.to_ne_bytes());
-        }
-        _ => {}
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cap_media_info::{Sample, Type};
 
     #[test]
-    fn downmixes_stereo_f32_to_mono() {
-        let frames = [(0.5f32, -0.25f32), (1.0f32, 1.0f32)];
-        let mut data = Vec::new();
+    fn target_info_uses_output_rate_and_mono() {
+        let device_info = AudioInfo {
+            sample_format: Sample::F32(Type::Packed),
+            sample_rate: 32000,
+            channels: 2,
+            time_base: cap_media_info::FFRational(1, 1_000_000),
+            buffer_size: 1024,
+            is_wireless_transport: false,
+        };
 
-        for (left, right) in frames {
-            data.extend_from_slice(&left.to_ne_bytes());
-            data.extend_from_slice(&right.to_ne_bytes());
-        }
+        let target = device_info
+            .with_max_channels(MICROPHONE_TARGET_CHANNELS)
+            .with_sample_rate(AudioMixer::INFO.sample_rate)
+            .with_sample_format(AudioMixer::INFO.sample_format)
+            .with_channels(MICROPHONE_TARGET_CHANNELS as usize);
 
-        let downmixed = maybe_downmix_channels(&data, SampleFormat::F32, 2, 1);
-        let owned = downmixed.into_owned();
-        assert_eq!(owned.len(), frames.len() * std::mem::size_of::<f32>());
-
-        let first = f32::from_ne_bytes(owned[0..4].try_into().unwrap());
-        let second = f32::from_ne_bytes(owned[4..8].try_into().unwrap());
-
-        assert!((first - 0.125).abs() < f32::EPSILON);
-        assert!((second - 1.0).abs() < f32::EPSILON);
+        assert_eq!(target.sample_rate, 48000);
+        assert_eq!(target.channels, 1);
+        assert_eq!(target.sample_format, AudioMixer::INFO.sample_format);
     }
 
     #[test]
-    fn leaves_mono_buffers_untouched() {
-        let sample = 0.75f32;
-        let data = sample.to_ne_bytes().to_vec();
-        let result = maybe_downmix_channels(&data, SampleFormat::F32, 1, 1);
-        assert!(matches!(result, Cow::Borrowed(_)));
+    fn resampler_detects_mismatch_between_source_and_target() {
+        let target = AudioInfo::new_raw(Sample::F32(Type::Packed), 48000, 1);
+
+        assert!(MicResampler::create(32000, 1, SampleFormat::F32, &target).is_some());
+        assert!(MicResampler::create(44100, 2, SampleFormat::I16, &target).is_some());
+        assert!(MicResampler::create(96000, 2, SampleFormat::F32, &target).is_some());
+    }
+
+    #[test]
+    fn resampler_matches_detects_same_source() {
+        let target = AudioInfo::new_raw(Sample::F32(Type::Packed), 48000, 1);
+        let resampler =
+            MicResampler::create(32000, 1, SampleFormat::F32, &target).expect("resampler");
+        assert!(resampler.matches(32000, 1, SampleFormat::F32));
+        assert!(!resampler.matches(48000, 1, SampleFormat::F32));
+        assert!(!resampler.matches(32000, 2, SampleFormat::F32));
+        assert!(!resampler.matches(32000, 1, SampleFormat::I16));
+    }
+
+    #[test]
+    fn upsampling_preserves_total_duration() {
+        use cap_timestamp::{MachAbsoluteTimestamp, Timestamp};
+
+        let target = AudioInfo::new_raw(Sample::F32(Type::Packed), 48000, 1);
+        let mut resampler =
+            MicResampler::create(32000, 2, SampleFormat::F32, &target).expect("resampler");
+
+        const FRAME_SAMPLES: usize = 1024;
+        const FRAME_COUNT: usize = 64;
+        const CHANNELS: usize = 2;
+
+        let ts = Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::now());
+
+        let payload_len_bytes = FRAME_SAMPLES * CHANNELS * std::mem::size_of::<f32>();
+        let payload = vec![0u8; payload_len_bytes];
+
+        let mut produced: u64 = 0;
+        for _ in 0..FRAME_COUNT {
+            if let Some(frame) = resampler.resample(&payload, 32000, 2, SampleFormat::F32, ts) {
+                produced += frame.samples() as u64;
+            }
+        }
+
+        let consumed_input_samples = (FRAME_SAMPLES * FRAME_COUNT) as u64;
+        let expected_output_samples = consumed_input_samples * 48_000 / 32_000;
+
+        let lower_bound = expected_output_samples * 99 / 100;
+        assert!(
+            produced >= lower_bound,
+            "upsampling lost samples: produced={produced}, expected≈{expected_output_samples}, \
+             lower_bound={lower_bound}"
+        );
+    }
+
+    #[test]
+    fn downsampling_preserves_total_duration() {
+        use cap_timestamp::{MachAbsoluteTimestamp, Timestamp};
+
+        let target = AudioInfo::new_raw(Sample::F32(Type::Packed), 48000, 1);
+        let mut resampler =
+            MicResampler::create(96000, 2, SampleFormat::F32, &target).expect("resampler");
+
+        const FRAME_SAMPLES: usize = 1024;
+        const FRAME_COUNT: usize = 64;
+        const CHANNELS: usize = 2;
+
+        let ts = Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::now());
+        let payload_len_bytes = FRAME_SAMPLES * CHANNELS * std::mem::size_of::<f32>();
+        let payload = vec![0u8; payload_len_bytes];
+
+        let mut produced: u64 = 0;
+        for _ in 0..FRAME_COUNT {
+            if let Some(frame) = resampler.resample(&payload, 96000, 2, SampleFormat::F32, ts) {
+                produced += frame.samples() as u64;
+            }
+        }
+
+        let consumed_input_samples = (FRAME_SAMPLES * FRAME_COUNT) as u64;
+        let expected_output_samples = consumed_input_samples * 48_000 / 96_000;
+
+        let lower_bound = expected_output_samples * 99 / 100;
+        assert!(
+            produced >= lower_bound,
+            "downsampling lost samples: produced={produced}, expected≈{expected_output_samples}, \
+             lower_bound={lower_bound}"
+        );
     }
 }

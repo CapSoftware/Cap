@@ -1,7 +1,7 @@
 use crate::sources::audio_mixer::AudioMixer;
 use anyhow::{Context, anyhow};
 use cap_media_info::{AudioInfo, VideoInfo};
-use cap_timestamp::{Timestamp, Timestamps};
+use cap_timestamp::{MasterClock, SourceClockOutcome, SourceClockState, Timestamp, Timestamps};
 use futures::{
     FutureExt, SinkExt, StreamExt, TryFutureExt,
     channel::{mpsc, oneshot},
@@ -30,6 +30,237 @@ const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
 const LARGE_FORWARD_JUMP_SECS: f64 = 2.0;
 
 const HEALTH_CHANNEL_CAPACITY: usize = 32;
+
+pub const STALL_BUDGET_MS: u64 = 50;
+pub(crate) const STALL_POLL_INTERVAL: Duration = Duration::from_micros(500);
+
+pub const VIDEO_START_GATE_TIMEOUT: Duration = Duration::from_millis(500);
+
+pub const AV_START_ALIGNMENT_LIMIT_NS: u64 = 500_000_000;
+
+#[derive(Clone)]
+pub struct VideoStartGate {
+    inner: Arc<VideoStartGateInner>,
+}
+
+struct VideoStartGateInner {
+    notify: tokio::sync::Notify,
+    start_ns: AtomicU64,
+    armed: AtomicBool,
+}
+
+impl VideoStartGate {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(VideoStartGateInner {
+                notify: tokio::sync::Notify::new(),
+                start_ns: AtomicU64::new(0),
+                armed: AtomicBool::new(false),
+            }),
+        }
+    }
+
+    pub fn publish(&self, start_ns: u64) {
+        if self
+            .inner
+            .armed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.inner.start_ns.store(start_ns, Ordering::Release);
+            self.inner.notify.notify_waiters();
+        }
+    }
+
+    pub fn is_armed(&self) -> bool {
+        self.inner.armed.load(Ordering::Acquire)
+    }
+
+    pub fn start_ns_if_armed(&self) -> Option<u64> {
+        if self.is_armed() {
+            Some(self.inner.start_ns.load(Ordering::Acquire))
+        } else {
+            None
+        }
+    }
+
+    pub async fn wait_with_timeout(&self, timeout: Duration) -> Option<u64> {
+        if let Some(v) = self.start_ns_if_armed() {
+            return Some(v);
+        }
+        let notified = self.inner.notify.notified();
+        tokio::pin!(notified);
+        match tokio::time::timeout(timeout, notified).await {
+            Ok(()) => Some(self.inner.start_ns.load(Ordering::Acquire)),
+            Err(_) => None,
+        }
+    }
+}
+
+impl Default for VideoStartGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub(crate) fn ns_to_sample_count(ns: u64, sample_rate: u32) -> u64 {
+    if sample_rate == 0 {
+        return 0;
+    }
+    (ns as u128 * sample_rate as u128 / 1_000_000_000u128) as u64
+}
+
+pub(crate) enum VideoStartGateAction {
+    Passthrough,
+    UseFrame(AudioFrame),
+    DropFrame,
+}
+
+impl std::fmt::Debug for VideoStartGateAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Passthrough => f.write_str("Passthrough"),
+            Self::UseFrame(frame) => write!(
+                f,
+                "UseFrame {{ samples: {}, rate: {} }}",
+                frame.inner.samples(),
+                frame.inner.rate()
+            ),
+            Self::DropFrame => f.write_str("DropFrame"),
+        }
+    }
+}
+
+pub(crate) async fn apply_video_start_gate(
+    gate: &VideoStartGate,
+    frame: &AudioFrame,
+    master_clock: &Arc<MasterClock>,
+    generator: &mut AudioTimestampGenerator,
+    sample_rate: u32,
+) -> VideoStartGateAction {
+    let video_start_ns = match gate.wait_with_timeout(VIDEO_START_GATE_TIMEOUT).await {
+        Some(v) => v,
+        None => {
+            warn!(
+                timeout_ms = VIDEO_START_GATE_TIMEOUT.as_millis() as u64,
+                "Video start gate expired before first video frame; \
+                 audio will start without encoder-pair gating"
+            );
+            return VideoStartGateAction::Passthrough;
+        }
+    };
+
+    let audio_start_ns_i64 = master_clock.remap_raw_ns(frame.timestamp);
+    let audio_start_ns = audio_start_ns_i64.max(0) as u64;
+
+    let offset_ns: i128 = video_start_ns as i128 - audio_start_ns as i128;
+    let limit = AV_START_ALIGNMENT_LIMIT_NS as i128;
+    if offset_ns.abs() > limit {
+        warn!(
+            video_start_ns,
+            audio_start_ns,
+            offset_ns = offset_ns as i64,
+            limit_ns = AV_START_ALIGNMENT_LIMIT_NS,
+            "First-frame A/V offset exceeds alignment limit; skipping trim"
+        );
+        return VideoStartGateAction::Passthrough;
+    }
+
+    if offset_ns == 0 {
+        return VideoStartGateAction::Passthrough;
+    }
+
+    if offset_ns > 0 {
+        let trim_samples = ns_to_sample_count(offset_ns as u64, sample_rate) as usize;
+        if trim_samples == 0 {
+            return VideoStartGateAction::Passthrough;
+        }
+        let total_samples = frame.inner.samples();
+        if trim_samples >= total_samples {
+            return VideoStartGateAction::DropFrame;
+        }
+        match trim_audio_frame_front(&frame.inner, trim_samples) {
+            Some(trimmed) => {
+                debug!(
+                    trimmed_samples = trim_samples,
+                    kept_samples = total_samples - trim_samples,
+                    offset_ns = offset_ns as i64,
+                    "Trimmed leading audio samples for encoder-pair alignment"
+                );
+                VideoStartGateAction::UseFrame(AudioFrame::new(trimmed, frame.timestamp))
+            }
+            None => {
+                warn!(
+                    trim_samples,
+                    total_samples,
+                    "Audio frame trim helper returned None; falling back to passthrough"
+                );
+                VideoStartGateAction::Passthrough
+            }
+        }
+    } else {
+        let silence_ns = (-offset_ns) as u64;
+        let silence_samples = ns_to_sample_count(silence_ns, sample_rate);
+        if silence_samples == 0 {
+            return VideoStartGateAction::Passthrough;
+        }
+        let advanced = generator.advance_by_duration(Duration::from_nanos(silence_ns));
+        debug!(
+            silence_ns,
+            silence_samples,
+            advanced,
+            "Advanced audio timeline to match video start (audio arrived after video)"
+        );
+        VideoStartGateAction::Passthrough
+    }
+}
+
+pub(crate) fn trim_audio_frame_front(
+    frame: &ffmpeg::frame::Audio,
+    samples_to_trim: usize,
+) -> Option<ffmpeg::frame::Audio> {
+    let total = frame.samples();
+    if samples_to_trim == 0 {
+        return Some(frame.clone());
+    }
+    if samples_to_trim >= total {
+        return None;
+    }
+    let new_samples = total - samples_to_trim;
+    let format = frame.format();
+    let channels = frame.channels().max(1) as usize;
+    let layout = frame.channel_layout();
+    let rate = frame.rate();
+    let bytes_per_sample = format.bytes();
+
+    let mut new_frame = ffmpeg::frame::Audio::new(format, new_samples, layout);
+    new_frame.set_rate(rate);
+    new_frame.set_channel_layout(layout);
+
+    if frame.is_planar() {
+        for plane_idx in 0..channels.min(frame.planes()) {
+            let src = frame.data(plane_idx);
+            let dst = new_frame.data_mut(plane_idx);
+            let offset = samples_to_trim * bytes_per_sample;
+            let len = new_samples * bytes_per_sample;
+            if src.len() < offset + len || dst.len() < len {
+                return None;
+            }
+            dst[..len].copy_from_slice(&src[offset..offset + len]);
+        }
+    } else {
+        let src = frame.data(0);
+        let dst = new_frame.data_mut(0);
+        let offset = samples_to_trim * bytes_per_sample * channels;
+        let len = new_samples * bytes_per_sample * channels;
+        if src.len() < offset + len || dst.len() < len {
+            return None;
+        }
+        dst[..len].copy_from_slice(&src[offset..offset + len]);
+    }
+
+    Some(new_frame)
+}
 
 pub(crate) enum BlockingThreadFinish {
     Clean,
@@ -71,11 +302,50 @@ pub(crate) fn spawn_blocking_thread_timeout_cleanup(
 
 #[derive(Debug, Clone)]
 pub enum PipelineHealthEvent {
-    FrameDropRateHigh { rate_pct: f64 },
-    AudioGapDetected { gap_ms: u64 },
-    AudioDegradedToVideoOnly { reason: String },
+    FrameDropRateHigh {
+        source: String,
+        rate_pct: f64,
+    },
+    AudioGapDetected {
+        gap_ms: u64,
+    },
+    AudioDegradedToVideoOnly {
+        reason: String,
+    },
     SourceRestarting,
     SourceRestarted,
+    Stalled {
+        source: String,
+        waited_ms: u64,
+    },
+    MuxerCrashed {
+        reason: String,
+    },
+    DiskSpaceLow {
+        bytes_remaining: u64,
+        warn_threshold_bytes: u64,
+    },
+    DiskSpaceExhausted {
+        bytes_remaining: u64,
+    },
+    DeviceLost {
+        subsystem: String,
+    },
+    EncoderRebuilt {
+        backend: String,
+        attempt: u32,
+    },
+    SourceAudioReset {
+        source: String,
+        starvation_ms: u64,
+    },
+    RecoveryFragmentCorrupt {
+        path: String,
+        reason: String,
+    },
+    CaptureTargetLost {
+        target: String,
+    },
 }
 
 pub type HealthSender = tokio::sync::mpsc::Sender<PipelineHealthEvent>;
@@ -87,6 +357,202 @@ fn new_health_channel() -> (HealthSender, HealthReceiver) {
 
 pub fn emit_health(tx: &HealthSender, event: PipelineHealthEvent) {
     let _ = tx.try_send(event);
+}
+
+#[derive(Clone, Default)]
+pub struct SharedHealthSender {
+    inner: Arc<std::sync::RwLock<Option<HealthSender>>>,
+}
+
+impl SharedHealthSender {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
+
+    pub fn set(&self, tx: HealthSender) {
+        if let Ok(mut guard) = self.inner.write() {
+            *guard = Some(tx);
+        }
+    }
+
+    pub fn get(&self) -> Option<HealthSender> {
+        self.inner.read().ok().and_then(|guard| guard.clone())
+    }
+
+    pub fn emit(&self, event: PipelineHealthEvent) {
+        if let Some(tx) = self.get() {
+            emit_health(&tx, event);
+        }
+    }
+}
+
+pub const DISK_SPACE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+pub struct DiskSpaceMonitor {
+    last_poll: Option<Instant>,
+    last_status: cap_utils::disk_space::DiskSpaceStatus,
+    stopped: bool,
+}
+
+impl DiskSpaceMonitor {
+    pub fn new() -> Self {
+        Self {
+            last_poll: None,
+            last_status: cap_utils::disk_space::DiskSpaceStatus::Ok,
+            stopped: false,
+        }
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.stopped
+    }
+
+    pub fn poll(&mut self, path: &Path, health: &SharedHealthSender) -> DiskSpacePollResult {
+        if self.stopped {
+            return DiskSpacePollResult::Stopped;
+        }
+
+        let now = Instant::now();
+        if let Some(last) = self.last_poll
+            && now.duration_since(last) < DISK_SPACE_POLL_INTERVAL
+        {
+            return DiskSpacePollResult::Skipped;
+        }
+        self.last_poll = Some(now);
+
+        let bytes = match cap_utils::disk_space::free_bytes_for_path(path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                trace!(error = %err, path = %path.display(), "DiskSpaceMonitor: free_bytes_for_path failed");
+                return DiskSpacePollResult::Ok;
+            }
+        };
+
+        let status = cap_utils::disk_space::DiskSpaceStatus::from_bytes(bytes);
+        let changed = status != self.last_status;
+        self.last_status = status;
+
+        match status {
+            cap_utils::disk_space::DiskSpaceStatus::Ok => DiskSpacePollResult::Ok,
+            cap_utils::disk_space::DiskSpaceStatus::Low => {
+                if changed {
+                    warn!(
+                        bytes_remaining = bytes,
+                        warn_threshold_bytes = cap_utils::disk_space::LOW_DISK_WARN_BYTES,
+                        path = %path.display(),
+                        "Disk space low"
+                    );
+                    health.emit(PipelineHealthEvent::DiskSpaceLow {
+                        bytes_remaining: bytes,
+                        warn_threshold_bytes: cap_utils::disk_space::LOW_DISK_WARN_BYTES,
+                    });
+                }
+                DiskSpacePollResult::Low {
+                    bytes_remaining: bytes,
+                }
+            }
+            cap_utils::disk_space::DiskSpaceStatus::Exhausted => {
+                if changed {
+                    error!(
+                        bytes_remaining = bytes,
+                        path = %path.display(),
+                        "Disk space exhausted; stopping recording"
+                    );
+                    health.emit(PipelineHealthEvent::DiskSpaceExhausted {
+                        bytes_remaining: bytes,
+                    });
+                }
+                self.stopped = true;
+                DiskSpacePollResult::Exhausted {
+                    bytes_remaining: bytes,
+                }
+            }
+        }
+    }
+}
+
+impl Default for DiskSpaceMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskSpacePollResult {
+    Skipped,
+    Ok,
+    Low { bytes_remaining: u64 },
+    Exhausted { bytes_remaining: u64 },
+    Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StallSendOutcome {
+    Sent,
+    StalledAndDropped { waited_ms: u64 },
+    Disconnected,
+}
+
+pub(crate) fn send_with_stall_budget_futures<T>(
+    tx: &mut mpsc::Sender<T>,
+    frame: T,
+    source: &'static str,
+    health_tx: &HealthSender,
+) -> StallSendOutcome {
+    let start = Instant::now();
+    let budget = Duration::from_millis(STALL_BUDGET_MS);
+    let mut frame = Some(frame);
+    loop {
+        let payload = frame.take().expect("frame retained across loop iterations");
+        match tx.try_send(payload) {
+            Ok(()) => return StallSendOutcome::Sent,
+            Err(err) if err.is_full() => {
+                let elapsed = start.elapsed();
+                if elapsed >= budget {
+                    let waited_ms = elapsed.as_millis() as u64;
+                    emit_health(
+                        health_tx,
+                        PipelineHealthEvent::Stalled {
+                            source: source.to_string(),
+                            waited_ms,
+                        },
+                    );
+                    return StallSendOutcome::StalledAndDropped { waited_ms };
+                }
+                frame = Some(err.into_inner());
+                std::thread::sleep(STALL_POLL_INTERVAL);
+            }
+            Err(_) => return StallSendOutcome::Disconnected,
+        }
+    }
+}
+
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn send_with_stall_budget_flume<T>(
+    tx: &flume::Sender<T>,
+    frame: T,
+    source: &'static str,
+    health_tx: &HealthSender,
+) -> StallSendOutcome {
+    let start = Instant::now();
+    let deadline = start + Duration::from_millis(STALL_BUDGET_MS);
+    match tx.send_deadline(frame, deadline) {
+        Ok(()) => StallSendOutcome::Sent,
+        Err(flume::SendTimeoutError::Timeout(_)) => {
+            let waited_ms = start.elapsed().as_millis() as u64;
+            emit_health(
+                health_tx,
+                PipelineHealthEvent::Stalled {
+                    source: source.to_string(),
+                    waited_ms,
+                },
+            );
+            StallSendOutcome::StalledAndDropped { waited_ms }
+        }
+        Err(flume::SendTimeoutError::Disconnected(_)) => StallSendOutcome::Disconnected,
+    }
 }
 
 pub(crate) fn wait_for_blocking_thread_finish(
@@ -127,35 +593,64 @@ fn video_mux_send_error(frame_count: u64, error: anyhow::Error) -> anyhow::Error
     anyhow!("Video muxer stopped accepting frames at frame {frame_count}: {error}")
 }
 
-struct AudioTimestampGenerator {
+pub(crate) struct AudioTimestampGenerator {
     sample_rate: u32,
     total_samples: u64,
+    master_clock: Option<Arc<MasterClock>>,
 }
 
 const VIDEO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.1;
 
 impl AudioTimestampGenerator {
+    #[cfg(test)]
     fn new(sample_rate: u32) -> Self {
         Self {
             sample_rate,
             total_samples: 0,
+            master_clock: None,
+        }
+    }
+
+    fn from_master_clock(master_clock: Arc<MasterClock>) -> Self {
+        Self {
+            sample_rate: master_clock.sample_rate(),
+            total_samples: 0,
+            master_clock: Some(master_clock),
         }
     }
 
     fn next_timestamp(&mut self, frame_samples: u64) -> Duration {
-        let timestamp_nanos = if self.sample_rate == 0 {
-            0u128
-        } else {
-            (self.total_samples as u128 * 1_000_000_000u128) / self.sample_rate as u128
-        };
+        let timestamp_nanos = samples_to_nanos(self.total_samples, self.sample_rate);
         self.total_samples += frame_samples;
-        Duration::from_nanos(timestamp_nanos.min(u64::MAX as u128) as u64)
+        if let Some(clock) = &self.master_clock
+            && frame_samples > 0
+        {
+            clock.advance_samples(frame_samples);
+        }
+        Duration::from_nanos(timestamp_nanos)
     }
 
     fn advance_by_duration(&mut self, duration: Duration) -> u64 {
         let samples = (duration.as_secs_f64() * self.sample_rate as f64).round() as u64;
         self.total_samples += samples;
+        if let Some(clock) = &self.master_clock
+            && samples > 0
+        {
+            clock.advance_samples(samples);
+        }
         samples
+    }
+}
+
+fn samples_to_nanos(samples: u64, sample_rate: u32) -> u64 {
+    if sample_rate == 0 {
+        return 0;
+    }
+    let nanos = (samples as u128 * 1_000_000_000u128) / sample_rate as u128;
+    if nanos > u64::MAX as u128 {
+        u64::MAX
+    } else {
+        nanos as u64
     }
 }
 
@@ -164,7 +659,8 @@ const WIRELESS_GAP_THRESHOLD: Duration = Duration::from_millis(160);
 const MAX_SILENCE_INSERTION: Duration = Duration::from_secs(1);
 
 struct AudioGapTracker {
-    wall_clock_start: Option<Instant>,
+    first_frame_ts: Option<Timestamp>,
+    reference: Timestamps,
     gap_threshold: Duration,
     total_silence_inserted: Duration,
     silence_insertion_count: u64,
@@ -172,9 +668,10 @@ struct AudioGapTracker {
 }
 
 impl AudioGapTracker {
-    fn new(has_wireless_source: bool) -> Self {
+    fn new(has_wireless_source: bool, reference: Timestamps) -> Self {
         Self {
-            wall_clock_start: None,
+            first_frame_ts: None,
+            reference,
             gap_threshold: if has_wireless_source {
                 WIRELESS_GAP_THRESHOLD
             } else {
@@ -186,25 +683,39 @@ impl AudioGapTracker {
         }
     }
 
-    fn mark_started(&mut self) {
-        if self.wall_clock_start.is_none() {
-            self.wall_clock_start = Some(Instant::now());
+    fn mark_started(&mut self, frame_ts: Timestamp) {
+        if self.first_frame_ts.is_none() {
+            self.first_frame_ts = Some(frame_ts);
         }
+    }
+
+    fn capture_elapsed(
+        &self,
+        current_frame_ts: Timestamp,
+        total_pause_duration: Duration,
+    ) -> Option<Duration> {
+        let first_ts = self.first_frame_ts?;
+        let delta_secs = current_frame_ts.signed_duration_since_secs(self.reference)
+            - first_ts.signed_duration_since_secs(self.reference);
+        if !delta_secs.is_finite() || delta_secs <= 0.0 {
+            return Some(Duration::ZERO);
+        }
+        Some(Duration::from_secs_f64(delta_secs).saturating_sub(total_pause_duration))
     }
 
     fn detect_gap(
         &self,
+        current_frame_ts: Timestamp,
         sample_based_elapsed: Duration,
         total_pause_duration: Duration,
     ) -> Option<Duration> {
-        let wall_start = self.wall_clock_start?;
-        let wall_elapsed = wall_start.elapsed().saturating_sub(total_pause_duration);
+        let capture_elapsed = self.capture_elapsed(current_frame_ts, total_pause_duration)?;
 
-        if wall_elapsed <= sample_based_elapsed {
+        if capture_elapsed <= sample_based_elapsed {
             return None;
         }
 
-        let gap = wall_elapsed.saturating_sub(sample_based_elapsed);
+        let gap = capture_elapsed.saturating_sub(sample_based_elapsed);
         if gap > self.gap_threshold {
             Some(gap.min(MAX_SILENCE_INSERTION))
         } else {
@@ -739,11 +1250,13 @@ impl<T> OnceSender<T> {
 
 impl OutputPipeline {
     pub fn builder(path: PathBuf) -> OutputPipelineBuilder<NoVideo> {
+        let timestamps = Timestamps::now();
         OutputPipelineBuilder::<NoVideo> {
             path,
             video: NoVideo,
             audio_sources: vec![],
-            timestamps: Timestamps::now(),
+            timestamps,
+            master_clock: None,
         }
     }
 }
@@ -751,13 +1264,15 @@ impl OutputPipeline {
 pub struct SetupCtx {
     tasks: TaskPool,
     health_tx: HealthSender,
+    master_clock: Arc<MasterClock>,
 }
 
 impl SetupCtx {
-    fn new(health_tx: HealthSender) -> Self {
+    fn new(health_tx: HealthSender, master_clock: Arc<MasterClock>) -> Self {
         Self {
             tasks: TaskPool::default(),
             health_tx,
+            master_clock,
         }
     }
 
@@ -767,6 +1282,10 @@ impl SetupCtx {
 
     pub fn health_tx(&self) -> &HealthSender {
         &self.health_tx
+    }
+
+    pub fn master_clock(&self) -> &Arc<MasterClock> {
+        &self.master_clock
     }
 }
 
@@ -783,6 +1302,7 @@ pub struct OutputPipelineBuilder<TVideo> {
     video: TVideo,
     audio_sources: Vec<AudioSourceSetupFn>,
     timestamps: Timestamps,
+    master_clock: Option<Arc<MasterClock>>,
 }
 
 pub struct NoVideo;
@@ -812,6 +1332,15 @@ impl<THasVideo> OutputPipelineBuilder<THasVideo> {
         self.timestamps = timestamps;
         self
     }
+
+    pub fn with_master_clock(mut self, master_clock: Arc<MasterClock>) -> Self {
+        self.master_clock = Some(master_clock);
+        self
+    }
+
+    pub fn set_master_clock(&mut self, master_clock: Arc<MasterClock>) {
+        self.master_clock = Some(master_clock);
+    }
 }
 
 impl OutputPipelineBuilder<NoVideo> {
@@ -824,6 +1353,7 @@ impl OutputPipelineBuilder<NoVideo> {
             path: self.path,
             audio_sources: self.audio_sources,
             timestamps: self.timestamps,
+            master_clock: self.master_clock,
         }
     }
 }
@@ -888,11 +1418,16 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             audio_sources,
             timestamps,
             path,
+            master_clock,
             ..
         } = self;
 
+        let has_audio_sources = !audio_sources.is_empty();
+
         let build_ctx = BuildCtx::new();
-        let mut setup_ctx = SetupCtx::new(build_ctx.health_tx.clone());
+        let master_clock = master_clock
+            .unwrap_or_else(|| MasterClock::new(timestamps, AudioMixer::INFO.rate() as u32));
+        let mut setup_ctx = SetupCtx::new(build_ctx.health_tx.clone(), master_clock.clone());
 
         let (video_source, video_rx) =
             setup_video_source::<TVideo>(video.config, &mut setup_ctx).await?;
@@ -922,6 +1457,8 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
         let video_frame_count = Arc::new(AtomicU64::new(0));
 
+        let video_start_gate = has_audio_sources.then(VideoStartGate::new);
+
         spawn_video_encoder(
             &mut setup_ctx,
             video_source,
@@ -932,6 +1469,9 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             timestamps,
             shared_pause.clone(),
             video_frame_count.clone(),
+            master_clock.clone(),
+            video_info,
+            video_start_gate.clone(),
         );
 
         finish_build(
@@ -945,6 +1485,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             &path,
             shared_pause,
             true,
+            video_start_gate,
         )
         .await?;
 
@@ -971,6 +1512,7 @@ impl OutputPipelineBuilder<NoVideo> {
             audio_sources,
             timestamps,
             path,
+            master_clock,
             ..
         } = self;
 
@@ -979,7 +1521,9 @@ impl OutputPipelineBuilder<NoVideo> {
         }
 
         let build_ctx = BuildCtx::new();
-        let mut setup_ctx = SetupCtx::new(build_ctx.health_tx.clone());
+        let master_clock = master_clock
+            .unwrap_or_else(|| MasterClock::new(timestamps, AudioMixer::INFO.rate() as u32));
+        let mut setup_ctx = SetupCtx::new(build_ctx.health_tx.clone(), master_clock.clone());
 
         let (first_tx, first_rx) = oneshot::channel();
 
@@ -1015,6 +1559,7 @@ impl OutputPipelineBuilder<NoVideo> {
             &path,
             shared_pause,
             false,
+            None,
         )
         .await?;
 
@@ -1078,6 +1623,7 @@ async fn finish_build(
     path: &Path,
     shared_pause: SharedWallClockPause,
     has_video: bool,
+    video_start_gate: Option<VideoStartGate>,
 ) -> anyhow::Result<()> {
     if let Some(audio) = audio {
         audio.configure(
@@ -1088,6 +1634,7 @@ async fn finish_build(
             first_tx,
             shared_pause,
             has_video,
+            video_start_gate,
         );
     }
 
@@ -1174,6 +1721,14 @@ async fn setup_muxer<TMuxer: Muxer>(
     Ok(Arc::new(Mutex::new(muxer)))
 }
 
+fn estimate_video_frame_duration_ns(video_info: &VideoInfo) -> u64 {
+    let fps = video_info.fps();
+    if fps == 0 {
+        return 33_333_333;
+    }
+    1_000_000_000 / fps as u64
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: VideoSource>(
     setup_ctx: &mut SetupCtx,
@@ -1185,7 +1740,11 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     timestamps: Timestamps,
     shared_pause: SharedWallClockPause,
     frame_counter: Arc<AtomicU64>,
+    master_clock: Arc<MasterClock>,
+    video_info: VideoInfo,
+    video_start_gate: Option<VideoStartGate>,
 ) {
+    let frame_duration_ns = estimate_video_frame_duration_ns(&video_info);
     setup_ctx.tasks().spawn("capture-video", {
         let stop_token = stop_token.clone();
         async move {
@@ -1214,6 +1773,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut frame_count = 0u64;
         let mut anomaly_tracker = TimestampAnomalyTracker::new("video");
         let mut drift_tracker = VideoDriftTracker::new();
+        let mut source_clock = SourceClockState::new("video");
         let mut dropped_during_pause: u64 = 0;
 
         let res = stop_token
@@ -1230,11 +1790,36 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
                     let timestamp = frame.timestamp();
 
+                    let is_first_frame = first_tx.is_some();
                     if let Some(first_tx) = first_tx.take() {
                         let _ = first_tx.send(timestamp);
                     }
 
-                    let raw_duration = match anomaly_tracker.process_timestamp(timestamp, timestamps) {
+                    let remap =
+                        source_clock.remap(&master_clock, timestamp, frame_duration_ns);
+                    if matches!(remap.outcome, SourceClockOutcome::HardReset) {
+                        warn!(
+                            source = "video",
+                            hard_resets = source_clock.hard_reset_count(),
+                            "Master clock hard reset for video source (>2s jump)"
+                        );
+                        anomaly_tracker = TimestampAnomalyTracker::new("video");
+                        drift_tracker.reset_baseline();
+                    }
+
+                    if is_first_frame && let Some(gate) = &video_start_gate {
+                        gate.publish(remap.master_ns);
+                        debug!(
+                            video_start_ns = remap.master_ns,
+                            "Published video start timestamp to encoder-pair gate"
+                        );
+                    }
+
+                    let remapped_ts = Timestamp::Instant(
+                        timestamps.instant() + remap.duration(),
+                    );
+
+                    let raw_duration = match anomaly_tracker.process_timestamp(remapped_ts, timestamps) {
                         Ok(d) => d,
                         Err(TimestampAnomalyError::TooManyConsecutiveAnomalies { count }) => {
                             return Err(anyhow!(
@@ -1309,12 +1894,31 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
                         let timestamp = frame.timestamp();
 
+                        let is_first_frame = first_tx.is_some();
                         if let Some(first_tx) = first_tx.take() {
                             let _ = first_tx.send(timestamp);
                         }
 
+                        let remap =
+                            source_clock.remap(&master_clock, timestamp, frame_duration_ns);
+                        if matches!(remap.outcome, SourceClockOutcome::HardReset) {
+                            anomaly_tracker = TimestampAnomalyTracker::new("video");
+                            drift_tracker.reset_baseline();
+                        }
+
+                        if is_first_frame && let Some(gate) = &video_start_gate {
+                            gate.publish(remap.master_ns);
+                            debug!(
+                                video_start_ns = remap.master_ns,
+                                "Published video start timestamp to encoder-pair gate (drain path)"
+                            );
+                        }
+                        let remapped_ts = Timestamp::Instant(
+                            timestamps.instant() + remap.duration(),
+                        );
+
                         let raw_duration =
-                            match anomaly_tracker.process_timestamp(timestamp, timestamps) {
+                            match anomaly_tracker.process_timestamp(remapped_ts, timestamps) {
                                 Ok(d) => d,
                                 Err(_) => {
                                     warn!("Timestamp anomaly during drain, skipping frame");
@@ -1415,144 +2019,135 @@ impl PreparedAudioSources {
         setup_ctx: &mut SetupCtx,
         muxer: Arc<Mutex<TMutex>>,
         stop_token: CancellationToken,
-        _timestamps: Timestamps,
+        timestamps: Timestamps,
         mut first_tx: Option<oneshot::Sender<Timestamp>>,
         shared_pause: SharedWallClockPause,
         has_video: bool,
+        video_start_gate: Option<VideoStartGate>,
     ) {
-        let sample_rate = self.audio_info.sample_rate;
         let audio_info = self.audio_info;
         let has_wireless_source = self.has_wireless_source;
         let health_tx = setup_ctx.health_tx().clone();
+        let master_clock = setup_ctx.master_clock().clone();
 
         setup_ctx.tasks().spawn("mux-audio", {
             let stop_token = stop_token.child_token();
             let muxer = muxer.clone();
             async move {
-                let mut timestamp_generator = AudioTimestampGenerator::new(sample_rate);
+                let mut timestamp_generator =
+                    AudioTimestampGenerator::from_master_clock(master_clock.clone());
+                let sample_rate = audio_info.sample_rate;
                 let mut dropped_during_pause: u64 = 0;
                 let mut frame_count: u64 = 0;
-                let mut gap_tracker = AudioGapTracker::new(has_wireless_source);
+                let mut gap_tracker = AudioGapTracker::new(has_wireless_source, timestamps);
+                let mut gate_applied = video_start_gate.is_none();
+
+                let mut audio_degraded = false;
 
                 let res = stop_token
                     .run_until_cancelled(async {
                         while let Some(frame) = self.audio_rx.next().await {
-                            let (is_paused, total_pause_duration) = shared_pause.check();
-
-                            if is_paused {
-                                dropped_during_pause += 1;
-                                continue;
-                            }
-
-                            if let Some(first_tx) = first_tx.take() {
-                                let _ = first_tx.send(frame.timestamp);
-                            }
-
-                            gap_tracker.mark_started();
-
-                            let sample_based_before = timestamp_generator.next_timestamp(0);
-
-                            if let Some(gap_duration) =
-                                gap_tracker.detect_gap(sample_based_before, total_pause_duration)
+                            match process_audio_frame(
+                                AudioFrameProcessContext {
+                                    audio_info: &audio_info,
+                                    sample_rate,
+                                    master_clock: &master_clock,
+                                    muxer: &muxer,
+                                    health_tx: &health_tx,
+                                    shared_pause: &shared_pause,
+                                    video_start_gate: video_start_gate.as_ref(),
+                                    has_video,
+                                    origin: FrameProcessOrigin::Live,
+                                },
+                                AudioFrameProcessState {
+                                    timestamp_generator: &mut timestamp_generator,
+                                    gap_tracker: &mut gap_tracker,
+                                    gate_applied: &mut gate_applied,
+                                    first_tx: &mut first_tx,
+                                    frame_count: &mut frame_count,
+                                    dropped_during_pause: &mut dropped_during_pause,
+                                },
+                                frame,
+                            )
+                            .await
                             {
-                                let silence_samples =
-                                    timestamp_generator.advance_by_duration(gap_duration);
-
-                                if silence_samples > 0 {
-                                    let silence =
-                                        create_silence_frame(&audio_info, silence_samples as usize);
-
-                                    let silence_frame = AudioFrame::new(silence, frame.timestamp);
-
-                                    if gap_duration >= MAX_SILENCE_INSERTION {
-                                        error!(
-                                            gap_ms = gap_duration.as_millis(),
-                                            "Audio gap exceeded 1s cap, \
-                                             something may be seriously wrong"
-                                        );
-                                    }
-
-                                    gap_tracker.record_insertion(gap_duration);
-
-                                    emit_health(
-                                        &health_tx,
-                                        PipelineHealthEvent::AudioGapDetected {
-                                            gap_ms: gap_duration.as_millis() as u64,
-                                        },
-                                    );
-
-                                    if let Err(e) = muxer
-                                        .lock()
-                                        .await
-                                        .send_audio_frame(silence_frame, sample_based_before)
-                                    {
-                                        if has_video {
-                                            warn!(
-                                                frame_count,
-                                                "Audio muxer rejected silence frame, \
-                                                 degrading to video-only: {e}"
-                                            );
-                                            emit_health(
-                                                &health_tx,
-                                                PipelineHealthEvent::AudioDegradedToVideoOnly {
-                                                    reason: format!("Silence frame rejected at frame {frame_count}: {e}"),
-                                                },
-                                            );
-                                            break;
-                                        }
-                                        return Err(anyhow!(
-                                            "Audio muxer stopped accepting frames \
-                                             at frame {frame_count}: {e}"
-                                        ));
-                                    }
-                                }
-                            }
-
-                            let frame_samples = frame.inner.samples() as u64;
-                            frame_count += 1;
-
-                            let sample_based_timestamp =
-                                timestamp_generator.next_timestamp(frame_samples);
-                            let timestamp = sample_based_timestamp;
-
-                            if frame_count.is_multiple_of(500) {
-                                debug!(
-                                    frame_count,
-                                    sample_based_secs = sample_based_timestamp.as_secs_f64(),
-                                    corrected_secs = timestamp.as_secs_f64(),
-                                    total_samples = timestamp_generator.total_samples,
-                                    total_pause_ms = total_pause_duration.as_millis(),
-                                    silence_insertions = gap_tracker.silence_insertion_count,
-                                    total_silence_ms =
-                                        gap_tracker.total_silence_inserted.as_millis(),
-                                    "Audio timestamp status"
-                                );
-                            }
-
-                            if let Err(e) = muxer.lock().await.send_audio_frame(frame, timestamp) {
-                                if has_video {
-                                    warn!(
-                                        frame_count,
-                                        "Audio muxer rejected frame, \
-                                         degrading to video-only: {e}"
-                                    );
-                                    emit_health(
-                                        &health_tx,
-                                        PipelineHealthEvent::AudioDegradedToVideoOnly {
-                                            reason: format!("Frame rejected at frame {frame_count}: {e}"),
-                                        },
-                                    );
+                                Ok(AudioFrameOutcome::Sent)
+                                | Ok(AudioFrameOutcome::DroppedPaused)
+                                | Ok(AudioFrameOutcome::DropFrame) => {}
+                                Ok(AudioFrameOutcome::AudioDegraded) => {
+                                    audio_degraded = true;
                                     break;
                                 }
-                                return Err(anyhow!(
-                                    "Audio muxer stopped accepting frames \
-                                     at frame {frame_count}: {e}"
-                                ));
+                                Err(e) => return Err(e),
                             }
                         }
                         Ok::<(), anyhow::Error>(())
                     })
                     .await;
+
+                let was_cancelled = res.is_none();
+
+                if was_cancelled && !audio_degraded {
+                    let drain_start = std::time::Instant::now();
+                    let max_drain_frames = 500u64;
+                    let mut drained = 0u64;
+                    let mut skipped = 0u64;
+                    let mut degraded_during_drain = false;
+
+                    while drained < max_drain_frames {
+                        match self.audio_rx.try_next() {
+                            Ok(Some(frame)) => match process_audio_frame(
+                                AudioFrameProcessContext {
+                                    audio_info: &audio_info,
+                                    sample_rate,
+                                    master_clock: &master_clock,
+                                    muxer: &muxer,
+                                    health_tx: &health_tx,
+                                    shared_pause: &shared_pause,
+                                    video_start_gate: video_start_gate.as_ref(),
+                                    has_video,
+                                    origin: FrameProcessOrigin::Drain,
+                                },
+                                AudioFrameProcessState {
+                                    timestamp_generator: &mut timestamp_generator,
+                                    gap_tracker: &mut gap_tracker,
+                                    gate_applied: &mut gate_applied,
+                                    first_tx: &mut first_tx,
+                                    frame_count: &mut frame_count,
+                                    dropped_during_pause: &mut dropped_during_pause,
+                                },
+                                frame,
+                            )
+                            .await
+                            {
+                                Ok(AudioFrameOutcome::Sent) => drained += 1,
+                                Ok(AudioFrameOutcome::DroppedPaused)
+                                | Ok(AudioFrameOutcome::DropFrame) => {}
+                                Ok(AudioFrameOutcome::AudioDegraded) => {
+                                    degraded_during_drain = true;
+                                    break;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "mux-audio drain: error processing frame, skipping: {e:#}"
+                                    );
+                                    skipped += 1;
+                                }
+                            },
+                            Ok(None) | Err(_) => break,
+                        }
+                    }
+
+                    if drained > 0 || skipped > 0 || degraded_during_drain {
+                        info!(
+                            drained,
+                            skipped,
+                            degraded = degraded_during_drain,
+                            elapsed_ms = drain_start.elapsed().as_millis() as u64,
+                            "mux-audio drain complete"
+                        );
+                    }
+                }
 
                 let final_pause_duration = shared_pause.total_pause_duration();
 
@@ -1594,6 +2189,194 @@ impl PreparedAudioSources {
     }
 }
 
+#[derive(Copy, Clone)]
+enum FrameProcessOrigin {
+    Live,
+    Drain,
+}
+
+enum AudioFrameOutcome {
+    Sent,
+    DroppedPaused,
+    DropFrame,
+    AudioDegraded,
+}
+
+struct AudioFrameProcessContext<'a, TMutex: AudioMuxer> {
+    audio_info: &'a AudioInfo,
+    sample_rate: u32,
+    master_clock: &'a Arc<MasterClock>,
+    muxer: &'a Arc<Mutex<TMutex>>,
+    health_tx: &'a HealthSender,
+    shared_pause: &'a SharedWallClockPause,
+    video_start_gate: Option<&'a VideoStartGate>,
+    has_video: bool,
+    origin: FrameProcessOrigin,
+}
+
+struct AudioFrameProcessState<'a> {
+    timestamp_generator: &'a mut AudioTimestampGenerator,
+    gap_tracker: &'a mut AudioGapTracker,
+    gate_applied: &'a mut bool,
+    first_tx: &'a mut Option<oneshot::Sender<Timestamp>>,
+    frame_count: &'a mut u64,
+    dropped_during_pause: &'a mut u64,
+}
+
+async fn process_audio_frame<TMutex: AudioMuxer>(
+    ctx: AudioFrameProcessContext<'_, TMutex>,
+    state: AudioFrameProcessState<'_>,
+    mut frame: AudioFrame,
+) -> anyhow::Result<AudioFrameOutcome> {
+    let (is_paused, total_pause_duration) = ctx.shared_pause.check();
+
+    if is_paused {
+        *state.dropped_during_pause += 1;
+        return Ok(AudioFrameOutcome::DroppedPaused);
+    }
+
+    if !*state.gate_applied
+        && let Some(gate) = ctx.video_start_gate
+    {
+        match apply_video_start_gate(
+            gate,
+            &frame,
+            ctx.master_clock,
+            state.timestamp_generator,
+            ctx.sample_rate,
+        )
+        .await
+        {
+            VideoStartGateAction::UseFrame(adjusted) => {
+                frame = adjusted;
+                *state.gate_applied = true;
+            }
+            VideoStartGateAction::DropFrame => {
+                trace!(
+                    "First audio frame fully consumed by trim, \
+                     awaiting next frame to re-apply gate"
+                );
+                return Ok(AudioFrameOutcome::DropFrame);
+            }
+            VideoStartGateAction::Passthrough => {
+                *state.gate_applied = true;
+            }
+        }
+    }
+
+    if let Some(first_tx) = state.first_tx.take() {
+        let _ = first_tx.send(frame.timestamp);
+    }
+
+    state.gap_tracker.mark_started(frame.timestamp);
+
+    let sample_based_before = state.timestamp_generator.next_timestamp(0);
+
+    if let Some(gap_duration) =
+        state
+            .gap_tracker
+            .detect_gap(frame.timestamp, sample_based_before, total_pause_duration)
+    {
+        let silence_samples = state.timestamp_generator.advance_by_duration(gap_duration);
+
+        if silence_samples > 0 {
+            let silence = create_silence_frame(ctx.audio_info, silence_samples as usize);
+
+            let silence_frame = AudioFrame::new(silence, frame.timestamp);
+
+            if gap_duration >= MAX_SILENCE_INSERTION {
+                error!(
+                    gap_ms = gap_duration.as_millis(),
+                    "Audio gap exceeded 1s cap, \
+                     something may be seriously wrong"
+                );
+            }
+
+            state.gap_tracker.record_insertion(gap_duration);
+
+            emit_health(
+                ctx.health_tx,
+                PipelineHealthEvent::AudioGapDetected {
+                    gap_ms: gap_duration.as_millis() as u64,
+                },
+            );
+
+            if let Err(e) = ctx
+                .muxer
+                .lock()
+                .await
+                .send_audio_frame(silence_frame, sample_based_before)
+            {
+                if ctx.has_video {
+                    warn!(
+                        frame_count = *state.frame_count,
+                        "Audio muxer rejected silence frame, \
+                         degrading to video-only: {e}"
+                    );
+                    emit_health(
+                        ctx.health_tx,
+                        PipelineHealthEvent::AudioDegradedToVideoOnly {
+                            reason: format!(
+                                "Silence frame rejected at frame {}: {e}",
+                                *state.frame_count
+                            ),
+                        },
+                    );
+                    return Ok(AudioFrameOutcome::AudioDegraded);
+                }
+                return Err(anyhow!(
+                    "Audio muxer stopped accepting frames \
+                     at frame {}: {e}",
+                    *state.frame_count
+                ));
+            }
+        }
+    }
+
+    let frame_samples = frame.inner.samples() as u64;
+    *state.frame_count += 1;
+
+    let sample_based_timestamp = state.timestamp_generator.next_timestamp(frame_samples);
+    let timestamp = sample_based_timestamp;
+
+    if matches!(ctx.origin, FrameProcessOrigin::Live) && state.frame_count.is_multiple_of(500) {
+        debug!(
+            frame_count = *state.frame_count,
+            sample_based_secs = sample_based_timestamp.as_secs_f64(),
+            corrected_secs = timestamp.as_secs_f64(),
+            total_samples = state.timestamp_generator.total_samples,
+            total_pause_ms = total_pause_duration.as_millis(),
+            silence_insertions = state.gap_tracker.silence_insertion_count,
+            total_silence_ms = state.gap_tracker.total_silence_inserted.as_millis(),
+            "Audio timestamp status"
+        );
+    }
+
+    if let Err(e) = ctx.muxer.lock().await.send_audio_frame(frame, timestamp) {
+        if ctx.has_video {
+            warn!(
+                frame_count = *state.frame_count,
+                "Audio muxer rejected frame, \
+                 degrading to video-only: {e}"
+            );
+            emit_health(
+                ctx.health_tx,
+                PipelineHealthEvent::AudioDegradedToVideoOnly {
+                    reason: format!("Frame rejected at frame {}: {e}", *state.frame_count),
+                },
+            );
+            return Ok(AudioFrameOutcome::AudioDegraded);
+        }
+        return Err(anyhow!(
+            "Audio muxer stopped accepting frames \
+             at frame {}: {e}",
+            *state.frame_count
+        ));
+    }
+
+    Ok(AudioFrameOutcome::Sent)
+}
+
 async fn setup_audio_sources(
     setup_ctx: &mut SetupCtx,
     mut audio_sources: Vec<AudioSourceSetupFn>,
@@ -1613,7 +2396,10 @@ async fn setup_audio_sources(
         erased_audio_sources.push(source);
         info
     } else {
-        let mut audio_mixer = AudioMixer::builder().with_timestamps(timestamps);
+        let mut audio_mixer = AudioMixer::builder()
+            .with_timestamps(timestamps)
+            .with_master_clock(setup_ctx.master_clock().clone())
+            .with_health_tx(setup_ctx.health_tx().clone());
         let stop_flag = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
 
@@ -1628,6 +2414,8 @@ async fn setup_audio_sources(
         setup_ctx.tasks().spawn_thread("audio-mixer", {
             let stop_flag = stop_flag.clone();
             move || {
+                #[cfg(windows)]
+                let _mmcss = cap_mediafoundation_utils::MmcssAudioHandle::register_audio();
                 audio_mixer.run(audio_tx, ready_tx, stop_flag);
                 Ok(())
             }
@@ -2887,6 +3675,451 @@ mod tests {
                 error.to_string().contains("late worker failure"),
                 "error should include the late worker failure"
             );
+        }
+    }
+
+    mod stall_send_budget {
+        use super::*;
+
+        fn drain_health_events(rx: &mut HealthReceiver) -> Vec<PipelineHealthEvent> {
+            let mut events = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                events.push(ev);
+            }
+            events
+        }
+
+        #[test]
+        fn flume_send_succeeds_without_stall_when_channel_has_room() {
+            let (tx, _rx) = flume::bounded::<u32>(4);
+            let (health_tx, mut health_rx) = new_health_channel();
+
+            let outcome = send_with_stall_budget_flume(&tx, 42, "test-source", &health_tx);
+
+            assert_eq!(outcome, StallSendOutcome::Sent);
+            assert!(drain_health_events(&mut health_rx).is_empty());
+        }
+
+        #[test]
+        fn flume_send_recovers_before_budget_when_receiver_drains() {
+            let (tx, rx) = flume::bounded::<u32>(1);
+            tx.try_send(1).expect("priming send should succeed");
+            let (health_tx, mut health_rx) = new_health_channel();
+
+            let drain_handle = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(10));
+                rx.recv().expect("receiver should drain priming value");
+                rx
+            });
+
+            let outcome = send_with_stall_budget_flume(&tx, 2, "test-source", &health_tx);
+
+            let _rx = drain_handle.join().unwrap();
+            assert_eq!(outcome, StallSendOutcome::Sent);
+            assert!(
+                drain_health_events(&mut health_rx).is_empty(),
+                "Stalled must not be emitted when send completes within budget"
+            );
+        }
+
+        #[test]
+        fn flume_send_stalls_and_drops_when_budget_expires() {
+            let (tx, _rx) = flume::bounded::<u32>(1);
+            tx.try_send(1).expect("priming send should succeed");
+            let (health_tx, mut health_rx) = new_health_channel();
+
+            let outcome = send_with_stall_budget_flume(&tx, 2, "screen-video", &health_tx);
+
+            match outcome {
+                StallSendOutcome::StalledAndDropped { waited_ms } => {
+                    assert!(
+                        waited_ms >= STALL_BUDGET_MS,
+                        "expected waited_ms >= {STALL_BUDGET_MS}, got {waited_ms}"
+                    );
+                }
+                other => panic!("expected StalledAndDropped, got {other:?}"),
+            }
+
+            let events = drain_health_events(&mut health_rx);
+            assert_eq!(events.len(), 1, "exactly one Stalled event expected");
+            match &events[0] {
+                PipelineHealthEvent::Stalled { source, waited_ms } => {
+                    assert_eq!(source, "screen-video");
+                    assert!(
+                        *waited_ms >= STALL_BUDGET_MS,
+                        "event waited_ms must reflect budget ({waited_ms})"
+                    );
+                }
+                other => panic!("expected Stalled event, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn flume_send_disconnected_returns_disconnected_without_stall() {
+            let (tx, rx) = flume::bounded::<u32>(1);
+            drop(rx);
+            let (health_tx, mut health_rx) = new_health_channel();
+
+            let outcome = send_with_stall_budget_flume(&tx, 1, "test-source", &health_tx);
+
+            assert_eq!(outcome, StallSendOutcome::Disconnected);
+            assert!(
+                drain_health_events(&mut health_rx).is_empty(),
+                "Disconnected must not emit Stalled"
+            );
+        }
+
+        #[test]
+        fn futures_mpsc_send_succeeds_without_stall_when_channel_has_room() {
+            let (mut tx, _rx) = mpsc::channel::<u32>(4);
+            let (health_tx, mut health_rx) = new_health_channel();
+
+            let outcome = send_with_stall_budget_futures(&mut tx, 42, "test-source", &health_tx);
+
+            assert_eq!(outcome, StallSendOutcome::Sent);
+            assert!(drain_health_events(&mut health_rx).is_empty());
+        }
+
+        #[test]
+        fn futures_mpsc_send_stalls_and_drops_when_budget_expires() {
+            let (mut tx, _rx) = mpsc::channel::<u32>(0);
+            tx.try_send(1)
+                .expect("priming send should fill zero-buf channel");
+            let (health_tx, mut health_rx) = new_health_channel();
+
+            let outcome =
+                send_with_stall_budget_futures(&mut tx, 2, "screen-system-audio", &health_tx);
+
+            match outcome {
+                StallSendOutcome::StalledAndDropped { waited_ms } => {
+                    assert!(
+                        waited_ms >= STALL_BUDGET_MS,
+                        "expected waited_ms >= {STALL_BUDGET_MS}, got {waited_ms}"
+                    );
+                }
+                other => panic!("expected StalledAndDropped, got {other:?}"),
+            }
+
+            let events = drain_health_events(&mut health_rx);
+            assert_eq!(events.len(), 1);
+            match &events[0] {
+                PipelineHealthEvent::Stalled { source, .. } => {
+                    assert_eq!(source, "screen-system-audio");
+                }
+                other => panic!("expected Stalled, got {other:?}"),
+            }
+        }
+
+        const _STALL_BUDGET_BOUNDS_CHECK: () = {
+            assert!(
+                STALL_BUDGET_MS >= 10 && STALL_BUDGET_MS <= 500,
+                "STALL_BUDGET_MS must be within a sane 10-500ms range"
+            );
+        };
+    }
+
+    mod video_start_gate {
+        use super::*;
+        use cap_media_info::AudioInfo;
+
+        const TEST_SAMPLE_RATE: u32 = 48_000;
+        const TEST_CHANNELS: usize = 2;
+
+        fn test_audio_info() -> AudioInfo {
+            AudioInfo {
+                sample_format: ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                sample_rate: TEST_SAMPLE_RATE,
+                channels: TEST_CHANNELS,
+                time_base: ffmpeg::Rational::new(1, TEST_SAMPLE_RATE as i32),
+                buffer_size: 1024,
+                is_wireless_transport: false,
+            }
+        }
+
+        fn make_test_frame(info: &AudioInfo, samples: usize, fill: f32) -> ffmpeg::frame::Audio {
+            let mut frame =
+                ffmpeg::frame::Audio::new(info.sample_format, samples, info.channel_layout());
+            frame.set_rate(info.sample_rate);
+            let plane = frame.data_mut(0);
+            let bytes = fill.to_ne_bytes();
+            for i in 0..(samples * info.channels) {
+                let off = i * 4;
+                plane[off..off + 4].copy_from_slice(&bytes);
+            }
+            frame
+        }
+
+        #[test]
+        fn gate_publishes_exactly_once() {
+            let gate = VideoStartGate::new();
+            assert!(!gate.is_armed());
+            gate.publish(12_345);
+            assert!(gate.is_armed());
+            assert_eq!(gate.start_ns_if_armed(), Some(12_345));
+
+            gate.publish(99_999);
+            assert_eq!(gate.start_ns_if_armed(), Some(12_345));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn gate_wait_returns_immediately_when_already_armed() {
+            let gate = VideoStartGate::new();
+            gate.publish(7_777);
+            let v = gate
+                .wait_with_timeout(Duration::from_millis(10))
+                .await
+                .expect("armed gate returns value without waiting");
+            assert_eq!(v, 7_777);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn gate_wait_times_out_when_never_armed() {
+            let gate = VideoStartGate::new();
+            let r = gate.wait_with_timeout(Duration::from_millis(5)).await;
+            assert!(r.is_none());
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn gate_wait_wakes_on_publish() {
+            let gate = VideoStartGate::new();
+            let gate_clone = gate.clone();
+
+            let publisher = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                gate_clone.publish(42);
+            });
+
+            let v = gate
+                .wait_with_timeout(Duration::from_secs(5))
+                .await
+                .expect("wait should return once publisher runs");
+            publisher.await.unwrap();
+            assert_eq!(v, 42);
+        }
+
+        #[test]
+        fn trim_audio_frame_front_basic_packed() {
+            let info = test_audio_info();
+            let frame = make_test_frame(&info, 1024, 1.0);
+            let trimmed =
+                trim_audio_frame_front(&frame, 256).expect("trim should succeed for 256/1024");
+            assert_eq!(trimmed.samples(), 768);
+            assert_eq!(trimmed.rate(), TEST_SAMPLE_RATE);
+            assert_eq!(trimmed.channels() as usize, TEST_CHANNELS);
+        }
+
+        #[test]
+        fn trim_audio_frame_front_full_drop_returns_none() {
+            let info = test_audio_info();
+            let frame = make_test_frame(&info, 64, 1.0);
+            let trimmed = trim_audio_frame_front(&frame, 64);
+            assert!(trimmed.is_none(), "trimming all samples must return None");
+            let trimmed_all = trim_audio_frame_front(&frame, 100);
+            assert!(trimmed_all.is_none());
+        }
+
+        #[test]
+        fn trim_audio_frame_front_zero_is_clone() {
+            let info = test_audio_info();
+            let frame = make_test_frame(&info, 512, 1.0);
+            let trimmed =
+                trim_audio_frame_front(&frame, 0).expect("zero trim must clone and succeed");
+            assert_eq!(trimmed.samples(), 512);
+        }
+
+        #[test]
+        fn ns_to_sample_count_maps_correctly() {
+            assert_eq!(ns_to_sample_count(0, 48_000), 0);
+            assert_eq!(
+                ns_to_sample_count(1_000_000_000, 48_000),
+                48_000,
+                "1s → sample_rate samples"
+            );
+            assert_eq!(
+                ns_to_sample_count(1_000_000, 48_000),
+                48,
+                "1ms at 48kHz is 48 samples"
+            );
+            assert_eq!(ns_to_sample_count(500_000_000, 0), 0);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn apply_gate_audio_leads_trims_front() {
+            let info = test_audio_info();
+            let master_clock = MasterClock::new(Timestamps::now(), TEST_SAMPLE_RATE);
+            let start = master_clock.start_instant();
+            let gate = VideoStartGate::new();
+
+            let video_start_ns: u64 = 20_000_000;
+            gate.publish(video_start_ns);
+
+            let audio_ts = Timestamp::Instant(start);
+            let frame = AudioFrame::new(make_test_frame(&info, 2048, 0.0), audio_ts);
+            let mut generator = AudioTimestampGenerator::from_master_clock(master_clock.clone());
+
+            let action = apply_video_start_gate(
+                &gate,
+                &frame,
+                &master_clock,
+                &mut generator,
+                info.sample_rate,
+            )
+            .await;
+
+            match action {
+                VideoStartGateAction::UseFrame(new_frame) => {
+                    let expected_trim =
+                        ns_to_sample_count(video_start_ns, info.sample_rate) as usize;
+                    assert_eq!(new_frame.inner.samples(), 2048 - expected_trim);
+                }
+                other => panic!("expected UseFrame when audio leads, got {other:?}"),
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn apply_gate_audio_leads_full_frame_drop() {
+            let info = test_audio_info();
+            let master_clock = MasterClock::new(Timestamps::now(), TEST_SAMPLE_RATE);
+            let start = master_clock.start_instant();
+            let gate = VideoStartGate::new();
+
+            let video_start_ns: u64 = 200_000_000;
+            gate.publish(video_start_ns);
+
+            let audio_ts = Timestamp::Instant(start);
+            let frame = AudioFrame::new(make_test_frame(&info, 512, 0.0), audio_ts);
+            let mut generator = AudioTimestampGenerator::from_master_clock(master_clock.clone());
+
+            let action = apply_video_start_gate(
+                &gate,
+                &frame,
+                &master_clock,
+                &mut generator,
+                info.sample_rate,
+            )
+            .await;
+
+            assert!(
+                matches!(action, VideoStartGateAction::DropFrame),
+                "a 200ms offset against 512-sample frame must drop the frame"
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn apply_gate_video_leads_advances_timeline() {
+            let info = test_audio_info();
+            let master_clock = MasterClock::new(Timestamps::now(), TEST_SAMPLE_RATE);
+            let start = master_clock.start_instant();
+            let gate = VideoStartGate::new();
+
+            gate.publish(0);
+
+            let audio_offset_ms = 15u64;
+            let audio_ts = Timestamp::Instant(start + Duration::from_millis(audio_offset_ms));
+            let frame = AudioFrame::new(make_test_frame(&info, 1024, 0.0), audio_ts);
+            let mut generator = AudioTimestampGenerator::from_master_clock(master_clock.clone());
+            let before = generator.total_samples;
+
+            let action = apply_video_start_gate(
+                &gate,
+                &frame,
+                &master_clock,
+                &mut generator,
+                info.sample_rate,
+            )
+            .await;
+
+            assert!(
+                matches!(action, VideoStartGateAction::Passthrough),
+                "video-leads should passthrough with generator advance, got {action:?}"
+            );
+            let expected_samples =
+                ns_to_sample_count(audio_offset_ms * 1_000_000, info.sample_rate);
+            assert_eq!(generator.total_samples - before, expected_samples);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn apply_gate_offset_beyond_limit_passthrough() {
+            let info = test_audio_info();
+            let master_clock = MasterClock::new(Timestamps::now(), TEST_SAMPLE_RATE);
+            let start = master_clock.start_instant();
+            let gate = VideoStartGate::new();
+
+            gate.publish(AV_START_ALIGNMENT_LIMIT_NS + 1_000_000);
+
+            let audio_ts = Timestamp::Instant(start);
+            let frame = AudioFrame::new(make_test_frame(&info, 2048, 0.0), audio_ts);
+            let mut generator = AudioTimestampGenerator::from_master_clock(master_clock.clone());
+
+            let action = apply_video_start_gate(
+                &gate,
+                &frame,
+                &master_clock,
+                &mut generator,
+                info.sample_rate,
+            )
+            .await;
+
+            assert!(
+                matches!(action, VideoStartGateAction::Passthrough),
+                "offset beyond AV_START_ALIGNMENT_LIMIT_NS must passthrough"
+            );
+        }
+
+        const _AV_ALIGNMENT_LIMIT_BOUNDS: () = {
+            assert!(
+                AV_START_ALIGNMENT_LIMIT_NS >= 50_000_000
+                    && AV_START_ALIGNMENT_LIMIT_NS <= 5_000_000_000,
+                "AV_START_ALIGNMENT_LIMIT_NS must be within 50ms..5s"
+            );
+        };
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn apply_gate_dropframe_retries_on_next_frame_not_consumed() {
+            let info = test_audio_info();
+            let master_clock = MasterClock::new(Timestamps::now(), TEST_SAMPLE_RATE);
+            let start = master_clock.start_instant();
+            let gate = VideoStartGate::new();
+
+            let video_start_ns: u64 = 200_000_000;
+            gate.publish(video_start_ns);
+
+            let small_frame =
+                AudioFrame::new(make_test_frame(&info, 512, 0.0), Timestamp::Instant(start));
+            let mut generator = AudioTimestampGenerator::from_master_clock(master_clock.clone());
+
+            let action = apply_video_start_gate(
+                &gate,
+                &small_frame,
+                &master_clock,
+                &mut generator,
+                info.sample_rate,
+            )
+            .await;
+            assert!(
+                matches!(action, VideoStartGateAction::DropFrame),
+                "sanity: 200ms offset on 512-sample frame must DropFrame"
+            );
+
+            let big_frame_offset_ms = 200u64;
+            let next_ts = Timestamp::Instant(start + Duration::from_millis(big_frame_offset_ms));
+            let big_frame = AudioFrame::new(make_test_frame(&info, 20_000, 0.0), next_ts);
+
+            let action2 = apply_video_start_gate(
+                &gate,
+                &big_frame,
+                &master_clock,
+                &mut generator,
+                info.sample_rate,
+            )
+            .await;
+            match action2 {
+                VideoStartGateAction::Passthrough | VideoStartGateAction::UseFrame(_) => {}
+                VideoStartGateAction::DropFrame => panic!(
+                    "gate must still be applicable on next frame after a DropFrame; \
+                     this guards the 2026-04-20 gate_applied regression"
+                ),
+            }
         }
     }
 }

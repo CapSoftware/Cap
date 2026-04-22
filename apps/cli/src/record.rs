@@ -61,6 +61,7 @@ impl RecordStart {
         let actor = studio_recording::Actor::builder(path, target_info)
             .with_system_audio(self.system_audio)
             .with_custom_cursor(false)
+            .with_fragmented(false)
             .build(
                 #[cfg(target_os = "macos")]
                 Some(cap_recording::SendableShareableContent::from(

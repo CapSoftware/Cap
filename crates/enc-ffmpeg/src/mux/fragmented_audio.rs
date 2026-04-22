@@ -43,7 +43,8 @@ impl FragmentedAudioFile {
             let opts = output.as_mut_ptr();
             let key = std::ffi::CString::new("movflags").unwrap();
             let value =
-                std::ffi::CString::new("frag_keyframe+empty_moov+default_base_moof").unwrap();
+                std::ffi::CString::new("frag_keyframe+empty_moov+default_base_moof+skip_trailer")
+                    .unwrap();
             ffmpeg::ffi::av_opt_set((*opts).priv_data, key.as_ptr(), value.as_ptr(), 0);
         }
 
@@ -73,6 +74,13 @@ impl FragmentedAudioFile {
     }
 
     pub fn finish(&mut self) -> Result<Result<(), ffmpeg::Error>, FinishError> {
+        self.finish_with_timestamp(Duration::ZERO)
+    }
+
+    pub fn finish_with_timestamp(
+        &mut self,
+        _: Duration,
+    ) -> Result<Result<(), ffmpeg::Error>, FinishError> {
         if self.finished {
             return Err(FinishError::AlreadyFinished);
         }
@@ -80,11 +88,17 @@ impl FragmentedAudioFile {
         self.finished = true;
 
         if self.has_frames {
-            let flush_result = self.encoder.flush(&mut self.output);
-            self.output
-                .write_trailer()
-                .map_err(FinishError::WriteTrailerFailed)?;
-            Ok(flush_result)
+            if let Err(flush_err) = self.encoder.flush(&mut self.output) {
+                tracing::warn!(
+                    "Audio encoder flush reported a non-fatal error (fragments on disk are valid): {flush_err}"
+                );
+            }
+            if let Err(trailer_err) = self.output.write_trailer() {
+                tracing::warn!(
+                    "Audio fragmented MP4 write_trailer reported a non-fatal error (fragments on disk are valid, file remains playable): {trailer_err}"
+                );
+            }
+            Ok(Ok(()))
         } else {
             let _ = self.output.write_trailer();
             Ok(Ok(()))
@@ -94,6 +108,6 @@ impl FragmentedAudioFile {
 
 impl Drop for FragmentedAudioFile {
     fn drop(&mut self) {
-        let _ = self.finish();
+        let _ = self.finish_with_timestamp(Duration::ZERO);
     }
 }

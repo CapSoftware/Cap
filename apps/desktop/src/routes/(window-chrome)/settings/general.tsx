@@ -599,6 +599,45 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						handleChange("serverUrl", origin);
 					}}
 				/>
+
+				<TelemetryCard
+					value={settings.enableTelemetry !== false}
+					onChange={(v) => handleChange("enableTelemetry", v)}
+				/>
+			</div>
+		</div>
+	);
+}
+
+function TelemetryCard(props: {
+	value: boolean;
+	onChange: (value: boolean) => void;
+}) {
+	return (
+		<div class="flex flex-col gap-3 mt-6">
+			<h3 class="text-sm text-gray-12 w-fit">Privacy</h3>
+			<div class="flex flex-col gap-3 px-4 py-3 rounded-xl border border-gray-3 bg-gray-2">
+				<div class="flex items-center justify-between gap-6">
+					<div class="flex flex-col gap-1">
+						<p class="text-sm text-gray-12">Share anonymous telemetry</p>
+						<p class="text-xs text-gray-10 max-w-[34rem]">
+							Cap uses anonymous telemetry to improve recording reliability,
+							upload accuracy, and bug fixes. We <strong>never</strong> collect
+							recording contents, window titles, file paths, or any personal
+							information. Events only include aggregate counts like frame
+							drops, A/V drift, and crash recovery outcomes.
+						</p>
+					</div>
+					<label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
+						<input
+							type="checkbox"
+							class="sr-only peer"
+							checked={props.value}
+							onChange={(e) => props.onChange(e.currentTarget.checked)}
+						/>
+						<div class="w-9 h-5 bg-gray-5 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-gray-1 after:border-gray-6 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500" />
+					</label>
+				</div>
 			</div>
 		</div>
 	);

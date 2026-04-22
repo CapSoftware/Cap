@@ -17,6 +17,8 @@ dist-ssr
 .env.test
 target
 target-agent
+target-phase8
+outputs
 .cursorrules
 .github/hooks
 
