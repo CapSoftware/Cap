@@ -30,7 +30,7 @@ async fn get_latest_log_file(app: &AppHandle) -> Option<PathBuf> {
         })
         .collect();
 
-    log_files.sort_by(|a, b| b.1.cmp(&a.1));
+    log_files.sort_by_key(|b| std::cmp::Reverse(b.1));
     log_files.first().map(|(path, _)| path.clone())
 }
 
