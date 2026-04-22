@@ -558,7 +558,7 @@ impl WindowsOOPFragmentedM4SMuxer {
                     };
 
                     let normalized_ts = normalize_timestamp(timestamp, &mut first_timestamp);
-                    if let Err(e) = encode_one(
+                    encode_one(
                         &mut encoder,
                         &mut subprocess,
                         &mut tracker,
@@ -566,9 +566,7 @@ impl WindowsOOPFragmentedM4SMuxer {
                         normalized_ts,
                         &mut slow_encode_count,
                         &mut total_frames,
-                    ) {
-                        return Err(e);
-                    }
+                    )?;
                 }
 
                 let final_ts = last_timestamp

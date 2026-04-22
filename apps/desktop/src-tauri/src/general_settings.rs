@@ -344,14 +344,22 @@ fn register_bundled_muxer_binary(_app: &AppHandle) {
         && let Some(dir) = exe.parent()
     {
         let candidate = dir.join(bundled_muxer_bin_name());
-        if candidate.exists() {
-            unsafe {
-                std::env::set_var(cap_recording::oop_muxer::ENV_BIN_PATH, &candidate);
+        if candidate.is_file() {
+            match cap_recording::oop_muxer::set_muxer_binary_override(candidate.clone()) {
+                Ok(()) => {
+                    tracing::info!(
+                        path = %candidate.display(),
+                        "Registered executable-adjacent cap-muxer binary for out-of-process muxer"
+                    );
+                }
+                Err(existing) => {
+                    tracing::debug!(
+                        existing = %existing.display(),
+                        candidate = %candidate.display(),
+                        "cap-muxer override already registered; keeping existing"
+                    );
+                }
             }
-            tracing::info!(
-                path = %candidate.display(),
-                "Registered executable-adjacent cap-muxer binary for out-of-process muxer"
-            );
         }
     }
 }

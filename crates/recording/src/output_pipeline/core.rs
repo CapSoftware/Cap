@@ -529,6 +529,7 @@ pub(crate) fn send_with_stall_budget_futures<T>(
     }
 }
 
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 pub(crate) fn send_with_stall_budget_flume<T>(
     tx: &flume::Sender<T>,
     frame: T,

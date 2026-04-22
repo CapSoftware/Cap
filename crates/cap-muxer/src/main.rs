@@ -9,7 +9,7 @@ use std::ffi::CString;
 use std::io::{self, BufReader, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 const EXIT_OK: u8 = 0;
 const EXIT_PROTOCOL_ERROR: u8 = 10;
@@ -131,12 +131,12 @@ impl FrameQueue {
 
     fn push(&self, frame: Frame) {
         let frame_bytes = frame_size_hint(&frame);
-        let mut guard = self.state.lock().expect("cap-muxer frame queue poisoned");
+        let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         while guard.bytes + frame_bytes > guard.capacity_bytes && !guard.frames.is_empty() {
             guard = self
                 .space_cv
                 .wait(guard)
-                .expect("cap-muxer frame queue poisoned");
+                .unwrap_or_else(PoisonError::into_inner);
         }
         guard.bytes = guard.bytes.saturating_add(frame_bytes);
         guard.frames.push_back(frame);
@@ -145,7 +145,7 @@ impl FrameQueue {
     }
 
     fn mark_reader_done(&self, err: Option<ProtocolError>) {
-        let mut guard = self.state.lock().expect("cap-muxer frame queue poisoned");
+        let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         guard.reader_done = true;
         if err.is_some() {
             guard.reader_err = err;
@@ -156,7 +156,7 @@ impl FrameQueue {
     }
 
     fn pop(&self) -> PopResult {
-        let mut guard = self.state.lock().expect("cap-muxer frame queue poisoned");
+        let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
             if let Some(frame) = guard.frames.pop_front() {
                 let size = frame_size_hint(&frame);
@@ -175,7 +175,7 @@ impl FrameQueue {
             guard = self
                 .data_cv
                 .wait(guard)
-                .expect("cap-muxer frame queue poisoned");
+                .unwrap_or_else(PoisonError::into_inner);
         }
     }
 }

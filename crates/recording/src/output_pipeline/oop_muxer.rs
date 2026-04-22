@@ -5,11 +5,12 @@ use cap_muxer_protocol::{
     STREAM_INDEX_VIDEO, StartParams, write_frame,
 };
 use std::{
+    collections::VecDeque,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStderr, ChildStdin, Command, ExitStatus, Stdio},
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::JoinHandle,
@@ -23,7 +24,23 @@ const RESPAWN_COOLDOWN: Duration = Duration::from_millis(500);
 const RESPAWN_STABILITY_WINDOW: Duration = Duration::from_secs(5);
 pub const EXIT_DISK_FULL: u8 = 60;
 
+static MUXER_BINARY_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_muxer_binary_override(path: PathBuf) -> Result<(), PathBuf> {
+    MUXER_BINARY_OVERRIDE.set(path)
+}
+
 pub fn resolve_muxer_binary() -> Result<PathBuf> {
+    if let Some(override_path) = MUXER_BINARY_OVERRIDE.get() {
+        if override_path.exists() {
+            return Ok(override_path.clone());
+        }
+        return Err(anyhow!(
+            "registered cap-muxer override points to missing path: {}",
+            override_path.display()
+        ));
+    }
+
     if let Ok(override_path) = std::env::var(ENV_BIN_PATH) {
         let path = PathBuf::from(override_path);
         if path.exists() {
@@ -119,7 +136,7 @@ pub struct MuxerSubprocess {
     child: Option<Child>,
     stdin: Option<BufWriter<ChildStdin>>,
     stderr_thread: Option<JoinHandle<Vec<String>>>,
-    stderr_lines: Arc<parking_lot::Mutex<Vec<String>>>,
+    stderr_lines: Arc<parking_lot::Mutex<VecDeque<String>>>,
     bin_path: PathBuf,
     config: MuxerSubprocessConfig,
     health_tx: Option<HealthSender>,
@@ -172,8 +189,15 @@ impl MuxerSubprocess {
             .take()
             .ok_or_else(|| MuxerSubprocessError::Spawn(anyhow!("subprocess stderr missing")))?;
 
-        let stderr_lines = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
-        let stderr_thread = Some(spawn_stderr_reader(stderr, stderr_lines.clone()));
+        let stderr_lines = Arc::new(parking_lot::Mutex::new(VecDeque::<String>::new()));
+        let stderr_thread = match spawn_stderr_reader(stderr, stderr_lines.clone()) {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+        };
 
         let mut subprocess = Self {
             child: Some(child),
@@ -391,7 +415,7 @@ impl MuxerSubprocess {
     }
 
     fn snapshot_stderr(&self) -> Vec<String> {
-        self.stderr_lines.lock().clone()
+        self.stderr_lines.lock().iter().cloned().collect()
     }
 
     fn report_crashed(&self, reason: &str) {
@@ -479,12 +503,17 @@ impl MuxerSubprocess {
                 exit_code,
                 stderr_tail.iter().rev().take(3).collect::<Vec<_>>()
             );
-            if exit_code == Some(EXIT_DISK_FULL as i32) {
+            let is_disk_full = exit_code == Some(EXIT_DISK_FULL as i32);
+            if is_disk_full {
                 self.report_disk_full(&reason);
             } else {
                 self.report_crashed(&reason);
             }
-            return Err(MuxerSubprocessError::Crashed(reason));
+            return Err(if is_disk_full {
+                MuxerSubprocessError::DiskFull(reason)
+            } else {
+                MuxerSubprocessError::Crashed(reason)
+            });
         }
 
         info!(
@@ -524,8 +553,8 @@ pub struct MuxerSubprocessReport {
 
 fn spawn_stderr_reader(
     stderr: ChildStderr,
-    lines: Arc<parking_lot::Mutex<Vec<String>>>,
-) -> JoinHandle<Vec<String>> {
+    lines: Arc<parking_lot::Mutex<VecDeque<String>>>,
+) -> Result<JoinHandle<Vec<String>>, MuxerSubprocessError> {
     std::thread::Builder::new()
         .name("cap-muxer-stderr".into())
         .spawn(move || {
@@ -537,9 +566,9 @@ fn spawn_stderr_reader(
                     Ok(line) => {
                         debug!(target: "cap_muxer_stderr", "{line}");
                         let mut guard = lines.lock();
-                        guard.push(line.clone());
+                        guard.push_back(line.clone());
                         if guard.len() > STDERR_RING_LIMIT {
-                            guard.remove(0);
+                            guard.pop_front();
                         }
                         drop(guard);
                         final_lines.push(line);
@@ -555,7 +584,9 @@ fn spawn_stderr_reader(
             }
             final_lines
         })
-        .expect("failed to spawn cap-muxer-stderr thread")
+        .map_err(|e| {
+            MuxerSubprocessError::Spawn(anyhow!("failed to spawn cap-muxer-stderr thread: {e}"))
+        })
 }
 
 pub struct RespawningMuxerSubprocess {

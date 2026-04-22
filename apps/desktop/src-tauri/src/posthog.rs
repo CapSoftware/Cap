@@ -354,7 +354,6 @@ pub fn set_telemetry_enabled(enabled: bool) {
     TELEMETRY_ENABLED.store(enabled, Ordering::Release);
 }
 
-#[allow(dead_code)]
 pub fn telemetry_enabled() -> bool {
     TELEMETRY_ENABLED.load(Ordering::Acquire)
 }
@@ -368,7 +367,7 @@ pub fn async_capture_event(app: &AppHandle, event: PostHogEvent) {
         .ok()
         .flatten()
         .map(|s| s.enable_telemetry)
-        .unwrap_or(true);
+        .unwrap_or_else(telemetry_enabled);
     TELEMETRY_ENABLED.store(live_enabled, Ordering::Release);
     if !live_enabled {
         return;
