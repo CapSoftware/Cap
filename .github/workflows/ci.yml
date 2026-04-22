@@ -211,15 +211,19 @@ jobs:
       - name: Output .env file
         run: cat apps/desktop/.env
 
+      - name: Run cap-setup
+        shell: bash
+        run: pnpm -w cap-setup
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
       - name: Build cap-muxer sidecar
         shell: bash
         run: ./scripts/build-cap-muxer.sh ${{ matrix.settings.target }}
 
       - name: Build app
         working-directory: apps/desktop
-        run: |
-          pnpm -w cap-setup
-          pnpm tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
+        run: pnpm tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 

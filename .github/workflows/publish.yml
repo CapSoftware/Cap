@@ -188,15 +188,19 @@ jobs:
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
           echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}' >> .env
 
+      - name: Run cap-setup
+        shell: bash
+        run: pnpm -w cap-setup
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
       - name: Build cap-muxer sidecar
         shell: bash
         run: ./scripts/build-cap-muxer.sh ${{ matrix.settings.target }}
 
       - name: Build app
         working-directory: apps/desktop
-        run: |
-          pnpm -w cap-setup
-          pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json
+        run: pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
