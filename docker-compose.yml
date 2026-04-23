@@ -113,7 +113,6 @@ services:
       /bin/sh -c "
       mc alias set capminio http://minio:9000 $${MINIO_ROOT_USER:-cap-admin} $${MINIO_ROOT_PASSWORD:-cap-minio-pwd-456};
       mc mb capminio/cap --ignore-existing;
-      mc anonymous set download capminio/cap;
       exit 0;
       "
     environment:
