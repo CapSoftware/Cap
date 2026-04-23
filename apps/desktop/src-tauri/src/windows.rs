@@ -250,7 +250,7 @@ async fn restore_main_window_inputs(app: &AppHandle) {
     }
 }
 
-async fn cleanup_camera_window(
+pub(crate) async fn cleanup_camera_window(
     app: &AppHandle,
     window: Option<&WebviewWindow>,
     #[allow(unused_variables)] reset_panel: bool,
