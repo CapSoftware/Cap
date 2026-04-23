@@ -49,6 +49,7 @@
 		"resources": {
 			"assets/backgrounds/macOS/*": "assets/backgrounds/macOS/",
 			"assets/backgrounds/blue/*": "assets/backgrounds/blue/",
+			"assets/backgrounds/cities/*": "assets/backgrounds/cities/",
 			"assets/backgrounds/dark/*": "assets/backgrounds/dark/",
 			"assets/backgrounds/orange/*": "assets/backgrounds/orange/",
 			"assets/backgrounds/purple/*": "assets/backgrounds/purple/",
