@@ -597,16 +597,17 @@ pub async fn start_recording(
             let mut app_state = state_mtx.write().await;
             app_state.was_camera_only_recording = true;
 
-            let current_mirrored = app_state
+            let (current_mirrored, current_background_blur) = app_state
                 .camera_preview
                 .get_state()
-                .map(|s| s.mirrored)
-                .unwrap_or(false);
+                .map(|s| (s.mirrored, s.background_blur))
+                .unwrap_or_default();
 
             let camera_state = CameraPreviewState {
                 size: crate::camera::CAMERA_PRESET_LARGE,
                 shape: CameraPreviewShape::Full,
                 mirrored: current_mirrored,
+                background_blur: current_background_blur,
             };
 
             if let Err(err) = app_state.camera_preview.set_state(camera_state) {
@@ -2734,6 +2735,10 @@ fn project_config_from_recording(
                 config.camera.rounding = 25.0;
             }
         }
+
+        config.camera.background_blur = cap_project::BackgroundBlurConfig {
+            mode: camera_preview_state.background_blur,
+        };
     }
 
     let timeline_segments = recordings

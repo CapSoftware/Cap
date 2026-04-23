@@ -18,6 +18,17 @@ pub struct CameraLayer {
     hidden: bool,
     last_recording_time: Option<f32>,
     yuv_converter: YuvToRgbaConverter,
+    blur_bind_group: Option<wgpu::BindGroup>,
+    blur_active: bool,
+    blur_cache: Option<BlurCacheEntry>,
+}
+
+#[derive(Clone, Copy)]
+struct BlurCacheEntry {
+    recording_time: f32,
+    mode: cap_camera_effects::BlurMode,
+    texture_idx: usize,
+    output_generation: u64,
 }
 
 impl CameraLayer {
@@ -65,6 +76,9 @@ impl CameraLayer {
             hidden: false,
             last_recording_time: None,
             yuv_converter,
+            blur_bind_group: None,
+            blur_active: false,
+            blur_cache: None,
         }
     }
 
@@ -75,6 +89,8 @@ impl CameraLayer {
         uniforms: Option<CompositeVideoFrameUniforms>,
         frame_data: Option<(XY<u32>, &DecodedFrame, f32)>,
     ) {
+        self.blur_active = false;
+
         let Some(uniforms) = uniforms else {
             self.hidden = true;
             return;
@@ -327,6 +343,8 @@ impl CameraLayer {
         frame_data: Option<(XY<u32>, &DecodedFrame, f32)>,
         encoder: &mut wgpu::CommandEncoder,
     ) {
+        self.blur_active = false;
+
         let Some(uniforms) = uniforms else {
             self.hidden = true;
             return;
@@ -464,12 +482,75 @@ impl CameraLayer {
         }
     }
 
+    pub fn source_texture_for_blur(&self) -> Option<&wgpu::Texture> {
+        if self.hidden || self.last_recording_time.is_none() {
+            return None;
+        }
+        Some(&self.frame_textures[self.current_texture])
+    }
+
+    pub fn attach_shared_blur(
+        &mut self,
+        device: &wgpu::Device,
+        processor: &cap_camera_effects::BlurProcessor,
+        mode: cap_camera_effects::BlurMode,
+    ) {
+        if self.hidden || self.last_recording_time.is_none() {
+            return;
+        }
+
+        let recording_time = self.last_recording_time.expect("checked above");
+        let current = self.current_texture;
+        let processor_generation = processor.output_generation();
+
+        let cache_hit = matches!(
+            self.blur_cache,
+            Some(entry)
+                if entry.texture_idx == current
+                    && entry.mode == mode
+                    && (entry.recording_time - recording_time).abs() < 0.001
+                    && entry.output_generation == processor_generation
+        ) && self.blur_bind_group.is_some();
+
+        if cache_hit {
+            self.blur_active = true;
+            return;
+        }
+
+        let Some(output_view) = processor.output_view() else {
+            return;
+        };
+
+        self.blur_bind_group = Some(self.pipeline.bind_group(
+            device,
+            &self.uniforms_buffer,
+            output_view,
+        ));
+        self.blur_cache = Some(BlurCacheEntry {
+            recording_time,
+            mode,
+            texture_idx: current,
+            output_generation: processor_generation,
+        });
+        self.blur_active = true;
+    }
+
     pub fn copy_to_texture(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if !self.hidden
-            && let Some(bind_group) = &self.bind_groups[self.current_texture]
-        {
+        if self.hidden {
+            return;
+        }
+
+        let bind_group = if self.blur_active {
+            self.blur_bind_group
+                .as_ref()
+                .or(self.bind_groups[self.current_texture].as_ref())
+        } else {
+            self.bind_groups[self.current_texture].as_ref()
+        };
+
+        if let Some(bind_group) = bind_group {
             pass.set_pipeline(&self.pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..3, 0..1);

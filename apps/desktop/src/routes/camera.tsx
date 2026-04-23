@@ -21,7 +21,7 @@ import {
 	Show,
 	Suspense,
 } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, type SetStoreFunction } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCameraMutation } from "~/utils/queries";
@@ -30,10 +30,12 @@ import { commands, events } from "~/utils/tauri";
 import { RecordingOptionsProvider } from "./(window-chrome)/OptionsContext";
 
 type CameraWindowShape = "round" | "square" | "full";
+type BackgroundBlurMode = "off" | "light" | "heavy";
 type CameraWindowState = {
 	size: number;
 	shape: CameraWindowShape;
 	mirrored: boolean;
+	backgroundBlur: BackgroundBlurMode | boolean;
 };
 
 const CAMERA_MIN_SIZE = 150;
@@ -50,7 +52,32 @@ const getCameraOnlyInitialState = (): CameraWindowState => ({
 	size: CAMERA_PRESET_LARGE,
 	shape: "full",
 	mirrored: false,
+	backgroundBlur: "off",
 });
+
+const BLUR_MODES: BackgroundBlurMode[] = ["off", "light", "heavy"];
+
+const cycleBlurMode = (
+	current: BackgroundBlurMode | boolean,
+): BackgroundBlurMode => {
+	if (typeof current === "boolean") {
+		return current ? "heavy" : "light";
+	}
+	const idx = BLUR_MODES.indexOf(current);
+	return BLUR_MODES[(idx + 1) % BLUR_MODES.length];
+};
+
+const blurModeLabel = (mode: BackgroundBlurMode | boolean): string => {
+	if (typeof mode === "boolean") return mode ? "Blur" : "";
+	switch (mode) {
+		case "light":
+			return "Light";
+		case "heavy":
+			return "Heavy";
+		default:
+			return "";
+	}
+};
 
 let ignoreMoveUntil = 0;
 
@@ -189,18 +216,11 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 						size: CAMERA_DEFAULT_SIZE,
 						shape: "round",
 						mirrored: false,
+						backgroundBlur: "off" as BackgroundBlurMode,
 					},
 		),
 		{ name: "cameraWindowState" },
 	);
-
-	const [isResizing, setIsResizing] = createSignal(false);
-	const [resizeStart, setResizeStart] = createSignal({
-		size: 0,
-		x: 0,
-		y: 0,
-		corner: "",
-	});
 
 	const applyCameraOnlyDefaults = () => {
 		const cameraOnlyState = getCameraOnlyInitialState();
@@ -263,7 +283,17 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		if (clampedSize !== currentSize) {
 			setState("size", clampedSize);
 		}
-		commands.setCameraPreviewState(state);
+		commands.setCameraPreviewState({
+			size: state.size,
+			shape: state.shape,
+			mirrored: state.mirrored,
+			background_blur:
+				(typeof state.backgroundBlur === "boolean"
+					? state.backgroundBlur
+						? "heavy"
+						: "off"
+					: state.backgroundBlur) ?? "off",
+		});
 	});
 
 	const [cameraPreviewReady] = createResource(() =>
@@ -277,60 +307,6 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			(state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
 		return 0.7 + normalized * 0.3;
 	};
-
-	const handleResizeStart = (corner: string) => (e: MouseEvent) => {
-		e.preventDefault();
-		e.stopPropagation();
-		setIsResizing(true);
-		setResizeStart({ size: state.size, x: e.clientX, y: e.clientY, corner });
-	};
-
-	const handleResizeMove = (e: MouseEvent) => {
-		if (!isResizing()) return;
-		const start = resizeStart();
-		const deltaX = e.clientX - start.x;
-		const deltaY = e.clientY - start.y;
-
-		let delta = 0;
-		if (start.corner.includes("e") && start.corner.includes("s")) {
-			delta = Math.max(deltaX, deltaY);
-		} else if (start.corner.includes("e") && start.corner.includes("n")) {
-			delta = Math.max(deltaX, -deltaY);
-		} else if (start.corner.includes("w") && start.corner.includes("s")) {
-			delta = Math.max(-deltaX, deltaY);
-		} else if (start.corner.includes("w") && start.corner.includes("n")) {
-			delta = Math.max(-deltaX, -deltaY);
-		} else if (start.corner.includes("e")) {
-			delta = deltaX;
-		} else if (start.corner.includes("w")) {
-			delta = -deltaX;
-		} else if (start.corner.includes("s")) {
-			delta = deltaY;
-		} else if (start.corner.includes("n")) {
-			delta = -deltaY;
-		}
-
-		const newSize = Math.max(
-			CAMERA_MIN_SIZE,
-			Math.min(CAMERA_MAX_SIZE, start.size + delta),
-		);
-		setState("size", newSize);
-	};
-
-	const handleResizeEnd = () => {
-		setIsResizing(false);
-	};
-
-	createEffect(() => {
-		if (isResizing()) {
-			window.addEventListener("mousemove", handleResizeMove);
-			window.addEventListener("mouseup", handleResizeEnd);
-			onCleanup(() => {
-				window.removeEventListener("mousemove", handleResizeMove);
-				window.removeEventListener("mouseup", handleResizeEnd);
-			});
-		}
-	});
 
 	return (
 		<div
@@ -382,32 +358,38 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 						>
 							<IconCapArrows class="size-5.5" />
 						</ControlButton>
+						<ControlButton
+							pressed={
+								state.backgroundBlur !== "off" && state.backgroundBlur !== false
+							}
+							onClick={() =>
+								setState("backgroundBlur", (b) => cycleBlurMode(b))
+							}
+						>
+							<div class="relative">
+								<IconLucidePersonStanding class="size-5.5" />
+								<Show
+									when={
+										state.backgroundBlur !== "off" &&
+										state.backgroundBlur !== false
+									}
+								>
+									<span class="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[7px] font-bold leading-none whitespace-nowrap">
+										{blurModeLabel(state.backgroundBlur)}
+									</span>
+								</Show>
+							</div>
+						</ControlButton>
 					</div>
 				</div>
 			</div>
 
-			<div
-				class="absolute top-0 left-0 w-4 h-4 cursor-nw-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("nw")}
-			/>
-			<div
-				class="absolute top-0 right-0 w-4 h-4 cursor-ne-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("ne")}
-			/>
-			<div
-				class="absolute bottom-0 left-0 w-4 h-4 cursor-sw-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("sw")}
-			/>
-			<div
-				class="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("se")}
+			<CameraResizeHandles
+				state={state}
+				setState={setState}
+				toolbarHeight={52}
 			/>
 
-			{/* The camera preview is rendered in Rust by wgpu */}
 			<Show when={cameraPreviewReady.loading}>
 				<div class="w-full flex-1 flex items-center justify-center">
 					<div class="text-gray-11">Loading camera...</div>
@@ -431,6 +413,153 @@ function ControlButton(
 	);
 }
 
+type ResizeCorner = "nw" | "ne" | "sw" | "se";
+
+const RESIZE_CORNERS: readonly ResizeCorner[] = ["nw", "ne", "sw", "se"];
+
+function CameraResizeHandles(props: {
+	state: CameraWindowState;
+	setState: SetStoreFunction<CameraWindowState>;
+	toolbarHeight: number;
+}) {
+	const [isResizing, setIsResizing] = createSignal(false);
+	const [activeCorner, setActiveCorner] = createSignal<ResizeCorner | null>(
+		null,
+	);
+	const [resizeStart, setResizeStart] = createSignal({
+		size: 0,
+		x: 0,
+		y: 0,
+		corner: "nw" as ResizeCorner,
+	});
+
+	const handleResizeStart = (corner: ResizeCorner) => (e: MouseEvent) => {
+		if (e.button !== 0) return;
+		e.preventDefault();
+		e.stopPropagation();
+		setIsResizing(true);
+		setActiveCorner(corner);
+		setResizeStart({
+			size: props.state.size,
+			x: e.clientX,
+			y: e.clientY,
+			corner,
+		});
+	};
+
+	const handleResizeMove = (e: MouseEvent) => {
+		if (!isResizing()) return;
+		const start = resizeStart();
+		const deltaX = e.clientX - start.x;
+		const deltaY = e.clientY - start.y;
+
+		const hasE = start.corner.includes("e");
+		const hasW = start.corner.includes("w");
+		const hasS = start.corner.includes("s");
+		const hasN = start.corner.includes("n");
+
+		const dx = hasE ? deltaX : hasW ? -deltaX : 0;
+		const dy = hasS ? deltaY : hasN ? -deltaY : 0;
+
+		const delta = (hasE || hasW) && (hasN || hasS) ? Math.max(dx, dy) : dx + dy;
+
+		const newSize = Math.max(
+			CAMERA_MIN_SIZE,
+			Math.min(CAMERA_MAX_SIZE, start.size + delta),
+		);
+		props.setState("size", newSize);
+	};
+
+	const handleResizeEnd = () => {
+		setIsResizing(false);
+		setActiveCorner(null);
+	};
+
+	createEffect(() => {
+		if (!isResizing()) return;
+		window.addEventListener("mousemove", handleResizeMove);
+		window.addEventListener("mouseup", handleResizeEnd);
+		onCleanup(() => {
+			window.removeEventListener("mousemove", handleResizeMove);
+			window.removeEventListener("mouseup", handleResizeEnd);
+		});
+	});
+
+	return (
+		<div
+			class="pointer-events-none absolute inset-x-0 bottom-0 z-20"
+			style={{ top: `${props.toolbarHeight}px` }}
+		>
+			{RESIZE_CORNERS.map((corner) => (
+				<ResizeCornerHandle
+					corner={corner}
+					onMouseDown={handleResizeStart(corner)}
+					active={activeCorner() === corner}
+				/>
+			))}
+		</div>
+	);
+}
+
+function ResizeCornerHandle(props: {
+	corner: ResizeCorner;
+	onMouseDown: (e: MouseEvent) => void;
+	active: boolean;
+}) {
+	const hitAreaClass = () => {
+		switch (props.corner) {
+			case "nw":
+				return "top-0 left-0 cursor-nw-resize";
+			case "ne":
+				return "top-0 right-0 cursor-ne-resize";
+			case "sw":
+				return "bottom-0 left-0 cursor-sw-resize";
+			case "se":
+				return "bottom-0 right-0 cursor-se-resize";
+		}
+	};
+
+	const bracketPositionClass = () => {
+		switch (props.corner) {
+			case "nw":
+				return "top-1.5 left-1.5 border-t-2 border-l-2 rounded-tl-[6px]";
+			case "ne":
+				return "top-1.5 right-1.5 border-t-2 border-r-2 rounded-tr-[6px]";
+			case "sw":
+				return "bottom-1.5 left-1.5 border-b-2 border-l-2 rounded-bl-[6px]";
+			case "se":
+				return "bottom-1.5 right-1.5 border-b-2 border-r-2 rounded-br-[6px]";
+		}
+	};
+
+	return (
+		<div
+			data-tauri-drag-region="false"
+			class={cx(
+				"absolute z-20 w-7 h-7 group/handle select-none",
+				hitAreaClass(),
+			)}
+			style={{ "pointer-events": "auto" }}
+			onMouseDown={props.onMouseDown}
+		>
+			<div
+				class={cx(
+					"absolute w-3.5 h-3.5 border-white pointer-events-none",
+					"transition-[opacity,transform,border-color] duration-150 ease-out",
+					"opacity-0 scale-90",
+					"group-hover:opacity-70 group-hover:scale-100",
+					"group-hover/handle:!opacity-100 group-hover/handle:!scale-110",
+					props.active && "!opacity-100 !scale-110",
+					bracketPositionClass(),
+				)}
+				style={{
+					filter: "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6))",
+				}}
+			/>
+		</div>
+	);
+}
+
 // Legacy stuff below
 
 function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
@@ -444,6 +573,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 						size: CAMERA_DEFAULT_SIZE,
 						shape: "round",
 						mirrored: false,
+						backgroundBlur: "off" as BackgroundBlurMode,
 					},
 		),
 		{ name: "cameraWindowState" },
@@ -492,12 +622,18 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		}
 	});
 
-	const [isResizing, setIsResizing] = createSignal(false);
-	const [resizeStart, setResizeStart] = createSignal({
-		size: 0,
-		x: 0,
-		y: 0,
-		corner: "",
+	createEffect(() => {
+		commands.setCameraPreviewState({
+			size: state.size,
+			shape: state.shape,
+			mirrored: state.mirrored,
+			background_blur:
+				(typeof state.backgroundBlur === "boolean"
+					? state.backgroundBlur
+						? "heavy"
+						: "off"
+					: state.backgroundBlur) ?? "off",
+		});
 	});
 
 	const [hasPositioned, setHasPositioned] = createSignal(isCameraOnlyMode());
@@ -792,60 +928,6 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		return 0.7 + normalized * 0.3;
 	};
 
-	const handleResizeStart = (corner: string) => (e: MouseEvent) => {
-		e.preventDefault();
-		e.stopPropagation();
-		setIsResizing(true);
-		setResizeStart({ size: state.size, x: e.clientX, y: e.clientY, corner });
-	};
-
-	const handleResizeMove = (e: MouseEvent) => {
-		if (!isResizing()) return;
-		const start = resizeStart();
-		const deltaX = e.clientX - start.x;
-		const deltaY = e.clientY - start.y;
-
-		let delta = 0;
-		if (start.corner.includes("e") && start.corner.includes("s")) {
-			delta = Math.max(deltaX, deltaY);
-		} else if (start.corner.includes("e") && start.corner.includes("n")) {
-			delta = Math.max(deltaX, -deltaY);
-		} else if (start.corner.includes("w") && start.corner.includes("s")) {
-			delta = Math.max(-deltaX, deltaY);
-		} else if (start.corner.includes("w") && start.corner.includes("n")) {
-			delta = Math.max(-deltaX, -deltaY);
-		} else if (start.corner.includes("e")) {
-			delta = deltaX;
-		} else if (start.corner.includes("w")) {
-			delta = -deltaX;
-		} else if (start.corner.includes("s")) {
-			delta = deltaY;
-		} else if (start.corner.includes("n")) {
-			delta = -deltaY;
-		}
-
-		const newSize = Math.max(
-			CAMERA_MIN_SIZE,
-			Math.min(CAMERA_MAX_SIZE, start.size + delta),
-		);
-		setState("size", newSize);
-	};
-
-	const handleResizeEnd = () => {
-		setIsResizing(false);
-	};
-
-	createEffect(() => {
-		if (isResizing()) {
-			window.addEventListener("mousemove", handleResizeMove);
-			window.addEventListener("mouseup", handleResizeEnd);
-			onCleanup(() => {
-				window.removeEventListener("mousemove", handleResizeMove);
-				window.removeEventListener("mouseup", handleResizeEnd);
-			});
-		}
-	});
-
 	const [_windowSize] = createResource(
 		() =>
 			[
@@ -1016,28 +1098,35 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 						>
 							<IconCapArrows class="size-5.5" />
 						</ControlButton>
+						<ControlButton
+							pressed={
+								state.backgroundBlur !== "off" && state.backgroundBlur !== false
+							}
+							onClick={() =>
+								setState("backgroundBlur", (b) => cycleBlurMode(b))
+							}
+						>
+							<div class="relative">
+								<IconLucidePersonStanding class="size-5.5" />
+								<Show
+									when={
+										state.backgroundBlur !== "off" &&
+										state.backgroundBlur !== false
+									}
+								>
+									<span class="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[7px] font-bold leading-none whitespace-nowrap">
+										{blurModeLabel(state.backgroundBlur)}
+									</span>
+								</Show>
+							</div>
+						</ControlButton>
 					</div>
 				</div>
 			</div>
-			<div
-				class="absolute top-0 left-0 w-4 h-4 cursor-nw-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("nw")}
-			/>
-			<div
-				class="absolute top-0 right-0 w-4 h-4 cursor-ne-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("ne")}
-			/>
-			<div
-				class="absolute bottom-0 left-0 w-4 h-4 cursor-sw-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("sw")}
-			/>
-			<div
-				class="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("se")}
+			<CameraResizeHandles
+				state={state}
+				setState={setState}
+				toolbarHeight={56}
 			/>
 			<div
 				ref={containerRef}

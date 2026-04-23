@@ -1,4 +1,3 @@
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type } from "@tauri-apps/plugin-os";
 import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -41,10 +40,9 @@ function Inner(props: {
 		if (key === "enableNativeCameraPreview") {
 			await commands.setCameraInput(null, true);
 			try {
-				const cameraWindow = await WebviewWindow.getByLabel("camera");
-				await cameraWindow?.close();
+				await commands.destroyCameraWindow();
 			} catch (error) {
-				console.error("Failed to close camera window", error);
+				console.error("Failed to destroy camera window", error);
 			}
 		}
 	};
