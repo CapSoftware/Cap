@@ -141,6 +141,8 @@ export const app = new Hono().post(
 
 				const outputKey = `${user.id}/${videoIdRaw}/result.mp4`;
 				const thumbnailKey = `${user.id}/${videoIdRaw}/screenshot/screen-capture.jpg`;
+				const spriteSheetKey = `${user.id}/${videoIdRaw}/sprites/sprite.jpg`;
+				const spriteVttKey = `${user.id}/${videoIdRaw}/sprites/thumbnails.vtt`;
 
 				const outputPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
 					outputKey,
@@ -154,10 +156,22 @@ export const app = new Hono().post(
 						ContentType: "image/jpeg",
 					},
 				);
+				const spriteSheetPresignedUrl =
+					yield* bucket.getInternalPresignedPutUrl(spriteSheetKey, {
+						ContentType: "image/jpeg",
+					});
+				const spriteVttPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
+					spriteVttKey,
+					{
+						ContentType: "text/vtt",
+					},
+				);
 
 				return {
 					outputPresignedUrl,
 					thumbnailPresignedUrl,
+					spriteSheetPresignedUrl,
+					spriteVttPresignedUrl,
 					videoInitUrl,
 					videoSegmentUrls,
 					audioInitUrl,
@@ -215,6 +229,8 @@ export const app = new Hono().post(
 				userId: user.id,
 				outputPresignedUrl: muxPayload.outputPresignedUrl,
 				thumbnailPresignedUrl: muxPayload.thumbnailPresignedUrl,
+				spriteSheetPresignedUrl: muxPayload.spriteSheetPresignedUrl,
+				spriteVttPresignedUrl: muxPayload.spriteVttPresignedUrl,
 				videoInitUrl: muxPayload.videoInitUrl,
 				videoSegmentUrls: muxPayload.videoSegmentUrls,
 				audioInitUrl: muxPayload.audioInitUrl,

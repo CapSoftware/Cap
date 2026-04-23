@@ -9,6 +9,7 @@ export type JobPhase =
 	| "processing"
 	| "uploading"
 	| "generating_thumbnail"
+	| "generating_sprites"
 	| "complete"
 	| "error"
 	| "cancelled";

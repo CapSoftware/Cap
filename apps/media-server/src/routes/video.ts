@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { ResilientInputFlags } from "../lib/ffmpeg-video";
 import {
 	downloadVideoToTemp,
+	generateSpriteSheet,
 	generateThumbnail,
 	processVideo,
 	repairContainer,
@@ -73,6 +74,8 @@ const processSchema = z.object({
 	videoUrl: z.string().url(),
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
+	spriteSheetPresignedUrl: z.string().url().optional(),
+	spriteVttPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
 	inputExtension: z.string().optional(),
@@ -434,6 +437,8 @@ video.post("/process", async (c) => {
 		videoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		spriteSheetPresignedUrl,
+		spriteVttPresignedUrl,
 		webhookUrl,
 		webhookSecret,
 	} = result.data;
@@ -446,6 +451,8 @@ video.post("/process", async (c) => {
 		videoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		spriteSheetPresignedUrl,
+		spriteVttPresignedUrl,
 		result.data,
 	).catch((err) => {
 		console.error(
@@ -667,6 +674,8 @@ async function processVideoAsync(
 	videoUrl: string,
 	outputPresignedUrl: string,
 	thumbnailPresignedUrl: string | undefined,
+	spriteSheetPresignedUrl: string | undefined,
+	spriteVttPresignedUrl: string | undefined,
 	options: z.infer<typeof processSchema>,
 ): Promise<void> {
 	const job = getJob(jobId);
@@ -760,6 +769,40 @@ async function processVideoAsync(
 				metadata.duration,
 			);
 			await uploadToS3(thumbnailData, thumbnailPresignedUrl, "image/jpeg");
+		}
+
+		if (spriteSheetPresignedUrl && spriteVttPresignedUrl) {
+			try {
+				updateJob(jobId, {
+					phase: "generating_sprites",
+					progress: 93,
+					message: "Generating preview sprites...",
+				});
+				await sendWebhook(job);
+
+				const spriteResult = await generateSpriteSheet(
+					outputTempFile.path,
+					metadata.duration,
+				);
+				await uploadToS3(
+					spriteResult.imageData,
+					spriteSheetPresignedUrl,
+					"image/jpeg",
+				);
+				const vttBlob = new Blob([spriteResult.vttContent], {
+					type: "text/vtt",
+				});
+				await uploadToS3(
+					new Uint8Array(await vttBlob.arrayBuffer()),
+					spriteVttPresignedUrl,
+					"text/vtt",
+				);
+			} catch (spriteErr) {
+				console.error(
+					`[video/process] Sprite generation failed for job ${jobId} (non-fatal):`,
+					spriteErr,
+				);
+			}
 		}
 
 		updateJob(jobId, {
@@ -956,6 +999,8 @@ const muxSegmentsSchema = z.object({
 	userId: z.string(),
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
+	spriteSheetPresignedUrl: z.string().url().optional(),
+	spriteVttPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
 	videoInitUrl: z.string().url(),
@@ -982,6 +1027,8 @@ video.post("/mux-segments", async (c) => {
 		userId,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		spriteSheetPresignedUrl,
+		spriteVttPresignedUrl,
 		webhookUrl,
 		webhookSecret,
 	} = body.data;
@@ -1011,6 +1058,8 @@ video.post("/mux-segments", async (c) => {
 		videoId,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		spriteSheetPresignedUrl,
+		spriteVttPresignedUrl,
 		videoInitUrl,
 		videoSegUrls,
 		audioInitUrl ?? null,
@@ -1152,6 +1201,8 @@ async function muxSegmentsAsync(
 	videoId: string,
 	outputPresignedUrl: string,
 	thumbnailPresignedUrl: string | undefined,
+	spriteSheetPresignedUrl: string | undefined,
+	spriteVttPresignedUrl: string | undefined,
 	videoInitUrl: string,
 	videoSegmentUrls: string[],
 	audioInitUrl: string | null,
@@ -1329,6 +1380,38 @@ async function muxSegmentsAsync(
 				console.warn(
 					`[mux-segments] Thumbnail generation failed for ${videoId}:`,
 					thumbErr,
+				);
+			}
+		}
+
+		if (spriteSheetPresignedUrl && spriteVttPresignedUrl) {
+			try {
+				updateJob(jobId, {
+					phase: "generating_sprites",
+					progress: 93,
+					message: "Generating preview sprites...",
+				});
+				sendWebhook(getJob(jobId)!);
+
+				const duration = metadata?.duration ?? 0;
+				const spriteResult = await generateSpriteSheet(resultPath, duration);
+				await uploadToS3(
+					spriteResult.imageData,
+					spriteSheetPresignedUrl,
+					"image/jpeg",
+				);
+				const vttBlob = new Blob([spriteResult.vttContent], {
+					type: "text/vtt",
+				});
+				await uploadToS3(
+					new Uint8Array(await vttBlob.arrayBuffer()),
+					spriteVttPresignedUrl,
+					"text/vtt",
+				);
+			} catch (spriteErr) {
+				console.warn(
+					`[mux-segments] Sprite generation failed for ${videoId} (non-fatal):`,
+					spriteErr,
 				);
 			}
 		}
