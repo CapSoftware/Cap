@@ -8,8 +8,7 @@ import {
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { start } from "workflow/api";
-import { transcribeVideoWorkflow } from "@/workflows/transcribe";
+import { runTranscription } from "@/workflows/transcribe";
 
 type TranscribeResult = {
 	success: boolean;
@@ -111,6 +110,9 @@ export async function transcribeVideo(
 		upload[0]?.phase === "processing" ||
 		upload[0]?.phase === "generating_thumbnail"
 	) {
+		console.log(
+			`[transcribeVideo] Video ${videoId} upload still in progress (phase=${upload[0]?.phase}), skipping`,
+		);
 		return {
 			success: true,
 			message: "Video upload is still in progress",
@@ -118,33 +120,48 @@ export async function transcribeVideo(
 	}
 
 	try {
+		await db()
+			.update(videos)
+			.set({ transcriptionStatus: "PROCESSING" })
+			.where(eq(videos.id, videoId));
+
 		console.log(
-			`[transcribeVideo] Triggering transcription workflow for video ${videoId}`,
+			`[transcribeVideo] Starting transcription directly for video ${videoId}`,
 		);
 
-		await start(transcribeVideoWorkflow, [
-			{
-				videoId,
-				userId,
-				aiGenerationEnabled,
-			},
-		]);
+		runTranscription({ videoId, userId, aiGenerationEnabled })
+			.then(() => {
+				console.log(
+					`[transcribeVideo] Transcription completed for video ${videoId}`,
+				);
+			})
+			.catch((error) => {
+				console.error(
+					`[transcribeVideo] Transcription failed for video ${videoId}:`,
+					error,
+				);
+				db()
+					.update(videos)
+					.set({ transcriptionStatus: null })
+					.where(eq(videos.id, videoId))
+					.catch((err) =>
+						console.error(
+							`[transcribeVideo] Failed to reset status for ${videoId}:`,
+							err,
+						),
+					);
+			});
 
 		return {
 			success: true,
-			message: "Transcription workflow started",
+			message: "Transcription started",
 		};
 	} catch (error) {
-		console.error("[transcribeVideo] Failed to trigger workflow:", error);
-
-		await db()
-			.update(videos)
-			.set({ transcriptionStatus: null })
-			.where(eq(videos.id, videoId));
+		console.error("[transcribeVideo] Failed to start transcription:", error);
 
 		return {
 			success: false,
-			message: "Failed to start transcription workflow",
+			message: "Failed to start transcription",
 		};
 	}
 }

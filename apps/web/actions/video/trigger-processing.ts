@@ -5,7 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { startVideoProcessingDirect } from "@/lib/video-processing";
 
 export async function triggerVideoProcessing({
 	videoId,
@@ -27,7 +27,7 @@ export async function triggerVideoProcessing({
 	if (!video) throw new Error("Video not found");
 	if (video.ownerId !== user.id) throw new Error("Unauthorized");
 
-	await startVideoProcessingWorkflow({
+	await startVideoProcessingDirect({
 		videoId,
 		userId: user.id,
 		rawFileKey,

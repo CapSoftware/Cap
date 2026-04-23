@@ -22,7 +22,7 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { runPromise } from "@/lib/server";
-import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { startVideoProcessingDirect } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
 import {
 	getMultipartFileKey,
@@ -377,6 +377,9 @@ app.post(
 					);
 
 					if (isRawRecorderUpload(subpath)) {
+						console.log(
+							`[multipart] Raw recorder upload complete: videoId=${videoId} fileKey=${fileKey}`,
+						);
 						yield* db.use((db) =>
 							db
 								.update(Db.videos)
@@ -398,7 +401,7 @@ app.post(
 						);
 
 						const processingStarted = yield* Effect.tryPromise(() =>
-							startVideoProcessingWorkflow({
+							startVideoProcessingDirect({
 								videoId: Video.VideoId.make(videoId),
 								userId: user.id,
 								rawFileKey: fileKey,
@@ -409,10 +412,15 @@ app.post(
 								mode: "multipart",
 							}),
 						).pipe(
-							Effect.map(() => true),
+							Effect.map(() => {
+								console.log(
+									`[multipart] Processing job started for raw upload ${videoId}`,
+								);
+								return true;
+							}),
 							Effect.catchAll((error) =>
 								Effect.logError(
-									"Failed to start video processing workflow after raw upload completion",
+									"Failed to start video processing after raw upload completion",
 									error,
 								).pipe(Effect.map(() => false)),
 							),
@@ -480,6 +488,10 @@ app.post(
 						),
 					);
 
+					console.log(
+						`[multipart] Deleted videoUploads for webMP4 ${videoId} (transcription now unblocked)`,
+					);
+
 					const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 					if (video.source.type === "webMP4" && mediaServerUrl) {
 						const inputUrl = yield* bucket.getInternalSignedObjectUrl(fileKey);
@@ -497,11 +509,18 @@ app.post(
 
 						yield* Effect.tryPromise({
 							try: async () => {
+								const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
+								const remuxHeaders: Record<string, string> = {
+									"Content-Type": "application/json",
+								};
+								if (webhookSecret) {
+									remuxHeaders["x-media-server-secret"] = webhookSecret;
+								}
 								const response = await fetch(
 									`${mediaServerUrl}/video/process`,
 									{
 										method: "POST",
-										headers: { "Content-Type": "application/json" },
+										headers: remuxHeaders,
 										body: JSON.stringify({
 											videoId,
 											userId: user.id,

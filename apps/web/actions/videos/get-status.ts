@@ -58,12 +58,15 @@ export async function getVideoStatus(
 
 	if (!video.transcriptionStatus && serverEnv().DEEPGRAM_API_KEY) {
 		const activeUpload = await db()
-			.select({ videoId: videoUploads.videoId })
+			.select({ videoId: videoUploads.videoId, phase: videoUploads.phase })
 			.from(videoUploads)
 			.where(eq(videoUploads.videoId, videoId))
 			.limit(1);
 
 		if (activeUpload.length > 0) {
+			console.log(
+				`[Get Status] Video ${videoId} has active upload (phase=${activeUpload[0]?.phase}), waiting before transcription`,
+			);
 			return {
 				transcriptionStatus: null,
 				aiGenerationStatus:
