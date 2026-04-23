@@ -42,6 +42,7 @@ import { Toggle } from "~/components/Toggle";
 import { generalSettingsStore } from "~/store";
 import { normalizeOpaqueHexColor } from "~/utils/hex-color";
 import type {
+	BackgroundBlurMode,
 	BackgroundSource,
 	CameraShape,
 	CaptionTrackSegment,
@@ -2300,6 +2301,74 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 							checked={project.camera.mirror}
 							onChange={(mirror) => setProject("camera", "mirror", mirror)}
 						/>
+					</Subfield>
+					<Subfield name="Background Blur">
+						<KSelect<{ name: string; value: BackgroundBlurMode }>
+							options={[
+								{ name: "Off", value: "off" },
+								{ name: "Light Blur", value: "light" },
+								{ name: "Heavy Blur", value: "heavy" },
+							]}
+							optionValue="value"
+							optionTextValue="name"
+							value={
+								(
+									[
+										{ name: "Off", value: "off" },
+										{ name: "Light Blur", value: "light" },
+										{ name: "Heavy Blur", value: "heavy" },
+									] as const
+								).find(
+									(v) =>
+										v.value === (project.camera.backgroundBlur?.mode ?? "off"),
+								) ?? { name: "Off", value: "off" }
+							}
+							onChange={(v) => {
+								if (v)
+									setProject("camera", "backgroundBlur", {
+										mode: v.value,
+									});
+							}}
+							disallowEmptySelection
+							itemComponent={(props) => (
+								<MenuItem<typeof KSelect.Item>
+									as={KSelect.Item}
+									item={props.item}
+								>
+									<KSelect.ItemLabel class="flex-1">
+										{props.item.rawValue.name}
+									</KSelect.ItemLabel>
+								</MenuItem>
+							)}
+						>
+							<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
+								<KSelect.Value<{
+									name: string;
+									value: string;
+								}> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+									{(state) => <span>{state.selectedOption().name}</span>}
+								</KSelect.Value>
+								<KSelect.Icon<ValidComponent>
+									as={(iconProps) => (
+										<IconCapChevronDown
+											{...iconProps}
+											class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+										/>
+									)}
+								/>
+							</KSelect.Trigger>
+							<KSelect.Portal>
+								<PopperContent<typeof KSelect.Content>
+									as={KSelect.Content}
+									class={cx(topSlideAnimateClasses, "z-50")}
+								>
+									<MenuItemList<typeof KSelect.Listbox>
+										class="overflow-y-auto max-h-32"
+										as={KSelect.Listbox}
+									/>
+								</PopperContent>
+							</KSelect.Portal>
+						</KSelect>
 					</Subfield>
 					<Subfield name="Shape">
 						<KSelect<{ name: string; value: CameraShape }>
