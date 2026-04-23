@@ -214,7 +214,7 @@ impl WsBlurState {
         rgba_data: &[u8],
         width: u32,
         height: u32,
-        _stride: u32,
+        stride: u32,
         mode: cap_camera_effects::BlurMode,
     ) -> Option<(Arc<Vec<u8>>, u32, u32, u32)> {
         if !self.init_attempted {
@@ -258,7 +258,7 @@ impl WsBlurState {
             rgba_data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(width * 4),
+                bytes_per_row: Some(stride),
                 rows_per_image: Some(height),
             },
             wgpu::Extent3d {

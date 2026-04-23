@@ -94,7 +94,7 @@ fn try_register_coreml(
         }
         Err(e) => {
             tracing::warn!("Camera background blur: CoreML EP registration failed, using CPU: {e}");
-            Session::builder().unwrap_or_else(|_| panic!("Failed to recreate session builder"))
+            e.recover()
         }
     }
 }
@@ -114,7 +114,7 @@ fn try_register_directml(
             tracing::warn!(
                 "Camera background blur: DirectML EP registration failed, using CPU: {e}"
             );
-            Session::builder().unwrap_or_else(|_| panic!("Failed to recreate session builder"))
+            e.recover()
         }
     }
 }
