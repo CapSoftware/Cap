@@ -166,6 +166,14 @@ const WALLPAPER_NAMES = [
 	"purple/4",
 	"purple/5",
 	"purple/6",
+	"cities/liverpool",
+	"cities/santorini",
+	"cities/miami",
+	"cities/monaco",
+	"cities/london",
+	"cities/rome",
+	"cities/sf",
+	"cities/nyc",
 	// Dark wallpapers
 	"dark/1",
 	"dark/2",
@@ -211,6 +219,7 @@ const BACKGROUND_THEMES = {
 	macOS: "macOS",
 	dark: "Dark",
 	blue: "Blue",
+	cities: "Cities",
 	purple: "Purple",
 	orange: "Orange",
 };
