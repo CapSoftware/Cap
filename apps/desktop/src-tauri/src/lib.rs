@@ -2229,6 +2229,137 @@ async fn get_editor_project_path(window: Window) -> Result<PathBuf, String> {
     Ok(path.clone())
 }
 
+#[derive(Serialize, Type, tauri_specta::Event, Clone, Debug)]
+pub struct CapRecordingImported {
+    pub project_path: String,
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result<(), String> {
+    let CapWindowId::Editor { id } =
+        CapWindowId::from_str(window.label()).map_err(|e| e.to_string())?
+    else {
+        return Err("Invalid window".to_string());
+    };
+
+    let project_path = {
+        let window_ids = EditorWindowIds::get(window.app_handle());
+        let window_ids = window_ids.ids.lock().unwrap();
+        let Some((path, _)) = window_ids.iter().find(|(_, _id)| *_id == id) else {
+            return Err("Editor instance not found".to_string());
+        };
+        path.clone()
+    };
+
+    if !recording_path.exists() || !recording_path.join("recording-meta.json").exists() {
+        return Err("Not a valid Cap recording".to_string());
+    }
+
+    let ext_meta = RecordingMeta::load_for_project(&recording_path)
+        .map_err(|e| format!("Failed to load recording meta: {e}"))?;
+    let RecordingMetaInner::Studio(ext_studio_meta) = &ext_meta.inner else {
+        return Err("External recording is not a studio recording".to_string());
+    };
+
+    let primary_meta = RecordingMeta::load_for_project(&project_path)
+        .map_err(|e| format!("Failed to load project meta: {e}"))?;
+    let RecordingMetaInner::Studio(primary_studio_meta) = &primary_meta.inner else {
+        return Err("Project is not a studio recording".to_string());
+    };
+
+    let primary_recordings =
+        cap_rendering::ProjectRecordingsMeta::new(&primary_meta.project_path, primary_studio_meta)
+            .map_err(|e| format!("Failed to load primary recordings: {e}"))?;
+    let ext_recordings =
+        cap_rendering::ProjectRecordingsMeta::new(&recording_path, ext_studio_meta)
+            .map_err(|e| format!("Failed to load external recordings: {e}"))?;
+
+    if let (Some(primary_first), Some(ext_first)) = (
+        primary_recordings.segments.first(),
+        ext_recordings.segments.first(),
+    ) && (ext_first.display.width != primary_first.display.width
+        || ext_first.display.height != primary_first.display.height)
+    {
+        return Err(format!(
+            "Recording resolution {}x{} does not match project resolution {}x{}",
+            ext_first.display.width,
+            ext_first.display.height,
+            primary_first.display.width,
+            primary_first.display.height,
+        ));
+    }
+
+    let mut project_config = ProjectConfiguration::load(&project_path)
+        .map_err(|e| format!("Failed to load project config: {e}"))?;
+
+    if project_config
+        .external_recordings
+        .iter()
+        .any(|r| std::path::Path::new(&r.path) == recording_path)
+    {
+        return Err("This recording has already been imported".to_string());
+    }
+
+    let ext_segment_counts = project_config
+        .external_recordings
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let p = std::path::PathBuf::from(&r.path);
+            let m = RecordingMeta::load_for_project(&p)
+                .map_err(|e| format!("existing external recording {i}: {e}"))?;
+            Ok(m.studio_meta()
+                .map(|s| match s {
+                    cap_project::StudioRecordingMeta::SingleSegment { .. } => 1usize,
+                    cap_project::StudioRecordingMeta::MultipleSegments { inner } => {
+                        inner.segments.len()
+                    }
+                })
+                .unwrap_or(0))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let clip_index_offset =
+        (primary_recordings.segments.len() + ext_segment_counts.iter().sum::<usize>()) as u32;
+
+    let label = ext_meta.pretty_name.clone();
+
+    project_config
+        .external_recordings
+        .push(cap_project::ExternalRecordingReference {
+            path: recording_path.to_string_lossy().to_string(),
+            label: Some(label),
+        });
+
+    let timeline = project_config.timeline.get_or_insert_with(Default::default);
+
+    let ext_segment_count = ext_recordings.segments.len();
+    for i in 0..ext_segment_count {
+        let duration = ext_recordings.segments[i].duration();
+        timeline.segments.push(cap_project::TimelineSegment {
+            recording_clip: clip_index_offset + i as u32,
+            start: 0.0,
+            end: duration,
+            timescale: 1.0,
+        });
+    }
+
+    project_config
+        .write(&project_path)
+        .map_err(|e| format!("Failed to save project config: {e}"))?;
+
+    EditorInstances::remove(window.clone()).await;
+
+    CapRecordingImported {
+        project_path: project_path.to_string_lossy().to_string(),
+    }
+    .emit(&window)
+    .map_err(|e| format!("Failed to emit event: {e}"))?;
+
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(editor))]
@@ -3558,6 +3689,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             export::generate_export_preview_fast,
             import::start_video_import,
             import::check_import_ready,
+            import_cap_recording,
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
@@ -3666,6 +3798,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             hotkeys::OnEscapePress,
             upload::UploadProgressEvent,
             import::VideoImportProgress,
+            CapRecordingImported,
             SetCaptureAreaPending,
             DevicesUpdated,
         ])

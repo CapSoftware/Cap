@@ -36,7 +36,7 @@
 	},
 	"bundle": {
 		"active": true,
-		"createUpdaterArtifacts": true,
+		"createUpdaterArtifacts": false,
 		"targets": "all",
 		"externalBin": ["binaries/cap-muxer"],
 		"icon": [
@@ -66,8 +66,7 @@
 					"x": 480,
 					"y": 140
 				}
-			},
-			"frameworks": ["../../../target/native-deps/Spacedrive.framework"]
+			}
 		},
 		"windows": {
 			"nsis": {

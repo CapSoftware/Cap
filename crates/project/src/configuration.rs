@@ -833,7 +833,7 @@ pub struct SceneSegment {
     pub mode: SceneMode,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
@@ -1202,6 +1202,14 @@ impl Annotation {
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalRecordingReference {
+    pub path: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectConfiguration {
     pub aspect_ratio: Option<AspectRatio>,
@@ -1221,6 +1229,8 @@ pub struct ProjectConfiguration {
     pub screen_motion_blur: f32,
     #[serde(default)]
     pub screen_movement_spring: ScreenMovementSpring,
+    #[serde(default)]
+    pub external_recordings: Vec<ExternalRecordingReference>,
 }
 
 fn camera_config_needs_migration(value: &Value) -> bool {

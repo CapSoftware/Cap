@@ -327,7 +327,7 @@ pub async fn generate_export_preview(
     settings: ExportPreviewSettings,
 ) -> Result<ExportPreviewResult, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
-    use cap_editor::create_segments;
+    use cap_editor::create_all_segments;
     use std::time::Instant;
 
     let recording_meta = RecordingMeta::load_for_project(&project_path)
@@ -337,12 +337,16 @@ pub async fn generate_export_preview(
         return Err("Cannot preview non-studio recordings".to_string());
     };
 
-    let project_config =
-        export_project_config(recording_meta.project_config(), settings.cursor_only);
+    let source_project_config = recording_meta.project_config();
+    let project_config = export_project_config(source_project_config.clone(), settings.cursor_only);
 
     let recordings = Arc::new(
-        ProjectRecordingsMeta::new(&recording_meta.project_path, studio_meta)
-            .map_err(|e| format!("Failed to load recordings: {e}"))?,
+        ProjectRecordingsMeta::new_with_external(
+            &recording_meta.project_path,
+            studio_meta,
+            &source_project_config.external_recordings,
+        )
+        .map_err(|e| format!("Failed to load recordings: {e}"))?,
     );
 
     let render_constants = Arc::new(
@@ -355,9 +359,14 @@ pub async fn generate_export_preview(
         .map_err(|e| format!("Failed to create render constants: {e}"))?,
     );
 
-    let segments = create_segments(&recording_meta, studio_meta, false)
-        .await
-        .map_err(|e| format!("Failed to create segments: {e}"))?;
+    let segments = create_all_segments(
+        &recording_meta,
+        studio_meta,
+        &source_project_config.external_recordings,
+        false,
+    )
+    .await
+    .map_err(|e| format!("Failed to create segments: {e}"))?;
 
     let render_segments: Vec<RenderSegment> = segments
         .iter()
