@@ -1,4 +1,5 @@
 import type React from "react";
+import { trackEvent } from "@/app/utils/analytics";
 
 export const getDownloadUrl = (
 	platform: string | null,
@@ -58,12 +59,24 @@ export const getVersionText = (platform: string | null): React.ReactNode => {
 	}
 };
 
-export const PlatformIcons: React.FC = () => {
+type PlatformIconsProps = {
+	source?: string;
+};
+
+export const PlatformIcons: React.FC<PlatformIconsProps> = ({
+	source = "unknown",
+}) => {
 	return (
 		<div className="flex relative z-10 gap-3 mt-5">
 			<div>
 				<button
 					onClick={() => {
+						trackEvent("download_cta_clicked", {
+							source_page: source,
+							cta_location: "platform_icons",
+							target: "apple-silicon",
+							target_url: "/download/apple-silicon",
+						});
 						window.location.href = "/download/apple-silicon";
 					}}
 					className="focus:outline-none"
@@ -84,6 +97,14 @@ export const PlatformIcons: React.FC = () => {
 			<div>
 				<a
 					href="/download"
+					onClick={() =>
+						trackEvent("download_cta_clicked", {
+							source_page: source,
+							cta_location: "platform_icons",
+							target: "download-page",
+							target_url: "/download",
+						})
+					}
 					className="focus:outline-none"
 					aria-label="Download for Windows"
 				>

@@ -11,6 +11,9 @@ export interface ToolPageContent {
 		title: string;
 		description: string;
 		buttonText: string;
+		buttonHref?: string;
+		secondaryButtonText?: string;
+		secondaryButtonHref?: string;
 	};
 
 	featuresTitle: string;

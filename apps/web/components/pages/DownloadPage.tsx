@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Link from "next/link";
+import { trackEvent } from "@/app/utils/analytics";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
@@ -14,6 +15,17 @@ import {
 export const DownloadPage = () => {
 	const { platform, isIntel } = useDetectPlatform();
 	const loading = platform === null;
+	const primaryDownloadUrl = getDownloadUrl(platform, isIntel);
+
+	const trackDownloadClick = (ctaLocation: string, targetUrl: string) => {
+		trackEvent("download_cta_clicked", {
+			source_page: "download_page",
+			cta_location: ctaLocation,
+			target_url: targetUrl,
+			detected_platform: platform ?? "unknown",
+			is_intel: Boolean(isIntel),
+		});
+	};
 
 	return (
 		<div className="py-32 md:py-40 wrapper wrapper-sm">
@@ -30,7 +42,8 @@ export const DownloadPage = () => {
 						<Button
 							variant="blue"
 							size="lg"
-							href={getDownloadUrl(platform, isIntel)}
+							href={primaryDownloadUrl}
+							onClick={() => trackDownloadClick("primary", primaryDownloadUrl)}
 							className="flex justify-center items-center py-6 font-medium text-white"
 						>
 							{!loading && getPlatformIcon(platform)}
@@ -64,7 +77,7 @@ export const DownloadPage = () => {
 				</div>
 
 				<div className="flex justify-center items-center fade-in-up animate-delay-2">
-					<PlatformIcons />
+					<PlatformIcons source="download_page" />
 				</div>
 
 				<div className="pb-4 mt-6 fade-in-up animate-delay-2">
@@ -75,6 +88,12 @@ export const DownloadPage = () => {
 						{platform !== "windows" && (
 							<a
 								href="/download/windows"
+								onClick={() =>
+									trackDownloadClick(
+										"other_option_windows",
+										"/download/windows",
+									)
+								}
 								className="text-sm transition-all text-gray-10 hover:underline"
 							>
 								Windows (Beta)
@@ -83,6 +102,12 @@ export const DownloadPage = () => {
 						{platform === "macos" && isIntel && (
 							<a
 								href="/download/apple-silicon"
+								onClick={() =>
+									trackDownloadClick(
+										"other_option_apple_silicon",
+										"/download/apple-silicon",
+									)
+								}
 								className="text-sm transition-all text-gray-10 hover:underline"
 							>
 								Apple Silicon
@@ -91,6 +116,12 @@ export const DownloadPage = () => {
 						{platform === "macos" && !isIntel && (
 							<a
 								href="/download/apple-intel"
+								onClick={() =>
+									trackDownloadClick(
+										"other_option_apple_intel",
+										"/download/apple-intel",
+									)
+								}
 								className="text-sm transition-all text-gray-10 hover:underline"
 							>
 								Apple Intel
@@ -100,12 +131,24 @@ export const DownloadPage = () => {
 							<>
 								<a
 									href="/download/apple-silicon"
+									onClick={() =>
+										trackDownloadClick(
+											"other_option_apple_silicon",
+											"/download/apple-silicon",
+										)
+									}
 									className="text-sm transition-all text-gray-8 hover:underline"
 								>
 									Apple Silicon
 								</a>
 								<a
 									href="/download/apple-intel"
+									onClick={() =>
+										trackDownloadClick(
+											"other_option_apple_intel",
+											"/download/apple-intel",
+										)
+									}
 									className="text-sm transition-all text-gray-8 hover:underline"
 								>
 									Apple Intel
@@ -114,6 +157,9 @@ export const DownloadPage = () => {
 						)}
 						<Link
 							href="/download/versions"
+							onClick={() =>
+								trackDownloadClick("all_versions", "/download/versions")
+							}
 							className="text-sm transition-all text-gray-10 hover:underline"
 						>
 							All versions

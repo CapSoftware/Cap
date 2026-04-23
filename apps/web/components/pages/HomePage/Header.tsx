@@ -10,6 +10,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRef, useState, useTransition } from "react";
 import { sendDownloadLink } from "@/actions/send-download-link";
+import { trackEvent } from "@/app/utils/analytics";
 import { LogoMarquee } from "@/components/ui/LogoMarquee";
 import {
 	getDownloadButtonText,
@@ -63,6 +64,8 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 	>("idle");
 	const [emailError, setEmailError] = useState("");
 	const [isPending, startTransition] = useTransition();
+	const primaryDownloadUrl =
+		platform === "windows" ? "/download" : getDownloadUrl(platform, isIntel);
 
 	const handleEmailSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
@@ -131,10 +134,15 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 					>
 						<Button
 							variant="dark"
-							href={
-								platform === "windows"
-									? "/download"
-									: getDownloadUrl(platform, isIntel)
+							href={primaryDownloadUrl}
+							onClick={() =>
+								trackEvent("download_cta_clicked", {
+									source_page: "home_header",
+									cta_location: "primary",
+									target_url: primaryDownloadUrl,
+									detected_platform: platform ?? "unknown",
+									is_intel: Boolean(isIntel),
+								})
 							}
 							size="lg"
 							className="flex justify-center items-center font-medium max-w-fit"
@@ -211,10 +219,19 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						custom={5}
 						variants={fadeIn}
 					>
-						<PlatformIcons />
+						<PlatformIcons source="home_header" />
 
 						<Link
 							href="/download"
+							onClick={() =>
+								trackEvent("download_cta_clicked", {
+									source_page: "home_header",
+									cta_location: "see_other_options",
+									target_url: "/download",
+									detected_platform: platform ?? "unknown",
+									is_intel: Boolean(isIntel),
+								})
+							}
 							className="mt-2 text-sm underline text-gray-10 hover:text-gray-12"
 						>
 							{homepageCopy.header.cta.seeOtherOptionsText}

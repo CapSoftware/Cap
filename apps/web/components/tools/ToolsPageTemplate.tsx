@@ -235,13 +235,24 @@ export const ToolsPageTemplate = ({
 							</div>
 							<div className="flex flex-col justify-center items-center space-y-3 sm:flex-row sm:space-y-0 sm:space-x-4">
 								<Button
-									variant="gray"
-									href="/download"
+									variant={content.cta.secondaryButtonText ? "blue" : "gray"}
+									href={content.cta.buttonHref ?? "/download"}
 									size="lg"
 									className="px-8 w-full font-medium transition-all duration-200 sm:w-auto"
 								>
 									{content.cta.buttonText}
 								</Button>
+								{content.cta.secondaryButtonText &&
+									content.cta.secondaryButtonHref && (
+										<Button
+											variant="gray"
+											href={content.cta.secondaryButtonHref}
+											size="lg"
+											className="px-8 w-full font-medium transition-all duration-200 sm:w-auto"
+										>
+											{content.cta.secondaryButtonText}
+										</Button>
+									)}
 							</div>
 						</div>
 					</div>
