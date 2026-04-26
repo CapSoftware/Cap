@@ -8,11 +8,13 @@ use tracing::trace;
 
 use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
 
+#[derive(Debug, Serialize, Deserialize)]
 pub enum CaptureMode {
     Screen(String),
     Window(String),
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 pub enum DeepLinkAction {
     StartRecording {
         capture_mode: CaptureMode,
@@ -172,7 +174,7 @@ impl DeepLinkAction {
             }
             DeepLinkAction::GetStatus => {
                 let state = app.state::<ArcLock<App>>();
-                let locked = state.lock().await;
+                let locked = state.read().await;
                 let status = if locked.current_recording.is_some() {
                     "recording"
                 } else {
