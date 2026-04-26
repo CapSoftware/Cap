@@ -1,3 +1,4 @@
+// File: crates/recording/src/camera.rs
 use cap_recording::CameraFeed;
 use cap_utils::Url;
 use std::collections::HashMap;
