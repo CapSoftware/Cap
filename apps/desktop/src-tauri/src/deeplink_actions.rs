@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
 use tracing::trace;
 
-use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
+use crate::{App, ArcLock, recording::{InProgressRecording, StartRecordingInputs}, windows::ShowCapWindow};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,6 +32,13 @@ pub enum DeepLinkAction {
     SetMicrophone {
         label: Option<String>,
     },
+    /// Sets the active camera input for the current recording.
+    ///
+    /// **Note on field naming**: The JSON key exposed in the deep-link URL is `camera`
+    /// (e.g. `cap-desktop://action?value={"set_camera":{"camera":<id>}}`), which maps
+    /// to the `id` parameter of the underlying `set_camera_input` Tauri command.
+    /// This divergence is intentional to keep the deep-link API readable; the call
+    /// site passes `camera` positionally so the mapping is correct at runtime.
     SetCamera {
         camera: Option<DeviceOrModelID>,
     },
@@ -166,9 +173,45 @@ impl DeepLinkAction {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::SetMicrophone { label } => {
+                // `set_mic_input` only rewires the active audio feed for Studio-mode
+                // recordings. For other modes (Instant/Segment) or when no recording is
+                // in progress, the call updates `selected_mic_label` and returns `Ok(())`
+                // without changing the live audio path. External callers (e.g. the Raycast
+                // extension) should be aware that the change takes effect at the *next*
+                // Studio recording start if no Studio session is currently active.
+                let is_studio = matches!(
+                    app.state::<crate::ArcLock<crate::App>>()
+                        .read()
+                        .await
+                        .current_recording(),
+                    Some(InProgressRecording::Studio { .. })
+                );
+                if !is_studio {
+                    tracing::warn!(
+                        "SetMicrophone deeplink: no active Studio recording; \
+                         microphone preference saved but audio path not immediately updated"
+                    );
+                }
                 crate::set_mic_input(app.state(), label).await
             }
             DeepLinkAction::SetCamera { camera } => {
+                // Same caveat as SetMicrophone: camera switching via deeplink only
+                // affects the live feed for an active Studio recording. In other modes
+                // the preference is persisted but the physical capture source is not
+                // immediately swapped.
+                let is_studio = matches!(
+                    app.state::<crate::ArcLock<crate::App>>()
+                        .read()
+                        .await
+                        .current_recording(),
+                    Some(InProgressRecording::Studio { .. })
+                );
+                if !is_studio {
+                    tracing::warn!(
+                        "SetCamera deeplink: no active Studio recording; \
+                         camera preference saved but capture source not immediately updated"
+                    );
+                }
                 crate::set_camera_input(app.clone(), app.state(), camera, None).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
