@@ -3509,9 +3509,89 @@ type FilteredRegistry = tracing_subscriber::layer::Layered<
 
 pub type DynLoggingLayer = Box<dyn tracing_subscriber::Layer<FilteredRegistry> + Send + Sync>;
 type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>, FilteredRegistry>;
+pub type LevelFilterHandle = tracing_subscriber::reload::Handle<
+    tracing_subscriber::filter::LevelFilter,
+    tracing_subscriber::layer::Layered<
+        tracing_subscriber::reload::Layer<Option<DynLoggingLayer>, FilteredRegistry>,
+        FilteredRegistry,
+    >,
+>;
+
+pub struct VerboseLoggingHandle {
+    inner: LevelFilterHandle,
+    default_level: tracing_subscriber::filter::LevelFilter,
+}
+
+impl VerboseLoggingHandle {
+    pub fn new(
+        inner: LevelFilterHandle,
+        default_level: tracing_subscriber::filter::LevelFilter,
+    ) -> Self {
+        Self {
+            inner,
+            default_level,
+        }
+    }
+
+    pub fn set_verbose(&self, verbose: bool) -> Result<(), String> {
+        let level = if verbose {
+            tracing_subscriber::filter::LevelFilter::TRACE
+        } else {
+            self.default_level
+        };
+        self.inner
+            .reload(level)
+            .map_err(|e| format!("Failed to reload log level: {e}"))
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_verbose_logging(
+    app: AppHandle,
+    handle: State<'_, Arc<VerboseLoggingHandle>>,
+    enabled: bool,
+) -> Result<(), String> {
+    handle.set_verbose(enabled)?;
+
+    GeneralSettingsStore::update(&app, |s| {
+        s.verbose_logging = enabled;
+    })?;
+
+    if enabled {
+        tracing::info!("Verbose logging enabled (TRACE level)");
+    } else {
+        tracing::info!("Verbose logging disabled (returned to default level)");
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn open_logs_folder(app: AppHandle) -> Result<(), String> {
+    let logs_dir = app
+        .state::<ArcLock<crate::App>>()
+        .read()
+        .await
+        .logs_dir
+        .clone();
+
+    let path_str = logs_dir
+        .to_str()
+        .ok_or_else(|| "Logs directory path is not valid UTF-8".to_string())?;
+
+    app.opener()
+        .open_path(path_str, None::<String>)
+        .map_err(|e| format!("Failed to open logs folder: {e}"))
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
+pub async fn run(
+    recording_logging_handle: LoggingHandle,
+    level_filter_handle: LevelFilterHandle,
+    logs_dir: PathBuf,
+) {
     ffmpeg::init()
         .map_err(|e| {
             error!("Failed to initialize ffmpeg: {e}");
@@ -3528,6 +3608,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             set_camera_input,
             recording_settings::set_recording_mode,
             upload_logs,
+            open_logs_folder,
+            set_verbose_logging,
             get_system_diagnostics,
             recording::start_recording,
             recording::stop_recording,
@@ -3805,6 +3887,30 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);
+
+            #[cfg(debug_assertions)]
+            let default_log_level = tracing_subscriber::filter::LevelFilter::TRACE;
+            #[cfg(not(debug_assertions))]
+            let default_log_level = tracing_subscriber::filter::LevelFilter::INFO;
+
+            let verbose_logging_handle = Arc::new(VerboseLoggingHandle::new(
+                level_filter_handle,
+                default_log_level,
+            ));
+
+            let verbose_logging_enabled = GeneralSettingsStore::get(&app)
+                .ok()
+                .flatten()
+                .map(|s| s.verbose_logging)
+                .unwrap_or(false);
+
+            if verbose_logging_enabled
+                && let Err(err) = verbose_logging_handle.set_verbose(true)
+            {
+                warn!("Failed to enable verbose logging at startup: {err}");
+            }
+
+            app.manage(verbose_logging_handle);
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());

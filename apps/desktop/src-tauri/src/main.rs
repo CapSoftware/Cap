@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use cap_desktop_lib::DynLoggingLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
     #[cfg(debug_assertions)]
@@ -105,9 +105,11 @@ fn main() {
     };
 
     #[cfg(debug_assertions)]
-    let level_filter = tracing_subscriber::filter::LevelFilter::TRACE;
+    let initial_level = LevelFilter::TRACE;
     #[cfg(not(debug_assertions))]
-    let level_filter = tracing_subscriber::filter::LevelFilter::INFO;
+    let initial_level = LevelFilter::INFO;
+
+    let (level_filter, level_handle) = tracing_subscriber::reload::Layer::new(initial_level);
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::filter::filter_fn(
@@ -141,5 +143,5 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed to build multi threaded tokio runtime")
-        .block_on(cap_desktop_lib::run(handle, logs_dir));
+        .block_on(cap_desktop_lib::run(handle, level_handle, logs_dir));
 }

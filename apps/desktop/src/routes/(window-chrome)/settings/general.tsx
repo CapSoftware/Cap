@@ -21,9 +21,11 @@ import {
 	Show,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
+import toast from "solid-toast";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
+import { Toggle } from "~/components/Toggle";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
 import {
@@ -604,6 +606,108 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					value={settings.enableTelemetry !== false}
 					onChange={(v) => handleChange("enableTelemetry", v)}
 				/>
+
+				<DiagnosticsCard
+					verboseLogging={settings.verboseLogging ?? false}
+					onVerboseLoggingChange={async (value) => {
+						setSettings("verboseLogging", value);
+						try {
+							await commands.setVerboseLogging(value);
+						} catch (error) {
+							console.error("Failed to set verbose logging", error);
+							setSettings("verboseLogging", !value);
+							toast.error("Failed to update verbose logging");
+						}
+					}}
+				/>
+			</div>
+		</div>
+	);
+}
+
+function DiagnosticsCard(props: {
+	verboseLogging: boolean;
+	onVerboseLoggingChange: (value: boolean) => void;
+}) {
+	const [revealing, setRevealing] = createSignal(false);
+	const [uploading, setUploading] = createSignal(false);
+
+	const handleReveal = async () => {
+		setRevealing(true);
+		try {
+			await commands.openLogsFolder();
+		} catch (error) {
+			console.error("Failed to open logs folder", error);
+			toast.error("Failed to open logs folder");
+		} finally {
+			setRevealing(false);
+		}
+	};
+
+	const handleUpload = async () => {
+		setUploading(true);
+		try {
+			await commands.uploadLogs();
+			toast.success("Logs uploaded successfully");
+		} catch (error) {
+			console.error("Failed to upload logs", error);
+			toast.error("Failed to upload logs");
+		} finally {
+			setUploading(false);
+		}
+	};
+
+	return (
+		<div class="flex flex-col gap-3 mt-6">
+			<h3 class="text-sm text-gray-12 w-fit">Diagnostics</h3>
+			<div class="flex flex-col gap-3 px-4 py-3 rounded-xl border border-gray-3 bg-gray-2">
+				<div class="flex items-center justify-between gap-6">
+					<div class="flex flex-col gap-1">
+						<p class="text-sm text-gray-12">Verbose logging</p>
+						<p class="text-xs text-gray-10 max-w-[34rem]">
+							Capture detailed trace-level logs covering recording, exporting,
+							uploading, and rendering pipelines. Use this when asked by support
+							so we can pinpoint and reproduce the exact issue you're seeing.
+							Logs are written locally and never sent anywhere until you press{" "}
+							<strong>Upload logs</strong>. May slightly increase CPU usage and
+							disk space while enabled.
+						</p>
+					</div>
+					<Toggle
+						size="sm"
+						checked={props.verboseLogging}
+						onChange={(v) => props.onVerboseLoggingChange(v)}
+					/>
+				</div>
+
+				<div class="flex flex-col gap-2 pt-3 border-t border-gray-3 sm:flex-row sm:items-center sm:justify-between">
+					<div class="flex flex-col gap-1">
+						<p class="text-sm text-gray-12">Logs folder</p>
+						<p class="text-xs text-gray-10 max-w-[34rem]">
+							Open the folder containing Cap's local log files, or send a
+							diagnostic bundle so we can investigate any issues you've run
+							into.
+						</p>
+					</div>
+					<div class="flex flex-shrink-0 gap-2">
+						<Button
+							size="sm"
+							variant="gray"
+							disabled={revealing()}
+							onClick={handleReveal}
+						>
+							{revealing() ? "Opening…" : "Reveal logs"}
+						</Button>
+						<Button
+							size="sm"
+							variant="dark"
+							disabled={uploading()}
+							onClick={handleUpload}
+						>
+							{uploading() ? "Uploading…" : "Upload logs"}
+						</Button>
+					</div>
+				</div>
 			</div>
 		</div>
 	);

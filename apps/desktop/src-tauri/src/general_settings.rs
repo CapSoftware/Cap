@@ -170,6 +170,8 @@ pub struct GeneralSettingsStore {
     pub enable_telemetry: bool,
     #[serde(default)]
     pub out_of_process_muxer: bool,
+    #[serde(default)]
+    pub verbose_logging: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -254,6 +256,7 @@ impl Default for GeneralSettingsStore {
             has_completed_onboarding: false,
             enable_telemetry: true,
             out_of_process_muxer: false,
+            verbose_logging: false,
         }
     }
 }
