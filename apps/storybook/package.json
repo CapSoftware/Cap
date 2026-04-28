@@ -8,6 +8,7 @@
 	},
 	"dependencies": {
 		"@cap/ui-solid": "workspace:*",
+		"@radix-ui/colors": "^3.0.0",
 		"postcss-pseudo-companion-classes": "^0.1.1",
 		"solid-js": "^1.9.3",
 		"zod": "^3"

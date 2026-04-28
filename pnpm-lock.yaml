@@ -322,6 +322,9 @@ importers:
       '@cap/ui-solid':
         specifier: workspace:*
         version: link:../../packages/ui-solid
+      '@radix-ui/colors':
+        specifier: ^3.0.0
+        version: 3.0.0
       postcss-pseudo-companion-classes:
         specifier: ^0.1.1
         version: 0.1.1(postcss@8.5.3)

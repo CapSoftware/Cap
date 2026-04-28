@@ -1,3 +1,4 @@
+import "../../desktop/src/styles/theme.css";
 import "@cap/ui-solid/main.css";
 
 const preview: Preview = {

@@ -1,3 +1,4 @@
+import { PositionOffsetField } from "@cap/ui-solid";
 import { NumberField } from "@kobalte/core";
 import {
 	Collapsible,
@@ -59,6 +60,7 @@ import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideGrid from "~icons/lucide/grid";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
+import IconLucideMove from "~icons/lucide/move";
 import IconLucideMoon from "~icons/lucide/moon";
 import IconLucidePalette from "~icons/lucide/palette";
 import IconLucideRabbit from "~icons/lucide/rabbit";
@@ -2022,6 +2024,19 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 					formatTooltip="%"
 				/>
 			</Field>
+			<PositionOffsetField
+				icon={<IconLucideMove class="size-4" />}
+				value={{
+					x: project.background.positionOffsetX ?? 0,
+					y: project.background.positionOffsetY ?? 0,
+				}}
+				onChange={(v) =>
+					batch(() => {
+						setProject("background", "positionOffsetX", v.x);
+						setProject("background", "positionOffsetY", v.y);
+					})
+				}
+			/>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
 				<div class="flex flex-col gap-3">
 					<Slider
