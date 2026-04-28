@@ -2046,16 +2046,16 @@ impl ProjectUniforms {
         (scaled_width, scaled_height)
     }
 
-    pub fn display_offset(
+    fn display_layout(
         options: &RenderOptions,
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
-    ) -> Coord<FrameSpace> {
-        let output_size = Self::get_output_size(options, project, resolution_base);
-        let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
+    ) -> (Coord<FrameSpace>, Coord<FrameSpace>) {
+        let output_size_u = Self::get_output_size(options, project, resolution_base);
+        let output_size = XY::new(output_size_u.0 as f64, output_size_u.1 as f64);
         let crop = Self::get_crop(options, project);
 
-        if project.aspect_ratio.is_none() {
+        let (centered_offset, target_size) = if project.aspect_ratio.is_none() {
             let (base_w, base_h) = Self::get_base_size(options, project);
             let output_scale = f64::min(
                 output_size.x / f64::max(base_w as f64, 1.0),
@@ -2063,62 +2063,73 @@ impl ProjectUniforms {
             );
             let padding_factor = Self::auto_padding_factor(project);
 
-            return Coord::new(XY::new(
+            let centered = XY::new(
                 crop.size.x as f64 * padding_factor * output_scale,
                 crop.size.y as f64 * padding_factor * output_scale,
-            ));
-        }
-
-        let output_aspect = output_size.x / output_size.y;
-
-        let crop_start =
-            Coord::<RawDisplaySpace>::new(XY::new(crop.position.x as f64, crop.position.y as f64));
-        let crop_end = Coord::<RawDisplaySpace>::new(XY::new(
-            (crop.position.x + crop.size.x) as f64,
-            (crop.position.y + crop.size.y) as f64,
-        ));
-
-        let cropped_size = crop_end.coord - crop_start.coord;
-
-        let cropped_aspect = cropped_size.x / cropped_size.y;
-
-        let padding = {
-            let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
-            let crop_basis = f64::max(cropped_size.x, cropped_size.y);
-            let base_padding = crop_basis * padding_factor;
-
-            let (base_w, base_h) = Self::get_base_size(options, project);
-            let output_scale = f64::min(
-                output_size.x / f64::max(base_w as f64, 1.0),
-                output_size.y / f64::max(base_h as f64, 1.0),
             );
-            let max_padding = f64::max(
-                f64::min((output_size.x - 1.0) / 2.0, (output_size.y - 1.0) / 2.0),
-                0.0,
+            let size = output_size - centered * 2.0;
+            (centered, size)
+        } else {
+            let output_aspect = output_size.x / output_size.y;
+
+            let cropped_size = XY::new(crop.size.x as f64, crop.size.y as f64);
+
+            let cropped_aspect = cropped_size.x / cropped_size.y;
+
+            let padding = {
+                let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
+                let crop_basis = f64::max(cropped_size.x, cropped_size.y);
+                let base_padding = crop_basis * padding_factor;
+
+                let (base_w, base_h) = Self::get_base_size(options, project);
+                let output_scale = f64::min(
+                    output_size.x / f64::max(base_w as f64, 1.0),
+                    output_size.y / f64::max(base_h as f64, 1.0),
+                );
+                let max_padding = f64::max(
+                    f64::min((output_size.x - 1.0) / 2.0, (output_size.y - 1.0) / 2.0),
+                    0.0,
+                );
+                (base_padding * output_scale).min(max_padding)
+            };
+
+            let is_height_constrained = cropped_aspect <= output_aspect;
+
+            let available_size = XY::new(
+                (output_size.x - 2.0 * padding).max(1.0),
+                (output_size.y - 2.0 * padding).max(1.0),
             );
-            (base_padding * output_scale).min(max_padding)
+
+            let target_size = if is_height_constrained {
+                XY::new(available_size.y * cropped_aspect, available_size.y)
+            } else {
+                XY::new(available_size.x, available_size.x / cropped_aspect)
+            };
+
+            let centered = (output_size - target_size) / 2.0;
+            (centered, target_size)
         };
 
-        let is_height_constrained = cropped_aspect <= output_aspect;
-
-        let available_size = XY::new(
-            (output_size.x - 2.0 * padding).max(1.0),
-            (output_size.y - 2.0 * padding).max(1.0),
+        let room = output_size - target_size;
+        let shift_x = (project.background.position_offset_x / 100.0) * room.x;
+        let shift_y = (project.background.position_offset_y / 100.0) * room.y;
+        let raw_offset = centered_offset + XY::new(shift_x, shift_y);
+        let max_x = room.x.max(0.0);
+        let max_y = room.y.max(0.0);
+        let offset = XY::new(
+            raw_offset.x.clamp(0.0, max_x),
+            raw_offset.y.clamp(0.0, max_y),
         );
 
-        let target_size = if is_height_constrained {
-            XY::new(available_size.y * cropped_aspect, available_size.y)
-        } else {
-            XY::new(available_size.x, available_size.x / cropped_aspect)
-        };
+        (Coord::new(offset), Coord::new(target_size))
+    }
 
-        let target_offset = (output_size - target_size) / 2.0;
-
-        Coord::new(if is_height_constrained {
-            XY::new(target_offset.x, padding)
-        } else {
-            XY::new(padding, target_offset.y)
-        })
+    pub fn display_offset(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
+    ) -> Coord<FrameSpace> {
+        Self::display_layout(options, project, resolution_base).0
     }
 
     pub fn display_size(
@@ -2126,23 +2137,15 @@ impl ProjectUniforms {
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        let output_size = Self::get_output_size(options, project, resolution_base);
-        let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
-
-        let display_offset = Self::display_offset(options, project, resolution_base);
-
-        let end = Coord::new(output_size) - display_offset;
-
-        end - display_offset
+        Self::display_layout(options, project, resolution_base).1
     }
 
     fn display_bounds(
         zoom: &InterpolatedZoom,
         display_offset: Coord<FrameSpace>,
         display_size: Coord<FrameSpace>,
-        output_size: XY<f64>,
     ) -> (Coord<FrameSpace>, Coord<FrameSpace>) {
-        let base_end = Coord::new(output_size) - display_offset;
+        let base_end = display_offset + display_size;
         let zoom_start = Coord::new(zoom.bounds.top_left * display_size.coord);
         let zoom_end = Coord::new((zoom.bounds.bottom_right - 1.0) * display_size.coord);
         let start = display_offset + zoom_start;
@@ -2570,10 +2573,9 @@ impl ProjectUniforms {
             let display_offset = Self::display_offset(options, project, resolution_base);
             let display_size = Self::display_size(options, project, resolution_base);
 
-            let (start, end) =
-                Self::display_bounds(&zoom, display_offset, display_size, output_size);
+            let (start, end) = Self::display_bounds(&zoom, display_offset, display_size);
             let (prev_start, prev_end) =
-                Self::display_bounds(&prev_zoom, display_offset, display_size, output_size);
+                Self::display_bounds(&prev_zoom, display_offset, display_size);
 
             let target_size = (end - start).coord;
             let min_target_axis = target_size.x.min(target_size.y);
@@ -3004,6 +3006,103 @@ mod tests {
         assert!(size.y >= 1.0);
         assert!(offset.x + size.x <= width as f64 + f64::EPSILON);
         assert!(offset.y + size.y <= height as f64 + f64::EPSILON);
+    }
+
+    #[test]
+    fn position_offset_zero_matches_centered_offset() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 25.0;
+        project.background.crop = Some(Crop {
+            position: XY::new(100, 50),
+            size: XY::new(1000, 500),
+        });
+
+        let (width, height) = ProjectUniforms::get_base_size(&options, &project);
+        let baseline = ProjectUniforms::display_offset(&options, &project, XY::new(width, height));
+
+        project.background.position_offset_x = 0.0;
+        project.background.position_offset_y = 0.0;
+        let with_zero = ProjectUniforms::display_offset(&options, &project, XY::new(width, height));
+
+        assert_eq!(with_zero.coord, baseline.coord);
+    }
+
+    #[test]
+    fn position_offset_shifts_image_within_available_room() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration {
+            aspect_ratio: Some(AspectRatio::Wide),
+            ..ProjectConfiguration::default()
+        };
+        project.background.padding = 30.0;
+
+        let (width, height) = ProjectUniforms::get_base_size(&options, &project);
+        let resolution = XY::new(width, height);
+
+        let centered = ProjectUniforms::display_offset(&options, &project, resolution);
+        let size = ProjectUniforms::display_size(&options, &project, resolution);
+        let output_u = ProjectUniforms::get_output_size(&options, &project, resolution);
+        let output = XY::new(output_u.0 as f64, output_u.1 as f64);
+        let room = output - size.coord;
+
+        project.background.position_offset_x = 50.0;
+        let shifted_right = ProjectUniforms::display_offset(&options, &project, resolution);
+        assert!((shifted_right.x - (centered.x + room.x * 0.5)).abs() < 1e-6);
+        assert!((shifted_right.y - centered.y).abs() < 1e-6);
+
+        project.background.position_offset_x = -50.0;
+        let shifted_left = ProjectUniforms::display_offset(&options, &project, resolution);
+        assert!((shifted_left.x - (centered.x - room.x * 0.5)).abs() < 1e-6);
+
+        project.background.position_offset_x = 0.0;
+        project.background.position_offset_y = 50.0;
+        let shifted_down = ProjectUniforms::display_offset(&options, &project, resolution);
+        assert!((shifted_down.y - (centered.y + room.y * 0.5)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn position_offset_clamps_to_keep_image_visible() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration {
+            aspect_ratio: Some(AspectRatio::Wide),
+            ..ProjectConfiguration::default()
+        };
+        project.background.padding = 30.0;
+        project.background.position_offset_x = 500.0;
+        project.background.position_offset_y = -500.0;
+
+        let (width, height) = ProjectUniforms::get_base_size(&options, &project);
+        let resolution = XY::new(width, height);
+        let offset = ProjectUniforms::display_offset(&options, &project, resolution);
+        let size = ProjectUniforms::display_size(&options, &project, resolution);
+        let output_u = ProjectUniforms::get_output_size(&options, &project, resolution);
+
+        assert!(offset.x >= 0.0);
+        assert!(offset.y >= 0.0);
+        assert!(offset.x + size.x <= output_u.0 as f64 + f64::EPSILON);
+        assert!(offset.y + size.y <= output_u.1 as f64 + f64::EPSILON);
+    }
+
+    #[test]
+    fn position_offset_does_not_change_display_size() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration {
+            aspect_ratio: Some(AspectRatio::Wide),
+            ..ProjectConfiguration::default()
+        };
+        project.background.padding = 30.0;
+
+        let (width, height) = ProjectUniforms::get_base_size(&options, &project);
+        let resolution = XY::new(width, height);
+        let baseline = ProjectUniforms::display_size(&options, &project, resolution);
+
+        project.background.position_offset_x = 40.0;
+        project.background.position_offset_y = -25.0;
+        let shifted = ProjectUniforms::display_size(&options, &project, resolution);
+
+        assert!((baseline.x - shifted.x).abs() < 1e-6);
+        assert!((baseline.y - shifted.y).abs() < 1e-6);
     }
 
     #[test]

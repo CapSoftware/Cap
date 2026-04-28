@@ -63,6 +63,11 @@
 			"allowedVersions": {
 				"next-auth>next": ">=16.0.0"
 			}
+		},
+		"overrides": {
+			"storybook-solidjs-vite": "1.0.0-beta.2",
+			"storybook-solidjs": "1.0.0-beta.2",
+			"@storybook/builder-vite": "8.6.12"
 		}
 	},
 	"packageManager": "pnpm@10.5.2",
