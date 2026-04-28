@@ -20,6 +20,9 @@ pub enum PostHogEvent {
     MultipartUploadFailed {
         duration: Duration,
         error: String,
+        stage: &'static str,
+        retried_chunk_count: u32,
+        bytes_uploaded: u64,
     },
     RecordingStarted {
         mode: &'static str,
@@ -138,10 +141,19 @@ fn posthog_event(event: PostHogEvent, distinct_id: Option<&str>) -> posthog_rs::
             set(&mut e, "size", size);
             e
         }
-        PostHogEvent::MultipartUploadFailed { duration, error } => {
+        PostHogEvent::MultipartUploadFailed {
+            duration,
+            error,
+            stage,
+            retried_chunk_count,
+            bytes_uploaded,
+        } => {
             let mut e = make_event("multipart_upload_failed", distinct_id);
             set(&mut e, "duration", duration.as_secs());
             set(&mut e, "error", truncate_reason(error));
+            set(&mut e, "stage", stage);
+            set(&mut e, "retried_chunk_count", retried_chunk_count);
+            set(&mut e, "bytes_uploaded_mb", bytes_uploaded / (1024 * 1024));
             e
         }
         PostHogEvent::RecordingStarted {

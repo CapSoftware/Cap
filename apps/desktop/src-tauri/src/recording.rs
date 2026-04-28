@@ -2917,23 +2917,27 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
     use crate::posthog::{PostHogEvent, async_capture_event};
     use crate::recording_telemetry::{mode_label, target_kind_label};
 
-    let (mode, target_kind, has_camera, has_mic, has_system_audio) = {
+    let (mode, target_kind, has_camera, has_mic, has_system_audio, target_width, target_height) = {
         let state = state_mtx.read().await;
         let Some(recording) = state.current_recording() else {
             return;
         };
         let inputs = recording.inputs();
-        let target_kind = target_kind_label(recording.capture_target());
+        let target = recording.capture_target();
+        let target_kind = target_kind_label(target);
         let has_camera = match recording {
             InProgressRecording::Instant { camera_feed, .. }
             | InProgressRecording::Studio { camera_feed, .. } => camera_feed.is_some(),
         };
+        let (target_width, target_height) = capture_target_dimensions(target);
         (
             mode_label(inputs.mode),
             target_kind,
             has_camera,
             state.selected_mic_label.is_some(),
             inputs.capture_system_audio,
+            target_width,
+            target_height,
         )
     };
 
@@ -2957,12 +2961,27 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
             has_mic,
             has_system_audio,
             target_fps,
-            target_width: 0,
-            target_height: 0,
+            target_width,
+            target_height,
             fragmented,
             custom_cursor_capture,
         },
     );
+}
+
+fn capture_target_dimensions(target: &ScreenCaptureTarget) -> (u32, u32) {
+    match target {
+        ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Window { .. } => target
+            .display()
+            .and_then(|d| d.physical_size())
+            .map(|s| (s.width().round() as u32, s.height().round() as u32))
+            .unwrap_or((0, 0)),
+        ScreenCaptureTarget::Area { bounds, .. } => (
+            bounds.size().width().round() as u32,
+            bounds.size().height().round() as u32,
+        ),
+        ScreenCaptureTarget::CameraOnly => (0, 0),
+    }
 }
 
 #[cfg(test)]

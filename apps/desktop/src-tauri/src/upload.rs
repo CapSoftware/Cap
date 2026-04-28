@@ -162,6 +162,9 @@ pub async fn upload_video(
             Err(err) => PostHogEvent::MultipartUploadFailed {
                 duration: start.elapsed(),
                 error: err.to_string(),
+                stage: "video_join",
+                retried_chunk_count: 0,
+                bytes_uploaded: 0,
             },
         },
     );
@@ -440,13 +443,18 @@ impl InstantMultipartUpload {
                                 .as_ref()
                                 .map(|v| Duration::from_secs(v.duration_in_secs as u64))
                                 .unwrap_or_default(),
-                            size: std::fs::metadata(file_path)
+                            size: std::fs::metadata(&file_path)
                                 .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
                                 .unwrap_or_default(),
                         },
                         Err(err) => PostHogEvent::MultipartUploadFailed {
                             duration: start.elapsed(),
                             error: err.to_string(),
+                            stage: "instant_multipart",
+                            retried_chunk_count: 0,
+                            bytes_uploaded: std::fs::metadata(&file_path)
+                                .map(|m| m.len())
+                                .unwrap_or_default(),
                         },
                     },
                 );
@@ -775,6 +783,9 @@ impl SegmentUploader {
                         Err(err) => PostHogEvent::MultipartUploadFailed {
                             duration: start.elapsed(),
                             error: err.to_string(),
+                            stage: "studio_segment",
+                            retried_chunk_count: 0,
+                            bytes_uploaded: 0,
                         },
                     },
                 );

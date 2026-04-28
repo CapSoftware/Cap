@@ -85,14 +85,23 @@ async fn init_gpu_inner() -> Option<SharedGpuContext> {
         tracing::warn!(
             "No hardware GPU adapter found, attempting software fallback for shared context"
         );
-        let software_adapter = instance
+        let software_adapter = match instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::LowPower,
                 force_fallback_adapter: true,
                 compatible_surface: None,
             })
             .await
-            .ok()?;
+        {
+            Ok(a) => a,
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    "Failed to acquire any wgpu adapter (hardware and software fallback both unavailable)"
+                );
+                return None;
+            }
+        };
 
         let adapter_info = software_adapter.get_info();
 
@@ -105,14 +114,28 @@ async fn init_gpu_inner() -> Option<SharedGpuContext> {
         (software_adapter, true)
     };
 
-    let (device, queue) = adapter
+    let adapter_info = adapter.get_info();
+
+    let (device, queue) = match adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("cap-shared-gpu-device"),
             required_features: wgpu::Features::empty(),
             ..Default::default()
         })
         .await
-        .ok()?;
+    {
+        Ok(pair) => pair,
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                adapter_name = adapter_info.name,
+                adapter_backend = ?adapter_info.backend,
+                adapter_device_type = ?adapter_info.device_type,
+                "wgpu request_device failed for shared GPU context"
+            );
+            return None;
+        }
+    };
 
     Some(SharedGpuContext {
         device: Arc::new(device),

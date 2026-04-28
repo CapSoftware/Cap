@@ -3983,6 +3983,27 @@ pub async fn run(
                 });
             }
 
+            if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
+                sentry::configure_scope(|scope| {
+                    scope.set_tag("os", std::env::consts::OS);
+                    scope.set_tag("arch", std::env::consts::ARCH);
+                    scope.set_tag("cap_version", env!("CARGO_PKG_VERSION"));
+                    scope.set_tag("instance_id", settings.instance_id.to_string());
+                    scope.set_tag(
+                        "cap_backend",
+                        if settings.server_url == "https://cap.so" {
+                            "cloud"
+                        } else {
+                            "self_hosted"
+                        },
+                    );
+                    scope.set_tag(
+                        "verbose_logging",
+                        if settings.verbose_logging { "on" } else { "off" },
+                    );
+                });
+            }
+
             {
                 let (server_url, should_update) = if cfg!(debug_assertions)
                     && let Ok(url) = std::env::var("VITE_SERVER_URL")
