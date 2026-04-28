@@ -1,3 +1,4 @@
+import { PositionOffsetField } from "@cap/ui-solid";
 import { Popover } from "@kobalte/core/popover";
 import { RadioGroup as KRadioGroup } from "@kobalte/core/radio-group";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
@@ -16,6 +17,7 @@ import type { BackgroundSource } from "~/utils/tauri";
 import IconCapBgBlur from "~icons/cap/bg-blur";
 import IconCapCircleX from "~icons/cap/circle-x";
 import IconCapImage from "~icons/cap/image";
+import IconLucideMove from "~icons/lucide/move";
 import {
 	DEFAULT_GRADIENT_FROM,
 	DEFAULT_GRADIENT_TO,
@@ -539,6 +541,19 @@ export function BackgroundSettingsPopover() {
 								formatTooltip="%"
 							/>
 						</Field>
+						<PositionOffsetField
+							icon={<IconLucideMove class="size-4" />}
+							value={{
+								x: project.background.positionOffsetX ?? 0,
+								y: project.background.positionOffsetY ?? 0,
+							}}
+							onChange={(v) =>
+								batch(() => {
+									setProject("background", "positionOffsetX", v.x);
+									setProject("background", "positionOffsetY", v.y);
+								})
+							}
+						/>
 					</div>
 				</Popover.Content>
 			</Popover.Portal>
