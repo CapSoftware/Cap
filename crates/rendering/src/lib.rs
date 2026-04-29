@@ -2773,7 +2773,7 @@ impl ProjectUniforms {
                         target_bounds[3] - target_bounds[1],
                     ],
                     rounding_px: compute_adjusted_radius(
-                        project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]) as f32,
+                        project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]),
                         project.camera.rounding_smoothness,
                     ),
                     corner_exponent: smoothness_to_exponent(project.camera.rounding_smoothness),
