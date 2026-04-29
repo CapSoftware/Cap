@@ -336,6 +336,7 @@ pub struct Camera {
     #[serde(alias = "advanced_shadow")]
     pub advanced_shadow: Option<ShadowConfiguration>,
     pub shape: CameraShape,
+    #[serde(default = "default_rounding_smoothness")]
     pub rounding_smoothness: f32,
     #[serde(default = "Camera::default_scale_during_zoom")]
     pub scale_during_zoom: f32,

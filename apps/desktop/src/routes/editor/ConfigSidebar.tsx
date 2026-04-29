@@ -2540,19 +2540,6 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 	);
 }
 
-const normalizeHexInput = (value: string, fallback: string) => {
-	const trimmed = value.trim();
-	const withHash = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
-	const shortMatch = /^#[0-9A-Fa-f]{3}$/.test(withHash);
-	if (shortMatch) {
-		const [, r, g, b] = withHash;
-		return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
-	}
-	const fullMatch = /^#[0-9A-Fa-f]{6}$/.test(withHash);
-	if (fullMatch) return withHash.toLowerCase();
-	return fallback;
-};
-
 function HexColorInput(props: {
 	value: string;
 	onChange: (value: string) => void;
