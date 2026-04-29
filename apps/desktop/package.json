@@ -18,7 +18,7 @@
 		"@cap/utils": "workspace:*",
 		"@cap/web-api-contract": "workspace:*",
 		"@corvu/tooltip": "^0.2.1",
-		"@kobalte/core": "^0.13.7",
+		"@kobalte/core": "^0.13.11",
 		"@radix-ui/colors": "^3.0.0",
 		"@rive-app/canvas": "^2.32.2",
 		"@solid-primitives/bounds": "^0.0.122",

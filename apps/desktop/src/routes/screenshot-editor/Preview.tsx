@@ -228,13 +228,13 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 					(pointerX -
 						(sizeData.width - sizeData.width * props.zoom) / 2 -
 						currentPan.x) /
-						currentScale;
+					currentScale;
 				const contentY =
 					boundsData.y +
 					(pointerY -
 						(sizeData.height - sizeData.height * props.zoom) / 2 -
 						currentPan.y) /
-						currentScale;
+					currentScale;
 
 				setPan({
 					x:
@@ -489,7 +489,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 								if (regionWidth <= 0 || regionHeight <= 0) continue;
 
 								const level = Math.max(1, mask.maskLevel ?? 16);
-								const type = mask.maskType ?? "blur-sm";
+								const type = mask.maskType ?? "blur";
 
 								if (type === "pixelate") {
 									const blockSize = Math.max(2, Math.round(level));

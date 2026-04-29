@@ -321,7 +321,7 @@ export function KeyboardTab() {
 									}
 								</KSelect.Value>
 								<KSelect.Icon>
-									<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-(--gray-500)" />
+									<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)" />
 								</KSelect.Icon>
 							</KSelect.Trigger>
 							<KSelect.Portal>

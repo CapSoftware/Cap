@@ -141,17 +141,21 @@
 	@keyframes collapsible-down {
 		from {
 			height: 0;
+			filter: blur(5px);
 		}
 		to {
 			height: var(--kb-collapsible-content-height);
+			filter: blur(0px);
 		}
 	}
 	@keyframes collapsible-up {
 		from {
 			height: var(--kb-collapsible-content-height);
+			filter: blur(0px);
 		}
 		to {
 			height: 0;
+			filter: blur(5px);
 		}
 	}
 }

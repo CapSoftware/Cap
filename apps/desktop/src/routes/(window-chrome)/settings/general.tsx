@@ -326,11 +326,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	// Helper function to render select dropdown for recording behaviors
 	const SelectSettingItem = <
 		T extends
-			| MainWindowRecordingStartBehaviour
-			| PostStudioRecordingBehaviour
-			| PostDeletionBehaviour
-			| StudioRecordingQuality
-			| number,
+		| MainWindowRecordingStartBehaviour
+		| PostStudioRecordingBehaviour
+		| PostDeletionBehaviour
+		| StudioRecordingQuality
+		| number,
 	>(props: {
 		label: string;
 		description: string;
@@ -836,7 +836,7 @@ function DefaultProjectNameCard(props: {
 						<p class="py-0.5 px-1">How to customize?</p>
 					</Collapsible.Trigger>
 
-					<Collapsible.Content class="opacity-0 transition animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100 text-xs text-gray-12 space-y-3 px-1 pb-2">
+					<Collapsible.Content class="opacity-0 transition animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100 text-xs text-gray-12 space-y-3 px-1 pb-2">
 						<p class="border-t pt-3">
 							Use placeholders in your template that will be automatically
 							filled in.

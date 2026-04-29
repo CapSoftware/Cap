@@ -144,7 +144,7 @@ export function LayersPanel() {
 			onCleanup(() => {
 				window.removeEventListener("mousemove", handleDragMove);
 				window.removeEventListener("mouseup", handleDragEnd);
-				window.removeEventListener("blur-sm", handleWindowBlur);
+				window.removeEventListener("blur", handleWindowBlur);
 				document.documentElement.removeEventListener(
 					"mouseleave",
 					handleMouseLeave,

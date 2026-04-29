@@ -14,10 +14,10 @@ import {
 	topSlideAnimateClasses,
 } from "../ui";
 
-export type CornerRoundingType = "rounded-sm" | "squircle";
+export type CornerRoundingType = "rounded" | "squircle";
 const CORNER_STYLE_OPTIONS = [
 	{ name: "Squircle", value: "squircle" },
-	{ name: "Rounded", value: "rounded-sm" },
+	{ name: "Rounded", value: "rounded" },
 ] satisfies Array<{ name: string; value: CornerRoundingType }>;
 
 function hasNoVisibleBackground(source: {
@@ -151,7 +151,7 @@ function CornerStyleSelect(props: {
 						as={(iconProps) => (
 							<IconCapChevronDown
 								{...iconProps}
-								class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-(--gray-500)"
+								class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
 							/>
 						)}
 					/>

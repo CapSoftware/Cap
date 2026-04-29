@@ -121,7 +121,7 @@ export function Editor() {
 						break;
 					case "h":
 						setActivePopover(
-							activePopover() === "shadow-sm" ? null : "shadow-sm",
+							activePopover() === "shadow" ? null : "shadow",
 						);
 						break;
 					case "e":
@@ -223,17 +223,17 @@ function Dialogs() {
 								const existingCrop = cropDialog().currentCrop;
 								const initialBounds = existingCrop
 									? {
-											x: existingCrop.position.x,
-											y: existingCrop.position.y,
-											width: existingCrop.size.x,
-											height: existingCrop.size.y,
-										}
+										x: existingCrop.position.x,
+										y: existingCrop.position.y,
+										width: existingCrop.size.x,
+										height: existingCrop.size.y,
+									}
 									: {
-											x: 0,
-											y: 0,
-											width: originalSize.x,
-											height: originalSize.y,
-										};
+										x: 0,
+										y: 0,
+										width: originalSize.x,
+										height: originalSize.y,
+									};
 
 								const previewSize = () => {
 									const srcW = originalSize.x;

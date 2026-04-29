@@ -404,3 +404,14 @@
 		@apply scrollbar-thin scrollbar-track-transparent scrollbar-thumb-black-transparent-40;
 	}
 }
+
+/* Preserve the same default border color from Tailwind 3 */
+@layer base {
+	*,
+	::after,
+	::before,
+	::backdrop,
+	::file-selector-button {
+		border-color: var(--color-gray-200, currentColor);
+	}
+}

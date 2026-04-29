@@ -138,7 +138,7 @@ export function CaptionsTab() {
 
 	const selectedCaptionIndex = () =>
 		editorState.timeline.selection?.type === "caption" &&
-		editorState.timeline.selection.indices.length === 1
+			editorState.timeline.selection.indices.length === 1
 			? editorState.timeline.selection.indices[0]
 			: -1;
 
@@ -537,7 +537,7 @@ export function CaptionsTab() {
 										</span>
 									</Show>
 									<KSelect.Icon>
-										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180" />
 									</KSelect.Icon>
 								</KSelect.Trigger>
 								<KSelect.Portal>
@@ -594,7 +594,7 @@ export function CaptionsTab() {
 										}}
 									</KSelect.Value>
 									<KSelect.Icon>
-										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180" />
 									</KSelect.Icon>
 								</KSelect.Trigger>
 								<KSelect.Portal>
@@ -919,7 +919,7 @@ export function CaptionsTab() {
 										}
 									</KSelect.Value>
 									<KSelect.Icon>
-										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-(--gray-500)" />
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)" />
 									</KSelect.Icon>
 								</KSelect.Trigger>
 								<KSelect.Portal>

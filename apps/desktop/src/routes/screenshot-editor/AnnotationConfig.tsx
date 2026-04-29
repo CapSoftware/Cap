@@ -33,7 +33,7 @@ export function AnnotationConfigBar() {
 			{(ann) => {
 				const type = () => ann().type;
 				const isMask = () => type() === "mask";
-				const maskType = () => ann().maskType ?? "blur-sm";
+				const maskType = () => ann().maskType ?? "blur";
 				const maskLevel = () => ann().maskLevel ?? 16;
 				return (
 					<div
@@ -101,11 +101,11 @@ export function AnnotationConfigBar() {
 											type="button"
 											class={cx(
 												"px-2.5 h-6 rounded-md text-xs font-medium transition-colors",
-												maskType() === "blur-sm"
+												maskType() === "blur"
 													? "bg-blue-9 text-white"
 													: "bg-gray-3 text-gray-11 hover:bg-gray-4",
 											)}
-											onClick={() => update("maskType", "blur-sm")}
+											onClick={() => update("maskType", "blur")}
 										>
 											Blur
 										</button>

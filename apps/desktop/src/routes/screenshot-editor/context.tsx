@@ -88,10 +88,10 @@ export type CurrentDialog =
 	| { type: "renamePreset"; presetIndex: number }
 	| { type: "deletePreset"; presetIndex: number }
 	| {
-			type: "crop";
-			originalSize: XY<number>;
-			currentCrop: { position: XY<number>; size: XY<number> } | null;
-	  };
+		type: "crop";
+		originalSize: XY<number>;
+		currentCrop: { position: XY<number>; size: XY<number> } | null;
+	};
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
@@ -182,7 +182,7 @@ function createScreenshotEditorContext() {
 	);
 
 	const [activePopover, setActivePopover] = createSignal<
-		"background" | "padding" | "rounding" | "shadow-sm" | "border" | null
+		"background" | "padding" | "rounding" | "shadow" | "border" | null
 	>(null);
 
 	const [dialog, setDialog] = createSignal<DialogState>({
@@ -348,7 +348,7 @@ function createScreenshotEditorContext() {
 					existing.bitmap.close();
 				}
 				setLatestFrame({ width, height, bitmap, revision });
-			} catch {}
+			} catch { }
 		};
 
 		return instance;

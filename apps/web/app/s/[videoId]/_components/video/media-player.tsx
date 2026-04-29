@@ -138,7 +138,7 @@ function useMediaSelector<T>(selector: (state: Partial<MediaState>) => T): T {
 
 	const subscribe = React.useCallback(
 		(cb: () => void) => {
-			if (!store?.subscribe) return () => {};
+			if (!store?.subscribe) return () => { };
 			return store.subscribe(cb);
 		},
 		[store],
@@ -1347,7 +1347,7 @@ function MediaPlayerControlsOverlay(props: MediaPlayerControlsOverlayProps) {
 	);
 }
 
-interface MediaPlayerPlayProps extends React.ComponentProps<typeof Button> {}
+interface MediaPlayerPlayProps extends React.ComponentProps<typeof Button> { }
 
 function MediaPlayerPlay(props: MediaPlayerPlayProps) {
 	const { asChild, children, className, disabled, ...playButtonProps } = props;
@@ -1540,8 +1540,8 @@ interface MediaPlayerSeekProps
 	tooltipSideOffset?: number;
 	tooltipCollisionBoundary?: Element | Element[];
 	tooltipCollisionPadding?:
-		| number
-		| Partial<Record<"top" | "right" | "bottom" | "left", number>>;
+	| number
+	| Partial<Record<"top" | "right" | "bottom" | "left", number>>;
 }
 
 function MediaPlayerSeek(props: MediaPlayerSeekProps) {
@@ -1669,11 +1669,11 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		const padding =
 			typeof tooltipCollisionPadding === "number"
 				? {
-						top: tooltipCollisionPadding,
-						right: tooltipCollisionPadding,
-						bottom: tooltipCollisionPadding,
-						left: tooltipCollisionPadding,
-					}
+					top: tooltipCollisionPadding,
+					right: tooltipCollisionPadding,
+					bottom: tooltipCollisionPadding,
+					left: tooltipCollisionPadding,
+				}
 				: { top: 0, right: 0, bottom: 0, left: 0, ...tooltipCollisionPadding };
 
 		const boundaries = tooltipCollisionBoundary
@@ -2599,9 +2599,9 @@ function MediaPlayerTime(props: MediaPlayerTimeProps) {
 
 interface MediaPlayerPlaybackSpeedProps
 	extends React.ComponentProps<typeof DropdownMenuTrigger>,
-		React.ComponentProps<typeof Button>,
-		Omit<React.ComponentProps<typeof DropdownMenu>, "dir">,
-		Pick<React.ComponentProps<typeof DropdownMenuContent>, "sideOffset"> {
+	React.ComponentProps<typeof Button>,
+	Omit<React.ComponentProps<typeof DropdownMenu>, "dir">,
+	Pick<React.ComponentProps<typeof DropdownMenuContent>, "sideOffset"> {
 	speeds?: number[];
 }
 
@@ -2689,7 +2689,7 @@ function MediaPlayerPlaybackSpeed(props: MediaPlayerPlaybackSpeedProps) {
 	);
 }
 
-interface MediaPlayerLoopProps extends React.ComponentProps<typeof Button> {}
+interface MediaPlayerLoopProps extends React.ComponentProps<typeof Button> { }
 
 function MediaPlayerLoop(props: MediaPlayerLoopProps) {
 	const { children, className, disabled, ...loopProps } = props;
@@ -2765,7 +2765,7 @@ function MediaPlayerLoop(props: MediaPlayerLoopProps) {
 }
 
 interface MediaPlayerFullscreenProps
-	extends React.ComponentProps<typeof Button> {}
+	extends React.ComponentProps<typeof Button> { }
 
 function MediaPlayerFullscreen(props: MediaPlayerFullscreenProps) {
 	const { children, className, disabled, ...fullscreenProps } = props;
@@ -3046,7 +3046,7 @@ function EnhancedAudioSync({
 				audio.pause();
 				return;
 			}
-			audio.play().catch(() => {});
+			audio.play().catch(() => { });
 		};
 
 		const handlePause = () => {
@@ -3097,7 +3097,7 @@ function EnhancedAudioSync({
 				if (enhancedAudioMuted) {
 					audio.pause();
 				} else {
-					audio.play().catch(() => {});
+					audio.play().catch(() => { });
 				}
 			}
 
@@ -3124,7 +3124,7 @@ function EnhancedAudioSync({
 }
 
 interface MediaPlayerDownloadProps
-	extends React.ComponentProps<typeof Button> {}
+	extends React.ComponentProps<typeof Button> { }
 
 function MediaPlayerDownload(props: MediaPlayerDownloadProps) {
 	const { children, className, disabled, ...downloadProps } = props;
@@ -3333,7 +3333,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 				<DropdownMenuSub>
 					<DropdownMenuSubTrigger>
 						<span className="flex-1">Speed</span>
-						<Badge variant="outline" className="rounded-sm">
+						<Badge variant="outline" className="rounded">
 							{mediaPlaybackRate}x
 						</Badge>
 					</DropdownMenuSubTrigger>
@@ -3365,7 +3365,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 					<DropdownMenuSub>
 						<DropdownMenuSubTrigger>
 							<span className="flex-1">Quality</span>
-							<Badge variant="outline" className="rounded-sm">
+							<Badge variant="outline" className="rounded">
 								{selectedRenditionLabel}
 							</Badge>
 						</DropdownMenuSubTrigger>
@@ -3414,7 +3414,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 								<GlobeIcon className="size-4" />
 								Captions
 							</span>
-							<Badge variant="outline" className="rounded-sm">
+							<Badge variant="outline" className="rounded">
 								{isCaptionLoading
 									? "..."
 									: captionLanguage === "off"
@@ -3422,8 +3422,8 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 										: captionLanguage === "original"
 											? "Original"
 											: (availableCaptions.find(
-													(c) => c.code === captionLanguage,
-												)?.name ?? captionLanguage)}
+												(c) => c.code === captionLanguage,
+											)?.name ?? captionLanguage)}
 							</Badge>
 						</DropdownMenuSubTrigger>
 						<DropdownMenuSubContent className="max-h-64 overflow-y-auto">
@@ -3477,7 +3477,7 @@ function MediaPlayerPortal(props: MediaPlayerPortalProps) {
 
 interface MediaPlayerTooltipProps
 	extends React.ComponentProps<typeof Tooltip>,
-		Pick<React.ComponentProps<typeof TooltipContent>, "sideOffset"> {
+	Pick<React.ComponentProps<typeof TooltipContent>, "sideOffset"> {
 	tooltip?: string;
 	shortcut?: string | string[];
 }
