@@ -1,6 +1,7 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { makePersisted } from "@solid-primitives/storage";
 import {
+	availableMonitors,
 	currentMonitor,
 	getCurrentWindow,
 	LogicalPosition,
@@ -20,22 +21,21 @@ import {
 	Show,
 	Suspense,
 } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, type SetStoreFunction } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCameraMutation } from "~/utils/queries";
 import { createLazySignal } from "~/utils/socket";
 import { commands, events } from "~/utils/tauri";
-import {
-	RecordingOptionsProvider,
-	useRecordingOptions,
-} from "./(window-chrome)/OptionsContext";
+import { RecordingOptionsProvider } from "./(window-chrome)/OptionsContext";
 
 type CameraWindowShape = "round" | "square" | "full";
+type BackgroundBlurMode = "off" | "light" | "heavy";
 type CameraWindowState = {
 	size: number;
 	shape: CameraWindowShape;
 	mirrored: boolean;
+	backgroundBlur: BackgroundBlurMode | boolean;
 };
 
 const CAMERA_MIN_SIZE = 150;
@@ -43,6 +43,83 @@ const CAMERA_MAX_SIZE = 600;
 const CAMERA_DEFAULT_SIZE = 230;
 const CAMERA_PRESET_SMALL = 230;
 const CAMERA_PRESET_LARGE = 400;
+
+const getCameraOnlyMode = () => {
+	return window.__CAP__?.cameraOnlyMode === true;
+};
+
+const getCameraOnlyInitialState = (): CameraWindowState => ({
+	size: CAMERA_PRESET_LARGE,
+	shape: "full",
+	mirrored: false,
+	backgroundBlur: "off",
+});
+
+const BLUR_MODES: BackgroundBlurMode[] = ["off", "light", "heavy"];
+
+const cycleBlurMode = (
+	current: BackgroundBlurMode | boolean,
+): BackgroundBlurMode => {
+	if (typeof current === "boolean") {
+		return current ? "heavy" : "light";
+	}
+	const idx = BLUR_MODES.indexOf(current);
+	return BLUR_MODES[(idx + 1) % BLUR_MODES.length];
+};
+
+const blurModeLabel = (mode: BackgroundBlurMode | boolean): string => {
+	if (typeof mode === "boolean") return mode ? "Blur" : "";
+	switch (mode) {
+		case "light":
+			return "Light";
+		case "heavy":
+			return "Heavy";
+		default:
+			return "";
+	}
+};
+
+let ignoreMoveUntil = 0;
+
+const ignoreMoveFor = (durationMs: number) => {
+	ignoreMoveUntil = Date.now() + durationMs;
+};
+
+const shouldIgnoreMove = () => Date.now() < ignoreMoveUntil;
+
+const queueCameraPositionSave = (() => {
+	let pending: { x: number; y: number } | null = null;
+	let timeout: ReturnType<typeof setTimeout> | null = null;
+
+	return (pos: { x: number; y: number }) => {
+		pending = pos;
+		if (timeout) return;
+		timeout = setTimeout(async () => {
+			timeout = null;
+			const next = pending;
+			pending = null;
+			if (!next || shouldIgnoreMove()) return;
+			try {
+				await commands.setCameraWindowPosition(next.x, next.y);
+			} catch (error) {
+				console.error("Failed to save camera window position", error);
+			}
+		}, 200);
+	};
+})();
+
+async function centerCurrentWindow() {
+	const monitor = await currentMonitor();
+	if (!monitor) return;
+	const window = getCurrentWindow();
+	const scaleFactor = monitor.scaleFactor;
+	const monitorPosition = monitor.position.toLogical(scaleFactor);
+	const monitorSize = monitor.size.toLogical(scaleFactor);
+	const windowSize = (await window.outerSize()).toLogical(scaleFactor);
+	const x = monitorPosition.x + (monitorSize.width - windowSize.width) / 2;
+	const y = monitorPosition.y + (monitorSize.height - windowSize.height) / 2;
+	await window.setPosition(new LogicalPosition(x, y));
+}
 
 export default function () {
 	document.documentElement.classList.toggle("dark", true);
@@ -65,6 +142,57 @@ export default function () {
 		}
 	});
 
+	onMount(() => {
+		const currentWindow = getCurrentWindow();
+		let unlistenMoved: (() => void) | null = null;
+		let syncingPosition = false;
+		let lastSavedPosition: { x: number; y: number } | null = null;
+		const queueIfChanged = (x: number, y: number) => {
+			if (shouldIgnoreMove()) return;
+			if (
+				lastSavedPosition &&
+				Math.abs(lastSavedPosition.x - x) < 1 &&
+				Math.abs(lastSavedPosition.y - y) < 1
+			) {
+				return;
+			}
+			lastSavedPosition = { x, y };
+			queueCameraPositionSave({ x, y });
+		};
+		const syncCurrentPosition = async () => {
+			if (syncingPosition || shouldIgnoreMove()) return;
+			syncingPosition = true;
+			try {
+				const scaleFactor = await currentWindow.scaleFactor();
+				const outerPosition = await currentWindow.outerPosition();
+				const logicalPosition = outerPosition.toLogical(scaleFactor);
+				queueIfChanged(logicalPosition.x, logicalPosition.y);
+			} catch (error) {
+				console.error("Failed to read camera window position", error);
+			}
+			syncingPosition = false;
+		};
+
+		void currentWindow
+			.onMoved(async ({ payload }) => {
+				const scaleFactor = await currentWindow.scaleFactor();
+				const logicalPos = payload.toLogical(scaleFactor);
+				queueIfChanged(logicalPos.x, logicalPos.y);
+			})
+			.then((unlisten) => {
+				unlistenMoved = unlisten;
+			});
+
+		const interval = window.setInterval(() => {
+			void syncCurrentPosition();
+		}, 400);
+
+		onCleanup(() => {
+			window.clearInterval(interval);
+			unlistenMoved?.();
+		});
+	});
+
 	return (
 		<RecordingOptionsProvider>
 			<Show
@@ -78,25 +206,68 @@ export default function () {
 }
 
 function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
+	const isCameraOnlyMode = () => getCameraOnlyMode();
+
 	const [state, setState] = makePersisted(
-		createStore<CameraWindowState>({
-			size: CAMERA_DEFAULT_SIZE,
-			shape: "round",
-			mirrored: false,
-		}),
+		createStore<CameraWindowState>(
+			isCameraOnlyMode()
+				? getCameraOnlyInitialState()
+				: {
+						size: CAMERA_DEFAULT_SIZE,
+						shape: "round",
+						mirrored: false,
+						backgroundBlur: "off" as BackgroundBlurMode,
+					},
+		),
 		{ name: "cameraWindowState" },
 	);
 
-	const [isResizing, setIsResizing] = createSignal(false);
-	const [resizeStart, setResizeStart] = createSignal({
-		size: 0,
-		x: 0,
-		y: 0,
-		corner: "",
+	const applyCameraOnlyDefaults = () => {
+		const cameraOnlyState = getCameraOnlyInitialState();
+		setState("size", cameraOnlyState.size);
+		setState("shape", cameraOnlyState.shape);
+	};
+
+	const centerCameraOnlyWindow = () => {
+		applyCameraOnlyDefaults();
+		ignoreMoveFor(1500);
+		void commands.ignoreCameraWindowPosition(1500);
+		void centerCurrentWindow();
+		setTimeout(() => {
+			void centerCurrentWindow();
+		}, 120);
+	};
+
+	onMount(() => {
+		if (isCameraOnlyMode()) {
+			centerCameraOnlyWindow();
+		}
+
+		const handleVisibilityChange = () => {
+			if (!document.hidden) {
+				setTimeout(() => {
+					commands.refreshCameraFeed().catch(() => {});
+				}, 500);
+			}
+		};
+		document.addEventListener("visibilitychange", handleVisibilityChange);
+		onCleanup(() =>
+			document.removeEventListener("visibilitychange", handleVisibilityChange),
+		);
 	});
 
+	createEffect(
+		on(
+			() => isCameraOnlyMode(),
+			(isCameraOnly, wasCameraOnly) => {
+				if (isCameraOnly && !wasCameraOnly) {
+					centerCameraOnlyWindow();
+				}
+			},
+		),
+	);
+
 	createEffect(() => {
-		// Support for legacy size strings.
 		let currentSize = state.size as number | string;
 		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
 			currentSize =
@@ -112,7 +283,17 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		if (clampedSize !== currentSize) {
 			setState("size", clampedSize);
 		}
-		commands.setCameraPreviewState(state);
+		commands.setCameraPreviewState({
+			size: state.size,
+			shape: state.shape,
+			mirrored: state.mirrored,
+			background_blur:
+				(typeof state.backgroundBlur === "boolean"
+					? state.backgroundBlur
+						? "heavy"
+						: "off"
+					: state.backgroundBlur) ?? "off",
+		});
 	});
 
 	const [cameraPreviewReady] = createResource(() =>
@@ -126,60 +307,6 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			(state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
 		return 0.7 + normalized * 0.3;
 	};
-
-	const handleResizeStart = (corner: string) => (e: MouseEvent) => {
-		e.preventDefault();
-		e.stopPropagation();
-		setIsResizing(true);
-		setResizeStart({ size: state.size, x: e.clientX, y: e.clientY, corner });
-	};
-
-	const handleResizeMove = (e: MouseEvent) => {
-		if (!isResizing()) return;
-		const start = resizeStart();
-		const deltaX = e.clientX - start.x;
-		const deltaY = e.clientY - start.y;
-
-		let delta = 0;
-		if (start.corner.includes("e") && start.corner.includes("s")) {
-			delta = Math.max(deltaX, deltaY);
-		} else if (start.corner.includes("e") && start.corner.includes("n")) {
-			delta = Math.max(deltaX, -deltaY);
-		} else if (start.corner.includes("w") && start.corner.includes("s")) {
-			delta = Math.max(-deltaX, deltaY);
-		} else if (start.corner.includes("w") && start.corner.includes("n")) {
-			delta = Math.max(-deltaX, -deltaY);
-		} else if (start.corner.includes("e")) {
-			delta = deltaX;
-		} else if (start.corner.includes("w")) {
-			delta = -deltaX;
-		} else if (start.corner.includes("s")) {
-			delta = deltaY;
-		} else if (start.corner.includes("n")) {
-			delta = -deltaY;
-		}
-
-		const newSize = Math.max(
-			CAMERA_MIN_SIZE,
-			Math.min(CAMERA_MAX_SIZE, start.size + delta),
-		);
-		setState("size", newSize);
-	};
-
-	const handleResizeEnd = () => {
-		setIsResizing(false);
-	};
-
-	createEffect(() => {
-		if (isResizing()) {
-			window.addEventListener("mousemove", handleResizeMove);
-			window.addEventListener("mouseup", handleResizeEnd);
-			onCleanup(() => {
-				window.removeEventListener("mousemove", handleResizeMove);
-				window.removeEventListener("mouseup", handleResizeEnd);
-			});
-		}
-	});
 
 	return (
 		<div
@@ -231,32 +358,38 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 						>
 							<IconCapArrows class="size-5.5" />
 						</ControlButton>
+						<ControlButton
+							pressed={
+								state.backgroundBlur !== "off" && state.backgroundBlur !== false
+							}
+							onClick={() =>
+								setState("backgroundBlur", (b) => cycleBlurMode(b))
+							}
+						>
+							<div class="relative">
+								<IconLucidePersonStanding class="size-5.5" />
+								<Show
+									when={
+										state.backgroundBlur !== "off" &&
+										state.backgroundBlur !== false
+									}
+								>
+									<span class="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[7px] font-bold leading-none whitespace-nowrap">
+										{blurModeLabel(state.backgroundBlur)}
+									</span>
+								</Show>
+							</div>
+						</ControlButton>
 					</div>
 				</div>
 			</div>
 
-			<div
-				class="absolute top-0 left-0 w-4 h-4 cursor-nw-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("nw")}
-			/>
-			<div
-				class="absolute top-0 right-0 w-4 h-4 cursor-ne-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("ne")}
-			/>
-			<div
-				class="absolute bottom-0 left-0 w-4 h-4 cursor-sw-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("sw")}
-			/>
-			<div
-				class="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("se")}
+			<CameraResizeHandles
+				state={state}
+				setState={setState}
+				toolbarHeight={52}
 			/>
 
-			{/* The camera preview is rendered in Rust by wgpu */}
 			<Show when={cameraPreviewReady.loading}>
 				<div class="w-full flex-1 flex items-center justify-center">
 					<div class="text-gray-11">Loading camera...</div>
@@ -280,22 +413,206 @@ function ControlButton(
 	);
 }
 
+type ResizeCorner = "nw" | "ne" | "sw" | "se";
+
+const RESIZE_CORNERS: readonly ResizeCorner[] = ["nw", "ne", "sw", "se"];
+
+function CameraResizeHandles(props: {
+	state: CameraWindowState;
+	setState: SetStoreFunction<CameraWindowState>;
+	toolbarHeight: number;
+}) {
+	const [isResizing, setIsResizing] = createSignal(false);
+	const [activeCorner, setActiveCorner] = createSignal<ResizeCorner | null>(
+		null,
+	);
+	const [resizeStart, setResizeStart] = createSignal({
+		size: 0,
+		x: 0,
+		y: 0,
+		corner: "nw" as ResizeCorner,
+	});
+
+	const handleResizeStart = (corner: ResizeCorner) => (e: MouseEvent) => {
+		if (e.button !== 0) return;
+		e.preventDefault();
+		e.stopPropagation();
+		setIsResizing(true);
+		setActiveCorner(corner);
+		setResizeStart({
+			size: props.state.size,
+			x: e.clientX,
+			y: e.clientY,
+			corner,
+		});
+	};
+
+	const handleResizeMove = (e: MouseEvent) => {
+		if (!isResizing()) return;
+		const start = resizeStart();
+		const deltaX = e.clientX - start.x;
+		const deltaY = e.clientY - start.y;
+
+		const hasE = start.corner.includes("e");
+		const hasW = start.corner.includes("w");
+		const hasS = start.corner.includes("s");
+		const hasN = start.corner.includes("n");
+
+		const dx = hasE ? deltaX : hasW ? -deltaX : 0;
+		const dy = hasS ? deltaY : hasN ? -deltaY : 0;
+
+		const delta = (hasE || hasW) && (hasN || hasS) ? Math.max(dx, dy) : dx + dy;
+
+		const newSize = Math.max(
+			CAMERA_MIN_SIZE,
+			Math.min(CAMERA_MAX_SIZE, start.size + delta),
+		);
+		props.setState("size", newSize);
+	};
+
+	const handleResizeEnd = () => {
+		setIsResizing(false);
+		setActiveCorner(null);
+	};
+
+	createEffect(() => {
+		if (!isResizing()) return;
+		window.addEventListener("mousemove", handleResizeMove);
+		window.addEventListener("mouseup", handleResizeEnd);
+		onCleanup(() => {
+			window.removeEventListener("mousemove", handleResizeMove);
+			window.removeEventListener("mouseup", handleResizeEnd);
+		});
+	});
+
+	return (
+		<div
+			class="pointer-events-none absolute inset-x-0 bottom-0 z-20"
+			style={{ top: `${props.toolbarHeight}px` }}
+		>
+			{RESIZE_CORNERS.map((corner) => (
+				<ResizeCornerHandle
+					corner={corner}
+					onMouseDown={handleResizeStart(corner)}
+					active={activeCorner() === corner}
+				/>
+			))}
+		</div>
+	);
+}
+
+function ResizeCornerHandle(props: {
+	corner: ResizeCorner;
+	onMouseDown: (e: MouseEvent) => void;
+	active: boolean;
+}) {
+	const hitAreaClass = () => {
+		switch (props.corner) {
+			case "nw":
+				return "top-0 left-0 cursor-nw-resize";
+			case "ne":
+				return "top-0 right-0 cursor-ne-resize";
+			case "sw":
+				return "bottom-0 left-0 cursor-sw-resize";
+			case "se":
+				return "bottom-0 right-0 cursor-se-resize";
+		}
+	};
+
+	const bracketPositionClass = () => {
+		switch (props.corner) {
+			case "nw":
+				return "top-1.5 left-1.5 border-t-2 border-l-2 rounded-tl-[6px]";
+			case "ne":
+				return "top-1.5 right-1.5 border-t-2 border-r-2 rounded-tr-[6px]";
+			case "sw":
+				return "bottom-1.5 left-1.5 border-b-2 border-l-2 rounded-bl-[6px]";
+			case "se":
+				return "bottom-1.5 right-1.5 border-b-2 border-r-2 rounded-br-[6px]";
+		}
+	};
+
+	return (
+		<div
+			data-tauri-drag-region="false"
+			class={cx(
+				"absolute z-20 w-7 h-7 group/handle select-none",
+				hitAreaClass(),
+			)}
+			style={{ "pointer-events": "auto" }}
+			onMouseDown={props.onMouseDown}
+		>
+			<div
+				class={cx(
+					"absolute w-3.5 h-3.5 border-white pointer-events-none",
+					"transition-[opacity,transform,border-color] duration-150 ease-out",
+					"opacity-0 scale-90",
+					"group-hover:opacity-70 group-hover:scale-100",
+					"group-hover/handle:!opacity-100 group-hover/handle:!scale-110",
+					props.active && "!opacity-100 !scale-110",
+					bracketPositionClass(),
+				)}
+				style={{
+					filter: "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6))",
+				}}
+			/>
+		</div>
+	);
+}
+
 // Legacy stuff below
 
 function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
-	const { rawOptions } = useRecordingOptions();
+	const isCameraOnlyMode = () => getCameraOnlyMode();
 
 	const [state, setState] = makePersisted(
-		createStore<CameraWindowState>({
-			size: CAMERA_DEFAULT_SIZE,
-			shape: "round",
-			mirrored: false,
-		}),
+		createStore<CameraWindowState>(
+			isCameraOnlyMode()
+				? getCameraOnlyInitialState()
+				: {
+						size: CAMERA_DEFAULT_SIZE,
+						shape: "round",
+						mirrored: false,
+						backgroundBlur: "off" as BackgroundBlurMode,
+					},
+		),
 		{ name: "cameraWindowState" },
 	);
 
+	const applyCameraOnlyDefaults = () => {
+		const cameraOnlyState = getCameraOnlyInitialState();
+		setState("size", cameraOnlyState.size);
+		setState("shape", cameraOnlyState.shape);
+	};
+
+	const centerCameraOnlyWindow = () => {
+		applyCameraOnlyDefaults();
+		ignoreMoveFor(1500);
+		void commands.ignoreCameraWindowPosition(1500);
+		void centerCurrentWindow();
+		setTimeout(() => {
+			void centerCurrentWindow();
+		}, 120);
+	};
+
+	onMount(() => {
+		if (isCameraOnlyMode()) {
+			centerCameraOnlyWindow();
+		}
+	});
+
+	createEffect(
+		on(
+			() => isCameraOnlyMode(),
+			(isCameraOnly, wasCameraOnly) => {
+				if (isCameraOnly && !wasCameraOnly) {
+					centerCameraOnlyWindow();
+				}
+			},
+		),
+	);
+
 	createEffect(() => {
-		// Support for legacy size strings.
 		const currentSize = state.size as number | string;
 		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
 			setState(
@@ -305,28 +622,109 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		}
 	});
 
-	const [isResizing, setIsResizing] = createSignal(false);
-	const [resizeStart, setResizeStart] = createSignal({
-		size: 0,
-		x: 0,
-		y: 0,
-		corner: "",
+	createEffect(() => {
+		commands.setCameraPreviewState({
+			size: state.size,
+			shape: state.shape,
+			mirrored: state.mirrored,
+			background_blur:
+				(typeof state.backgroundBlur === "boolean"
+					? state.backgroundBlur
+						? "heavy"
+						: "off"
+					: state.backgroundBlur) ?? "off",
+		});
 	});
 
-	const [hasPositioned, setHasPositioned] = createSignal(false);
+	const [hasPositioned, setHasPositioned] = createSignal(isCameraOnlyMode());
 
 	const [latestFrame, setLatestFrame] = createLazySignal<{
 		width: number;
 		data: ImageData;
 	} | null>();
+	let reusableFrameData: ImageData | null = null;
+	let reusableFrameWidth = 0;
+	let reusableFrameHeight = 0;
 
 	const [frameDimensions, setFrameDimensions] = createSignal<{
 		width: number;
 		height: number;
 	} | null>(null);
 
+	const [externalContainerSize, setExternalContainerSize] = createSignal<{
+		width: number;
+		height: number;
+	} | null>(null);
+
+	let containerRef: HTMLDivElement | undefined;
+
+	onMount(() => {
+		if (!containerRef) return;
+
+		const updateContainerSize = () => {
+			if (!containerRef) return;
+			const rect = containerRef.getBoundingClientRect();
+			const currentSize = externalContainerSize();
+			if (
+				!currentSize ||
+				Math.abs(currentSize.width - rect.width) > 1 ||
+				Math.abs(currentSize.height - rect.height) > 1
+			) {
+				setExternalContainerSize({ width: rect.width, height: rect.height });
+			}
+		};
+
+		const resizeObserver = new ResizeObserver(updateContainerSize);
+		resizeObserver.observe(containerRef);
+		updateContainerSize();
+
+		onCleanup(() => resizeObserver.disconnect());
+	});
+
+	function getReusableFrameData(width: number, height: number) {
+		if (
+			!reusableFrameData ||
+			reusableFrameWidth !== width ||
+			reusableFrameHeight !== height
+		) {
+			reusableFrameData = new ImageData(width, height);
+			reusableFrameWidth = width;
+			reusableFrameHeight = height;
+		}
+
+		return reusableFrameData;
+	}
+
+	let pendingRender = false;
+	let rafId: number | null = null;
+	let cachedCtx: CanvasRenderingContext2D | null = null;
+
+	function scheduleRender() {
+		if (rafId !== null) return;
+		rafId = requestAnimationFrame(() => {
+			rafId = null;
+			if (!pendingRender) return;
+			pendingRender = false;
+
+			if (!cachedCtx && cameraCanvasRef) {
+				cachedCtx = cameraCanvasRef.getContext("2d");
+			}
+			if (cachedCtx && reusableFrameData) {
+				cachedCtx.putImageData(reusableFrameData, 0, 0);
+			}
+		});
+	}
+
 	function imageDataHandler(imageData: { width: number; data: ImageData }) {
-		setLatestFrame(imageData);
+		const currentFrame = latestFrame();
+		if (
+			!currentFrame ||
+			currentFrame.data !== imageData.data ||
+			currentFrame.data.width !== imageData.data.width ||
+			currentFrame.data.height !== imageData.data.height
+		) {
+			setLatestFrame(imageData);
+		}
 
 		const currentDimensions = frameDimensions();
 		if (
@@ -340,43 +738,76 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			});
 		}
 
-		const ctx = cameraCanvasRef?.getContext("2d");
-		ctx?.putImageData(imageData.data, 0, 0);
+		pendingRender = true;
+		scheduleRender();
 	}
 
+	const STALL_TIMEOUT_MS = 2000;
+
 	const { cameraWsPort } = window.__CAP__;
+	const [isWindowVisible, setIsWindowVisible] = createSignal(!document.hidden);
 	const [_isConnected, setIsConnected] = createSignal(false);
 	let ws: WebSocket | undefined;
+	let reconnectInterval: ReturnType<typeof setInterval> | undefined;
+	let stallCheckInterval: ReturnType<typeof setInterval> | undefined;
+	let lastFrameTime = 0;
+
+	onMount(() => {
+		const handleVisibilityChange = () => {
+			setIsWindowVisible(!document.hidden);
+			if (!document.hidden) {
+				lastFrameTime = Date.now();
+				commands.refreshCameraFeed().catch(() => {});
+			}
+		};
+		document.addEventListener("visibilitychange", handleVisibilityChange);
+		onCleanup(() =>
+			document.removeEventListener("visibilitychange", handleVisibilityChange),
+		);
+	});
 
 	const createSocket = () => {
 		const socket = new WebSocket(`ws://localhost:${cameraWsPort}`);
 		socket.binaryType = "arraybuffer";
 
 		socket.addEventListener("open", () => {
-			console.log("WebSocket connected");
 			setIsConnected(true);
+			lastFrameTime = Date.now();
+			reusableFrameData = null;
+			reusableFrameWidth = 0;
+			reusableFrameHeight = 0;
+			if (cachedCtx && cameraCanvasRef) {
+				cachedCtx.clearRect(
+					0,
+					0,
+					cameraCanvasRef.width,
+					cameraCanvasRef.height,
+				);
+			}
 		});
 
 		socket.addEventListener("close", () => {
-			console.log("WebSocket disconnected");
 			setIsConnected(false);
 		});
 
-		socket.addEventListener("error", (error) => {
-			console.error("WebSocket error:", error);
+		socket.addEventListener("error", () => {
 			setIsConnected(false);
 		});
 
 		socket.onmessage = (event) => {
+			if (!isWindowVisible()) return;
+
+			lastFrameTime = Date.now();
+
 			const buffer = event.data as ArrayBuffer;
 			const clamped = new Uint8ClampedArray(buffer);
-			if (clamped.length < 12) {
+			if (clamped.length < 24) {
 				console.error("Received frame too small to contain metadata");
 				return;
 			}
 
-			const metadataOffset = clamped.length - 12;
-			const meta = new DataView(buffer, metadataOffset, 12);
+			const metadataOffset = clamped.length - 24;
+			const meta = new DataView(buffer, metadataOffset, 24);
 			const strideBytes = meta.getUint32(0, true);
 			const height = meta.getUint32(4, true);
 			const width = meta.getUint32(8, true);
@@ -405,46 +836,90 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				return;
 			}
 
-			let pixels: Uint8ClampedArray;
-
+			const imageData = getReusableFrameData(width, height);
 			if (strideBytes === expectedRowBytes) {
-				pixels = source.subarray(0, expectedLength);
+				imageData.data.set(source.subarray(0, expectedLength));
 			} else {
-				pixels = new Uint8ClampedArray(expectedLength);
 				for (let row = 0; row < height; row += 1) {
 					const srcStart = row * strideBytes;
 					const destStart = row * expectedRowBytes;
-					pixels.set(
+					imageData.data.set(
 						source.subarray(srcStart, srcStart + expectedRowBytes),
 						destStart,
 					);
 				}
 			}
-
-			const imageData = new ImageData(
-				new Uint8ClampedArray(pixels),
-				width,
-				height,
-			);
 			imageDataHandler({ width, data: imageData });
 		};
 
 		return socket;
 	};
 
-	ws = createSocket();
-
-	const reconnectInterval = setInterval(() => {
-		if (!ws || ws.readyState !== WebSocket.OPEN) {
-			console.log("Attempting to reconnect...");
-			if (ws) ws.close();
-			ws = createSocket();
+	const stopSocket = () => {
+		if (reconnectInterval) {
+			clearInterval(reconnectInterval);
+			reconnectInterval = undefined;
 		}
-	}, 5000);
+
+		if (stallCheckInterval) {
+			clearInterval(stallCheckInterval);
+			stallCheckInterval = undefined;
+		}
+
+		if (ws) {
+			ws.close();
+			ws = undefined;
+		}
+
+		setIsConnected(false);
+	};
+
+	const startSocket = () => {
+		if (ws || !isWindowVisible()) return;
+
+		lastFrameTime = Date.now();
+		ws = createSocket();
+
+		reconnectInterval = setInterval(() => {
+			if (!ws || ws.readyState !== WebSocket.OPEN) {
+				if (ws) ws.close();
+				ws = createSocket();
+			}
+		}, 5000);
+
+		stallCheckInterval = setInterval(() => {
+			if (
+				ws?.readyState === WebSocket.OPEN &&
+				isWindowVisible() &&
+				lastFrameTime > 0 &&
+				Date.now() - lastFrameTime > STALL_TIMEOUT_MS
+			) {
+				lastFrameTime = Date.now();
+				commands.refreshCameraFeed().catch(() => {});
+				if (ws) ws.close();
+				ws = createSocket();
+			}
+		}, STALL_TIMEOUT_MS);
+	};
+
+	createEffect(() => {
+		if (isWindowVisible()) {
+			startSocket();
+		} else {
+			stopSocket();
+		}
+	});
 
 	onCleanup(() => {
-		clearInterval(reconnectInterval);
-		ws?.close();
+		if (rafId !== null) {
+			cancelAnimationFrame(rafId);
+			rafId = null;
+		}
+		cachedCtx = null;
+		reusableFrameData = null;
+		reusableFrameWidth = 0;
+		reusableFrameHeight = 0;
+		stopSocket();
 	});
 
 	const scale = () => {
@@ -452,60 +927,6 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			(state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
 		return 0.7 + normalized * 0.3;
 	};
-
-	const handleResizeStart = (corner: string) => (e: MouseEvent) => {
-		e.preventDefault();
-		e.stopPropagation();
-		setIsResizing(true);
-		setResizeStart({ size: state.size, x: e.clientX, y: e.clientY, corner });
-	};
-
-	const handleResizeMove = (e: MouseEvent) => {
-		if (!isResizing()) return;
-		const start = resizeStart();
-		const deltaX = e.clientX - start.x;
-		const deltaY = e.clientY - start.y;
-
-		let delta = 0;
-		if (start.corner.includes("e") && start.corner.includes("s")) {
-			delta = Math.max(deltaX, deltaY);
-		} else if (start.corner.includes("e") && start.corner.includes("n")) {
-			delta = Math.max(deltaX, -deltaY);
-		} else if (start.corner.includes("w") && start.corner.includes("s")) {
-			delta = Math.max(-deltaX, deltaY);
-		} else if (start.corner.includes("w") && start.corner.includes("n")) {
-			delta = Math.max(-deltaX, -deltaY);
-		} else if (start.corner.includes("e")) {
-			delta = deltaX;
-		} else if (start.corner.includes("w")) {
-			delta = -deltaX;
-		} else if (start.corner.includes("s")) {
-			delta = deltaY;
-		} else if (start.corner.includes("n")) {
-			delta = -deltaY;
-		}
-
-		const newSize = Math.max(
-			CAMERA_MIN_SIZE,
-			Math.min(CAMERA_MAX_SIZE, start.size + delta),
-		);
-		setState("size", newSize);
-	};
-
-	const handleResizeEnd = () => {
-		setIsResizing(false);
-	};
-
-	createEffect(() => {
-		if (isResizing()) {
-			window.addEventListener("mousemove", handleResizeMove);
-			window.addEventListener("mouseup", handleResizeEnd);
-			onCleanup(() => {
-				window.removeEventListener("mousemove", handleResizeMove);
-				window.removeEventListener("mouseup", handleResizeEnd);
-			});
-		}
-	});
 
 	const [_windowSize] = createResource(
 		() =>
@@ -529,25 +950,59 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			await currentWindow.setSize(new LogicalSize(windowWidth, totalHeight));
 
 			const monitor = await currentMonitor();
-			if (!monitor) return { size: base, windowWidth, windowHeight };
+			const monitors = await availableMonitors();
+			const activeMonitor = monitor ?? monitors[0];
+			if (!activeMonitor) {
+				return { size: base, windowWidth, windowHeight };
+			}
 
-			const scalingFactor = monitor.scaleFactor;
-			const width = monitor.size.width / scalingFactor - windowWidth - 100;
-			const height = monitor.size.height / scalingFactor - totalHeight - 100;
+			const scalingFactor = activeMonitor.scaleFactor;
+			const width =
+				activeMonitor.size.width / scalingFactor - windowWidth - 100;
+			const height =
+				activeMonitor.size.height / scalingFactor - totalHeight - 100;
 
 			if (!hasPositioned()) {
-				currentWindow.setPosition(
-					new LogicalPosition(
-						width + monitor.position.toLogical(scalingFactor).x,
-						height + monitor.position.toLogical(scalingFactor).y,
-					),
-				);
+				ignoreMoveFor(1500);
+				const settings = await generalSettingsStore.get();
+				const saved = settings?.cameraWindowPosition ?? null;
+				if (saved) {
+					const onMonitor = monitors.some((m) => {
+						const scale = m.scaleFactor;
+						const pos = m.position.toLogical(scale);
+						const size = m.size.toLogical(scale);
+						return (
+							saved.x >= pos.x &&
+							saved.x < pos.x + size.width &&
+							saved.y >= pos.y &&
+							saved.y < pos.y + size.height
+						);
+					});
+					if (onMonitor) {
+						currentWindow.setPosition(new LogicalPosition(saved.x, saved.y));
+					} else {
+						currentWindow.setPosition(
+							new LogicalPosition(
+								width + activeMonitor.position.toLogical(scalingFactor).x,
+								height + activeMonitor.position.toLogical(scalingFactor).y,
+							),
+						);
+					}
+				} else {
+					currentWindow.setPosition(
+						new LogicalPosition(
+							width + activeMonitor.position.toLogical(scalingFactor).x,
+							height + activeMonitor.position.toLogical(scalingFactor).y,
+						),
+					);
+				}
 				setHasPositioned(true);
 			} else {
 				const outerPos = await currentWindow.outerPosition();
 				const logicalPos = outerPos.toLogical(scalingFactor);
-				const monitorLogicalPos = monitor.position.toLogical(scalingFactor);
-				const monitorLogicalSize = monitor.size.toLogical(scalingFactor);
+				const monitorLogicalPos =
+					activeMonitor.position.toLogical(scalingFactor);
+				const monitorLogicalSize = activeMonitor.size.toLogical(scalingFactor);
 
 				let newX = logicalPos.x;
 				let newY = logicalPos.y;
@@ -579,6 +1034,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 					Math.abs(newX - logicalPos.x) > 1 ||
 					Math.abs(newY - logicalPos.y) > 1
 				) {
+					ignoreMoveFor(1000);
 					await currentWindow.setPosition(new LogicalPosition(newX, newY));
 				}
 			}
@@ -588,16 +1044,6 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	);
 
 	let cameraCanvasRef: HTMLCanvasElement | undefined;
-
-	createEffect(
-		on(
-			() => rawOptions.cameraLabel,
-			(label) => {
-				if (label === null) getCurrentWindow().close();
-			},
-			{ defer: true },
-		),
-	);
 
 	onMount(() => getCurrentWindow().show());
 
@@ -652,30 +1098,38 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 						>
 							<IconCapArrows class="size-5.5" />
 						</ControlButton>
+						<ControlButton
+							pressed={
+								state.backgroundBlur !== "off" && state.backgroundBlur !== false
+							}
+							onClick={() =>
+								setState("backgroundBlur", (b) => cycleBlurMode(b))
+							}
+						>
+							<div class="relative">
+								<IconLucidePersonStanding class="size-5.5" />
+								<Show
+									when={
+										state.backgroundBlur !== "off" &&
+										state.backgroundBlur !== false
+									}
+								>
+									<span class="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[7px] font-bold leading-none whitespace-nowrap">
+										{blurModeLabel(state.backgroundBlur)}
+									</span>
+								</Show>
+							</div>
+						</ControlButton>
 					</div>
 				</div>
 			</div>
-			<div
-				class="absolute top-0 left-0 w-4 h-4 cursor-nw-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("nw")}
+			<CameraResizeHandles
+				state={state}
+				setState={setState}
+				toolbarHeight={56}
 			/>
 			<div
-				class="absolute top-0 right-0 w-4 h-4 cursor-ne-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("ne")}
-			/>
-			<div
-				class="absolute bottom-0 left-0 w-4 h-4 cursor-sw-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("sw")}
-			/>
-			<div
-				class="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
-				style={{ "pointer-events": "auto" }}
-				onMouseDown={handleResizeStart("se")}
-			/>
-			<div
+				ref={containerRef}
 				class={cx(
 					"flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none shadow-lg bg-gray-1 text-gray-12",
 					state.shape === "round" ? "rounded-full" : "rounded-3xl",
@@ -688,6 +1142,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 							latestFrame={latestFrame}
 							state={state}
 							ref={cameraCanvasRef}
+							containerSize={externalContainerSize() ?? undefined}
 						/>
 					</Show>
 				</Suspense>
@@ -700,6 +1155,7 @@ function Canvas(props: {
 	latestFrame: Accessor<{ width: number; data: ImageData } | null | undefined>;
 	state: CameraWindowState;
 	ref: HTMLCanvasElement | undefined;
+	containerSize?: { width: number; height: number };
 }) {
 	const style = () => {
 		const frame = props.latestFrame();
@@ -707,8 +1163,10 @@ function Canvas(props: {
 
 		const aspectRatio = frame.data.width / frame.data.height;
 
-		// Use state.size directly for immediate feedback
-		const base = props.state.size;
+		// Use container size if available (for external resize), otherwise use state.size
+		const base = props.containerSize
+			? Math.min(props.containerSize.width, props.containerSize.height)
+			: props.state.size;
 
 		// Replicate window size logic synchronously for the canvas
 		const winWidth =
@@ -741,7 +1199,7 @@ function Canvas(props: {
 			else
 				return {
 					width: base,
-					height: base * aspectRatio,
+					height: base / aspectRatio,
 				};
 		})();
 
@@ -764,7 +1222,7 @@ function Canvas(props: {
 			style={style()}
 			width={props.latestFrame()?.data.width}
 			height={props.latestFrame()?.data.height}
-			ref={props.ref!}
+			ref={props.ref}
 		/>
 	);
 }

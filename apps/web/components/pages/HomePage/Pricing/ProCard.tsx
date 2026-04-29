@@ -21,7 +21,7 @@ import { ProArt, type ProArtRef } from "./ProArt";
 export const ProCard = () => {
 	const stripeCtx = useStripeContext();
 	const [users, setUsers] = useState(1);
-	const [isAnnually, setIsAnnually] = useState(true);
+	const [isAnnually, setIsAnnually] = useState(false);
 	const proArtRef = useRef<ProArtRef>(null);
 
 	const CAP_PRO_ANNUAL_PRICE_PER_USER = homepageCopy.pricing.pro.pricing.annual;
@@ -290,6 +290,14 @@ export const ProCard = () => {
 							style={{ fontSize: "14px", minWidth: "14px" }}
 						/>
 						<span className="text-gray-4">Shared team spaces</span>
+					</li>
+					<li className="flex items-center text-sm text-gray-1">
+						<FontAwesomeIcon
+							icon={faCloud}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">Loom video importer</span>
 					</li>
 				</ul>
 			</div>

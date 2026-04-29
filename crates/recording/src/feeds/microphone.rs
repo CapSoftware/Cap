@@ -1,3 +1,5 @@
+use crate::output_pipeline::{HealthSender, PipelineHealthEvent, emit_health};
+use cap_audio::estimate_input_latency;
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cap_timestamp::Timestamp;
 use cpal::{
@@ -12,7 +14,12 @@ use kameo::prelude::*;
 use replace_with::replace_with_or_abort;
 use std::{
     ops::Deref,
-    sync::mpsc::{self, SyncSender},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, SyncSender},
+    },
+    time::{Duration, Instant},
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -24,6 +31,8 @@ type StreamReadyFuture =
 pub struct MicrophoneSamples {
     pub data: Vec<u8>,
     pub format: SampleFormat,
+    pub sample_rate: u32,
+    pub channels: u16,
     pub info: InputCallbackInfo,
     pub timestamp: Timestamp,
 }
@@ -31,18 +40,78 @@ pub struct MicrophoneSamples {
 #[derive(Actor)]
 pub struct MicrophoneFeed {
     input_id_counter: u32,
+    lock_generation: u64,
     state: State,
-    senders: Vec<flume::Sender<MicrophoneSamples>>,
+    senders: Vec<MicrophoneFeedSender>,
     error_sender: flume::Sender<StreamError>,
+    dropped_message_count: Arc<AtomicU64>,
+}
+
+struct MicrophoneFeedSender {
+    sender: flume::Sender<MicrophoneSamples>,
+    health_tx: Option<HealthSender>,
+    label: Option<String>,
+    stalled_since: Option<Instant>,
+    last_stalled_event: Option<Instant>,
+}
+
+impl MicrophoneFeedSender {
+    fn new(sender: flume::Sender<MicrophoneSamples>) -> Self {
+        Self {
+            sender,
+            health_tx: None,
+            label: None,
+            stalled_since: None,
+            last_stalled_event: None,
+        }
+    }
+
+    fn recording(
+        sender: flume::Sender<MicrophoneSamples>,
+        health_tx: HealthSender,
+        label: String,
+    ) -> Self {
+        Self {
+            sender,
+            health_tx: Some(health_tx),
+            label: Some(label),
+            stalled_since: None,
+            last_stalled_event: None,
+        }
+    }
+
+    fn reset_stall(&mut self) {
+        self.stalled_since = None;
+        self.last_stalled_event = None;
+    }
 }
 
 enum State {
     Open(OpenState),
-    Locked { inner: AttachedState },
+    Locked {
+        inner: AttachedState,
+        token: Weak<()>,
+    },
 }
 
 impl State {
     fn try_as_open(&mut self) -> Result<&mut OpenState, FeedLockedError> {
+        let is_stale = matches!(self, Self::Locked { token, .. } if token.strong_count() == 0);
+
+        if is_stale {
+            warn!("Detected stale microphone feed lock, auto-recovering");
+            replace_with_or_abort(self, |state| {
+                if let Self::Locked { inner, .. } = state {
+                    Self::Open(OpenState {
+                        connecting: None,
+                        attached: Some(inner),
+                    })
+                } else {
+                    state
+                }
+            });
+        }
+
         if let Self::Open(open_state) = self {
             Ok(open_state)
         } else {
@@ -90,12 +159,14 @@ impl MicrophoneFeed {
     pub fn new(error_sender: flume::Sender<StreamError>) -> Self {
         Self {
             input_id_counter: 0,
+            lock_generation: 0,
             state: State::Open(OpenState {
                 connecting: None,
                 attached: None,
             }),
             senders: Vec::new(),
             error_sender,
+            dropped_message_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -139,6 +210,7 @@ impl MicrophoneFeed {
             sample_format,
             actor_ref,
             error_sender,
+            dropped_message_count,
             log_action,
         } = params;
 
@@ -162,6 +234,7 @@ impl MicrophoneFeed {
             let config = config.clone();
             let actor_ref = actor_ref.clone();
             let error_sender = error_sender.clone();
+            let dropped_message_count = dropped_message_count.clone();
             move || {
                 let device_name_for_log = device.name().ok();
 
@@ -199,6 +272,9 @@ impl MicrophoneFeed {
                     buffer_size_description
                 );
 
+                let callback_sample_rate = config.sample_rate().0;
+                let callback_channels = config.channels();
+
                 let stream = match device.build_input_stream_raw(
                     &stream_config,
                     sample_format,
@@ -215,14 +291,20 @@ impl MicrophoneFeed {
                             }
                             callback_count += 1;
 
-                            let _ = actor_ref
+                            if let Err(error) = actor_ref
                                 .tell(MicrophoneSamples {
                                     data: data.bytes().to_vec(),
                                     format: data.sample_format(),
+                                    sample_rate: callback_sample_rate,
+                                    channels: callback_channels,
                                     info: info.clone(),
                                     timestamp: Timestamp::from_cpal(info.timestamp().capture),
                                 })
-                                .try_send();
+                                .try_send()
+                            {
+                                dropped_message_count.fetch_add(1, Ordering::Relaxed);
+                                warn!("Failed to enqueue microphone samples: {error}");
+                            }
                         }
                     },
                     move |e| {
@@ -318,9 +400,16 @@ const MIN_LATENCY_MS: u32 = 10;
 const MAX_LATENCY_MS: u32 = 120;
 const ABS_MIN_BUFFER_FRAMES: u32 = 128;
 
-fn stream_config_with_latency(config: &SupportedStreamConfig) -> (cpal::StreamConfig, Option<u32>) {
+const WIRELESS_TARGET_LATENCY_MS: u32 = 80;
+const WIRELESS_MIN_LATENCY_MS: u32 = 50;
+const WIRELESS_MAX_LATENCY_MS: u32 = 200;
+
+fn stream_config_with_latency(
+    config: &SupportedStreamConfig,
+    device_name: Option<&str>,
+) -> (cpal::StreamConfig, Option<u32>) {
     let mut stream_config: cpal::StreamConfig = config.clone().into();
-    let buffer_size_frames = desired_buffer_size_frames(config);
+    let buffer_size_frames = desired_buffer_size_frames(config, device_name);
 
     if let Some(frames) = buffer_size_frames {
         stream_config.buffer_size = BufferSize::Fixed(frames);
@@ -329,7 +418,10 @@ fn stream_config_with_latency(config: &SupportedStreamConfig) -> (cpal::StreamCo
     (stream_config, buffer_size_frames)
 }
 
-fn desired_buffer_size_frames(config: &SupportedStreamConfig) -> Option<u32> {
+fn desired_buffer_size_frames(
+    config: &SupportedStreamConfig,
+    device_name: Option<&str>,
+) -> Option<u32> {
     match config.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => {
             let sample_rate = config.sample_rate().0;
@@ -338,9 +430,26 @@ fn desired_buffer_size_frames(config: &SupportedStreamConfig) -> Option<u32> {
                 return None;
             }
 
-            let desired = latency_ms_to_frames(sample_rate, TARGET_LATENCY_MS);
-            let min_latency_frames = latency_ms_to_frames(sample_rate, MIN_LATENCY_MS);
-            let max_latency_frames = latency_ms_to_frames(sample_rate, MAX_LATENCY_MS);
+            let latency_info = estimate_input_latency(sample_rate, 1024, device_name);
+            let is_wireless = latency_info.transport.is_wireless();
+
+            let (target_ms, min_ms, max_ms) = if is_wireless {
+                info!(
+                    "Detected wireless microphone '{}', using extended buffer settings",
+                    device_name.unwrap_or("unknown")
+                );
+                (
+                    WIRELESS_TARGET_LATENCY_MS,
+                    WIRELESS_MIN_LATENCY_MS,
+                    WIRELESS_MAX_LATENCY_MS,
+                )
+            } else {
+                (TARGET_LATENCY_MS, MIN_LATENCY_MS, MAX_LATENCY_MS)
+            };
+
+            let desired = latency_ms_to_frames(sample_rate, target_ms);
+            let min_latency_frames = latency_ms_to_frames(sample_rate, min_ms);
+            let max_latency_frames = latency_ms_to_frames(sample_rate, max_ms);
 
             let desired = desired.clamp(min_latency_frames, max_latency_frames);
             let device_max = *max;
@@ -364,6 +473,8 @@ pub struct MicrophoneFeedLock {
     audio_info: AudioInfo,
     buffer_size_frames: Option<u32>,
     drop_tx: Option<oneshot::Sender<()>>,
+    device_name: String,
+    _token: Arc<()>,
 }
 
 impl MicrophoneFeedLock {
@@ -377,6 +488,14 @@ impl MicrophoneFeedLock {
 
     pub fn buffer_size_frames(&self) -> Option<u32> {
         self.buffer_size_frames
+    }
+
+    pub fn device_name(&self) -> &str {
+        &self.device_name
+    }
+
+    pub async fn dropped_message_count(&self) -> u64 {
+        self.actor.ask(GetDroppedMessageCount).await.unwrap_or(0)
     }
 }
 
@@ -406,7 +525,15 @@ pub struct RemoveInput;
 
 pub struct AddSender(pub flume::Sender<MicrophoneSamples>);
 
+pub struct AddRecordingSender {
+    pub sender: flume::Sender<MicrophoneSamples>,
+    pub health_tx: HealthSender,
+    pub label: String,
+}
+
 pub struct Lock;
+
+pub struct GetDroppedMessageCount;
 
 // Private Events
 
@@ -430,7 +557,9 @@ struct InputConnectFailed {
     id: u32,
 }
 
-struct Unlock;
+struct Unlock {
+    generation: u64,
+}
 
 #[derive(Clone, Copy)]
 enum StreamLogAction {
@@ -457,6 +586,7 @@ struct StreamSpawnParams {
     sample_format: SampleFormat,
     actor_ref: ActorRef<MicrophoneFeed>,
     error_sender: flume::Sender<StreamError>,
+    dropped_message_count: Arc<AtomicU64>,
     log_action: StreamLogAction,
 }
 
@@ -499,7 +629,8 @@ impl Message<SetInput> for MicrophoneFeed {
                 };
 
                 let sample_format = config.sample_format();
-                let (stream_config, buffer_size_frames) = stream_config_with_latency(&config);
+                let (stream_config, buffer_size_frames) =
+                    stream_config_with_latency(&config, Some(&label));
 
                 let actor_ref = ctx.actor_ref();
                 let (ready_future, done_tx) = Self::spawn_input_stream(StreamSpawnParams {
@@ -512,6 +643,7 @@ impl Message<SetInput> for MicrophoneFeed {
                     sample_format,
                     actor_ref: actor_ref.clone(),
                     error_sender: self.error_sender.clone(),
+                    dropped_message_count: self.dropped_message_count.clone(),
                     log_action: StreamLogAction::Build,
                 });
                 let ready = ready_future.shared();
@@ -571,7 +703,7 @@ impl Message<SetInput> for MicrophoneFeed {
 
                 Ok(ready_for_return)
             }
-            State::Locked { inner } => {
+            State::Locked { inner, .. } => {
                 if inner.label != msg.label {
                     return Err(SetInputError::Locked(FeedLockedError));
                 }
@@ -582,7 +714,8 @@ impl Message<SetInput> for MicrophoneFeed {
                 };
 
                 let sample_format = config.sample_format();
-                let (stream_config, buffer_size_frames) = stream_config_with_latency(&config);
+                let (stream_config, buffer_size_frames) =
+                    stream_config_with_latency(&config, Some(&label));
 
                 let new_id = self.input_id_counter;
                 self.input_id_counter += 1;
@@ -600,6 +733,7 @@ impl Message<SetInput> for MicrophoneFeed {
                     sample_format,
                     actor_ref: actor_ref.clone(),
                     error_sender: self.error_sender.clone(),
+                    dropped_message_count: self.dropped_message_count.clone(),
                     log_action: StreamLogAction::Rebuild,
                 });
                 let ready = ready_future.shared();
@@ -654,7 +788,23 @@ impl Message<AddSender> for MicrophoneFeed {
     type Reply = ();
 
     async fn handle(&mut self, msg: AddSender, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.senders.push(msg.0);
+        self.senders.push(MicrophoneFeedSender::new(msg.0));
+    }
+}
+
+impl Message<AddRecordingSender> for MicrophoneFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: AddRecordingSender,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.senders.push(MicrophoneFeedSender::recording(
+            msg.sender,
+            msg.health_tx,
+            msg.label,
+        ));
     }
 }
 
@@ -667,12 +817,36 @@ impl Message<MicrophoneSamples> for MicrophoneFeed {
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let mut to_remove = vec![];
+        let now = Instant::now();
+        let stall_emit_interval = Duration::from_secs(5);
 
-        for (i, sender) in self.senders.iter().enumerate() {
-            if let Err(TrySendError::Disconnected(_)) = sender.try_send(msg.clone()) {
-                warn!("Audio sender {} disconnected, will be removed", i);
-                to_remove.push(i);
-            };
+        for (i, sender) in self.senders.iter_mut().enumerate() {
+            match sender.sender.try_send(msg.clone()) {
+                Ok(()) => sender.reset_stall(),
+                Err(TrySendError::Full(_)) => {
+                    let stalled_since = sender.stalled_since.get_or_insert(now);
+                    let should_emit = sender
+                        .last_stalled_event
+                        .is_none_or(|last| now.duration_since(last) >= stall_emit_interval);
+                    if should_emit {
+                        sender.last_stalled_event = Some(now);
+                        if let (Some(health_tx), Some(label)) = (&sender.health_tx, &sender.label) {
+                            emit_health(
+                                health_tx,
+                                PipelineHealthEvent::Stalled {
+                                    source: label.clone(),
+                                    waited_ms: now.duration_since(*stalled_since).as_millis()
+                                        as u64,
+                                },
+                            );
+                        }
+                    }
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    warn!("Audio sender {} disconnected, will be removed", i);
+                    to_remove.push(i);
+                }
+            }
         }
 
         if !to_remove.is_empty() {
@@ -715,24 +889,55 @@ impl Message<Lock> for MicrophoneFeed {
 
         let config = attached.config.clone();
         let buffer_size_frames = attached.buffer_size_frames;
+        let device_name = attached.label.clone();
 
-        self.state = State::Locked { inner: attached };
+        self.lock_generation += 1;
+        let generation = self.lock_generation;
+        let token = Arc::new(());
+        let token_weak = Arc::downgrade(&token);
+
+        self.state = State::Locked {
+            inner: attached,
+            token: token_weak,
+        };
 
         let (drop_tx, drop_rx) = oneshot::channel();
 
         let actor_ref = ctx.actor_ref();
         tokio::spawn(async move {
             let _ = drop_rx.await;
-            let _ = actor_ref.tell(Unlock).await;
+            let _ = actor_ref.tell(Unlock { generation }).await;
         });
 
+        let latency_info = estimate_input_latency(
+            config.sample_rate().0,
+            buffer_size_frames.unwrap_or(1024),
+            Some(&device_name),
+        );
+        let audio_info = AudioInfo::from_stream_config_with_buffer(&config, buffer_size_frames)
+            .with_wireless_transport(latency_info.transport.is_wireless());
+
         Ok(MicrophoneFeedLock {
-            audio_info: AudioInfo::from_stream_config_with_buffer(&config, buffer_size_frames),
+            audio_info,
             actor: ctx.actor_ref(),
             config,
             buffer_size_frames,
             drop_tx: Some(drop_tx),
+            device_name,
+            _token: token,
         })
+    }
+}
+
+impl Message<GetDroppedMessageCount> for MicrophoneFeed {
+    type Reply = u64;
+
+    async fn handle(
+        &mut self,
+        _: GetDroppedMessageCount,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.dropped_message_count.load(Ordering::Relaxed)
     }
 }
 
@@ -784,7 +989,7 @@ impl Message<LockedInputReconnected> for MicrophoneFeed {
         msg: LockedInputReconnected,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let State::Locked { inner } = &mut self.state
+        if let State::Locked { inner, .. } = &mut self.state
             && inner.label == msg.label
         {
             inner.id = msg.id;
@@ -798,11 +1003,19 @@ impl Message<LockedInputReconnected> for MicrophoneFeed {
 impl Message<Unlock> for MicrophoneFeed {
     type Reply = ();
 
-    async fn handle(&mut self, _: Unlock, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        trace!("MicrophoneFeed.Unlock");
+    async fn handle(&mut self, msg: Unlock, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        trace!("MicrophoneFeed.Unlock(gen={})", msg.generation);
+
+        if msg.generation != self.lock_generation {
+            trace!(
+                "Ignoring stale microphone unlock (msg gen {} != current {})",
+                msg.generation, self.lock_generation
+            );
+            return;
+        }
 
         replace_with_or_abort(&mut self.state, |state| {
-            if let State::Locked { inner } = state {
+            if let State::Locked { inner, .. } = state {
                 State::Open(OpenState {
                     connecting: None,
                     attached: Some(inner),

@@ -5,6 +5,7 @@ import type { User } from "next-auth";
 interface MobileMenuProps {
 	setShowMobileMenu: (showMobileMenu: boolean) => void;
 	auth: User | null;
+	stars?: string;
 }
 
 interface NavLink {
@@ -55,7 +56,11 @@ const externalLinks: NavLink[] = [
 	},
 ];
 
-const MobileMenu: React.FC<MobileMenuProps> = ({ setShowMobileMenu, auth }) => {
+const MobileMenu: React.FC<MobileMenuProps> = ({
+	setShowMobileMenu,
+	auth,
+	stars,
+}) => {
 	return (
 		<div className="block overflow-auto fixed top-0 left-0 z-40 px-4 w-full h-full bg-gray-2">
 			<div className="pb-12">
@@ -84,7 +89,9 @@ const MobileMenu: React.FC<MobileMenuProps> = ({ setShowMobileMenu, auth }) => {
 									>
 										{link.icon}
 										<span className="ml-2 text-lg font-medium text-gray-11">
-											{link.text}
+											{link.text === "Open Source" && stars
+												? `${stars} Stars`
+												: link.text}
 										</span>
 									</Link>
 								</li>

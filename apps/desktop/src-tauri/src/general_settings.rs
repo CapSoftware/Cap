@@ -1,7 +1,9 @@
 use crate::window_exclusion::WindowExclusion;
+use scap_targets::DisplayId;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use std::collections::BTreeMap;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
 use tracing::{error, instrument};
@@ -31,10 +33,27 @@ pub enum PostDeletionBehaviour {
     ReopenRecordingWindow,
 }
 
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum EditorPreviewQuality {
+    Quarter,
+    #[default]
+    Half,
+    Full,
+}
+
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StudioRecordingQuality {
+    #[default]
+    Balanced,
+    Ultra,
+}
+
 impl MainWindowRecordingStartBehaviour {
     pub fn perform(&self, window: &tauri::WebviewWindow) -> tauri::Result<()> {
         match self {
-            Self::Close => window.close(),
+            Self::Close => window.hide(),
             Self::Minimise => window.minimize(),
         }
     }
@@ -45,6 +64,11 @@ const DEFAULT_EXCLUDED_WINDOW_TITLES: &[&str] = &[
     "Cap Settings",
     "Cap Recording Controls",
     "Cap Camera",
+    "Cap Target Select",
+    "Cap Window Capture Occluder",
+    "Cap Capture Area",
+    "Cap Mode Selection",
+    "Cap Recordings Overlay",
 ];
 
 pub fn default_excluded_windows() -> Vec<WindowExclusion> {
@@ -63,6 +87,15 @@ pub fn default_excluded_windows() -> Vec<WindowExclusion> {
 // Things that affect the user experience should only be enabled by default for new configurations.
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct WindowPosition {
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub display_id: Option<DisplayId>,
+}
+
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct GeneralSettingsStore {
     #[serde(default = "uuid::Uuid::new_v4")]
     pub instance_id: Uuid,
@@ -72,12 +105,11 @@ pub struct GeneralSettingsStore {
     pub hide_dock_icon: bool,
     #[serde(default)]
     pub auto_create_shareable_link: bool,
-    #[serde(default = "true_b")]
+    #[serde(default = "default_true")]
     pub enable_notifications: bool,
     #[serde(default)]
     pub disable_auto_open_links: bool,
-    // first launch: store won't exist so show startup
-    #[serde(default = "true_b")]
+    #[serde(default = "default_true")]
     pub has_completed_startup: bool,
     #[serde(default)]
     pub theme: AppTheme,
@@ -91,29 +123,21 @@ pub struct GeneralSettingsStore {
     pub post_studio_recording_behaviour: PostStudioRecordingBehaviour,
     #[serde(default)]
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
-    // Renamed from `custom_cursor_capture` to `custom_cursor_capture2` so we can change the default.
     #[serde(default = "default_true", rename = "custom_cursor_capture2")]
     pub custom_cursor_capture: bool,
     #[serde(default = "default_server_url")]
     pub server_url: String,
     #[serde(default)]
     pub recording_countdown: Option<u32>,
-    // #[deprecated = "can be removed when native camera preview is ready"]
     #[serde(
         default = "default_enable_native_camera_preview",
         skip_serializing_if = "no"
     )]
     pub enable_native_camera_preview: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub auto_zoom_on_clicks: bool,
-    // #[deprecated = "can be removed when new recording flow is the default"]
-    #[serde(
-        default = "default_enable_new_recording_flow",
-        skip_serializing_if = "no"
-    )]
-    pub enable_new_recording_flow: bool,
-    #[serde(default)]
-    pub recording_picker_preference_set: bool,
+    #[serde(default = "default_true")]
+    pub capture_keyboard_events: bool,
     #[serde(default)]
     pub post_deletion_behaviour: PostDeletionBehaviour,
     #[serde(default = "default_excluded_windows")]
@@ -124,17 +148,32 @@ pub struct GeneralSettingsStore {
     pub instant_mode_max_resolution: u32,
     #[serde(default)]
     pub default_project_name_template: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub crash_recovery_recording: bool,
+    #[serde(default = "default_max_fps")]
+    pub max_fps: u32,
+    #[serde(default = "default_transcription_hints")]
+    pub transcription_hints: Vec<String>,
+    #[serde(default)]
+    pub editor_preview_quality: EditorPreviewQuality,
+    #[serde(default)]
+    pub studio_recording_quality: StudioRecordingQuality,
+    #[serde(default)]
+    pub main_window_position: Option<WindowPosition>,
+    #[serde(default)]
+    pub camera_window_position: Option<WindowPosition>,
+    #[serde(default)]
+    pub camera_window_positions_by_monitor_name: BTreeMap<String, WindowPosition>,
+    #[serde(default = "default_true")]
+    pub has_completed_onboarding: bool,
+    #[serde(default = "default_true")]
+    pub enable_telemetry: bool,
+    #[serde(default)]
+    pub out_of_process_muxer: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
-    // This will help us with testing it
     cfg!(all(debug_assertions, target_os = "macos"))
-}
-
-fn default_enable_new_recording_flow() -> bool {
-    false
 }
 
 fn no(_: &bool) -> bool {
@@ -147,6 +186,19 @@ fn default_true() -> bool {
 
 fn default_instant_mode_max_resolution() -> u32 {
     1920
+}
+
+fn default_max_fps() -> u32 {
+    60
+}
+
+fn default_transcription_hints() -> Vec<String> {
+    vec![
+        "Cap".to_string(),
+        "TypeScript".to_string(),
+        "My Brand Name".to_string(),
+        "mywebsite.com".to_string(),
+    ]
 }
 
 fn default_server_url() -> String {
@@ -185,14 +237,23 @@ impl Default for GeneralSettingsStore {
             recording_countdown: Some(3),
             enable_native_camera_preview: default_enable_native_camera_preview(),
             auto_zoom_on_clicks: false,
-            enable_new_recording_flow: default_enable_new_recording_flow(),
-            recording_picker_preference_set: false,
+            capture_keyboard_events: true,
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,
             instant_mode_max_resolution: 1920,
             default_project_name_template: None,
-            crash_recovery_recording: false,
+            crash_recovery_recording: true,
+            max_fps: 60,
+            transcription_hints: default_transcription_hints(),
+            editor_preview_quality: EditorPreviewQuality::Half,
+            studio_recording_quality: StudioRecordingQuality::Balanced,
+            main_window_position: None,
+            camera_window_position: None,
+            camera_window_positions_by_monitor_name: BTreeMap::new(),
+            has_completed_onboarding: false,
+            enable_telemetry: true,
+            out_of_process_muxer: false,
         }
     }
 }
@@ -204,10 +265,6 @@ pub enum AppTheme {
     System,
     Light,
     Dark,
-}
-
-fn true_b() -> bool {
-    true
 }
 
 impl GeneralSettingsStore {
@@ -233,7 +290,14 @@ impl GeneralSettingsStore {
         let mut settings = Self::get(app)?.unwrap_or_default();
         update(&mut settings);
         store.set("general_settings", json!(settings));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+
+        crate::posthog::set_telemetry_enabled(settings.enable_telemetry);
+
+        #[cfg(target_os = "macos")]
+        crate::permissions::sync_macos_dock_visibility(app);
+
+        Ok(())
     }
 
     fn save(&self, app: &AppHandle) -> Result<(), String> {
@@ -249,7 +313,7 @@ impl GeneralSettingsStore {
 pub fn init(app: &AppHandle) {
     println!("Initializing GeneralSettingsStore");
 
-    let mut store = match GeneralSettingsStore::get(app) {
+    let store = match GeneralSettingsStore::get(app) {
         Ok(Some(store)) => store,
         Ok(None) => GeneralSettingsStore::default(),
         Err(e) => {
@@ -258,16 +322,54 @@ pub fn init(app: &AppHandle) {
         }
     };
 
-    if !store.recording_picker_preference_set {
-        store.enable_new_recording_flow = false;
-        store.recording_picker_preference_set = true;
-    }
+    crate::posthog::set_telemetry_enabled(store.enable_telemetry);
+    register_bundled_muxer_binary(app);
 
     if let Err(e) = store.save(app) {
         error!("Failed to save general settings: {}", e);
     }
 
+    #[cfg(target_os = "macos")]
+    crate::permissions::sync_macos_dock_visibility(app);
+
     println!("GeneralSettingsState managed");
+}
+
+fn register_bundled_muxer_binary(_app: &AppHandle) {
+    if std::env::var_os(cap_recording::oop_muxer::ENV_BIN_PATH).is_some() {
+        return;
+    }
+
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join(bundled_muxer_bin_name());
+        if candidate.is_file() {
+            match cap_recording::oop_muxer::set_muxer_binary_override(candidate.clone()) {
+                Ok(()) => {
+                    tracing::info!(
+                        path = %candidate.display(),
+                        "Registered executable-adjacent cap-muxer binary for out-of-process muxer"
+                    );
+                }
+                Err(existing) => {
+                    tracing::debug!(
+                        existing = %existing.display(),
+                        candidate = %candidate.display(),
+                        "cap-muxer override already registered; keeping existing"
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn bundled_muxer_bin_name() -> &'static str {
+    if cfg!(windows) {
+        "cap-muxer.exe"
+    } else {
+        "cap-muxer"
+    }
 }
 
 #[tauri::command]

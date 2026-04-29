@@ -1,0 +1,12 @@
+---
+title: Simplified Audio Timestamps, Pause/Resume Fixes & Preset Management
+app: Cap Desktop
+publishedAt: "2026-01-09"
+version: 0.4.2
+image:
+---
+
+- **Simplified audio timestamp generation** — Replaced complex drift tracking with sample-based timestamp generation for more reliable and predictable audio timing. This eliminates edge cases with clock drift detection and produces cleaner, more accurate audio synchronization.
+- **Improved pause/resume handling** — Added shared wall clock pause tracking that correctly accounts for paused time in both video and audio pipelines. Recordings now seamlessly continue with accurate timestamps after pausing and resuming.
+- **Better frame recovery during playback** — Increased fallback distance for frame cache lookups, especially near the end of videos. Playback now handles missing frames more gracefully by using nearby cached frames rather than failing.
+- **Preset management improvements** — Added ability to clear all presets and improved configuration default handling. Default cursor mode now uses raw positioning for snappier cursor movement.

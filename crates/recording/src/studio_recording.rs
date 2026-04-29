@@ -1,43 +1,47 @@
+#[cfg(target_os = "macos")]
+use crate::SendableShareableContent;
+#[cfg(target_os = "macos")]
+use crate::output_pipeline::{
+    AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig, MacOSFragmentedM4SCameraMuxer,
+    MacOSFragmentedM4SCameraMuxerConfig,
+};
 use crate::{
-    ActorError, MediaError, RecordingBaseInputs, RecordingError,
+    ActorError, H264_MAX_DIMENSION, MediaError, RecordingBaseInputs, RecordingError,
+    SharedPauseState, calculate_gpu_compatible_size,
     capture_pipeline::{
         MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
     },
-    cursor::{CursorActor, Cursors, spawn_cursor_recorder},
+    cursor::{CursorActor, Cursors, IncrementalCaptureOutputs, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
-    ffmpeg::{OggMuxer, SegmentedAudioMuxer, SegmentedAudioMuxerConfig},
+    ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer},
     output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
 };
 
-#[cfg(target_os = "macos")]
-use crate::output_pipeline::{
-    AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig, FragmentedAVFoundationCameraMuxer,
-    FragmentedAVFoundationCameraMuxerConfig,
-};
-
 #[cfg(windows)]
 use crate::output_pipeline::{
-    WindowsCameraMuxer, WindowsCameraMuxerConfig, WindowsSegmentedCameraMuxer,
-    WindowsSegmentedCameraMuxerConfig,
+    WindowsCameraMuxer, WindowsCameraMuxerConfig, WindowsFragmentedM4SCameraMuxer,
+    WindowsFragmentedM4SCameraMuxerConfig,
 };
 use anyhow::{Context as _, anyhow, bail};
 use cap_media_info::VideoInfo;
 use cap_project::{
-    CursorEvents, MultipleSegments, Platform, RecordingMeta, RecordingMetaInner,
-    StudioRecordingMeta, StudioRecordingStatus,
+    CursorEvents, KeyboardEvents, MultipleSegment, MultipleSegments, Platform, RecordingMeta,
+    RecordingMetaInner, StudioRecordingMeta, StudioRecordingStatus,
 };
 use cap_timestamp::{Timestamp, Timestamps};
 use futures::{FutureExt, StreamExt, future::OptionFuture, stream::FuturesUnordered};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
+use serde::Serialize;
 use std::{
     path::{Path, PathBuf},
+    pin::Pin,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::watch;
+use tokio::{sync::watch, task::JoinHandle};
 use tracing::{Instrument, debug, error_span, info, trace, warn};
 
 #[allow(clippy::large_enum_variant)]
@@ -90,23 +94,40 @@ impl Actor {
         let cursors = if let Some(cursor) = pipeline.cursor.as_mut()
             && let Ok(res) = cursor.actor.rx.clone().await
         {
-            std::fs::write(
-                &cursor.output_path,
-                serde_json::to_string_pretty(&CursorEvents {
-                    clicks: res.clicks,
-                    moves: res.moves,
-                })?,
-            )?;
+            if let Some(output_path) = cursor.output_path.as_ref() {
+                std::fs::write(
+                    output_path,
+                    serde_json::to_string_pretty(&CursorEvents {
+                        clicks: res.clicks,
+                        moves: res.moves,
+                    })?,
+                )?;
+            }
+
+            if !res.keyboard_presses.is_empty()
+                && let Some(keyboard_output_path) = cursor.keyboard_output_path.as_ref()
+            {
+                KeyboardEvents {
+                    presses: res.keyboard_presses,
+                }
+                .write_to_file(keyboard_output_path)
+                .map_err(anyhow::Error::msg)?;
+            }
 
             (res.cursors, res.next_cursor_id)
         } else {
             (Default::default(), 0)
         };
 
+        let camera_device_id = self.segment_factory.camera_device_id();
+        let mic_device_id = self.segment_factory.mic_device_id();
+
         self.segments.push(RecordingSegment {
             start: segment_start_time,
             end: segment_stop_time,
             pipeline,
+            camera_device_id,
+            mic_device_id,
         });
 
         Ok(cursors)
@@ -206,11 +227,12 @@ impl Message<Resume> for Actor {
                     .create_next(cursors, next_cursor_id)
                     .await?;
 
+                let new_segment_start_time = current_time_f64();
+
                 Some(ActorState::Recording {
                     pipeline,
-                    // pipeline_done_rx,
                     index: next_index,
-                    segment_start_time: current_time_f64(),
+                    segment_start_time: new_segment_start_time,
                     segment_start_instant: Instant::now(),
                 })
             }
@@ -285,10 +307,22 @@ impl Message<SetCameraFeed> for Actor {
     }
 }
 
+pub struct IsPaused;
+
+impl Message<IsPaused> for Actor {
+    type Reply = bool;
+
+    async fn handle(&mut self, _: IsPaused, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        matches!(self.state, Some(ActorState::Paused { .. }))
+    }
+}
+
 pub struct RecordingSegment {
     pub start: f64,
     pub end: f64,
     pipeline: FinishedPipeline,
+    pub camera_device_id: Option<String>,
+    pub mic_device_id: Option<String>,
 }
 
 pub struct ScreenPipelineOutput {
@@ -304,6 +338,8 @@ struct Pipeline {
     pub camera: Option<OutputPipeline>,
     pub system_audio: Option<OutputPipeline>,
     pub cursor: Option<CursorPipeline>,
+    pub track_failures: SharedTrackFailures,
+    pub watcher_task: Option<JoinHandle<()>>,
 }
 
 struct FinishedPipeline {
@@ -314,53 +350,218 @@ struct FinishedPipeline {
     pub camera: Option<FinishedOutputPipeline>,
     pub system_audio: Option<FinishedOutputPipeline>,
     pub cursor: Option<CursorPipeline>,
+    pub track_failures: Vec<TrackFailureRecord>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum RecordingTrackKind {
+    Display,
+    Microphone,
+    Camera,
+    SystemAudio,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum TrackFailureStage {
+    Runtime,
+    Stop,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct TrackFailureRecord {
+    track: RecordingTrackKind,
+    stage: TrackFailureStage,
+    error: String,
+}
+
+type SharedTrackFailures = Arc<std::sync::Mutex<Vec<TrackFailureRecord>>>;
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct RecordingFailureDiagnostics {
+    version: u32,
+    segments: Vec<SegmentFailureDiagnostics>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SegmentFailureDiagnostics {
+    segment_index: u32,
+    start: f64,
+    end: f64,
+    track_failures: Vec<TrackFailureRecord>,
+}
+
+struct SegmentOutput {
+    meta: MultipleSegment,
+    diagnostics: Option<SegmentFailureDiagnostics>,
+}
+
+fn record_track_failure(
+    failures: &SharedTrackFailures,
+    track: RecordingTrackKind,
+    stage: TrackFailureStage,
+    error: impl Into<String>,
+) {
+    let error = error.into();
+    match failures.lock() {
+        Ok(mut failures) => failures.push(TrackFailureRecord {
+            track,
+            stage,
+            error,
+        }),
+        Err(poisoned) => poisoned.into_inner().push(TrackFailureRecord {
+            track,
+            stage,
+            error,
+        }),
+    }
+}
+
+fn take_track_failures(failures: &SharedTrackFailures) -> Vec<TrackFailureRecord> {
+    match failures.lock() {
+        Ok(mut failures) => std::mem::take(&mut *failures),
+        Err(poisoned) => {
+            let mut failures = poisoned.into_inner();
+            std::mem::take(&mut *failures)
+        }
+    }
+}
+
+fn has_track_failure(failures: &SharedTrackFailures, track: RecordingTrackKind) -> bool {
+    match failures.lock() {
+        Ok(failures) => failures.iter().any(|failure| failure.track == track),
+        Err(poisoned) => poisoned
+            .into_inner()
+            .iter()
+            .any(|failure| failure.track == track),
+    }
+}
+
+fn finalize_optional_track(
+    track: RecordingTrackKind,
+    result: Result<Option<FinishedOutputPipeline>, anyhow::Error>,
+    failures: &SharedTrackFailures,
+) -> Option<FinishedOutputPipeline> {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            warn!(?track, error = %error, "Optional recording track failed during stop");
+            if !has_track_failure(failures, track) {
+                record_track_failure(failures, track, TrackFailureStage::Stop, error.to_string());
+            }
+            None
+        }
+    }
+}
+
+fn build_recording_failure_diagnostics(
+    segments: &[SegmentFailureDiagnostics],
+) -> Option<RecordingFailureDiagnostics> {
+    if segments.is_empty() {
+        None
+    } else {
+        Some(RecordingFailureDiagnostics {
+            version: 1,
+            segments: segments.to_vec(),
+        })
+    }
+}
+
+fn write_recording_failure_diagnostics(
+    recording_dir: &Path,
+    diagnostics: &RecordingFailureDiagnostics,
+) -> Result<(), RecordingError> {
+    std::fs::write(
+        recording_dir.join("recording-diagnostics.json"),
+        serde_json::to_string_pretty(diagnostics)?,
+    )?;
+    Ok(())
 }
 
 impl Pipeline {
     pub async fn stop(mut self) -> anyhow::Result<FinishedPipeline> {
-        let (screen, microphone, camera, system_audio) = futures::join!(
-            self.screen.stop(),
+        let (microphone, camera, system_audio) = futures::join!(
             OptionFuture::from(self.microphone.map(|s| s.stop())),
             OptionFuture::from(self.camera.map(|s| s.stop())),
             OptionFuture::from(self.system_audio.map(|s| s.stop()))
         );
 
+        let screen = self.screen.stop().await;
+
         if let Some(cursor) = self.cursor.as_mut() {
             cursor.actor.stop();
         }
 
-        let system_audio = match system_audio.transpose() {
-            Ok(value) => value,
-            Err(err) => {
-                warn!("system audio pipeline failed during stop: {err:#}");
-                None
-            }
-        };
+        if let Some(watcher_task) = self.watcher_task.take()
+            && let Err(error) = watcher_task.await
+        {
+            warn!(error = %error, "Studio recording watcher task ended unexpectedly");
+        }
 
         Ok(FinishedPipeline {
             start_time: self.start_time,
-            screen: screen.context("screen")?,
-            microphone: microphone.transpose().context("microphone")?,
-            camera: camera.transpose().context("camera")?,
-            system_audio,
+            screen: screen.context("display")?,
+            microphone: finalize_optional_track(
+                RecordingTrackKind::Microphone,
+                microphone.transpose(),
+                &self.track_failures,
+            ),
+            camera: finalize_optional_track(
+                RecordingTrackKind::Camera,
+                camera.transpose(),
+                &self.track_failures,
+            ),
+            system_audio: finalize_optional_track(
+                RecordingTrackKind::SystemAudio,
+                system_audio.transpose(),
+                &self.track_failures,
+            ),
             cursor: self.cursor,
+            track_failures: take_track_failures(&self.track_failures),
         })
     }
 
-    fn spawn_watcher(&self, completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>) {
-        let mut futures = FuturesUnordered::new();
-        futures.push(self.screen.done_fut());
+    fn spawn_watcher(
+        &mut self,
+        completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
+    ) {
+        let mut futures = FuturesUnordered::<
+            Pin<
+                Box<
+                    dyn futures::Future<
+                            Output = (RecordingTrackKind, bool, Result<(), PipelineDoneError>),
+                        > + Send,
+                >,
+            >,
+        >::new();
+        futures.push(Box::pin({
+            let done_fut = self.screen.done_fut();
+            async move { (RecordingTrackKind::Display, true, done_fut.await) }
+        }));
 
         if let Some(ref microphone) = self.microphone {
-            futures.push(microphone.done_fut());
+            futures.push(Box::pin({
+                let done_fut = microphone.done_fut();
+                async move { (RecordingTrackKind::Microphone, false, done_fut.await) }
+            }));
         }
 
         if let Some(ref camera) = self.camera {
-            futures.push(camera.done_fut());
+            futures.push(Box::pin({
+                let done_fut = camera.done_fut();
+                async move { (RecordingTrackKind::Camera, false, done_fut.await) }
+            }));
         }
 
         if let Some(ref system_audio) = self.system_audio {
-            futures.push(system_audio.done_fut());
+            futures.push(Box::pin({
+                let done_fut = system_audio.done_fut();
+                async move { (RecordingTrackKind::SystemAudio, false, done_fut.await) }
+            }));
         }
 
         // Ensure non-video pipelines stop promptly when the video pipeline completes
@@ -385,20 +586,32 @@ impl Pipeline {
             });
         }
 
-        tokio::spawn(async move {
-            while let Some(res) = futures.next().await {
-                if let Err(err) = res
-                    && completion_tx.borrow().is_none()
-                {
-                    let _ = completion_tx.send(Some(Err(err)));
+        let track_failures = self.track_failures.clone();
+        self.watcher_task = Some(tokio::spawn(async move {
+            while let Some((track, required, res)) = futures.next().await {
+                if let Err(err) = res {
+                    if required {
+                        if completion_tx.borrow().is_none() {
+                            let _ = completion_tx.send(Some(Err(err)));
+                        }
+                    } else {
+                        warn!(?track, error = %err, "Optional recording track failed during runtime");
+                        record_track_failure(
+                            &track_failures,
+                            track,
+                            TrackFailureStage::Runtime,
+                            err.to_string(),
+                        );
+                    }
                 }
             }
-        });
+        }));
     }
 }
 
 struct CursorPipeline {
-    output_path: PathBuf,
+    output_path: Option<PathBuf>,
+    keyboard_output_path: Option<PathBuf>,
     actor: CursorActor,
 }
 
@@ -436,6 +649,10 @@ impl ActorHandle {
     ) -> anyhow::Result<()> {
         Ok(self.actor_ref.ask(SetCameraFeed { camera_feed }).await?)
     }
+
+    pub async fn is_paused(&self) -> anyhow::Result<bool> {
+        Ok(self.actor_ref.ask(IsPaused).await?)
+    }
 }
 
 impl Actor {
@@ -454,7 +671,11 @@ pub struct ActorBuilder {
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
     custom_cursor: bool,
+    keyboard_capture: bool,
     fragmented: bool,
+    use_oop_muxer: bool,
+    max_fps: u32,
+    quality: crate::StudioQuality,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<scap_targets::WindowId>,
 }
@@ -468,7 +689,11 @@ impl ActorBuilder {
             mic_feed: None,
             camera_feed: None,
             custom_cursor: false,
-            fragmented: false,
+            keyboard_capture: true,
+            fragmented: true,
+            use_oop_muxer: false,
+            max_fps: 60,
+            quality: crate::StudioQuality::Balanced,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
         }
@@ -494,8 +719,28 @@ impl ActorBuilder {
         self
     }
 
+    pub fn with_keyboard_capture(mut self, keyboard_capture: bool) -> Self {
+        self.keyboard_capture = keyboard_capture;
+        self
+    }
+
     pub fn with_fragmented(mut self, fragmented: bool) -> Self {
         self.fragmented = fragmented;
+        self
+    }
+
+    pub fn with_out_of_process_muxer(mut self, use_oop_muxer: bool) -> Self {
+        self.use_oop_muxer = use_oop_muxer;
+        self
+    }
+
+    pub fn with_max_fps(mut self, max_fps: u32) -> Self {
+        self.max_fps = max_fps.clamp(1, 120);
+        self
+    }
+
+    pub fn with_quality(mut self, quality: crate::StudioQuality) -> Self {
+        self.quality = quality;
         self
     }
 
@@ -507,7 +752,7 @@ impl ActorBuilder {
 
     pub async fn build(
         self,
-        #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+        #[cfg(target_os = "macos")] shareable_content: Option<SendableShareableContent>,
     ) -> anyhow::Result<ActorHandle> {
         spawn_studio_recording_actor(
             self.output_path,
@@ -522,18 +767,27 @@ impl ActorBuilder {
                 excluded_windows: self.excluded_windows,
             },
             self.custom_cursor,
+            self.keyboard_capture,
             self.fragmented,
+            self.use_oop_muxer,
+            self.max_fps,
+            self.quality,
         )
         .await
     }
 }
 
 #[tracing::instrument("studio_recording", skip_all)]
+#[allow(clippy::too_many_arguments)]
 async fn spawn_studio_recording_actor(
     recording_dir: PathBuf,
     base_inputs: RecordingBaseInputs,
     custom_cursor_capture: bool,
+    keyboard_capture: bool,
     fragmented: bool,
+    use_oop_muxer: bool,
+    max_fps: u32,
+    quality: crate::StudioQuality,
 ) -> anyhow::Result<ActorHandle> {
     ensure_dir(&recording_dir)?;
 
@@ -543,8 +797,6 @@ async fn spawn_studio_recording_actor(
 
     let segments_dir = ensure_dir(&content_dir.join("segments"))?;
     let cursors_dir = ensure_dir(&content_dir.join("cursors"))?;
-
-    let start_time = Timestamps::now();
 
     let (completion_tx, completion_rx) =
         watch::channel::<Option<Result<(), PipelineDoneError>>>(None);
@@ -563,8 +815,11 @@ async fn spawn_studio_recording_actor(
         cursors_dir,
         base_inputs.clone(),
         custom_cursor_capture,
+        keyboard_capture,
         fragmented,
-        start_time,
+        use_oop_muxer,
+        max_fps,
+        quality,
         completion_tx.clone(),
     );
 
@@ -619,47 +874,180 @@ async fn stop_recording(
     fragmented: bool,
 ) -> Result<CompletedRecording, RecordingError> {
     use cap_project::*;
+    use cap_timestamp::{AUDIO_OUTPUT_FRAMES, DEFAULT_SAMPLE_RATE};
 
-    let make_relative = |path: &PathBuf| {
-        RelativePathBuf::from_path(path.strip_prefix(&recording_dir).unwrap()).unwrap()
+    const DEFAULT_FPS: u32 = 30;
+
+    const CROSS_TRACK_SNAP_SECS: f64 = AUDIO_OUTPUT_FRAMES as f64 / DEFAULT_SAMPLE_RATE as f64;
+
+    let make_relative = |path: &PathBuf| -> RelativePathBuf {
+        match path.strip_prefix(&recording_dir) {
+            Ok(stripped) => RelativePathBuf::from_path(stripped).unwrap_or_else(|_| {
+                tracing::warn!(
+                    "Failed to convert path to relative: {:?}, using filename only",
+                    path
+                );
+                RelativePathBuf::from(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .as_ref(),
+                )
+            }),
+            Err(_) => {
+                tracing::warn!(
+                    "Path {:?} is not inside recording_dir {:?}, using filename only",
+                    path,
+                    recording_dir
+                );
+                RelativePathBuf::from(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .as_ref(),
+                )
+            }
+        }
     };
 
-    let segment_metas: Vec<_> = futures::stream::iter(segments)
-        .then(async |s| {
-            let to_start_time = |timestamp: Timestamp| {
-                timestamp
-                    .duration_since(s.pipeline.start_time)
-                    .as_secs_f64()
+    let segment_outputs: Vec<_> = segments
+        .into_iter()
+        .enumerate()
+        .map(|(segment_index, s)| {
+            let to_start_time =
+                |timestamp: Timestamp| timestamp.signed_duration_since_secs(s.pipeline.start_time);
+
+            let mic_start_time = s
+                .pipeline
+                .microphone
+                .as_ref()
+                .map(|mic| to_start_time(mic.first_timestamp));
+
+            let camera_start_time = s.pipeline.camera.as_ref().map(|camera| {
+                let raw_camera_start = to_start_time(camera.first_timestamp);
+                if let Some(mic_start) = mic_start_time {
+                    let sync_offset = raw_camera_start - mic_start;
+                    if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
+                        mic_start
+                    } else {
+                        raw_camera_start
+                    }
+                } else {
+                    raw_camera_start
+                }
+            });
+
+            let raw_display_start = to_start_time(s.pipeline.screen.first_timestamp);
+            let display_start_time = if let Some(cam_start) = camera_start_time {
+                let sync_offset = raw_display_start - cam_start;
+                if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
+                    cam_start
+                } else {
+                    raw_display_start
+                }
+            } else if let Some(mic_start) = mic_start_time {
+                let sync_offset = raw_display_start - mic_start;
+                if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
+                    mic_start
+                } else {
+                    raw_display_start
+                }
+            } else {
+                raw_display_start
             };
 
-            MultipleSegment {
-                display: VideoMeta {
-                    path: make_relative(&s.pipeline.screen.path),
-                    fps: s.pipeline.screen.video_info.unwrap().fps(),
-                    start_time: Some(to_start_time(s.pipeline.screen.first_timestamp)),
+            let diagnostics =
+                (!s.pipeline.track_failures.is_empty()).then(|| SegmentFailureDiagnostics {
+                    segment_index: segment_index as u32,
+                    start: s.start,
+                    end: s.end,
+                    track_failures: s.pipeline.track_failures.clone(),
+                });
+
+            SegmentOutput {
+                meta: MultipleSegment {
+                    display: VideoMeta {
+                        path: make_relative(&s.pipeline.screen.path),
+                        fps: s
+                            .pipeline
+                            .screen
+                            .video_info
+                            .map(|v| v.fps())
+                            .unwrap_or_else(|| {
+                                tracing::warn!(
+                                    "Screen video_info missing, using default fps: {}",
+                                    DEFAULT_FPS
+                                );
+                                DEFAULT_FPS
+                            }),
+                        start_time: Some(display_start_time),
+                        device_id: None,
+                    },
+                    camera: s.pipeline.camera.map(|camera| VideoMeta {
+                        path: make_relative(&camera.path),
+                        fps: camera.video_info.map(|v| v.fps()).unwrap_or_else(|| {
+                            tracing::warn!(
+                                "Camera video_info missing, using default fps: {}",
+                                DEFAULT_FPS
+                            );
+                            DEFAULT_FPS
+                        }),
+                        start_time: camera_start_time,
+                        device_id: s.camera_device_id.clone(),
+                    }),
+                    mic: s.pipeline.microphone.map(|mic| AudioMeta {
+                        path: make_relative(&mic.path),
+                        start_time: mic_start_time,
+                        device_id: s.mic_device_id.clone(),
+                    }),
+                    system_audio: s.pipeline.system_audio.map(|audio| {
+                        let raw_sys_start = to_start_time(audio.first_timestamp);
+                        let sys_start_time = if let Some(mic_start) = mic_start_time {
+                            let sync_offset = raw_sys_start - mic_start;
+                            if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
+                                mic_start
+                            } else {
+                                raw_sys_start
+                            }
+                        } else {
+                            let sync_offset = raw_sys_start - display_start_time;
+                            if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
+                                display_start_time
+                            } else {
+                                raw_sys_start
+                            }
+                        };
+                        AudioMeta {
+                            path: make_relative(&audio.path),
+                            start_time: Some(sys_start_time),
+                            device_id: None,
+                        }
+                    }),
+                    cursor: s
+                        .pipeline
+                        .cursor
+                        .as_ref()
+                        .and_then(|cursor| cursor.output_path.as_ref().map(make_relative)),
+                    keyboard: s.pipeline.cursor.as_ref().and_then(|cursor| {
+                        cursor
+                            .keyboard_output_path
+                            .as_ref()
+                            .filter(|path| path.exists())
+                            .map(make_relative)
+                    }),
                 },
-                camera: s.pipeline.camera.map(|camera| VideoMeta {
-                    path: make_relative(&camera.path),
-                    fps: camera.video_info.unwrap().fps(),
-                    start_time: Some(to_start_time(camera.first_timestamp)),
-                }),
-                mic: s.pipeline.microphone.map(|mic| AudioMeta {
-                    path: make_relative(&mic.path),
-                    start_time: Some(to_start_time(mic.first_timestamp)),
-                }),
-                system_audio: s.pipeline.system_audio.map(|audio| AudioMeta {
-                    path: make_relative(&audio.path),
-                    start_time: Some(to_start_time(audio.first_timestamp)),
-                }),
-                cursor: s
-                    .pipeline
-                    .cursor
-                    .as_ref()
-                    .map(|cursor| make_relative(&cursor.output_path)),
+                diagnostics,
             }
         })
-        .collect::<Vec<_>>()
-        .await;
+        .collect();
+    let segment_failure_diagnostics: Vec<_> = segment_outputs
+        .iter()
+        .filter_map(|segment| segment.diagnostics.clone())
+        .collect();
+    let segment_metas: Vec<_> = segment_outputs
+        .into_iter()
+        .map(|segment| segment.meta)
+        .collect();
 
     let needs_remux = if fragmented {
         segment_metas.iter().any(|seg| {
@@ -699,10 +1087,22 @@ async fn stop_recording(
         },
     };
 
+    persist_final_recording_meta(&recording_dir, &meta);
+
     let project_config = cap_project::ProjectConfiguration::default();
     project_config
         .write(&recording_dir)
         .map_err(RecordingError::from)?;
+
+    if let Some(diagnostics) = build_recording_failure_diagnostics(&segment_failure_diagnostics)
+        && let Err(error) = write_recording_failure_diagnostics(&recording_dir, &diagnostics)
+    {
+        warn!(
+            error = %error,
+            path = %recording_dir.join("recording-diagnostics.json").display(),
+            "Failed to persist recording diagnostics sidecar"
+        );
+    }
 
     Ok(CompletedRecording {
         project_path: recording_dir,
@@ -718,8 +1118,11 @@ struct SegmentPipelineFactory {
     cursors_dir: PathBuf,
     base_inputs: RecordingBaseInputs,
     custom_cursor_capture: bool,
+    keyboard_capture: bool,
     fragmented: bool,
-    start_time: Timestamps,
+    use_oop_muxer: bool,
+    max_fps: u32,
+    quality: crate::StudioQuality,
     index: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     #[cfg(windows)]
@@ -733,8 +1136,11 @@ impl SegmentPipelineFactory {
         cursors_dir: PathBuf,
         base_inputs: RecordingBaseInputs,
         custom_cursor_capture: bool,
+        keyboard_capture: bool,
         fragmented: bool,
-        start_time: Timestamps,
+        use_oop_muxer: bool,
+        max_fps: u32,
+        quality: crate::StudioQuality,
         completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     ) -> Self {
         Self {
@@ -742,8 +1148,11 @@ impl SegmentPipelineFactory {
             cursors_dir,
             base_inputs,
             custom_cursor_capture,
+            keyboard_capture,
             fragmented,
-            start_time,
+            use_oop_muxer,
+            max_fps,
+            quality,
             index: 0,
             completion_tx,
             #[cfg(windows)]
@@ -756,7 +1165,8 @@ impl SegmentPipelineFactory {
         cursors: Cursors,
         next_cursors_id: u32,
     ) -> anyhow::Result<Pipeline> {
-        let pipeline = create_segment_pipeline(
+        let segment_start_time = Timestamps::now();
+        let mut pipeline = create_segment_pipeline(
             &self.segments_dir,
             &self.cursors_dir,
             self.index,
@@ -764,8 +1174,12 @@ impl SegmentPipelineFactory {
             cursors,
             next_cursors_id,
             self.custom_cursor_capture,
+            self.keyboard_capture,
             self.fragmented,
-            self.start_time,
+            self.use_oop_muxer,
+            self.max_fps,
+            self.quality,
+            segment_start_time,
             #[cfg(windows)]
             self.encoder_preferences.clone(),
         )
@@ -784,6 +1198,20 @@ impl SegmentPipelineFactory {
 
     pub fn set_camera_feed(&mut self, camera_feed: Option<Arc<CameraFeedLock>>) {
         self.base_inputs.camera_feed = camera_feed;
+    }
+
+    pub fn camera_device_id(&self) -> Option<String> {
+        self.base_inputs
+            .camera_feed
+            .as_ref()
+            .map(|f| f.camera_info().device_id().to_string())
+    }
+
+    pub fn mic_device_id(&self) -> Option<String> {
+        self.base_inputs
+            .mic_feed
+            .as_ref()
+            .map(|f| f.device_name().to_string())
     }
 }
 
@@ -833,34 +1261,17 @@ async fn create_segment_pipeline(
     prev_cursors: Cursors,
     next_cursors_id: u32,
     custom_cursor_capture: bool,
+    keyboard_capture: bool,
     fragmented: bool,
+    use_oop_muxer: bool,
+    max_fps: u32,
+    quality: crate::StudioQuality,
     start_time: Timestamps,
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 ) -> anyhow::Result<Pipeline> {
     #[cfg(windows)]
-    let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
-
-    let (display, crop) =
-        target_to_display_and_crop(&base_inputs.capture_target).context("target_display_crop")?;
-
-    let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
-        display,
-        crop,
-        !custom_cursor_capture,
-        120,
-        start_time.system_time(),
-        base_inputs.capture_system_audio,
-        #[cfg(windows)]
-        d3d_device,
-        #[cfg(target_os = "macos")]
-        base_inputs.shareable_content,
-        #[cfg(target_os = "macos")]
-        base_inputs.excluded_windows,
-    )
-    .await
-    .context("screen capture init")?;
-
-    let (capture_source, system_audio) = screen_config.to_sources().await?;
+    let d3d_device = crate::capture_pipeline::create_d3d_device()
+        .context("D3D11 device creation failed - this may happen in VMs, RDP sessions, or systems without GPU drivers")?;
 
     let dir = ensure_dir(&segments_dir.join(format!("segment-{index}")))?;
 
@@ -868,28 +1279,131 @@ async fn create_segment_pipeline(
 
     trace!("preparing segment pipeline {index}");
 
-    let screen = ScreenCaptureMethod::make_studio_mode_pipeline(
-        capture_source,
-        screen_output_path.clone(),
-        start_time,
-        fragmented,
+    #[cfg(target_os = "macos")]
+    let shared_pause_state = if fragmented {
+        Some(SharedPauseState::new(Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        )))
+    } else {
+        None
+    };
+
+    #[cfg(windows)]
+    let shared_pause_state = if fragmented {
+        Some(SharedPauseState::new(Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        )))
+    } else {
+        None
+    };
+
+    let camera_only = matches!(
+        base_inputs.capture_target,
+        screen_capture::ScreenCaptureTarget::CameraOnly
+    );
+
+    let (screen, system_audio, cursor_display) = if camera_only {
+        let camera_feed = base_inputs.camera_feed.clone().ok_or_else(|| {
+            anyhow!(
+                "Camera-only recording requires a camera, but no camera is currently available. \
+                Please select a camera in the recording settings before starting. \
+                If you have already selected a camera, it may have been disconnected or \
+                failed to initialize. Try reconnecting your camera or selecting a different one."
+            )
+        })?;
+
+        #[cfg(target_os = "macos")]
+        let screen = OutputPipeline::builder(screen_output_path.clone())
+            .with_video::<sources::NativeCamera>(camera_feed.clone())
+            .with_timestamps(start_time)
+            .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
+            .instrument(error_span!("screen-out"))
+            .await
+            .context("camera-only screen pipeline setup")?;
+
         #[cfg(windows)]
-        encoder_preferences,
-    )
-    .instrument(error_span!("screen-out"))
-    .await
-    .context("screen pipeline setup")?;
+        let screen = OutputPipeline::builder(screen_output_path.clone())
+            .with_video::<sources::NativeCamera>(camera_feed.clone())
+            .with_timestamps(start_time)
+            .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
+                encoder_preferences: encoder_preferences.clone(),
+                ..Default::default()
+            })
+            .instrument(error_span!("screen-out"))
+            .await
+            .context("camera-only screen pipeline setup")?;
+
+        (screen, None, None)
+    } else {
+        let capture_target = base_inputs.capture_target.clone();
+
+        #[cfg(windows)]
+        let d3d_device = d3d_device;
+
+        let (display, crop) =
+            target_to_display_and_crop(&capture_target).context("target_display_crop")?;
+
+        let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+            display,
+            crop,
+            !custom_cursor_capture,
+            max_fps,
+            start_time.system_time(),
+            base_inputs.capture_system_audio,
+            #[cfg(windows)]
+            d3d_device,
+            #[cfg(target_os = "macos")]
+            base_inputs
+                .shareable_content
+                .clone()
+                .ok_or_else(|| anyhow!("Missing shareable content"))?,
+            #[cfg(target_os = "macos")]
+            base_inputs.excluded_windows.clone(),
+        )
+        .await
+        .context("screen capture init")?;
+
+        let screen_info = screen_config.info();
+        let output_size = calculate_gpu_compatible_size(
+            screen_info.width,
+            screen_info.height,
+            H264_MAX_DIMENSION,
+        );
+
+        let (capture_source, system_audio) = screen_config.to_sources().await?;
+
+        let screen = ScreenCaptureMethod::make_studio_mode_pipeline(
+            capture_source,
+            screen_output_path.clone(),
+            start_time,
+            fragmented,
+            use_oop_muxer,
+            shared_pause_state.clone(),
+            output_size,
+            quality,
+            #[cfg(windows)]
+            encoder_preferences.clone(),
+        )
+        .instrument(error_span!("screen-out"))
+        .await
+        .context("screen pipeline setup")?;
+
+        (screen, system_audio, Some(display))
+    };
 
     #[cfg(target_os = "macos")]
-    let camera = if let Some(camera_feed) = base_inputs.camera_feed {
+    let camera = if camera_only {
+        None
+    } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if fragmented {
             let fragments_dir = dir.join("camera");
             OutputPipeline::builder(fragments_dir)
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
-                .build::<FragmentedAVFoundationCameraMuxer>(
-                    FragmentedAVFoundationCameraMuxerConfig::default(),
-                )
+                .build::<MacOSFragmentedM4SCameraMuxer>(MacOSFragmentedM4SCameraMuxerConfig {
+                    shared_pause_state: shared_pause_state.clone(),
+                    ..Default::default()
+                })
                 .instrument(error_span!("camera-out"))
                 .await
         } else {
@@ -906,20 +1420,28 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(windows)]
-    let camera = if let Some(camera_feed) = base_inputs.camera_feed {
+    let camera = if camera_only {
+        None
+    } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if fragmented {
             let fragments_dir = dir.join("camera");
             OutputPipeline::builder(fragments_dir)
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
-                .build::<WindowsSegmentedCameraMuxer>(WindowsSegmentedCameraMuxerConfig::default())
+                .build::<WindowsFragmentedM4SCameraMuxer>(WindowsFragmentedM4SCameraMuxerConfig {
+                    shared_pause_state: shared_pause_state.clone(),
+                    ..Default::default()
+                })
                 .instrument(error_span!("camera-out"))
                 .await
         } else {
             OutputPipeline::builder(dir.join("camera.mp4"))
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
-                .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig::default())
+                .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
+                    encoder_preferences: encoder_preferences.clone(),
+                    ..Default::default()
+                })
                 .instrument(error_span!("camera-out"))
                 .await
         };
@@ -930,11 +1452,13 @@ async fn create_segment_pipeline(
 
     let microphone = if let Some(mic_feed) = base_inputs.mic_feed {
         let pipeline = if fragmented {
-            let fragments_dir = dir.join("audio-input");
-            OutputPipeline::builder(fragments_dir)
+            let output_path = dir.join("audio-input.m4a");
+            OutputPipeline::builder(output_path)
                 .with_audio_source::<sources::Microphone>(mic_feed)
                 .with_timestamps(start_time)
-                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig::default())
+                .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
+                    shared_pause_state: shared_pause_state.clone(),
+                })
                 .instrument(error_span!("mic-out"))
                 .await
         } else {
@@ -952,11 +1476,13 @@ async fn create_segment_pipeline(
 
     let system_audio = if let Some(system_audio_source) = system_audio {
         let pipeline = if fragmented {
-            let fragments_dir = dir.join("system_audio");
-            OutputPipeline::builder(fragments_dir)
+            let output_path = dir.join("system_audio.m4a");
+            OutputPipeline::builder(output_path)
                 .with_audio_source::<screen_capture::SystemAudioSource>(system_audio_source)
                 .with_timestamps(start_time)
-                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig::default())
+                .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
+                    shared_pause_state: shared_pause_state.clone(),
+                })
                 .instrument(error_span!("system-audio-out"))
                 .await
         } else {
@@ -972,36 +1498,52 @@ async fn create_segment_pipeline(
         None
     };
 
-    let cursor = custom_cursor_capture
-        .then(move || {
-            let cursor_crop_bounds = base_inputs
-                .capture_target
-                .cursor_crop()
-                .ok_or(CreateSegmentPipelineError::NoBounds)?;
+    let cursor = if camera_only {
+        None
+    } else {
+        (custom_cursor_capture || keyboard_capture)
+            .then(move || {
+                let cursor_crop_bounds = base_inputs
+                    .capture_target
+                    .cursor_crop()
+                    .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
-            let cursor_output_path = dir.join("cursor.json");
-            let incremental_output = if fragmented {
-                Some(cursor_output_path.clone())
-            } else {
-                None
-            };
+                let cursor_output_path = dir.join("cursor.json");
+                let keyboard_output_path = dir.join(cap_project::KEYBOARD_EVENTS_FILE_NAME);
+                let incremental_output = if fragmented && custom_cursor_capture {
+                    Some(cursor_output_path.clone())
+                } else {
+                    None
+                };
+                let keyboard_incremental_output = if fragmented && keyboard_capture {
+                    Some(keyboard_output_path.clone())
+                } else {
+                    None
+                };
 
-            let cursor = spawn_cursor_recorder(
-                cursor_crop_bounds,
-                display,
-                cursors_dir.to_path_buf(),
-                prev_cursors,
-                next_cursors_id,
-                start_time,
-                incremental_output,
-            );
+                let cursor_display = cursor_display.ok_or(CreateSegmentPipelineError::NoDisplay)?;
 
-            Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
-                output_path: cursor_output_path,
-                actor: cursor,
+                let cursor = spawn_cursor_recorder(
+                    cursor_crop_bounds,
+                    cursor_display,
+                    cursors_dir.to_path_buf(),
+                    prev_cursors,
+                    next_cursors_id,
+                    start_time,
+                    IncrementalCaptureOutputs {
+                        cursor: incremental_output,
+                        keyboard: keyboard_incremental_output,
+                    },
+                );
+
+                Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
+                    output_path: custom_cursor_capture.then_some(cursor_output_path),
+                    keyboard_output_path: keyboard_capture.then_some(keyboard_output_path),
+                    actor: cursor,
+                })
             })
-        })
-        .transpose()?;
+            .transpose()?
+    };
 
     info!("pipeline playing");
 
@@ -1012,6 +1554,8 @@ async fn create_segment_pipeline(
         camera,
         cursor,
         system_audio,
+        track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+        watcher_task: None,
     })
 }
 
@@ -1027,6 +1571,28 @@ fn current_time_f64() -> f64 {
         .as_secs_f64()
 }
 
+fn persist_final_recording_meta(recording_dir: &Path, studio_meta: &StudioRecordingMeta) {
+    use chrono::Local;
+
+    let pretty_name = Local::now().format("Cap %Y-%m-%d at %H.%M.%S").to_string();
+    let recording_meta = RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: recording_dir.to_path_buf(),
+        pretty_name,
+        sharing: None,
+        inner: RecordingMetaInner::Studio(Box::new(studio_meta.clone())),
+        upload: None,
+    };
+
+    if let Err(err) = recording_meta.save_for_project() {
+        warn!(
+            error = ?err,
+            path = %recording_dir.join("recording-meta.json").display(),
+            "Failed to persist final recording meta; downstream consumers may see in-progress state"
+        );
+    }
+}
+
 fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
     use chrono::Local;
 
@@ -1037,16 +1603,441 @@ fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
         project_path: recording_dir.to_path_buf(),
         pretty_name,
         sharing: None,
-        inner: RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+        inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
             inner: MultipleSegments {
                 segments: Vec::new(),
                 cursors: cap_project::Cursors::default(),
                 status: Some(StudioRecordingStatus::InProgress),
             },
-        }),
+        })),
         upload: None,
     };
 
     meta.save_for_project()
         .map_err(|e| anyhow!("Failed to save in-progress meta: {:?}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output_pipeline::{
+        AudioMuxer, ChannelAudioSource, ChannelAudioSourceConfig, ChannelVideoSource,
+        ChannelVideoSourceConfig, Muxer, TaskPool, VideoFrame, VideoMuxer,
+    };
+
+    fn test_finished_output_pipeline() -> FinishedOutputPipeline {
+        let timestamps = Timestamps::now();
+        test_finished_output_pipeline_at(
+            PathBuf::from("track.mp4"),
+            Timestamp::Instant(timestamps.instant()),
+            None,
+            1,
+        )
+    }
+
+    fn test_finished_output_pipeline_at(
+        path: PathBuf,
+        first_timestamp: Timestamp,
+        video_info: Option<VideoInfo>,
+        video_frame_count: u64,
+    ) -> FinishedOutputPipeline {
+        FinishedOutputPipeline {
+            path,
+            first_timestamp,
+            video_info,
+            video_frame_count,
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct TestVideoFrame {
+        timestamp: Timestamp,
+    }
+
+    impl VideoFrame for TestVideoFrame {
+        fn timestamp(&self) -> Timestamp {
+            self.timestamp
+        }
+    }
+
+    struct SuccessfulVideoMuxer;
+
+    impl Muxer for SuccessfulVideoMuxer {
+        type Config = ();
+
+        async fn setup(
+            _config: Self::Config,
+            _output_path: PathBuf,
+            _video_config: Option<VideoInfo>,
+            _audio_config: Option<cap_media_info::AudioInfo>,
+            _pause_flag: Arc<std::sync::atomic::AtomicBool>,
+            _tasks: &mut TaskPool,
+        ) -> anyhow::Result<Self>
+        where
+            Self: Sized,
+        {
+            Ok(Self)
+        }
+
+        fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+            Ok(Ok(()))
+        }
+    }
+
+    impl AudioMuxer for SuccessfulVideoMuxer {
+        fn send_audio_frame(
+            &mut self,
+            _frame: crate::output_pipeline::AudioFrame,
+            _timestamp: Duration,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl VideoMuxer for SuccessfulVideoMuxer {
+        type VideoFrame = TestVideoFrame;
+
+        fn send_video_frame(
+            &mut self,
+            _frame: Self::VideoFrame,
+            _timestamp: Duration,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct FailingAudioMuxerConfig {
+        fail_after_frame: u64,
+    }
+
+    struct FailingAudioMuxer {
+        fail_after_frame: u64,
+        sent_frames: u64,
+    }
+
+    impl Muxer for FailingAudioMuxer {
+        type Config = FailingAudioMuxerConfig;
+
+        async fn setup(
+            config: Self::Config,
+            _output_path: PathBuf,
+            _video_config: Option<VideoInfo>,
+            _audio_config: Option<cap_media_info::AudioInfo>,
+            _pause_flag: Arc<std::sync::atomic::AtomicBool>,
+            _tasks: &mut TaskPool,
+        ) -> anyhow::Result<Self>
+        where
+            Self: Sized,
+        {
+            Ok(Self {
+                fail_after_frame: config.fail_after_frame,
+                sent_frames: 0,
+            })
+        }
+
+        fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+            Ok(Ok(()))
+        }
+    }
+
+    impl AudioMuxer for FailingAudioMuxer {
+        fn send_audio_frame(
+            &mut self,
+            _frame: crate::output_pipeline::AudioFrame,
+            _timestamp: Duration,
+        ) -> anyhow::Result<()> {
+            self.sent_frames += 1;
+            if self.sent_frames >= self.fail_after_frame {
+                return Err(anyhow!("optional audio mux send failed"));
+            }
+            Ok(())
+        }
+    }
+
+    fn test_video_info() -> VideoInfo {
+        VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30)
+    }
+
+    fn test_audio_info() -> cap_media_info::AudioInfo {
+        cap_media_info::AudioInfo::new_raw(
+            cap_media_info::Sample::F32(cap_media_info::Type::Packed),
+            48_000,
+            2,
+        )
+    }
+
+    #[test]
+    fn finalize_optional_track_records_stop_failure() {
+        let failures = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let output = finalize_optional_track(
+            RecordingTrackKind::Camera,
+            Err(anyhow!("camera stop failed")),
+            &failures,
+        );
+
+        assert!(output.is_none());
+
+        let recorded = take_track_failures(&failures);
+        assert_eq!(
+            recorded,
+            vec![TrackFailureRecord {
+                track: RecordingTrackKind::Camera,
+                stage: TrackFailureStage::Stop,
+                error: "camera stop failed".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn finalize_optional_track_preserves_successful_track() {
+        let failures = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let output = finalize_optional_track(
+            RecordingTrackKind::Microphone,
+            Ok(Some(test_finished_output_pipeline())),
+            &failures,
+        );
+
+        assert!(output.is_some());
+        assert!(take_track_failures(&failures).is_empty());
+    }
+
+    #[test]
+    fn finalize_optional_track_does_not_duplicate_runtime_failure() {
+        let failures = Arc::new(std::sync::Mutex::new(Vec::new()));
+        record_track_failure(
+            &failures,
+            RecordingTrackKind::SystemAudio,
+            TrackFailureStage::Runtime,
+            "system audio writer failed",
+        );
+
+        let output = finalize_optional_track(
+            RecordingTrackKind::SystemAudio,
+            Err(anyhow!("system audio writer failed")),
+            &failures,
+        );
+
+        assert!(output.is_none());
+        assert_eq!(
+            take_track_failures(&failures),
+            vec![TrackFailureRecord {
+                track: RecordingTrackKind::SystemAudio,
+                stage: TrackFailureStage::Runtime,
+                error: "system audio writer failed".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn build_recording_failure_diagnostics_skips_clean_recordings() {
+        assert!(build_recording_failure_diagnostics(&[]).is_none());
+    }
+
+    #[test]
+    fn build_recording_failure_diagnostics_keeps_segment_failures() {
+        let diagnostics = build_recording_failure_diagnostics(&[SegmentFailureDiagnostics {
+            segment_index: 2,
+            start: 10.0,
+            end: 20.0,
+            track_failures: vec![
+                TrackFailureRecord {
+                    track: RecordingTrackKind::Microphone,
+                    stage: TrackFailureStage::Runtime,
+                    error: "microphone writer failed".to_string(),
+                },
+                TrackFailureRecord {
+                    track: RecordingTrackKind::SystemAudio,
+                    stage: TrackFailureStage::Stop,
+                    error: "system audio finalize failed".to_string(),
+                },
+            ],
+        }]);
+
+        assert_eq!(
+            diagnostics,
+            Some(RecordingFailureDiagnostics {
+                version: 1,
+                segments: vec![SegmentFailureDiagnostics {
+                    segment_index: 2,
+                    start: 10.0,
+                    end: 20.0,
+                    track_failures: vec![
+                        TrackFailureRecord {
+                            track: RecordingTrackKind::Microphone,
+                            stage: TrackFailureStage::Runtime,
+                            error: "microphone writer failed".to_string(),
+                        },
+                        TrackFailureRecord {
+                            track: RecordingTrackKind::SystemAudio,
+                            stage: TrackFailureStage::Stop,
+                            error: "system audio finalize failed".to_string(),
+                        },
+                    ],
+                }],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_recording_keeps_success_when_diagnostics_sidecar_write_fails() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let recording_dir = temp_dir.path().join("recording");
+        let start_time = Timestamps::now();
+        std::fs::create_dir_all(recording_dir.join("content"))
+            .expect("recording content dir should be created");
+        std::fs::create_dir_all(recording_dir.join("recording-diagnostics.json"))
+            .expect("diagnostics path should be pre-created as a directory");
+
+        let segment = RecordingSegment {
+            start: 0.0,
+            end: 1.0,
+            pipeline: FinishedPipeline {
+                start_time,
+                screen: test_finished_output_pipeline_at(
+                    recording_dir.join("content/display.mp4"),
+                    Timestamp::Instant(start_time.instant() + Duration::from_millis(33)),
+                    Some(test_video_info()),
+                    1,
+                ),
+                microphone: None,
+                camera: None,
+                system_audio: None,
+                cursor: None,
+                track_failures: vec![TrackFailureRecord {
+                    track: RecordingTrackKind::Microphone,
+                    stage: TrackFailureStage::Runtime,
+                    error: "microphone runtime failure".to_string(),
+                }],
+            },
+            camera_device_id: None,
+            mic_device_id: None,
+        };
+
+        let completed = stop_recording(
+            recording_dir.clone(),
+            vec![segment],
+            Default::default(),
+            false,
+        )
+        .await
+        .expect("diagnostics sidecar failure should not abort stop_recording");
+
+        assert_eq!(completed.project_path, recording_dir);
+        assert!(
+            completed.project_path.join("project-config.json").is_file(),
+            "project config should still be written"
+        );
+        assert!(
+            completed
+                .project_path
+                .join("recording-diagnostics.json")
+                .is_dir(),
+            "the pre-existing diagnostics directory should remain, proving the sidecar write failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_preserves_display_when_optional_track_fails_during_runtime() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let timestamps = Timestamps::now();
+        let (screen_tx, screen_rx) = flume::bounded(4);
+        let (completion_tx, completion_rx) = watch::channel(None);
+        let (mut microphone_tx, microphone_rx) = futures::channel::mpsc::channel(4);
+
+        let screen = OutputPipeline::builder(temp_dir.path().join("display.mp4"))
+            .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
+                test_video_info(),
+                screen_rx,
+            ))
+            .with_timestamps(timestamps)
+            .build::<SuccessfulVideoMuxer>(())
+            .await
+            .expect("display pipeline should build");
+
+        let microphone = OutputPipeline::builder(temp_dir.path().join("audio-input.ogg"))
+            .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                test_audio_info(),
+                microphone_rx,
+            ))
+            .with_timestamps(timestamps)
+            .build::<FailingAudioMuxer>(FailingAudioMuxerConfig {
+                fail_after_frame: 1,
+            })
+            .await
+            .expect("microphone pipeline should build");
+        let microphone_done = microphone.done_fut();
+
+        let mut pipeline = Pipeline {
+            start_time: timestamps,
+            screen,
+            microphone: Some(microphone),
+            camera: None,
+            system_audio: None,
+            cursor: None,
+            track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+            watcher_task: None,
+        };
+        pipeline.spawn_watcher(completion_tx);
+
+        screen_tx
+            .send_async(TestVideoFrame {
+                timestamp: Timestamp::Instant(timestamps.instant() + Duration::from_millis(33)),
+            })
+            .await
+            .expect("display frame should send");
+        drop(screen_tx);
+
+        microphone_tx
+            .try_send(crate::output_pipeline::AudioFrame::new(
+                test_audio_info().empty_frame(960),
+                Timestamp::Instant(timestamps.instant() + Duration::from_millis(20)),
+            ))
+            .expect("microphone frame should send");
+        drop(microphone_tx);
+
+        let microphone_error = microphone_done
+            .await
+            .expect_err("optional microphone pipeline should fail at runtime");
+        assert!(
+            microphone_error
+                .to_string()
+                .contains("Audio muxer stopped accepting frames at frame 1"),
+            "runtime error should retain the mux send-failure context"
+        );
+
+        let finished = pipeline
+            .stop()
+            .await
+            .expect("display success should still allow the recording to stop cleanly");
+
+        assert_eq!(
+            finished.screen.video_frame_count, 1,
+            "display output should be preserved"
+        );
+        assert!(
+            finished.microphone.is_none(),
+            "optional microphone output should be dropped after runtime failure"
+        );
+        assert_eq!(
+            finished.track_failures.len(),
+            1,
+            "runtime failure should be recorded exactly once"
+        );
+        assert!(
+            completion_rx.borrow().is_none(),
+            "optional runtime failure should not publish a required-track completion error"
+        );
+        assert_eq!(
+            finished.track_failures[0].track,
+            RecordingTrackKind::Microphone
+        );
+        assert_eq!(finished.track_failures[0].stage, TrackFailureStage::Runtime);
+        assert!(
+            finished.track_failures[0]
+                .error
+                .contains("Audio muxer stopped accepting frames at frame 1"),
+            "recorded runtime failure should preserve the mux send-failure context"
+        );
+    }
 }

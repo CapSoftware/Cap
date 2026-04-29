@@ -20,12 +20,20 @@ import {
 	useTimelineContext,
 	useTrackContext,
 } from "./context";
-import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
+import {
+	SegmentContent,
+	SegmentHandle,
+	SegmentRoot,
+	TrackRoot,
+	useSetPreviewTime,
+} from "./Track";
 
 export type SceneSegmentDragState =
 	| { type: "idle" }
 	| { type: "movePending" }
 	| { type: "moving" };
+
+const MIN_SCENE_SEGMENT_PIXEL_WIDTH = 80;
 
 export function SceneTrack(props: {
 	onDragStateChanged: (v: SceneSegmentDragState) => void;
@@ -41,6 +49,12 @@ export function SceneTrack(props: {
 	} = useEditorContext();
 
 	const { duration, secsPerPixel } = useTimelineContext();
+	const setPreviewTime = useSetPreviewTime();
+	const selectedSceneIndices = createMemo(() => {
+		const selection = editorState.timeline.selection;
+		if (!selection || selection.type !== "scene") return null;
+		return new Set(selection.indices);
+	});
 
 	const [hoveringSegment, setHoveringSegment] = createSignal(false);
 	const [hoveredTime, setHoveredTime] = createSignal<number>();
@@ -90,7 +104,7 @@ export function SceneTrack(props: {
 					return;
 				}
 
-				const bounds = e.target.getBoundingClientRect()!;
+				const bounds = e.currentTarget.getBoundingClientRect();
 
 				let time =
 					(e.clientX - bounds.left) * secsPerPixel() +
@@ -340,16 +354,9 @@ export function SceneTrack(props: {
 					}
 
 					const isSelected = createMemo(() => {
-						const selection = editorState.timeline.selection;
-						if (!selection || selection.type !== "scene") return false;
-
-						const segmentIndex = project.timeline?.sceneSegments?.findIndex(
-							(s) => s.start === segment.start && s.end === segment.end,
-						);
-
-						if (segmentIndex === undefined || segmentIndex === -1) return false;
-
-						return selection.indices.includes(segmentIndex);
+						const indices = selectedSceneIndices();
+						if (!indices) return false;
+						return indices.has(i());
 					});
 
 					return (
@@ -385,13 +392,18 @@ export function SceneTrack(props: {
 								onMouseDown={createMouseDownDrag(
 									() => {
 										const start = segment.start;
+										const minDuration = Math.max(
+											1,
+											secsPerPixel() * MIN_SCENE_SEGMENT_PIXEL_WIDTH,
+										);
 
 										let minValue = 0;
 
-										const maxValue = segment.end - 1;
+										const maxValue = segment.end - minDuration;
 
 										for (let i = sceneSegments().length - 1; i >= 0; i--) {
-											const segment = sceneSegments()[i]!;
+											const segment = sceneSegments()[i];
+											if (!segment) continue;
 											if (segment.end <= start) {
 												minValue = segment.end;
 												break;
@@ -404,16 +416,17 @@ export function SceneTrack(props: {
 										const newStart =
 											value.start +
 											(e.clientX - initialMouseX) * secsPerPixel();
+										const nextStart = Math.min(
+											value.maxValue,
+											Math.max(value.minValue, newStart),
+										);
 
 										setProject(
 											"timeline",
 											"sceneSegments",
 											i(),
 											"start",
-											Math.min(
-												value.maxValue,
-												Math.max(value.minValue, newStart),
-											),
+											nextStart,
 										);
 
 										setProject(
@@ -425,6 +438,7 @@ export function SceneTrack(props: {
 												}
 											}),
 										);
+										setPreviewTime(nextStart);
 									},
 								)}
 							/>
@@ -492,13 +506,18 @@ export function SceneTrack(props: {
 								onMouseDown={createMouseDownDrag(
 									() => {
 										const end = segment.end;
+										const minDuration = Math.max(
+											1,
+											secsPerPixel() * MIN_SCENE_SEGMENT_PIXEL_WIDTH,
+										);
 
-										const minValue = segment.start + 1;
+										const minValue = segment.start + minDuration;
 
 										let maxValue = duration();
 
 										for (let i = 0; i < sceneSegments().length; i++) {
-											const segment = sceneSegments()[i]!;
+											const segment = sceneSegments()[i];
+											if (!segment) continue;
 											if (segment.start > end) {
 												maxValue = segment.start;
 												break;
@@ -510,16 +529,17 @@ export function SceneTrack(props: {
 									(e, value, initialMouseX) => {
 										const newEnd =
 											value.end + (e.clientX - initialMouseX) * secsPerPixel();
+										const nextEnd = Math.min(
+											value.maxValue,
+											Math.max(value.minValue, newEnd),
+										);
 
 										setProject(
 											"timeline",
 											"sceneSegments",
 											i(),
 											"end",
-											Math.min(
-												value.maxValue,
-												Math.max(value.minValue, newEnd),
-											),
+											nextEnd,
 										);
 
 										setProject(
@@ -531,6 +551,7 @@ export function SceneTrack(props: {
 												}
 											}),
 										);
+										setPreviewTime(nextEnd);
 									},
 								)}
 							/>

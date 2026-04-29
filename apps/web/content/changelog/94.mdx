@@ -1,0 +1,20 @@
+---
+title: Ultra Quality, Camera Overhaul & Segmented Uploads
+app: Cap Desktop
+publishedAt: "2026-04-15"
+version: 0.4.84
+image:
+---
+
+- **Ultra quality mode** — A new quality selector in settings lets you switch between Balanced and Ultra for studio recordings. Ultra uses higher bitrates for maximum fidelity in detailed UI walkthroughs and code demos.
+- **Segmented Instant Mode recordings** — Instant mode now uploads HLS segments as they're recorded instead of assembling a single MP4. Your link is shareable sooner and viewers can watch a live preview while you're still recording. Now enabled on Windows too.
+- **Screen capture auto-restart** — On macOS, if the screen capture pipeline drops out, it automatically restarts without interrupting your recording.
+- **Camera reliability** — Camera preview now detects stalls and auto-refreshes, restores correctly when reopening Cap or waking from sleep, and always cleans up feeds when recording ends.
+- **Camera performance** — Batched rendering, thread-local decoder caching, and frame reuse make camera preview significantly smoother across both macOS and Windows.
+- **Click-to-lock window selection** — Click a window in the target selector to lock onto it. The camera preview repositions automatically to stay out of the way, and recording controls now anchor relative to your capture target.
+- **Trim handle flickering** — Fixed a rendering glitch when dragging trim handles in the editor.
+- **Cmd/Ctrl+W to close windows** — Standard keyboard shortcut now works to close any Cap window.
+- **Platform-specific hotkey labels** — Settings now show the correct modifier symbols for your OS (⌘ on Mac, Ctrl on Windows).
+- **Recording stop reliability** — Timeouts throughout the stop pipeline prevent hangs when ending a recording. Audio and video now stop concurrently for faster shutdown.
+- **Exit shutdown guards** — All uploads complete and resources clean up before the app fully exits, preventing data loss on quit.
+- **Camera-only recording fixes** — Thumbnails and uploads now work correctly for camera-only recordings.

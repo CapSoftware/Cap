@@ -69,5 +69,6 @@ mod windows {
         }
     }
 
+    #[allow(dead_code)]
     pub struct FormatSelection(VideoFormat);
 }

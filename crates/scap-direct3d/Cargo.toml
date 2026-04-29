@@ -29,6 +29,8 @@ windows = { workspace = true, features = [
     "Win32_System_Variant",
     "Storage_Search",
     "Storage_Streams",
+    "Win32_System_SystemInformation",
+    "Win32_System_LibraryLoader",
 ] }
 
 [dev-dependencies]
@@ -41,4 +43,5 @@ workspace = true
 
 [dependencies]
 thiserror.workspace = true
+tracing.workspace = true
 workspace-hack = { version = "0.1", path = "../workspace-hack" }

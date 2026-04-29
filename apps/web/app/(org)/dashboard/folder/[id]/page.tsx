@@ -40,7 +40,7 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 			<div>
 				<div className="flex gap-2 items-center mb-10">
 					<NewSubfolderButton parentFolderId={folderId} />
-					<UploadCapButton size="sm" folderId={folderId} />
+					<UploadCapButton size="sm" />
 				</div>
 				<div className="flex justify-between items-center mb-6 w-full">
 					<div className="flex overflow-x-auto items-center font-medium">

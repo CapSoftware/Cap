@@ -19,6 +19,16 @@ const formatDate = (date: Date) => date.toISOString().slice(0, 10);
 const formatDateTime = (date: Date) =>
 	date.toISOString().slice(0, 19).replace("T", " ");
 const buildPathname = (videoId: Video.VideoId) => `/s/${videoId}`;
+const getFileExtensionFromKey = (fileKey: string) => {
+	const fileName = fileKey.split("/").at(-1) ?? "";
+	const extension = fileName.split(".").at(-1)?.toLowerCase();
+
+	if (!extension || extension === fileName.toLowerCase()) {
+		return null;
+	}
+
+	return extension;
+};
 
 type UploadProgressUpdateInput = Schema.Type<
 	typeof Video.UploadProgressUpdateInput
@@ -276,6 +286,11 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 								total: Db.videoUploads.total,
 								startedAt: Db.videoUploads.startedAt,
 								updatedAt: Db.videoUploads.updatedAt,
+								phase: Db.videoUploads.phase,
+								processingProgress: Db.videoUploads.processingProgress,
+								processingMessage: Db.videoUploads.processingMessage,
+								processingError: Db.videoUploads.processingError,
+								rawFileKey: Db.videoUploads.rawFileKey,
 							})
 							.from(Db.videoUploads)
 							.where(Dz.eq(Db.videoUploads.videoId, videoId)),
@@ -283,7 +298,19 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
 
 				if (result == null) return Option.none();
-				return Option.some(new Video.UploadProgress(result));
+				return Option.some(
+					new Video.UploadProgress({
+						uploaded: result.uploaded,
+						total: result.total,
+						startedAt: result.startedAt,
+						updatedAt: result.updatedAt,
+						phase: result.phase,
+						processingProgress: result.processingProgress,
+						processingMessage: Option.fromNullable(result.processingMessage),
+						processingError: Option.fromNullable(result.processingError),
+						hasRawFallback: result.rawFileKey != null,
+					}),
+				);
 			}),
 
 			updateUploadProgress: Effect.fn("Videos.updateUploadProgress")(function* (
@@ -315,13 +342,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				yield* db.use((db) =>
 					db.transaction(async (tx) => {
 						if (record.upload) {
-							if (uploaded === total && record.upload.mode === "singlepart") {
-								await tx
-									.delete(Db.videoUploads)
-									.where(Dz.eq(Db.videoUploads.videoId, videoId));
-								return;
-							}
-
 							await tx
 								.update(Db.videoUploads)
 								.set({
@@ -464,8 +484,48 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				const [video] = maybeVideo.value;
 
 				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
-
 				const src = Video.Video.getSource(video);
+
+				if (src instanceof Video.Mp4Source && video.source.type === "webMP4") {
+					const mp4Head = yield* bucket
+						.headObject(src.getFileKey())
+						.pipe(Effect.option);
+
+					if (
+						Option.isSome(mp4Head) &&
+						(mp4Head.value.ContentLength ?? 0) > 0
+					) {
+						const downloadUrl = yield* bucket.getSignedObjectUrl(
+							src.getFileKey(),
+						);
+
+						return Option.some({
+							fileName: `${video.name}.mp4`,
+							downloadUrl,
+						});
+					}
+
+					const [upload] = yield* db.use((db) =>
+						db
+							.select({ rawFileKey: Db.videoUploads.rawFileKey })
+							.from(Db.videoUploads)
+							.where(Dz.eq(Db.videoUploads.videoId, video.id)),
+					);
+
+					if (upload?.rawFileKey) {
+						const downloadUrl = yield* bucket.getSignedObjectUrl(
+							upload.rawFileKey,
+						);
+						const extension =
+							getFileExtensionFromKey(upload.rawFileKey) ?? "mp4";
+
+						return Option.some({
+							fileName: `${video.name}.${extension}`,
+							downloadUrl,
+						});
+					}
+				}
+
 				if (!src) return Option.none();
 				if (!(src instanceof Video.Mp4Source)) return Option.none();
 

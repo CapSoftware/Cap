@@ -1,6 +1,50 @@
 import { type NextRequest, NextResponse } from "next/server";
+import { getGitHubReleases } from "@/utils/releases";
 
 export const runtime = "edge";
+
+type FallbackPlatform = "macos-arm64" | "macos-x64" | "windows";
+
+async function checkCrabNebulaDownload(
+	url: string,
+): Promise<{ ok: true; finalUrl: string } | { ok: false }> {
+	try {
+		const res = await fetch(url, {
+			redirect: "follow",
+			cache: "no-store",
+			headers: {
+				Range: "bytes=0-0",
+			},
+		});
+
+		if (res.status >= 200 && res.status < 300) {
+			return { ok: true, finalUrl: res.url };
+		}
+	} catch {}
+
+	return { ok: false };
+}
+
+async function getGitHubFallbackDownloadUrl(
+	platform: FallbackPlatform,
+): Promise<string | null> {
+	try {
+		const releases = await getGitHubReleases();
+
+		for (const release of releases) {
+			const url =
+				platform === "windows"
+					? release.downloads.windows
+					: platform === "macos-arm64"
+						? release.downloads["macos-arm64"]
+						: release.downloads["macos-x64"];
+
+			if (url) return url;
+		}
+	} catch {}
+
+	return null;
+}
 
 export async function GET(
 	request: NextRequest,
@@ -9,34 +53,64 @@ export async function GET(
 	const params = await props.params;
 	const platform = params.platform.toLowerCase();
 
-	// Define download URLs for different platforms
-	const downloadUrls: Record<string, string> = {
-		"apple-intel":
-			"https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
-		intel:
-			"https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64", // Keep for backward compatibility
-		mac: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64", // Default to Apple Silicon
-		macos:
-			"https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64", // Default to Apple Silicon
-		"apple-silicon":
-			"https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
-		aarch64:
-			"https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
-		x86_64:
-			"https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
-		windows:
-			"https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64",
-		win: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64",
+	const downloadUrls: Record<
+		string,
+		{ url: string; fallback: FallbackPlatform }
+	> = {
+		"apple-intel": {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
+			fallback: "macos-x64",
+		},
+		intel: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
+			fallback: "macos-x64",
+		},
+		mac: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
+			fallback: "macos-arm64",
+		},
+		macos: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
+			fallback: "macos-arm64",
+		},
+		"apple-silicon": {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
+			fallback: "macos-arm64",
+		},
+		aarch64: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
+			fallback: "macos-arm64",
+		},
+		x86_64: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
+			fallback: "macos-x64",
+		},
+		windows: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64",
+			fallback: "windows",
+		},
+		win: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64",
+			fallback: "windows",
+		},
 	};
 
-	// Get the download URL for the requested platform
-	const downloadUrl = downloadUrls[platform];
+	const download = downloadUrls[platform];
 
 	// If the platform is not supported, redirect to the main download page
-	if (!downloadUrl) {
+	if (!download) {
 		return NextResponse.redirect(new URL("/download", request.url));
 	}
 
-	// Redirect to the appropriate download URL
-	return NextResponse.redirect(downloadUrl);
+	const primary = await checkCrabNebulaDownload(download.url);
+	if (primary.ok) {
+		return NextResponse.redirect(primary.finalUrl);
+	}
+
+	const fallback = await getGitHubFallbackDownloadUrl(download.fallback);
+	if (fallback) {
+		return NextResponse.redirect(fallback);
+	}
+
+	return NextResponse.redirect(new URL("/download/versions", request.url));
 }

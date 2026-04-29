@@ -19,6 +19,7 @@ import {
 	CheckIcon,
 	DownloadIcon,
 	FastForwardIcon,
+	GlobeIcon,
 	Loader2Icon,
 	Maximize2Icon,
 	Minimize2Icon,
@@ -31,6 +32,7 @@ import {
 	RewindIcon,
 	RotateCcwIcon,
 	SettingsIcon,
+	SparklesIcon,
 	SubtitlesIcon,
 	Volume1Icon,
 	Volume2Icon,
@@ -38,12 +40,13 @@ import {
 } from "lucide-react";
 import {
 	MediaActionTypes,
+	MediaContext,
 	MediaProvider,
+	type MediaState,
 	timeUtils,
 	useMediaDispatch,
 	useMediaFullscreenRef,
 	useMediaRef,
-	useMediaSelector,
 } from "media-chrome/react/media-store";
 import * as React from "react";
 import { forwardRef, useEffect } from "react";
@@ -74,6 +77,86 @@ const SEEK_TOOLTIP_Y = "--seek-tooltip-y";
 
 const SPRITE_CONTAINER_WIDTH = 224;
 const SPRITE_CONTAINER_HEIGHT = 128;
+
+const DEFAULT_SEEKABLE: [number, number] = [0, 0];
+const DEFAULT_BUFFERED: (readonly [number, number])[] = [];
+type ChapterCue = Pick<VTTCue, "text" | "startTime" | "endTime">;
+type SubtitleTrack = Pick<TextTrack, "kind" | "label" | "language">;
+type RenditionInfo = {
+	src?: string;
+	id?: string;
+	width?: number;
+	height?: number;
+	bitrate?: number;
+	frameRate?: number;
+	codec?: string;
+	readonly selected?: boolean;
+};
+
+const DEFAULT_CUES: readonly ChapterCue[] = [];
+const DEFAULT_SUBTITLES_LIST: readonly SubtitleTrack[] = [];
+const DEFAULT_SUBTITLES_SHOWING: readonly SubtitleTrack[] = [];
+const DEFAULT_RENDITION_LIST: readonly RenditionInfo[] = [];
+
+type S = Partial<MediaState>;
+const selectPaused = (s: S) => s.mediaPaused ?? true;
+const selectFullscreen = (s: S) => s.mediaIsFullscreen ?? false;
+const selectLoading = (s: S) => s.mediaLoading ?? false;
+const selectHasPlayed = (s: S) => s.mediaHasPlayed ?? false;
+const selectError = (s: S) => s.mediaError;
+const selectVolume = (s: S) => s.mediaVolume ?? 1;
+const selectMuted = (s: S) => s.mediaMuted ?? false;
+const selectVolumeLevel = (s: S) => s.mediaVolumeLevel ?? "high";
+const selectCurrentTime = (s: S) => s.mediaCurrentTime ?? 0;
+const selectDuration = (s: S) => s.mediaDuration ?? 0;
+const selectSeekable = (s: S) => s.mediaSeekable ?? DEFAULT_SEEKABLE;
+const selectBuffered = (s: S) => s.mediaBuffered ?? DEFAULT_BUFFERED;
+const selectEnded = (s: S) => s.mediaEnded ?? false;
+const selectChaptersCues = (s: S) => s.mediaChaptersCues ?? DEFAULT_CUES;
+const selectPreviewTime = (s: S) => s.mediaPreviewTime;
+const selectPreviewImage = (s: S) => s.mediaPreviewImage;
+const selectPreviewCoords = (s: S) => s.mediaPreviewCoords;
+const selectPlaybackRate = (s: S) => s.mediaPlaybackRate ?? 1;
+const selectPip = (s: S) => s.mediaIsPip ?? false;
+const selectSubtitlesList = (s: S) =>
+	s.mediaSubtitlesList ?? DEFAULT_SUBTITLES_LIST;
+const selectSubtitlesShowing = (s: S) =>
+	s.mediaSubtitlesShowing ?? DEFAULT_SUBTITLES_SHOWING;
+const selectRenditionList = (s: S) =>
+	s.mediaRenditionList ?? DEFAULT_RENDITION_LIST;
+const selectRenditionSelected = (s: S) => s.mediaRenditionSelected;
+
+const EMPTY_MEDIA_STATE = Object.freeze({}) as Partial<MediaState>;
+
+const serverSnapshotCache = new Map<
+	(state: Partial<MediaState>) => unknown,
+	unknown
+>();
+
+function useMediaSelector<T>(selector: (state: Partial<MediaState>) => T): T {
+	const store = React.useContext(MediaContext);
+
+	const subscribe = React.useCallback(
+		(cb: () => void) => {
+			if (!store?.subscribe) return () => {};
+			return store.subscribe(cb);
+		},
+		[store],
+	);
+
+	const getSnapshot = React.useCallback(
+		() => selector(store?.getState?.() ?? EMPTY_MEDIA_STATE),
+		[store, selector],
+	);
+
+	if (!serverSnapshotCache.has(selector)) {
+		serverSnapshotCache.set(selector, selector(EMPTY_MEDIA_STATE));
+	}
+	const cached = serverSnapshotCache.get(selector) as T;
+	const getServerSnapshot = React.useCallback(() => cached, [cached]);
+
+	return React.useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+}
 
 type Direction = "ltr" | "rtl";
 
@@ -285,10 +368,8 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 	const lastMouseMoveRef = React.useRef<number>(Date.now());
 	const volumeIndicatorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
-	const mediaPaused = useMediaSelector((state) => state.mediaPaused ?? true);
-	const isFullscreen = useMediaSelector(
-		(state) => state.mediaIsFullscreen ?? false,
-	);
+	const mediaPaused = useMediaSelector(selectPaused);
+	const isFullscreen = useMediaSelector(selectFullscreen);
 
 	const [mounted, setMounted] = React.useState(false);
 	React.useLayoutEffect(() => setMounted(true), []);
@@ -833,6 +914,14 @@ const MediaPlayerVideo = forwardRef<HTMLVideoElement, MediaPlayerVideoProps>(
 			[dispatch, props.onClick],
 		);
 
+		const onContextMenu = React.useCallback(
+			(event: React.MouseEvent<HTMLVideoElement>) => {
+				event.preventDefault();
+				props.onContextMenu?.(event);
+			},
+			[props.onContextMenu],
+		);
+
 		const VideoPrimitive = asChild ? Slot : "video";
 
 		return (
@@ -844,6 +933,7 @@ const MediaPlayerVideo = forwardRef<HTMLVideoElement, MediaPlayerVideoProps>(
 				id={context.mediaId}
 				ref={composedRef}
 				onClick={onPlayToggle}
+				onContextMenu={onContextMenu}
 			/>
 		);
 	},
@@ -890,9 +980,7 @@ function MediaPlayerControls(props: MediaPlayerControlsProps) {
 	} = props;
 
 	const context = useMediaPlayerContext("MediaPlayerControls");
-	const isFullscreen = useMediaSelector(
-		(state) => state.mediaIsFullscreen ?? false,
-	);
+	const isFullscreen = useMediaSelector(selectFullscreen);
 	const controlsVisible = useStoreSelector((state) => state.controlsVisible);
 	// Call the callback whenever controlsVisible changes
 	useEffect(() => {
@@ -935,9 +1023,9 @@ function MediaPlayerLoading(props: MediaPlayerLoadingProps) {
 		...loadingProps
 	} = props;
 
-	const isLoading = useMediaSelector((state) => state.mediaLoading ?? false);
-	const isPaused = useMediaSelector((state) => state.mediaPaused ?? true);
-	const hasPlayed = useMediaSelector((state) => state.mediaHasPlayed ?? false);
+	const isLoading = useMediaSelector(selectLoading);
+	const isPaused = useMediaSelector(selectPaused);
+	const hasPlayed = useMediaSelector(selectHasPlayed);
 
 	const shouldShowLoading = isLoading && !isPaused;
 	const shouldUseDelay = hasPlayed && shouldShowLoading;
@@ -1016,10 +1104,8 @@ function MediaPlayerError(props: MediaPlayerErrorProps) {
 	} = props;
 
 	const context = useMediaPlayerContext("MediaPlayerError");
-	const isFullscreen = useMediaSelector(
-		(state) => state.mediaIsFullscreen ?? false,
-	);
-	const mediaError = useMediaSelector((state) => state.mediaError);
+	const isFullscreen = useMediaSelector(selectFullscreen);
+	const mediaError = useMediaSelector(selectError);
 
 	const error = errorProp ?? mediaError;
 
@@ -1172,11 +1258,9 @@ interface MediaPlayerVolumeIndicatorProps extends React.ComponentProps<"div"> {
 function MediaPlayerVolumeIndicator(props: MediaPlayerVolumeIndicatorProps) {
 	const { asChild, className, ...indicatorProps } = props;
 
-	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
-	const mediaMuted = useMediaSelector((state) => state.mediaMuted ?? false);
-	const mediaVolumeLevel = useMediaSelector(
-		(state) => state.mediaVolumeLevel ?? "high",
-	);
+	const mediaVolume = useMediaSelector(selectVolume);
+	const mediaMuted = useMediaSelector(selectMuted);
+	const mediaVolumeLevel = useMediaSelector(selectVolumeLevel);
 	const volumeIndicatorVisible = useStoreSelector(
 		(state) => state.volumeIndicatorVisible,
 	);
@@ -1244,9 +1328,7 @@ interface MediaPlayerControlsOverlayProps extends React.ComponentProps<"div"> {
 function MediaPlayerControlsOverlay(props: MediaPlayerControlsOverlayProps) {
 	const { asChild, className, ...overlayProps } = props;
 
-	const isFullscreen = useMediaSelector(
-		(state) => state.mediaIsFullscreen ?? false,
-	);
+	const isFullscreen = useMediaSelector(selectFullscreen);
 	const controlsVisible = useStoreSelector((state) => state.controlsVisible);
 
 	const OverlayPrimitive = asChild ? Slot : "div";
@@ -1272,7 +1354,7 @@ function MediaPlayerPlay(props: MediaPlayerPlayProps) {
 
 	const context = useMediaPlayerContext("MediaPlayerPlay");
 	const dispatch = useMediaDispatch();
-	const mediaPaused = useMediaSelector((state) => state.mediaPaused ?? true);
+	const mediaPaused = useMediaSelector(selectPaused);
 
 	const isDisabled = disabled || context.disabled;
 
@@ -1337,9 +1419,7 @@ function MediaPlayerSeekBackward(props: MediaPlayerSeekBackwardProps) {
 
 	const context = useMediaPlayerContext("MediaPlayerSeekBackward");
 	const dispatch = useMediaDispatch();
-	const mediaCurrentTime = useMediaSelector(
-		(state) => state.mediaCurrentTime ?? 0,
-	);
+	const mediaCurrentTime = useMediaSelector(selectCurrentTime);
 
 	const isDisabled = disabled || context.disabled;
 
@@ -1398,12 +1478,8 @@ function MediaPlayerSeekForward(props: MediaPlayerSeekForwardProps) {
 
 	const context = useMediaPlayerContext("MediaPlayerSeekForward");
 	const dispatch = useMediaDispatch();
-	const mediaCurrentTime = useMediaSelector(
-		(state) => state.mediaCurrentTime ?? 0,
-	);
-	const [, seekableEnd] = useMediaSelector(
-		(state) => state.mediaSeekable ?? [0, 0],
-	);
+	const mediaCurrentTime = useMediaSelector(selectCurrentTime);
+	const [, seekableEnd] = useMediaSelector(selectSeekable);
 	const isDisabled = disabled || context.disabled;
 
 	const onSeekForward = React.useCallback(
@@ -1458,7 +1534,8 @@ interface MediaPlayerSeekProps
 	withTime?: boolean;
 	withoutChapter?: boolean;
 	withoutTooltip?: boolean;
-	tooltipThumbnailSrc?: string | ((time: number) => string);
+	fallbackDuration?: number | null;
+	tooltipThumbnailSrc?: string | ((time: number) => string | undefined | null);
 	tooltipTimeVariant?: "current" | "progress";
 	tooltipSideOffset?: number;
 	tooltipCollisionBoundary?: Element | Element[];
@@ -1472,6 +1549,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		withTime = false,
 		withoutChapter = false,
 		withoutTooltip = false,
+		fallbackDuration,
 		tooltipTimeVariant = "current",
 		tooltipThumbnailSrc,
 		tooltipSideOffset,
@@ -1485,25 +1563,16 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	const context = useMediaPlayerContext(SEEK_NAME);
 	const store = useStoreContext(SEEK_NAME);
 	const dispatch = useMediaDispatch();
-	const mediaCurrentTime = useMediaSelector(
-		(state) => state.mediaCurrentTime ?? 0,
-	);
-	const [seekableStart = 0, seekableEnd = 0] = useMediaSelector(
-		(state) => state.mediaSeekable ?? [0, 0],
-	);
-	const mediaBuffered = useMediaSelector((state) => state.mediaBuffered ?? []);
-	const mediaEnded = useMediaSelector((state) => state.mediaEnded ?? false);
+	const mediaCurrentTime = useMediaSelector(selectCurrentTime);
+	const mediaDuration = useMediaSelector(selectDuration);
+	const [seekableStart = 0, seekableEnd = 0] = useMediaSelector(selectSeekable);
+	const mediaBuffered = useMediaSelector(selectBuffered);
+	const mediaEnded = useMediaSelector(selectEnded);
 
-	const chapterCues = useMediaSelector(
-		(state) => state.mediaChaptersCues ?? [],
-	);
-	const mediaPreviewTime = useMediaSelector((state) => state.mediaPreviewTime);
-	const mediaPreviewImage = useMediaSelector(
-		(state) => state.mediaPreviewImage,
-	);
-	const mediaPreviewCoords = useMediaSelector(
-		(state) => state.mediaPreviewCoords,
-	);
+	const chapterCues = useMediaSelector(selectChaptersCues);
+	const mediaPreviewTime = useMediaSelector(selectPreviewTime);
+	const mediaPreviewImage = useMediaSelector(selectPreviewImage);
+	const mediaPreviewCoords = useMediaSelector(selectPreviewCoords);
 
 	const seekRef = React.useRef<HTMLDivElement>(null);
 	const tooltipRef = React.useRef<HTMLDivElement>(null);
@@ -1536,6 +1605,29 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	const lastSeekCommitTimeRef = React.useRef<number>(0);
 
 	const timeCache = React.useRef<Map<number, string>>(new Map());
+	const resolvedDuration = React.useMemo(() => {
+		const mediaValues = [mediaDuration, seekableEnd].filter(
+			(d) => Number.isFinite(d) && d > 0,
+		);
+		if (mediaValues.length > 0) return Math.max(...mediaValues);
+		if (
+			fallbackDuration != null &&
+			Number.isFinite(fallbackDuration) &&
+			fallbackDuration > 0
+		)
+			return fallbackDuration;
+		return 0;
+	}, [fallbackDuration, mediaDuration, seekableEnd]);
+	const lastKnownDurationRef = React.useRef(resolvedDuration);
+
+	React.useEffect(() => {
+		if (resolvedDuration > 0) {
+			lastKnownDurationRef.current = resolvedDuration;
+		}
+	}, [resolvedDuration]);
+
+	const effectiveDuration =
+		resolvedDuration > 0 ? resolvedDuration : lastKnownDurationRef.current;
 
 	const displayValue = seekState.pendingSeekTime ?? mediaCurrentTime;
 
@@ -1564,9 +1656,12 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		return formatted;
 	}, []);
 
-	const currentTime = getCachedTime(displayValue, seekableEnd);
-	const duration = getCachedTime(seekableEnd, seekableEnd);
-	const remainingTime = getCachedTime(seekableEnd - displayValue, seekableEnd);
+	const currentTime = getCachedTime(displayValue, effectiveDuration);
+	const duration = getCachedTime(effectiveDuration, effectiveDuration);
+	const remainingTime = getCachedTime(
+		effectiveDuration - displayValue,
+		effectiveDuration,
+	);
 
 	const onCollisionDataUpdate = React.useCallback(() => {
 		if (collisionDataRef.current) return collisionDataRef.current;
@@ -1608,6 +1703,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 					typeof tooltipThumbnailSrc === "function"
 						? tooltipThumbnailSrc(time)
 						: tooltipThumbnailSrc;
+				if (!src) return null;
 				return { src, coords: null };
 			}
 
@@ -1709,17 +1805,17 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	);
 
 	const onHoverProgressUpdate = React.useCallback(() => {
-		if (!seekRef.current || seekableEnd <= 0) return;
+		if (!seekRef.current || effectiveDuration <= 0) return;
 
 		const hoverPercent = Math.min(
 			100,
-			(hoverTimeRef.current / seekableEnd) * 100,
+			(hoverTimeRef.current / effectiveDuration) * 100,
 		);
 		seekRef.current.style.setProperty(
 			SEEK_HOVER_PERCENT,
 			`${hoverPercent.toFixed(4)}%`,
 		);
-	}, [seekableEnd]);
+	}, [effectiveDuration]);
 
 	React.useEffect(() => {
 		if (seekState.pendingSeekTime !== null) {
@@ -1752,7 +1848,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	}, [dispatch, seekState.isHovering, tooltipDisabled]);
 
 	const bufferedProgress = React.useMemo(() => {
-		if (mediaBuffered.length === 0 || seekableEnd <= 0) return 0;
+		if (mediaBuffered.length === 0 || effectiveDuration <= 0) return 0;
 
 		if (mediaEnded) return 1;
 
@@ -1761,11 +1857,17 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		);
 
 		if (containingRange) {
-			return Math.min(1, containingRange[1] / seekableEnd);
+			return Math.min(1, containingRange[1] / effectiveDuration);
 		}
 
-		return Math.min(1, seekableStart / seekableEnd);
-	}, [mediaBuffered, mediaCurrentTime, seekableEnd, mediaEnded, seekableStart]);
+		return Math.min(1, seekableStart / effectiveDuration);
+	}, [
+		effectiveDuration,
+		mediaBuffered,
+		mediaCurrentTime,
+		mediaEnded,
+		seekableStart,
+	]);
 
 	const onPointerEnter = React.useCallback(() => {
 		if (seekRef.current) {
@@ -1777,7 +1879,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		horizontalMovementRef.current = 0;
 		verticalMovementRef.current = 0;
 
-		if (seekableEnd > 0) {
+		if (effectiveDuration > 0) {
 			if (hoverTimeoutRef.current) {
 				clearTimeout(hoverTimeoutRef.current);
 			}
@@ -1792,7 +1894,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				}
 			}
 		}
-	}, [seekableEnd, onTooltipPositionUpdate, tooltipDisabled]);
+	}, [effectiveDuration, onTooltipPositionUpdate, tooltipDisabled]);
 
 	const onPointerLeave = React.useCallback(() => {
 		if (hoverTimeoutRef.current) {
@@ -1835,7 +1937,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 
 	const onPointerMove = React.useCallback(
 		(event: React.PointerEvent<HTMLDivElement>) => {
-			if (seekableEnd <= 0) return;
+			if (effectiveDuration <= 0) return;
 
 			if (!seekRectRef.current && seekRef.current) {
 				seekRectRef.current = seekRef.current.getBoundingClientRect();
@@ -1879,7 +1981,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 					Math.min(clientX - seekRect.left, seekRect.width),
 				);
 				const relativeX = offsetXOnSeekBar / seekRect.width;
-				const calculatedHoverTime = relativeX * seekableEnd;
+				const calculatedHoverTime = relativeX * effectiveDuration;
 
 				hoverTimeRef.current = calculatedHoverTime;
 
@@ -1929,7 +2031,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 			onPreviewUpdate,
 			onTooltipPositionUpdate,
 			onHoverProgressUpdate,
-			seekableEnd,
+			effectiveDuration,
 			seekState.isHovering,
 			tooltipDisabled,
 		],
@@ -2034,15 +2136,15 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 
 	const currentChapterCue = getCurrentChapterCue(hoverTimeRef.current);
 	const thumbnail = getThumbnail(hoverTimeRef.current);
-	const hoverTime = getCachedTime(hoverTimeRef.current, seekableEnd);
+	const hoverTime = getCachedTime(hoverTimeRef.current, effectiveDuration);
 
 	const chapterSeparators = React.useMemo(() => {
-		if (withoutChapter || chapterCues.length <= 1 || seekableEnd <= 0) {
+		if (withoutChapter || chapterCues.length <= 1 || effectiveDuration <= 0) {
 			return null;
 		}
 
 		return chapterCues.slice(1).map((chapterCue, index) => {
-			const position = (chapterCue.startTime / seekableEnd) * 100;
+			const position = (chapterCue.startTime / effectiveDuration) * 100;
 
 			return (
 				<div
@@ -2059,7 +2161,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				/>
 			);
 		});
-	}, [chapterCues, seekableEnd, withoutChapter]);
+	}, [chapterCues, effectiveDuration, withoutChapter]);
 
 	const spriteStyle = React.useMemo<React.CSSProperties>(() => {
 		if (!thumbnail?.coords || !thumbnail?.src) {
@@ -2100,7 +2202,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				{...seekProps}
 				ref={seekRef}
 				min={seekableStart}
-				max={seekableEnd}
+				max={effectiveDuration}
 				step={0.01}
 				className={cn(
 					"flex relative items-center w-full select-none touch-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
@@ -2122,7 +2224,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 						}}
 					/>
 					<SliderPrimitive.Range className="absolute h-full bg-white will-change-[width]" />
-					{seekState.isHovering && seekableEnd > 0 && (
+					{seekState.isHovering && effectiveDuration > 0 && (
 						<div
 							data-slot="media-player-seek-hover-range"
 							className="absolute h-full bg-white/70 will-change-[width,opacity]"
@@ -2139,7 +2241,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 			{!withoutTooltip &&
 				!context.withoutTooltip &&
 				seekState.isHovering &&
-				seekableEnd > 0 && (
+				effectiveDuration > 0 && (
 					<MediaPlayerPortal>
 						<div
 							ref={tooltipRef}
@@ -2224,12 +2326,18 @@ interface MediaPlayerVolumeProps
 	extends React.ComponentProps<typeof SliderPrimitive.Root> {
 	asChild?: boolean;
 	expandable?: boolean;
+	enhancedAudioEnabled?: boolean;
+	enhancedAudioMuted?: boolean;
+	setEnhancedAudioMuted?: (muted: boolean) => void;
 }
 
 function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 	const {
 		asChild,
 		expandable = false,
+		enhancedAudioEnabled = false,
+		enhancedAudioMuted,
+		setEnhancedAudioMuted,
 		className,
 		disabled,
 		...volumeProps
@@ -2238,24 +2346,45 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 	const context = useMediaPlayerContext(VOLUME_NAME);
 	const store = useStoreContext(VOLUME_NAME);
 	const dispatch = useMediaDispatch();
-	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
-	const mediaMuted = useMediaSelector((state) => state.mediaMuted ?? false);
-	const mediaVolumeLevel = useMediaSelector(
-		(state) => state.mediaVolumeLevel ?? "high",
-	);
+	const mediaVolume = useMediaSelector(selectVolume);
+	const mediaMuted = useMediaSelector(selectMuted);
+	const mediaVolumeLevel = useMediaSelector(selectVolumeLevel);
 
 	const sliderId = React.useId();
 	const volumeTriggerId = React.useId();
 
 	const isDisabled = disabled || context.disabled;
 
+	const displayMuted = enhancedAudioEnabled
+		? (enhancedAudioMuted ?? false)
+		: mediaMuted;
+
+	const resolvedVolumeLevel = enhancedAudioEnabled
+		? displayMuted || mediaVolume === 0
+			? "off"
+			: mediaVolume >= 0.5
+				? "high"
+				: "low"
+		: mediaVolumeLevel;
+
 	const onMute = React.useCallback(() => {
+		if (enhancedAudioEnabled && setEnhancedAudioMuted) {
+			setEnhancedAudioMuted(!(enhancedAudioMuted ?? false));
+			return;
+		}
+
 		dispatch({
 			type: mediaMuted
 				? MediaActionTypes.MEDIA_UNMUTE_REQUEST
 				: MediaActionTypes.MEDIA_MUTE_REQUEST,
 		});
-	}, [dispatch, mediaMuted]);
+	}, [
+		dispatch,
+		enhancedAudioEnabled,
+		enhancedAudioMuted,
+		mediaMuted,
+		setEnhancedAudioMuted,
+	]);
 
 	const onVolumeChange = React.useCallback(
 		(value: number[]) => {
@@ -2289,7 +2418,7 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 		[dispatch, store],
 	);
 
-	const effectiveVolume = mediaMuted ? 0 : mediaVolume;
+	const effectiveVolume = displayMuted ? 0 : mediaVolume;
 
 	return (
 		<div
@@ -2308,19 +2437,19 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 					id={volumeTriggerId}
 					type="button"
 					aria-controls={`${context.mediaId} ${sliderId}`}
-					aria-label={mediaMuted ? "Unmute" : "Mute"}
-					aria-pressed={mediaMuted}
+					aria-label={displayMuted ? "Unmute" : "Mute"}
+					aria-pressed={displayMuted}
 					data-slot="media-player-volume-trigger"
-					data-state={mediaMuted ? "on" : "off"}
+					data-state={displayMuted ? "on" : "off"}
 					variant="ghost"
 					size="icon"
 					className="size-8"
 					disabled={isDisabled}
 					onClick={onMute}
 				>
-					{mediaVolumeLevel === "off" || mediaMuted ? (
+					{resolvedVolumeLevel === "off" ? (
 						<VolumeXIcon />
-					) : mediaVolumeLevel === "high" ? (
+					) : resolvedVolumeLevel === "high" ? (
 						<Volume2Icon />
 					) : (
 						<Volume1Icon />
@@ -2361,40 +2490,67 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 interface MediaPlayerTimeProps extends React.ComponentProps<"div"> {
 	variant?: "progress" | "remaining" | "duration";
 	asChild?: boolean;
+	fallbackDuration?: number | null;
 }
 
 function MediaPlayerTime(props: MediaPlayerTimeProps) {
-	const { variant = "progress", asChild, className, ...timeProps } = props;
+	const {
+		variant = "progress",
+		asChild,
+		className,
+		fallbackDuration,
+		...timeProps
+	} = props;
 
 	const context = useMediaPlayerContext("MediaPlayerTime");
-	const mediaCurrentTime = useMediaSelector(
-		(state) => state.mediaCurrentTime ?? 0,
-	);
-	const [, seekableEnd = 0] = useMediaSelector(
-		(state) => state.mediaSeekable ?? [0, 0],
-	);
+	const mediaCurrentTime = useMediaSelector(selectCurrentTime);
+	const mediaDuration = useMediaSelector(selectDuration);
+	const [, seekableEnd = 0] = useMediaSelector(selectSeekable);
+	const resolvedDuration = React.useMemo(() => {
+		const mediaValues = [mediaDuration, seekableEnd].filter(
+			(d) => Number.isFinite(d) && d > 0,
+		);
+		if (mediaValues.length > 0) return Math.max(...mediaValues);
+		if (
+			fallbackDuration != null &&
+			Number.isFinite(fallbackDuration) &&
+			fallbackDuration > 0
+		)
+			return fallbackDuration;
+		return 0;
+	}, [fallbackDuration, mediaDuration, seekableEnd]);
+	const lastKnownDurationRef = React.useRef(resolvedDuration);
+
+	React.useEffect(() => {
+		if (resolvedDuration > 0) {
+			lastKnownDurationRef.current = resolvedDuration;
+		}
+	}, [resolvedDuration]);
+
+	const effectiveDuration =
+		resolvedDuration > 0 ? resolvedDuration : lastKnownDurationRef.current;
 
 	const times = React.useMemo(() => {
 		if (variant === "remaining") {
 			return {
 				remaining: timeUtils.formatTime(
-					seekableEnd - mediaCurrentTime,
-					seekableEnd,
+					effectiveDuration - mediaCurrentTime,
+					effectiveDuration,
 				),
 			};
 		}
 
 		if (variant === "duration") {
 			return {
-				duration: timeUtils.formatTime(seekableEnd, seekableEnd),
+				duration: timeUtils.formatTime(effectiveDuration, effectiveDuration),
 			};
 		}
 
 		return {
-			current: timeUtils.formatTime(mediaCurrentTime, seekableEnd),
-			duration: timeUtils.formatTime(seekableEnd, seekableEnd),
+			current: timeUtils.formatTime(mediaCurrentTime, effectiveDuration),
+			duration: timeUtils.formatTime(effectiveDuration, effectiveDuration),
 		};
-	}, [variant, mediaCurrentTime, seekableEnd]);
+	}, [variant, mediaCurrentTime, effectiveDuration]);
 
 	const TimePrimitive = asChild ? Slot : "div";
 
@@ -2466,9 +2622,7 @@ function MediaPlayerPlaybackSpeed(props: MediaPlayerPlaybackSpeedProps) {
 	const context = useMediaPlayerContext(PLAYBACK_SPEED_NAME);
 	const store = useStoreContext(PLAYBACK_SPEED_NAME);
 	const dispatch = useMediaDispatch();
-	const mediaPlaybackRate = useMediaSelector(
-		(state) => state.mediaPlaybackRate ?? 1,
-	);
+	const mediaPlaybackRate = useMediaSelector(selectPlaybackRate);
 
 	const isDisabled = disabled || context.disabled;
 
@@ -2618,9 +2772,7 @@ function MediaPlayerFullscreen(props: MediaPlayerFullscreenProps) {
 
 	const context = useMediaPlayerContext("MediaPlayerFullscreen");
 	const dispatch = useMediaDispatch();
-	const isFullscreen = useMediaSelector(
-		(state) => state.mediaIsFullscreen ?? false,
-	);
+	const isFullscreen = useMediaSelector(selectFullscreen);
 
 	const isDisabled = disabled || context.disabled;
 
@@ -2670,9 +2822,7 @@ function MediaPlayerPiP(props: MediaPlayerPiPProps) {
 
 	const context = useMediaPlayerContext("MediaPlayerPiP");
 	const dispatch = useMediaDispatch();
-	const isPictureInPicture = useMediaSelector(
-		(state) => state.mediaIsPip ?? false,
-	);
+	const isPictureInPicture = useMediaSelector(selectPip);
 
 	const isDisabled = disabled || context.disabled;
 
@@ -2776,6 +2926,203 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
 	);
 }
 
+type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+
+interface MediaPlayerEnhancedAudioProps
+	extends React.ComponentProps<typeof Button> {
+	enhancedAudioStatus?: EnhancedAudioStatus | null;
+	enhancedAudioEnabled?: boolean;
+	setEnhancedAudioEnabled?: (enabled: boolean) => void;
+}
+
+function MediaPlayerEnhancedAudio(props: MediaPlayerEnhancedAudioProps) {
+	const {
+		children,
+		className,
+		disabled,
+		enhancedAudioStatus,
+		enhancedAudioEnabled,
+		setEnhancedAudioEnabled,
+		...enhancedAudioProps
+	} = props;
+
+	const context = useMediaPlayerContext("MediaPlayerEnhancedAudio");
+
+	const isProcessing = enhancedAudioStatus === "PROCESSING";
+	const isComplete = enhancedAudioStatus === "COMPLETE";
+	const isDisabled = disabled || context.disabled || !isComplete;
+
+	const onEnhancedAudioToggle = React.useCallback(() => {
+		if (isComplete) {
+			setEnhancedAudioEnabled?.(!enhancedAudioEnabled);
+		}
+	}, [enhancedAudioEnabled, setEnhancedAudioEnabled, isComplete]);
+
+	if (
+		!enhancedAudioStatus ||
+		enhancedAudioStatus === "ERROR" ||
+		enhancedAudioStatus === "SKIPPED"
+	) {
+		return null;
+	}
+
+	const tooltipText = isProcessing
+		? "Enhancing audio..."
+		: enhancedAudioEnabled
+			? "Enhanced audio on"
+			: "Enhance audio";
+
+	return (
+		<MediaPlayerTooltip tooltip={tooltipText}>
+			<PlayerButton
+				type="button"
+				aria-controls={context.mediaId}
+				aria-label={
+					isProcessing
+						? "Audio enhancement in progress"
+						: enhancedAudioEnabled
+							? "Disable enhanced audio"
+							: "Enable enhanced audio"
+				}
+				aria-pressed={enhancedAudioEnabled}
+				data-disabled={isDisabled ? "" : undefined}
+				data-slot="media-player-enhanced-audio"
+				data-state={enhancedAudioEnabled ? "on" : "off"}
+				disabled={isDisabled}
+				{...enhancedAudioProps}
+				variant="ghost"
+				size="icon"
+				className={cn(
+					"size-8",
+					enhancedAudioEnabled && "text-blue-500",
+					className,
+				)}
+				onClick={onEnhancedAudioToggle}
+			>
+				{children ??
+					(isProcessing ? (
+						<Loader2Icon className="animate-spin" />
+					) : (
+						<SparklesIcon />
+					))}
+			</PlayerButton>
+		</MediaPlayerTooltip>
+	);
+}
+
+interface EnhancedAudioSyncProps {
+	enhancedAudioRef: React.RefObject<HTMLAudioElement | null>;
+	videoRef: React.RefObject<HTMLVideoElement | null>;
+	enhancedAudioEnabled: boolean;
+	enhancedAudioMuted: boolean;
+}
+
+function EnhancedAudioSync({
+	enhancedAudioRef,
+	videoRef,
+	enhancedAudioEnabled,
+	enhancedAudioMuted,
+}: EnhancedAudioSyncProps) {
+	const mediaVolume = useMediaSelector(selectVolume);
+	const wasEnhancedRef = React.useRef(false);
+
+	const syncEnhancedAudio = React.useCallback(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+		audio.currentTime = video.currentTime;
+		audio.playbackRate = video.playbackRate;
+	}, [enhancedAudioRef, videoRef]);
+
+	React.useEffect(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+
+		const handlePlay = () => {
+			if (!enhancedAudioEnabled) return;
+			syncEnhancedAudio();
+			if (audio.muted) {
+				audio.pause();
+				return;
+			}
+			audio.play().catch(() => {});
+		};
+
+		const handlePause = () => {
+			audio.pause();
+		};
+
+		const handleSeeked = () => {
+			if (enhancedAudioEnabled) {
+				syncEnhancedAudio();
+			}
+		};
+
+		const handleRateChange = () => {
+			if (enhancedAudioEnabled) {
+				audio.playbackRate = video.playbackRate;
+			}
+		};
+
+		video.addEventListener("play", handlePlay);
+		video.addEventListener("pause", handlePause);
+		video.addEventListener("seeked", handleSeeked);
+		video.addEventListener("ratechange", handleRateChange);
+
+		return () => {
+			video.removeEventListener("play", handlePlay);
+			video.removeEventListener("pause", handlePause);
+			video.removeEventListener("seeked", handleSeeked);
+			video.removeEventListener("ratechange", handleRateChange);
+		};
+	}, [enhancedAudioEnabled, syncEnhancedAudio, videoRef, enhancedAudioRef]);
+
+	React.useEffect(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+
+		const wasEnhanced = wasEnhancedRef.current;
+
+		if (enhancedAudioEnabled) {
+			wasEnhancedRef.current = true;
+
+			video.muted = true;
+			audio.volume = mediaVolume;
+			audio.muted = enhancedAudioMuted;
+			syncEnhancedAudio();
+
+			if (!video.paused) {
+				if (enhancedAudioMuted) {
+					audio.pause();
+				} else {
+					audio.play().catch(() => {});
+				}
+			}
+
+			return;
+		}
+
+		wasEnhancedRef.current = false;
+
+		audio.pause();
+
+		if (wasEnhanced) {
+			video.muted = enhancedAudioMuted;
+		}
+	}, [
+		enhancedAudioEnabled,
+		enhancedAudioMuted,
+		mediaVolume,
+		syncEnhancedAudio,
+		videoRef,
+		enhancedAudioRef,
+	]);
+
+	return null;
+}
+
 interface MediaPlayerDownloadProps
 	extends React.ComponentProps<typeof Button> {}
 
@@ -2827,7 +3174,23 @@ function MediaPlayerDownload(props: MediaPlayerDownloadProps) {
 	);
 }
 
-interface MediaPlayerSettingsProps extends MediaPlayerPlaybackSpeedProps {}
+type CaptionLanguage = string;
+
+interface CaptionOption {
+	code: CaptionLanguage;
+	name: string;
+}
+
+interface MediaPlayerSettingsProps extends MediaPlayerPlaybackSpeedProps {
+	enhancedAudioStatus?: EnhancedAudioStatus | null;
+	enhancedAudioEnabled?: boolean;
+	setEnhancedAudioEnabled?: (enabled: boolean) => void;
+	captionLanguage?: CaptionLanguage;
+	onCaptionLanguageChange?: (language: CaptionLanguage) => void;
+	availableCaptions?: CaptionOption[];
+	isCaptionLoading?: boolean;
+	hasCaptions?: boolean;
+}
 
 function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 	const {
@@ -2840,6 +3203,14 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 		modal = false,
 		className,
 		disabled,
+		enhancedAudioStatus,
+		enhancedAudioEnabled,
+		setEnhancedAudioEnabled,
+		captionLanguage = "original",
+		onCaptionLanguageChange,
+		availableCaptions = [],
+		isCaptionLoading = false,
+		hasCaptions = false,
 		...settingsProps
 	} = props;
 
@@ -2847,21 +3218,11 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 	const store = useStoreContext(SETTINGS_NAME);
 	const dispatch = useMediaDispatch();
 
-	const mediaPlaybackRate = useMediaSelector(
-		(state) => state.mediaPlaybackRate ?? 1,
-	);
-	const mediaSubtitlesList = useMediaSelector(
-		(state) => state.mediaSubtitlesList ?? [],
-	);
-	const mediaSubtitlesShowing = useMediaSelector(
-		(state) => state.mediaSubtitlesShowing ?? [],
-	);
-	const mediaRenditionList = useMediaSelector(
-		(state) => state.mediaRenditionList ?? [],
-	);
-	const selectedRenditionId = useMediaSelector(
-		(state) => state.mediaRenditionSelected,
-	);
+	const mediaPlaybackRate = useMediaSelector(selectPlaybackRate);
+	const mediaSubtitlesList = useMediaSelector(selectSubtitlesList);
+	const mediaSubtitlesShowing = useMediaSelector(selectSubtitlesShowing);
+	const mediaRenditionList = useMediaSelector(selectRenditionList);
+	const selectedRenditionId = useMediaSelector(selectRenditionSelected);
 
 	const isDisabled = disabled || context.disabled;
 	const isSubtitlesActive = mediaSubtitlesShowing.length > 0;
@@ -2988,6 +3349,18 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 						))}
 					</DropdownMenuSubContent>
 				</DropdownMenuSub>
+				{enhancedAudioStatus === "COMPLETE" && (
+					<DropdownMenuItem
+						className="justify-between"
+						onSelect={() => setEnhancedAudioEnabled?.(!enhancedAudioEnabled)}
+					>
+						<span className="flex items-center gap-2">
+							<SparklesIcon className="size-4" />
+							Enhanced Audio
+						</span>
+						{enhancedAudioEnabled && <CheckIcon />}
+					</DropdownMenuItem>
+				)}
 				{context.isVideo && mediaRenditionList.length > 0 && (
 					<DropdownMenuSub>
 						<DropdownMenuSubTrigger>
@@ -3031,6 +3404,53 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 										</DropdownMenuItem>
 									);
 								})}
+						</DropdownMenuSubContent>
+					</DropdownMenuSub>
+				)}
+				{hasCaptions && (
+					<DropdownMenuSub>
+						<DropdownMenuSubTrigger disabled={isCaptionLoading}>
+							<span className="flex items-center gap-2 flex-1">
+								<GlobeIcon className="size-4" />
+								Captions
+							</span>
+							<Badge variant="outline" className="rounded-sm">
+								{isCaptionLoading
+									? "..."
+									: captionLanguage === "off"
+										? "Off"
+										: captionLanguage === "original"
+											? "Original"
+											: (availableCaptions.find(
+													(c) => c.code === captionLanguage,
+												)?.name ?? captionLanguage)}
+							</Badge>
+						</DropdownMenuSubTrigger>
+						<DropdownMenuSubContent className="max-h-64 overflow-y-auto">
+							<DropdownMenuItem
+								className="justify-between"
+								onSelect={() => onCaptionLanguageChange?.("off")}
+							>
+								Off
+								{captionLanguage === "off" && <CheckIcon />}
+							</DropdownMenuItem>
+							<DropdownMenuItem
+								className="justify-between"
+								onSelect={() => onCaptionLanguageChange?.("original")}
+							>
+								Original
+								{captionLanguage === "original" && <CheckIcon />}
+							</DropdownMenuItem>
+							{availableCaptions.map((caption) => (
+								<DropdownMenuItem
+									key={caption.code}
+									className="justify-between"
+									onSelect={() => onCaptionLanguageChange?.(caption.code)}
+								>
+									{caption.name}
+									{captionLanguage === caption.code && <CheckIcon />}
+								</DropdownMenuItem>
+							))}
 						</DropdownMenuSubContent>
 					</DropdownMenuSub>
 				)}
@@ -3142,11 +3562,12 @@ export {
 	MediaPlayerFullscreen,
 	MediaPlayerPiP,
 	MediaPlayerCaptions,
+	MediaPlayerEnhancedAudio,
 	MediaPlayerDownload,
 	MediaPlayerSettings,
 	MediaPlayerPortal,
 	MediaPlayerTooltip,
-	//
+	EnhancedAudioSync,
 	MediaPlayerRoot as Root,
 	MediaPlayerVideo as Video,
 	MediaPlayerAudio as Audio,
@@ -3166,11 +3587,13 @@ export {
 	MediaPlayerFullscreen as Fullscreen,
 	MediaPlayerPiP as PiP,
 	MediaPlayerCaptions as Captions,
+	MediaPlayerEnhancedAudio as EnhancedAudio,
 	MediaPlayerDownload as Download,
 	MediaPlayerSettings as Settings,
 	MediaPlayerPortal as Portal,
 	MediaPlayerTooltip as Tooltip,
-	//
 	useMediaSelector as useMediaPlayer,
 	useStoreSelector as useMediaPlayerStore,
 };
+
+export type { CaptionOption, CaptionLanguage };

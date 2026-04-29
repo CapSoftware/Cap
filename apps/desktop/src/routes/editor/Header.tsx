@@ -7,16 +7,24 @@ import { cx } from "cva";
 import {
 	type ComponentProps,
 	createEffect,
+	createMemo,
 	createSignal,
 	onCleanup,
 	onMount,
 	Show,
 } from "solid-js";
+import { produce } from "solid-js/store";
+import toast from "solid-toast";
 import Tooltip from "~/components/Tooltip";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { trackEvent } from "~/utils/analytics";
 import { commands } from "~/utils/tauri";
 import { initializeTitlebar } from "~/utils/titlebar-state";
+import {
+	applyCaptionResultToProject,
+	getSelectedTranscriptionSettings,
+	transcribeEditorCaptions,
+} from "./captions";
 import { useEditorContext } from "./context";
 import PresetsDropdown from "./PresetsDropdown";
 import ShareButton from "./ShareButton";
@@ -44,7 +52,10 @@ export interface ExportEstimates {
 export function Header() {
 	const {
 		editorInstance,
+		project,
+		setProject,
 		projectHistory,
+		dialog,
 		setDialog,
 		meta,
 		exportState,
@@ -64,6 +75,61 @@ export function Header() {
 		if (!editorState.timeline.selection) return false;
 		setEditorState("timeline", "selection", null);
 		return true;
+	};
+
+	const showCaptionsStale = createMemo(
+		() =>
+			(editorState.captions.isStale || editorState.captions.isGenerating) &&
+			!editorState.captions.staleDismissed &&
+			((project.timeline?.captionSegments?.length ?? 0) > 0 ||
+				(project.captions?.segments?.length ?? 0) > 0),
+	);
+
+	const hasTranscript = createMemo(() => {
+		const segments = project.captions?.segments ?? [];
+		return segments.some((seg) => seg.words && seg.words.length > 0);
+	});
+
+	const isTranscriptOpen = createMemo(() => {
+		const d = dialog();
+		return "type" in d && d.type === "transcript" && d.open;
+	});
+
+	const regenerateCaptions = async () => {
+		setEditorState("captions", "isGenerating", true);
+		try {
+			const { model, language } = getSelectedTranscriptionSettings();
+			const result = await transcribeEditorCaptions(
+				editorInstance.path,
+				model,
+				language,
+			);
+			if (result.segments.length < 1) {
+				toast.error(
+					"No captions were generated. The audio might be too quiet or unclear.",
+				);
+				return;
+			}
+
+			setProject(
+				produce((p) => {
+					applyCaptionResultToProject(
+						p,
+						result.segments,
+						editorInstance.recordings.segments,
+						editorInstance.recordingDuration,
+					);
+				}),
+			);
+
+			setEditorState("captions", "isStale", false);
+			toast.success("Captions regenerated!");
+		} catch (error) {
+			console.error("Error regenerating captions:", error);
+			toast.error("Failed to regenerate captions");
+		} finally {
+			setEditorState("captions", "isGenerating", false);
+		}
 	};
 
 	return (
@@ -164,8 +230,91 @@ export function Header() {
 				<Show when={customDomain.data}>
 					<ShareButton />
 				</Show>
+				<Show when={showCaptionsStale()}>
+					<div class="flex items-center h-[32px] rounded-lg bg-gray-3 overflow-hidden">
+						<button
+							class="h-full px-3 text-gray-11 text-xs font-medium transition-colors hover:bg-gray-4 flex items-center gap-1.5 disabled:opacity-70 disabled:cursor-not-allowed"
+							disabled={editorState.captions.isGenerating}
+							onClick={() => void regenerateCaptions()}
+						>
+							<Show
+								when={!editorState.captions.isGenerating}
+								fallback={
+									<svg
+										class="size-3.5 animate-spin"
+										viewBox="0 0 16 16"
+										fill="none"
+									>
+										<circle
+											cx="8"
+											cy="8"
+											r="6.5"
+											stroke="currentColor"
+											stroke-opacity="0.25"
+											stroke-width="2.5"
+										/>
+										<path
+											d="M14.5 8a6.5 6.5 0 00-6.5-6.5"
+											stroke="currentColor"
+											stroke-width="2.5"
+											stroke-linecap="round"
+										/>
+									</svg>
+								}
+							>
+								<IconCapCaptions class="size-3.5" />
+							</Show>
+							{editorState.captions.isGenerating
+								? "Regenerating..."
+								: "Regenerate captions"}
+						</button>
+						<Show when={!editorState.captions.isGenerating}>
+							<div class="w-px h-4 bg-gray-6" />
+							<button
+								class="h-full w-[30px] flex items-center justify-center text-gray-9 hover:text-gray-11 hover:bg-gray-4 transition-colors"
+								onClick={() =>
+									setEditorState("captions", "staleDismissed", true)
+								}
+							>
+								<svg
+									width="8"
+									height="8"
+									viewBox="0 0 10 10"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="1.5"
+									stroke-linecap="round"
+								>
+									<path d="M1 1l8 8M9 1l-8 8" />
+								</svg>
+							</button>
+						</Show>
+					</div>
+				</Show>
+				<Show when={hasTranscript()}>
+					<Button
+						variant={isTranscriptOpen() ? "white" : "gray"}
+						class="flex gap-1.5 justify-center h-[40px]"
+						onClick={() => {
+							clearTimelineSelection();
+							if (isTranscriptOpen()) {
+								setDialog((d) => ({ ...d, open: false }));
+							} else {
+								setDialog({ type: "transcript", open: true });
+							}
+						}}
+					>
+						<Show
+							when={isTranscriptOpen()}
+							fallback={<IconCapCaptions class="size-4" />}
+						>
+							<IconLucideArrowLeft class="size-4" />
+						</Show>
+						{isTranscriptOpen() ? "Back" : "Transcript"}
+					</Button>
+				</Show>
 				<Button
-					variant="dark"
+					variant="blue"
 					class="flex gap-1.5 justify-center h-[40px] w-full max-w-[100px]"
 					onClick={() => {
 						clearTimelineSelection();
@@ -176,7 +325,7 @@ export function Header() {
 						setDialog({ type: "export", open: true });
 					}}
 				>
-					<UploadIcon class="text-gray-1 size-4" />
+					<UploadIcon class="size-4" />
 					Export
 				</Button>
 				{ostype() === "windows" && <CaptionControlsWindows11 />}

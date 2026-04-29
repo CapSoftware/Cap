@@ -23,21 +23,22 @@ import {
 import { createStore, reconcile } from "solid-js/store";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
-import themePreviewLegacyAuto from "~/assets/theme-previews/legacy-auto.jpg";
-import themePreviewLegacyDark from "~/assets/theme-previews/legacy-dark.jpg";
-import themePreviewLegacyLight from "~/assets/theme-previews/legacy-light.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
+import {
+	deriveGeneralSettings,
+	type GeneralSettingsStore,
+} from "~/utils/general-settings";
 import {
 	type AppTheme,
 	type CaptureWindow,
 	commands,
 	events,
-	type GeneralSettingsStore,
 	type MainWindowRecordingStartBehaviour,
 	type PostDeletionBehaviour,
 	type PostStudioRecordingBehaviour,
+	type StudioRecordingQuality,
 	type WindowExclusion,
 } from "~/utils/tauri";
 import IconLucidePlus from "~icons/lucide/plus";
@@ -69,37 +70,20 @@ const getWindowOptionLabel = (window: CaptureWindow) => {
 
 type ExtendedGeneralSettingsStore = GeneralSettingsStore;
 
-const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
-	uploadIndividualFiles: false,
-	hideDockIcon: false,
-	autoCreateShareableLink: false,
-	enableNotifications: true,
-	enableNativeCameraPreview: false,
-	enableNewRecordingFlow: true,
-	recordingPickerPreferenceSet: false,
-	autoZoomOnClicks: false,
-	custom_cursor_capture2: true,
-	excludedWindows: [],
-	instantModeMaxResolution: 1920,
-});
-
-const deriveInitialSettings = (
-	store: GeneralSettingsStore | null,
-): ExtendedGeneralSettingsStore => {
-	const defaults = createDefaultGeneralSettings();
-	if (!store) return defaults;
-
-	return {
-		...defaults,
-		...store,
-	};
-};
-
 const INSTANT_MODE_RESOLUTION_OPTIONS = [
 	{ value: 1280, label: "720p" },
 	{ value: 1920, label: "1080p" },
 	{ value: 2560, label: "1440p" },
 	{ value: 3840, label: "4K" },
+] satisfies {
+	value: number;
+	label: string;
+}[];
+
+const MAX_FPS_OPTIONS = [
+	{ value: 30, label: "30 FPS" },
+	{ value: 60, label: "60 FPS (Recommended)" },
+	{ value: 120, label: "120 FPS" },
 ] satisfies {
 	value: number;
 	label: string;
@@ -120,7 +104,6 @@ export default function GeneralSettings() {
 
 function AppearanceSection(props: {
 	currentTheme: AppTheme;
-	newRecordingFlow: boolean;
 	onThemeChange: (theme: AppTheme) => void;
 }) {
 	const options = [
@@ -138,17 +121,11 @@ function AppearanceSection(props: {
 		},
 	] satisfies { id: AppTheme; name: string }[];
 
-	const previews = createMemo(() => {
-		return {
-			system: props.newRecordingFlow
-				? themePreviewAuto
-				: themePreviewLegacyAuto,
-			light: props.newRecordingFlow
-				? themePreviewLight
-				: themePreviewLegacyLight,
-			dark: props.newRecordingFlow ? themePreviewDark : themePreviewLegacyDark,
-		};
-	});
+	const previews = {
+		system: themePreviewAuto,
+		light: themePreviewLight,
+		dark: themePreviewDark,
+	};
 
 	return (
 		<div class="flex flex-col gap-4">
@@ -183,7 +160,7 @@ function AppearanceSection(props: {
 										aria-label={`Select theme: ${theme.name}`}
 									>
 										<div class="flex justify-center items-center w-full h-full">
-											<Show when={previews()[theme.id]} keyed>
+											<Show when={previews[theme.id]} keyed>
 												{(preview) => (
 													<img
 														class="animate-in fade-in duration-300"
@@ -215,11 +192,11 @@ function AppearanceSection(props: {
 
 function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
-		deriveInitialSettings(props.initialStore),
+		deriveGeneralSettings(props.initialStore),
 	);
 
 	createEffect(() => {
-		setSettings(reconcile(deriveInitialSettings(props.initialStore)));
+		setSettings(reconcile(deriveGeneralSettings(props.initialStore)));
 	});
 
 	const [windows, { refetch: refetchWindows }] = createResource(
@@ -246,16 +223,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
-	const recordingWindowVariant = () =>
-		settings.enableNewRecordingFlow === false ? "old" : "new";
-
-	const updateRecordingWindowVariant = (variant: "new" | "old") => {
-		const shouldUseNew = variant === "new";
-		if (settings.enableNewRecordingFlow === shouldUseNew) return;
-		handleChange("enableNewRecordingFlow", shouldUseNew, {
-			recordingPickerPreferenceSet: true,
-		});
-	};
 
 	const matchesExclusion = (
 		exclusion: WindowExclusion,
@@ -362,13 +329,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
 			| PostDeletionBehaviour
+			| StudioRecordingQuality
 			| number,
 	>(props: {
 		label: string;
 		description: string;
 		value: T;
 		onChange: (value: T) => void;
-		options: { text: string; value: any }[];
+		options: { text: string; value: T }[];
 	}) => {
 		return (
 			<SettingItem label={props.label} description={props.description}>
@@ -409,24 +377,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			<div class="p-4 space-y-6">
 				<AppearanceSection
 					currentTheme={settings.theme ?? "system"}
-					newRecordingFlow={settings.enableNewRecordingFlow}
 					onThemeChange={(newTheme) => {
 						setSettings("theme", newTheme);
 						generalSettingsStore.set({ theme: newTheme });
 					}}
 				/>
-
-				<SettingGroup
-					title="Cap Pro"
-					titleStyling="bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg"
-				>
-					<ToggleSettingItem
-						label="Automatically open shareable links"
-						description="Whether Cap should automatically open instant recordings in your browser"
-						value={!settings.disableAutoOpenLinks}
-						onChange={(v) => handleChange("disableAutoOpenLinks", !v)}
-					/>
-				</SettingGroup>
 
 				{ostype === "macos" && (
 					<SettingGroup title="App">
@@ -470,33 +425,16 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				)}
 
 				<SettingGroup title="Recording">
-					<SettingItem
-						label="Recording window"
-						description="Choose which recording picker experience Cap should open."
-					>
-						<div class="flex gap-1 bg-gray-3 rounded-lg p-1 text-xs font-medium">
-							{(
-								[
-									{ id: "new", label: "New" },
-									{ id: "old", label: "Old" },
-								] as const
-							).map((option) => (
-								<button
-									type="button"
-									class={cx("flex-1 rounded-md px-3 py-1.5 transition-colors", {
-										"bg-gray-12 text-gray-1":
-											recordingWindowVariant() === option.id,
-										"text-gray-11 hover:text-gray-12":
-											recordingWindowVariant() !== option.id,
-									})}
-									aria-pressed={recordingWindowVariant() === option.id}
-									onClick={() => updateRecordingWindowVariant(option.id)}
-								>
-									{option.label}
-								</button>
-							))}
-						</div>
-					</SettingItem>
+					<SelectSettingItem
+						label="Studio mode quality"
+						description="Balanced uses less storage and CPU. Ultra records at higher bitrate for maximum quality."
+						value={settings.studioRecordingQuality ?? "balanced"}
+						onChange={(value) => handleChange("studioRecordingQuality", value)}
+						options={[
+							{ text: "Balanced", value: "balanced" as StudioRecordingQuality },
+							{ text: "Ultra", value: "ultra" as StudioRecordingQuality },
+						]}
+					/>
 					<SelectSettingItem
 						label="Instant mode max resolution"
 						description="Choose the maximum resolution for Instant Mode recordings."
@@ -569,6 +507,60 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							handleChange("deleteInstantRecordingsAfterUpload", v)
 						}
 					/>
+					<ToggleSettingItem
+						label="Crash-recoverable recording"
+						description="Records in fragmented segments that can be recovered if the app crashes or your system loses power. May have slightly higher storage usage during recording."
+						value={settings.crashRecoveryRecording ?? true}
+						onChange={(value) => handleChange("crashRecoveryRecording", value)}
+					/>
+					<ToggleSettingItem
+						label="Custom cursor capture in Studio Mode"
+						description="Studio Mode recordings capture cursor state separately so you can adjust cursor size and smoothing later in the editor."
+						value={!!settings.custom_cursor_capture2}
+						onChange={(value) => handleChange("custom_cursor_capture2", value)}
+					/>
+					<ToggleSettingItem
+						label="Auto zoom on clicks"
+						description="Automatically generate zoom segments around mouse clicks during Studio Mode recordings."
+						value={!!settings.autoZoomOnClicks}
+						onChange={(value) => handleChange("autoZoomOnClicks", value)}
+					/>
+					<ToggleSettingItem
+						label="Capture keyboard presses for the editor"
+						description="Records keyboard presses during Studio Mode so you can generate keyboard overlays in the editor. This data is only used in the editor."
+						value={!!settings.captureKeyboardEvents}
+						onChange={(value) => handleChange("captureKeyboardEvents", value)}
+					/>
+					<div class="flex flex-col gap-1">
+						<SelectSettingItem
+							label="Max capture framerate"
+							description="Maximum framerate for screen capture. Higher values may cause instability on some systems."
+							value={settings.maxFps ?? 60}
+							onChange={(value) => handleChange("maxFps", value)}
+							options={MAX_FPS_OPTIONS.map((option) => ({
+								text: option.label,
+								value: option.value,
+							}))}
+						/>
+						{(settings.maxFps ?? 60) > 60 && (
+							<p class="text-xs text-amber-500 px-1 pb-2">
+								⚠️ Higher framerates may cause frame drops or increased CPU usage
+								on some systems.
+							</p>
+						)}
+					</div>
+				</SettingGroup>
+
+				<SettingGroup
+					title="Cap Pro Settings"
+					titleStyling="bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg"
+				>
+					<ToggleSettingItem
+						label="Automatically open shareable links"
+						description="Whether Cap should automatically open instant recordings in your browser"
+						value={!settings.disableAutoOpenLinks}
+						onChange={(v) => handleChange("disableAutoOpenLinks", !v)}
+					/>
 				</SettingGroup>
 
 				<DefaultProjectNameCard
@@ -607,6 +599,45 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						handleChange("serverUrl", origin);
 					}}
 				/>
+
+				<TelemetryCard
+					value={settings.enableTelemetry !== false}
+					onChange={(v) => handleChange("enableTelemetry", v)}
+				/>
+			</div>
+		</div>
+	);
+}
+
+function TelemetryCard(props: {
+	value: boolean;
+	onChange: (value: boolean) => void;
+}) {
+	return (
+		<div class="flex flex-col gap-3 mt-6">
+			<h3 class="text-sm text-gray-12 w-fit">Privacy</h3>
+			<div class="flex flex-col gap-3 px-4 py-3 rounded-xl border border-gray-3 bg-gray-2">
+				<div class="flex items-center justify-between gap-6">
+					<div class="flex flex-col gap-1">
+						<p class="text-sm text-gray-12">Share anonymous telemetry</p>
+						<p class="text-xs text-gray-10 max-w-[34rem]">
+							Cap uses anonymous telemetry to improve recording reliability,
+							upload accuracy, and bug fixes. We <strong>never</strong> collect
+							recording contents, window titles, file paths, or any personal
+							information. Events only include aggregate counts like frame
+							drops, A/V drift, and crash recovery outcomes.
+						</p>
+					</div>
+					<label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
+						<input
+							type="checkbox"
+							class="sr-only peer"
+							checked={props.value}
+							onChange={(e) => props.onChange(e.currentTarget.checked)}
+						/>
+						<div class="w-9 h-5 bg-gray-5 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-gray-1 after:border-gray-6 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500" />
+					</label>
+				</div>
 			</div>
 		</div>
 	);

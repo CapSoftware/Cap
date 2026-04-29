@@ -1,10 +1,11 @@
+import type { JSX } from "solid-js";
 import { Toggle } from "~/components/Toggle";
 
 export function SettingItem(props: {
 	pro?: boolean;
 	label: string;
 	description?: string;
-	children: any;
+	children: JSX.Element;
 }) {
 	return (
 		<div class="flex flex-row gap-2 justify-between items-center py-3 text-sm">

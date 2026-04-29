@@ -1,4 +1,3 @@
-import { createRive } from "@aerofoil/rive-solid-canvas";
 import { Button } from "@cap/ui-solid";
 import type { licenseContract } from "@cap/web-api-contract";
 import { createMutation, useQueryClient } from "@tanstack/solid-query";
@@ -13,6 +12,7 @@ import {
 } from "solid-js";
 import { generalSettingsStore } from "~/store";
 import { createLicenseQuery } from "~/utils/queries";
+import { createRive } from "~/utils/rive";
 import { commands } from "~/utils/tauri";
 import { licenseApiClient } from "~/utils/web-api";
 import PricingRive from "../../../assets/rive/pricing.riv";
@@ -108,13 +108,15 @@ function LicenseKeyActivate(props: {
 			<Show when={store()}>
 				{(generalSettings) => {
 					const [licenseKey, setLicenseKey] = createSignal("");
+					const instanceId = generalSettings().instanceId;
+					if (!instanceId) throw new Error("No instance ID found");
 
 					const activateLicenseKey = createMutation(() => ({
 						mutationFn: async (vars: { licenseKey: string }) => {
 							const resp = await licenseApiClient.activateCommercialLicense({
 								headers: {
 									licensekey: vars.licenseKey,
-									instanceid: generalSettings().instanceId!,
+									instanceid: instanceId,
 								},
 								body: { reset: false },
 							});
@@ -126,7 +128,7 @@ function LicenseKeyActivate(props: {
 								"message" in resp.body
 							)
 								throw resp.body.message;
-							throw new Error((resp.body as any).toString());
+							throw new Error(String(resp.body));
 						},
 						onSuccess: (value, { licenseKey }) => {
 							props.onActivated({ ...value, licenseKey });

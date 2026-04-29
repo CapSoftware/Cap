@@ -12,9 +12,14 @@ pub struct NV12ToRGBA {
 impl NV12ToRGBA {
     pub async fn new() -> Self {
         println!("NV12ToRGBA");
+        #[cfg(target_os = "windows")]
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::DX12 | wgpu::Backends::VULKAN,
+            ..Default::default()
+        });
+        #[cfg(not(target_os = "windows"))]
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
-        // Get adapter for GPU
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,

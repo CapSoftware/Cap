@@ -7,20 +7,27 @@ use cidre::{
 pub enum AsFFmpegError {
     UnsupportedFormat(cv::PixelFormat),
     BaseAddrLock(os::Error),
+    NoImageBuffer,
 }
 
 impl super::AsFFmpeg for scap_screencapturekit::VideoFrame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
-        let mut image_buf = self.image_buf().retained();
+        let Some(image_buf_ref) = self.image_buf() else {
+            return Err(AsFFmpegError::NoImageBuffer);
+        };
+        let mut image_buf = image_buf_ref.retained();
 
         let width = image_buf.width();
         let height = image_buf.height();
+        let pixel_format = image_buf.pixel_format();
+        let plane0_stride = image_buf.plane_bytes_per_row(0);
+        let plane1_stride = image_buf.plane_bytes_per_row(1);
 
         let bytes_lock =
             ImageBufExt::base_addr_lock(image_buf.as_mut(), cv::pixel_buffer::LockFlags::READ_ONLY)
                 .map_err(AsFFmpegError::BaseAddrLock)?;
 
-        Ok(match self.image_buf().pixel_format() {
+        Ok(match pixel_format {
             cv::PixelFormat::_420V => {
                 let mut ff_frame = ffmpeg::frame::Video::new(
                     ffmpeg::format::Pixel::NV12,
@@ -28,7 +35,7 @@ impl super::AsFFmpeg for scap_screencapturekit::VideoFrame {
                     height as u32,
                 );
 
-                let src_stride = self.image_buf().plane_bytes_per_row(0);
+                let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);
 
                 let src_bytes = bytes_lock.plane_data(0);
@@ -42,7 +49,7 @@ impl super::AsFFmpeg for scap_screencapturekit::VideoFrame {
                     dest_row.copy_from_slice(src_row);
                 }
 
-                let src_stride = self.image_buf().plane_bytes_per_row(1);
+                let src_stride = plane1_stride;
                 let dest_stride = ff_frame.stride(1);
 
                 let src_bytes = bytes_lock.plane_data(1);
@@ -65,7 +72,7 @@ impl super::AsFFmpeg for scap_screencapturekit::VideoFrame {
                     height as u32,
                 );
 
-                let src_stride = self.image_buf().plane_bytes_per_row(0);
+                let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);
 
                 let src_bytes = bytes_lock.plane_data(0);

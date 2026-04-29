@@ -1,4 +1,3 @@
-import { createRive } from "@aerofoil/rive-solid-canvas";
 import { Button } from "@cap/ui-solid";
 import { createMutation, useQueryClient } from "@tanstack/solid-query";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
@@ -6,6 +5,7 @@ import { type Accessor, createSignal, Show } from "solid-js";
 import { generalSettingsStore } from "~/store";
 import { getProPlanId } from "~/utils/plans";
 import { createLicenseQuery } from "~/utils/queries";
+import { createRive } from "~/utils/rive";
 import { commands } from "~/utils/tauri";
 import { apiClient, licenseApiClient, protectedHeaders } from "~/utils/web-api";
 import PricingRive from "../../assets/rive/pricing.riv";
@@ -65,7 +65,7 @@ export default function Page() {
 					"message" in resp.body
 				)
 					throw resp.body.message;
-				throw new Error((resp.body as any).toString());
+				throw new Error(String(resp.body));
 			}
 		},
 		onSuccess: async () => {
@@ -165,7 +165,6 @@ export default function Page() {
 	//         token,
 	//         user_id,
 	//         expires,
-	//         intercom_hash: existingAuth?.intercom_hash ?? "",
 	//         plan: {
 	//           upgraded: false,
 	//           last_checked: 0,
@@ -553,7 +552,7 @@ const ActivateLicenseDialog = ({ open, onOpenChange }: Props) => {
 				return { ...resp.body, licenseKey: vars.licenseKey };
 			if (typeof resp.body === "object" && resp.body && "message" in resp.body)
 				throw resp.body.message;
-			throw new Error((resp.body as any).toString());
+			throw new Error(String(resp.body));
 		},
 		onSuccess: async (value) => {
 			await generalSettingsStore.set({

@@ -1,17 +1,28 @@
-/** @type {import('next').NextConfig} */
-
 import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
 import fs from "node:fs";
 import path from "node:path";
+import workflowNext from "workflow/next";
+
+const { withWorkflow } = workflowNext;
 
 const packageJson = JSON.parse(
 	fs.readFileSync(path.resolve("./package.json"), "utf8"),
 );
 const { version } = packageJson;
 
+const ffmpegTracingIncludes = [
+	"./node_modules/ffmpeg-static/ffmpeg",
+	"./node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/ffmpeg",
+];
+
 const nextConfig = {
 	reactStrictMode: true,
+	serverExternalPackages: ["ffmpeg-static", "prettier"],
+	outputFileTracingIncludes: {
+		"/.well-known/workflow/v1/step": ffmpegTracingIncludes,
+		"/api/tools/loom-download": ffmpegTracingIncludes,
+	},
 	transpilePackages: [
 		"@cap/ui",
 		"@cap/utils",
@@ -21,9 +32,6 @@ const nextConfig = {
 		"@cap/database",
 		"next-mdx-remote",
 	],
-	eslint: {
-		ignoreDuringBuilds: true,
-	},
 	typescript: {
 		ignoreBuildErrors: true,
 	},
@@ -31,11 +39,22 @@ const nextConfig = {
 		optimizePackageImports: [
 			"@cap/ui",
 			"@cap/utils",
-			// "@cap/web-api-contract",
-			// "@cap/web-domain",
-			// "@cap/web-backend",
-			"@cap/database",
+			"lucide-react",
+			"framer-motion",
+			"motion",
+			"@fortawesome/free-solid-svg-icons",
+			"@fortawesome/free-brands-svg-icons",
+			"@tanstack/react-query",
+			"recharts",
+			"@radix-ui/react-dialog",
+			"@radix-ui/react-dropdown-menu",
+			"@radix-ui/react-popover",
+			"@radix-ui/react-select",
+			"@radix-ui/react-slider",
+			"@radix-ui/react-tooltip",
+			"date-fns",
 		],
+		turbopackFileSystemCacheForDev: true,
 	},
 	images: {
 		remotePatterns: [
@@ -109,28 +128,8 @@ const nextConfig = {
 	env: {
 		appVersion: version,
 	},
-	// If the NEXT_PUBLIC_DOCKER_BUILD environment variable is set to true, we are output nextjs to standalone ready for docker deployment
 	output:
 		process.env.NEXT_PUBLIC_DOCKER_BUILD === "true" ? "standalone" : undefined,
-	// webpack: (config) => {
-	// 	config.module.rules.push({
-	// 		test: /\.(?:js|ts)$/,
-	// 		use: [
-	// 			{
-	// 				loader: "babel-loader",
-	// 				options: {
-	// 					presets: ["next/babel"],
-	// 					plugins: [
-	// 						"@babel/plugin-transform-private-property-in-object",
-	// 						"@babel/plugin-transform-private-methods",
-	// 					],
-	// 				},
-	// 			},
-	// 		],
-	// 	});
-
-	// 	return config;
-	// },
 };
 
-export default nextConfig;
+export default withWorkflow(nextConfig);

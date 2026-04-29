@@ -241,7 +241,7 @@ export const Caps = ({
 				open={openNewFolderDialog}
 				onOpenChange={setOpenNewFolderDialog}
 			/>
-			<div className="flex gap-3 items-center mb-10 w-full">
+			<div className="flex flex-wrap gap-3 items-center mb-10 w-full">
 				<Button
 					onClick={() => setOpenNewFolderDialog(true)}
 					size="sm"

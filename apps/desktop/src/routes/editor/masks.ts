@@ -22,6 +22,7 @@ export type MaskKeyframes = {
 export type MaskSegment = {
 	start: number;
 	end: number;
+	track: number;
 	enabled: boolean;
 	maskType: MaskKind;
 	center: XY<number>;
@@ -46,6 +47,7 @@ export const defaultMaskSegment = (
 ): MaskSegment => ({
 	start,
 	end,
+	track: 0,
 	enabled: true,
 	maskType: "sensitive",
 	center: { x: 0.5, y: 0.5 },
@@ -54,7 +56,7 @@ export const defaultMaskSegment = (
 	opacity: 1,
 	pixelation: 18,
 	darkness: 0.5,
-	fadeDuration: 0.15,
+	fadeDuration: 0,
 	keyframes: { position: [], size: [], intensity: [] },
 });
 

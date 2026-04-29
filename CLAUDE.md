@@ -2,6 +2,54 @@
 
 This file provides comprehensive guidance to Claude Code when working with code in this repository.
 
+## Pre-Generation Invariants (read BEFORE writing any code)
+
+These rules are enforced by CI (`cargo clippy -D warnings`, Biome). Fixing violations after the fact is wasted effort — emit code in the correct shape the FIRST time. Every CI failure tied to a rule below means this section was not respected.
+
+### Zero-tolerance rules
+- **No code comments anywhere.** Not `//`, `/* */`, `///`, `//!`, `#`, JSDoc, nor doc strings injected into new code. Applies to Rust, TS, JS, Python, shell, SQL, TOML — every language. Code must explain itself through naming and types.
+- **Never edit generated files**: `**/tauri.ts`, `**/queries.ts`, `apps/desktop/src-tauri/gen/**`, `packages/ui-solid/src/auto-imports.d.ts`.
+- **Never start additional dev servers** (`pnpm dev`, `pnpm dev:web`, `pnpm dev:desktop`, Docker). Assume the developer has them running.
+
+### Post-edit gates (required before declaring any task complete)
+These match CI. `cargo check` / `tsc` alone are NOT substitutes.
+
+- Rust edits → `cargo fmt --all` **and** `cargo clippy -p <crate> --all-targets -- -D warnings` (use `--workspace` for multi-crate changes).
+- TS / JS / JSON / CSS / MD edits → `pnpm format` **and** `pnpm lint`. For type changes also `pnpm typecheck`.
+- DB schema edits → `pnpm db:generate` before relying on it.
+
+### Rust — write the clippy-clean form the FIRST time
+All patterns below are `deny` in the workspace `[workspace.lints]` in `Cargo.toml`. Do not emit the left column; emit the right column.
+
+| ❌ Don't write | ✅ Write instead | Lint |
+|---|---|---|
+| `dbg!(x)` | `tracing::debug!(?x)` (or delete) | `dbg_macro` |
+| `let _ = async_fn();` | `async_fn().await;` or `tokio::spawn(async_fn());` | `let_underscore_future` |
+| `a - b` for `Duration`/`Instant` | `a.saturating_sub(b)` | `unchecked_time_subtraction` |
+| `if a { if b { … } }` | `if a && b { … }` | `collapsible_if` |
+| `x.clone()` when `x: Copy` | `x` | `clone_on_copy` |
+| `iter.map(\|x\| foo(x))` | `iter.map(foo)` | `redundant_closure` |
+| `fn f(v: &Vec<T>)` / `fn f(s: &String)` | `fn f(v: &[T])` / `fn f(s: &str)` | `ptr_arg` |
+| `v.len() == 0` / `v.len() > 0` | `v.is_empty()` / `!v.is_empty()` | `len_zero` |
+| `let _ = unit_returning();` | `unit_returning();` | `let_unit_value` |
+| `opt.unwrap_or_else(\|\| 42)` (cheap default) | `opt.unwrap_or(42)` | `unnecessary_lazy_evaluations` |
+| `for i in 0..v.len() { v[i] … }` | `for item in &v { … }` or `.iter().enumerate()` | `needless_range_loop` |
+| `value.min(max).max(min)` | `value.clamp(min, max)` | `manual_clamp` |
+
+`unused_must_use = "deny"` also applies: every `Result`, `Option`, `#[must_use]` value must be explicitly handled. `let _ = …;` is only valid for `Result`-returning calls you consciously discard (e.g. `let _ = tx.send(msg);`); it is NOT valid for unit-returning calls — see `let_unit_value`.
+
+### TypeScript / JavaScript — write the Biome-clean form the FIRST time
+`biome.json` at the repo root is the source of truth. When generating TS/JS/JSON/CSS:
+
+- **Indent: tab.** Not two spaces, not four spaces.
+- **Quotes: double.** `"foo"`, never `'foo'`, in JS/TS.
+- **`organizeImports: on`** — group/sort imports naturally and drop unused ones.
+- **Recommended lint ruleset on**, with only `suspicious.noShadowRestrictedNames` disabled. Unused vars, `noExplicitAny`, dead code, etc. are all enforced.
+- Desktop (`apps/desktop/**`) has a11y rules off; everywhere else they apply.
+- CSS overrides: `noUnknownAtRules`, `noUnknownTypeSelector`, `noDescendingSpecificity` off for `**/*.css`.
+- Avoid `any`. Use `unknown` + narrowing, or existing shared types from `@cap/utils`, `@cap/web-domain`, generated bindings, etc.
+- Do not introduce `@ts-expect-error` / `@ts-ignore` / `// biome-ignore` without a real reason. Prefer fixing the underlying type or pattern.
+
 ## Project Overview
 
 Cap is the open source alternative to Loom. It's a Turborepo monorepo with a Tauri v2 desktop app (Rust + SolidStart) and a Next.js web app. The Next.js app at `apps/web` is the main web application for sharing and management; the desktop app at `apps/desktop` is the cross‑platform recorder/editor (macOS and Windows).
@@ -360,76 +408,15 @@ Minimize `useEffect` usage: compute during render, handle logic in event handler
 - Windowing/permissions are handled in Rust; keep UI logic in Solid and avoid mixing IPC with rendering logic.
 
 ## Conventions
-- **CRITICAL: NO CODE COMMENTS**: Never add any form of comments to code. This includes:
-  - Single-line comments: `//` (JavaScript/TypeScript/Rust), `#` (Python/Shell)
-  - Multi-line comments: `/* */` (JavaScript/TypeScript), `/* */` (Rust)
-  - Documentation comments: `///`, `//!` (Rust), `/** */` (JSDoc)
-  - Any other comment syntax in any language
-  - Code must be self-explanatory through naming, types, and structure. Use docs/READMEs for explanations when necessary.
-- Directory naming: lower-case-dashed
-- Components: PascalCase; hooks: camelCase starting with `use`
-- Strict TypeScript; avoid `any`; leverage shared types
-- Use Biome for linting/formatting; match existing formatting
+- Directory naming: lower-case-dashed.
+- Components: PascalCase; hooks: camelCase starting with `use`; Rust modules snake_case; crates kebab-case.
+- Biome formats and lints TS/JS/JSON/CSS (tab indent, double quotes, organizeImports). rustfmt + the workspace clippy lints handle Rust.
+
+The zero-comment rule, the denied clippy patterns, and the Biome style invariants all live in **Pre-Generation Invariants** at the top of this file — that section is authoritative.
 
 ## Rust Clippy Rules (Workspace Lints)
-All Rust code must respect these workspace-level lints defined in `Cargo.toml`. Violating any of these will fail CI:
 
-**Rust compiler lints:**
-- `unused_must_use = "deny"` — Always handle `Result`/`Option` or types marked `#[must_use]`; never ignore them.
-
-**Clippy lints (all denied — code MUST NOT contain these patterns):**
-- `dbg_macro` — Never use `dbg!()` in code; use proper logging (`tracing::debug!`, etc.) instead.
-- `let_underscore_future` — Never write `let _ = async_fn()` which silently drops futures; await or explicitly handle them.
-- `unchecked_duration_subtraction` — Use `duration.saturating_sub(other)` instead of `duration - other` to avoid panics on underflow.
-- `collapsible_if` — Merge nested `if` statements: write `if a && b { }` instead of `if a { if b { } }`.
-- `clone_on_copy` — Don't call `.clone()` on `Copy` types (integers, bools, etc.); just copy them directly.
-- `redundant_closure` — Use function references directly: `iter.map(foo)` instead of `iter.map(|x| foo(x))`.
-- `ptr_arg` — Accept `&[T]` or `&str` instead of `&Vec<T>` or `&String` in function parameters for flexibility.
-- `len_zero` — Use `.is_empty()` instead of `.len() == 0` or `.len() > 0` / `.len() != 0`.
-- `let_unit_value` — Don't assign `()` to a variable: write `foo();` instead of `let _ = foo();` or `let x = foo();` when return is unit.
-- `unnecessary_lazy_evaluations` — Use `.unwrap_or(val)` instead of `.unwrap_or_else(|| val)` when the default is a simple/cheap value.
-- `needless_range_loop` — Use `for item in &collection` or `for (i, item) in collection.iter().enumerate()` instead of `for i in 0..collection.len()`.
-- `manual_clamp` — Use `value.clamp(min, max)` instead of manual `if` chains or `.min(max).max(min)` patterns.
-
-**Examples of violations to avoid:**
-
-```rust
-dbg!(value);
-let _ = some_async_function();
-let duration = duration_a - duration_b;
-if condition {
-    if other_condition {
-        do_something();
-    }
-}
-let x = 5.clone();
-vec.iter().map(|x| process(x))
-fn example(v: &Vec<i32>) { }
-if vec.len() == 0 { }
-let _ = returns_unit();
-option.unwrap_or_else(|| 42)
-for i in 0..vec.len() { println!("{}", vec[i]); }
-value.min(max).max(min)
-```
-
-**Correct alternatives:**
-
-```rust
-tracing::debug!(?value);
-some_async_function().await;
-let duration = duration_a.saturating_sub(duration_b);
-if condition && other_condition {
-    do_something();
-}
-let x = 5;
-vec.iter().map(process)
-fn example(v: &[i32]) { }
-if vec.is_empty() { }
-returns_unit();
-option.unwrap_or(42)
-for item in &vec { println!("{}", item); }
-value.clamp(min, max)
-```
+See the **Pre-Generation Invariants** section at the top of this file — it is the single source of truth for the denied workspace lints (`[workspace.lints]` in `Cargo.toml`) and the clippy-clean forms to emit. Keeping only one copy avoids the two lists drifting apart.
 
 ## Security & Privacy Considerations
 
@@ -480,10 +467,10 @@ Transcription/AI Enhancement → Database Storage
 - **Effect System**: Used in web-backend packages
 - **Media Processing**: FFmpeg documentation for Rust bindings
 
-## Code Formatting
+## Code Formatting & Lint Gates
 
-Always format code before completing work:
-- **TypeScript/JavaScript**: Run `pnpm format` to format all code with Biome
-- **Rust**: Run `cargo fmt` to format all Rust code with rustfmt
+Before declaring any task complete, run the appropriate gate for every file type that was touched. These are the same gates CI runs; skipping them will push broken work.
 
-These commands should be run regularly during development and always at the end of a coding session to ensure consistent formatting across the codebase.
+- **Rust**: `cargo fmt --all` **and** `cargo clippy -p <crate> --all-targets -- -D warnings` (`--workspace` for multi-crate changes). `cargo check` does NOT run the denied clippy lints and is not a substitute.
+- **TypeScript / JavaScript / JSON / CSS / MD**: `pnpm format` **and** `pnpm lint`. If types changed, also `pnpm typecheck`.
+- If a gate fails, fix the violation in the source code (see the "write X instead of Y" tables in **Pre-Generation Invariants** at the top of this file). Do not paper over clippy/Biome failures with `#[allow(...)]`, `// biome-ignore`, or `any` unless explicitly approved.

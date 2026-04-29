@@ -990,11 +990,7 @@ mod tests {
             let diff = (*s as i32 - *d as i32).abs();
             assert!(
                 diff <= 2,
-                "Mismatch at index {}: scalar={}, simd={}, diff={}",
-                i,
-                s,
-                d,
-                diff
+                "Mismatch at index {i}: scalar={s}, simd={d}, diff={diff}"
             );
         }
     }
@@ -1064,11 +1060,7 @@ mod tests {
             let diff = (*a as i32 - *b as i32).abs();
             assert!(
                 diff <= 2,
-                "Mismatch at index {}: expected={}, got={}, diff={}",
-                i,
-                a,
-                b,
-                diff
+                "Mismatch at index {i}: expected={a}, got={b}, diff={diff}"
             );
         }
     }
@@ -1119,11 +1111,7 @@ mod tests {
             let diff = (*s as i32 - *d as i32).abs();
             assert!(
                 diff <= 2,
-                "YUV420P mismatch at index {}: scalar={}, simd={}, diff={}",
-                i,
-                s,
-                d,
-                diff
+                "YUV420P mismatch at index {i}: scalar={s}, simd={d}, diff={diff}"
             );
         }
     }
@@ -1135,9 +1123,9 @@ mod tests {
         let y_stride = 1920u32;
         let uv_stride = 1920u32;
 
-        let y_data: Vec<u8> = (0..y_stride * height).map(|i| ((i % 256) as u8)).collect();
+        let y_data: Vec<u8> = (0..y_stride * height).map(|i| (i % 256) as u8).collect();
         let uv_data: Vec<u8> = (0..uv_stride * height / 2)
-            .map(|i| (((i + 64) % 256) as u8))
+            .map(|i| ((i + 64) % 256) as u8)
             .collect();
 
         let mut output = vec![0u8; (width * height * 4) as usize];

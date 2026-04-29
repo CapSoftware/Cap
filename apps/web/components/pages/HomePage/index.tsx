@@ -8,8 +8,11 @@ import Faq from "./Faq";
 import Features from "./Features";
 import Header from "./Header";
 import { HomePageSchema } from "./HomePageSchema";
+import InstantModeDetail from "./InstantModeDetail";
 import Pricing from "./Pricing";
-import RecordingModes from "./RecordingModes";
+import RecordingModePicker from "./RecordingModePicker";
+import ScreenshotModeDetail from "./ScreenshotModeDetail";
+import StudioModeDetail from "./StudioModeDetail";
 import Testimonials from "./Testimonials";
 
 interface HomePageProps {
@@ -23,8 +26,11 @@ export const HomePage: React.FC<HomePageProps> = ({
 		<>
 			<HomePageSchema />
 			<Header serverHomepageCopyVariant={serverHomepageCopyVariant} />
-			<div className="space-y-[150px] lg:space-y-[200px]">
-				<RecordingModes />
+			<div className="space-y-20 sm:space-y-[120px] lg:space-y-[180px]">
+				<RecordingModePicker />
+				<InstantModeDetail />
+				<StudioModeDetail />
+				<ScreenshotModeDetail />
 				<Features />
 				<Testimonials />
 				<Pricing />

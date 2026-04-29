@@ -1,0 +1,16 @@
+
+---
+title: Video Import, Advanced Compression & Smoother Animations
+app: Cap Desktop
+publishedAt: "2026-01-12"
+version: 0.4.3
+image:
+---
+
+- **Video import support** — You can now import existing video files directly into Cap for editing and sharing. Imported videos go through the same studio workflow as recordings, letting you add zoom effects, cursor overlays, and export with Cap's compression.
+- **Advanced export compression controls** — Added custom bits-per-pixel settings for fine-grained control over export quality and file size. Access these options in the export panel to dial in the perfect balance for your use case.
+- **Enhanced cursor and zoom interpolation** — Improved spring-based animation system with better critically damped motion for smoother cursor and zoom transitions. Added screen motion blur support for more polished playback.
+- **Better audio handling on Windows** — Improved audio latency handling with proper Windows support. Resampling errors are now handled more gracefully to prevent export failures.
+- **Decoder health monitoring** — Improved decoder health checks and cache handling to detect and recover from GPU/decoder issues more reliably during playback and export.
+- **macOS window improvements** — Windows now properly center on screen and respect focus/activation policies for a more consistent experience.
+- **Even dimension fixes** — Screen capture and video scaling now ensure dimensions are always even, preventing encoding issues with certain video codecs.

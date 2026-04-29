@@ -1,0 +1,138 @@
+---
+title: "Camera & Microphone"
+summary: "Configure your camera and microphone for recordings"
+tags: "Recording, Settings"
+---
+
+Cap lets you include a camera overlay and microphone audio in your recordings. This guide covers how to select your devices, configure settings, and troubleshoot common issues on macOS and Windows.
+
+## Camera
+
+### Selecting a Camera
+
+Cap automatically detects all available cameras connected to your system. To choose which camera to use:
+
+1. Open Cap Desktop.
+2. Click the **camera** dropdown next to the camera toggle.
+3. Select your preferred camera from the list.
+
+Cap remembers your selection between sessions. If you disconnect a camera and reconnect it later, Cap will resume using it automatically.
+
+### Camera Overlay
+
+When the camera is enabled, your webcam feed appears as a floating overlay in the recording. The overlay gives your recordings a personal touch and helps viewers connect with you.
+
+**Positioning**: The camera overlay can be placed in any corner of your recording. Click and drag the overlay in the preview to reposition it.
+
+**Sizing**: Adjust the size of the camera overlay to make it more or less prominent. A smaller overlay keeps the focus on your screen content, while a larger one makes your face more visible.
+
+**Shape**: The camera overlay appears as a circle by default, creating a clean, modern look.
+
+### Disabling the Camera
+
+Toggle the camera button off to record without a webcam overlay. Your camera selection and settings are preserved so you can quickly toggle it back on for your next recording.
+
+## Microphone
+
+### Selecting a Microphone
+
+Cap detects all available audio input devices on your system. To choose your microphone:
+
+1. Open Cap Desktop.
+2. Click the **microphone** dropdown next to the microphone toggle.
+3. Select your preferred microphone from the list.
+
+This list includes built-in microphones, USB microphones, audio interfaces, and any other input devices recognized by your operating system.
+
+### Audio Monitoring
+
+Before you start recording, Cap shows an audio level indicator so you can verify your microphone is picking up sound. Speak normally and watch for the level meter to respond. This helps you catch issues like a muted microphone or wrong device selection before you start recording.
+
+### System Audio
+
+In addition to microphone audio, Cap can capture system audio (the sound playing through your computer). This is useful for:
+
+- Recording video calls where you want to capture both sides of the conversation
+- Demonstrating software that produces sound
+- Recording presentations with embedded audio or video
+
+### Disabling the Microphone
+
+Toggle the microphone button off to record without audio. Screen-only recordings are useful when you plan to add narration later or when the visual content speaks for itself.
+
+## Audio Settings
+
+### Tips for Better Audio
+
+- **Use an external microphone** when possible. Even an inexpensive USB microphone will sound significantly better than a built-in laptop mic.
+- **Reduce background noise.** Close windows, turn off fans, and move away from noisy environments.
+- **Keep a consistent distance** from your microphone. About 6-12 inches (15-30 cm) works well for most microphones.
+- **Test before recording.** Use the audio level indicator to check that your microphone is working and at a good level.
+- **Avoid tapping your desk.** Vibrations travel through surfaces and get picked up by microphones, especially those on stands.
+
+## Permissions
+
+### macOS Permissions
+
+macOS requires explicit permission for apps to access your camera and microphone. Cap will prompt you the first time you try to use each device.
+
+**Camera Permission**
+
+1. When you first enable the camera, macOS shows a permission dialog.
+2. Click **Allow** to grant access.
+3. If you accidentally denied the permission, you can fix it in **System Settings** > **Privacy & Security** > **Camera** and toggle Cap on.
+
+**Microphone Permission**
+
+1. When you first enable the microphone, macOS shows a permission dialog.
+2. Click **Allow** to grant access.
+3. If you accidentally denied the permission, go to **System Settings** > **Privacy & Security** > **Microphone** and toggle Cap on.
+
+After changing permissions in System Settings, you may need to restart Cap for the changes to take effect.
+
+### Windows Permissions
+
+Windows manages camera and microphone access through its Privacy settings.
+
+**Camera Permission**
+
+1. Windows will prompt you when Cap first tries to access the camera.
+2. Click **Yes** to allow.
+3. To manage later: **Settings** > **Privacy** > **Camera** and ensure Cap is allowed.
+
+**Microphone Permission**
+
+1. Windows will prompt you when Cap first tries to access the microphone.
+2. Click **Yes** to allow.
+3. To manage later: **Settings** > **Privacy** > **Microphone** and ensure Cap is allowed.
+
+## Troubleshooting
+
+### Camera Not Detected
+
+- **Check the connection.** If using an external camera, make sure the USB cable is securely connected.
+- **Try a different USB port.** Some ports may not provide enough power for certain cameras.
+- **Check permissions.** Verify that Cap has camera permission in your system settings.
+- **Close other apps.** Some cameras can only be used by one application at a time. Close any other apps that might be using the camera (video call software, other recording tools, etc.).
+- **Restart Cap.** Close and reopen Cap Desktop to refresh the device list.
+
+### Microphone Not Working
+
+- **Check the audio level indicator.** If it does not respond when you speak, Cap is not receiving audio from the selected device.
+- **Verify device selection.** Make sure you have the correct microphone selected in the dropdown.
+- **Check permissions.** Verify that Cap has microphone permission in your system settings.
+- **Check system volume.** Open your system sound settings and verify the input device is not muted and the level is set appropriately.
+- **Test in another app.** Try using the microphone in another application to confirm it is working at the system level.
+
+### Audio is Quiet or Distorted
+
+- **Move closer to the microphone.** If audio is too quiet, reduce the distance between you and the mic.
+- **Check for obstructions.** Make sure nothing is blocking the microphone.
+- **Reduce input gain.** If audio is distorted or clipping, lower the input level in your system sound settings.
+- **Try a different microphone.** Built-in laptop microphones can produce poor results. An external USB microphone is a significant upgrade.
+
+### Camera Overlay is Not Showing in Recording
+
+- **Verify the camera toggle is on.** The camera button in Cap Desktop should be active (highlighted).
+- **Check that the camera feed is visible** in the Cap preview before starting your recording.
+- **Restart Cap** if the camera was connected after Cap was opened.

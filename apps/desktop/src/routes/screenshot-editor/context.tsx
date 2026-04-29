@@ -1,8 +1,8 @@
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
-import { debounce } from "@solid-primitives/scheduled";
+import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import {
 	createEffect,
 	createResource,
@@ -11,11 +11,7 @@ import {
 	onCleanup,
 } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import {
-	createImageDataWS,
-	createLazySignal,
-	type FrameData,
-} from "~/utils/socket";
+import { createLazySignal, type FrameData } from "~/utils/socket";
 import {
 	type Annotation,
 	type AnnotationType,
@@ -27,6 +23,62 @@ import {
 	type ProjectConfiguration,
 	type XY,
 } from "~/utils/tauri";
+import { calculateImageTransform } from "./layout";
+
+const NV12_FORMAT_MAGIC = 0x4e563132;
+
+type ScreenshotFrameData = FrameData & {
+	revision: number;
+};
+
+function convertNv12ToRgba(
+	nv12Data: Uint8ClampedArray,
+	width: number,
+	height: number,
+	yStride: number,
+): Uint8ClampedArray {
+	const rgbaSize = width * height * 4;
+	const rgba = new Uint8ClampedArray(rgbaSize);
+
+	const ySize = yStride * height;
+	const yPlane = nv12Data;
+	const uvPlane = nv12Data.subarray(ySize);
+	const uvStride = yStride;
+
+	for (let row = 0; row < height; row++) {
+		const yRowOffset = row * yStride;
+		const uvRowOffset = Math.floor(row / 2) * uvStride;
+		const rgbaRowOffset = row * width * 4;
+
+		for (let col = 0; col < width; col++) {
+			const y = yPlane[yRowOffset + col] - 16;
+
+			const uvCol = Math.floor(col / 2) * 2;
+			const u = uvPlane[uvRowOffset + uvCol] - 128;
+			const v = uvPlane[uvRowOffset + uvCol + 1] - 128;
+
+			const c = 298 * y;
+			const d = u;
+			const e = v;
+
+			let r = (c + 409 * e + 128) >> 8;
+			let g = (c - 100 * d - 208 * e + 128) >> 8;
+			let b = (c + 516 * d + 128) >> 8;
+
+			r = r < 0 ? 0 : r > 255 ? 255 : r;
+			g = g < 0 ? 0 : g > 255 ? 255 : g;
+			b = b < 0 ? 0 : b > 255 ? 255 : b;
+
+			const rgbaOffset = rgbaRowOffset + col * 4;
+			rgba[rgbaOffset] = r;
+			rgba[rgbaOffset + 1] = g;
+			rgba[rgbaOffset + 2] = b;
+			rgba[rgbaOffset + 3] = 255;
+		}
+	}
+
+	return rgba;
+}
 
 export type ScreenshotProject = ProjectConfiguration;
 export type { Annotation, AnnotationType };
@@ -86,8 +138,9 @@ const DEFAULT_HOTKEYS: HotkeysConfiguration = {
 const DEFAULT_PROJECT: ScreenshotProject = {
 	background: {
 		source: {
-			type: "wallpaper",
-			path: "macOS/sequoia-dark",
+			type: "color",
+			value: [255, 255, 255],
+			alpha: 255,
 		},
 		blur: 0,
 		padding: 20,
@@ -136,7 +189,19 @@ function createScreenshotEditorContext() {
 		open: false,
 	});
 
-	const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
+	const [latestFrame, setLatestFrame] = createLazySignal<ScreenshotFrameData>();
+	const [previewCanvas, setPreviewCanvas] =
+		createSignal<HTMLCanvasElement | null>(null);
+	const [previewMaskCanvas, setPreviewMaskCanvas] =
+		createSignal<HTMLCanvasElement | null>(null);
+	const [configRevision, setConfigRevision] = createSignal(0);
+	const [originalImageSize, setOriginalImageSize] = createSignal<{
+		width: number;
+		height: number;
+	} | null>(null);
+	const [isRenderReady, setIsRenderReady] = createSignal(false);
+	const [isImageFileReady, setIsImageFileReady] = createSignal(false);
+	let wsRef: WebSocket | null = null;
 
 	const [editorInstance] = createResource(async () => {
 		const instance = await commands.createScreenshotEditorInstance();
@@ -148,39 +213,143 @@ function createScreenshotEditorContext() {
 			}
 		}
 
+		setOriginalImageSize({
+			width: instance.imageWidth,
+			height: instance.imageHeight,
+		});
+
+		const hasReceivedWebSocketFrame = { value: false };
+
 		if (instance.path) {
-			const img = new Image();
-			img.crossOrigin = "anonymous";
-			img.src = convertFileSrc(instance.path);
-			img.onload = async () => {
-				try {
-					const bitmap = await createImageBitmap(img);
-					const existing = latestFrame();
-					if (existing?.bitmap) {
-						existing.bitmap.close();
+			const loadImage = (imagePath: string, retryCount = 0) => {
+				const img = new Image();
+				img.crossOrigin = "anonymous";
+				img.src = convertFileSrc(imagePath);
+				img.onload = async () => {
+					setIsImageFileReady(true);
+					if (hasReceivedWebSocketFrame.value) {
+						return;
 					}
-					setLatestFrame({
-						width: img.naturalWidth,
-						height: img.naturalHeight,
-						bitmap,
-					});
-				} catch (e: unknown) {
-					console.error("Failed to create ImageBitmap from fallback image:", e);
-				}
+					try {
+						const bitmap = await createImageBitmap(img);
+						if (hasReceivedWebSocketFrame.value) {
+							bitmap.close();
+							return;
+						}
+						const existing = latestFrame();
+						if (existing?.bitmap) {
+							existing.bitmap.close();
+						}
+						setLatestFrame({
+							width: img.naturalWidth,
+							height: img.naturalHeight,
+							bitmap,
+							revision: 0,
+						});
+						setIsRenderReady(true);
+					} catch (e: unknown) {
+						console.error(
+							"Failed to create ImageBitmap from fallback image:",
+							e,
+						);
+					}
+				};
+				img.onerror = () => {
+					if (retryCount < 10) {
+						setTimeout(() => loadImage(imagePath, retryCount + 1), 200);
+					}
+				};
+				return img;
 			};
-			img.onerror = (event) => {
-				console.error("Failed to load screenshot image:", {
-					path: instance.path,
-					src: img.src,
-					event,
-				});
-			};
+
+			const pathStr = instance.path;
+			const isCapDir = pathStr.endsWith(".cap");
+			const imagePath = isCapDir ? `${pathStr}/original.png` : pathStr;
+			loadImage(imagePath);
 		}
 
-		const [_ws, _isConnected, _isWorkerReady] = createImageDataWS(
-			instance.framesSocketUrl,
-			setLatestFrame,
-		);
+		const ws = new WebSocket(instance.framesSocketUrl);
+		wsRef = ws;
+		ws.binaryType = "arraybuffer";
+		ws.onmessage = async (event) => {
+			const buffer = event.data as ArrayBuffer;
+
+			let isNv12Format = false;
+			if (buffer.byteLength >= 28) {
+				const formatCheck = new DataView(buffer, buffer.byteLength - 4, 4);
+				isNv12Format = formatCheck.getUint32(0, true) === NV12_FORMAT_MAGIC;
+			}
+
+			let width: number;
+			let height: number;
+			let revision: number;
+			let processedData: Uint8ClampedArray;
+
+			if (isNv12Format) {
+				if (buffer.byteLength < 28) return;
+
+				const metadataOffset = buffer.byteLength - 28;
+				const meta = new DataView(buffer, metadataOffset, 28);
+				const yStride = meta.getUint32(0, true);
+				height = meta.getUint32(4, true);
+				width = meta.getUint32(8, true);
+				revision = meta.getUint32(12, true);
+
+				if (!width || !height) return;
+
+				const ySize = yStride * height;
+				const uvSize = yStride * (height / 2);
+				const totalSize = ySize + uvSize;
+
+				const nv12Data = new Uint8ClampedArray(buffer, 0, totalSize);
+				processedData = convertNv12ToRgba(nv12Data, width, height, yStride);
+			} else {
+				if (buffer.byteLength < 24) return;
+
+				const metadataOffset = buffer.byteLength - 24;
+				const meta = new DataView(buffer, metadataOffset, 24);
+				const strideBytes = meta.getUint32(0, true);
+				height = meta.getUint32(4, true);
+				width = meta.getUint32(8, true);
+				revision = meta.getUint32(12, true);
+
+				if (!width || !height) return;
+
+				const expectedRowBytes = width * 4;
+				const frameData = new Uint8ClampedArray(
+					buffer,
+					0,
+					buffer.byteLength - 24,
+				);
+
+				if (strideBytes === expectedRowBytes) {
+					processedData = frameData.subarray(0, expectedRowBytes * height);
+				} else {
+					processedData = new Uint8ClampedArray(expectedRowBytes * height);
+					for (let row = 0; row < height; row++) {
+						const srcStart = row * strideBytes;
+						const destStart = row * expectedRowBytes;
+						processedData.set(
+							frameData.subarray(srcStart, srcStart + expectedRowBytes),
+							destStart,
+						);
+					}
+				}
+			}
+
+			hasReceivedWebSocketFrame.value = true;
+			setIsRenderReady(true);
+
+			try {
+				const imageData = new ImageData(processedData, width, height);
+				const bitmap = await createImageBitmap(imageData);
+				const existing = latestFrame();
+				if (existing?.bitmap && existing.bitmap !== bitmap) {
+					existing.bitmap.close();
+				}
+				setLatestFrame({ width, height, bitmap, revision });
+			} catch {}
+		};
 
 		return instance;
 	});
@@ -198,11 +367,40 @@ function createScreenshotEditorContext() {
 		if (frame?.bitmap) {
 			frame.bitmap.close();
 		}
+		if (wsRef) {
+			wsRef.close();
+			wsRef = null;
+		}
 	});
 
-	const saveConfig = debounce((config: ProjectConfiguration) => {
-		commands.updateScreenshotConfig(config, true);
-	}, 1000);
+	const FPS = 60;
+	const FRAME_TIME = 1000 / FPS;
+
+	const doRenderUpdate = ({
+		config,
+		revision,
+	}: {
+		config: ProjectConfiguration;
+		revision: number;
+	}) => {
+		void invoke("update_screenshot_config", { config, save: false, revision });
+	};
+
+	const throttledRenderUpdate = throttle(doRenderUpdate, FRAME_TIME);
+	const trailingRenderUpdate = debounce(doRenderUpdate, FRAME_TIME + 16);
+
+	const saveConfig = debounce(
+		({
+			config,
+			revision,
+		}: {
+			config: ProjectConfiguration;
+			revision: number;
+		}) => {
+			void invoke("update_screenshot_config", { config, save: true, revision });
+		},
+		1000,
+	);
 
 	createEffect(
 		on(
@@ -218,9 +416,95 @@ function createScreenshotEditorContext() {
 					...unwrap(project),
 					annotations: unwrap(annotations),
 				};
+				const revision = configRevision() + 1;
 
-				commands.updateScreenshotConfig(config, false);
-				saveConfig(config);
+				setConfigRevision(revision);
+
+				throttledRenderUpdate({ config, revision });
+				trailingRenderUpdate({ config, revision });
+				saveConfig({ config, revision });
+			},
+		),
+	);
+
+	let prevState: {
+		frameSize: { width: number; height: number };
+		imageSize: { width: number; height: number };
+		transform: {
+			offset: { x: number; y: number };
+			size: { width: number; height: number };
+		};
+	} | null = null;
+
+	createEffect(
+		on(
+			() => ({
+				frame: latestFrame(),
+				imageSize: originalImageSize(),
+				padding: project.background.padding,
+				crop: project.background.crop,
+			}),
+			({ frame, imageSize, padding, crop }) => {
+				if (!frame || !imageSize) return;
+
+				const frameSize = { width: frame.width, height: frame.height };
+
+				const frameSizeChanged =
+					!prevState ||
+					Math.abs(frameSize.width - prevState.frameSize.width) > 1 ||
+					Math.abs(frameSize.height - prevState.frameSize.height) > 1;
+
+				if (!frameSizeChanged) {
+					return;
+				}
+
+				const currentTransform = calculateImageTransform(
+					frameSize,
+					imageSize,
+					padding,
+					crop,
+				);
+
+				const rawAnnotations = unwrap(annotations);
+				const shouldTransform =
+					prevState && rawAnnotations.length > 0 && frameSizeChanged;
+
+				if (shouldTransform && prevState) {
+					const scaleX =
+						currentTransform.size.width / prevState.transform.size.width;
+					const scaleY =
+						currentTransform.size.height / prevState.transform.size.height;
+
+					const oldOffset = prevState.transform.offset;
+					const newOffset = currentTransform.offset;
+
+					const updatedAnnotations = rawAnnotations.map((ann) => {
+						const relX = ann.x - oldOffset.x;
+						const relY = ann.y - oldOffset.y;
+
+						const newX = newOffset.x + relX * scaleX;
+						const newY = newOffset.y + relY * scaleY;
+
+						const newWidth = ann.width * scaleX;
+						const newHeight = ann.height * scaleY;
+
+						return {
+							...ann,
+							x: newX,
+							y: newY,
+							width: newWidth,
+							height: newHeight,
+						};
+					});
+
+					setAnnotations(reconcile(updatedAnnotations));
+				}
+
+				prevState = {
+					frameSize,
+					imageSize,
+					transform: currentTransform,
+				};
 			},
 		),
 	);
@@ -362,6 +646,14 @@ function createScreenshotEditorContext() {
 		dialog,
 		setDialog,
 		latestFrame,
+		previewCanvas,
+		setPreviewCanvas,
+		previewMaskCanvas,
+		setPreviewMaskCanvas,
+		configRevision,
+		originalImageSize,
+		isRenderReady,
+		isImageFileReady,
 		editorInstance,
 	};
 }

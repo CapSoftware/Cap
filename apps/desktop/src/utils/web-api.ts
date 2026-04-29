@@ -15,7 +15,7 @@ const api: ApiFetcher = async (args) => {
 
 	const resp = await fetch(args.path, args);
 
-	let body;
+	let body: unknown;
 
 	const contentType = resp.headers.get("content-type");
 	if (contentType === "application/json") {
@@ -60,6 +60,9 @@ export async function maybeProtectedHeaders() {
 
 export async function protectedHeaders() {
 	const { authorization } = await maybeProtectedHeaders();
-	if (!authorization) throw new Error("Not authorized");
+	if (!authorization)
+		throw new Error(
+			"Please sign in to continue. Alternatively, email hello@cap.so or join our Discord at cap.link/discord",
+		);
 	return { authorization };
 }

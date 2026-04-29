@@ -6,11 +6,17 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+default = []
+test-utils = []
+memory-profiling = ["dep:dhat"]
+
 [dependencies]
 cap-audio = { path = "../audio" }
 cap-fail = { path = "../fail" }
 cap-project = { path = "../project" }
 cap-media = { path = "../media" }
+cap-rendering = { path = "../rendering" }
 cap-flags = { path = "../flags" }
 cap-utils = { path = "../utils" }
 scap-targets = { path = "../scap-targets" }
@@ -22,6 +28,7 @@ cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 cap-frame-converter = { path = "../frame-converter" }
 cap-timestamp = { path = "../timestamp" }
+cap-muxer-protocol = { path = "../cap-muxer-protocol" }
 scap-ffmpeg = { path = "../scap-ffmpeg" }
 
 specta = { workspace = true }
@@ -51,6 +58,9 @@ kameo = "0.17.2"
 inquire = "0.7.5"
 replace_with = "0.1.8"
 retry = "2.1.0"
+sysinfo = "0.35"
+parking_lot = "0.12"
+dhat = { version = "0.3", optional = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -58,10 +68,12 @@ cidre = { workspace = true }
 screencapturekit = "0.3.5"
 cocoa = "0.26.0"
 objc = "0.2.7"
+objc2 = "0.6"
 objc2-app-kit = "0.3.1"
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
 foreign-types-shared = "0.3"
+libc = "0.2"
 
 scap-screencapturekit = { path = "../scap-screencapturekit" }
 cap-enc-avfoundation = { path = "../enc-avfoundation" }
@@ -87,3 +99,31 @@ scap-cpal = { path = "../scap-cpal" }
 [dev-dependencies]
 tempfile = "3.20.0"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+clap = { version = "4.5", features = ["derive"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+libproc = "0.14"
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows = { workspace = true, features = ["Win32_UI_HiDpi"] }
+
+[[test]]
+name = "synthetic_recording"
+required-features = ["test-utils"]
+
+[[example]]
+name = "synthetic-test-runner"
+required-features = ["test-utils"]
+
+[[example]]
+name = "playback-test-runner"
+
+[[example]]
+name = "real-device-test-runner"
+
+[[example]]
+name = "memory-stress-test"
+
+[[example]]
+name = "instant-mode-profile"

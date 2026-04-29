@@ -18,7 +18,7 @@ const CONTROL_SLOT_SIZE = 4;
 const CONTROL_METADATA_OFFSET = 5;
 const CONTROL_DATA_OFFSET = 6;
 const CONTROL_VERSION = 7;
-const CONTROL_READER_ACTIVE = 8;
+const _CONTROL_READER_ACTIVE = 8;
 
 const META_FRAME_SIZE = 0;
 const META_FRAME_NUMBER = 1;
@@ -233,9 +233,18 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 	};
 }
 
+export interface BorrowedFrame {
+	data: Uint8Array;
+	frameSize: number;
+	release(): void;
+}
+
 export interface Consumer {
 	read(timeoutMs?: number): ArrayBuffer | null;
+	readInto(target: Uint8Array, timeoutMs?: number): number | null;
+	borrow(timeoutMs?: number): BorrowedFrame | null;
 	isShutdown(): boolean;
+	getSlotSize(): number;
 }
 
 function advanceReadIndexCAS(
@@ -243,8 +252,10 @@ function advanceReadIndexCAS(
 	readIdx: number,
 	nextIdx: number,
 ): void {
+	const MAX_ADVANCE_RETRIES = 16;
 	let expectedIdx = readIdx;
-	while (true) {
+
+	for (let attempt = 0; attempt < MAX_ADVANCE_RETRIES; attempt++) {
 		const exchanged = Atomics.compareExchange(
 			controlView,
 			CONTROL_READ_INDEX,
@@ -373,8 +384,196 @@ export function createConsumer(buffer: SharedArrayBuffer): Consumer {
 			return null;
 		},
 
+		readInto(target: Uint8Array, timeoutMs: number = 100): number | null {
+			const MAX_CAS_RETRIES = 3;
+
+			for (let attempt = 0; attempt < MAX_CAS_RETRIES; attempt++) {
+				const shutdownFlag = Atomics.load(controlView, CONTROL_SHUTDOWN);
+				if (shutdownFlag) {
+					return null;
+				}
+
+				const readIdx = Atomics.load(controlView, CONTROL_READ_INDEX);
+				const slotMetaIdx =
+					(metadataOffset + readIdx * METADATA_ENTRY_SIZE) / 4;
+
+				let state = Atomics.load(metadataView, slotMetaIdx + META_SLOT_STATE);
+
+				if (state !== SLOT_STATE.READY) {
+					const waitResult = Atomics.wait(
+						metadataView,
+						slotMetaIdx + META_SLOT_STATE,
+						state,
+						timeoutMs,
+					);
+					if (waitResult === "timed-out") {
+						return null;
+					}
+
+					const shutdownCheck = Atomics.load(controlView, CONTROL_SHUTDOWN);
+					if (shutdownCheck) {
+						return null;
+					}
+
+					state = Atomics.load(metadataView, slotMetaIdx + META_SLOT_STATE);
+					if (state !== SLOT_STATE.READY) {
+						continue;
+					}
+				}
+
+				const exchangedState = Atomics.compareExchange(
+					metadataView,
+					slotMetaIdx + META_SLOT_STATE,
+					SLOT_STATE.READY,
+					SLOT_STATE.READING,
+				);
+				if (exchangedState !== SLOT_STATE.READY) {
+					continue;
+				}
+
+				const frameSize = Atomics.load(
+					metadataView,
+					slotMetaIdx + META_FRAME_SIZE,
+				);
+				const slotDataOffset = dataOffset + readIdx * slotSize;
+
+				if (
+					!Number.isInteger(frameSize) ||
+					frameSize < 0 ||
+					frameSize > slotSize ||
+					slotDataOffset < 0 ||
+					slotDataOffset + frameSize > buffer.byteLength ||
+					frameSize > target.byteLength
+				) {
+					Atomics.store(
+						metadataView,
+						slotMetaIdx + META_SLOT_STATE,
+						SLOT_STATE.EMPTY,
+					);
+					const nextIdx = (readIdx + 1) % slotCount;
+					advanceReadIndexCAS(controlView, readIdx, nextIdx);
+					return null;
+				}
+
+				target.set(new Uint8Array(buffer, slotDataOffset, frameSize), 0);
+
+				Atomics.store(
+					metadataView,
+					slotMetaIdx + META_SLOT_STATE,
+					SLOT_STATE.EMPTY,
+				);
+
+				const nextIdx = (readIdx + 1) % slotCount;
+				advanceReadIndexCAS(controlView, readIdx, nextIdx);
+
+				return frameSize;
+			}
+
+			return null;
+		},
+
+		borrow(timeoutMs: number = 100): BorrowedFrame | null {
+			const MAX_CAS_RETRIES = 3;
+
+			for (let attempt = 0; attempt < MAX_CAS_RETRIES; attempt++) {
+				const shutdownFlag = Atomics.load(controlView, CONTROL_SHUTDOWN);
+				if (shutdownFlag) {
+					return null;
+				}
+
+				const readIdx = Atomics.load(controlView, CONTROL_READ_INDEX);
+				const slotMetaIdx =
+					(metadataOffset + readIdx * METADATA_ENTRY_SIZE) / 4;
+
+				let state = Atomics.load(metadataView, slotMetaIdx + META_SLOT_STATE);
+
+				if (state !== SLOT_STATE.READY) {
+					const waitResult = Atomics.wait(
+						metadataView,
+						slotMetaIdx + META_SLOT_STATE,
+						state,
+						timeoutMs,
+					);
+					if (waitResult === "timed-out") {
+						return null;
+					}
+
+					const shutdownCheck = Atomics.load(controlView, CONTROL_SHUTDOWN);
+					if (shutdownCheck) {
+						return null;
+					}
+
+					state = Atomics.load(metadataView, slotMetaIdx + META_SLOT_STATE);
+					if (state !== SLOT_STATE.READY) {
+						continue;
+					}
+				}
+
+				const exchangedState = Atomics.compareExchange(
+					metadataView,
+					slotMetaIdx + META_SLOT_STATE,
+					SLOT_STATE.READY,
+					SLOT_STATE.READING,
+				);
+				if (exchangedState !== SLOT_STATE.READY) {
+					continue;
+				}
+
+				const frameSize = Atomics.load(
+					metadataView,
+					slotMetaIdx + META_FRAME_SIZE,
+				);
+				const slotDataOffset = dataOffset + readIdx * slotSize;
+
+				if (
+					!Number.isInteger(frameSize) ||
+					frameSize < 0 ||
+					frameSize > slotSize ||
+					slotDataOffset < 0 ||
+					slotDataOffset + frameSize > buffer.byteLength
+				) {
+					Atomics.store(
+						metadataView,
+						slotMetaIdx + META_SLOT_STATE,
+						SLOT_STATE.EMPTY,
+					);
+					const nextIdx = (readIdx + 1) % slotCount;
+					advanceReadIndexCAS(controlView, readIdx, nextIdx);
+					return null;
+				}
+
+				const data = new Uint8Array(buffer, slotDataOffset, frameSize);
+
+				let released = false;
+				const capturedReadIdx = readIdx;
+				const capturedSlotMetaIdx = slotMetaIdx;
+
+				const release = () => {
+					if (released) return;
+					released = true;
+
+					Atomics.store(
+						metadataView,
+						capturedSlotMetaIdx + META_SLOT_STATE,
+						SLOT_STATE.EMPTY,
+					);
+
+					const nextIdx = (capturedReadIdx + 1) % slotCount;
+					advanceReadIndexCAS(controlView, capturedReadIdx, nextIdx);
+				};
+
+				return { data, frameSize, release };
+			}
+
+			return null;
+		},
+
 		isShutdown(): boolean {
 			return Atomics.load(controlView, CONTROL_SHUTDOWN) === 1;
+		},
+
+		getSlotSize(): number {
+			return slotSize;
 		},
 	};
 }

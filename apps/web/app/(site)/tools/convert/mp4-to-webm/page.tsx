@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
 	title: "MP4 to WebM Converter | Free Online Video Converter | Cap",
@@ -27,7 +28,20 @@ export const metadata: Metadata = {
 			"Convert MP4 videos to WebM format for better web compatibility. Process locally with no uploads for maximum privacy.",
 		images: ["/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/tools/convert/mp4-to-webm",
+	},
 };
+
+const breadcrumbSchema = createBreadcrumbSchema([
+	{ name: "Home", url: "https://cap.so" },
+	{ name: "Tools", url: "https://cap.so/tools" },
+	{ name: "Convert", url: "https://cap.so/tools/convert" },
+	{
+		name: "MP4 to WebM Converter",
+		url: "https://cap.so/tools/convert/mp4-to-webm",
+	},
+]);
 
 export default function MP4ToWebMPage() {
 	const pageContent: ToolPageContent = {
@@ -79,11 +93,19 @@ export default function MP4ToWebMPage() {
 	};
 
 	return (
-		<ToolsPageTemplate
-			content={pageContent}
-			toolComponent={
-				<MediaFormatConverter initialConversionPath="mp4-to-webm" />
-			}
-		/>
+		<>
+			<script
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(breadcrumbSchema),
+				}}
+			/>
+			<ToolsPageTemplate
+				content={pageContent}
+				toolComponent={
+					<MediaFormatConverter initialConversionPath="mp4-to-webm" />
+				}
+			/>
+		</>
 	);
 }

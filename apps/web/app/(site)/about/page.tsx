@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { AboutPage } from "@/components/pages/AboutPage";
 
 export const metadata: Metadata = {
-	title: "About Us — Cap",
+	title: "About — Cap",
 	description:
-		"Learn about Cap's mission to make screen sharing effortless, powerful, and private through our open-source, privacy-first platform.",
+		"Cap is the open source alternative to Loom. Learn why we started Cap and our commitment to privacy, transparency, and community-driven development.",
 };
 
 export default function App() {

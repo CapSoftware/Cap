@@ -31,20 +31,17 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 		const token = env.TINYBIRD_TOKEN;
 		const host = env.TINYBIRD_HOST;
 
-		if (!host) {
-			yield* Effect.die(new Error("TINYBIRD_HOST must be set"));
-		}
+		const enabled = Boolean(token && host);
 
 		yield* Effect.logDebug("Initializing Tinybird service", {
 			hasToken: Boolean(token),
-			host,
+			hasHost: Boolean(host),
+			enabled,
 		});
-
-		const enabled = Boolean(token);
 
 		if (!enabled) {
 			yield* Effect.logWarning(
-				"Tinybird is disabled: TINYBIRD_TOKEN is not set",
+				"Tinybird is disabled: TINYBIRD_TOKEN and/or TINYBIRD_HOST not set",
 			);
 		}
 

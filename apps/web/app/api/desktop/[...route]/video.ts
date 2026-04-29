@@ -3,6 +3,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
 import {
+	importedVideos,
 	organizationMembers,
 	organizations,
 	s3Buckets,
@@ -32,7 +33,11 @@ app.get(
 		"query",
 		z.object({
 			recordingMode: z
-				.union([z.literal("hls"), z.literal("desktopMP4")])
+				.union([
+					z.literal("hls"),
+					z.literal("desktopMP4"),
+					z.literal("desktopSegments"),
+				])
 				.optional(),
 			isScreenshot: z.coerce.boolean().default(false),
 			videoId: z.string().optional(),
@@ -177,7 +182,9 @@ app.get(
 							? { type: "local" as const }
 							: recordingMode === "desktopMP4"
 								? { type: "desktopMP4" as const }
-								: undefined,
+								: recordingMode === "desktopSegments"
+									? { type: "desktopSegments" as const }
+									: undefined,
 					isScreenshot,
 					bucket: customBucket?.id,
 					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
@@ -195,6 +202,7 @@ app.get(
 			if (clientSupportsUploadProgress)
 				await db().insert(videoUploads).values({
 					videoId: idToUse,
+					mode: "singlepart",
 				});
 
 			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
@@ -268,7 +276,7 @@ app.delete(
 				.select({ video: videos, bucket: s3Buckets })
 				.from(videos)
 				.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
-				.where(eq(videos.id, videoId));
+				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 
 			if (!result)
 				return c.json(
@@ -277,6 +285,7 @@ app.delete(
 				);
 
 			await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
+			await db().delete(importedVideos).where(eq(importedVideos.id, videoId));
 
 			await db()
 				.delete(videos)
@@ -346,7 +355,7 @@ app.post(
 				);
 
 			if (video.upload) {
-				if (uploaded === total && video.upload.mode === "singlepart") {
+				if (uploaded === total && video.upload.mode !== "multipart") {
 					await db()
 						.delete(videoUploads)
 						.where(eq(videoUploads.videoId, videoId));

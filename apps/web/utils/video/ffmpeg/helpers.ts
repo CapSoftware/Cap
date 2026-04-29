@@ -34,18 +34,22 @@ export function generateMasterPlaylist(
 	audioPlaylistUrl: string | null,
 	xStreamInfo?: string,
 ) {
+	const hasAudio = !!audioPlaylistUrl;
 	const streamInfo = xStreamInfo
-		? `${xStreamInfo},AUDIO="audio"`
-		: `BANDWIDTH=${bandwidth},RESOLUTION=${resolution},AUDIO="audio"`;
+		? hasAudio
+			? `${xStreamInfo},AUDIO="audio"`
+			: xStreamInfo
+		: hasAudio
+			? `BANDWIDTH=${bandwidth},RESOLUTION=${resolution},AUDIO="audio"`
+			: `BANDWIDTH=${bandwidth},RESOLUTION=${resolution}`;
 	const masterPlaylist = `#EXTM3U
 #EXT-X-VERSION:4
 #EXT-X-INDEPENDENT-SEGMENTS
 ${
-	audioPlaylistUrl
-		? `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="en",URI="${audioPlaylistUrl}"`
+	hasAudio
+		? `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="en",URI="${audioPlaylistUrl}"\n`
 		: ""
-}
-#EXT-X-STREAM-INF:${streamInfo}
+}#EXT-X-STREAM-INF:${streamInfo}
 ${videoPlaylistUrl}
 `;
 

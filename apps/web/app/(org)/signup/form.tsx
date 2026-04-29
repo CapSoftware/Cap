@@ -105,7 +105,11 @@ export function SignupForm() {
 	}, [emailSent]);
 
 	const handleGoogleSignIn = () => {
-		trackEvent("auth_started", { method: "google", is_signup: true });
+		trackEvent("auth_started", {
+			method: "google",
+			is_signup: true,
+			auth_surface: "signup",
+		});
 		signIn("google", {
 			...(next && next.length > 0 ? { callbackUrl: next } : {}),
 		});
@@ -268,9 +272,11 @@ export function SignupForm() {
 											trackEvent("auth_started", {
 												method: "email",
 												is_signup: true,
+												auth_surface: "signup",
 											});
+											const normalizedEmail = email.trim().toLowerCase();
 											signIn("email", {
-												email,
+												email: normalizedEmail,
 												redirect: false,
 												...(next && next.length > 0
 													? { callbackUrl: next }
@@ -283,10 +289,13 @@ export function SignupForm() {
 														setEmailSent(true);
 														setLastEmailSentTime(Date.now());
 														trackEvent("auth_email_sent", {
-															email_domain: email.split("@")[1],
+															method: "email",
+															is_signup: true,
+															auth_surface: "signup",
+															email_domain: normalizedEmail.split("@")[1],
 														});
 														const params = new URLSearchParams({
-															email,
+															email: normalizedEmail,
 															...(next && { next }),
 															lastSent: Date.now().toString(),
 														});
@@ -435,7 +444,7 @@ const NormalSignup = ({
 					value={email}
 					disabled={emailSent || loading}
 					onChange={(e) => {
-						setEmail(e.target.value);
+						setEmail(e.target.value.toLowerCase());
 					}}
 				/>
 				<MotionButton

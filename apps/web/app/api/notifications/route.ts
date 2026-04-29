@@ -3,24 +3,12 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { notifications, users } from "@cap/database/schema";
 import { Notification as APINotification } from "@cap/web-api-contract";
 import { ImageUploads } from "@cap/web-backend";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import type { NotificationType } from "@/lib/Notification";
 import { runPromise } from "@/lib/server";
 import { jsonExtractString } from "@/utils/sql";
-
-const _notificationDataSchema = z.object({
-	authorId: z.string(),
-	content: z.string().optional(),
-	videoId: z.string(),
-});
-
-type NotificationsKeys = (typeof notifications.$inferSelect)["type"];
-type NotificationsKeysWithReplies =
-	| Exclude<`${NotificationsKeys}s`, "replys">
-	| "replies";
 
 export const dynamic = "force-dynamic";
 
@@ -51,7 +39,10 @@ export async function GET() {
 			.from(notifications)
 			.leftJoin(
 				users,
-				and(eq(jsonExtractString(notifications.data, "authorId"), users.id)),
+				and(
+					ne(notifications.type, "anon_view"),
+					eq(jsonExtractString(notifications.data, "authorId"), users.id),
+				),
 			)
 			.where(
 				and(
@@ -78,18 +69,21 @@ export async function GET() {
 			)
 			.groupBy(notifications.type);
 
-		const formattedCountResults: Record<NotificationType, number> = {
+		type NotificationCountKey = Exclude<NotificationType, "anon_view">;
+		const formattedCountResults: Record<NotificationCountKey, number> = {
 			view: 0,
 			comment: 0,
 			reply: 0,
 			reaction: 0,
-			// recordings: 0,
-			// mentions: 0,
 		};
 
-		countResults.forEach(({ type, count }) => {
-			formattedCountResults[type] = Number(count);
-		});
+		for (const { type, count } of countResults) {
+			if (type === "anon_view") {
+				formattedCountResults.view += Number(count);
+			} else if (type in formattedCountResults) {
+				formattedCountResults[type as NotificationCountKey] += Number(count);
+			}
+		}
 
 		const formattedNotifications = await Effect.gen(function* () {
 			const imageUploads = yield* ImageUploads;
@@ -97,7 +91,18 @@ export async function GET() {
 			return yield* Effect.all(
 				notificationsWithAuthors.map(({ notification, author }) =>
 					Effect.gen(function* () {
-						// all notifications currently require an author
+						if (notification.type === "anon_view") {
+							return APINotification.parse({
+								id: notification.id,
+								type: "anon_view",
+								readAt: notification.readAt,
+								videoId: notification.data.videoId,
+								createdAt: notification.createdAt,
+								anonName: notification.data.anonName ?? "Anonymous Viewer",
+								location: notification.data.location ?? null,
+							});
+						}
+
 						if (!author) return null;
 
 						const resolvedAvatar = author.avatar
@@ -138,9 +143,9 @@ export async function GET() {
 		});
 	} catch (error) {
 		console.error("Error fetching notifications:", error);
-		return NextResponse.json({
-			status: 500,
-			error: "Failed to fetch notifications",
-		});
+		return NextResponse.json(
+			{ error: "Failed to fetch notifications" },
+			{ status: 500 },
+		);
 	}
 }

@@ -7,7 +7,7 @@ import {
 	useQuery,
 } from "@tanstack/solid-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createEffect, createMemo, onCleanup } from "solid-js";
+import { batch, createEffect, createMemo, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import {
@@ -21,6 +21,7 @@ import {
 	commands,
 	type DeviceOrModelID,
 	type RecordingMode,
+	type RecordingTargetMode,
 	type ScreenCaptureTarget,
 } from "./tauri";
 import { orgCustomDomainClient, protectedHeaders } from "./web-api";
@@ -46,7 +47,8 @@ export const listScreens = queryOptions({
 	queryKey: ["capture", "displays"] as const,
 	queryFn: () => commands.listCaptureDisplays(),
 	reconcile: "id",
-	refetchInterval: 1000,
+	refetchInterval: 10_000,
+	staleTime: 5_000,
 });
 
 export const listWindowsWithThumbnails = queryOptions({
@@ -70,7 +72,8 @@ export const listDisplaysWithThumbnails = queryOptions({
 	queryKey: ["capture", "displays-thumbnails"] as const,
 	queryFn: () => commands.listDisplaysWithThumbnails(),
 	reconcile: "id",
-	refetchInterval: 1000,
+	refetchInterval: 10_000,
+	staleTime: 5_000,
 });
 
 const getCurrentRecording = queryOptions({
@@ -90,7 +93,8 @@ export const listRecordings = queryOptions({
 export const listVideoDevices = queryOptions({
 	queryKey: ["videoDevices"] as const,
 	queryFn: () => commands.listCameras(),
-	refetchInterval: 1000,
+	refetchInterval: 5_000,
+	staleTime: 3_000,
 	initialData: [],
 });
 
@@ -110,16 +114,32 @@ export const listAudioDevices = queryOptions({
 	queryKey: ["audioDevices"] as const,
 	queryFn: () => commands.listAudioDevices(),
 	reconcile: "name",
-	refetchInterval: 1000,
-	gcTime: 0,
-	staleTime: 0,
+	refetchInterval: 5_000,
+	staleTime: 3_000,
 });
 
 export const getPermissions = queryOptions({
 	queryKey: ["permissionsOS"] as const,
 	queryFn: () => commands.doPermissionsCheck(true),
-	refetchInterval: 1000,
+	staleTime: 3_000,
 });
+
+export function createPermissionsQuery() {
+	const [refetchInterval, setRefetchInterval] = createStore<{
+		value: number;
+	}>({ value: 5_000 });
+
+	const timeoutId = setTimeout(() => {
+		setRefetchInterval("value", 15_000);
+	}, 30_000);
+
+	onCleanup(() => clearTimeout(timeoutId));
+
+	return createQuery(() => ({
+		...getPermissions,
+		refetchInterval: refetchInterval.value,
+	}));
+}
 
 export const isSystemAudioSupported = queryOptions({
 	queryKey: ["systemAudioSupported"] as const,
@@ -127,14 +147,17 @@ export const isSystemAudioSupported = queryOptions({
 	staleTime: Number.POSITIVE_INFINITY, // This won't change during runtime
 });
 
+type CameraCaptureTarget = ScreenCaptureTarget | { variant: "cameraOnly" };
+type ExtendedRecordingTargetMode = RecordingTargetMode | "camera" | null;
+
 export function createOptionsQuery() {
 	const PERSIST_KEY = "recording-options-query-2";
 	const [_state, _setState] = createStore<{
-		captureTarget: ScreenCaptureTarget;
+		captureTarget: CameraCaptureTarget;
 		micName: string | null;
 		mode: RecordingMode;
 		captureSystemAudio?: boolean;
-		targetMode?: "display" | "window" | "area" | null;
+		targetMode?: ExtendedRecordingTargetMode;
 		cameraID?: DeviceOrModelID | null;
 		organizationId?: string | null;
 		/** @deprecated */
@@ -151,15 +174,30 @@ export function createOptionsQuery() {
 		if (e.key === PERSIST_KEY) _setState(JSON.parse(e.newValue ?? "{}"));
 	});
 
+	let initialized = false;
+
+	recordingSettingsStore.get().then((data) => {
+		batch(() => {
+			if (data?.mode && data.mode !== _state.mode) {
+				_setState("mode", data.mode);
+			}
+			initialized = true;
+		});
+	});
+
 	createEffect(() => {
-		recordingSettingsStore.set({
+		const settings = {
 			target: _state.captureTarget,
 			micName: _state.micName,
 			cameraId: _state.cameraID,
 			mode: _state.mode,
 			systemAudio: _state.captureSystemAudio,
 			organizationId: _state.organizationId,
-		});
+		};
+
+		if (initialized) {
+			recordingSettingsStore.set(settings);
+		}
 	});
 
 	const storeListenerCleanup = recordingSettingsStore.listen((data) => {
@@ -202,8 +240,15 @@ export function createLicenseQuery() {
 		},
 	}));
 
-	generalSettingsStore.listen(() => query.refetch());
-	authStore.listen(() => query.refetch());
+	const generalSettingsCleanup = generalSettingsStore.listen(() =>
+		query.refetch(),
+	);
+	const authCleanup = authStore.listen(() => query.refetch());
+
+	onCleanup(() => {
+		generalSettingsCleanup.then((cleanup) => cleanup());
+		authCleanup.then((cleanup) => cleanup());
+	});
 
 	return query;
 }
@@ -211,33 +256,49 @@ export function createLicenseQuery() {
 export function createCameraMutation() {
 	const { setOptions, rawOptions } = useRecordingOptions();
 
-	const rawMutate = async (model: DeviceOrModelID | null) => {
+	const rawMutate = async (
+		model: DeviceOrModelID | null,
+		skipCameraWindow?: boolean,
+	) => {
 		const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
 		setOptions("cameraID", reconcile(model));
-		await commands.setCameraInput(model).catch(async (e) => {
-			const message =
-				typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
+		await commands
+			.setCameraInput(model, skipCameraWindow ?? null)
+			.catch(async (e) => {
+				const message =
+					typeof e === "string"
+						? e
+						: e instanceof Error
+							? e.message
+							: String(e);
 
-			if (message.includes("DeviceNotFound")) {
-				setOptions("cameraID", null);
-				console.warn("Selected camera is unavailable.");
-				return;
-			}
+				if (
+					message.includes("DeviceNotFound") ||
+					message.includes("CameraTimeout") ||
+					message.includes("Failed to initialize camera")
+				) {
+					setOptions("cameraID", null);
+					console.warn("Selected camera is unavailable.");
+					return;
+				}
 
-			if (JSON.stringify(before) === JSON.stringify(model) || !before) {
-				setOptions("cameraID", null);
-			} else setOptions("cameraID", reconcile(before));
+				if (JSON.stringify(before) === JSON.stringify(model) || !before) {
+					setOptions("cameraID", null);
+				} else setOptions("cameraID", reconcile(before));
 
-			throw e;
-		});
+				throw e;
+			});
 
-		if (model) {
+		if (model && !skipCameraWindow) {
 			getCurrentWindow().setFocus();
 		}
 	};
 
 	const setCameraInput = useMutation(() => ({
-		mutationFn: rawMutate,
+		mutationFn: (args: {
+			model: DeviceOrModelID | null;
+			skipCameraWindow?: boolean;
+		}) => rawMutate(args.model, args.skipCameraWindow),
 	}));
 
 	return new Proxy(

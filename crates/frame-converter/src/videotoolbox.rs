@@ -218,7 +218,8 @@ impl VideoToolboxConverter {
     fn copy_output_to_frame(
         &self,
         pixel_buffer: CVPixelBufferRef,
-    ) -> Result<frame::Video, ConvertError> {
+        output: &mut frame::Video,
+    ) -> Result<(), ConvertError> {
         unsafe {
             let lock_status = CVPixelBufferLockBaseAddress(pixel_buffer, 0);
             if lock_status != K_CV_RETURN_SUCCESS {
@@ -227,9 +228,6 @@ impl VideoToolboxConverter {
                 )));
             }
         }
-
-        let mut output =
-            frame::Video::new(self.output_format, self.output_width, self.output_height);
 
         unsafe {
             let plane_count = CVPixelBufferGetPlaneCount(pixel_buffer);
@@ -243,11 +241,15 @@ impl VideoToolboxConverter {
                 let dst_data = output.data_mut(0);
                 let dst_ptr = dst_data.as_mut_ptr();
 
-                for row in 0..height {
-                    let src_row = src_ptr.add(row * src_stride);
-                    let dst_row = dst_ptr.add(row * dst_stride);
+                if src_stride == dst_stride {
+                    ptr::copy_nonoverlapping(src_ptr, dst_ptr, height * src_stride);
+                } else {
                     let copy_len = src_stride.min(dst_stride);
-                    ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
+                    for row in 0..height {
+                        let src_row = src_ptr.add(row * src_stride);
+                        let dst_row = dst_ptr.add(row * dst_stride);
+                        ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
+                    }
                 }
             } else {
                 for plane in 0..plane_count {
@@ -259,11 +261,15 @@ impl VideoToolboxConverter {
                     let dst_data = output.data_mut(plane);
                     let dst_ptr = dst_data.as_mut_ptr();
 
-                    for row in 0..height {
-                        let src_row = src_ptr.add(row * src_stride);
-                        let dst_row = dst_ptr.add(row * dst_stride);
+                    if src_stride == dst_stride {
+                        ptr::copy_nonoverlapping(src_ptr, dst_ptr, height * src_stride);
+                    } else {
                         let copy_len = src_stride.min(dst_stride);
-                        ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
+                        for row in 0..height {
+                            let src_row = src_ptr.add(row * src_stride);
+                            let dst_row = dst_ptr.add(row * dst_stride);
+                            ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
+                        }
                     }
                 }
             }
@@ -271,7 +277,7 @@ impl VideoToolboxConverter {
             CVPixelBufferUnlockBaseAddress(pixel_buffer, 0);
         }
 
-        Ok(output)
+        Ok(())
     }
 }
 
@@ -289,6 +295,17 @@ impl Drop for VideoToolboxConverter {
 
 impl FrameConverter for VideoToolboxConverter {
     fn convert(&self, input: frame::Video) -> Result<frame::Video, ConvertError> {
+        let mut output =
+            frame::Video::new(self.output_format, self.output_width, self.output_height);
+        self.convert_into(input, &mut output)?;
+        Ok(output)
+    }
+
+    fn convert_into(
+        &self,
+        input: frame::Video,
+        output: &mut frame::Video,
+    ) -> Result<(), ConvertError> {
         let count = self.conversion_count.fetch_add(1, Ordering::Relaxed);
 
         if count == 0 {
@@ -328,14 +345,14 @@ impl FrameConverter for VideoToolboxConverter {
             );
         }
 
-        let mut result = self.copy_output_to_frame(output_buffer)?;
-        result.set_pts(input.pts());
+        self.copy_output_to_frame(output_buffer, output)?;
+        output.set_pts(input.pts());
 
         unsafe {
             CVPixelBufferRelease(output_buffer);
         }
 
-        Ok(result)
+        Ok(())
     }
 
     fn name(&self) -> &'static str {

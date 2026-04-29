@@ -1,4 +1,8 @@
+#[cfg(target_os = "macos")]
+use crate::SendableShareableContent;
 use cap_cursor_capture::CursorCropBounds;
+#[cfg(target_os = "macos")]
+use cap_media_info::ensure_even;
 use cap_media_info::{AudioInfo, VideoInfo};
 use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use serde::{Deserialize, Serialize};
@@ -60,6 +64,7 @@ pub enum ScreenCaptureTarget {
         screen: DisplayId,
         bounds: LogicalBounds,
     },
+    CameraOnly,
 }
 
 impl ScreenCaptureTarget {
@@ -68,6 +73,7 @@ impl ScreenCaptureTarget {
             Self::Display { id } => Display::from_id(id),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.display()),
             Self::Area { screen, .. } => Display::from_id(screen),
+            Self::CameraOnly => None,
         }
     }
 
@@ -166,6 +172,7 @@ impl ScreenCaptureTarget {
                     )));
                 }
             }
+            Self::CameraOnly => None,
         }
     }
 
@@ -183,6 +190,7 @@ impl ScreenCaptureTarget {
                     size.height() * scale,
                 ))
             }
+            Self::CameraOnly => None,
         }
     }
 
@@ -191,6 +199,7 @@ impl ScreenCaptureTarget {
             Self::Display { id } => Display::from_id(id).and_then(|d| d.name()),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.name()),
             Self::Area { screen, .. } => Display::from_id(screen).and_then(|d| d.name()),
+            Self::CameraOnly => Some("Camera".to_string()),
         }
     }
 
@@ -199,6 +208,7 @@ impl ScreenCaptureTarget {
             ScreenCaptureTarget::Display { .. } => "Display",
             ScreenCaptureTarget::Window { .. } => "Window",
             ScreenCaptureTarget::Area { .. } => "Area",
+            ScreenCaptureTarget::CameraOnly => "Camera",
         }
     }
 }
@@ -297,7 +307,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         start_time: SystemTime,
         system_audio: bool,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
-        #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+        #[cfg(target_os = "macos")] shareable_content: SendableShareableContent,
         #[cfg(target_os = "macos")] excluded_windows: Vec<WindowId>,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
@@ -311,10 +321,9 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                 crop_bounds.and_then(|b| {
                     let logical_size = b.size();
                     let scale = display.raw_handle().scale()?;
-                    Some(PhysicalSize::new(
-                        logical_size.width() * scale,
-                        logical_size.height() * scale,
-                    ))
+                    let width = ensure_even((logical_size.width() * scale) as u32) as f64;
+                    let height = ensure_even((logical_size.height() * scale) as u32) as f64;
+                    Some(PhysicalSize::new(width, height))
                 })
             }
 

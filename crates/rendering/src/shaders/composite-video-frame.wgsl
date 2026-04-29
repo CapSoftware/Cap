@@ -17,9 +17,8 @@ struct Uniforms {
     opacity: f32,
     border_enabled: f32,
     border_width: f32,
-    _padding1: vec2<f32>,
+    _padding1: vec4<f32>,
     border_color: vec4<f32>,
-    _padding2: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -160,23 +159,18 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             return mix(shadow_color, base_color, base_color.a);
         }
 
-        let direction = motion_vec / motion_len;
-        let stroke = min(motion_len, 0.35);
-        let num_samples = i32(clamp(6.0 + 24.0 * blur_strength, 6.0, 36.0));
+        let velocity_uv = motion_vec;
+        let offset_base = -0.5;
+        let k = 20;
 
-        for (var i = 1; i < num_samples; i = i + 1) {
-            let t = f32(i) / f32(num_samples);
-            let eased = smoothstep(0.0, 1.0, t);
-            let offset = direction * stroke * eased;
-            let jitter_seed = target_uv + vec2<f32>(t, f32(i) * 0.37);
-            let jitter = (rand(jitter_seed) - 0.5) * stroke * 0.15;
-            let sample_uv = target_uv - offset + direction * jitter;
+        for (var i = 0; i < 20; i = i + 1) {
+            let bias = velocity_uv * (f32(i) / f32(k) + offset_base);
+            let sample_uv = target_uv + bias;
 
             if sample_uv.x >= 0.0 && sample_uv.x <= 1.0 && sample_uv.y >= 0.0 && sample_uv.y <= 1.0 {
                 var sample_color = sample_texture(sample_uv, crop_bounds_uv);
                 sample_color = apply_rounded_corners(sample_color, sample_uv);
-                let weight = 1.0 - t * 0.8;
-                let sample_weight = weight * sample_color.a;
+                let sample_weight = sample_color.a;
                 if sample_weight > 1e-6 {
                     accum += sample_color * sample_weight;
                     weight_sum += sample_weight;
@@ -185,27 +179,25 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         }
     } else {
         let center = uniforms.motion_blur_zoom_center;
-        let to_center = target_uv - center;
-        let dist = length(to_center);
+        let dir = center - target_uv;
+        let dist = length(dir);
         if dist < 1e-4 || zoom_amount < 1e-4 {
             return mix(shadow_color, base_color, base_color.a);
         }
 
-        let radial_dir = to_center / dist;
-        let sample_span = zoom_amount * 1.2;
-        let num_samples = i32(clamp(8.0 + 26.0 * blur_strength, 8.0, 40.0));
+        let scaled_dir = dir * blur_strength;
+        let max_kernel = 13.0;
 
-        for (var i = 1; i < num_samples; i = i + 1) {
-            let t = f32(i) / f32(num_samples);
-            let offset = radial_dir * sample_span * t;
-            let jitter_seed = vec2<f32>(t, target_uv.x + target_uv.y);
-            let jitter = (rand(jitter_seed) - 0.5) * zoom_amount * 0.1;
-            let sample_uv = target_uv - offset + radial_dir * jitter;
+        let offset_rand = rand(vec2<f32>(target_uv.x * 7.37, target_uv.y * 11.23));
+
+        for (var i = 0; i < 13; i = i + 1) {
+            let percent = (f32(i) + offset_rand) / max_kernel;
+            let weight = 4.0 * (percent - percent * percent);
+            let sample_uv = target_uv + scaled_dir * percent;
 
             if sample_uv.x >= 0.0 && sample_uv.x <= 1.0 && sample_uv.y >= 0.0 && sample_uv.y <= 1.0 {
                 var sample_color = sample_texture(sample_uv, crop_bounds_uv);
                 sample_color = apply_rounded_corners(sample_color, sample_uv);
-                let weight = 1.0 - t * 0.9;
                 let sample_weight = weight * sample_color.a;
                 if sample_weight > 1e-6 {
                     accum += sample_color * sample_weight;

@@ -367,6 +367,10 @@ impl SegmentedAudioEncoder {
     pub fn finish_with_timestamp(&mut self, timestamp: Duration) -> Result<(), FinishError> {
         let segment_path = self.current_segment_path();
         let segment_start = self.segment_start_time;
+        let effective_end_timestamp = self
+            .last_frame_timestamp
+            .map(|last| last.max(timestamp))
+            .unwrap_or(timestamp);
 
         if let Some(mut encoder) = self.current_encoder.take() {
             if encoder.has_frames {
@@ -383,7 +387,7 @@ impl SegmentedAudioEncoder {
                 sync_file(&segment_path);
 
                 if let Some(start) = segment_start {
-                    let final_duration = timestamp.saturating_sub(start);
+                    let final_duration = effective_end_timestamp.saturating_sub(start);
                     let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
 
                     self.completed_segments.push(SegmentInfo {

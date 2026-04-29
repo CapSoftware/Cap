@@ -448,6 +448,65 @@ pub fn default_output_latency_hint(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct InputLatencyInfo {
+    pub device_latency_secs: f64,
+    pub buffer_latency_secs: f64,
+    pub total_latency_secs: f64,
+    pub transport: OutputTransportKind,
+}
+
+impl InputLatencyInfo {
+    pub fn new(
+        device_latency_secs: f64,
+        buffer_latency_secs: f64,
+        transport: OutputTransportKind,
+    ) -> Self {
+        Self {
+            device_latency_secs,
+            buffer_latency_secs,
+            total_latency_secs: device_latency_secs + buffer_latency_secs,
+            transport,
+        }
+    }
+
+    pub fn from_buffer_only(sample_rate: u32, buffer_size_frames: u32) -> Self {
+        let buffer_latency = if sample_rate > 0 {
+            buffer_size_frames as f64 / sample_rate as f64
+        } else {
+            0.0
+        };
+        Self::new(0.0, buffer_latency, OutputTransportKind::Unknown)
+    }
+}
+
+pub fn estimate_input_latency(
+    sample_rate: u32,
+    buffer_size_frames: u32,
+    device_name: Option<&str>,
+) -> InputLatencyInfo {
+    if sample_rate == 0 {
+        return InputLatencyInfo::new(0.0, 0.0, OutputTransportKind::Unknown);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        macos::estimate_input_latency(sample_rate, buffer_size_frames, device_name)
+            .unwrap_or_else(|| InputLatencyInfo::from_buffer_only(sample_rate, buffer_size_frames))
+    }
+
+    #[cfg(windows)]
+    {
+        windows::estimate_input_latency(sample_rate, buffer_size_frames, device_name)
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = device_name;
+        InputLatencyInfo::from_buffer_only(sample_rate, buffer_size_frames)
+    }
+}
+
 fn time_based_alpha(dt_secs: f64, tau_secs: f64) -> f64 {
     if tau_secs <= 0.0 {
         return 1.0;
@@ -489,8 +548,8 @@ mod macos {
     #[cfg(target_os = "macos")]
     use super::AIRPLAY_MIN_LATENCY_SECS;
     use super::{
-        MAX_LATENCY_SECS, OutputLatencyHint, OutputTransportKind, WIRELESS_FALLBACK_LATENCY_SECS,
-        WIRELESS_MIN_LATENCY_SECS, transport_constraints,
+        InputLatencyInfo, MAX_LATENCY_SECS, OutputLatencyHint, OutputTransportKind,
+        WIRELESS_FALLBACK_LATENCY_SECS, WIRELESS_MIN_LATENCY_SECS, transport_constraints,
     };
     use cidre::{
         core_audio::{
@@ -506,6 +565,74 @@ mod macos {
     ) -> Option<OutputLatencyHint> {
         let device = System::default_output_device().ok()?;
         compute_latency_hint(&device, sample_rate, fallback_buffer_frames).ok()
+    }
+
+    pub(super) fn estimate_input_latency(
+        sample_rate: u32,
+        buffer_size_frames: u32,
+        _device_name: Option<&str>,
+    ) -> Option<InputLatencyInfo> {
+        let device = System::default_input_device().ok()?;
+        compute_input_latency(&device, sample_rate, buffer_size_frames).ok()
+    }
+
+    fn compute_input_latency(
+        device: &Device,
+        sample_rate: u32,
+        fallback_buffer_frames: u32,
+    ) -> os::Result<InputLatencyInfo> {
+        let transport = device
+            .transport_type()
+            .unwrap_or(DeviceTransportType::UNKNOWN);
+        let transport_kind = transport_kind(transport);
+
+        let device_latency_frames =
+            scoped_u32(device, PropSelector::DEVICE_LATENCY, PropScope::INPUT).unwrap_or(0);
+        let safety_offset_frames =
+            scoped_u32(device, PropSelector::DEVICE_SAFETY_OFFSET, PropScope::INPUT).unwrap_or(0);
+        let buffer_frames = device
+            .prop(&PropSelector::DEVICE_BUF_FRAME_SIZE.global_addr())
+            .unwrap_or(fallback_buffer_frames);
+        let stream_latency_frames = max_input_stream_latency(device).unwrap_or(0);
+
+        let device_sample_rate = device.nominal_sample_rate().unwrap_or(sample_rate as f64);
+        let effective_rate = if device_sample_rate > 0.0 {
+            device_sample_rate
+        } else {
+            sample_rate as f64
+        };
+
+        let device_latency_total_frames = device_latency_frames as u64
+            + safety_offset_frames as u64
+            + stream_latency_frames as u64;
+
+        let device_latency_secs = device_latency_total_frames as f64 / effective_rate;
+        let buffer_latency_secs = buffer_frames as f64 / effective_rate;
+
+        Ok(InputLatencyInfo::new(
+            device_latency_secs,
+            buffer_latency_secs,
+            transport_kind,
+        ))
+    }
+
+    fn max_input_stream_latency(device: &Device) -> os::Result<u32> {
+        let streams = device.streams()?;
+        let mut max_latency = 0u32;
+
+        for stream in streams {
+            if is_input_stream(&stream)?
+                && let Ok(latency) = stream.latency()
+            {
+                max_latency = max_latency.max(latency);
+            }
+        }
+
+        Ok(max_latency)
+    }
+
+    fn is_input_stream(stream: &Stream) -> os::Result<bool> {
+        stream.direction().map(|dir| dir == 1)
     }
 
     fn compute_latency_hint(
@@ -559,14 +686,10 @@ mod macos {
 
         match transport_kind {
             OutputTransportKind::Airplay => {
-                if latency_secs < AIRPLAY_MIN_LATENCY_SECS {
-                    latency_secs = AIRPLAY_MIN_LATENCY_SECS;
-                }
+                latency_secs = latency_secs.max(AIRPLAY_MIN_LATENCY_SECS);
             }
             OutputTransportKind::Wireless | OutputTransportKind::ContinuityWireless => {
-                if latency_secs < WIRELESS_MIN_LATENCY_SECS {
-                    latency_secs = WIRELESS_MIN_LATENCY_SECS;
-                }
+                latency_secs = latency_secs.max(WIRELESS_MIN_LATENCY_SECS);
             }
             _ => {}
         }
@@ -614,8 +737,211 @@ mod macos {
     }
 }
 
+#[cfg(windows)]
+mod windows {
+    use super::{InputLatencyInfo, OutputTransportKind, WIRELESS_MIN_LATENCY_SECS};
+    use tracing::{debug, trace};
+    use windows::{
+        Win32::Devices::FunctionDiscovery::PKEY_Device_EnumeratorName,
+        Win32::Media::Audio::{
+            DEVICE_STATE, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture,
+        },
+        Win32::System::Com::{
+            CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, STGM_READ,
+        },
+        core::PCWSTR,
+    };
+
+    const BLUETOOTH_DEVICE_PATTERNS: &[&str] = &[
+        "airpod",
+        "bluetooth",
+        "bt ",
+        "wireless",
+        "bose",
+        "sony wh",
+        "sony wf",
+        "jabra",
+        "beats",
+        "galaxy buds",
+        "pixel buds",
+        "anker",
+        "jbl ",
+        "soundcore",
+        "tozo",
+        "raycon",
+        "skullcandy",
+        "sennheiser momentum",
+        "audio-technica ath-m50xbt",
+        "marshall",
+        "b&o",
+        "bang & olufsen",
+        "shokz",
+        "aftershokz",
+    ];
+
+    fn is_likely_bluetooth_device(device_name: &str) -> bool {
+        let lower = device_name.to_lowercase();
+        BLUETOOTH_DEVICE_PATTERNS
+            .iter()
+            .any(|pattern| lower.contains(pattern))
+    }
+
+    fn detect_transport_via_mmdevice(device_name: &str) -> Option<OutputTransportKind> {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+
+            let collection = enumerator
+                .EnumAudioEndpoints(eCapture, DEVICE_STATE(1))
+                .ok()?;
+            let count = collection.GetCount().ok()?;
+
+            for i in 0..count {
+                let device: IMMDevice = match collection.Item(i) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+
+                let props = match device.OpenPropertyStore(STGM_READ) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
+                let friendly_name = get_device_friendly_name(&device);
+                let matches_name = friendly_name
+                    .as_ref()
+                    .map(|n| n.to_lowercase().contains(&device_name.to_lowercase()))
+                    .unwrap_or(false);
+
+                if !matches_name {
+                    continue;
+                }
+
+                if let Ok(bus_enum) = props.GetValue(&PKEY_Device_EnumeratorName) {
+                    let bus_name = bus_enum.Anonymous.Anonymous.Anonymous.pwszVal;
+                    if !bus_name.0.is_null() {
+                        let bus_str = PCWSTR(bus_name.0).to_string().ok()?;
+                        trace!(
+                            device = ?friendly_name,
+                            bus = %bus_str,
+                            "Windows audio device bus enumerator"
+                        );
+
+                        let bus_lower = bus_str.to_lowercase();
+                        if bus_lower.contains("bthenum") || bus_lower.contains("bluetooth") {
+                            debug!(
+                                device = ?friendly_name,
+                                "Detected Bluetooth audio device via Windows API"
+                            );
+                            return Some(OutputTransportKind::Wireless);
+                        }
+                    }
+                }
+
+                return Some(OutputTransportKind::Wired);
+            }
+
+            None
+        }
+    }
+
+    fn get_device_friendly_name(device: &IMMDevice) -> Option<String> {
+        use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+
+        unsafe {
+            let props = device.OpenPropertyStore(STGM_READ).ok()?;
+            let name_val = props.GetValue(&PKEY_Device_FriendlyName).ok()?;
+            let name_ptr = name_val.Anonymous.Anonymous.Anonymous.pwszVal;
+            if name_ptr.0.is_null() {
+                return None;
+            }
+            PCWSTR(name_ptr.0).to_string().ok()
+        }
+    }
+
+    pub fn estimate_input_latency(
+        sample_rate: u32,
+        buffer_size_frames: u32,
+        device_name: Option<&str>,
+    ) -> InputLatencyInfo {
+        if sample_rate == 0 {
+            return InputLatencyInfo::new(0.0, 0.0, OutputTransportKind::Unknown);
+        }
+
+        let buffer_latency_secs = buffer_size_frames as f64 / sample_rate as f64;
+
+        let transport_kind = device_name
+            .and_then(|name| {
+                if let Some(transport) = detect_transport_via_mmdevice(name) {
+                    return Some(transport);
+                }
+
+                if is_likely_bluetooth_device(name) {
+                    debug!(
+                        device = %name,
+                        "Detected likely Bluetooth device via name pattern matching"
+                    );
+                    return Some(OutputTransportKind::Wireless);
+                }
+
+                None
+            })
+            .unwrap_or(OutputTransportKind::Unknown);
+
+        let device_latency_secs = match transport_kind {
+            OutputTransportKind::Wireless => {
+                debug!(
+                    device = ?device_name,
+                    latency_ms = WIRELESS_MIN_LATENCY_SECS * 1000.0,
+                    "Using wireless latency for audio device"
+                );
+                WIRELESS_MIN_LATENCY_SECS
+            }
+            _ => 0.01,
+        };
+
+        InputLatencyInfo::new(device_latency_secs, buffer_latency_secs, transport_kind)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn detects_airpods() {
+            assert!(is_likely_bluetooth_device("AirPods Pro"));
+            assert!(is_likely_bluetooth_device("airpods"));
+        }
+
+        #[test]
+        fn detects_generic_bluetooth() {
+            assert!(is_likely_bluetooth_device("Bluetooth Headset"));
+            assert!(is_likely_bluetooth_device("BT Audio"));
+        }
+
+        #[test]
+        fn does_not_detect_wired() {
+            assert!(!is_likely_bluetooth_device("Realtek HD Audio"));
+            assert!(!is_likely_bluetooth_device("USB Microphone"));
+            assert!(!is_likely_bluetooth_device("Blue Yeti"));
+        }
+
+        #[test]
+        fn wireless_mic_gets_higher_latency() {
+            let wireless = estimate_input_latency(48000, 1024, Some("AirPods Pro"));
+            let wired = estimate_input_latency(48000, 1024, Some("USB Microphone"));
+
+            assert!(wireless.device_latency_secs >= WIRELESS_MIN_LATENCY_SECS);
+            assert!(wired.device_latency_secs < WIRELESS_MIN_LATENCY_SECS);
+            assert!(wireless.total_latency_secs > wired.total_latency_secs);
+        }
+    }
+}
+
 #[cfg(test)]
-#[allow(clippy::unchecked_duration_subtraction)]
+#[allow(clippy::unchecked_time_subtraction)]
 mod tests {
     use super::*;
     use std::time::Instant;

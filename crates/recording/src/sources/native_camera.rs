@@ -29,7 +29,7 @@ impl VideoSource for NativeCamera {
     where
         Self: Sized,
     {
-        let (tx, rx) = flume::bounded(256);
+        let (tx, rx) = flume::bounded(8);
 
         feed_lock
             .ask(camera::AddNativeSender(tx))

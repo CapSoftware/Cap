@@ -1,0 +1,15 @@
+---
+title: Camera Only Mode, Faster macOS Capture & Better Screenshot UX
+app: Cap Desktop
+publishedAt: "2026-01-16"
+version: 0.4.5
+image:
+---
+
+- **Camera Only Mode** — Record video using just your camera. This mode can be toggled directly from the main window for quick, focused video capture. Both Studio and Instant Mode supported.
+- **More reliable decoding and seek behavior** — Added FFmpeg software fallback when hardware decoding fails, improved AVAssetReader end-of-file handling, and tuned decoder timeouts for slow seeks and initial playback.
+- **Smoother exports and playback stability** — Editor preview now pauses during export, keyframe distribution and frame iteration were improved, and GPU buffer resizing is more robust to reduce stalls.
+- **Lower-overhead macOS frame processing** — Introduced pooled pixel buffers and a dedicated copier for screen capture, then refactored frame scaling around the pool for more efficient processing.
+- **Improved audio timestamp and drift handling** — Reworked timestamp/drift logic in the recording and MP4 pipelines for more stable long-running audio-video sync.
+- **Cleaner screenshot workflow** — Target selection overlays are now hidden before capture, hidden overlays no longer block clicks, and screenshot notification audio behavior was refined.
+- **Better multi-display overlay focus** — Improved focus and positioning logic for target-selection overlays across multi-monitor setups.

@@ -4,9 +4,11 @@ import ChartLineIcon from "./ChartLine";
 import MessageCircleMoreIcon from "./Chat";
 import ChatIcon from "./Chat";
 import ClapIcon from "./Clap";
+import CodeIcon from "./Code";
 import CogIcon from "./Cog";
 import DownloadIcon from "./Download";
 import HomeIcon from "./Home";
+import ImportIcon from "./Import";
 import LayersIcon from "./Layers";
 import LogoutIcon from "./Logout";
 import ReactionIcon from "./Reaction";
@@ -17,9 +19,11 @@ export {
 	ArrowUpIcon,
 	CapIcon,
 	MessageCircleMoreIcon,
+	CodeIcon,
 	CogIcon,
 	DownloadIcon,
 	HomeIcon,
+	ImportIcon,
 	LayersIcon,
 	LogoutIcon,
 	SettingsGearIcon,

@@ -3,6 +3,7 @@
 import type { comments as commentsSchema } from "@cap/database/schema";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import {
 	startTransition,
 	use,
@@ -18,6 +19,7 @@ import {
 	type VideoStatusResult,
 } from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
+import { CaptionProvider } from "./_components/CaptionContext";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import SummaryChapters from "./_components/SummaryChapters";
@@ -131,6 +133,13 @@ const trackVideoView = (payload: {
 	});
 };
 
+type AiGenerationStatus =
+	| "QUEUED"
+	| "PROCESSING"
+	| "COMPLETE"
+	| "ERROR"
+	| "SKIPPED";
+
 interface ShareProps {
 	data: VideoData;
 	comments: MaybePromise<CommentWithAuthor[]>;
@@ -144,8 +153,7 @@ interface ShareProps {
 		title?: string | null;
 		summary?: string | null;
 		chapters?: { title: string; start: number }[] | null;
-		processing?: boolean;
-		generationSkipped?: boolean;
+		aiGenerationStatus?: AiGenerationStatus | null;
 	} | null;
 	aiGenerationEnabled: boolean;
 }
@@ -159,8 +167,7 @@ const useVideoStatus = (
 			title?: string | null;
 			summary?: string | null;
 			chapters?: { title: string; start: number }[] | null;
-			processing?: boolean;
-			generationSkipped?: boolean;
+			aiGenerationStatus?: AiGenerationStatus | null;
 		} | null;
 	},
 ) => {
@@ -178,9 +185,12 @@ const useVideoStatus = (
 						| "PROCESSING"
 						| "COMPLETE"
 						| "ERROR"
+						| "SKIPPED"
+						| "NO_AUDIO"
 						| null,
-					aiProcessing: initialData.aiData?.processing || false,
-					aiGenerationSkipped: initialData.aiData?.generationSkipped || false,
+					aiGenerationStatus:
+						(initialData.aiData?.aiGenerationStatus as AiGenerationStatus) ||
+						null,
 					aiTitle: initialData.aiData?.title || null,
 					summary: initialData.aiData?.summary || null,
 					chapters: initialData.aiData?.chapters || null,
@@ -198,7 +208,11 @@ const useVideoStatus = (
 					return true;
 				}
 
-				if (data.transcriptionStatus === "ERROR") {
+				if (
+					data.transcriptionStatus === "ERROR" ||
+					data.transcriptionStatus === "SKIPPED" ||
+					data.transcriptionStatus === "NO_AUDIO"
+				) {
 					return false;
 				}
 
@@ -207,15 +221,22 @@ const useVideoStatus = (
 						return false;
 					}
 
-					if (data.aiGenerationSkipped) {
+					if (
+						data.aiGenerationStatus === "SKIPPED" ||
+						data.aiGenerationStatus === "ERROR" ||
+						data.aiGenerationStatus === "COMPLETE"
+					) {
 						return false;
 					}
 
-					if (data.aiProcessing) {
+					if (
+						data.aiGenerationStatus === "QUEUED" ||
+						data.aiGenerationStatus === "PROCESSING"
+					) {
 						return true;
 					}
 
-					if (!data.summary && !data.chapters) {
+					if (!data.aiGenerationStatus && !data.summary && !data.chapters) {
 						return true;
 					}
 
@@ -271,8 +292,7 @@ export const Share = ({
 			title: videoStatus?.aiTitle || null,
 			summary: videoStatus?.summary || null,
 			chapters: videoStatus?.chapters || null,
-			processing: videoStatus?.aiProcessing || false,
-			generationSkipped: videoStatus?.aiGenerationSkipped || false,
+			aiGenerationStatus: videoStatus?.aiGenerationStatus || null,
 		}),
 		[videoStatus],
 	);
@@ -298,18 +318,29 @@ export const Share = ({
 			return true;
 		}
 
-		if (transcriptionStatus === "ERROR") {
+		if (
+			transcriptionStatus === "ERROR" ||
+			transcriptionStatus === "SKIPPED" ||
+			transcriptionStatus === "NO_AUDIO"
+		) {
 			return false;
 		}
 
 		if (transcriptionStatus === "COMPLETE") {
-			if (aiData.generationSkipped) {
+			if (
+				aiData.aiGenerationStatus === "SKIPPED" ||
+				aiData.aiGenerationStatus === "ERROR" ||
+				aiData.aiGenerationStatus === "COMPLETE"
+			) {
 				return false;
 			}
-			if (aiData.processing === true) {
+			if (
+				aiData.aiGenerationStatus === "QUEUED" ||
+				aiData.aiGenerationStatus === "PROCESSING"
+			) {
 				return true;
 			}
-			if (!aiData.summary && !aiData.chapters) {
+			if (!aiData.aiGenerationStatus && !aiData.summary && !aiData.chapters) {
 				return true;
 			}
 		}
@@ -318,6 +349,9 @@ export const Share = ({
 	};
 
 	const aiLoading = shouldShowLoading();
+
+	const searchParams = useSearchParams();
+	const initialSeekDone = useRef(false);
 
 	const handleSeek = useCallback((time: number) => {
 		const v =
@@ -356,6 +390,41 @@ export const Share = ({
 		}, 3000);
 	}, []);
 
+	useEffect(() => {
+		if (initialSeekDone.current) return;
+		const tParam = searchParams.get("t");
+		if (!tParam) return;
+		const t = parseInt(tParam, 10);
+		if (!Number.isFinite(t) || t < 0) return;
+
+		const v =
+			playerRef.current ??
+			(document.querySelector("video") as HTMLVideoElement | null);
+		if (v) {
+			initialSeekDone.current = true;
+			handleSeek(t);
+			return;
+		}
+
+		const interval = setInterval(() => {
+			const el =
+				playerRef.current ??
+				(document.querySelector("video") as HTMLVideoElement | null);
+			if (el) {
+				clearInterval(interval);
+				initialSeekDone.current = true;
+				handleSeek(t);
+			}
+		}, 200);
+
+		const timeout = setTimeout(() => clearInterval(interval), 10000);
+
+		return () => {
+			clearInterval(interval);
+			clearTimeout(timeout);
+		};
+	}, [searchParams, handleSeek]);
+
 	const handleOptimisticComment = useCallback(
 		(comment: CommentType) => {
 			startTransition(() => {
@@ -391,76 +460,80 @@ export const Share = ({
 		isDisabled("disableTranscript");
 
 	return (
-		<div className="mt-4">
-			<div className="flex flex-col gap-4 lg:flex-row">
-				<div className="flex-1">
-					<div className="overflow-visible relative bg-white rounded-2xl border aspect-video border-gray-5">
-						<div className="absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-visible rounded-xl">
-							<ShareVideo
-								data={{ ...data, transcriptionStatus }}
-								comments={comments}
-								areChaptersDisabled={areChaptersDisabled}
-								areCaptionsDisabled={areCaptionsDisabled}
-								areCommentStampsDisabled={areCommentStampsDisabled}
-								areReactionStampsDisabled={areReactionStampsDisabled}
-								chapters={aiData?.chapters || []}
-								aiProcessing={aiData?.processing || false}
-								ref={playerRef}
+		<CaptionProvider
+			videoId={data.id}
+			transcriptionStatus={transcriptionStatus}
+		>
+			<div className="mt-4">
+				<div className="flex flex-col gap-4 lg:flex-row">
+					<div className="flex-1">
+						<div className="overflow-visible relative bg-white rounded-2xl border aspect-video border-gray-5">
+							<div className="absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-visible rounded-xl">
+								<ShareVideo
+									data={{ ...data, transcriptionStatus }}
+									comments={comments}
+									areChaptersDisabled={areChaptersDisabled}
+									areCaptionsDisabled={areCaptionsDisabled}
+									areCommentStampsDisabled={areCommentStampsDisabled}
+									areReactionStampsDisabled={areReactionStampsDisabled}
+									chapters={aiData?.chapters || []}
+									aiGenerationStatus={aiData?.aiGenerationStatus}
+									canRetryProcessing={viewerId === data.owner.id}
+									showPlaybackStatusBadge={viewerId === data.owner.id}
+									ref={playerRef}
+								/>
+							</div>
+						</div>
+						<div className="mt-4 lg:hidden">
+							<Toolbar
+								onOptimisticComment={handleOptimisticComment}
+								onCommentSuccess={handleCommentSuccess}
+								data={data}
 							/>
 						</div>
 					</div>
-					<div className="mt-4 lg:hidden">
+
+					{!allSettingsDisabled && (
+						<div className="flex flex-col lg:w-80">
+							<Sidebar
+								data={{
+									...data,
+									createdAt: effectiveDate,
+									transcriptionStatus,
+								}}
+								videoSettings={videoSettings}
+								commentsData={commentsData}
+								setCommentsData={setCommentsData}
+								optimisticComments={optimisticComments}
+								setOptimisticComments={setOptimisticComments}
+								handleCommentSuccess={handleCommentSuccess}
+								views={views}
+								onSeek={handleSeek}
+								videoId={data.id}
+								aiData={aiData}
+								aiGenerationEnabled={aiGenerationEnabled}
+								ref={activityRef}
+							/>
+						</div>
+					)}
+				</div>
+
+				<div className="hidden mt-4 lg:block">
+					<div>
 						<Toolbar
 							onOptimisticComment={handleOptimisticComment}
 							onCommentSuccess={handleCommentSuccess}
+							disableReactions={
+								videoSettings?.disableReactions ??
+								data.orgSettings?.disableReactions
+							}
 							data={data}
 						/>
 					</div>
 				</div>
 
-				{!allSettingsDisabled && (
-					<div className="flex flex-col lg:w-80">
-						<Sidebar
-							data={{
-								...data,
-								createdAt: effectiveDate,
-								transcriptionStatus,
-							}}
-							videoSettings={videoSettings}
-							commentsData={commentsData}
-							setCommentsData={setCommentsData}
-							optimisticComments={optimisticComments}
-							setOptimisticComments={setOptimisticComments}
-							handleCommentSuccess={handleCommentSuccess}
-							views={views}
-							onSeek={handleSeek}
-							videoId={data.id}
-							aiData={aiData}
-							aiGenerationEnabled={aiGenerationEnabled}
-							ref={activityRef}
-						/>
-					</div>
-				)}
-			</div>
-
-			<div className="hidden mt-4 lg:block">
-				<div>
-					<Toolbar
-						onOptimisticComment={handleOptimisticComment}
-						onCommentSuccess={handleCommentSuccess}
-						disableReactions={
-							videoSettings?.disableReactions ??
-							data.orgSettings?.disableReactions
-						}
-						data={data}
-					/>
-				</div>
-			</div>
-
-			<div className="hidden mt-4 lg:block">
-				{aiLoading &&
-					(transcriptionStatus === "PROCESSING" ||
-						transcriptionStatus === "COMPLETE") && (
+				<div className="hidden mt-4 lg:block">
+					{aiLoading && (
 						<div className="p-4 animate-pulse new-card-style">
 							<div className="space-y-6">
 								<div>
@@ -490,14 +563,15 @@ export const Share = ({
 						</div>
 					)}
 
-				<SummaryChapters
-					isSummaryDisabled={isSummaryDisabled}
-					areChaptersDisabled={areChaptersDisabled}
-					handleSeek={handleSeek}
-					aiData={aiData}
-					aiLoading={aiLoading}
-				/>
+					<SummaryChapters
+						isSummaryDisabled={isSummaryDisabled}
+						areChaptersDisabled={areChaptersDisabled}
+						handleSeek={handleSeek}
+						aiData={aiData}
+						aiLoading={aiLoading}
+					/>
+				</div>
 			</div>
-		</div>
+		</CaptionProvider>
 	);
 };

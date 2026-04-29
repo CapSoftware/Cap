@@ -35,8 +35,16 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import { useDashboardContext } from "../../Contexts";
-import { CapIcon, ChartLineIcon, CogIcon, RecordIcon } from "../AnimatedIcons";
+import {
+	CapIcon,
+	ChartLineIcon,
+	CodeIcon,
+	CogIcon,
+	ImportIcon,
+	RecordIcon,
+} from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
+import { MemberAvatars } from "./MemberAvatars";
 import SpacesList from "./SpacesList";
 import { updateActiveOrganization } from "./server";
 
@@ -48,6 +56,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const pathname = usePathname();
 	const [open, setOpen] = useState(false);
 	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
+
+	const DEVELOPER_DASHBOARD_ALLOWED_EMAILS = ["richie@cap.so"];
+
+	const showDeveloperDashboard =
+		buildEnv.NEXT_PUBLIC_IS_CAP &&
+		DEVELOPER_DASHBOARD_ALLOWED_EMAILS.includes(user.email);
 
 	const manageNavigation = [
 		{
@@ -71,12 +85,32 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			subNav: [],
 		},
 		{
+			name: "Import Video",
+			href: `/dashboard/import`,
+			matchChildren: true,
+			icon: <ImportIcon />,
+			subNav: [],
+		},
+		{
 			name: "Organization Settings",
 			href: `/dashboard/settings/organization`,
 			ownerOnly: true,
+			matchChildren: true,
 			icon: <CogIcon />,
 			subNav: [],
 		},
+		...(showDeveloperDashboard
+			? [
+					{
+						name: "Developers",
+						href: `/dashboard/developers`,
+						ownerOnly: true,
+						matchChildren: true,
+						icon: <CodeIcon />,
+						subNav: [] as { name: string; href: string }[],
+					},
+				]
+			: []),
 	];
 
 	const [dialogOpen, setDialogOpen] = useState(false);
@@ -268,6 +302,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					</PopoverTrigger>
 				</Tooltip>
 			</Popover>
+			<MemberAvatars />
 			<nav
 				className="flex flex-col justify-between w-full h-full"
 				aria-label="Sidebar"

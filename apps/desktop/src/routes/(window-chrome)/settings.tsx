@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { A, type RouteSectionProps } from "@solidjs/router";
 import { getVersion } from "@tauri-apps/api/app";
+import * as shell from "@tauri-apps/plugin-shell";
 import "@total-typescript/ts-reset/filter-boolean";
 import { createResource, For, Show, Suspense } from "solid-js";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
@@ -47,6 +48,11 @@ export default function Settings(props: RouteSectionProps) {
 								icon: IconLucideImage,
 							},
 							{
+								href: "transcription",
+								name: "Transcription",
+								icon: IconCapCaptions,
+							},
+							{
 								href: "integrations",
 								name: "Integrations",
 								icon: IconLucideUnplug,
@@ -89,7 +95,18 @@ export default function Settings(props: RouteSectionProps) {
 				</ul>
 				<div class="p-[0.625rem] text-left flex flex-col">
 					<Show when={version()}>
-						{(v) => <p class="mb-2 text-xs text-gray-11">v{v()}</p>}
+						{(v) => (
+							<div class="mb-2 text-xs text-gray-11 flex flex-col items-start gap-0.5">
+								<span>v{v()}</span>
+								<button
+									type="button"
+									class="text-gray-11 hover:text-gray-12 underline transition-colors"
+									onClick={() => shell.open("https://cap.so/download/versions")}
+								>
+									View previous versions
+								</button>
+							</div>
+						)}
 					</Show>
 					{auth.data ? (
 						<Button

@@ -1,4 +1,4 @@
-import { Button, Input, Label } from "@cap/ui";
+import { Button, Label } from "@cap/ui";
 import type { Organisation } from "@cap/web-domain";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -35,19 +35,31 @@ export const AccessEmailDomain = () => {
 	return (
 		<div className="flex-1 space-y-4">
 			<div className="space-y-1">
-				<Label htmlFor="allowedEmailDomain">Access email domain</Label>
+				<Label htmlFor="allowedEmailDomain">Email access restriction</Label>
 				<p className="text-sm text-gray-10">
-					Only emails from this domain can access shared videos.{" "}
-					<span className="font-medium text-sm text-gray-11 leading-[0px]">
-						Leave blank to allow everyone.
+					Restrict who can access public "anyone with the link" videos. Add
+					email domains (e.g.{" "}
+					<code className="text-xs bg-gray-3 px-1 py-0.5 rounded">
+						company.com
+					</code>
+					) or specific email addresses (e.g.{" "}
+					<code className="text-xs bg-gray-3 px-1 py-0.5 rounded">
+						larry@google.com
+					</code>
+					), separated by commas.
+				</p>
+				<p className="text-sm text-gray-10">
+					Members of your organization and spaces can always access videos
+					shared with them, regardless of this setting.{" "}
+					<span className="font-medium text-gray-11">
+						Leave blank to allow anyone with the link.
 					</span>
 				</p>
 			</div>
-			<div className="flex flex-col gap-3 w-full md:items-center md:flex-row h-fit">
-				<Input
-					type="text"
-					className="bg-gray-2"
-					placeholder="e.g. company.com"
+			<div className="flex flex-col gap-3 w-full h-fit">
+				<textarea
+					className="flex px-4 py-3 w-full font-thin transition-all duration-200 text-[16px] md:text-[13px] text-gray-12 bg-gray-1 border-gray-4 outline-0 focus:bg-gray-2 rounded-xl hover:bg-gray-2 border-[1px] focus:border-gray-5 placeholder:text-gray-8 ring-0 ring-gray-2 focus:ring-1 focus:ring-gray-12 focus:ring-offset-2 ring-offset-gray-3 hover:placeholder:text-gray-12 placeholder:duration-200 min-h-[72px] resize-y"
+					placeholder="e.g. company.com, partner.org, larry@google.com"
 					value={emailDomain || ""}
 					id="allowedEmailDomain"
 					name="allowedEmailDomain"
@@ -55,20 +67,23 @@ export const AccessEmailDomain = () => {
 						setEmailDomain(e.target.value);
 					}}
 				/>
-				<Button
-					className="min-w-fit"
-					type="submit"
-					spinner={saveLoading}
-					size="sm"
-					variant="dark"
-					disabled={
-						saveLoading ||
-						emailDomain === activeOrganization?.organization.allowedEmailDomain
-					}
-					onClick={handleEmailDomainSave}
-				>
-					{saveLoading ? null : "Save"}
-				</Button>
+				<div>
+					<Button
+						className="min-w-fit"
+						type="submit"
+						spinner={saveLoading}
+						size="sm"
+						variant="dark"
+						disabled={
+							saveLoading ||
+							emailDomain ===
+								activeOrganization?.organization.allowedEmailDomain
+						}
+						onClick={handleEmailDomainSave}
+					>
+						{saveLoading ? null : "Save"}
+					</Button>
+				</div>
 			</div>
 		</div>
 	);

@@ -8,7 +8,13 @@ pub struct HttpClient(reqwest::Client);
 
 impl Default for HttpClient {
     fn default() -> Self {
-        Self(reqwest::Client::new())
+        Self(
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Failed to build HTTP client"),
+        )
     }
 }
 
@@ -26,21 +32,17 @@ impl Default for RetryableHttpClient {
     fn default() -> Self {
         Self(
             reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
                 .retry(
                     reqwest::retry::always()
-                        .classify_fn(|req_rep| {
-                            match req_rep.status() {
-                                // Server errors
-                                Some(s)
-                                    if s.is_server_error()
-                                        || s == StatusCode::TOO_MANY_REQUESTS =>
-                                {
-                                    req_rep.retryable()
-                                }
-                                // Network errors
-                                None => req_rep.retryable(),
-                                _ => req_rep.success(),
+                        .classify_fn(|req_rep| match req_rep.status() {
+                            Some(s)
+                                if s.is_server_error() || s == StatusCode::TOO_MANY_REQUESTS =>
+                            {
+                                req_rep.retryable()
                             }
+                            None => req_rep.retryable(),
+                            _ => req_rep.success(),
                         })
                         .max_retries_per_request(5)
                         .max_extra_load(5.0),

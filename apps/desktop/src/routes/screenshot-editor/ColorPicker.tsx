@@ -1,5 +1,8 @@
 import { createWritableMemo } from "@solid-primitives/memo";
+import { getHexColorDigitCount, hexToRgb } from "~/utils/hex-color";
 import { TextInput } from "./TextInput";
+
+export { hexToRgb } from "~/utils/hex-color";
 
 export const BACKGROUND_COLORS = [
 	"#FF0000", // Red
@@ -29,6 +32,18 @@ export function RgbInput(props: {
 	let prevHex = rgbToHex(props.value);
 	let colorInput!: HTMLInputElement;
 
+	const commitValue = (raw: string) => {
+		const trimmed = raw.trim();
+		const value = hexToRgb(trimmed);
+		if (value) {
+			const [r, g, b] = value;
+			props.onChange([r, g, b]);
+			setText(rgbToHex([r, g, b]));
+			return true;
+		}
+		return false;
+	};
+
 	return (
 		<div class="flex flex-row items-center gap-[0.75rem] relative">
 			<button
@@ -57,24 +72,29 @@ export function RgbInput(props: {
 				onFocus={() => {
 					prevHex = rgbToHex(props.value);
 				}}
+				onKeyDown={(e) => {
+					if (e.key === "Enter") {
+						e.preventDefault();
+						if (!commitValue(e.currentTarget.value)) {
+							setText(prevHex);
+						}
+						e.currentTarget.blur();
+					}
+				}}
 				onInput={(e) => {
 					setText(e.currentTarget.value);
-					const value = hexToRgb(e.target.value);
+					const digitCount = getHexColorDigitCount(e.currentTarget.value);
+					if (digitCount !== 6 && digitCount !== 8) return;
+
+					const value = hexToRgb(e.currentTarget.value.trim());
 					if (!value) return;
 					const [r, g, b] = value;
 					props.onChange([r, g, b]);
 				}}
 				onBlur={(e) => {
-					const value = hexToRgb(e.target.value);
-					if (value) {
-						const [r, g, b] = value;
-						props.onChange([r, g, b]);
-					} else {
+					if (!commitValue(e.target.value)) {
 						setText(prevHex);
-						const fallbackValue = hexToRgb(text());
-						if (!fallbackValue) return;
-						const [r, g, b] = fallbackValue;
-						props.onChange([r, g, b]);
+						props.onChange(props.value);
 					}
 				}}
 			/>
@@ -87,21 +107,4 @@ export function rgbToHex(rgb: [number, number, number]) {
 		.map((c) => c.toString(16).padStart(2, "0"))
 		.join("")
 		.toUpperCase()}`;
-}
-
-export function hexToRgb(hex: string): [number, number, number, number] | null {
-	const match = hex.match(
-		/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})?$/i,
-	);
-	if (!match) return null;
-	const [, r, g, b, a] = match;
-	const rgb = [
-		Number.parseInt(r, 16),
-		Number.parseInt(g, 16),
-		Number.parseInt(b, 16),
-	] as const;
-	if (a) {
-		return [...rgb, Number.parseInt(a, 16)];
-	}
-	return [...rgb, 255];
 }

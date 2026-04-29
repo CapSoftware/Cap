@@ -111,7 +111,23 @@ const ghActionsOidc = createMiddleware<{
 			return new Response("Invalid repository", { status: 401 });
 		}
 
-		c.set("githubToken", payload as any);
+		const runId = payload.run_id;
+		const repositoryId = payload.repository_id;
+		const actor = payload.actor;
+
+		if (
+			typeof runId !== "string" ||
+			typeof repositoryId !== "string" ||
+			typeof actor !== "string"
+		) {
+			return new Response("Missing workflow token claims", { status: 401 });
+		}
+
+		c.set("githubToken", {
+			run_id: runId,
+			repository_id: repositoryId,
+			actor,
+		});
 	} catch (error) {
 		if (error instanceof Error)
 			return new Response(`Token validation failed: ${error.message}`, {
@@ -250,7 +266,7 @@ async function handleCommand(interaction: InteractionBody, env: Env) {
 	}
 }
 
-async function verifyRequest(request: Request, jsonBody: any) {
+async function verifyRequest(request: Request, jsonBody: unknown) {
 	const signature = request.headers.get("X-Signature-Ed25519");
 	if (!signature) throw new Error("Signature header not found");
 

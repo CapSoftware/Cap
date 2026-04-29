@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.4.0"
+version = "0.4.85"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -24,7 +24,6 @@ tauri = { workspace = true, features = [
     "protocol-asset",
     "tray-icon",
     "image-png",
-    "devtools",
 ] }
 tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
 tauri-plugin-dialog = "2.2.0"
@@ -49,7 +48,7 @@ serde = { workspace = true }
 serde_json = "1.0.111"
 specta.workspace = true
 specta-typescript = "0.0.7"
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 uuid = { version = "1.10.0", features = ["v4"] }
 image = "0.25.2"
 futures-intrusive = "0.5.0"
@@ -79,6 +78,7 @@ log = "0.4.20"
 
 cap-audio = { path = "../../../crates/audio" }
 cap-camera = { path = "../../../crates/camera", features = ["serde", "specta"] }
+cap-camera-effects = { path = "../../../crates/camera-effects" }
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
 cap-rendering = { path = "../../../crates/rendering" }
@@ -87,6 +87,8 @@ cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
+cap-enc-ffmpeg = { path = "../../../crates/enc-ffmpeg" }
+cap-media-info = { path = "../../../crates/media-info" }
 scap-targets = { path = "../../../crates/scap-targets" }
 scap-screencapturekit = { path = "../../../crates/scap-screencapturekit" }
 scap-direct3d = { path = "../../../crates/scap-direct3d" }
@@ -101,6 +103,7 @@ tokio-stream = { version = "0.1.17", features = ["sync"] }
 md5 = "0.7.0"
 tokio-util = "0.7.15"
 wgpu.workspace = true
+pollster = "0.4"
 bytemuck = "1.23.1"
 kameo = "0.17.2"
 tauri-plugin-sentry = "0.5.0"
@@ -115,6 +118,7 @@ opentelemetry = "0.31.0"
 opentelemetry-otlp = "0.31.0"                                                 #{ version = , features = ["http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
 posthog-rs = "0.3.7"
+sysinfo = "0.35"
 workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
 aho-corasick.workspace = true
 
@@ -126,6 +130,14 @@ objc2-app-kit = { version = "0.3.0", features = [
     "NSWindow",
     "NSResponder",
     "NSHapticFeedback",
+    "NSWorkspace",
+    "NSRunningApplication",
+] }
+objc2 = "0.6.0"
+objc2-foundation = { version = "0.3.0", features = [
+    "NSNotification",
+    "NSString",
+    "NSThread",
 ] }
 cocoa = "0.26.0"
 objc = "0.2.7"
@@ -133,14 +145,22 @@ swift-rs = "1.0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 cidre = { workspace = true }
 
+[target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
+parakeet-rs = "0.3.4"
+
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System",
+    "Win32_System_Power",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
 ] }
 windows-sys = { workspace = true }
+winreg = "0.55"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
+
+[dev-dependencies]
+tauri = { workspace = true, features = ["test"] }

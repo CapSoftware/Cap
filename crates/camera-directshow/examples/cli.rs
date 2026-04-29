@@ -56,7 +56,7 @@ mod windows {
                         return None;
                     }
 
-                    let video_info = &*media_type.video_info();
+                    let video_info = media_type.video_info();
 
                     let width = video_info.bmiHeader.biWidth;
                     let height = video_info.bmiHeader.biHeight;
@@ -114,7 +114,7 @@ mod windows {
                 .start_capturing(
                     &selected_format.media_type,
                     Box::new(|frame| {
-                        let data_length = unsafe { frame.sample.GetActualDataLength() };
+                        let data_length = frame.sample.GetActualDataLength();
                         println!(
                             "Frame: data_length={data_length:?}, timestamp={:?}",
                             frame.timestamp

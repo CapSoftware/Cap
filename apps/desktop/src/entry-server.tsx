@@ -11,9 +11,13 @@ export default createHandler(() => (
 					<link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
 					<script
 						innerHTML={`
-							if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-								document.documentElement.classList.add('dark');
-							}
+							(function() {
+								var theme = null;
+								try { theme = localStorage.getItem('cap-theme'); } catch (e) {}
+								var isDark = theme === 'dark' ||
+									(theme !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+								if (isDark) document.documentElement.classList.add('dark');
+							})();
 						`}
 					/>
 					{assets}

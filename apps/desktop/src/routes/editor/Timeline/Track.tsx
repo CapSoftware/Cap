@@ -70,7 +70,7 @@ export function SegmentRoot(
 			<div
 				{...props}
 				class={cx(
-					"absolute overflow-hidden border rounded-xl inset-y-0",
+					"absolute overflow-visible border rounded-xl inset-y-0",
 					editorState.timeline.interactMode === "split" &&
 						"timeline-scissors-cursor",
 					props.class,
@@ -84,7 +84,7 @@ export function SegmentRoot(
 			>
 				<div
 					class={cx(
-						"h-full flex flex-row rounded-xl overflow-hidden group",
+						"relative h-full flex flex-row rounded-xl overflow-hidden group",
 						props.innerClass,
 					)}
 				>
@@ -113,22 +113,30 @@ export function SegmentHandle(
 	props: ComponentProps<"div"> & { position: "start" | "end" },
 ) {
 	const ctx = useSegmentContext();
-	const hidden = () => ctx.width() < 40;
+	const compact = () => ctx.width() < 40;
 
 	return (
 		<div
 			{...props}
 			class={cx(
-				"w-4 min-w-4 cursor-col-resize transition-opacity h-full flex flex-row items-center relative z-10",
+				"absolute inset-y-0 z-10 flex w-5 cursor-col-resize items-center justify-center transition-opacity",
 				props.position === "start"
-					? "left-0 justify-center -ml-1"
-					: "right-0 justify-center -mr-1",
-				hidden() ? "opacity-0" : "opacity-0 group-hover:opacity-100",
+					? "left-0 -translate-x-1/2"
+					: "right-0 translate-x-1/2",
+				compact() ? "opacity-55" : "opacity-35 group-hover:opacity-100",
 				props.class,
 			)}
-			data-hidden={hidden()}
+			data-compact={compact()}
 		>
 			<div class="w-[3px] h-8 bg-solid-white rounded-full" />
 		</div>
 	);
+}
+
+export function useSetPreviewTime() {
+	const { totalDuration, setEditorState } = useEditorContext();
+
+	return (time: number) => {
+		setEditorState("previewTime", Math.min(Math.max(0, time), totalDuration()));
+	};
 }

@@ -1,8 +1,9 @@
 pub mod gif;
+pub mod mov;
 pub mod mp4;
 
 use cap_editor::SegmentMedia;
-use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
+use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
 use std::{path::PathBuf, sync::Arc};
 
@@ -52,6 +53,7 @@ pub struct ExporterBuilder {
     project_path: PathBuf,
     config: Option<ProjectConfiguration>,
     output_path: Option<PathBuf>,
+    force_ffmpeg_decoder: bool,
 }
 
 impl ExporterBuilder {
@@ -60,14 +62,25 @@ impl ExporterBuilder {
         self
     }
 
+    pub fn with_output_path(mut self, output_path: PathBuf) -> Self {
+        self.output_path = Some(output_path);
+        self
+    }
+
+    pub fn with_force_ffmpeg_decoder(mut self, force: bool) -> Self {
+        self.force_ffmpeg_decoder = force;
+        self
+    }
+
     pub async fn build(self) -> Result<ExporterBase, ExporterBuildError> {
         type Error = ExporterBuildError;
 
-        let project_config = serde_json::from_reader(
-            std::fs::File::open(self.project_path.join("project-config.json"))
-                .map_err(|v| Error::ConfigLoad(v.into()))?,
-        )
-        .map_err(|v| Error::ConfigLoad(v.into()))?;
+        let project_config = if let Some(config) = self.config {
+            config
+        } else {
+            ProjectConfiguration::load(&self.project_path)
+                .map_err(|v| Error::ConfigLoad(v.into()))?
+        };
 
         let recording_meta =
             RecordingMeta::load_for_project(&self.project_path).map_err(Error::MetaLoad)?;
@@ -90,9 +103,10 @@ impl ExporterBuilder {
             .map_err(Error::RendererSetup)?,
         );
 
-        let segments = cap_editor::create_segments(&recording_meta, studio_meta)
-            .await
-            .map_err(Error::MediaLoad)?;
+        let segments =
+            cap_editor::create_segments(&recording_meta, studio_meta, self.force_ffmpeg_decoder)
+                .await
+                .map_err(Error::MediaLoad)?;
 
         let output_path = self
             .output_path
@@ -114,6 +128,29 @@ impl ExporterBuilder {
             project_path: self.project_path,
         })
     }
+}
+
+pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> ProjectConfiguration {
+    project_config.background.source = BackgroundSource::Color {
+        value: [0, 0, 0],
+        alpha: 0,
+    };
+    project_config.background.blur = 0.0;
+    project_config.background.shadow = 0.0;
+    project_config.background.advanced_shadow = None;
+    project_config.background.border = None;
+    project_config.camera.hide = true;
+    project_config.captions = None;
+    project_config.keyboard = None;
+
+    if let Some(timeline) = project_config.timeline.as_mut() {
+        timeline.mask_segments.clear();
+        timeline.text_segments.clear();
+        timeline.caption_segments.clear();
+        timeline.keyboard_segments.clear();
+    }
+
+    project_config
 }
 
 pub struct ExporterBase {
@@ -144,6 +181,7 @@ impl ExporterBase {
             project_path,
             config: None,
             output_path: None,
+            force_ffmpeg_decoder: false,
         }
     }
 }

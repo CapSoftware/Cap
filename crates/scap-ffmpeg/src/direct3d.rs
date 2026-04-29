@@ -3,6 +3,49 @@ use scap_direct3d::PixelFormat;
 
 pub type AsFFmpegError = windows::core::Error;
 
+#[inline]
+fn copy_frame_data(
+    src_bytes: &[u8],
+    src_stride: usize,
+    dest_bytes: &mut [u8],
+    dest_stride: usize,
+    row_length: usize,
+    height: usize,
+) {
+    debug_assert!(height > 0, "height must be positive");
+    debug_assert!(
+        src_bytes.len()
+            >= (height - 1)
+                .saturating_mul(src_stride)
+                .saturating_add(row_length),
+        "source buffer too small"
+    );
+    debug_assert!(
+        dest_bytes.len()
+            >= (height - 1)
+                .saturating_mul(dest_stride)
+                .saturating_add(row_length),
+        "destination buffer too small"
+    );
+
+    if src_stride == row_length && dest_stride == row_length {
+        let total_bytes = row_length.saturating_mul(height);
+        unsafe {
+            std::ptr::copy_nonoverlapping(src_bytes.as_ptr(), dest_bytes.as_mut_ptr(), total_bytes);
+        }
+    } else {
+        for i in 0..height {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    src_bytes.as_ptr().add(i * src_stride),
+                    dest_bytes.as_mut_ptr().add(i * dest_stride),
+                    row_length,
+                );
+            }
+        }
+    }
+}
+
 impl super::AsFFmpeg for scap_direct3d::Frame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
         let buffer = self.as_buffer()?;
@@ -12,6 +55,7 @@ impl super::AsFFmpeg for scap_direct3d::Frame {
 
         let src_bytes = buffer.data();
         let src_stride = buffer.stride() as usize;
+        let row_length = width * 4;
 
         match self.pixel_format() {
             PixelFormat::R8G8B8A8Unorm => {
@@ -24,14 +68,14 @@ impl super::AsFFmpeg for scap_direct3d::Frame {
                 let dest_stride = ff_frame.stride(0);
                 let dest_bytes = ff_frame.data_mut(0);
 
-                let row_length = width * 4;
-
-                for i in 0..height {
-                    let src_row = &src_bytes[i * src_stride..i * src_stride + row_length];
-                    let dest_row = &mut dest_bytes[i * dest_stride..i * dest_stride + row_length];
-
-                    dest_row.copy_from_slice(src_row);
-                }
+                copy_frame_data(
+                    src_bytes,
+                    src_stride,
+                    dest_bytes,
+                    dest_stride,
+                    row_length,
+                    height,
+                );
 
                 Ok(ff_frame)
             }
@@ -45,14 +89,14 @@ impl super::AsFFmpeg for scap_direct3d::Frame {
                 let dest_stride = ff_frame.stride(0);
                 let dest_bytes = ff_frame.data_mut(0);
 
-                let row_length = width * 4;
-
-                for i in 0..height {
-                    let src_row = &src_bytes[i * src_stride..i * src_stride + row_length];
-                    let dest_row = &mut dest_bytes[i * dest_stride..i * dest_stride + row_length];
-
-                    dest_row.copy_from_slice(src_row);
-                }
+                copy_frame_data(
+                    src_bytes,
+                    src_stride,
+                    dest_bytes,
+                    dest_stride,
+                    row_length,
+                    height,
+                );
 
                 Ok(ff_frame)
             }

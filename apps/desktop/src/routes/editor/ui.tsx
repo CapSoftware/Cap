@@ -27,6 +27,7 @@ export function Field(
 		name: string;
 		icon?: JSX.Element;
 		value?: JSX.Element;
+		badge?: string;
 		class?: string;
 		disabled?: boolean;
 	}>,
@@ -39,6 +40,11 @@ export function Field(
 			>
 				{props.icon}
 				{props.name}
+				{props.badge && (
+					<span class="text-[10px] px-1.5 py-0.5 bg-gray-3 rounded-full text-gray-11 font-medium">
+						{props.badge}
+					</span>
+				)}
 				{props.value && <div class="ml-auto">{props.value}</div>}
 			</span>
 			{props.children}
@@ -420,7 +426,7 @@ export function EditorButton<T extends ValidComponent = "button">(
 }
 
 export const dropdownContainerClasses =
-	"z-10 flex flex-col rounded-[0.75rem] border border-gray-3 bg-gray-1 shadow-s overflow-y-hidden outline-none";
+	"z-[60] flex flex-col rounded-[0.75rem] border border-gray-3 bg-gray-1 shadow-s overflow-y-hidden outline-none";
 
 export const topLeftAnimateClasses =
 	"ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-left";
@@ -435,7 +441,7 @@ export const topSlideAnimateClasses =
 	"ui-expanded:animate-in ui-expanded:fade-in ui-expanded:slide-in-from-top-1 ui-closed:animate-out ui-closed:fade-out ui-closed:slide-out-to-top-1 origin-top-center";
 
 export function ComingSoonTooltip(
-	props: ComponentProps<typeof KTooltip> & any,
+	props: ComponentProps<typeof KTooltip> & { as?: ValidComponent },
 ) {
 	const [trigger, root] = splitProps(props, ["children", "as"]);
 	return (

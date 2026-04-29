@@ -32,8 +32,10 @@ export function handleRecordingResult(
 
 				if (result === buttons.yes || result === buttons.ok)
 					emit("start-sign-in");
-				else if (result === buttons.no && setOptions)
+				else if (result === buttons.no && setOptions) {
 					setOptions({ mode: "studio" });
+					commands.setRecordingMode("studio");
+				}
 			} else if (result === "UpgradeRequired") commands.showWindow("Upgrade");
 			else
 				await dialog.message(`Error: ${result}`, {

@@ -6,18 +6,45 @@ use std::{
 };
 use windows::{
     Win32::{
+        Foundation::HANDLE,
         Media::MediaFoundation::{IMFMediaBuffer, MFSTARTUP_FULL, MFStartup},
-        System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize},
+        System::{
+            Threading::{AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW},
+            WinRT::{RO_INIT_MULTITHREADED, RoInitialize},
+        },
     },
-    core::Result,
+    core::{PCWSTR, Result},
 };
 
-// This is the value for Win7+
 pub const MF_VERSION: u32 = 131184;
 
 pub fn thread_init() {
     let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
     let _ = unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) };
+}
+
+pub struct MmcssAudioHandle {
+    handle: HANDLE,
+}
+
+impl MmcssAudioHandle {
+    pub fn register_audio() -> Option<Self> {
+        let task_name: Vec<u16> = "Audio\0".encode_utf16().collect();
+        let mut task_index: u32 = 0;
+        match unsafe { AvSetMmThreadCharacteristicsW(PCWSTR(task_name.as_ptr()), &mut task_index) }
+        {
+            Ok(handle) if !handle.is_invalid() => Some(Self { handle }),
+            _ => None,
+        }
+    }
+}
+
+impl Drop for MmcssAudioHandle {
+    fn drop(&mut self) {
+        if !self.handle.is_invalid() {
+            let _ = unsafe { AvRevertMmThreadCharacteristics(self.handle) };
+        }
+    }
 }
 
 pub trait IMFMediaBufferExt {

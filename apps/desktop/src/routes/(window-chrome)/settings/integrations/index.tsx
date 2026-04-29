@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import { For, onMount } from "solid-js";
+import IconLucideDatabase from "~icons/lucide/database";
 
 import "@total-typescript/ts-reset/filter-boolean";
 import { authStore } from "~/store";

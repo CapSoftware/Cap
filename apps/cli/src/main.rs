@@ -166,7 +166,10 @@ impl Export {
         let exporter_output_path = cap_export::mp4::Mp4ExportSettings {
             fps: 60,
             resolution_base: XY::new(1920, 1080),
-            compression: cap_export::mp4::ExportCompression::Minimal,
+            compression: cap_export::mp4::ExportCompression::Maximum,
+            custom_bpp: None,
+            force_ffmpeg_decoder: false,
+            optimize_filesize: false,
         }
         .export(exporter_base, move |_f| {
             // print!("\rrendered frame {f}");

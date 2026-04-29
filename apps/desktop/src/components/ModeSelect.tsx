@@ -1,9 +1,5 @@
 import { cx } from "cva";
 import { type JSX, Show } from "solid-js";
-import instantModeDark from "~/assets/illustrations/instant-mode-dark.png";
-import instantModeLight from "~/assets/illustrations/instant-mode-light.png";
-import studioModeDark from "~/assets/illustrations/studio-mode-dark.png";
-import studioModeLight from "~/assets/illustrations/studio-mode-light.png";
 import { createOptionsQuery } from "~/utils/queries";
 import { commands, type RecordingMode } from "~/utils/tauri";
 
@@ -11,16 +7,12 @@ interface ModeOptionProps {
 	mode: RecordingMode;
 	title: string;
 	description: string;
-	imageDark?: string;
-	imageLight?: string;
-	icon?: (props: { class: string; style?: JSX.CSSProperties }) => JSX.Element;
+	icon: (props: { class: string; style?: JSX.CSSProperties }) => JSX.Element;
 	isSelected: boolean;
 	onSelect: (mode: RecordingMode) => void;
 }
 
 const ModeOption = (props: ModeOptionProps) => {
-	const hasImage = () => props.imageDark && props.imageLight;
-
 	return (
 		<div
 			data-tauri-drag-region="none"
@@ -41,34 +33,7 @@ const ModeOption = (props: ModeOptionProps) => {
 			</Show>
 
 			<div class="flex items-center justify-center w-full pt-5 pb-3">
-				<Show
-					when={hasImage()}
-					fallback={
-						<div
-							class={cx(
-								"flex items-center justify-center size-20 rounded-full",
-								props.isSelected
-									? "bg-blue-4 dark:bg-blue-4/50"
-									: "bg-gray-3 dark:bg-gray-4",
-							)}
-						>
-							{props.icon?.({
-								class: "size-10 invert dark:invert-0",
-							})}
-						</div>
-					}
-				>
-					<img
-						src={props.imageDark}
-						alt={props.title}
-						class="hidden dark:block size-20 object-contain"
-					/>
-					<img
-						src={props.imageLight}
-						alt={props.title}
-						class="block dark:hidden size-20 object-contain"
-					/>
-				</Show>
+				<props.icon class="size-6 invert dark:invert-0" />
 			</div>
 
 			<div class="flex flex-col items-center px-4 pb-4 text-center">
@@ -101,15 +66,13 @@ const ModeSelect = (props: { onClose?: () => void; standalone?: boolean }) => {
 			mode: "instant" as const,
 			title: "Instant",
 			description: "Share instantly with a link. Uploads as you record.",
-			imageDark: instantModeDark,
-			imageLight: instantModeLight,
+			icon: IconCapInstant,
 		},
 		{
 			mode: "studio" as const,
 			title: "Studio",
 			description: "Highest quality local recording for editing later.",
-			imageDark: studioModeDark,
-			imageLight: studioModeLight,
+			icon: IconCapFilmCut,
 		},
 		{
 			mode: "screenshot" as const,
@@ -145,8 +108,6 @@ const ModeSelect = (props: { onClose?: () => void; standalone?: boolean }) => {
 						mode={option.mode}
 						title={option.title}
 						description={option.description}
-						imageDark={option.imageDark}
-						imageLight={option.imageLight}
 						icon={option.icon}
 						isSelected={rawOptions.mode === option.mode}
 						onSelect={handleModeChange}

@@ -1,6 +1,17 @@
 "use client";
 
-const faqContent = [
+import Link from "next/link";
+
+interface FaqItem {
+	title: string;
+	answer: string;
+	link?: {
+		text: string;
+		href: string;
+	};
+}
+
+const faqContent: FaqItem[] = [
 	{
 		title: "Who is Cap for?",
 		answer:
@@ -19,7 +30,12 @@ const faqContent = [
 	{
 		title: "What makes Cap different from Loom?",
 		answer:
-			"Cap is open source, privacy-focused, and lets you own your data. You can connect custom S3 storage buckets, self-host the entire platform, and get a lightweight, faster experience. We focus strongly on design, user experience, and building with our community at the center of everything we do.",
+			"Cap is open source, privacy-focused, and lets you own your data. You can connect custom S3 storage buckets, self-host the entire platform, and get a lightweight, faster experience. We focus strongly on design, user experience, and building with our community at the center of everything we do. Plus, our built-in Loom video importer makes switching effortless.",
+	},
+	{
+		title: "Can I import my Loom videos to Cap?",
+		answer:
+			"Yes! Cap Pro includes a built-in Loom video importer that lets you seamlessly transfer your existing Loom recordings into Cap. Just paste your Loom video links and Cap handles the rest — keeping all your content organized in one place.",
 	},
 	{
 		title: "Can I self-host Cap?",
@@ -30,6 +46,10 @@ const faqContent = [
 		title: "Is there a commercial license available?",
 		answer:
 			"Yes, we offer commercial licenses for businesses that want to use the Cap desktop app. The commercial license includes the Cap Recorder + Editor with local-only features. Our Pro plan also includes a commercial license for the desktop app.",
+		link: {
+			text: "Deactivate your license",
+			href: "/deactivate-license",
+		},
 	},
 	{
 		title: "What happens after the beta period ends?",
@@ -45,11 +65,19 @@ export const FaqPage = () => {
 				<h1>FAQ</h1>
 			</div>
 			<div className="mb-10">
-				{faqContent.map((section, index) => {
+				{faqContent.map((section) => {
 					return (
-						<div key={index} className="mx-auto my-8 max-w-2xl">
+						<div key={section.title} className="mx-auto my-8 max-w-2xl">
 							<h2 className="mb-2 text-xl">{section.title}</h2>
 							<p className="text-lg">{section.answer}</p>
+							{section.link && (
+								<Link
+									href={section.link.href}
+									className="inline-block mt-2 text-blue-500 hover:text-blue-600 hover:underline"
+								>
+									{section.link.text} &rarr;
+								</Link>
+							)}
 						</div>
 					);
 				})}

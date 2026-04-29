@@ -83,8 +83,15 @@ function createServerEnv() {
 
 			/// AI providers
 			DEEPGRAM_API_KEY: z.string().optional().describe("Audio transcription"),
+			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),
+			REPLICATE_API_TOKEN: z
+				.string()
+				.optional()
+				.describe("Replicate API token for audio enhancement"),
+			SUPERMEMORY_API_KEY: z.string().optional(),
+			SUPERMEMORY_KNOWLEDGE_TAG: z.string().optional(),
 
 			/// Cap Cloud
 			// These are only needed for Cap Cloud (https://cap.so)
@@ -112,7 +119,22 @@ function createServerEnv() {
 			VERCEL_AWS_ROLE_ARN: z.string().optional(),
 			POSTHOG_PERSONAL_API_KEY: z.string().optional(),
 			DUB_API_KEY: z.string().optional(),
-			INTERCOM_SECRET: z.string().optional(),
+
+			/// Media Server
+			MEDIA_SERVER_URL: z
+				.string()
+				.optional()
+				.describe("URL of the media server for FFmpeg processing"),
+			MEDIA_SERVER_WEBHOOK_SECRET: z
+				.string()
+				.optional()
+				.describe("Secret for authenticating media server webhook callbacks"),
+			MEDIA_SERVER_WEBHOOK_URL: z
+				.string()
+				.optional()
+				.describe(
+					"Base URL for media server webhooks (use host.docker.internal for Docker setups)",
+				),
 
 			/// Ignore
 			NODE_ENV: z.string(),

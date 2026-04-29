@@ -59,6 +59,10 @@ async function main() {
 		envs.WEB_URL = "http://localhost:3000";
 		envs.NEXTAUTH_URL = envs.WEB_URL;
 		envs.WORKFLOWS_RPC_SECRET = crypto.randomBytes(32).toString("base64");
+		envs.MEDIA_SERVER_URL = "http://localhost:3456";
+		envs.MEDIA_SERVER_WEBHOOK_SECRET = crypto
+			.randomBytes(32)
+			.toString("base64");
 
 		if (!allEnvs.NEXTAUTH_SECRET) {
 			allEnvs.NEXTAUTH_SECRET = crypto.randomBytes(32).toString("base64");

@@ -13,7 +13,6 @@ pub struct AudioRendererTrack<'a> {
     pub offset: isize,
 }
 
-// Renders a combination of audio tracks into a single stereo buffer
 pub fn render_audio(
     tracks: &[AudioRendererTrack],
     offset: usize,
@@ -24,7 +23,15 @@ pub fn render_audio(
     let samples = samples.min(
         tracks
             .iter()
-            .flat_map(|t| (t.data.samples().len() / t.data.channels() as usize).checked_sub(offset))
+            .filter_map(|t| {
+                let track_samples = t.data.samples().len() / t.data.channels() as usize;
+                let available = track_samples as isize - offset as isize - t.offset;
+                if available > 0 {
+                    Some(available as usize)
+                } else {
+                    None
+                }
+            })
             .max()
             .unwrap_or(0),
     );
@@ -74,8 +81,10 @@ pub fn render_audio(
             }
         }
 
-        out[out_offset + i * 2] = left;
-        out[out_offset + i * 2 + 1] = right;
+        let l = left.clamp(-1.0, 1.0);
+        let r = right.clamp(-1.0, 1.0);
+        out[out_offset + i * 2] = l;
+        out[out_offset + i * 2 + 1] = r;
     }
 
     samples

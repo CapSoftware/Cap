@@ -95,6 +95,8 @@ const footerLinks = {
 		},
 	] as FooterLink[],
 	additional: [
+		{ label: "Loom Video Importer", href: "/loom-alternative" },
+		{ label: "Loom Video Downloader", href: "/tools/loom-downloader" },
 		{ label: "Screen Recorder", href: "/screen-recorder" },
 		{ label: "Free Screen Recorder", href: "/free-screen-recorder" },
 		{ label: "Screen Recorder for Mac", href: "/screen-recorder-mac" },
@@ -120,6 +122,7 @@ export const Footer = () => {
 							<p className="max-w-sm text-gray-12">
 								Cap is the open source alternative to Loom. Lightweight,
 								powerful, and cross-platform. Record and share in seconds.
+								Import your existing Loom videos seamlessly.
 							</p>
 						</div>
 						<p className="pt-4 text-sm text-gray-9">

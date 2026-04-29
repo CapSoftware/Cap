@@ -2,6 +2,8 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { debounce } from "@solid-primitives/scheduled";
+import { Menu } from "@tauri-apps/api/menu";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
 
@@ -9,14 +11,15 @@ import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
+import { createCaptionTrackSegments } from "./captions";
 import {
+	type EditorPreviewQuality,
 	FPS,
-	type PreviewQuality,
 	serializeProjectConfiguration,
 	useEditorContext,
 } from "./context";
-import { preloadCropVideoFull } from "./cropVideoPreloader";
 import { MaskOverlay } from "./MaskOverlay";
+import { PerformanceOverlay } from "./PerformanceOverlay";
 import { TextOverlay } from "./TextOverlay";
 import {
 	EditorButton,
@@ -29,6 +32,14 @@ import {
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
 
+function logCropProfile(
+	stage: string,
+	data: Record<string, number | string | boolean | null> = {},
+) {
+	if (!import.meta.env.DEV) return;
+	console.info("[crop-profile]", stage, data);
+}
+
 export function PlayerContent() {
 	const {
 		project,
@@ -39,62 +50,85 @@ export function PlayerContent() {
 		setEditorState,
 		zoomOutLimit,
 		setProject,
+		canvasControls,
 		previewResolutionBase,
 		previewQuality,
 		setPreviewQuality,
 	} = useEditorContext();
 
 	const previewOptions = [
-		{ label: "Full", value: "full" as PreviewQuality },
-		{ label: "Half", value: "half" as PreviewQuality },
-		{ label: "Quarter", value: "quarter" as PreviewQuality },
+		{ label: "Full", value: "full" as EditorPreviewQuality },
+		{ label: "Half", value: "half" as EditorPreviewQuality },
+		{ label: "Quarter", value: "quarter" as EditorPreviewQuality },
 	];
+
+	const zoomHint = () =>
+		ostype() === "windows"
+			? "Hold Ctrl and scroll, or press Ctrl +/- to zoom"
+			: "Pinch, or press Cmd +/- to zoom";
 
 	// Load captions on mount
 	onMount(async () => {
 		if (editorInstance?.path) {
-			// Still load captions into the store since they will be used by the GPU renderer
 			await captionsStore.loadCaptions(editorInstance.path);
 
-			// Synchronize captions settings with project configuration
-			// This ensures the GPU renderer will receive the caption settings
 			if (editorInstance && project) {
 				const updatedProject = { ...project };
+				let projectDidChange = false;
+				const captionSegments = captionsStore.state.segments;
+				const hasStoredCaptions = captionSegments.length > 0;
 
-				// Add captions data to project configuration if it doesn't exist
-				if (
-					!updatedProject.captions &&
-					captionsStore.state.segments.length > 0
-				) {
+				if (!updatedProject.captions && hasStoredCaptions) {
 					updatedProject.captions = {
-						segments: captionsStore.state.segments.map((segment) => ({
+						segments: captionSegments.map((segment) => ({
 							id: segment.id,
 							start: segment.start,
 							end: segment.end,
 							text: segment.text,
 						})),
-						settings: {
-							enabled: captionsStore.state.settings.enabled,
-							font: captionsStore.state.settings.font,
-							size: captionsStore.state.settings.size,
-							color: captionsStore.state.settings.color,
-							backgroundColor: captionsStore.state.settings.backgroundColor,
-							backgroundOpacity: captionsStore.state.settings.backgroundOpacity,
-							position: captionsStore.state.settings.position,
-							italic: captionsStore.state.settings.italic,
-							outline: captionsStore.state.settings.outline,
-							outlineColor: captionsStore.state.settings.outlineColor,
-							exportWithSubtitles:
-								captionsStore.state.settings.exportWithSubtitles,
-							highlightColor: captionsStore.state.settings.highlightColor,
-							fadeDuration: captionsStore.state.settings.fadeDuration,
-						},
+						settings: { ...captionsStore.state.settings },
 					};
+					projectDidChange = true;
+				}
 
-					// Update the project with captions data
+				if (
+					hasStoredCaptions &&
+					(updatedProject.timeline?.captionSegments?.length ?? 0) === 0
+				) {
+					updatedProject.timeline = {
+						...(updatedProject.timeline ?? {
+							segments: [
+								{
+									start: 0,
+									end: editorInstance.recordingDuration,
+									timescale: 1,
+								},
+							],
+							zoomSegments: [],
+							sceneSegments: [],
+							maskSegments: [],
+							textSegments: [],
+						}),
+						captionSegments: createCaptionTrackSegments(captionSegments),
+					};
+					projectDidChange = true;
+				}
+
+				const hasCaptionTrackData =
+					hasStoredCaptions ||
+					(updatedProject.timeline?.captionSegments?.length ?? 0) > 0;
+
+				if (hasCaptionTrackData) {
+					setEditorState(
+						"timeline",
+						"tracks",
+						"caption",
+						updatedProject.captions?.settings?.enabled ?? true,
+					);
+				}
+
+				if (projectDidChange) {
 					setProject(updatedProject);
-
-					// Save the updated project configuration
 					await commands.setProjectConfig(
 						serializeProjectConfiguration(updatedProject),
 					);
@@ -123,7 +157,31 @@ export function PlayerContent() {
 	};
 
 	const cropDialogHandler = async () => {
+		const startedAt = performance.now();
 		const display = editorInstance.recordings.segments[0].display;
+		const controls = canvasControls();
+		let previewUrl: string | null = null;
+		logCropProfile("click", {
+			recordingDurationSec: Math.round(editorInstance.recordingDuration),
+			playbackTimeSec: Number(editorState.playbackTime.toFixed(3)),
+			displayWidth: display.width,
+			displayHeight: display.height,
+			wasPlaying: editorState.playing,
+		});
+		if (controls?.hasRenderedFrame()) {
+			try {
+				const previewFrame = await controls.captureFrame();
+				if (previewFrame) {
+					previewUrl = URL.createObjectURL(previewFrame);
+				}
+			} catch (error) {
+				console.warn("Preview frame capture failed:", error);
+			}
+		}
+		logCropProfile("preview-frame-captured", {
+			elapsedMs: Number((performance.now() - startedAt).toFixed(2)),
+			available: previewUrl !== null,
+		});
 		setDialog({
 			open: true,
 			type: "crop",
@@ -136,12 +194,19 @@ export function PlayerContent() {
 					y: display.height,
 				}),
 			},
+			previewUrl,
+		});
+		logCropProfile("dialog-opened", {
+			elapsedMs: Number((performance.now() - startedAt).toFixed(2)),
 		});
 		await commands.stopPlayback();
+		logCropProfile("playback-stopped", {
+			elapsedMs: Number((performance.now() - startedAt).toFixed(2)),
+		});
 		setEditorState("playing", false);
 	};
 
-	const handlePreviewQualityChange = async (quality: PreviewQuality) => {
+	const handlePreviewQualityChange = async (quality: EditorPreviewQuality) => {
 		if (quality === previewQuality()) return;
 
 		const wasPlaying = editorState.playing;
@@ -257,8 +322,6 @@ export function PlayerContent() {
 					<EditorButton
 						tooltipText="Crop Video"
 						onClick={cropDialogHandler}
-						onMouseEnter={preloadCropVideoFull}
-						onFocus={preloadCropVideoFull}
 						leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
 					>
 						Crop
@@ -266,7 +329,7 @@ export function PlayerContent() {
 				</div>
 				<div class="flex items-center gap-2">
 					<span class="text-xs font-medium text-gray-11">Preview quality</span>
-					<KSelect<{ label: string; value: PreviewQuality }>
+					<KSelect<{ label: string; value: EditorPreviewQuality }>
 						options={previewOptions}
 						optionValue="value"
 						optionTextValue="label"
@@ -294,7 +357,7 @@ export function PlayerContent() {
 						<KSelect.Trigger class="flex items-center gap-2 h-9 px-3 rounded-lg border border-gray-3 bg-gray-2 dark:bg-gray-3 text-sm text-gray-12">
 							<KSelect.Value<{
 								label: string;
-								value: PreviewQuality;
+								value: EditorPreviewQuality;
 							}> class="flex-1 text-left truncate">
 								{(state) =>
 									state.selectedOption()?.label ?? "Select preview quality"
@@ -319,7 +382,7 @@ export function PlayerContent() {
 				</div>
 			</div>
 			<PreviewCanvas />
-			<div class="flex overflow-hidden z-10 flex-row gap-3 justify-between items-center p-5">
+			<div class="relative flex overflow-hidden z-10 flex-row gap-3 justify-between items-center p-5">
 				<div class="flex-1">
 					<Time
 						class="text-gray-12"
@@ -439,6 +502,9 @@ export function PlayerContent() {
 						}
 					/>
 				</div>
+				<div class="absolute right-2 bottom-1 text-[11px] leading-none text-right text-gray-9 pointer-events-none whitespace-nowrap">
+					{zoomHint()}
+				</div>
 			</div>
 		</div>
 	);
@@ -457,11 +523,29 @@ const gridStyle = {
 };
 
 function PreviewCanvas() {
-	const { latestFrame, canvasControls } = useEditorContext();
+	const { latestFrame, canvasControls, performanceMode, setPerformanceMode } =
+		useEditorContext();
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
 
-	const canvasTransferredRef = { current: false };
+	const handleContextMenu = async (e: MouseEvent) => {
+		e.preventDefault();
+		const menu = await Menu.new({
+			items: [
+				{
+					id: "performance-mode",
+					text: performanceMode() ? "✓ Performance Mode" : "Performance Mode",
+					action: () => setPerformanceMode(!performanceMode()),
+				},
+			],
+		});
+		menu.popup();
+	};
+
+	const canvasInitializedRef = { current: false };
+	const [canvasRef, setCanvasRef] = createSignal<HTMLCanvasElement | null>(
+		null,
+	);
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
@@ -487,103 +571,101 @@ function PreviewCanvas() {
 		}
 	});
 
-	const isWindows = navigator.userAgent.includes("Windows");
-
-	const initCanvas = (canvas: HTMLCanvasElement) => {
-		if (canvasTransferredRef.current) return;
+	createEffect(() => {
+		const canvas = canvasRef();
 		const controls = canvasControls();
-		if (!controls) return;
+		console.warn("[Player] Canvas init effect", {
+			hasCanvas: !!canvas,
+			hasControls: !!controls,
+			alreadyInit: canvasInitializedRef.current,
+		});
+		if (canvasInitializedRef.current || !canvas || !controls) return;
 
-		if (isWindows) {
-			controls.initDirectCanvas(canvas);
-			canvasTransferredRef.current = true;
-			return;
-		}
+		console.warn("[Player] Initializing canvas", {
+			canvasId: canvas.id,
+			isConnected: canvas.isConnected,
+		});
+		controls.initDirectCanvas(canvas);
+		canvasInitializedRef.current = true;
+		console.warn("[Player] Canvas initialized successfully");
+	});
 
-		try {
-			const offscreen = canvas.transferControlToOffscreen();
-			controls.initCanvas(offscreen);
-			canvasTransferredRef.current = true;
-		} catch (e) {
-			console.error("[PreviewCanvas] Failed to transfer canvas:", e);
-		}
+	const padding = 4;
+	const frameWidth = () => latestFrame()?.width ?? 1920;
+	const frameHeight = () => latestFrame()?.height ?? 1080;
+
+	const availableWidth = () =>
+		Math.max(debouncedBounds().width - padding * 2, 0);
+	const availableHeight = () =>
+		Math.max(debouncedBounds().height - padding * 2, 0);
+
+	const containerAspect = () => {
+		const width = availableWidth();
+		const height = availableHeight();
+		if (width === 0 || height === 0) return 1;
+		return width / height;
 	};
+
+	const frameAspect = () => {
+		const width = frameWidth();
+		const height = frameHeight();
+		if (width === 0 || height === 0) return containerAspect();
+		return width / height;
+	};
+
+	const size = () => {
+		let width: number;
+		let height: number;
+		if (frameAspect() < containerAspect()) {
+			height = availableHeight();
+			width = height * frameAspect();
+		} else {
+			width = availableWidth();
+			height = width / frameAspect();
+		}
+
+		return { width, height };
+	};
+
+	const hasFrame = () => !!latestFrame();
 
 	return (
 		<div
 			ref={setCanvasContainerRef}
 			class="relative flex-1 justify-center items-center"
 			style={{ contain: "layout style" }}
+			onContextMenu={handleContextMenu}
 		>
-			<Show when={latestFrame()}>
-				{(currentFrame) => {
-					const padding = 4;
-					const frameWidth = () => currentFrame().width;
-					const frameHeight = () => currentFrame().height;
-
-					const availableWidth = () =>
-						Math.max(debouncedBounds().width - padding * 2, 0);
-					const availableHeight = () =>
-						Math.max(debouncedBounds().height - padding * 2, 0);
-
-					const containerAspect = () => {
-						const width = availableWidth();
-						const height = availableHeight();
-						if (width === 0 || height === 0) return 1;
-						return width / height;
-					};
-
-					const frameAspect = () => {
-						const width = frameWidth();
-						const height = frameHeight();
-						if (width === 0 || height === 0) return containerAspect();
-						return width / height;
-					};
-
-					const size = () => {
-						let width: number;
-						let height: number;
-						if (frameAspect() < containerAspect()) {
-							height = availableHeight();
-							width = height * frameAspect();
-						} else {
-							width = availableWidth();
-							height = width / frameAspect();
-						}
-
-						return { width, height };
-					};
-
-					return (
-						<div class="flex overflow-hidden absolute inset-0 justify-center items-center h-full">
-							<div
-								class="relative"
-								style={{
-									width: `${size().width}px`,
-									height: `${size().height}px`,
-									contain: "strict",
-								}}
-							>
-								<canvas
-									style={{
-										width: `${size().width}px`,
-										height: `${size().height}px`,
-										"image-rendering": "auto",
-										"background-color": "#000000",
-										...(hasRenderedFrame() ? gridStyle : {}),
-									}}
-									ref={initCanvas}
-									id="canvas"
-									width={frameWidth()}
-									height={frameHeight()}
-								/>
-								<MaskOverlay size={size()} />
-								<TextOverlay size={size()} />
-							</div>
-						</div>
-					);
-				}}
-			</Show>
+			<div
+				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full"
+				style={{ visibility: hasFrame() ? "visible" : "hidden" }}
+			>
+				<div
+					class="relative"
+					style={{
+						width: `${size().width}px`,
+						height: `${size().height}px`,
+						contain: "strict",
+					}}
+				>
+					<canvas
+						style={{
+							width: `${size().width}px`,
+							height: `${size().height}px`,
+							"image-rendering": "auto",
+							"background-color": "#000000",
+							...(hasRenderedFrame() ? gridStyle : {}),
+						}}
+						ref={setCanvasRef}
+						id="canvas"
+					/>
+					<Show when={hasFrame()}>
+						<MaskOverlay size={size()} />
+						<TextOverlay size={size()} />
+						<PerformanceOverlay size={size()} />
+					</Show>
+				</div>
+			</div>
 		</div>
 	);
 }

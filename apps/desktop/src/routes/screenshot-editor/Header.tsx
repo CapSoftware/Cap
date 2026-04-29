@@ -21,6 +21,7 @@ import { BorderPopover } from "./popovers/BorderPopover";
 import { PaddingPopover } from "./popovers/PaddingPopover";
 import { RoundingPopover } from "./popovers/RoundingPopover";
 import { ShadowPopover } from "./popovers/ShadowPopover";
+
 import {
 	DropdownItem,
 	EditorButton,
@@ -32,7 +33,7 @@ import { useScreenshotExport } from "./useScreenshotExport";
 
 export function Header() {
 	const ctx = useScreenshotEditorContext();
-	const { setDialog, project, latestFrame } = ctx;
+	const { setDialog, project, originalImageSize, isImageFileReady } = ctx;
 	const path = () => ctx.editorInstance()?.path ?? "";
 
 	const { exportImage, isExporting } = useScreenshotExport();
@@ -65,17 +66,17 @@ export function Header() {
 	});
 
 	const cropDialogHandler = () => {
-		const frame = latestFrame();
-		if (!frame?.bitmap) return;
+		const imgSize = originalImageSize();
+		if (!imgSize) return;
 		setDialog({
 			open: true,
 			type: "crop",
-			originalSize: { x: frame.width, y: frame.height },
+			originalSize: { x: imgSize.width, y: imgSize.height },
 			currentCrop: project.background.crop,
 		});
 	};
 
-	const isCropDisabled = () => !latestFrame()?.bitmap;
+	const isCropDisabled = () => !originalImageSize() || !isImageFileReady();
 
 	return (
 		<div
@@ -106,7 +107,7 @@ export function Header() {
 
 			<div
 				class={cx(
-					"flex flex-row items-center gap-2",
+					"flex flex-row items-center gap-2 h-full",
 					ostype() !== "windows" && "pr-2",
 				)}
 			>

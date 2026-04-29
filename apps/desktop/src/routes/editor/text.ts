@@ -3,6 +3,7 @@ import type { XY } from "~/utils/tauri";
 export type TextSegment = {
 	start: number;
 	end: number;
+	track: number;
 	enabled: boolean;
 	content: string;
 	center: XY<number>;
@@ -21,6 +22,7 @@ export const defaultTextSegment = (
 ): TextSegment => ({
 	start,
 	end,
+	track: 0,
 	enabled: true,
 	content: "Text",
 	center: { x: 0.5, y: 0.5 },

@@ -136,6 +136,10 @@ fn test_gradient_background(
             from: [65535, 0, 0], // Red
             to: [0, 0, 65535],   // Blue
             angle: 45,
+            noise_intensity: None,
+            noise_scale: None,
+            animated: None,
+            animation_speed: None,
         },
         border: None,
     };
@@ -201,6 +205,10 @@ fn test_gradient_angles(
                 from: [65535, 32768, 0], // Orange
                 to: [32768, 0, 65535],   // Purple
                 angle,
+                noise_intensity: None,
+                noise_scale: None,
+                animated: None,
+                animation_speed: None,
             },
             border: None,
         };
@@ -266,6 +274,10 @@ fn test_caching(
             from: [0, 65535, 0],
             to: [0, 0, 65535],
             angle: 90,
+            noise_intensity: None,
+            noise_scale: None,
+            animated: None,
+            animation_speed: None,
         },
         border: None,
     };
@@ -312,6 +324,10 @@ fn test_caching(
             from: [65535, 0, 0],
             to: [65535, 65535, 0],
             angle: 45,
+            noise_intensity: None,
+            noise_scale: None,
+            animated: None,
+            animation_speed: None,
         },
         border: None,
     };

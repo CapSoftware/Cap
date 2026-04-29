@@ -18,7 +18,11 @@
 		"noEmit": true,
 		"jsx": "preserve",
 		"incremental": true,
-		"plugins": [{ "name": "next" }, { "name": "@effect/language-service" }],
+		"plugins": [
+			{ "name": "next" },
+			{ "name": "@effect/language-service" },
+			{ "name": "workflow" }
+		],
 		"baseUrl": ".",
 		"paths": {
 			"@/app/*": ["app/*"],
@@ -28,7 +32,8 @@
 			"@/lib/*": ["lib/*"],
 			"@/actions/*": ["actions/*"],
 			"@/data/*": ["data/*"],
-			"@/services": ["services"]
+			"@/services": ["services"],
+			"@/workflows/*": ["workflows/*"]
 		},
 		"types": ["node"]
 	},

@@ -62,6 +62,10 @@ impl ModelID {
         let vid = unique_id[unique_id.len() - 2 * 4..unique_id.len() - 4].to_string();
         let pid = unique_id[unique_id.len() - 4..].to_string();
 
+        if vid == "0000" && pid == "0001" {
+            return None;
+        }
+
         Some(Self { vid, pid })
     }
 }
@@ -99,30 +103,37 @@ pub(super) fn start_capturing_impl(
     let queue = dispatch::Queue::new();
     let delegate =
         CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(move |data| {
-            let Some(image_buf) = data.sample_buf.image_buf() else {
+            if data.sample_buf.image_buf().is_none() {
                 return;
             };
 
             callback(CapturedFrame {
-                native: NativeCapturedFrame(image_buf.retained(), data.sample_buf.retained()),
-                // reference_time: Instant::now(),
+                native: NativeCapturedFrame(data.sample_buf.retained()),
                 timestamp: data.timestamp,
-                // capture_begin_time: Some(data.capture_begin_time),
             });
         })));
 
     let mut output = av::capture::VideoDataOutput::new();
     let mut session = av::capture::Session::new();
+    let mut added_input = false;
 
     session.configure(|s| {
         if s.can_add_input(&input) {
             s.add_input(&input);
+            added_input = true;
         } else {
-            panic!("can't add input");
+            return;
         }
 
         s.add_output(&output);
     });
+
+    if !added_input {
+        return Err(AVFoundationError::Message(
+            "Failed to add camera input to AVFoundation session".to_string(),
+        )
+        .into());
+    }
 
     output.set_sample_buf_delegate(Some(delegate.as_ref()), Some(&queue));
 
@@ -140,8 +151,8 @@ pub(super) fn start_capturing_impl(
     Ok(AVFoundationRecordingHandle {
         _delegate: delegate,
         session,
-        _output: output,
-        _input: input,
+        output,
+        input,
         _device: device,
     })
 }
@@ -149,15 +160,33 @@ pub(super) fn start_capturing_impl(
 pub struct AVFoundationRecordingHandle {
     _delegate: arc::R<cap_camera_avfoundation::CallbackOutputDelegate>,
     session: arc::R<cidre::av::capture::Session>,
-    _output: arc::R<av::CaptureVideoDataOutput>,
-    _input: arc::R<av::CaptureDeviceInput>,
+    output: arc::R<av::CaptureVideoDataOutput>,
+    input: arc::R<av::CaptureDeviceInput>,
     _device: arc::R<av::CaptureDevice>,
 }
 
 impl AVFoundationRecordingHandle {
     pub fn stop_capturing(mut self) -> Result<(), String> {
-        self.session.stop_running();
+        self.teardown();
         Ok(())
+    }
+
+    fn teardown(&mut self) {
+        self.session.stop_running();
+        self.output
+            .set_sample_buf_delegate::<CallbackOutputDelegate>(None, None);
+        let output = self.output.clone();
+        let input = self.input.clone();
+        self.session.configure(move |s| {
+            s.remove_output(&output);
+            s.remove_input(&input);
+        });
+    }
+}
+
+impl Drop for AVFoundationRecordingHandle {
+    fn drop(&mut self) {
+        self.teardown();
     }
 }
 
@@ -167,6 +196,8 @@ pub enum AVFoundationError {
     Static(&'static cidre::ns::Error),
     #[error("{0}")]
     Retained(cidre::arc::R<cidre::ns::Error>),
+    #[error("{0}")]
+    Message(String),
 }
 
 impl From<&'static cidre::ns::Error> for AVFoundationError {
@@ -188,6 +219,7 @@ impl Deref for AVFoundationError {
         match self {
             AVFoundationError::Static(err) => err,
             AVFoundationError::Retained(err) => err,
+            AVFoundationError::Message(_) => unreachable!(),
         }
     }
 }
@@ -197,19 +229,20 @@ impl Debug for AVFoundationError {
         match self {
             AVFoundationError::Static(err) => write!(f, "{err}"),
             AVFoundationError::Retained(err) => write!(f, "{err}"),
+            AVFoundationError::Message(err) => write!(f, "{err}"),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct NativeCapturedFrame(arc::R<cv::ImageBuf>, arc::R<cm::SampleBuf>);
+pub struct NativeCapturedFrame(arc::R<cm::SampleBuf>);
 
 impl NativeCapturedFrame {
-    pub fn image_buf(&self) -> &arc::R<cv::ImageBuf> {
-        &self.0
+    pub fn image_buf(&self) -> Option<arc::R<cv::ImageBuf>> {
+        self.0.image_buf().map(|b| b.retained())
     }
 
     pub fn sample_buf(&self) -> &arc::R<cm::SampleBuf> {
-        &self.1
+        &self.0
     }
 }

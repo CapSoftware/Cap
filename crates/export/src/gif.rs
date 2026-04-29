@@ -57,7 +57,9 @@ impl GifExportSettings {
             gif_output_path.set_extension("gif");
         }
 
-        std::fs::create_dir_all(gif_output_path.parent().unwrap()).map_err(|e| e.to_string())?;
+        if let Some(parent) = gif_output_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
 
         trace!(
             "Creating GIF encoder at path '{}'",
@@ -122,7 +124,9 @@ impl GifExportSettings {
                 .iter()
                 .map(|s| RenderSegment {
                     cursor: s.cursor.clone(),
+                    keyboard: s.keyboard.clone(),
                     decoders: s.decoders.clone(),
+                    render_display: true,
                 })
                 .collect(),
             fps,

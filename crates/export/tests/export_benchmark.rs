@@ -24,7 +24,10 @@ async fn run_export(project_path: PathBuf) -> Result<(PathBuf, Duration, u32), S
     let settings = Mp4ExportSettings {
         fps: 60,
         resolution_base: XY::new(1920, 1080),
-        compression: ExportCompression::Minimal,
+        compression: ExportCompression::Maximum,
+        custom_bpp: None,
+        force_ffmpeg_decoder: false,
+        optimize_filesize: false,
     };
 
     let start = Instant::now();

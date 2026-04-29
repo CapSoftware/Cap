@@ -7,6 +7,7 @@ use cap_desktop_lib::DynLoggingLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
+    #[cfg(debug_assertions)]
     unsafe {
         std::env::set_var("RUST_LOG", "trace");
     }
@@ -103,11 +104,17 @@ fn main() {
         (None, None)
     };
 
+    #[cfg(debug_assertions)]
+    let level_filter = tracing_subscriber::filter::LevelFilter::TRACE;
+    #[cfg(not(debug_assertions))]
+    let level_filter = tracing_subscriber::filter::LevelFilter::INFO;
+
     tracing_subscriber::registry()
         .with(tracing_subscriber::filter::filter_fn(
             (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
         ))
         .with(reload_layer)
+        .with(level_filter)
         .with(otel_layer)
         .with(
             tracing_subscriber::fmt::layer()

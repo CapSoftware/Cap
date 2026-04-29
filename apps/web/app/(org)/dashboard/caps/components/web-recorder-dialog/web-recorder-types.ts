@@ -26,3 +26,8 @@ export type RecordingFailureDownload = {
 	url: string;
 	fileName: string;
 };
+
+export type RecoveredRecordingDownload = RecordingFailureDownload & {
+	id: string;
+	createdAt: number;
+};

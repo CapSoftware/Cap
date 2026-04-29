@@ -49,7 +49,7 @@ const OtpForm = ({
 				inputRefs.current[5]?.focus();
 			}
 
-			if (index + value.length >= 5) handleVerify.mutate(undefined);
+			if (newCode.every((d) => d)) handleVerify.mutate(newCode.join(""));
 		} else {
 			const newCode = [...code];
 			newCode[index] = value;
@@ -70,16 +70,20 @@ const OtpForm = ({
 		}
 	};
 
+	const normalizedEmail = email.toLowerCase();
+
 	const handleVerify = useMutation({
-		mutationFn: async () => {
-			const otpCode = code.join("");
+		mutationFn: async (pastedCode?: string) => {
+			const otpCode = pastedCode ?? code.join("");
 			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
 
-			const res = await fetch(
-				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
+			await fetch(
+				`/api/auth/callback/email?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/dashboard")}`,
 			);
 
-			if (!res.url.includes("/login-success")) {
+			const sessionRes = await fetch("/api/auth/session");
+			const session = await sessionRes.json();
+			if (!session?.user) {
 				setCode(["", "", "", "", "", ""]);
 				inputRefs.current[0]?.focus();
 				throw "Invalid code. Please try again.";
@@ -114,7 +118,7 @@ const OtpForm = ({
 			}
 
 			const result = await signIn("email", {
-				email,
+				email: normalizedEmail,
 				redirect: false,
 			});
 
@@ -175,7 +179,7 @@ const OtpForm = ({
 				className="w-full"
 				spinner={isVerifying}
 				onClick={() => {
-					handleVerify.mutate(undefined);
+					handleVerify.mutate(code.join(""));
 				}}
 				disabled={code.some((digit) => !digit) || isVerifying}
 			>

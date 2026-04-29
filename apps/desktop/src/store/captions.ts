@@ -15,13 +15,13 @@ export type CaptionsState = {
 export const defaultCaptionSettings: CaptionSettings = {
 	enabled: false,
 	font: "System Sans-Serif",
-	size: 45,
-	color: "#A0A0A0",
+	size: 50,
+	color: "#FFFFFF",
 	backgroundColor: "#000000",
 	backgroundOpacity: 95,
 	position: "bottom-center",
 	italic: false,
-	fontWeight: 700,
+	fontWeight: 400,
 	outline: false,
 	outlineColor: "#000000",
 	exportWithSubtitles: false,
@@ -29,6 +29,7 @@ export const defaultCaptionSettings: CaptionSettings = {
 	fadeDuration: 0.2,
 	lingerDuration: 0.4,
 	wordTransitionDuration: 0.25,
+	activeWordHighlight: false,
 };
 
 function createCaptionsStore() {
@@ -145,6 +146,7 @@ function createCaptionsStore() {
 						fadeDuration: state.settings.fadeDuration,
 						lingerDuration: state.settings.lingerDuration,
 						wordTransitionDuration: state.settings.wordTransitionDuration,
+						activeWordHighlight: state.settings.activeWordHighlight,
 					},
 				};
 

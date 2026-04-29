@@ -19,6 +19,7 @@ interface VideoThumbnailProps {
 	videoDuration?: number;
 	imageStatus: ImageLoadingStatus;
 	setImageStatus: (status: ImageLoadingStatus) => void;
+	hasActiveUpload?: boolean;
 }
 
 const formatDuration = (durationSecs: number) => {
@@ -48,7 +49,10 @@ function generateRandomGrayScaleColor() {
 	return `rgb(${grayScaleValue}, ${grayScaleValue}, ${grayScaleValue})`;
 }
 
-export const useThumnailQuery = (videoId: Video.VideoId) => {
+export const useThumnailQuery = (
+	videoId: Video.VideoId,
+	enabled: boolean = true,
+) => {
 	return useEffectQuery({
 		queryKey: ThumbnailRequest.queryKey(videoId),
 		queryFn: Effect.fn(function* () {
@@ -57,6 +61,7 @@ export const useThumnailQuery = (videoId: Video.VideoId) => {
 				yield* ThumbnailRequest.DataLoaderResolver,
 			);
 		}),
+		enabled,
 	});
 };
 
@@ -70,8 +75,9 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		videoDuration,
 		imageStatus,
 		setImageStatus,
+		hasActiveUpload = false,
 	}) => {
-		const thumbnailUrl = useThumnailQuery(videoId);
+		const thumbnailUrl = useThumnailQuery(videoId, !hasActiveUpload);
 		const imageRef = useRef<HTMLImageElement>(null);
 
 		const randomGradient = `linear-gradient(to right, ${generateRandomGrayScaleColor()}, ${generateRandomGrayScaleColor()})`;
@@ -82,6 +88,11 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 			}
 		}, [setImageStatus]);
 
+		const showError =
+			!hasActiveUpload && (thumbnailUrl.isError || imageStatus === "error");
+		const showLoading =
+			hasActiveUpload || thumbnailUrl.isPending || imageStatus === "loading";
+
 		return (
 			<div
 				className={clsx(
@@ -90,13 +101,14 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 				)}
 			>
 				<div className="flex absolute inset-0 z-10 justify-center items-center">
-					{thumbnailUrl.isError || imageStatus === "error" ? (
+					{showError ? (
 						<div
 							className="w-full h-full"
 							style={{ backgroundImage: randomGradient }}
 						/>
 					) : (
-						(thumbnailUrl.isPending || imageStatus === "loading") && (
+						showLoading &&
+						!thumbnailUrl.data && (
 							<LogoSpinner className="w-5 h-auto animate-spin md:w-8" />
 						)
 					)}

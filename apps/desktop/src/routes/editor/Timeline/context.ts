@@ -13,6 +13,30 @@ const TIMELINE_MARKING_RESOLUTIONS = [0.5, 1, 2.5, 5, 10, 30];
 
 const SEGMENT_RENDER_PADDING = 2;
 
+type TimelineContextValue = {
+	duration: Accessor<number>;
+	secsPerPixel: Accessor<number>;
+	timelineBounds: Readonly<NullableBounds>;
+	markingResolution: Accessor<number>;
+	visibleTimeRange: Accessor<{ start: number; end: number }>;
+	isSegmentVisible(segmentStart: number, segmentEnd: number): boolean;
+};
+
+type TrackContextValue = {
+	secsPerPixel: Accessor<number>;
+	trackBounds: Readonly<NullableBounds>;
+	trackState: {
+		draggingSegment: boolean;
+	};
+	setTrackState: ReturnType<
+		typeof createStore<{ draggingSegment: boolean }>
+	>[1];
+};
+
+type SegmentContextValue = {
+	width: Accessor<number>;
+};
+
 export const [TimelineContextProvider, useTimelineContext] =
 	createContextProvider(
 		(props: {
@@ -51,7 +75,7 @@ export const [TimelineContextProvider, useTimelineContext] =
 				isSegmentVisible,
 			};
 		},
-		null!,
+		null as unknown as TimelineContextValue,
 	);
 
 export const [TrackContextProvider, useTrackContext] = createContextProvider(
@@ -73,10 +97,13 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
 			setTrackState,
 		};
 	},
-	null!,
+	null as unknown as TrackContextValue,
 );
 
 export const [SegmentContextProvider, useSegmentContext] =
-	createContextProvider((props: { width: Accessor<number> }) => {
-		return props;
-	}, null!);
+	createContextProvider(
+		(props: { width: Accessor<number> }) => {
+			return props;
+		},
+		null as unknown as SegmentContextValue,
+	);

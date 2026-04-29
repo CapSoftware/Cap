@@ -19,7 +19,7 @@ export type PublicPolicy<E = never, R = never> = Effect.Effect<
 
 export class PolicyDeniedError extends Schema.TaggedError<PolicyDeniedError>()(
 	"PolicyDenied",
-	{},
+	{ reason: Schema.optional(Schema.String) },
 	HttpApiSchema.annotations({ status: 403 }),
 ) {}
 

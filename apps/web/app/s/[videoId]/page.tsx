@@ -34,7 +34,6 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardData,
@@ -117,26 +116,47 @@ const ALLOWED_REFERRERS = [
 	"linkedin.com",
 ];
 
-function PolicyDeniedView() {
+function PolicyDeniedView({ reason }: { reason?: string }) {
+	let title = "This video is private";
+	let description: React.ReactNode = (
+		<>
+			If you own this video, please <Link href="/login">sign in</Link> to manage
+			sharing.
+		</>
+	);
+
+	if (reason === "email_restriction_login_required") {
+		title = "This video requires sign-in";
+		description = (
+			<>
+				The owner of this video has restricted access. Please{" "}
+				<Link href="/login">sign in</Link> with an authorized email address to
+				view.
+			</>
+		);
+	} else if (reason === "email_restriction_denied") {
+		title = "Access restricted";
+		description =
+			"Your email address does not meet the requirements set by the video owner.";
+	}
+
 	return (
 		<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
 			<Logo className="size-32" />
-			<h1 className="mb-2 text-2xl font-semibold">This video is private</h1>
-			<p className="text-gray-400">
-				If you own this video, please <Link href="/login">sign in</Link> to
-				manage sharing.
-			</p>
+			<h1 className="mb-2 text-2xl font-semibold">{title}</h1>
+			<p className="text-gray-400">{description}</p>
 		</div>
 	);
 }
 
-const renderPolicyDenied = (videoId: Video.VideoId) =>
-	Effect.succeed(<PolicyDeniedView key={videoId} />);
+const renderPolicyDenied = (videoId: Video.VideoId, reason?: string) =>
+	Effect.succeed(<PolicyDeniedView key={videoId} reason={reason} />);
 
 const renderNoSuchElement = () => Effect.sync(() => notFound());
 
 const getShareVideoPageCatchers = (videoId: Video.VideoId) => ({
-	PolicyDenied: () => renderPolicyDenied(videoId),
+	PolicyDenied: (e: Policy.PolicyDeniedError) =>
+		renderPolicyDenied(videoId, e.reason),
 	NoSuchElementException: renderNoSuchElement,
 });
 
@@ -211,8 +231,8 @@ export async function generateMetadata(
 		Effect.catchTags({
 			PolicyDenied: () =>
 				Effect.succeed({
-					title: "Cap: This video is private",
-					description: "This video is private and cannot be shared.",
+					title: "Cap: This video is restricted",
+					description: "This video has restricted access.",
 					openGraph: {
 						images: [
 							{
@@ -309,6 +329,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					height: videos.height,
 					duration: videos.duration,
 					fps: videos.fps,
+					firstViewEmailSentAt: videos.firstViewEmailSentAt,
 					hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
@@ -359,6 +380,7 @@ async function AuthorizedContent({
 		owner: InferSelectModel<typeof users>;
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasPassword: boolean;
+		hasActiveUpload: boolean;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
 	};
@@ -408,6 +430,7 @@ async function AuthorizedContent({
 		.select({
 			email: users.email,
 			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
 		})
 		.from(users)
 		.where(eq(users.id, video.owner.id))
@@ -418,138 +441,34 @@ async function AuthorizedContent({
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
 	}
 
-	if (video.sharedOrganization?.organizationId) {
-		const organization = await db()
-			.select()
-			.from(organizations)
-			.where(eq(organizations.id, video.sharedOrganization.organizationId))
-			.limit(1);
-
-		if (organization[0]?.allowedEmailDomain) {
-			if (
-				!user?.email ||
-				!user.email.endsWith(`@${organization[0].allowedEmailDomain}`)
-			) {
-				console.log(
-					"[ShareVideoPage] Access denied - domain restriction:",
-					organization[0].allowedEmailDomain,
-				);
-				return (
-					<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
-						<h1 className="mb-4 text-2xl font-bold">Access Restricted</h1>
-						<p className="mb-2 text-gray-10">
-							This video is only accessible to members of this organization.
-						</p>
-						<p className="text-gray-600">
-							Please sign in with your organization email address to access this
-							content.
-						</p>
-					</div>
-				);
-			}
-		}
-	}
-
 	if (
+		!video.hasActiveUpload &&
 		video.transcriptionStatus !== "COMPLETE" &&
-		video.transcriptionStatus !== "PROCESSING"
+		video.transcriptionStatus !== "PROCESSING" &&
+		video.transcriptionStatus !== "SKIPPED" &&
+		video.transcriptionStatus !== "NO_AUDIO"
 	) {
 		console.log("[ShareVideoPage] Starting transcription for video:", videoId);
-		await transcribeVideo(videoId, video.owner.id, aiGenerationEnabled);
-
-		const updatedVideoQuery = await db()
-			.select({
-				id: videos.id,
-				name: videos.name,
-				createdAt: videos.createdAt,
-				updatedAt: videos.updatedAt,
-				effectiveCreatedAt: videos.effectiveCreatedAt,
-				bucket: videos.bucket,
-				metadata: videos.metadata,
-				public: videos.public,
-				videoStartTime: videos.videoStartTime,
-				audioStartTime: videos.audioStartTime,
-				xStreamInfo: videos.xStreamInfo,
-				jobId: videos.jobId,
-				jobStatus: videos.jobStatus,
-				isScreenshot: videos.isScreenshot,
-				skipProcessing: videos.skipProcessing,
-				transcriptionStatus: videos.transcriptionStatus,
-				source: videos.source,
-				sharedOrganization: {
-					organizationId: sharedVideos.organizationId,
-				},
-				orgSettings: organizations.settings,
-				videoSettings: videos.settings,
-			})
-			.from(videos)
-			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-			.innerJoin(users, eq(videos.ownerId, users.id))
-			.leftJoin(organizations, eq(videos.orgId, organizations.id))
-			.where(eq(videos.id, videoId))
-			.execute();
-
-		if (updatedVideoQuery[0]) {
-			Object.assign(video, updatedVideoQuery[0]);
-			console.log(
-				"[ShareVideoPage] Updated transcription status:",
-				video.transcriptionStatus,
-			);
-		}
+		transcribeVideo(videoId, video.owner.id, aiGenerationEnabled).catch(
+			(error) => {
+				console.error(
+					`[ShareVideoPage] Error transcribing video ${videoId}:`,
+					error,
+				);
+			},
+		);
 	}
 
 	const currentMetadata = (video.metadata as VideoMetadata) || {};
 	const metadata = currentMetadata;
-	let initialAiData = null;
+	const aiGenerationStatus = metadata.aiGenerationStatus || null;
 
-	if (metadata.summary || metadata.chapters || metadata.aiTitle) {
-		initialAiData = {
-			title: metadata.aiTitle || null,
-			summary: metadata.summary || null,
-			chapters: metadata.chapters || null,
-			processing: metadata.aiProcessing || false,
-			generationSkipped: metadata.aiGenerationSkipped || false,
-		};
-	} else if (metadata.aiProcessing) {
-		initialAiData = {
-			title: null,
-			summary: null,
-			chapters: null,
-			processing: true,
-			generationSkipped: false,
-		};
-	} else if (metadata.aiGenerationSkipped) {
-		initialAiData = {
-			title: null,
-			summary: null,
-			chapters: null,
-			processing: false,
-			generationSkipped: true,
-		};
-	}
-
-	if (
-		video.transcriptionStatus === "COMPLETE" &&
-		!currentMetadata.aiProcessing &&
-		!currentMetadata.aiGenerationSkipped &&
-		!currentMetadata.summary &&
-		!currentMetadata.chapters &&
-		aiGenerationEnabled
-	) {
-		try {
-			generateAiMetadata(videoId, video.owner.id).catch((error) => {
-				console.error(
-					`[ShareVideoPage] Error generating AI metadata for video ${videoId}:`,
-					error,
-				);
-			});
-		} catch (error) {
-			console.error(
-				`[ShareVideoPage] Error starting AI metadata generation for video ${videoId}:`,
-				error,
-			);
-		}
-	}
+	const initialAiData = {
+		title: metadata.aiTitle || null,
+		summary: metadata.summary || null,
+		chapters: metadata.chapters || null,
+		aiGenerationStatus,
+	};
 
 	const customDomainPromise = (async () => {
 		if (!user) {

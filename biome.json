@@ -9,6 +9,8 @@
 		"includes": [
 			"**",
 			"!apps/desktop/src/utils/tauri.ts",
+			"!apps/desktop/src/global.d.ts",
+			"!apps/web/public/gif.worker.js",
 			"!packages/ui-solid/src/auto-imports.d.ts"
 		],
 		"ignoreUnknown": false
@@ -44,6 +46,22 @@
 			"includes": ["apps/desktop/**/*"],
 			"linter": {
 				"rules": { "a11y": "off" }
+			}
+		},
+		{
+			"includes": ["**/*.css"],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noUnknownAtRules": "off"
+					},
+					"correctness": {
+						"noUnknownTypeSelector": "off"
+					},
+					"style": {
+						"noDescendingSpecificity": "off"
+					}
+				}
 			}
 		}
 	]

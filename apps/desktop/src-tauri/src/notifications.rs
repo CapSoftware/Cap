@@ -89,7 +89,6 @@ impl NotificationType {
 }
 
 pub fn send_notification(app: &tauri::AppHandle, notification_type: NotificationType) {
-    // Check if notifications are enabled in settings
     let enable_notifications = GeneralSettingsStore::get(app)
         .map(|settings| settings.is_some_and(|s| s.enable_notifications))
         .unwrap_or(false);
@@ -107,5 +106,15 @@ pub fn send_notification(app: &tauri::AppHandle, notification_type: Notification
         .show()
         .ok();
 
-    AppSounds::Notification.play();
+    let skip_sound = matches!(
+        notification_type,
+        NotificationType::ScreenshotSaved
+            | NotificationType::ScreenshotCopiedToClipboard
+            | NotificationType::ScreenshotSaveFailed
+            | NotificationType::ScreenshotCopyFailed
+    );
+
+    if !skip_sound {
+        AppSounds::Notification.play();
+    }
 }

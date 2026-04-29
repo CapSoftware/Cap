@@ -5,16 +5,15 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use wgpu::{include_wgsl, util::DeviceExt};
 
-use crate::{
-    ProjectUniforms, RenderVideoConstants, RenderingError, create_shader_render_pipeline,
-    srgb_to_linear,
-};
+use crate::{ProjectUniforms, RenderVideoConstants, RenderingError, create_shader_render_pipeline};
 
 #[derive(PartialEq, Debug, Clone, Copy, Serialize, Deserialize, Type)]
 pub struct Gradient {
     start: [f32; 4],
     end: [f32; 4],
     angle: f32,
+    noise_intensity: f32,
+    noise_scale: f32,
 }
 
 #[derive(PartialEq)]
@@ -34,25 +33,34 @@ impl From<BackgroundSource> for Background {
     fn from(value: BackgroundSource) -> Self {
         match value {
             BackgroundSource::Color { value, alpha } => Background::Color([
-                srgb_to_linear(value[0]),
-                srgb_to_linear(value[1]),
-                srgb_to_linear(value[2]),
+                value[0] as f32 / 255.0,
+                value[1] as f32 / 255.0,
+                value[2] as f32 / 255.0,
                 alpha as f32 / 255.0,
             ]),
-            BackgroundSource::Gradient { from, to, angle } => Background::Gradient(Gradient {
+            BackgroundSource::Gradient {
+                from,
+                to,
+                angle,
+                noise_intensity,
+                noise_scale,
+                ..
+            } => Background::Gradient(Gradient {
                 start: [
-                    srgb_to_linear(from[0]),
-                    srgb_to_linear(from[1]),
-                    srgb_to_linear(from[2]),
+                    from[0] as f32 / 255.0,
+                    from[1] as f32 / 255.0,
+                    from[2] as f32 / 255.0,
                     1.0,
                 ],
                 end: [
-                    srgb_to_linear(to[0]),
-                    srgb_to_linear(to[1]),
-                    srgb_to_linear(to[2]),
+                    to[0] as f32 / 255.0,
+                    to[1] as f32 / 255.0,
+                    to[2] as f32 / 255.0,
                     1.0,
                 ],
                 angle: angle as f32,
+                noise_intensity: noise_intensity.unwrap_or(0.0),
+                noise_scale: noise_scale.unwrap_or(3.0),
             }),
             BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
                 if let Some(path) = path
@@ -121,8 +129,29 @@ impl BackgroundLayer {
                         let texture = match textures.entry(path.clone()) {
                             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                             std::collections::hash_map::Entry::Vacant(e) => {
-                                let img = image::open(&path)
-                                    .map_err(|e| RenderingError::ImageLoadError(e.to_string()))?;
+                                let img = match image::open(&path) {
+                                    Ok(img) => img,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to load background image '{}': {}. Falling back to white.",
+                                            path,
+                                            e
+                                        );
+                                        let fallback_background =
+                                            Background::Color([1.0, 1.0, 1.0, 1.0]);
+                                        let buffer =
+                                            GradientOrColorUniforms::from(fallback_background)
+                                                .to_buffer(device);
+                                        self.inner = Some(Inner::ColorOrGradient {
+                                            value: ColorOrGradient::Color([1.0, 1.0, 1.0, 1.0]),
+                                            bind_group: self
+                                                .color_pipeline
+                                                .bind_group(device, &buffer),
+                                            buffer,
+                                        });
+                                        return Ok(());
+                                    }
+                                };
                                 let rgba = img.to_rgba8();
                                 let dimensions = img.dimensions();
 
@@ -415,7 +444,9 @@ pub struct GradientOrColorUniforms {
     pub start: [f32; 4],
     pub end: [f32; 4],
     pub angle: f32,
-    _padding: [f32; 3],
+    pub noise_intensity: f32,
+    pub noise_scale: f32,
+    _padding: f32,
 }
 
 impl GradientOrColorUniforms {
@@ -447,9 +478,17 @@ impl From<Background> for GradientOrColorUniforms {
                     color[3],
                 ],
                 angle: 0.0,
-                _padding: [0.0; 3],
+                noise_intensity: 0.0,
+                noise_scale: 0.0,
+                _padding: 0.0,
             },
-            Background::Gradient(Gradient { start, end, angle }) => Self {
+            Background::Gradient(Gradient {
+                start,
+                end,
+                angle,
+                noise_intensity,
+                noise_scale,
+            }) => Self {
                 start: [
                     start[0] * start[3],
                     start[1] * start[3],
@@ -458,7 +497,9 @@ impl From<Background> for GradientOrColorUniforms {
                 ],
                 end: [end[0] * end[3], end[1] * end[3], end[2] * end[3], end[3]],
                 angle,
-                _padding: [0.0; 3],
+                noise_intensity,
+                noise_scale,
+                _padding: 0.0,
             },
             Background::Image { .. } => {
                 unreachable!("Image backgrounds should be handled separately")
@@ -518,40 +559,64 @@ mod tests {
     #[test]
     fn test_transparent_color_conversion() {
         let source = BackgroundSource::Color {
-            value: [255, 0, 0], // Red
-            alpha: 128,         // 50% opacity
+            value: [255, 0, 0],
+            alpha: 128,
         };
         let background = Background::from(source);
         match background {
             Background::Color(color) => {
-                assert!((color[0] - 1.0).abs() < 1e-6); // Red in linear
+                assert!((color[0] - 1.0).abs() < 1e-6);
                 assert_eq!(color[1], 0.0);
                 assert_eq!(color[2], 0.0);
-                assert!((color[3] - 0.5).abs() < 0.01); // Alpha 128/255 ≈ 0.5
+                assert!((color[3] - 0.5).abs() < 0.01);
             }
             _ => panic!("Expected Color variant"),
         }
     }
 
     #[test]
-    fn test_transparent_gradient_conversion() {
+    fn test_color_conversion_uses_normalized_byte_values() {
+        let source = BackgroundSource::Color {
+            value: [128, 64, 32],
+            alpha: 200,
+        };
+        let background = Background::from(source);
+        match background {
+            Background::Color(color) => {
+                assert!((color[0] - (128.0 / 255.0)).abs() < 1e-6);
+                assert!((color[1] - (64.0 / 255.0)).abs() < 1e-6);
+                assert!((color[2] - (32.0 / 255.0)).abs() < 1e-6);
+                assert!((color[3] - (200.0 / 255.0)).abs() < 1e-6);
+            }
+            _ => panic!("Expected Color variant"),
+        }
+    }
+
+    #[test]
+    fn test_gradient_conversion() {
         let source = BackgroundSource::Gradient {
-            from: [0, 255, 0], // Green
-            to: [0, 0, 255],   // Blue
+            from: [0, 255, 0],
+            to: [0, 0, 255],
             angle: 90,
+            noise_intensity: Some(50.0),
+            noise_scale: Some(30.0),
+            animated: None,
+            animation_speed: None,
         };
         let background = Background::from(source);
         match background {
             Background::Gradient(gradient) => {
                 assert_eq!(gradient.start[0], 0.0);
-                assert_eq!(gradient.start[1], 1.0); // Green in linear
+                assert_eq!(gradient.start[1], 1.0);
                 assert_eq!(gradient.start[2], 0.0);
-                assert_eq!(gradient.start[3], 1.0); // Alpha 255/255 = 1.0
+                assert_eq!(gradient.start[3], 1.0);
                 assert_eq!(gradient.end[0], 0.0);
                 assert_eq!(gradient.end[1], 0.0);
-                assert_eq!(gradient.end[2], 1.0); // Blue in linear
-                assert_eq!(gradient.end[3], 0.0); // Alpha 0/255 = 0.0
+                assert_eq!(gradient.end[2], 1.0);
+                assert_eq!(gradient.end[3], 1.0);
                 assert_eq!(gradient.angle, 90.0);
+                assert_eq!(gradient.noise_intensity, 50.0);
+                assert_eq!(gradient.noise_scale, 30.0);
             }
             _ => panic!("Expected Gradient variant"),
         }

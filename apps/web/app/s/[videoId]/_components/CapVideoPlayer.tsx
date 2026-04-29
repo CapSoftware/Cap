@@ -1,16 +1,36 @@
 "use client";
 
 import { LogoSpinner } from "@cap/ui";
+import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { skipToken, useQuery } from "@tanstack/react-query";
+import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangleIcon } from "lucide-react";
+import { AlertTriangleIcon, InfoIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import CommentStamp from "./CommentStamp";
-import ProgressCircle, { useUploadProgress } from "./ProgressCircle";
+import {
+	AVC_LEVEL_IOS_HARDWARE_CEILING,
+	createLevelPatchedMp4ObjectUrl,
+	isIosSafari,
+	probeAvcLevelFromUrl,
+} from "./mp4-level-patch";
+import {
+	canRetryFailedProcessing,
+	getUploadFailureMessage,
+	shouldDeferPlaybackSource,
+	shouldReloadPlaybackAfterUploadCompletes,
+	useUploadProgress,
+} from "./ProgressCircle";
+import {
+	type ResolvedPlaybackSource,
+	resolvePlaybackSource,
+	shouldFallbackToRawPlaybackSource,
+} from "./playback-source";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -30,9 +50,34 @@ import {
 	MediaPlayerVolume,
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
+import { captureVideoFrameDataUrl } from "./video-frame-thumbnail";
+
+const { circumference } = getProgressCircleConfig();
+
+function getProgressStatusText(
+	status: "uploading" | "processing" | "generating_thumbnail",
+) {
+	switch (status) {
+		case "processing":
+			return "Processing";
+		case "generating_thumbnail":
+			return "Finishing up";
+		default:
+			return "Uploading";
+	}
+}
+
+type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+
+interface CaptionOption {
+	code: string;
+	name: string;
+}
 
 interface Props {
 	videoSrc: string;
+	rawFallbackSrc?: string;
 	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
@@ -52,10 +97,21 @@ interface Props {
 		authorName?: string | null;
 	}>;
 	onSeek?: (time: number) => void;
+	enhancedAudioUrl?: string | null;
+	enhancedAudioStatus?: EnhancedAudioStatus | null;
+	captionLanguage?: string;
+	onCaptionLanguageChange?: (language: string) => void;
+	availableCaptions?: CaptionOption[];
+	isCaptionLoading?: boolean;
+	hasCaptions?: boolean;
+	canRetryProcessing?: boolean;
+	duration?: number | null;
+	showPlaybackStatusBadge?: boolean;
 }
 
 export function CapVideoPlayer({
 	videoSrc,
+	rawFallbackSrc,
 	videoId,
 	chaptersSrc,
 	captionsSrc,
@@ -69,6 +125,16 @@ export function CapVideoPlayer({
 	disableCommentStamps = false,
 	disableReactionStamps = false,
 	onSeek,
+	enhancedAudioUrl: _enhancedAudioUrl,
+	enhancedAudioStatus: _enhancedAudioStatus,
+	captionLanguage,
+	onCaptionLanguageChange,
+	availableCaptions = [],
+	isCaptionLoading = false,
+	hasCaptions = false,
+	canRetryProcessing = false,
+	duration: fallbackDuration,
+	showPlaybackStatusBadge = false,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -78,14 +144,15 @@ export function CapVideoPlayer({
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 	const [isMobile, setIsMobile] = useState(false);
-	const retryCount = useRef(0);
-	const retryTimeout = useRef<NodeJS.Timeout | null>(null);
-	const startTime = useRef<number>(Date.now());
 	const [hasError, setHasError] = useState(false);
-	const [isRetrying, setIsRetrying] = useState(false);
-	const isRetryingRef = useRef(false);
-	const maxRetries = 3;
-	const [duration, setDuration] = useState(0);
+	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
+	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
+	const [preferredSource, setPreferredSource] = useState<"mp4" | "raw">("mp4");
+	const [hasTriedRawFallback, setHasTriedRawFallback] = useState(false);
+	const [iosLevelPatchedUrl, setIosLevelPatchedUrl] = useState<string | null>(
+		null,
+	);
+	const queryClient = useQueryClient();
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -102,167 +169,139 @@ export function CapVideoPlayer({
 		videoId,
 		hasActiveUpload || false,
 	);
-	// if the video comes back from S3, just ignore the upload progress.
 	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
-	const isUploadProgressPending = uploadProgress?.status === "fetching";
+	const isProcessing = uploadProgress?.status === "processing";
+	const isGeneratingThumbnail =
+		uploadProgress?.status === "generating_thumbnail";
+	const hasActiveProgress =
+		isUploading || isProcessing || isGeneratingThumbnail;
+	const shouldDeferResolvedSource = shouldDeferPlaybackSource(uploadProgress);
 
-	const resolvedSrc = useQuery<{ url: string; supportsCrossOrigin: boolean }>({
-		queryKey: ["resolvedSrc", videoSrc],
-		queryFn:
-			isUploadProgressPending || isUploading
-				? skipToken
-				: async () => {
-						try {
-							const timestamp = Date.now();
-							const urlWithTimestamp = videoSrc.includes("?")
-								? `${videoSrc}&_t=${timestamp}`
-								: `${videoSrc}?_t=${timestamp}`;
-
-							const response = await fetch(urlWithTimestamp, {
-								method: "GET",
-								headers: { range: "bytes=0-0" },
-							});
-							const finalUrl = response.redirected
-								? response.url
-								: urlWithTimestamp;
-
-							// Check if the resolved URL is from a CORS-incompatible service
-							const isCloudflareR2 = finalUrl.includes(
-								".r2.cloudflarestorage.com",
-							);
-							const isS3 =
-								finalUrl.includes(".s3.") || finalUrl.includes("amazonaws.com");
-							const isCorsIncompatible = isCloudflareR2 || isS3;
-
-							let supportsCrossOrigin = enableCrossOrigin;
-
-							// Set CORS based on URL compatibility BEFORE video element is created
-							if (isCorsIncompatible) {
-								console.log(
-									"CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:",
-									finalUrl,
-								);
-								supportsCrossOrigin = false;
-							}
-
-							return { url: finalUrl, supportsCrossOrigin };
-						} catch (error) {
-							console.error(
-								"CapVideoPlayer: Error fetching new video URL:",
-								error,
-							);
-							const timestamp = Date.now();
-							const fallbackUrl = videoSrc.includes("?")
-								? `${videoSrc}&_t=${timestamp}`
-								: `${videoSrc}?_t=${timestamp}`;
-							return {
-								url: fallbackUrl,
-								supportsCrossOrigin: enableCrossOrigin,
-							};
-						}
-					},
+	const resolvedSrc = useQuery<ResolvedPlaybackSource | null>({
+		queryKey: [
+			"resolvedSrc",
+			videoSrc,
+			rawFallbackSrc,
+			enableCrossOrigin,
+			preferredSource,
+		],
+		queryFn: shouldDeferResolvedSource
+			? skipToken
+			: () =>
+					resolvePlaybackSource({
+						videoSrc,
+						rawFallbackSrc,
+						enableCrossOrigin,
+						preferredSource,
+					}),
 		refetchOnWindowFocus: false,
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
 	});
 
-	const reloadVideo = useCallback(async () => {
-		const video = videoRef.current;
-		if (!video || retryCount.current >= maxRetries) return;
-
-		console.log(
-			`Reloading video (attempt ${retryCount.current + 1}/${maxRetries})`,
-		);
-
-		const currentPosition = video.currentTime;
-		const wasPlaying = !video.paused;
-
-		video.load();
-
-		if (currentPosition > 0) {
-			const restorePosition = () => {
-				video.currentTime = currentPosition;
-				if (wasPlaying) {
-					video
-						.play()
-						.catch((err) => console.error("Error resuming playback:", err));
-				}
-				video.removeEventListener("canplay", restorePosition);
-			};
-			video.addEventListener("canplay", restorePosition);
-		}
-
-		retryCount.current += 1;
-	}, [videoRef.current]);
-
-	const setupRetry = useCallback(() => {
-		if (retryTimeout.current) {
-			clearTimeout(retryTimeout.current);
-		}
-
-		if (retryCount.current >= maxRetries) {
-			console.error(`Video failed to load after ${maxRetries} attempts`);
-			setHasError(true);
-			isRetryingRef.current = false;
-			setIsRetrying(false);
-			return;
-		}
-
-		const elapsedMs = Date.now() - startTime.current;
-		if (elapsedMs > 60000) {
-			console.error("Video failed to load after 1 minute");
-			setHasError(true);
-			isRetryingRef.current = false;
-			setIsRetrying(false);
-			return;
-		}
-
-		let retryInterval: number;
-		if (retryCount.current === 0) {
-			retryInterval = 2000; // 2 seconds
-		} else if (retryCount.current === 1) {
-			retryInterval = 5000; // 5 seconds
-		} else {
-			retryInterval = 10000; // 10 seconds
-		}
-
-		console.log(
-			`Retrying video load in ${retryInterval}ms (attempt ${retryCount.current + 1}/${maxRetries})`,
-		);
-
-		retryTimeout.current = setTimeout(() => {
-			reloadVideo();
-		}, retryInterval);
-	}, [reloadVideo]);
-
 	useEffect(() => {
+		void videoSrc;
+		void rawFallbackSrc;
 		setVideoLoaded(false);
 		setHasError(false);
-		isRetryingRef.current = false;
-		setIsRetrying(false);
-		retryCount.current = 0;
-		startTime.current = Date.now();
+		setShowPlayButton(false);
+		setPreferredSource("mp4");
+		setHasTriedRawFallback(false);
+	}, [videoSrc, rawFallbackSrc]);
 
-		if (retryTimeout.current) {
-			clearTimeout(retryTimeout.current);
-			retryTimeout.current = null;
+	useEffect(() => {
+		const resolvedUrl = resolvedSrc.data?.url;
+		const resolvedType = resolvedSrc.data?.type;
+
+		setIosLevelPatchedUrl((previous) => {
+			if (previous) URL.revokeObjectURL(previous);
+			return null;
+		});
+
+		if (!resolvedUrl || resolvedType !== "mp4") {
+			return;
 		}
-	}, [videoSrc]);
+
+		if (
+			typeof window === "undefined" ||
+			!isIosSafari(window.navigator?.userAgent)
+		) {
+			return;
+		}
+
+		const controller = new AbortController();
+		let cancelled = false;
+		let createdUrl: string | null = null;
+
+		(async () => {
+			const observedLevel = await probeAvcLevelFromUrl(resolvedUrl, {
+				signal: controller.signal,
+			});
+
+			if (cancelled) return;
+			if (observedLevel === null) return;
+			if (observedLevel <= AVC_LEVEL_IOS_HARDWARE_CEILING) return;
+
+			const patched = await createLevelPatchedMp4ObjectUrl(resolvedUrl, {
+				signal: controller.signal,
+			});
+
+			if (cancelled || !patched) {
+				if (patched) URL.revokeObjectURL(patched.objectUrl);
+				return;
+			}
+
+			if (!patched.patched) {
+				URL.revokeObjectURL(patched.objectUrl);
+				return;
+			}
+
+			createdUrl = patched.objectUrl;
+			setIosLevelPatchedUrl(patched.objectUrl);
+		})();
+
+		return () => {
+			cancelled = true;
+			controller.abort();
+			if (createdUrl) URL.revokeObjectURL(createdUrl);
+		};
+	}, [resolvedSrc.data?.url, resolvedSrc.data?.type]);
+
+	useEffect(() => {
+		return () => {
+			setIosLevelPatchedUrl((previous) => {
+				if (previous) URL.revokeObjectURL(previous);
+				return null;
+			});
+		};
+	}, []);
 
 	// Track video duration for comment markers
+	useEffect(() => {
+		setPlayerDuration(fallbackDuration ?? 0);
+	}, [fallbackDuration]);
+
 	useEffect(() => {
 		const video = videoRef.current;
 		if (!video) return;
 
 		const handleLoadedMetadata = () => {
-			setDuration(video.duration);
+			if (Number.isFinite(video.duration) && video.duration > 0) {
+				setPlayerDuration(video.duration);
+			}
 		};
+
+		if (Number.isFinite(video.duration) && video.duration > 0) {
+			setPlayerDuration(video.duration);
+		}
 
 		video.addEventListener("loadedmetadata", handleLoadedMetadata);
 
 		return () => {
 			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
 		};
-	}, [videoRef.current]);
+	}, [videoRef]);
 
 	// Track when all data is ready for comment markers
 	const [markersReady, setMarkersReady] = useState(false);
@@ -279,10 +318,31 @@ export function CapVideoPlayer({
 
 	useEffect(() => {
 		// Only show markers when we have duration, comments, and video element
-		if (duration > 0 && comments.length > 0 && videoRef.current) {
+		if (playerDuration > 0 && comments.length > 0 && videoRef.current) {
 			setMarkersReady(true);
 		}
-	}, [duration, comments.length, videoRef.current]);
+	}, [playerDuration, comments.length, videoRef.current]);
+
+	useEffect(() => {
+		if (resolvedSrc.data) {
+			setHasError(false);
+			return;
+		}
+
+		if (uploadProgress || resolvedSrc.isPending) {
+			setHasError(false);
+			return;
+		}
+
+		if (resolvedSrc.isSuccess) {
+			setHasError(true);
+		}
+	}, [
+		resolvedSrc.data,
+		resolvedSrc.isPending,
+		resolvedSrc.isSuccess,
+		uploadProgress,
+	]);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -291,46 +351,40 @@ export function CapVideoPlayer({
 		const handleLoadedData = () => {
 			setVideoLoaded(true);
 			setHasError(false);
-			isRetryingRef.current = false;
-			setIsRetrying(false);
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
-			}
-			if (retryTimeout.current) {
-				clearTimeout(retryTimeout.current);
-				retryTimeout.current = null;
 			}
 		};
 
 		const handleCanPlay = () => {
 			setVideoLoaded(true);
 			setHasError(false);
-			isRetryingRef.current = false;
-			setIsRetrying(false);
-			if (retryTimeout.current) {
-				clearTimeout(retryTimeout.current);
-				retryTimeout.current = null;
+			if (!hasPlayedOnce) {
+				setShowPlayButton(true);
 			}
-		};
-
-		const handleLoad = () => {
-			setVideoLoaded(true);
 		};
 
 		const handlePlay = () => {
 			setHasPlayedOnce(true);
 		};
 
-		const handleError = (e: Event) => {
-			const error = (e.target as HTMLVideoElement).error;
-			console.error("CapVideoPlayer: Video error detected:", error);
-			if (!videoLoaded && !hasError) {
-				// Set both ref and state immediately to prevent any flash of error UI
-				isRetryingRef.current = true;
-				setIsRetrying(true);
+		const handleError = () => {
+			if (
+				shouldFallbackToRawPlaybackSource(
+					resolvedSrc.data?.type,
+					rawFallbackSrc,
+					hasTriedRawFallback,
+				)
+			) {
+				setHasTriedRawFallback(true);
+				setPreferredSource("raw");
+				setVideoLoaded(false);
 				setHasError(false);
-				setupRetry();
+				setShowPlayButton(false);
+				return;
 			}
+
+			setHasError(true);
 		};
 
 		// Caption track setup
@@ -373,26 +427,24 @@ export function CapVideoPlayer({
 
 		const handleLoadedMetadataWithTracks = () => {
 			setVideoLoaded(true);
+			setHasError(false);
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
 			}
 			setupTracks();
 		};
 
-		// Monitor for track changes and ensure they stay hidden
 		const handleTrackChange = () => {
 			ensureTracksHidden();
+			setupTracks();
 		};
 
 		video.addEventListener("loadeddata", handleLoadedData);
 		video.addEventListener("canplay", handleCanPlay);
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
-		video.addEventListener("load", handleLoad);
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
-		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
 
-		// Add event listeners to monitor track changes
 		video.textTracks.addEventListener("change", handleTrackChange);
 		video.textTracks.addEventListener("addtrack", handleTrackChange);
 		video.textTracks.addEventListener("removetrack", handleTrackChange);
@@ -401,41 +453,9 @@ export function CapVideoPlayer({
 			handleLoadedData();
 		}
 
-		// Initial timeout to catch videos that take too long to load
-		if (!videoLoaded && !hasError && retryCount.current === 0) {
-			const initialTimeout = setTimeout(() => {
-				if (!videoLoaded && !hasError) {
-					console.log(
-						"Video taking longer than expected to load, attempting reload",
-					);
-					isRetryingRef.current = true;
-					setIsRetrying(true);
-					setupRetry();
-				}
-			}, 10000);
-
-			return () => {
-				clearTimeout(initialTimeout);
-				video.removeEventListener("loadeddata", handleLoadedData);
-				video.removeEventListener("canplay", handleCanPlay);
-				video.removeEventListener("load", handleLoad);
-				video.removeEventListener("play", handlePlay);
-				video.removeEventListener("error", handleError as EventListener);
-				video.removeEventListener(
-					"loadedmetadata",
-					handleLoadedMetadataWithTracks,
-				);
-				video.textTracks.removeEventListener("change", handleTrackChange);
-				video.textTracks.removeEventListener("addtrack", handleTrackChange);
-				video.textTracks.removeEventListener("removetrack", handleTrackChange);
-				if (retryTimeout.current) clearTimeout(retryTimeout.current);
-			};
-		}
-
 		return () => {
 			video.removeEventListener("loadeddata", handleLoadedData);
 			video.removeEventListener("canplay", handleCanPlay);
-			video.removeEventListener("load", handleLoad);
 			video.removeEventListener("play", handlePlay);
 			video.removeEventListener("error", handleError as EventListener);
 			video.removeEventListener(
@@ -445,61 +465,114 @@ export function CapVideoPlayer({
 			video.textTracks.removeEventListener("change", handleTrackChange);
 			video.textTracks.removeEventListener("addtrack", handleTrackChange);
 			video.textTracks.removeEventListener("removetrack", handleTrackChange);
-			if (retryTimeout.current) {
-				clearTimeout(retryTimeout.current);
-			}
 			if (captionTrack) {
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
 		};
 	}, [
 		hasPlayedOnce,
+		hasTriedRawFallback,
+		rawFallbackSrc,
+		resolvedSrc.data?.type,
 		resolvedSrc.isPending,
-		hasError,
-		setupRetry,
-		videoLoaded,
 		videoRef.current,
 	]);
 
 	const generateVideoFrameThumbnail = useCallback(
-		(time: number): string => {
-			const video = videoRef.current;
-
-			if (!video) {
-				return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${Math.floor(time)}s`;
-			}
-
-			const canvas = document.createElement("canvas");
-			canvas.width = 224;
-			canvas.height = 128;
-			const ctx = canvas.getContext("2d");
-
-			if (ctx) {
-				try {
-					ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-					return canvas.toDataURL("image/jpeg", 0.8);
-				} catch (_error) {
-					return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
-				}
-			}
-			return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
-		},
-		[videoRef.current],
+		(_time: number): string | undefined =>
+			captureVideoFrameDataUrl({ video: videoRef.current }),
+		[],
 	);
 
 	const isUploadFailed = uploadProgress?.status === "failed";
+	const isUploadError = uploadProgress?.status === "error";
+	const showUploadFailureOverlay =
+		isUploadFailed ||
+		(isUploadError && !resolvedSrc.data && !resolvedSrc.isPending);
+	const canRetryUploadProcessing = canRetryFailedProcessing(
+		uploadProgress,
+		canRetryProcessing,
+	);
+	const uploadFailureMessage = getUploadFailureMessage(
+		uploadProgress,
+		canRetryProcessing,
+	);
+
+	const retryProcessing = useCallback(async () => {
+		if (!canRetryUploadProcessing || isRetryingProcessing) {
+			return;
+		}
+
+		setIsRetryingProcessing(true);
+
+		try {
+			const result = await retryVideoProcessing({ videoId });
+			await queryClient.invalidateQueries({
+				queryKey: ["getUploadProgress", videoId],
+			});
+			toast.success(
+				result.status === "started"
+					? "Video processing restarted."
+					: "Video is still processing.",
+			);
+		} catch (error) {
+			console.error("Failed to retry video processing", error);
+			toast.error("Could not retry video processing.");
+		} finally {
+			setIsRetryingProcessing(false);
+		}
+	}, [canRetryUploadProcessing, isRetryingProcessing, queryClient, videoId]);
 
 	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
 	useEffect(() => {
-		// Check if we transitioned from having upload progress to null which means it's completed and reload the video.
-		// This prevents it just showing the dreaded "Format error" screen.
-		if (prevUploadProgress.current && !uploadProgress && !videoLoaded) {
-			reloadVideo();
-			// Make it more reliable.
-			setTimeout(() => reloadVideo(), 1000);
+		if (
+			shouldReloadPlaybackAfterUploadCompletes(
+				prevUploadProgress.current,
+				uploadProgress,
+				videoLoaded,
+			)
+		) {
+			setHasError(false);
+			void queryClient.invalidateQueries({
+				queryKey: [
+					"resolvedSrc",
+					videoSrc,
+					rawFallbackSrc,
+					enableCrossOrigin,
+					preferredSource,
+				],
+			});
 		}
 		prevUploadProgress.current = uploadProgress;
-	}, [uploadProgress, videoLoaded, reloadVideo]);
+	}, [
+		enableCrossOrigin,
+		preferredSource,
+		queryClient,
+		rawFallbackSrc,
+		uploadProgress,
+		videoLoaded,
+		videoSrc,
+	]);
+
+	const showPreparingOverlay =
+		!videoLoaded &&
+		!uploadProgress &&
+		!hasError &&
+		(!resolvedSrc.isSuccess || Boolean(resolvedSrc.data));
+	const showPlaybackResolutionError =
+		hasError && !uploadProgress && !resolvedSrc.data && !resolvedSrc.isPending;
+	const showRawPlaybackBadge =
+		showPlaybackStatusBadge && resolvedSrc.data?.type === "raw";
+	const rawPlaybackBadgeLabel =
+		uploadProgressRaw?.status === "error"
+			? "Original upload"
+			: "Optimizing video";
+	const rawPlaybackBadgeDescription =
+		uploadProgressRaw?.status === "error"
+			? "The processed version is unavailable right now, so this page is playing the original uploaded file instead."
+			: "This page is temporarily playing the original uploaded file while Cap finishes processing the optimized version for smoother playback and broader compatibility.";
+	const blockPlaybackControls =
+		(!videoLoaded && hasActiveProgress) || showUploadFailureOverlay;
 
 	return (
 		<MediaPlayer
@@ -513,35 +586,68 @@ export function CapVideoPlayer({
 			)}
 			autoHide
 		>
-			{isUploadFailed && (
+			{showUploadFailureOverlay && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
 					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
-						Upload failed. Please try re-uploading from the Cap desktop app via
-						Settings {">"} Previous Recordings.
+						{uploadFailureMessage}
+					</p>
+					{canRetryUploadProcessing && (
+						<button
+							type="button"
+							onClick={retryProcessing}
+							disabled={isRetryingProcessing}
+							className="px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-full transition-colors disabled:opacity-60 disabled:cursor-not-allowed hover:bg-blue-600"
+						>
+							{isRetryingProcessing ? "Retrying..." : "Retry Processing"}
+						</button>
+					)}
+				</div>
+			)}
+			{showPlaybackResolutionError && (
+				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
+					<AlertTriangleIcon className="text-red-500 size-12" />
+					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
+						Could not load a playable video source. Reload to try again.
 					</p>
 				</div>
 			)}
 			<div
 				className={clsx(
 					"flex absolute inset-0 z-10 rounded-xl justify-center items-center bg-black transition-opacity duration-300 overflow-visible",
-					videoLoaded || !!uploadProgress
+					videoLoaded || !!uploadProgress || !showPreparingOverlay
 						? "opacity-0 pointer-events-none"
 						: "opacity-100",
 				)}
 			>
 				<div className="flex flex-col gap-2 items-center">
 					<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
-					{retryCount.current > 0 && (
-						<p className="text-sm text-white opacity-75">
-							Preparing video... ({retryCount.current}/{maxRetries})
-						</p>
-					)}
 				</div>
 			</div>
+			{showRawPlaybackBadge && (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<button
+							type="button"
+							className="absolute top-3 left-3 z-10 inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70"
+							aria-label={rawPlaybackBadgeDescription}
+						>
+							<InfoIcon className="size-3" />
+							<span>{rawPlaybackBadgeLabel}</span>
+						</button>
+					</TooltipTrigger>
+					<TooltipContent
+						side="bottom"
+						align="start"
+						className="max-w-[260px] border border-white/10 bg-black/90 px-3 py-2 text-xs leading-relaxed text-white shadow-xl"
+					>
+						{rawPlaybackBadgeDescription}
+					</TooltipContent>
+				</Tooltip>
+			)}
 			{resolvedSrc.data && (
 				<MediaPlayerVideo
-					src={resolvedSrc.data.url}
+					src={iosLevelPatchedUrl ?? resolvedSrc.data.url}
 					ref={videoRef}
 					onLoadedData={() => {
 						setVideoLoaded(true);
@@ -568,28 +674,68 @@ export function CapVideoPlayer({
 				</MediaPlayerVideo>
 			)}
 			<AnimatePresence>
-				{!videoLoaded && isUploading && !isUploadFailed && (
-					<motion.div
-						initial={{ opacity: 0, y: 10 }}
-						animate={{ opacity: 1, y: 0 }}
-						exit={{ opacity: 0, y: 10 }}
-						transition={{ duration: 0.2 }}
-						className="flex absolute inset-0 z-10 justify-center items-center m-auto size-[130px] md:size-32"
-					>
-						<ProgressCircle
-							progress={
-								uploadProgress?.status === "uploading"
-									? uploadProgress.progress
-									: 0
-							}
+				{!videoLoaded && hasActiveProgress && !showUploadFailureOverlay && (
+					<>
+						<motion.div
+							initial={{ opacity: 0 }}
+							animate={{ opacity: 1 }}
+							exit={{ opacity: 0 }}
+							transition={{ duration: 0.2 }}
+							className="absolute inset-0 z-10 transition-all duration-300 bg-black/60 rounded-xl"
 						/>
-					</motion.div>
+						<motion.div
+							initial={{ opacity: 0, y: 10 }}
+							animate={{ opacity: 1, y: 0 }}
+							exit={{ opacity: 0, y: 10 }}
+							transition={{ duration: 0.2 }}
+							className="flex absolute bottom-3 left-3 gap-2 items-center z-20"
+						>
+							<span className="text-sm font-semibold text-white">
+								{getProgressStatusText(
+									isProcessing
+										? "processing"
+										: isGeneratingThumbnail
+											? "generating_thumbnail"
+											: "uploading",
+								)}
+								{uploadProgress?.progress != null &&
+									uploadProgress.progress > 0 &&
+									` ${Math.round(uploadProgress.progress)}%`}
+							</span>
+							<svg className="w-4 h-4 transform -rotate-90" viewBox="0 0 20 20">
+								<title>Progress</title>
+								<circle
+									cx="10"
+									cy="10"
+									r="8"
+									stroke="currentColor"
+									strokeWidth="3"
+									fill="none"
+									className="text-white/30"
+								/>
+								<circle
+									cx="10"
+									cy="10"
+									r="8"
+									stroke="currentColor"
+									strokeWidth="3"
+									fill="none"
+									strokeLinecap="round"
+									className="text-white transition-all duration-200 ease-out"
+									style={{
+										strokeDasharray: `${circumference} ${circumference}`,
+										strokeDashoffset: `${calculateStrokeDashoffset(uploadProgress?.progress ?? 0, circumference)}`,
+									}}
+								/>
+							</svg>
+						</motion.div>
+					</>
 				)}
 				{showPlayButton &&
 					videoLoaded &&
 					!hasPlayedOnce &&
-					!isUploading &&
-					!isUploadFailed && (
+					!showUploadFailureOverlay &&
+					!showPlaybackResolutionError && (
 						<motion.div
 							whileHover={{ scale: 1.1 }}
 							whileTap={{ scale: 0.9 }}
@@ -621,9 +767,9 @@ export function CapVideoPlayer({
 				</div>
 			)}
 			<MediaPlayerLoading />
-			{!isRetrying && !isRetryingRef.current && !isUploading && (
-				<MediaPlayerError />
-			)}
+			{!isUploading &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && <MediaPlayerError />}
 			<MediaPlayerVolumeIndicator />
 
 			{mainControlsVisible &&
@@ -639,7 +785,7 @@ export function CapVideoPlayer({
 					);
 
 					return filteredComments.map((comment) => {
-						const position = (Number(comment.timestamp) / duration) * 100;
+						const position = (Number(comment.timestamp) / playerDuration) * 100;
 						const containerPadding = 20;
 						const availableWidth = `calc(100% - ${containerPadding * 2}px)`;
 						const adjustedPosition = `calc(${containerPadding}px + (${position}% * ${availableWidth} / 100%))`;
@@ -661,12 +807,13 @@ export function CapVideoPlayer({
 			<MediaPlayerControls
 				className="flex-col items-start gap-2.5"
 				mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
-				isUploadingOrFailed={isUploading || isUploadFailed}
+				isUploadingOrFailed={blockPlaybackControls}
 			>
 				<MediaPlayerControlsOverlay className="rounded-b-xl" />
 				<MediaPlayerSeek
+					fallbackDuration={playerDuration}
 					tooltipThumbnailSrc={
-						isMobile || !resolvedSrc.isSuccess
+						isMobile || !resolvedSrc.data?.supportsCrossOrigin
 							? undefined
 							: generateVideoFrameThumbnail
 					}
@@ -676,8 +823,13 @@ export function CapVideoPlayer({
 						<MediaPlayerPlay />
 						<MediaPlayerSeekBackward />
 						<MediaPlayerSeekForward />
-						<MediaPlayerVolume expandable />
-						<MediaPlayerTime />
+						<MediaPlayerVolume
+							expandable
+							// enhancedAudioEnabled={enhancedAudioEnabled}
+							// enhancedAudioMuted={enhancedAudioMuted}
+							// setEnhancedAudioMuted={setEnhancedAudioMuted}
+						/>
+						<MediaPlayerTime fallbackDuration={playerDuration} />
 					</div>
 					<div className="flex gap-2 items-center">
 						{!disableCaptions && (
@@ -686,12 +838,44 @@ export function CapVideoPlayer({
 								toggleCaptions={toggleCaptions}
 							/>
 						)}
-						<MediaPlayerSettings />
+						{/* <MediaPlayerEnhancedAudio
+							enhancedAudioStatus={enhancedAudioStatus}
+							enhancedAudioEnabled={enhancedAudioEnabled}
+							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+						/> */}
+						<MediaPlayerSettings
+							// enhancedAudioStatus={enhancedAudioStatus}
+							// enhancedAudioEnabled={enhancedAudioEnabled}
+							// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+							captionLanguage={captionLanguage}
+							onCaptionLanguageChange={onCaptionLanguageChange}
+							availableCaptions={availableCaptions}
+							isCaptionLoading={isCaptionLoading}
+							hasCaptions={hasCaptions}
+						/>
 						<MediaPlayerPiP />
 						<MediaPlayerFullscreen />
 					</div>
 				</div>
 			</MediaPlayerControls>
+			{/* {enhancedAudioUrl && (
+				<>
+					<audio
+						ref={enhancedAudioRef}
+						src={enhancedAudioUrl}
+						preload="auto"
+						className="hidden"
+					>
+						<track kind="captions" />
+					</audio>
+					<EnhancedAudioSync
+						enhancedAudioRef={enhancedAudioRef}
+						videoRef={videoRef}
+						enhancedAudioEnabled={enhancedAudioEnabled}
+						enhancedAudioMuted={enhancedAudioMuted}
+					/>
+				</>
+			)} */}
 		</MediaPlayer>
 	);
 }

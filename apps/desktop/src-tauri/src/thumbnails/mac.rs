@@ -7,14 +7,14 @@ use super::*;
 pub async fn capture_display_thumbnail(display: &scap_targets::Display) -> Option<String> {
     let content = get_shareable_content().await.ok()??;
 
-    let filter = display.raw_handle().as_content_filter(content).await?;
+    let filter = display.raw_handle().as_content_filter(content)?;
     capture_thumbnail_from_filter(filter).await
 }
 
 pub async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<String> {
     let content = get_shareable_content().await.ok()??;
 
-    let sc_window = window.raw_handle().as_sc(content).await?;
+    let sc_window = window.raw_handle().as_sc(content)?;
     let filter = cidre::sc::ContentFilter::with_desktop_independent_window(&sc_window);
     capture_thumbnail_from_filter(filter).await
 }

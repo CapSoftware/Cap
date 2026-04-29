@@ -386,33 +386,36 @@ export default function TargetCard(props: TargetCardProps) {
 				</div>
 				<Show when={local.variant === "screenshot"}>
 					<div class="flex items-center justify-between px-2 pb-1.5 pt-0.5 gap-1">
-						<div
-							role="button"
-							tabIndex={-1}
-							onClick={handleOpenEditor}
-							class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
-							title="Editor"
-						>
-							<IconLucideEdit class="size-3.5" />
-						</div>
-						<div
-							role="button"
-							tabIndex={-1}
-							onClick={handleCopy}
-							class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
-							title="Copy to clipboard"
-						>
-							<IconLucideCopy class="size-3.5" />
-						</div>
-						<div
-							role="button"
-							tabIndex={-1}
-							onClick={handleSave}
-							class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
-							title="Save as..."
-						>
-							<IconLucideSave class="size-3.5" />
-						</div>
+						<Tooltip content="Edit">
+							<div
+								role="button"
+								tabIndex={-1}
+								onClick={handleOpenEditor}
+								class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+							>
+								<IconLucideEdit class="size-3.5" />
+							</div>
+						</Tooltip>
+						<Tooltip content="Copy to clipboard">
+							<div
+								role="button"
+								tabIndex={-1}
+								onClick={handleCopy}
+								class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+							>
+								<IconLucideCopy class="size-3.5" />
+							</div>
+						</Tooltip>
+						<Tooltip content="Save as...">
+							<div
+								role="button"
+								tabIndex={-1}
+								onClick={handleSave}
+								class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+							>
+								<IconLucideSave class="size-3.5" />
+							</div>
+						</Tooltip>
 					</div>
 				</Show>
 				<Show when={local.variant === "recording"}>

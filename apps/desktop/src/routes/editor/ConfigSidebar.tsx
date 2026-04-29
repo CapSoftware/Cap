@@ -15,7 +15,6 @@ import { createWritableMemo } from "@solid-primitives/memo";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
 import { BaseDirectory, writeFile } from "@tauri-apps/plugin-fs";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	batch,
@@ -41,21 +40,25 @@ import imageBg from "~/assets/illustrations/image.webp";
 import transparentBg from "~/assets/illustrations/transparent.webp";
 import { Toggle } from "~/components/Toggle";
 import { generalSettingsStore } from "~/store";
-import {
-	type BackgroundSource,
-	type CameraShape,
-	type ClipOffsets,
-	type CursorAnimationStyle,
-	type CursorType,
-	commands,
-	type SceneSegment,
-	type StereoMode,
-	type TimelineSegment,
-	type ZoomSegment,
+import { normalizeOpaqueHexColor } from "~/utils/hex-color";
+import type {
+	BackgroundBlurMode,
+	BackgroundSource,
+	CameraShape,
+	CaptionTrackSegment,
+	ClipOffsets,
+	CursorAnimationStyle,
+	CursorType,
+	KeyboardTrackSegment,
+	SceneSegment,
+	StereoMode,
+	TimelineSegment,
+	ZoomSegment,
 } from "~/utils/tauri";
 import IconLucideBoxSelect from "~icons/lucide/box-select";
 import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideGrid from "~icons/lucide/grid";
+import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideMoon from "~icons/lucide/moon";
 import IconLucidePalette from "~icons/lucide/palette";
@@ -65,13 +68,13 @@ import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
 import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
+import { syncCaptionWordsWithText } from "./captions";
+import { getColorPreviewBorderColor, hexToRgb, RgbInput } from "./color-utils";
 import { useEditorContext } from "./context";
+import { GradientEditor } from "./GradientEditor";
+import { KeyboardTab } from "./KeyboardTab";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
-import {
-	DEFAULT_GRADIENT_FROM,
-	DEFAULT_GRADIENT_TO,
-	type RGBColor,
-} from "./projectConfig";
+import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
 import type { TextSegment } from "./text";
@@ -79,6 +82,7 @@ import {
 	ComingSoonTooltip,
 	EditorButton,
 	Field,
+	Input,
 	MenuItem,
 	MenuItemList,
 	PopperContent,
@@ -86,6 +90,7 @@ import {
 	Subfield,
 	topSlideAnimateClasses,
 } from "./ui";
+import { formatTime } from "./utils";
 
 const BACKGROUND_SOURCES = {
 	wallpaper: "Wallpaper",
@@ -128,27 +133,6 @@ const BACKGROUND_COLORS = [
 	"#00000000", // Transparent
 ];
 
-const BACKGROUND_GRADIENTS = [
-	{ from: [15, 52, 67], to: [52, 232, 158] }, // Dark Blue to Teal
-	{ from: [34, 193, 195], to: [253, 187, 45] }, // Turquoise to Golden Yellow
-	{ from: [29, 253, 251], to: [195, 29, 253] }, // Cyan to Purple
-	{ from: [69, 104, 220], to: [176, 106, 179] }, // Blue to Violet
-	{ from: [106, 130, 251], to: [252, 92, 125] }, // Soft Blue to Pinkish Red
-	{ from: [131, 58, 180], to: [253, 29, 29] }, // Purple to Red
-	{ from: [249, 212, 35], to: [255, 78, 80] }, // Yellow to Coral Red
-	{ from: [255, 94, 0], to: [255, 42, 104] }, // Orange to Reddish Pink
-	{ from: [255, 0, 150], to: [0, 204, 255] }, // Pink to Sky Blue
-	{ from: [0, 242, 96], to: [5, 117, 230] }, // Green to Blue
-	{ from: [238, 205, 163], to: [239, 98, 159] }, // Peach to Soft Pink
-	{ from: [44, 62, 80], to: [52, 152, 219] }, // Dark Gray Blue to Light Blue
-	{ from: [168, 239, 255], to: [238, 205, 163] }, // Light Blue to Peach
-	{ from: [74, 0, 224], to: [143, 0, 255] }, // Deep Blue to Bright Purple
-	{ from: [252, 74, 26], to: [247, 183, 51] }, // Deep Orange to Soft Yellow
-	{ from: [0, 255, 255], to: [255, 20, 147] }, // Cyan to Deep Pink
-	{ from: [255, 127, 0], to: [255, 255, 0] }, // Orange to Yellow
-	{ from: [255, 0, 255], to: [0, 255, 0] }, // Magenta to Green
-] satisfies Array<{ from: RGBColor; to: RGBColor }>;
-
 const WALLPAPER_NAMES = [
 	// macOS wallpapers
 	"macOS/tahoe-dusk-min",
@@ -183,6 +167,14 @@ const WALLPAPER_NAMES = [
 	"purple/4",
 	"purple/5",
 	"purple/6",
+	"cities/liverpool",
+	"cities/santorini",
+	"cities/miami",
+	"cities/monaco",
+	"cities/london",
+	"cities/rome",
+	"cities/sf",
+	"cities/nyc",
 	// Dark wallpapers
 	"dark/1",
 	"dark/2",
@@ -223,6 +215,7 @@ const BACKGROUND_THEMES = {
 	macOS: "macOS",
 	dark: "Dark",
 	blue: "Blue",
+	cities: "Cities",
 	purple: "Purple",
 	orange: "Orange",
 };
@@ -233,7 +226,7 @@ type CursorPresetValues = {
 	friction: number;
 };
 
-const DEFAULT_CURSOR_MOTION_BLUR = 0.5;
+const DEFAULT_CURSOR_MOTION_BLUR = 0.3;
 
 const CURSOR_TYPE_OPTIONS = [
 	{
@@ -256,10 +249,22 @@ const CURSOR_ANIMATION_STYLE_OPTIONS = [
 		preset: { tension: 65, mass: 1.8, friction: 16 },
 	},
 	{
+		value: "smooth",
+		label: "Smooth",
+		description: "Ultra-smooth cinematic feel with high damping.",
+		preset: { tension: 80, mass: 2.5, friction: 28 },
+	},
+	{
 		value: "mellow",
 		label: "Mellow",
 		description: "Balanced smoothing for everyday tutorials and walkthroughs.",
 		preset: { tension: 120, mass: 1.1, friction: 18 },
+	},
+	{
+		value: "fast",
+		label: "Fast",
+		description: "Quick, responsive smoothing for fast-paced content.",
+		preset: { tension: 380, mass: 1.0, friction: 30 },
 	},
 	{
 		value: "custom",
@@ -286,11 +291,11 @@ const findCursorPreset = (
 		(option) =>
 			option.preset &&
 			Math.abs(option.preset.tension - values.tension) <=
-				CURSOR_PRESET_TOLERANCE.tension &&
+			CURSOR_PRESET_TOLERANCE.tension &&
 			Math.abs(option.preset.mass - values.mass) <=
-				CURSOR_PRESET_TOLERANCE.mass &&
+			CURSOR_PRESET_TOLERANCE.mass &&
 			Math.abs(option.preset.friction - values.friction) <=
-				CURSOR_PRESET_TOLERANCE.friction,
+			CURSOR_PRESET_TOLERANCE.friction,
 	);
 
 	return preset?.value ?? null;
@@ -302,7 +307,9 @@ const TAB_IDS = {
 	transcript: "transcript",
 	audio: "audio",
 	cursor: "cursor",
+	keyboard: "keyboard",
 	hotkeys: "hotkeys",
+	captions: "captions",
 } as const;
 
 export function ConfigSidebar() {
@@ -364,6 +371,7 @@ export function ConfigSidebar() {
 			| "transcript"
 			| "audio"
 			| "cursor"
+			| "keyboard"
 			| "hotkeys"
 			| "captions",
 	});
@@ -395,7 +403,11 @@ export function ConfigSidebar() {
 							),
 						},
 						{
-							id: "captions" as const,
+							id: TAB_IDS.keyboard,
+							icon: IconLucideKeyboard,
+						},
+						{
+							id: TAB_IDS.captions,
 							icon: IconCapMessageBubble,
 						},
 						// { id: "hotkeys" as const, icon: IconCapHotkeys },
@@ -426,7 +438,7 @@ export function ConfigSidebar() {
 								class={cx(
 									"flex justify-center relative border-transparent border z-10 items-center rounded-md size-9 transition will-change-transform",
 									state.selectedTab !== item.id &&
-										"group-hover:border-gray-300 group-disabled:border-none",
+									"group-hover:border-gray-300 group-disabled:border-none",
 								)}
 							>
 								<Dynamic component={item.icon} />
@@ -578,8 +590,7 @@ export function ConfigSidebar() {
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
 					<Field
-						name="Cursor"
-						icon={<IconCapCursor />}
+						name="Show cursor"
 						value={
 							<Toggle
 								checked={!project.cursor.hide}
@@ -626,6 +637,16 @@ export function ConfigSidebar() {
 								minValue={20}
 								maxValue={300}
 								step={1}
+							/>
+						</Field>
+						<Field name="Tilt" icon={<IconLucideRotate3d class="size-4" />}>
+							<Slider
+								value={[project.cursor.rotationAmount ?? 0.15]}
+								onChange={(v) => setProject("cursor", "rotationAmount", v[0])}
+								minValue={0}
+								maxValue={1}
+								step={0.01}
+								formatTooltip={(value) => `${Math.round(value * 100)}%`}
 							/>
 						</Field>
 						<Field
@@ -809,10 +830,16 @@ export function ConfigSidebar() {
 					</Field>
 				</KTabs.Content>
 				<KTabs.Content
-					value="captions"
+					value={TAB_IDS.captions}
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
 					<CaptionsTab />
+				</KTabs.Content>
+				<KTabs.Content
+					value={TAB_IDS.keyboard}
+					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
+				>
+					<KeyboardTab />
 				</KTabs.Content>
 			</div>
 			<div
@@ -829,6 +856,151 @@ export function ConfigSidebar() {
 				<Show when={editorState.timeline.selection}>
 					{(selection) => (
 						<Suspense>
+							<Show
+								when={(() => {
+									const captionSelection = selection();
+									if (captionSelection.type !== "caption") return;
+
+									const segments = captionSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.captionSegments?.[index],
+										}))
+										.filter(
+											(
+												item,
+											): item is {
+												index: number;
+												segment: CaptionTrackSegment;
+											} => item.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+
+									return { selection: captionSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} caption{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() =>
+													projectActions.deleteCaptionSegments(
+														value().segments.map((s) => s.index),
+													)
+												}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<div class="p-4 rounded-lg border border-gray-200">
+													<CaptionSegmentConfig
+														segment={item.segment}
+														segmentIndex={item.index}
+													/>
+												</div>
+											)}
+										</For>
+									</div>
+								)}
+							</Show>
+							<Show
+								when={(() => {
+									const keyboardSelection = selection();
+									if (keyboardSelection.type !== "keyboard") return;
+
+									const segments = keyboardSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.keyboardSegments?.[index],
+										}))
+										.filter(
+											(
+												item,
+											): item is {
+												index: number;
+												segment: KeyboardTrackSegment;
+											} => item.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+
+									return { selection: keyboardSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() => {
+														setEditorState("timeline", "selection", null);
+														setState("selectedTab", TAB_IDS.keyboard);
+													}}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} keyboard{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() =>
+													projectActions.deleteKeyboardSegments(
+														value().segments.map((s) => s.index),
+													)
+												}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<div class="p-4 rounded-lg border border-gray-200">
+													<KeyboardSegmentConfig
+														segment={item.segment}
+														segmentIndex={item.index}
+													/>
+												</div>
+											)}
+										</For>
+									</div>
+								)}
+							</Show>
 							<Show
 								when={(() => {
 									const textSelection = selection();
@@ -1257,7 +1429,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 									photoUrl.replace("file://", ""),
 								);
 
-								debouncedSetProject(rawPath);
+								setWallpaperSource(rawPath);
 							} catch (_err) {
 								toast.error("Failed to set wallpaper");
 							}
@@ -1319,17 +1491,14 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 
 	let fileInput!: HTMLInputElement;
 
-	// Optimize the debounced set project function
-	const debouncedSetProject = (wallpaperPath: string) => {
+	const setWallpaperSource = (wallpaperPath: string) => {
 		const resumeHistory = projectHistory.pause();
-		queueMicrotask(() => {
-			batch(() => {
-				setProject("background", "source", {
-					type: "wallpaper",
-					path: wallpaperPath,
-				} as const);
-				resumeHistory();
-			});
+		batch(() => {
+			setProject("background", "source", {
+				type: "wallpaper",
+				path: wallpaperPath,
+			} as const);
+			resumeHistory();
 		});
 	};
 
@@ -1354,8 +1523,6 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 			to: DEFAULT_GRADIENT_TO,
 		},
 	};
-
-	const hapticsEnabled = ostype() === "macos";
 
 	return (
 		<KTabs.Content value={TAB_IDS.background} class="flex flex-col gap-6 p-4">
@@ -1543,17 +1710,13 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 								ref={setBackgroundRef}
 								class="flex overflow-x-auto overscroll-contain relative z-10 flex-row gap-2 items-center mb-3 text-xs hide-scroll"
 								style={{
-									"-webkit-mask-image": `linear-gradient(to right, transparent, black ${
-										scrollX() > 0 ? "24px" : "0"
-									}, black calc(100% - ${
-										reachedEndOfScroll() ? "0px" : "24px"
-									}), transparent)`,
+									"-webkit-mask-image": `linear-gradient(to right, transparent, black ${scrollX() > 0 ? "24px" : "0"
+										}, black calc(100% - ${reachedEndOfScroll() ? "0px" : "24px"
+										}), transparent)`,
 
-									"mask-image": `linear-gradient(to right, transparent, black ${
-										scrollX() > 0 ? "24px" : "0"
-									}, black calc(100% - ${
-										reachedEndOfScroll() ? "0px" : "24px"
-									}), transparent);`,
+									"mask-image": `linear-gradient(to right, transparent, black ${scrollX() > 0 ? "24px" : "0"
+										}, black calc(100% - ${reachedEndOfScroll() ? "0px" : "24px"
+										}), transparent);`,
 								}}
 							>
 								<For each={Object.entries(BACKGROUND_THEMES)}>
@@ -1580,10 +1743,10 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 							value={
 								project.background.source.type === "wallpaper"
 									? (wallpapers()?.find((w) =>
-											(
-												project.background.source as { path?: string }
-											).path?.includes(w.id),
-										)?.url ?? undefined)
+										(
+											project.background.source as { path?: string }
+										).path?.includes(w.id),
+									)?.url ?? undefined)
 									: undefined
 							}
 							onChange={(photoUrl) => {
@@ -1595,7 +1758,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 
 									// Get the raw path without any URL prefixes
 
-									debouncedSetProject(wallpaper.rawPath);
+									setWallpaperSource(wallpaper.rawPath);
 
 									ensurePaddingForBackground();
 								} catch (_err) {
@@ -1832,128 +1995,8 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 							</div>
 						</Show>
 					</KTabs.Content>
-					<KTabs.Content value="gradient" class="flex flex-row justify-between">
-						<Show
-							when={
-								project.background.source.type === "gradient" &&
-								project.background.source
-							}
-						>
-							{(source) => {
-								const max = 360;
-
-								const { projectHistory } = useEditorContext();
-
-								const angle = () => source().angle ?? 90;
-
-								return (
-									<div class="flex flex-col gap-3">
-										<div class="flex gap-5 h-10">
-											<RgbInput
-												value={source().from}
-												onChange={(from) => {
-													backgrounds.gradient.from = from;
-													setProject("background", "source", {
-														type: "gradient",
-														from,
-													});
-												}}
-											/>
-											<RgbInput
-												value={source().to}
-												onChange={(to) => {
-													backgrounds.gradient.to = to;
-													setProject("background", "source", {
-														type: "gradient",
-														to,
-													});
-												}}
-											/>
-											<div
-												class="flex relative flex-col items-center p-1 ml-auto rounded-full border bg-gray-1 border-gray-3 size-10 cursor-ns-resize shrink-0"
-												style={{ transform: `rotate(${angle()}deg)` }}
-												onMouseDown={(downEvent) => {
-													const start = angle();
-													const _resumeHistory = projectHistory.pause();
-
-													createRoot((dispose) =>
-														createEventListenerMap(window, {
-															mouseup: () => dispose(),
-															mousemove: (moveEvent) => {
-																const rawNewAngle =
-																	Math.round(
-																		start +
-																			(downEvent.clientY - moveEvent.clientY),
-																	) % max;
-																const newAngle = moveEvent.shiftKey
-																	? rawNewAngle
-																	: Math.round(rawNewAngle / 45) * 45;
-
-																if (
-																	!moveEvent.shiftKey &&
-																	hapticsEnabled &&
-																	project.background.source.type ===
-																		"gradient" &&
-																	project.background.source.angle !== newAngle
-																) {
-																	commands.performHapticFeedback(
-																		"alignment",
-																		"now",
-																	);
-																}
-
-																setProject("background", "source", {
-																	type: "gradient",
-																	angle:
-																		newAngle < 0 ? newAngle + max : newAngle,
-																});
-															},
-														}),
-													);
-												}}
-											>
-												<div class="bg-blue-9 rounded-full size-1.5" />
-											</div>
-										</div>
-										<div class="flex flex-wrap gap-2">
-											<For each={BACKGROUND_GRADIENTS}>
-												{(gradient) => (
-													<label class="relative">
-														<input
-															type="radio"
-															class="sr-only peer"
-															name="colorPicker"
-															onChange={(e) => {
-																if (e.target.checked) {
-																	backgrounds.gradient = {
-																		type: "gradient",
-																		from: gradient.from,
-																		to: gradient.to,
-																	};
-																	setProject(
-																		"background",
-																		"source",
-																		backgrounds.gradient,
-																	);
-																}
-															}}
-														/>
-														<div
-															class="rounded-lg transition-all duration-200 cursor-pointer size-8 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
-															style={{
-																background: `linear-gradient(${angle()}deg, rgb(${gradient.from.join(
-																	",",
-																)}), rgb(${gradient.to.join(",")}))`,
-															}}
-														/>
-													</label>
-												)}
-											</For>
-										</div>
-									</div>
-								);
-							}}
-						</Show>
+					<KTabs.Content value="gradient">
+						<GradientEditor />
 					</KTabs.Content>
 				</KTabs>
 			</Field>
@@ -2234,7 +2277,6 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 														: "left-1/2 transform -translate-x-1/2",
 												item.y === "top" ? "top-2" : "bottom-2",
 											)}
-											onClick={() => setProject("camera", "position", item)}
 										>
 											<div class="size-[0.5rem] shrink-0 bg-solid-white rounded-full" />
 										</RadioGroup.ItemControl>
@@ -2254,6 +2296,74 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 							checked={project.camera.mirror}
 							onChange={(mirror) => setProject("camera", "mirror", mirror)}
 						/>
+					</Subfield>
+					<Subfield name="Background Blur">
+						<KSelect<{ name: string; value: BackgroundBlurMode }>
+							options={[
+								{ name: "Off", value: "off" },
+								{ name: "Light Blur", value: "light" },
+								{ name: "Heavy Blur", value: "heavy" },
+							]}
+							optionValue="value"
+							optionTextValue="name"
+							value={
+								(
+									[
+										{ name: "Off", value: "off" },
+										{ name: "Light Blur", value: "light" },
+										{ name: "Heavy Blur", value: "heavy" },
+									] as const
+								).find(
+									(v) =>
+										v.value === (project.camera.backgroundBlur?.mode ?? "off"),
+								) ?? { name: "Off", value: "off" }
+							}
+							onChange={(v) => {
+								if (v)
+									setProject("camera", "backgroundBlur", {
+										mode: v.value,
+									});
+							}}
+							disallowEmptySelection
+							itemComponent={(props) => (
+								<MenuItem<typeof KSelect.Item>
+									as={KSelect.Item}
+									item={props.item}
+								>
+									<KSelect.ItemLabel class="flex-1">
+										{props.item.rawValue.name}
+									</KSelect.ItemLabel>
+								</MenuItem>
+							)}
+						>
+							<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
+								<KSelect.Value<{
+									name: string;
+									value: string;
+								}> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+									{(state) => <span>{state.selectedOption().name}</span>}
+								</KSelect.Value>
+								<KSelect.Icon<ValidComponent>
+									as={(iconProps) => (
+										<IconCapChevronDown
+											{...iconProps}
+											class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+										/>
+									)}
+								/>
+							</KSelect.Trigger>
+							<KSelect.Portal>
+								<PopperContent<typeof KSelect.Content>
+									as={KSelect.Content}
+									class={cx(topSlideAnimateClasses, "z-50")}
+								>
+									<MenuItemList<typeof KSelect.Listbox>
+										class="overflow-y-auto max-h-32"
+										as={KSelect.Listbox}
+									/>
+								</PopperContent>
+							</KSelect.Portal>
+						</KSelect>
 					</Subfield>
 					<Subfield name="Shape">
 						<KSelect<{ name: string; value: CameraShape }>
@@ -2456,8 +2566,11 @@ function HexColorInput(props: {
 			<div class="relative">
 				<button
 					type="button"
-					class="w-10 h-10 rounded-md border border-gray-4 cursor-pointer hover:border-gray-5 transition-colors"
-					style={{ "background-color": text() }}
+					class="size-[2rem] rounded-[0.5rem] cursor-pointer transition-[box-shadow]"
+					style={{
+						"background-color": text(),
+						"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(text())}`,
+					}}
 					onClick={() => colorInput?.click()}
 				/>
 				<input
@@ -2485,7 +2598,8 @@ function HexColorInput(props: {
 					setText(e.currentTarget.value);
 				}}
 				onBlur={(e) => {
-					const next = normalizeHexInput(e.currentTarget.value, prevColor);
+					const next =
+						normalizeOpaqueHexColor(e.currentTarget.value) ?? prevColor;
 					setText(next);
 					prevColor = next;
 					props.onChange(next);
@@ -2679,6 +2793,215 @@ function TextSegmentConfig(props: {
 	);
 }
 
+function KeyboardSegmentConfig(props: {
+	segmentIndex: number;
+	segment: KeyboardTrackSegment;
+}) {
+	const { setProject } = useEditorContext();
+
+	const updateSegment = (fn: (segment: KeyboardTrackSegment) => void) => {
+		setProject(
+			"timeline",
+			"keyboardSegments",
+			produce((segments) => {
+				const segment = segments?.[props.segmentIndex];
+				if (!segment) return;
+				fn(segment);
+			}),
+		);
+	};
+
+	return (
+		<div class="space-y-4">
+			<Field
+				name={`Keyboard ${props.segmentIndex + 1}`}
+				icon={<IconLucideKeyboard class="size-4" />}
+			>
+				<Input
+					type="text"
+					value={props.segment.displayText}
+					onChange={(e) =>
+						updateSegment((segment) => {
+							segment.displayText = e.currentTarget.value;
+						})
+					}
+				/>
+			</Field>
+			<Field name="Timing" icon={<IconLucideTimer class="size-4" />}>
+				<div class="rounded-xl border border-gray-3 bg-gray-2/70 p-3 space-y-3">
+					<div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-start">
+						<div class="rounded-lg border border-gray-3 bg-gray-1/80 p-2.5 space-y-2">
+							<div class="flex items-center justify-between text-[10px] uppercase tracking-[0.08em] text-gray-10">
+								<span>Start</span>
+								<span>{formatTime(props.segment.start)}</span>
+							</div>
+							<Input
+								type="number"
+								value={props.segment.start.toFixed(2)}
+								step="0.1"
+								min={0}
+								onChange={(e) =>
+									updateSegment((segment) => {
+										segment.start = Number.parseFloat(e.currentTarget.value);
+									})
+								}
+							/>
+						</div>
+						<div class="pt-10 text-xs font-medium text-gray-10">to</div>
+						<div class="rounded-lg border border-gray-3 bg-gray-1/80 p-2.5 space-y-2">
+							<div class="flex items-center justify-between text-[10px] uppercase tracking-[0.08em] text-gray-10">
+								<span>End</span>
+								<span>{formatTime(props.segment.end)}</span>
+							</div>
+							<Input
+								type="number"
+								value={props.segment.end.toFixed(2)}
+								step="0.1"
+								min={props.segment.start}
+								onChange={(e) =>
+									updateSegment((segment) => {
+										segment.end = Number.parseFloat(e.currentTarget.value);
+									})
+								}
+							/>
+						</div>
+					</div>
+					<div class="flex items-center justify-between rounded-lg bg-gray-1/70 px-3 py-2 text-xs text-gray-11">
+						<span>Duration</span>
+						<span class="font-medium text-gray-12">
+							{Math.max(0, props.segment.end - props.segment.start).toFixed(2)}s
+						</span>
+					</div>
+				</div>
+			</Field>
+			<Field name="Fade Duration" icon={<IconLucideTimer class="size-4" />}>
+				<Slider
+					value={[(props.segment.fadeDurationOverride ?? 0.15) * 100]}
+					onChange={([value]) =>
+						updateSegment((segment) => {
+							segment.fadeDurationOverride = value / 100;
+						})
+					}
+					minValue={0}
+					maxValue={50}
+					step={1}
+				/>
+			</Field>
+		</div>
+	);
+}
+
+function CaptionSegmentConfig(props: {
+	segmentIndex: number;
+	segment: CaptionTrackSegment;
+}) {
+	const { setProject } = useEditorContext();
+
+	const updateSegment = (fn: (segment: CaptionTrackSegment) => void) => {
+		setProject(
+			produce((project) => {
+				const timelineSegment =
+					project.timeline?.captionSegments?.[props.segmentIndex];
+				if (!timelineSegment) return;
+
+				fn(timelineSegment);
+
+				const captionSegment = project.captions?.segments?.[props.segmentIndex];
+				if (!captionSegment) return;
+
+				captionSegment.start = timelineSegment.start;
+				captionSegment.end = timelineSegment.end;
+				captionSegment.text = timelineSegment.text;
+				captionSegment.words = timelineSegment.words?.map((word) => ({
+					...word,
+				}));
+			}),
+		);
+	};
+
+	return (
+		<div class="space-y-4">
+			<Field
+				name={`Transcript ${props.segmentIndex + 1}`}
+				icon={<IconCapMessageBubble />}
+			>
+				<textarea
+					class="flex-1 px-3 py-2 rounded-lg border border-gray-3 bg-gray-2 text-gray-12 resize-none min-h-[96px] w-full"
+					value={props.segment.text}
+					onInput={(e) =>
+						updateSegment((segment) => {
+							segment.text = e.currentTarget.value;
+							segment.words = syncCaptionWordsWithText(
+								e.currentTarget.value,
+								segment.words,
+								segment.start,
+								segment.end,
+							);
+						})
+					}
+				/>
+			</Field>
+			<Field name="Timing" icon={<IconLucideTimer class="size-4" />}>
+				<div class="rounded-xl border border-gray-3 bg-gray-2/70 p-3 space-y-3">
+					<div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-start">
+						<div class="rounded-lg border border-gray-3 bg-gray-1/80 p-2.5 space-y-2">
+							<div class="flex items-center justify-between text-[10px] uppercase tracking-[0.08em] text-gray-10">
+								<span>Start</span>
+								<span>{formatTime(props.segment.start)}</span>
+							</div>
+							<Input
+								type="number"
+								value={props.segment.start.toFixed(2)}
+								step="0.1"
+								min={0}
+								onChange={(
+									e: Event & {
+										currentTarget: HTMLInputElement;
+										target: HTMLInputElement;
+									},
+								) =>
+									updateSegment((segment) => {
+										segment.start = Number.parseFloat(e.target.value);
+									})
+								}
+							/>
+						</div>
+						<div class="pt-10 text-xs font-medium text-gray-10">to</div>
+						<div class="rounded-lg border border-gray-3 bg-gray-1/80 p-2.5 space-y-2">
+							<div class="flex items-center justify-between text-[10px] uppercase tracking-[0.08em] text-gray-10">
+								<span>End</span>
+								<span>{formatTime(props.segment.end)}</span>
+							</div>
+							<Input
+								type="number"
+								value={props.segment.end.toFixed(2)}
+								step="0.1"
+								min={props.segment.start}
+								onChange={(
+									e: Event & {
+										currentTarget: HTMLInputElement;
+										target: HTMLInputElement;
+									},
+								) =>
+									updateSegment((segment) => {
+										segment.end = Number.parseFloat(e.target.value);
+									})
+								}
+							/>
+						</div>
+					</div>
+					<div class="flex items-center justify-between rounded-lg bg-gray-1/70 px-3 py-2 text-xs text-gray-11">
+						<span>Duration</span>
+						<span class="font-medium text-gray-12">
+							{Math.max(0, props.segment.end - props.segment.start).toFixed(2)}s
+						</span>
+					</div>
+				</div>
+			</Field>
+		</div>
+	);
+}
+
 function MaskSegmentConfig(props: {
 	segmentIndex: number;
 	segment: MaskSegment;
@@ -2758,6 +3081,7 @@ function MaskSegmentConfig(props: {
 									segment.opacity = 1;
 								} else {
 									segment.feather = 0.1;
+									segment.fadeDuration = 0;
 								}
 							})
 						}
@@ -2833,20 +3157,22 @@ function MaskSegmentConfig(props: {
 					/>
 				</Field>
 			</Show>
-			<Field name="Fade Duration" icon={<IconLucideTimer class="size-4" />}>
-				<Slider
-					value={[props.segment.fadeDuration ?? 0.15]}
-					onChange={([v]) =>
-						updateSegment((segment) => {
-							segment.fadeDuration = v;
-						})
-					}
-					minValue={0}
-					maxValue={1}
-					step={0.01}
-					formatTooltip="s"
-				/>
-			</Field>
+			<Show when={props.segment.maskType === "highlight"}>
+				<Field name="Fade Duration" icon={<IconLucideTimer class="size-4" />}>
+					<Slider
+						value={[props.segment.fadeDuration ?? 0.15]}
+						onChange={([v]) =>
+							updateSegment((segment) => {
+								segment.fadeDuration = v;
+							})
+						}
+						minValue={0}
+						maxValue={1}
+						step={0.01}
+						formatTooltip="s"
+					/>
+				</Field>
+			</Show>
 		</div>
 	);
 }
@@ -2875,8 +3201,7 @@ function ZoomSegmentPreview(props: {
 	createEffect(() => {
 		// TODO: make this not hardcoded
 		const path = convertFileSrc(
-			`${editorInstance.path}/content/segments/segment-${
-				clipSegment()?.recordingSegment ?? 0
+			`${editorInstance.path}/content/segments/segment-${clipSegment()?.recordingSegment ?? 0
 			}/display.mp4`,
 		);
 		video.src = path;
@@ -3084,8 +3409,7 @@ function ZoomSegmentConfig(props: {
 								createEffect(() => {
 									const path = convertFileSrc(
 										// TODO: this shouldn't be so hardcoded
-										`${
-											editorInstance.path
+										`${editorInstance.path
 										}/content/segments/segment-${segmentIndex()}/display.mp4`,
 									);
 									video.src = path;
@@ -3215,7 +3539,7 @@ function ZoomSegmentConfig(props: {
 																x: Math.max(
 																	Math.min(
 																		(moveEvent.clientX - bounds.left) /
-																			bounds.width,
+																		bounds.width,
 																		1,
 																	),
 																	0,
@@ -3223,7 +3547,7 @@ function ZoomSegmentConfig(props: {
 																y: Math.max(
 																	Math.min(
 																		(moveEvent.clientY - bounds.top) /
-																			bounds.height,
+																		bounds.height,
 																		1,
 																	),
 																	0,
@@ -3573,103 +3897,6 @@ function SceneSegmentConfig(props: {
 			</Field>
 		</>
 	);
-}
-
-function RgbInput(props: {
-	value: [number, number, number];
-	onChange: (value: [number, number, number]) => void;
-}) {
-	const [text, setText] = createWritableMemo(() => rgbToHex(props.value));
-	let prevHex = rgbToHex(props.value);
-
-	let colorInput!: HTMLInputElement;
-
-	return (
-		<div class="flex flex-row items-center gap-[0.75rem] relative">
-			<button
-				type="button"
-				class="size-[2rem] rounded-[0.5rem]"
-				style={{
-					"background-color": rgbToHex(props.value),
-				}}
-				onClick={() => colorInput.click()}
-			/>
-			<input
-				ref={colorInput}
-				type="color"
-				class="absolute left-0 bottom-0 w-[3rem] opacity-0"
-				value={rgbToHex(props.value)}
-				onChange={(e) => {
-					const value = hexToRgb(e.target.value);
-					if (!value) return;
-
-					// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
-					const [r, g, b] = value;
-					props.onChange([r, g, b]);
-				}}
-			/>
-			<TextInput
-				class="w-[4.60rem] p-[0.375rem] text-gray-12 text-[13px] border rounded-[0.5rem] bg-gray-1 outline-none focus:ring-1 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-1 focus:ring-offset-gray-200"
-				value={text()}
-				onFocus={() => {
-					prevHex = rgbToHex(props.value);
-				}}
-				onInput={(e) => {
-					setText(e.currentTarget.value);
-
-					const value = hexToRgb(e.target.value);
-					if (!value) return;
-
-					const [r, g, b] = value;
-					props.onChange([r, g, b]);
-				}}
-				onBlur={(e) => {
-					const value = hexToRgb(e.target.value);
-					if (value) {
-						const [r, g, b] = value;
-						// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
-						props.onChange([r, g, b]);
-					} else {
-						setText(prevHex);
-						const fallbackValue = hexToRgb(text());
-						if (!fallbackValue) return;
-
-						const [r, g, b] = fallbackValue;
-						props.onChange([r, g, b]);
-					}
-				}}
-			/>
-		</div>
-	);
-}
-
-function rgbToHex(rgb: [number, number, number]) {
-	return `#${rgb
-		.map((c) => c.toString(16).padStart(2, "0"))
-		.join("")
-		.toUpperCase()}`;
-}
-
-function hexToRgb(hex: string): [number, number, number, number] | null {
-	// Support both 6-digit (RGB) and 8-digit (RGBA) hex colors
-	const match = hex.match(
-		/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})?$/i,
-	);
-	if (!match) return null;
-
-	const [, r, g, b, a] = match;
-	const rgb = [
-		Number.parseInt(r, 16),
-		Number.parseInt(g, 16),
-		Number.parseInt(b, 16),
-	] as const;
-
-	// If alpha is provided, return RGBA tuple
-	if (a) {
-		return [...rgb, Number.parseInt(a, 16)];
-	}
-
-	return [...rgb, 255];
 }
 
 const CHECKERED_BUTTON_BACKGROUND = `url("data:image/svg+xml,%3Csvg width='16' height='16' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='8' height='8' fill='%23a0a0a0'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%23a0a0a0'/%3E%3C/svg%3E")`;

@@ -20,6 +20,8 @@ export function AnnotationLayer(props: {
 	cssWidth: number;
 	cssHeight: number;
 	imageRect: { x: number; y: number; width: number; height: number };
+	isPanning?: boolean;
+	onBackgroundMouseDown?: (e: MouseEvent) => void;
 }) {
 	const {
 		project,
@@ -86,8 +88,11 @@ export function AnnotationLayer(props: {
 	createEffect(() => {
 		const rect = props.imageRect;
 		if (rect.width <= 0 || rect.height <= 0) return;
+		const currentlyDrawingId = isDrawing() ? tempAnnotation()?.id : null;
+		const masksToRemove: string[] = [];
 		for (const ann of annotations) {
 			if (ann.type !== "mask") continue;
+			if (ann.id === currentlyDrawingId) continue;
 			const left = clampValue(
 				Math.min(ann.x, ann.x + ann.width),
 				rect.x,
@@ -110,6 +115,10 @@ export function AnnotationLayer(props: {
 			);
 			const width = Math.max(0, right - left);
 			const height = Math.max(0, bottom - top);
+			if (width < 5 || height < 5) {
+				masksToRemove.push(ann.id);
+				continue;
+			}
 			if (
 				left !== Math.min(ann.x, ann.x + ann.width) ||
 				top !== Math.min(ann.y, ann.y + ann.height) ||
@@ -123,6 +132,11 @@ export function AnnotationLayer(props: {
 					height,
 				});
 			}
+		}
+		if (masksToRemove.length > 0) {
+			setAnnotations((prev) =>
+				prev.filter((a) => !masksToRemove.includes(a.id)),
+			);
 		}
 	});
 
@@ -154,6 +168,7 @@ export function AnnotationLayer(props: {
 		if (tool === "select") {
 			if (e.target === e.currentTarget) {
 				setSelectedAnnotationId(null);
+				props.onBackgroundMouseDown?.(e);
 			}
 			return;
 		}
@@ -198,8 +213,8 @@ export function AnnotationLayer(props: {
 			opacity: 1,
 			rotation: 0,
 			text: tool === "text" ? "Text" : null,
-			maskType: tool === "mask" ? "blur" : null,
-			maskLevel: tool === "mask" ? 16 : null,
+			maskType: tool === "mask" ? "pixelate" : null,
+			maskLevel: tool === "mask" ? 7 : null,
 		};
 
 		if (tool === "text") {
@@ -207,11 +222,11 @@ export function AnnotationLayer(props: {
 			newAnn.width = 150; // Default width
 		}
 
+		setTempAnnotation(newAnn);
+
 		if (tool === "mask") {
 			setAnnotations((prev) => [...prev, newAnn]);
 		}
-
-		setTempAnnotation(newAnn);
 	};
 
 	const handleMouseMove = (e: MouseEvent) => {
@@ -446,6 +461,14 @@ export function AnnotationLayer(props: {
 			setIsDrawing(false);
 			setActiveTool("select");
 			setSelectedAnnotationId(ann.id);
+
+			if (ann.type === "text") {
+				textSnapshot = {
+					project: structuredClone(unwrap(project)),
+					annotations: structuredClone(unwrap(annotations)),
+				};
+				setTextEditingId(ann.id);
+			}
 		}
 
 		if (dragState()) {
@@ -521,6 +544,12 @@ export function AnnotationLayer(props: {
 				left: 0,
 				"pointer-events": "all",
 				"z-index": 10,
+				cursor:
+					activeTool() === "select"
+						? props.isPanning
+							? "grabbing"
+							: "grab"
+						: undefined,
 			}}
 			class={activeTool() !== "select" ? "cursor-crosshair" : ""}
 			onMouseDown={handleMouseDown}

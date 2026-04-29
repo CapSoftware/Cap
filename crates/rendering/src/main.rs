@@ -101,13 +101,16 @@ async fn main() -> Result<()> {
                         .map(|c| recording_meta.path(&c.path)),
                 },
                 0,
+                false,
             )
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create decoders for single segment: {}", e))?;
 
             vec![RenderSegment {
                 cursor: Arc::new(Default::default()),
+                keyboard: Arc::new(Default::default()),
                 decoders,
+                render_display: true,
             }]
         }
         StudioRecordingMeta::MultipleSegments { inner, .. } => {
@@ -121,6 +124,7 @@ async fn main() -> Result<()> {
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
                     i,
+                    false,
                 )
                 .await
                 .map_err(|e| {
@@ -128,8 +132,14 @@ async fn main() -> Result<()> {
                 })?;
 
                 let cursor = Arc::new(s.cursor_events(&recording_meta));
+                let keyboard = Arc::new(s.keyboard_events(&recording_meta));
 
-                segments.push(RenderSegment { cursor, decoders });
+                segments.push(RenderSegment {
+                    cursor,
+                    keyboard,
+                    decoders,
+                    render_display: true,
+                });
             }
             segments
         }
@@ -248,6 +258,6 @@ fn save_as_jpeg(frame: &RenderedFrame, output_path: &PathBuf) -> Result<()> {
 
 fn save_as_raw(frame: &RenderedFrame, output_path: &PathBuf) -> Result<()> {
     // Save raw RGBA data
-    std::fs::write(output_path, &frame.data).context("Failed to save raw frame data")?;
+    std::fs::write(output_path, &*frame.data).context("Failed to save raw frame data")?;
     Ok(())
 }

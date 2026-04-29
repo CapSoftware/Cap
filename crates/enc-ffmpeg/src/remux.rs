@@ -3,6 +3,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     ptr,
+    sync::atomic::{AtomicI32, Ordering},
     time::Duration,
 };
 
@@ -10,6 +11,27 @@ use cap_media_info::{AudioInfo, AudioInfoError};
 use ffmpeg::{ChannelLayout, codec as avcodec, format as avformat, packet::Mut as PacketMut};
 
 use crate::audio::opus::{OpusEncoder, OpusEncoderError};
+
+static ORIGINAL_LOG_LEVEL: AtomicI32 = AtomicI32::new(-1);
+const SEEK_PROBE_PACKET_LIMIT: usize = 240;
+const SEEK_PROBE_PADDING_US: i64 = 250_000;
+
+fn suppress_ffmpeg_logs() {
+    unsafe {
+        let current = ffmpeg::ffi::av_log_get_level();
+        ORIGINAL_LOG_LEVEL.store(current, Ordering::SeqCst);
+        ffmpeg::ffi::av_log_set_level(ffmpeg::ffi::AV_LOG_QUIET);
+    }
+}
+
+fn restore_ffmpeg_logs() {
+    let original = ORIGINAL_LOG_LEVEL.load(Ordering::SeqCst);
+    if original >= 0 {
+        unsafe {
+            ffmpeg::ffi::av_log_set_level(original);
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum RemuxError {
@@ -103,16 +125,10 @@ fn open_input_with_format(
     }
 }
 
-fn concatenate_with_concat_demuxer(
-    concat_list_path: &Path,
-    output: &Path,
+fn remux_streams(
+    ictx: &mut avformat::context::Input,
+    octx: &mut avformat::context::Output,
 ) -> Result<(), RemuxError> {
-    let mut options = ffmpeg::Dictionary::new();
-    options.set("safe", "0");
-
-    let mut ictx = open_input_with_format(concat_list_path, "concat", options)?;
-    let mut octx = avformat::output(output)?;
-
     let mut stream_mapping: Vec<Option<usize>> = Vec::new();
     let mut output_stream_index = 0usize;
 
@@ -171,13 +187,26 @@ fn concatenate_with_concat_demuxer(
             packet.set_stream(output_index);
             packet.set_position(-1);
 
-            packet.write_interleaved(&mut octx)?;
+            packet.write_interleaved(octx)?;
         }
     }
 
     octx.write_trailer()?;
 
     Ok(())
+}
+
+fn concatenate_with_concat_demuxer(
+    concat_list_path: &Path,
+    output: &Path,
+) -> Result<(), RemuxError> {
+    let mut options = ffmpeg::Dictionary::new();
+    options.set("safe", "0");
+
+    let mut ictx = open_input_with_format(concat_list_path, "concat", options)?;
+    let mut octx = avformat::output(output)?;
+
+    remux_streams(&mut ictx, &mut octx)
 }
 
 pub fn concatenate_audio_to_ogg(fragments: &[PathBuf], output: &Path) -> Result<(), RemuxError> {
@@ -270,10 +299,27 @@ pub fn stream_copy_fragments(fragments: &[PathBuf], output: &Path) -> Result<(),
 }
 
 pub fn probe_media_valid(path: &Path) -> bool {
-    avformat::input(path).is_ok()
+    suppress_ffmpeg_logs();
+    let result = avformat::input(path).is_ok();
+    restore_ffmpeg_logs();
+    result
 }
 
 pub fn probe_video_can_decode(path: &Path) -> Result<bool, String> {
+    suppress_ffmpeg_logs();
+    let result = probe_video_can_decode_inner(path);
+    restore_ffmpeg_logs();
+    result
+}
+
+pub fn probe_video_seek_points(path: &Path, sample_count: usize) -> Result<(), String> {
+    suppress_ffmpeg_logs();
+    let result = probe_video_seek_points_inner(path, sample_count);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
     let input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
 
     let input_stream = input
@@ -346,7 +392,163 @@ pub fn probe_video_can_decode(path: &Path) -> Result<bool, String> {
     ))
 }
 
+fn probe_video_seek_points_inner(path: &Path, sample_count: usize) -> Result<(), String> {
+    let mut input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
+    let duration_us = input.duration();
+    let probe_points = build_seek_probe_positions(duration_us, sample_count);
+
+    let (stream_index, decoder_ctx) = {
+        let input_stream = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .ok_or_else(|| "No video stream found".to_string())?;
+
+        let stream_index = input_stream.index();
+        let decoder_ctx = avcodec::Context::from_parameters(input_stream.parameters())
+            .map_err(|e| format!("Failed to create decoder context: {e}"))?;
+
+        (stream_index, decoder_ctx)
+    };
+
+    let mut decoder = decoder_ctx
+        .decoder()
+        .video()
+        .map_err(|e| format!("Failed to create video decoder: {e}"))?;
+
+    let mut frame = ffmpeg::frame::Video::empty();
+
+    for position_us in probe_points {
+        probe_video_seek_point_with(
+            &mut input,
+            &mut decoder,
+            stream_index,
+            position_us,
+            &mut frame,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn probe_video_seek_point_with(
+    input: &mut avformat::context::Input,
+    decoder: &mut ffmpeg::decoder::Video,
+    stream_index: usize,
+    position_us: i64,
+    frame: &mut ffmpeg::frame::Video,
+) -> Result<(), String> {
+    use ffmpeg::rescale;
+
+    let seek_target = rescale::Rescale::rescale(&position_us, (1, 1_000_000), rescale::TIME_BASE);
+    decoder.flush();
+    input
+        .seek(seek_target, ..seek_target)
+        .map_err(|e| format!("Failed to seek to {position_us}us: {e}"))?;
+
+    let mut packets_tried = 0usize;
+
+    for (stream, packet) in input.packets() {
+        if stream.index() != stream_index {
+            continue;
+        }
+
+        packets_tried += 1;
+
+        if let Err(e) = decoder.send_packet(&packet) {
+            if packets_tried >= SEEK_PROBE_PACKET_LIMIT {
+                return Err(format!(
+                    "Failed to send packet after seeking to {position_us}us: {e}"
+                ));
+            }
+            continue;
+        }
+
+        match decoder.receive_frame(frame) {
+            Ok(()) => return Ok(()),
+            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => {}
+            Err(ffmpeg::Error::Eof) => {}
+            Err(e) => {
+                if packets_tried >= SEEK_PROBE_PACKET_LIMIT {
+                    return Err(format!(
+                        "Failed to decode after seeking to {position_us}us: {e}"
+                    ));
+                }
+            }
+        }
+
+        if packets_tried >= SEEK_PROBE_PACKET_LIMIT {
+            return Err(format!(
+                "No decodable frames found within {} packets after seeking to {position_us}us",
+                SEEK_PROBE_PACKET_LIMIT
+            ));
+        }
+    }
+
+    decoder
+        .send_eof()
+        .map_err(|e| format!("Failed to send EOF after seeking to {position_us}us: {e}"))?;
+
+    loop {
+        match decoder.receive_frame(frame) {
+            Ok(()) => return Ok(()),
+            Err(ffmpeg::Error::Eof) => break,
+            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => continue,
+            Err(e) => {
+                return Err(format!(
+                    "Failed to receive frame after EOF at {position_us}us: {e}"
+                ));
+            }
+        }
+    }
+
+    Err(format!(
+        "No decodable frames found after seeking to {position_us}us"
+    ))
+}
+
+fn build_seek_probe_positions(duration_us: i64, sample_count: usize) -> Vec<i64> {
+    if duration_us <= 0 {
+        return vec![0];
+    }
+
+    let baseline_ratios = [0.0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9];
+    let requested = sample_count.max(3).min(baseline_ratios.len() + 1);
+
+    let mut indices = vec![0usize];
+    if requested > 2 {
+        let interior = requested - 2;
+        let max_index = baseline_ratios.len() - 1;
+
+        for step in 1..=interior {
+            let index = ((step * max_index) + interior / 2) / interior;
+            if !indices.contains(&index) {
+                indices.push(index);
+            }
+        }
+    }
+
+    indices.sort_unstable();
+    indices.dedup();
+
+    let mut positions: Vec<i64> = indices
+        .into_iter()
+        .map(|index| ((duration_us as f64) * baseline_ratios[index]).round() as i64)
+        .collect();
+
+    positions.push((duration_us - SEEK_PROBE_PADDING_US).max(0));
+    positions.sort_unstable();
+    positions.dedup();
+    positions
+}
+
 pub fn get_media_duration(path: &Path) -> Option<Duration> {
+    suppress_ffmpeg_logs();
+    let result = get_media_duration_inner(path);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn get_media_duration_inner(path: &Path) -> Option<Duration> {
     let input = avformat::input(path).ok()?;
     let duration_ts = input.duration();
     if duration_ts <= 0 {
@@ -356,6 +558,13 @@ pub fn get_media_duration(path: &Path) -> Option<Duration> {
 }
 
 pub fn get_video_fps(path: &Path) -> Option<u32> {
+    suppress_ffmpeg_logs();
+    let result = get_video_fps_inner(path);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn get_video_fps_inner(path: &Path) -> Option<u32> {
     let input = avformat::input(path).ok()?;
     let stream = input.streams().best(ffmpeg::media::Type::Video)?;
     let rate = stream.avg_frame_rate();
@@ -363,4 +572,238 @@ pub fn get_video_fps(path: &Path) -> Option<u32> {
         return None;
     }
     Some((rate.numerator() as f64 / rate.denominator() as f64).round() as u32)
+}
+
+pub fn probe_m4s_can_decode_with_init(
+    init_path: &Path,
+    segment_path: &Path,
+) -> Result<bool, String> {
+    let temp_path = segment_path.with_extension("probe_temp.mp4");
+
+    let init_data = std::fs::read(init_path)
+        .map_err(|e| format!("Failed to read init segment {}: {e}", init_path.display()))?;
+    let segment_data = std::fs::read(segment_path)
+        .map_err(|e| format!("Failed to read segment {}: {e}", segment_path.display()))?;
+
+    {
+        let mut temp_file = std::fs::File::create(&temp_path)
+            .map_err(|e| format!("Failed to create temp file: {e}"))?;
+        temp_file
+            .write_all(&init_data)
+            .map_err(|e| format!("Failed to write init data: {e}"))?;
+        temp_file
+            .write_all(&segment_data)
+            .map_err(|e| format!("Failed to write segment data: {e}"))?;
+        temp_file
+            .sync_all()
+            .map_err(|e| format!("Failed to sync temp file: {e}"))?;
+    }
+
+    let result = probe_video_can_decode(&temp_path);
+
+    if let Err(e) = std::fs::remove_file(&temp_path) {
+        tracing::warn!("failed to remove temp file {}: {}", temp_path.display(), e);
+    }
+
+    result
+}
+
+pub fn concatenate_m4s_segments_with_init(
+    init_path: &Path,
+    segments: &[PathBuf],
+    output: &Path,
+) -> Result<(), RemuxError> {
+    if segments.is_empty() {
+        return Err(RemuxError::NoFragments);
+    }
+
+    if !init_path.exists() {
+        return Err(RemuxError::FragmentNotFound(init_path.to_path_buf()));
+    }
+
+    for segment in segments {
+        if !segment.exists() {
+            return Err(RemuxError::FragmentNotFound(segment.clone()));
+        }
+    }
+
+    let combined_path = output.with_extension("combined_fmp4.mp4");
+
+    {
+        let init_data = std::fs::read(init_path)?;
+        let mut combined_file = std::fs::File::create(&combined_path)?;
+        combined_file.write_all(&init_data)?;
+
+        for segment in segments {
+            let segment_data = std::fs::read(segment)?;
+            combined_file.write_all(&segment_data)?;
+        }
+        combined_file.sync_all()?;
+    }
+
+    let result = remux_to_regular_mp4(&combined_path, output);
+
+    if let Err(e) = std::fs::remove_file(&combined_path) {
+        tracing::warn!(
+            "failed to remove combined file {}: {}",
+            combined_path.display(),
+            e
+        );
+    }
+
+    result
+}
+
+fn remux_to_regular_mp4(input_path: &Path, output_path: &Path) -> Result<(), RemuxError> {
+    let mut ictx = avformat::input(input_path)?;
+    let mut octx = avformat::output(output_path)?;
+
+    remux_streams(&mut ictx, &mut octx)
+}
+
+pub fn remux_file(input_path: &Path, output_path: &Path) -> Result<(), RemuxError> {
+    remux_to_regular_mp4(input_path, output_path)
+}
+
+pub fn merge_video_audio(
+    video_path: &Path,
+    audio_path: &Path,
+    output_path: &Path,
+) -> Result<(), RemuxError> {
+    suppress_ffmpeg_logs();
+    let result = merge_video_audio_inner(video_path, audio_path, output_path);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn merge_video_audio_inner(
+    video_path: &Path,
+    audio_path: &Path,
+    output_path: &Path,
+) -> Result<(), RemuxError> {
+    let mut video_ctx = avformat::input(video_path)?;
+    let mut audio_ctx = avformat::input(audio_path)?;
+    let mut octx = avformat::output(output_path)?;
+
+    let mut video_stream_map: Vec<Option<usize>> = Vec::new();
+    let mut audio_stream_map: Vec<Option<usize>> = Vec::new();
+    let mut out_idx = 0usize;
+
+    for stream in video_ctx.streams() {
+        if stream.parameters().medium() == ffmpeg::media::Type::Video {
+            video_stream_map.push(Some(out_idx));
+            out_idx += 1;
+            let mut out_stream = octx.add_stream(None)?;
+            out_stream.set_parameters(stream.parameters());
+            unsafe {
+                (*out_stream.as_mut_ptr()).time_base = (*stream.as_ptr()).time_base;
+            }
+        } else {
+            video_stream_map.push(None);
+        }
+    }
+
+    for stream in audio_ctx.streams() {
+        if stream.parameters().medium() == ffmpeg::media::Type::Audio {
+            audio_stream_map.push(Some(out_idx));
+            out_idx += 1;
+            let mut out_stream = octx.add_stream(None)?;
+            out_stream.set_parameters(stream.parameters());
+            unsafe {
+                (*out_stream.as_mut_ptr()).time_base = (*stream.as_ptr()).time_base;
+            }
+        } else {
+            audio_stream_map.push(None);
+        }
+    }
+
+    octx.write_header()?;
+
+    let mut last_dts: Vec<i64> = vec![i64::MIN; out_idx];
+
+    for (stream, packet) in video_ctx.packets() {
+        if let Some(Some(oidx)) = video_stream_map.get(stream.index()) {
+            let oidx = *oidx;
+            let mut packet = packet;
+            packet.rescale_ts(stream.time_base(), octx.stream(oidx).unwrap().time_base());
+
+            let dts = packet.dts().unwrap_or(0);
+            if last_dts[oidx] != i64::MIN && dts <= last_dts[oidx] {
+                let fixed = last_dts[oidx] + 1;
+                unsafe {
+                    (*packet.as_mut_ptr()).dts = fixed;
+                    if let Some(pts) = packet.pts()
+                        && pts <= fixed
+                    {
+                        (*packet.as_mut_ptr()).pts = fixed;
+                    }
+                }
+            }
+            last_dts[oidx] = packet.dts().unwrap_or(0);
+
+            packet.set_stream(oidx);
+            packet.set_position(-1);
+            packet.write_interleaved(&mut octx)?;
+        }
+    }
+
+    for (stream, packet) in audio_ctx.packets() {
+        if let Some(Some(oidx)) = audio_stream_map.get(stream.index()) {
+            let oidx = *oidx;
+            let mut packet = packet;
+            packet.rescale_ts(stream.time_base(), octx.stream(oidx).unwrap().time_base());
+
+            let dts = packet.dts().unwrap_or(0);
+            if last_dts[oidx] != i64::MIN && dts <= last_dts[oidx] {
+                let fixed = last_dts[oidx] + 1;
+                unsafe {
+                    (*packet.as_mut_ptr()).dts = fixed;
+                    if let Some(pts) = packet.pts()
+                        && pts <= fixed
+                    {
+                        (*packet.as_mut_ptr()).pts = fixed;
+                    }
+                }
+            }
+            last_dts[oidx] = packet.dts().unwrap_or(0);
+
+            packet.set_stream(oidx);
+            packet.set_position(-1);
+            packet.write_interleaved(&mut octx)?;
+        }
+    }
+
+    octx.write_trailer()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_seek_probe_positions;
+
+    #[test]
+    fn seek_probe_positions_cover_start_middle_and_end() {
+        let positions = build_seek_probe_positions(10_000_000, 6);
+
+        assert_eq!(positions.first().copied(), Some(0));
+        assert!(
+            positions.iter().any(|p| *p >= 2_000_000 && *p <= 8_000_000),
+            "expected an interior probe position"
+        );
+        assert!(
+            positions.last().copied().unwrap_or_default() >= 9_000_000,
+            "expected a near-end probe position"
+        );
+    }
+
+    #[test]
+    fn seek_probe_positions_are_sorted_and_unique() {
+        let positions = build_seek_probe_positions(1_000_000, 12);
+
+        assert!(!positions.is_empty());
+
+        for window in positions.windows(2) {
+            assert!(window[0] < window[1]);
+        }
+    }
 }

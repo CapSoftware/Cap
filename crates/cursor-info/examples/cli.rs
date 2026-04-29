@@ -1,7 +1,10 @@
-use std::collections::HashMap;
-
-use cap_cursor_info::{CursorShape, CursorShapeMacOS};
+use cap_cursor_info::CursorShape;
+#[cfg(target_os = "macos")]
+use cap_cursor_info::CursorShapeMacOS;
+#[cfg(target_os = "macos")]
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "macos")]
+use std::collections::HashMap;
 
 #[allow(unreachable_code)]
 fn main() {
@@ -103,7 +106,7 @@ fn run() {
                 // Try to convert HCURSOR to CursorShape using the TryFrom implementation
                 match CursorShape::try_from(&cursor_info.hCursor) {
                     Ok(cursor_shape) => {
-                        println!("CursorShape: {}", cursor_shape);
+                        println!("CursorShape: {cursor_shape}");
                     }
                     Err(_) => {
                         println!("Unknown cursor: {:?}", cursor_info.hCursor);

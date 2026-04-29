@@ -49,7 +49,7 @@ export function VerifyOTPForm({
 				inputRefs.current[5]?.focus();
 			}
 
-			if (index + value.length >= 5) handleVerify.mutate();
+			if (newCode.every((d) => d)) handleVerify.mutate(newCode.join(""));
 		} else {
 			const newCode = [...code];
 			newCode[index] = value;
@@ -70,17 +70,20 @@ export function VerifyOTPForm({
 		}
 	};
 
+	const normalizedEmail = email.toLowerCase();
+
 	const handleVerify = useMutation({
-		mutationFn: async () => {
-			const otpCode = code.join("");
+		mutationFn: async (pastedCode?: string) => {
+			const otpCode = pastedCode ?? code.join("");
 			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
 
-			// shoutout https://github.com/buoyad/Tally/pull/14
-			const res = await fetch(
-				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
+			await fetch(
+				`/api/auth/callback/email?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent(next || "/dashboard")}`,
 			);
 
-			if (!res.url.includes("/login-success")) {
+			const sessionRes = await fetch("/api/auth/session");
+			const session = await sessionRes.json();
+			if (!session?.user) {
 				setCode(["", "", "", "", "", ""]);
 				inputRefs.current[0]?.focus();
 				throw "Invalid code. Please try again.";
@@ -115,7 +118,7 @@ export function VerifyOTPForm({
 			}
 
 			const result = await signIn("email", {
-				email,
+				email: normalizedEmail,
 				redirect: false,
 			});
 
@@ -164,7 +167,7 @@ export function VerifyOTPForm({
 					Enter verification code
 				</h1>
 				<p className="text-sm text-gray-10">
-					We sent a 6-digit code to {email}
+					We sent a 6-digit code to {normalizedEmail}
 				</p>
 			</div>
 
@@ -201,7 +204,7 @@ export function VerifyOTPForm({
 				variant="primary"
 				className="w-full"
 				spinner={isVerifying}
-				onClick={() => handleVerify.mutate()}
+				onClick={() => handleVerify.mutate(code.join(""))}
 				disabled={code.some((digit) => !digit) || isVerifying}
 			>
 				{isVerifying ? "Verifying..." : "Verify Code"}

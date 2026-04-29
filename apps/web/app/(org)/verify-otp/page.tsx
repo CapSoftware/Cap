@@ -25,7 +25,7 @@ export default async function VerifyOTPPage(props: {
 		<div className="flex h-screen w-full items-center justify-center">
 			<Suspense fallback={null}>
 				<VerifyOTPForm
-					email={searchParams.email}
+					email={searchParams.email?.toLowerCase() ?? ""}
 					next={searchParams.next}
 					lastSent={searchParams.lastSent}
 				/>

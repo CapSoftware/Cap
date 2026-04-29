@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 const REMEMBER_DEVICES_KEY = "cap-web-recorder-remember-devices";
 const PREFERRED_CAMERA_KEY = "cap-web-recorder-preferred-camera";
 const PREFERRED_MICROPHONE_KEY = "cap-web-recorder-preferred-microphone";
+const SYSTEM_AUDIO_ENABLED_KEY = "cap-web-recorder-system-audio";
 
 interface DevicePreferencesOptions {
 	open: boolean;
@@ -20,6 +21,7 @@ export const useDevicePreferences = ({
 	const [rememberDevices, setRememberDevices] = useState(false);
 	const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
 	const [selectedMicId, setSelectedMicId] = useState<string | null>(null);
+	const [systemAudioEnabled, setSystemAudioEnabled] = useState(false);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;
@@ -28,6 +30,12 @@ export const useDevicePreferences = ({
 			const storedRemember = window.localStorage.getItem(REMEMBER_DEVICES_KEY);
 			if (storedRemember === "true") {
 				setRememberDevices(true);
+			}
+			const storedSystemAudio = window.localStorage.getItem(
+				SYSTEM_AUDIO_ENABLED_KEY,
+			);
+			if (storedSystemAudio === "true") {
+				setSystemAudioEnabled(true);
 			}
 		} catch (error) {
 			console.error("Failed to load recorder preferences", error);
@@ -107,6 +115,23 @@ export const useDevicePreferences = ({
 		}
 	};
 
+	const handleSystemAudioChange = (enabled: boolean) => {
+		setSystemAudioEnabled(enabled);
+
+		if (typeof window === "undefined") {
+			return;
+		}
+
+		try {
+			window.localStorage.setItem(
+				SYSTEM_AUDIO_ENABLED_KEY,
+				enabled ? "true" : "false",
+			);
+		} catch (error) {
+			console.error("Failed to persist system audio preference", error);
+		}
+	};
+
 	const handleRememberDevicesChange = (next: boolean) => {
 		setRememberDevices(next);
 
@@ -145,10 +170,12 @@ export const useDevicePreferences = ({
 		rememberDevices,
 		selectedCameraId,
 		selectedMicId,
+		systemAudioEnabled,
 		setSelectedCameraId,
 		setSelectedMicId,
 		handleCameraChange,
 		handleMicChange,
+		handleSystemAudioChange,
 		handleRememberDevicesChange,
 	};
 };

@@ -2,6 +2,7 @@
 #![allow(non_snake_case)]
 
 use cap_mediafoundation_utils::*;
+use parking_lot::Mutex;
 use std::{
     ffi::OsString,
     fmt::Display,
@@ -9,10 +10,7 @@ use std::{
     ops::{Deref, DerefMut},
     os::windows::ffi::OsStringExt,
     slice::from_raw_parts,
-    sync::{
-        Mutex,
-        mpsc::{Receiver, Sender, channel},
-    },
+    sync::mpsc::{Receiver, Sender, channel},
     time::Duration,
 };
 use tracing::error;
@@ -227,7 +225,7 @@ impl Device {
                 .SetUINT32(&MF_CAPTURE_ENGINE_USE_VIDEO_DEVICE_ONLY, 1)
                 .map_err(StartCapturingError::ConfigureEngine)?;
 
-            println!("Initializing engine...");
+            tracing::debug!("Initializing Media Foundation capture engine");
 
             engine
                 .Initialize(
@@ -244,7 +242,7 @@ impl Device {
                 ));
             };
 
-            println!("Engine initialized.");
+            tracing::debug!("Media Foundation capture engine initialized");
 
             let source = engine
                 .GetSource()
@@ -345,8 +343,11 @@ fn retry_on_invalid_request<T>(
 ) -> windows_core::Result<T> {
     let mut retry_count = 0;
 
-    const MAX_RETRIES: u32 = 100;
-    const RETRY_DELAY: Duration = Duration::from_millis(50);
+    const MAX_RETRIES: u32 = 50;
+    const INITIAL_DELAY_MS: u64 = 1;
+    const MAX_DELAY_MS: u64 = 50;
+
+    let mut current_delay_ms = INITIAL_DELAY_MS;
 
     loop {
         match cb() {
@@ -356,7 +357,8 @@ fn retry_on_invalid_request<T>(
                     return Err(e);
                 }
                 retry_count += 1;
-                std::thread::sleep(RETRY_DELAY);
+                std::thread::sleep(Duration::from_millis(current_delay_ms));
+                current_delay_ms = (current_delay_ms * 2).min(MAX_DELAY_MS);
             }
             Err(e) => return Err(e),
         }
@@ -467,18 +469,9 @@ pub struct VideoSample(IMFSample);
 impl VideoSample {
     pub fn bytes(&self) -> windows_core::Result<Vec<u8>> {
         unsafe {
-            let bytes = self.0.GetTotalLength()?;
-            let mut out = Vec::with_capacity(bytes as usize);
-
-            let buffer_count = self.0.GetBufferCount()?;
-            for buffer_i in 0..buffer_count {
-                let buffer = self.0.GetBufferByIndex(buffer_i)?;
-
-                let bytes = buffer.lock()?;
-                out.extend(&*bytes);
-            }
-
-            Ok(out)
+            let buffer = self.0.ConvertToContiguousBuffer()?;
+            let locked = buffer.lock()?;
+            Ok(locked.to_vec())
         }
     }
 }
@@ -564,9 +557,7 @@ impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
             return Ok(());
         };
 
-        let Ok(mut callback) = self.sample_callback.lock() else {
-            return Ok(());
-        };
+        let mut callback = self.sample_callback.lock();
 
         let sample_time = unsafe { sample.GetSampleTime() }?;
 

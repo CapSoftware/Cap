@@ -4,15 +4,16 @@ import {
 } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import {
+	batch,
 	type ComponentProps,
 	createEffect,
 	createMemo,
 	createRoot,
 	createSignal,
-	For,
 	Index,
 	Match,
 	onCleanup,
+	onMount,
 	Show,
 	Switch,
 } from "solid-js";
@@ -29,6 +30,7 @@ import {
 	TrackRoot,
 	useSegmentTranslateX,
 	useSegmentWidth,
+	useSetPreviewTime,
 } from "./Track";
 
 const CANVAS_HEIGHT = 52;
@@ -37,16 +39,22 @@ const WAVEFORM_SAMPLE_STEP = 0.1;
 const WAVEFORM_CONTROL_STEP = 0.05;
 const WAVEFORM_PADDING_SECONDS = 0.3;
 
+const WAVEFORM_MUTE_DB = -30;
+const MIN_CLIP_SEGMENT_PIXEL_WIDTH = 100;
+
 function gainToScale(gain?: number) {
 	if (!Number.isFinite(gain)) return 1;
 	const value = gain as number;
-	if (value <= WAVEFORM_MIN_DB) return 0;
-	return Math.max(0, 1 + value / -WAVEFORM_MIN_DB);
+	if (value <= WAVEFORM_MUTE_DB) return 0;
+	return Math.max(0, (value - WAVEFORM_MUTE_DB) / -WAVEFORM_MUTE_DB);
 }
+
+const MAX_WAVEFORM_SAMPLES = 6000;
 
 function createWaveformPath(
 	segment: { start: number; end: number },
-	waveform?: number[],
+	waveform: number[] | undefined,
+	targetSamples: number,
 ) {
 	if (typeof Path2D === "undefined") return;
 	if (!waveform || waveform.length === 0) return;
@@ -54,10 +62,20 @@ function createWaveformPath(
 	const duration = Math.max(segment.end - segment.start, WAVEFORM_SAMPLE_STEP);
 	if (!Number.isFinite(duration) || duration <= 0) return;
 
+	const nativeSamples = Math.ceil(duration / WAVEFORM_SAMPLE_STEP) + 1;
+	const numSamples = Math.min(
+		Math.max(targetSamples, 50),
+		MAX_WAVEFORM_SAMPLES,
+		nativeSamples,
+	);
+
+	const timeStep = duration / numSamples;
+
 	const path = new Path2D();
 	path.moveTo(0, 1);
 
-	const amplitudeAt = (index: number) => {
+	const amplitudeAt = (time: number) => {
+		const index = Math.floor(time * 10);
 		const sample = waveform[index];
 		const db =
 			typeof sample === "number" && Number.isFinite(sample)
@@ -70,17 +88,13 @@ function createWaveformPath(
 
 	const controlStep = Math.min(WAVEFORM_CONTROL_STEP / duration, 0.25);
 
-	for (
-		let time = segment.start;
-		time <= segment.end + WAVEFORM_SAMPLE_STEP;
-		time += WAVEFORM_SAMPLE_STEP
-	) {
-		const index = Math.floor(time * 10);
-		const normalizedX = (index / 10 - segment.start) / duration;
-		const prevX =
-			(index / 10 - WAVEFORM_SAMPLE_STEP - segment.start) / duration;
-		const y = 1 - amplitudeAt(index);
-		const prevY = 1 - amplitudeAt(index - 1);
+	for (let i = 0; i <= numSamples; i++) {
+		const time = segment.start + i * timeStep;
+		const normalizedX = (time - segment.start) / duration;
+		const prevTime = time - timeStep;
+		const prevX = Math.max(0, (prevTime - segment.start) / duration);
+		const y = 1 - amplitudeAt(time);
+		const prevY = 1 - amplitudeAt(prevTime);
 		const cpX1 = prevX + controlStep / 2;
 		const cpX2 = normalizedX - controlStep / 2;
 		path.bezierCurveTo(cpX1, prevY, cpX2, y, normalizedX, y);
@@ -108,56 +122,173 @@ function formatTime(totalSeconds: number): string {
 	}
 }
 
+const MAX_CANVAS_WIDTH = 2000;
+const SAMPLES_PER_PIXEL = 2;
+
 function WaveformCanvas(props: {
 	systemWaveform?: number[];
 	micWaveform?: number[];
 	segment: { start: number; end: number };
+	segmentOffset: number;
 }) {
-	const { project } = useEditorContext();
+	const { project, editorState } = useEditorContext();
 	const { width } = useSegmentContext();
-	const segmentRange = createMemo(() => ({
-		start: props.segment.start,
-		end: props.segment.end,
-	}));
-	const micPath = createMemo(() =>
-		createWaveformPath(segmentRange(), props.micWaveform),
-	);
-	const systemPath = createMemo(() =>
-		createWaveformPath(segmentRange(), props.systemWaveform),
-	);
+	const { timelineBounds } = useTimelineContext();
 
 	let canvas: HTMLCanvasElement | undefined;
+	let rafId: number | null = null;
+	let lastRenderKey = "";
 
-	createEffect(() => {
+	const renderCanvas = () => {
+		rafId = null;
 		if (!canvas) return;
 		const ctx = canvas.getContext("2d");
 		if (!ctx) return;
 
-		const canvasWidth = Math.max(width(), 1);
+		const segmentDuration = props.segment.end - props.segment.start;
+		const fullSegmentWidth = width();
+
+		if (fullSegmentWidth < 1 || segmentDuration <= 0) {
+			return;
+		}
+
+		const useVirtualization = fullSegmentWidth > MAX_CANVAS_WIDTH;
+
+		let canvasWidth: number;
+		let leftOffsetPx: number;
+		let renderWidth: number;
+		let renderSegment: { start: number; end: number };
+
+		if (useVirtualization) {
+			const viewportWidth = timelineBounds.width ?? 800;
+			const transform = editorState.timeline.transform;
+			const viewStart = transform.position;
+			const viewEnd = viewStart + transform.zoom;
+
+			const segStart = props.segmentOffset;
+			const segEnd = segStart + segmentDuration;
+
+			const visibleStart = Math.max(viewStart, segStart);
+			const visibleEnd = Math.min(viewEnd, segEnd);
+
+			if (visibleEnd <= visibleStart) {
+				canvas.width = 1;
+				canvas.style.left = "0px";
+				canvas.style.width = "1px";
+				return;
+			}
+
+			const visibleStartInSegment = visibleStart - segStart;
+			const visibleEndInSegment = visibleEnd - segStart;
+
+			const pxPerSec = fullSegmentWidth / segmentDuration;
+			const visibleWidthPx = Math.min(
+				(visibleEndInSegment - visibleStartInSegment) * pxPerSec,
+				viewportWidth + 200,
+			);
+
+			canvasWidth = Math.min(
+				Math.max(Math.ceil(visibleWidthPx), 1),
+				MAX_CANVAS_WIDTH,
+			);
+			leftOffsetPx = visibleStartInSegment * pxPerSec;
+			renderWidth = visibleWidthPx;
+			renderSegment = {
+				start: props.segment.start + visibleStartInSegment,
+				end: props.segment.start + visibleEndInSegment,
+			};
+		} else {
+			canvasWidth = Math.max(Math.ceil(fullSegmentWidth), 1);
+			leftOffsetPx = 0;
+			renderWidth = fullSegmentWidth;
+			renderSegment = {
+				start: props.segment.start,
+				end: props.segment.end,
+			};
+		}
+
+		const micScale = gainToScale(project.audio.micVolumeDb);
+		const systemScale = gainToScale(project.audio.systemVolumeDb);
+
+		const renderKey = `${canvasWidth}-${renderSegment.start.toFixed(2)}-${renderSegment.end.toFixed(2)}-${micScale.toFixed(2)}-${systemScale.toFixed(2)}`;
+		if (renderKey === lastRenderKey) {
+			return;
+		}
+		lastRenderKey = renderKey;
+
 		canvas.width = canvasWidth;
+		canvas.style.left = `${leftOffsetPx}px`;
+		canvas.style.width = `${renderWidth}px`;
+
 		const canvasHeight = canvas.height;
 		ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
-		const drawPath = (
-			path: Path2D | undefined,
+		const numSamples = Math.min(
+			Math.ceil(canvasWidth * SAMPLES_PER_PIXEL),
+			MAX_WAVEFORM_SAMPLES,
+		);
+
+		const drawWaveform = (
+			waveform: number[] | undefined,
 			color: string,
 			gain?: number,
 		) => {
+			const path = createWaveformPath(renderSegment, waveform, numSamples);
 			if (!path) return;
 			const scale = gainToScale(gain);
 			if (scale <= 0) return;
 			ctx.save();
-			ctx.translate(0, -1);
-			ctx.scale(1, scale);
-			ctx.translate(0, 1);
-			ctx.scale(canvasWidth, canvasHeight);
+			ctx.translate(0, canvasHeight * (1 - scale));
+			ctx.scale(canvasWidth, canvasHeight * scale);
 			ctx.fillStyle = color;
 			ctx.fill(path);
 			ctx.restore();
 		};
 
-		drawPath(micPath(), "rgba(255,255,255,0.4)", project.audio.micVolumeDb);
-		drawPath(systemPath(), "rgba(255,150,0,0.5)", project.audio.systemVolumeDb);
+		drawWaveform(
+			props.micWaveform,
+			"rgba(255,255,255,0.4)",
+			project.audio.micVolumeDb,
+		);
+		drawWaveform(
+			props.systemWaveform,
+			"rgba(255,150,0,0.5)",
+			project.audio.systemVolumeDb,
+		);
+	};
+
+	createEffect(() => {
+		width();
+		timelineBounds.width;
+		editorState.timeline.transform.position;
+		editorState.timeline.transform.zoom;
+		props.segment.start;
+		props.segment.end;
+		props.micWaveform;
+		props.systemWaveform;
+		project.audio.micVolumeDb;
+		project.audio.systemVolumeDb;
+
+		if (rafId !== null) {
+			cancelAnimationFrame(rafId);
+		}
+		rafId = requestAnimationFrame(renderCanvas);
+	});
+
+	onMount(() => {
+		setTimeout(() => {
+			lastRenderKey = "";
+			if (rafId !== null) {
+				cancelAnimationFrame(rafId);
+			}
+			rafId = requestAnimationFrame(renderCanvas);
+		}, 300);
+	});
+
+	onCleanup(() => {
+		if (rafId !== null) {
+			cancelAnimationFrame(rafId);
+		}
 	});
 
 	return (
@@ -165,7 +296,8 @@ function WaveformCanvas(props: {
 			ref={(el) => {
 				canvas = el;
 			}}
-			class="absolute inset-0 w-full h-full pointer-events-none"
+			class="absolute top-0 h-full pointer-events-none"
+			style={{ left: "0px" }}
 			height={CANVAS_HEIGHT}
 		/>
 	);
@@ -190,9 +322,23 @@ export function ClipTrack(
 	} = useEditorContext();
 
 	const { secsPerPixel, duration, isSegmentVisible } = useTimelineContext();
+	const setPreviewTime = useSetPreviewTime();
 
 	const segments = (): Array<TimelineSegment> =>
 		project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
+	const selectedClipIndices = createMemo(() => {
+		const selection = editorState.timeline.selection;
+		if (!selection || selection.type !== "clip") return null;
+		return new Set(selection.indices);
+	});
+	const totalClipTimelineDuration = createMemo(() => {
+		const segs = segments();
+		let total = 0;
+		for (let i = 0; i < segs.length; i++) {
+			total += (segs[i].end - segs[i].start) / segs[i].timescale;
+		}
+		return total;
+	});
 
 	const segmentOffsets = createMemo(() => {
 		const segs = segments();
@@ -224,7 +370,10 @@ export function ClipTrack(
 		const { transform } = editorState.timeline;
 
 		if (transform.position + transform.zoom > totalDuration() + 4) {
-			transform.updateZoom(totalDuration(), editorState.previewTime!);
+			transform.updateZoom(
+				totalDuration(),
+				editorState.previewTime ?? editorState.playbackTime,
+			);
 		}
 	}
 
@@ -286,17 +435,9 @@ export function ClipTrack(
 					}));
 
 					const isSelected = createMemo(() => {
-						const selection = editorState.timeline.selection;
-						if (!selection || selection.type !== "clip") return false;
-						const seg = segment();
-
-						const segmentIndex = project.timeline?.segments?.findIndex(
-							(s) => s.start === seg.start && s.end === seg.end,
-						);
-
-						if (segmentIndex === undefined || segmentIndex === -1) return false;
-
-						return selection.indices.includes(segmentIndex);
+						const indices = selectedClipIndices();
+						if (!indices) return false;
+						return indices.has(i());
 					});
 
 					const micWaveform = () => {
@@ -310,7 +451,7 @@ export function ClipTrack(
 					const systemAudioWaveform = () => {
 						if (
 							project.audio.systemVolumeDb &&
-							project.audio.systemVolumeDb <= -30
+							project.audio.systemVolumeDb < -30
 						)
 							return;
 
@@ -511,6 +652,7 @@ export function ClipTrack(
 										micWaveform={micWaveform()}
 										systemWaveform={systemAudioWaveform()}
 										segment={segment()}
+										segmentOffset={prevDuration()}
 									/>
 								)}
 
@@ -522,6 +664,12 @@ export function ClipTrack(
 									onMouseDown={(downEvent) => {
 										if (split()) return;
 										const seg = segment();
+										const minRecordedDuration = Math.max(
+											1,
+											secsPerPixel() *
+												MIN_CLIP_SEGMENT_PIXEL_WIDTH *
+												seg.timescale,
+										);
 
 										const initialStart = seg.start;
 										setStartHandleDrag({
@@ -536,13 +684,8 @@ export function ClipTrack(
 
 										const availableTimelineDuration =
 											editorInstance.recordingDuration -
-											segments().reduce(
-												(acc, s, segmentI) =>
-													segmentI === i()
-														? acc
-														: acc + (s.end - s.start) / s.timescale,
-												0,
-											);
+											(totalClipTimelineDuration() -
+												(seg.end - seg.start) / seg.timescale);
 
 										const maxDuration = Math.min(
 											maxSegmentDuration,
@@ -568,7 +711,7 @@ export function ClipTrack(
 													prevSegmentIsSameClip ? prevSegment.end : 0,
 													seg.end - maxDuration,
 												),
-												seg.end - 1,
+												seg.end - minRecordedDuration,
 											);
 
 											setStartHandleDrag({
@@ -576,20 +719,22 @@ export function ClipTrack(
 												initialStart,
 											});
 
-											setProject(
-												"timeline",
-												"segments",
-												i(),
-												"start",
-												clampedStart,
-											);
+											batch(() => {
+												setProject(
+													"timeline",
+													"segments",
+													i(),
+													"start",
+													clampedStart,
+												);
+												setPreviewTime(prevDuration());
+											});
 										}
 
 										const resumeHistory = projectHistory.pause();
 										createRoot((dispose) => {
 											onCleanup(() => {
 												resumeHistory();
-												console.log("NUL");
 												setStartHandleDrag(null);
 												onHandleReleased();
 											});
@@ -639,6 +784,12 @@ export function ClipTrack(
 									onMouseDown={(downEvent) => {
 										const seg = segment();
 										const end = seg.end;
+										const minRecordedDuration = Math.max(
+											1,
+											secsPerPixel() *
+												MIN_CLIP_SEGMENT_PIXEL_WIDTH *
+												seg.timescale,
+										);
 
 										if (split()) return;
 										const maxSegmentDuration =
@@ -648,13 +799,8 @@ export function ClipTrack(
 
 										const availableTimelineDuration =
 											editorInstance.recordingDuration -
-											segments().reduce(
-												(acc, s, segmentI) =>
-													segmentI === i()
-														? acc
-														: acc + (s.end - s.start) / s.timescale,
-												0,
-											);
+											(totalClipTimelineDuration() -
+												(seg.end - seg.start) / seg.timescale);
 
 										const nextSegment = segments()[i() + 1];
 										const nextSegmentIsSameClip =
@@ -668,23 +814,30 @@ export function ClipTrack(
 												secsPerPixel() *
 												seg.timescale;
 											const newEnd = end + deltaRecorded;
-
-											setProject(
-												"timeline",
-												"segments",
-												i(),
-												"end",
-												Math.max(
-													Math.min(
-														newEnd,
-														end + availableTimelineDuration * seg.timescale,
-														nextSegmentIsSameClip
-															? nextSegment.start
-															: maxSegmentDuration,
-													),
-													seg.start + 1,
+											const clampedEnd = Math.max(
+												Math.min(
+													newEnd,
+													end + availableTimelineDuration * seg.timescale,
+													nextSegmentIsSameClip
+														? nextSegment.start
+														: maxSegmentDuration,
 												),
+												seg.start + minRecordedDuration,
 											);
+
+											batch(() => {
+												setProject(
+													"timeline",
+													"segments",
+													i(),
+													"end",
+													clampedEnd,
+												);
+												setPreviewTime(
+													prevDuration() +
+														(clampedEnd - seg.start) / seg.timescale,
+												);
+											});
 										}
 
 										const resumeHistory = projectHistory.pause();
@@ -764,35 +917,40 @@ function Markings(props: { segment: TimelineSegment; prevDuration: number }) {
 	const { editorState } = useEditorContext();
 	const { secsPerPixel, markingResolution } = useTimelineContext();
 
-	const markings = () => {
+	const transform = () => editorState.timeline.transform;
+
+	const markingParams = () => {
 		const resolution = markingResolution();
-
-		const { transform } = editorState.timeline;
 		const visibleMin =
-			transform.position - props.prevDuration + props.segment.start;
-		const visibleMax = visibleMin + transform.zoom;
-
+			transform().position - props.prevDuration + props.segment.start;
+		const visibleMax = visibleMin + transform().zoom;
 		const start = Math.floor(visibleMin / resolution);
+		const count = Math.ceil(visibleMax / resolution) - start;
+		return { resolution, start, count };
+	};
 
-		return Array.from(
-			{ length: Math.ceil(visibleMax / resolution) - start },
-			(_, i) => (start + i) * resolution,
-		);
+	const getMarkingTime = (index: number) => {
+		const { resolution, start } = markingParams();
+		return (start + index) * resolution;
 	};
 
 	return (
-		<For each={markings()}>
-			{(marking) => (
-				<div
-					style={{
-						transform: `translateX(${
-							(marking - props.segment.start) / secsPerPixel()
-						}px)`,
-					}}
-					class="absolute z-10 w-px h-12 bg-gradient-to-b from-transparent to-transparent via-white-transparent-40 dark:via-black-transparent-60"
-				/>
-			)}
-		</For>
+		<Index each={Array.from({ length: markingParams().count })}>
+			{(_, index) => {
+				const marking = () => getMarkingTime(index);
+				const translateX = () =>
+					(marking() - props.segment.start) / secsPerPixel();
+
+				return (
+					<div
+						style={{
+							transform: `translateX(${translateX()}px)`,
+						}}
+						class="absolute z-10 w-px h-12 bg-gradient-to-b from-transparent to-transparent via-white-transparent-40 dark:via-black-transparent-60"
+					/>
+				);
+			}}
+		</Index>
 	);
 }
 

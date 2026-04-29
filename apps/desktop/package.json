@@ -7,7 +7,9 @@
 		"preparescript": "node scripts/prepare.js",
 		"localdev": "dotenv -e ../../.env -- vinxi dev --port 3002",
 		"build": "vinxi build",
-		"tauri": "tauri"
+		"tauri": "tauri",
+		"test:memory": "node scripts/desktop-memory-soak.js",
+		"test:memory:unit": "vitest run scripts/desktop-memory-soak.test.js"
 	},
 	"dependencies": {
 		"@aerofoil/rive-solid-canvas": "^2.1.4",
@@ -16,10 +18,9 @@
 		"@cap/utils": "workspace:*",
 		"@cap/web-api-contract": "workspace:*",
 		"@corvu/tooltip": "^0.2.1",
-		"@intercom/messenger-js-sdk": "^0.0.14",
 		"@kobalte/core": "^0.13.7",
 		"@radix-ui/colors": "^3.0.0",
-		"@rive-app/canvas": "^2.26.7",
+		"@rive-app/canvas": "^2.32.2",
 		"@solid-primitives/bounds": "^0.0.122",
 		"@solid-primitives/broadcast-channel": "^0.1.1",
 		"@solid-primitives/context": "^0.2.3",
@@ -39,7 +40,7 @@
 		"@solidjs/router": "^0.14.2",
 		"@solidjs/start": "^1.1.3",
 		"@tanstack/solid-query": "^5.51.21",
-		"@tauri-apps/api": "2.5.0",
+		"@tauri-apps/api": "2.8.0",
 		"@tauri-apps/plugin-clipboard-manager": "^2.3.0",
 		"@tauri-apps/plugin-deep-link": "^2.4.1",
 		"@tauri-apps/plugin-dialog": "^2.4.0",

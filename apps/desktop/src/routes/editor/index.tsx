@@ -2,10 +2,10 @@ import { Effect, getCurrentWindow } from "@tauri-apps/api/window";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { createEffect, Suspense } from "solid-js";
-import { AbsoluteInsetLoader } from "~/components/Loader";
 import { generalSettingsStore } from "~/store";
 import { commands } from "~/utils/tauri";
 import { Editor } from "./Editor";
+import { EditorSkeleton } from "./editor-skeleton";
 
 export default function () {
 	const generalSettings = generalSettingsStore.createQuery();
@@ -27,7 +27,7 @@ export default function () {
 				) && "bg-transparent-window",
 			)}
 		>
-			<Suspense fallback={<AbsoluteInsetLoader />}>
+			<Suspense fallback={<EditorSkeleton />}>
 				<Editor />
 			</Suspense>
 		</div>

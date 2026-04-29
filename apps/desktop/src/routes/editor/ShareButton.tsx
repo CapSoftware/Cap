@@ -80,6 +80,7 @@ function ShareButton() {
 						y: RESOLUTION_OPTIONS._1080p.height,
 					},
 					compression: "Web",
+					custom_bpp: null,
 				},
 				(msg) => {
 					setUploadState(
@@ -297,8 +298,8 @@ function ShareButton() {
 			<Dialog.Root open={!upload.isIdle}>
 				<DialogContent
 					title={"Reupload Recording"}
-					confirm={<></>}
-					close={<></>}
+					confirm={null}
+					close={null}
 					class="text-gray-12 dark:text-gray-12"
 				>
 					<div class="w-[80%] text-center mx-auto relative z-10 space-y-6 py-4">

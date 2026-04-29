@@ -178,10 +178,7 @@ impl DisplayImpl {
 }
 
 impl DisplayImpl {
-    pub async fn as_sc(
-        &self,
-        content: arc::R<sc::ShareableContent>,
-    ) -> Option<arc::R<sc::Display>> {
+    pub fn as_sc(&self, content: arc::R<sc::ShareableContent>) -> Option<arc::R<sc::Display>> {
         content
             .displays()
             .iter()
@@ -189,15 +186,14 @@ impl DisplayImpl {
             .map(|display| display.retained())
     }
 
-    pub async fn as_content_filter(
+    pub fn as_content_filter(
         &self,
         content: arc::R<sc::ShareableContent>,
     ) -> Option<arc::R<sc::ContentFilter>> {
         self.as_content_filter_excluding_windows(content, vec![])
-            .await
     }
 
-    pub async fn as_content_filter_excluding_windows(
+    pub fn as_content_filter_excluding_windows(
         &self,
         content: arc::R<sc::ShareableContent>,
         windows: Vec<arc::R<sc::Window>>,
@@ -294,7 +290,7 @@ impl WindowImpl {
             })
             .collect::<Vec<_>>();
 
-        windows_with_level.sort_by(|a, b| b.1.cmp(&a.1));
+        windows_with_level.sort_by_key(|b| std::cmp::Reverse(b.1));
 
         windows_with_level.first().map(|(window, _)| *window)
     }
@@ -508,7 +504,7 @@ impl WindowImpl {
         }
     }
 
-    pub async fn as_sc(&self, content: arc::R<sc::ShareableContent>) -> Option<arc::R<sc::Window>> {
+    pub fn as_sc(&self, content: arc::R<sc::ShareableContent>) -> Option<arc::R<sc::Window>> {
         content
             .windows()
             .iter()

@@ -27,9 +27,9 @@ impl From<BackgroundSource> for Background {
     fn from(source: BackgroundSource) -> Self {
         match source {
             BackgroundSource::Color { value, .. } => Background::Color(value),
-            BackgroundSource::Gradient { from, to, angle } => {
-                Background::Gradient { from, to, angle }
-            }
+            BackgroundSource::Gradient {
+                from, to, angle, ..
+            } => Background::Gradient { from, to, angle },
             BackgroundSource::Image { path } => {
                 if let Some(path) = path {
                     Background::Image {
@@ -275,32 +275,29 @@ impl RecordableLayer for BackgroundLayer {
     fn prepare(&mut self, frame_data: &FrameData) -> Result<(), SkiaRenderingError> {
         let new_background = Background::from(frame_data.uniforms.background.clone());
 
-        // Handle image loading if needed
         match &new_background {
-            Background::Image { path } | Background::Wallpaper { path } => {
-                if self.image_path.as_ref() != Some(path) || self.loaded_image.is_none() {
-                    // For now, we'll do synchronous loading. In a real implementation,
-                    // this should be async or cached at a higher level
-                    match std::fs::read(path) {
-                        Ok(image_data) => {
-                            let data = skia_safe::Data::new_copy(&image_data);
-                            if let Some(image) = Image::from_encoded(&data) {
-                                self.loaded_image = Some(image);
-                                self.image_path = Some(path.clone());
-                            } else {
-                                tracing::error!("Failed to decode image: {:?}", path);
-                                return Err(SkiaRenderingError::Other(anyhow::anyhow!(
-                                    "Failed to decode image"
-                                )));
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to load image: {:?}, error: {}", path, e);
+            Background::Image { path } | Background::Wallpaper { path }
+                if self.image_path.as_ref() != Some(path) || self.loaded_image.is_none() =>
+            {
+                match std::fs::read(path) {
+                    Ok(image_data) => {
+                        let data = skia_safe::Data::new_copy(&image_data);
+                        if let Some(image) = Image::from_encoded(&data) {
+                            self.loaded_image = Some(image);
+                            self.image_path = Some(path.clone());
+                        } else {
+                            tracing::error!("Failed to decode image: {:?}", path);
                             return Err(SkiaRenderingError::Other(anyhow::anyhow!(
-                                "Failed to load image: {}",
-                                e
+                                "Failed to decode image"
                             )));
                         }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load image: {:?}, error: {}", path, e);
+                        return Err(SkiaRenderingError::Other(anyhow::anyhow!(
+                            "Failed to load image: {}",
+                            e
+                        )));
                     }
                 }
             }
@@ -344,6 +341,10 @@ mod tests {
             from: [65535, 0, 0],
             to: [0, 0, 65535],
             angle: 45,
+            noise_intensity: None,
+            noise_scale: None,
+            animated: None,
+            animation_speed: None,
         };
         let gradient_bg = Background::from(gradient_source);
         assert!(matches!(

@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
-import { createMutation, createQuery } from "@tanstack/solid-query";
-import { createSignal, Show } from "solid-js";
-import { commands } from "~/utils/tauri";
+import { createMutation } from "@tanstack/solid-query";
+import { createSignal, onMount, Show } from "solid-js";
+import { commands, type IncompleteRecordingInfo } from "~/utils/tauri";
 
 function formatDuration(secs: number): string {
 	if (secs < 60) {
@@ -15,18 +15,32 @@ function formatDuration(secs: number): string {
 	return `${mins}m ${remainingSecs}s`;
 }
 
+const RECOVERY_CHECK_DELAY_MS = 2000;
+
 export function RecoveryToast() {
+	const [incompleteRecordings, setIncompleteRecordings] = createSignal<
+		IncompleteRecordingInfo[] | null
+	>(null);
 	const [dismissed] = createSignal(false);
 
-	const incompleteRecordings = createQuery(() => ({
-		queryKey: ["incompleteRecordings"],
-		queryFn: () => commands.findIncompleteRecordings(),
-		refetchOnWindowFocus: false,
-		staleTime: Number.POSITIVE_INFINITY,
-	}));
+	const fetchIncompleteRecordings = async () => {
+		try {
+			const result = await commands.findIncompleteRecordings();
+			setIncompleteRecordings(result);
+		} catch {
+			setIncompleteRecordings([]);
+		}
+	};
+
+	onMount(() => {
+		const timer = setTimeout(() => {
+			fetchIncompleteRecordings();
+		}, RECOVERY_CHECK_DELAY_MS);
+		return () => clearTimeout(timer);
+	});
 
 	const mostRecent = () => {
-		const data = incompleteRecordings.data;
+		const data = incompleteRecordings();
 		if (!data || data.length === 0) return null;
 		return data[0];
 	};
@@ -35,7 +49,7 @@ export function RecoveryToast() {
 		mutationFn: async (projectPath: string) => {
 			const result = await commands.recoverRecording(projectPath);
 			await commands.showWindow({ Editor: { project_path: result } });
-			await incompleteRecordings.refetch();
+			await fetchIncompleteRecordings();
 			return result;
 		},
 	}));
@@ -43,7 +57,7 @@ export function RecoveryToast() {
 	const discardMutation = createMutation(() => ({
 		mutationFn: async (projectPath: string) => {
 			await commands.discardIncompleteRecording(projectPath);
-			await incompleteRecordings.refetch();
+			await fetchIncompleteRecordings();
 		},
 	}));
 

@@ -16,7 +16,11 @@ dist-ssr
 .env.development
 .env.test
 target
+target-agent
+target-phase8
+outputs
 .cursorrules
+.github/hooks
 
 # Editor directories and files
 .vscode/*
@@ -51,3 +55,21 @@ tauri.windows.conf.json
 .cursor
 .env*.local
 .docs/
+.claude/
+.claude/settings.local.json
+
+# Release backfill scripts (one-time use)
+scripts/backfill-releases.sh
+scripts/update-github-releases.sh
+scripts/releases-backfill-data.txt
+
+# SEO agent state (machine-local, contains sensitive ranking data)
+/seo/
+/docs/
+
+# OpenCode commands (local)
+.opencode/
+analysis/
+analysis/plans/
+.ralphy
+tmp/

@@ -17,4 +17,4 @@ export function getGroqClient(): Groq | null {
 	return groqClient;
 }
 
-export const GROQ_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct";
+export const GROQ_MODEL = "openai/gpt-oss-120b";

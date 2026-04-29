@@ -29,6 +29,9 @@ export const metadata: Metadata = {
 			"Cap is the best free screen recorder for Mac, offering HD quality, unlimited recording, and easy export. Ideal for tutorials, presentations, and educational videos.",
 		images: ["https://cap.so/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/screen-recorder-mac",
+	},
 };
 
 export default function Page() {

@@ -1,7 +1,8 @@
 import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
 import { cx } from "cva";
-import { createSignal, For, Show, Suspense } from "solid-js";
+import { For, Show, Suspense } from "solid-js";
 import { reconcile } from "solid-js/store";
+import toast from "solid-toast";
 import { normalizeProject, useEditorContext } from "./context";
 import {
 	DropdownItem,
@@ -15,6 +16,7 @@ import {
 
 export function PresetsDropdown() {
 	const { setDialog, presets, setProject, project } = useEditorContext();
+
 	return (
 		<KDropdownMenu gutter={8} placement="bottom">
 			<EditorButton<typeof KDropdownMenu.Trigger>
@@ -43,13 +45,11 @@ export function PresetsDropdown() {
 								}
 							>
 								{(preset, i) => {
-									const [showSettings, setShowSettings] = createSignal(false);
-
 									function applyPreset() {
-										setShowSettings(false);
 										const normalizedConfig = normalizeProject({
 											...preset.config,
-											timeline: project.timeline,
+											timeline: project.timeline ?? null,
+											clips: project.clips,
 										});
 										setProject(reconcile(normalizedConfig));
 									}
@@ -59,7 +59,6 @@ export function PresetsDropdown() {
 											<MenuItem<typeof KDropdownMenu.SubTrigger>
 												as={KDropdownMenu.SubTrigger}
 												class="h-[2.5rem]"
-												onFocusIn={() => setShowSettings(false)}
 												onClick={() => {
 													applyPreset();
 												}}
@@ -70,66 +69,61 @@ export function PresetsDropdown() {
 														Default
 													</span>
 												</Show>
-												<button
-													type="button"
-													class="text-gray-11 hover:text-[currentColor]"
-													onClick={(e) => {
-														e.stopPropagation();
-														setShowSettings((s) => !s);
-													}}
-													onPointerUp={(e) => {
-														e.stopPropagation();
-														e.preventDefault();
-													}}
-												>
-													<IconCapSettings />
-												</button>
+												<IconCapSettings class="text-gray-11 group-hover:text-[currentColor] shrink-0" />
 											</MenuItem>
 											<KDropdownMenu.Portal>
-												{showSettings() && (
-													<MenuItemList<typeof KDropdownMenu.SubContent>
-														as={KDropdownMenu.SubContent}
-														class={cx(
-															"w-44 animate-in fade-in slide-in-from-left-1",
-															dropdownContainerClasses,
-														)}
+												<MenuItemList<typeof KDropdownMenu.SubContent>
+													as={KDropdownMenu.SubContent}
+													class={cx(
+														"w-52 animate-in fade-in slide-in-from-left-1",
+														dropdownContainerClasses,
+													)}
+												>
+													<DropdownItem
+														onSelect={() => {
+															applyPreset();
+														}}
 													>
-														<DropdownItem
-															onSelect={() => {
-																applyPreset();
-															}}
-														>
-															Apply
-														</DropdownItem>
-														<DropdownItem
-															onSelect={() => presets.setDefault(i())}
-														>
-															Set as default
-														</DropdownItem>
-														<DropdownItem
-															onSelect={() =>
-																setDialog({
-																	type: "renamePreset",
-																	presetIndex: i(),
-																	open: true,
-																})
-															}
-														>
-															Rename
-														</DropdownItem>
-														<DropdownItem
-															onClick={() =>
-																setDialog({
-																	type: "deletePreset",
-																	presetIndex: i(),
-																	open: true,
-																})
-															}
-														>
-															Delete
-														</DropdownItem>
-													</MenuItemList>
-												)}
+														Apply
+													</DropdownItem>
+													<DropdownItem
+														onSelect={async () => {
+															await presets.saveToPreset(i(), project);
+															toast.success(
+																`Saved settings to "${preset.name}"`,
+															);
+														}}
+													>
+														Save settings to preset
+													</DropdownItem>
+													<DropdownItem
+														onSelect={() => presets.setDefault(i())}
+													>
+														Set as default
+													</DropdownItem>
+													<DropdownItem
+														onSelect={() =>
+															setDialog({
+																type: "renamePreset",
+																presetIndex: i(),
+																open: true,
+															})
+														}
+													>
+														Rename
+													</DropdownItem>
+													<DropdownItem
+														onClick={() =>
+															setDialog({
+																type: "deletePreset",
+																presetIndex: i(),
+																open: true,
+															})
+														}
+													>
+														Delete
+													</DropdownItem>
+												</MenuItemList>
 											</KDropdownMenu.Portal>
 										</KDropdownMenu.Sub>
 									);

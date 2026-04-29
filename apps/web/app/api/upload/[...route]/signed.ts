@@ -20,7 +20,77 @@ import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 import { parseVideoIdOrFileKey } from "../utils";
 
+function contentTypeForSubpath(subpath: string): string {
+	if (subpath.endsWith(".json")) return "application/json";
+	if (subpath.endsWith(".mp4") || subpath.endsWith(".m4s")) return "video/mp4";
+	if (subpath.endsWith(".jpg") || subpath.endsWith(".jpeg"))
+		return "image/jpeg";
+	if (subpath.endsWith(".aac")) return "audio/aac";
+	if (subpath.endsWith(".webm")) return "audio/webm";
+	if (subpath.endsWith(".m3u8")) return "application/x-mpegURL";
+	return "application/octet-stream";
+}
+
 export const app = new Hono().use(withAuth);
+
+app.post(
+	"/batch",
+	zValidator(
+		"json",
+		z.object({
+			videoId: z.string(),
+			subpaths: z
+				.array(
+					z
+						.string()
+						.refine(
+							(s) => !s.includes("..") && !s.startsWith("/"),
+							"Invalid subpath",
+						),
+				)
+				.min(1)
+				.max(50),
+		}),
+	),
+	async (c) => {
+		const user = c.get("user");
+		const { videoId, subpaths } = c.req.valid("json");
+
+		try {
+			const [customBucket] = await db()
+				.select()
+				.from(Db.s3Buckets)
+				.where(eq(Db.s3Buckets.ownerId, user.id));
+
+			const urls = await Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(
+					Option.fromNullable(customBucket?.id),
+				);
+
+				const entries = yield* Effect.all(
+					subpaths.map((subpath) => {
+						const fileKey = `${user.id}/${videoId}/${subpath}`;
+						return bucket
+							.getPresignedPutUrl(
+								fileKey,
+								{ ContentType: contentTypeForSubpath(subpath) },
+								{ expiresIn: 1800 },
+							)
+							.pipe(Effect.map((url) => [subpath, url] as const));
+					}),
+					{ concurrency: "unbounded" },
+				);
+
+				return Object.fromEntries(entries);
+			}).pipe(runPromise);
+
+			return c.json({ urls });
+		} catch (error) {
+			console.error("Batch signed URL generation failed:", error);
+			return c.json({ error: "Internal server error" }, 500);
+		}
+	},
+);
 
 app.post(
 	"/",

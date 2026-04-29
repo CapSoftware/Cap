@@ -1,0 +1,11 @@
+---
+title: Export Resilience, Audio-Video Sync & Silent Video Support
+app: Cap Desktop
+publishedAt: "2026-01-08"
+version: 0.4.1
+image:
+---
+
+- **Improved export resilience** — Exports now retry failed frame decodes up to 3 times with exponential backoff, and can recover from intermittent GPU/decoder hiccups. If a frame fails completely, the previous valid frame is used to prevent gaps. Timeout handling is now more forgiving, waiting for up to 3 consecutive timeouts before aborting.
+- **Better audio-video timestamp sync** — Improved resync logic handles large timestamp jumps (such as those caused by system sleep/wake) by automatically resyncing to wall clock time. Clock skew compensation is now more robust with proper floating-point accumulation.
+- **Timestamp pipeline overhaul** — Recording timestamps now propagate correctly through the entire capture and audio pipeline from the very first frame, improving sync accuracy from the start of recordings.

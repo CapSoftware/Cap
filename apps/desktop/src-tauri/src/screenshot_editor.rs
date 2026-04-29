@@ -8,17 +8,20 @@ use cap_project::{
 };
 use cap_rendering::{
     DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RenderVideoConstants,
-    RendererLayers,
+    RendererLayers, ZoomFocusInterpolator,
 };
-use image::{GenericImageView, RgbImage, buffer::ConvertBuffer};
+use image::{
+    GenericImageView, ImageEncoder, RgbImage, buffer::ConvertBuffer, codecs::png::PngEncoder,
+};
 use relative_path::RelativePathBuf;
 use serde::Serialize;
 use specta::Type;
+use std::io::Cursor;
 use std::str::FromStr;
 use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
 use tauri::{
-    Manager, Runtime, Window,
+    AppHandle, Manager, Runtime, Window,
     ipc::{CommandArg, InvokeError},
 };
 use tokio::sync::{RwLock, watch};
@@ -26,12 +29,24 @@ use tokio_util::sync::CancellationToken;
 
 const MAX_DIMENSION: u32 = 16_384;
 
+type PendingResult = Result<Arc<ScreenshotEditorInstance>, String>;
+type PendingReceiver = watch::Receiver<Option<PendingResult>>;
+
+#[derive(Clone)]
+pub struct ScreenshotConfigUpdate {
+    pub revision: u32,
+    pub config: ProjectConfiguration,
+}
+
 pub struct ScreenshotEditorInstance {
     pub ws_port: u16,
     pub ws_shutdown_token: CancellationToken,
-    pub config_tx: watch::Sender<ProjectConfiguration>,
+    pub config_tx: watch::Sender<ScreenshotConfigUpdate>,
     pub path: PathBuf,
     pub pretty_name: String,
+    pub image_width: u32,
+    pub image_height: u32,
+    source_rgba: Arc<Vec<u8>>,
 }
 
 impl ScreenshotEditorInstance {
@@ -39,6 +54,9 @@ impl ScreenshotEditorInstance {
         self.ws_shutdown_token.cancel();
     }
 }
+
+#[derive(Clone, Default)]
+pub struct PendingScreenshotEditorInstances(Arc<RwLock<HashMap<String, PendingReceiver>>>);
 
 #[derive(Clone)]
 pub struct ScreenshotEditorInstances(Arc<RwLock<HashMap<String, Arc<ScreenshotEditorInstance>>>>);
@@ -78,6 +96,329 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowScreenshotEditorInstance {
 }
 
 impl ScreenshotEditorInstances {
+    async fn create_instance(
+        app_handle: &AppHandle,
+        path: PathBuf,
+    ) -> Result<Arc<ScreenshotEditorInstance>, String> {
+        let (frame_tx, frame_rx) = watch::channel(None);
+        let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+        if ws_port == 0 {
+            return Err("Failed to start screenshot editor frame websocket".to_string());
+        }
+
+        let (data, width, height) = {
+            let key = path
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let pending = app_handle.try_state::<PendingScreenshots>();
+            let pending_frame = pending.and_then(|p| p.remove(&key));
+
+            if let Some(frame) = pending_frame {
+                let width = frame.width;
+                let height = frame.height;
+                let channels = frame.channels;
+
+                if width > MAX_DIMENSION || height > MAX_DIMENSION {
+                    return Err(format!("Image dimensions exceed maximum: {width}x{height}"));
+                }
+
+                let expected_len = width
+                    .checked_mul(height)
+                    .and_then(|p| p.checked_mul(channels))
+                    .ok_or_else(|| format!("Image dimensions overflow: {width}x{height}"))?;
+                let expected_len = usize::try_from(expected_len)
+                    .map_err(|_| format!("Image size too large: {width}x{height}"))?;
+
+                let data = frame.data;
+
+                if data.len() != expected_len {
+                    return Err(format!(
+                        "Image data length mismatch: expected {expected_len} bytes for {width}x{height}x{channels} frame, got {}",
+                        data.len()
+                    ));
+                }
+
+                let rgba_data = if channels == 4 {
+                    let rgba_img = image::RgbaImage::from_raw(width, height, data)
+                        .ok_or_else(|| format!("Invalid RGBA data for {width}x{height} frame"))?;
+                    rgba_img.into_raw()
+                } else {
+                    let rgb_img = RgbImage::from_raw(width, height, data)
+                        .ok_or_else(|| format!("Invalid RGB data for {width}x{height} frame"))?;
+                    let rgba_img: image::RgbaImage = rgb_img.convert();
+                    rgba_img.into_raw()
+                };
+                (rgba_data, width, height)
+            } else {
+                let image_path = if path.is_dir() {
+                    let original = path.join("original.png");
+                    if original.exists() {
+                        original
+                    } else {
+                        std::fs::read_dir(&path)
+                            .ok()
+                            .and_then(|dir| {
+                                dir.flatten()
+                                    .find(|e| {
+                                        e.path().extension().and_then(|s| s.to_str()) == Some("png")
+                                    })
+                                    .map(|e| e.path())
+                            })
+                            .ok_or_else(|| format!("No PNG file found in directory: {path:?}"))?
+                    }
+                } else {
+                    path.clone()
+                };
+
+                let img =
+                    image::open(&image_path).map_err(|e| format!("Failed to open image: {e}"))?;
+                let (w, h) = img.dimensions();
+
+                if w > MAX_DIMENSION || h > MAX_DIMENSION {
+                    return Err(format!("Image dimensions exceed maximum: {w}x{h}"));
+                }
+
+                w.checked_mul(h)
+                    .and_then(|p| p.checked_mul(4))
+                    .ok_or_else(|| format!("Image dimensions overflow: {w}x{h}"))?;
+
+                (img.to_rgba8().into_raw(), w, h)
+            }
+        };
+
+        let cap_dir = if path.extension().and_then(|s| s.to_str()) == Some("cap") {
+            Some(path.clone())
+        } else if let Some(parent) = path.parent() {
+            if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
+                Some(parent.to_path_buf())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let (recording_meta, loaded_config) = if let Some(cap_dir) = &cap_dir {
+            let meta = RecordingMeta::load_for_project(cap_dir).ok();
+            let config = ProjectConfiguration::load(cap_dir).ok();
+            (meta, config)
+        } else {
+            (None, None)
+        };
+
+        let recording_meta = if let Some(meta) = recording_meta {
+            meta
+        } else {
+            let filename = path
+                .file_name()
+                .ok_or_else(|| "Invalid path".to_string())?
+                .to_string_lossy();
+            let relative_path = RelativePathBuf::from(filename.as_ref());
+            let video_meta = VideoMeta {
+                path: relative_path.clone(),
+                fps: 30,
+                start_time: Some(0.0),
+                device_id: None,
+            };
+            let segment = SingleSegment {
+                display: video_meta.clone(),
+                camera: None,
+                audio: None,
+                cursor: None,
+            };
+            let studio_meta = StudioRecordingMeta::SingleSegment { segment };
+            RecordingMeta {
+                platform: None,
+                project_path: path.parent().unwrap().to_path_buf(),
+                pretty_name: "Screenshot".to_string(),
+                sharing: None,
+                inner: RecordingMetaInner::Studio(Box::new(studio_meta.clone())),
+                upload: None,
+            }
+        };
+
+        let shared = if let Some(gpu) = gpu_context::get_shared_gpu().await {
+            cap_rendering::SharedWgpuDevice {
+                instance: (*gpu.instance).clone(),
+                adapter: (*gpu.adapter).clone(),
+                device: (*gpu.device).clone(),
+                queue: (*gpu.queue).clone(),
+                is_software_adapter: gpu.is_software_adapter,
+            }
+        } else {
+            let instance = cap_rendering::create_wgpu_instance().await;
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                })
+                .await
+                .map_err(|_| "No GPU adapter found".to_string())?;
+            let adapter_info = adapter.get_info();
+            let is_software_adapter = cap_rendering::is_software_wgpu_adapter(&adapter_info);
+
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("cap-rendering-device"),
+                    required_features: wgpu::Features::empty(),
+                    ..Default::default()
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+            cap_rendering::SharedWgpuDevice {
+                instance,
+                adapter,
+                device,
+                queue,
+                is_software_adapter,
+            }
+        };
+
+        let options = cap_rendering::RenderOptions {
+            screen_size: cap_project::XY::new(width, height),
+            camera_size: None,
+        };
+
+        let studio_meta = match &recording_meta.inner {
+            RecordingMetaInner::Studio(meta) => meta.clone(),
+            _ => return Err("Invalid recording meta for screenshot".to_string()),
+        };
+
+        let constants = RenderVideoConstants::from_shared_device(
+            shared,
+            options,
+            *studio_meta,
+            recording_meta.clone(),
+        );
+
+        let (config_tx, mut config_rx) = watch::channel(ScreenshotConfigUpdate {
+            revision: 0,
+            config: loaded_config.unwrap_or_default(),
+        });
+
+        let render_shutdown_token = ws_shutdown_token.clone();
+
+        let source_rgba = Arc::new(data);
+
+        let instance = Arc::new(ScreenshotEditorInstance {
+            ws_port,
+            ws_shutdown_token,
+            config_tx,
+            path: path.clone(),
+            pretty_name: recording_meta.pretty_name.clone(),
+            image_width: width,
+            image_height: height,
+            source_rgba: source_rgba.clone(),
+        });
+
+        let decoded_frame = DecodedFrame::new(source_rgba.as_ref().clone(), width, height);
+
+        tokio::spawn(async move {
+            let mut frame_renderer = FrameRenderer::new(&constants);
+            let mut layers = RendererLayers::new_with_options(
+                &constants.device,
+                &constants.queue,
+                constants.is_software_adapter,
+            );
+            let shutdown_token = render_shutdown_token;
+            let mut current_update = config_rx.borrow().clone();
+            let mut current_config = current_update.config.clone();
+            let mut current_revision = current_update.revision;
+
+            loop {
+                if shutdown_token.is_cancelled() {
+                    break;
+                }
+                let segment_frames = DecodedSegmentFrames {
+                    screen_frame: Some(DecodedFrame::new(
+                        decoded_frame.data().to_vec(),
+                        decoded_frame.width(),
+                        decoded_frame.height(),
+                    )),
+                    camera_frame: None,
+                    segment_time: 0.0,
+                    recording_time: 0.0,
+                };
+
+                let (base_w, base_h) =
+                    ProjectUniforms::get_base_size(&constants.options, &current_config);
+
+                let cursor_events = cap_project::CursorEvents::default();
+                let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+                    &cursor_events,
+                    None,
+                    current_config.cursor.click_spring_config(),
+                    current_config.screen_movement_spring,
+                    0.0,
+                    current_config
+                        .timeline
+                        .as_ref()
+                        .map(|t| t.zoom_segments.as_slice())
+                        .unwrap_or(&[]),
+                );
+
+                let uniforms = ProjectUniforms::new(
+                    &constants,
+                    &current_config,
+                    0,
+                    30,
+                    cap_project::XY::new(base_w, base_h),
+                    &cursor_events,
+                    &segment_frames,
+                    0.0,
+                    &zoom_focus_interpolator,
+                );
+
+                let rendered_frame = frame_renderer
+                    .render_immediate(
+                        segment_frames,
+                        uniforms,
+                        &cap_project::CursorEvents::default(),
+                        true,
+                        &mut layers,
+                    )
+                    .await;
+
+                match rendered_frame {
+                    Ok(frame) => {
+                        let _ = frame_tx.send(Some(std::sync::Arc::new(WSFrame {
+                            data: frame.data,
+                            width: frame.width,
+                            height: frame.height,
+                            stride: frame.padded_bytes_per_row,
+                            frame_number: current_revision,
+                            target_time_ns: frame.target_time_ns,
+                            format: crate::frame_ws::WSFrameFormat::Rgba,
+                            created_at: Instant::now(),
+                        })));
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to render screenshot frame: {e}");
+                    }
+                }
+
+                tokio::select! {
+                    res = config_rx.changed() => {
+                        if res.is_err() {
+                            break;
+                        }
+                        current_update = config_rx.borrow().clone();
+                        current_revision = current_update.revision;
+                        current_config = current_update.config.clone();
+                    }
+                    _ = shutdown_token.cancelled() => {
+                        break;
+                    }
+                }
+            }
+            let _ = frame_tx.send(None);
+        });
+
+        Ok(instance)
+    }
+
     pub async fn get_or_create(
         window: &Window,
         path: PathBuf,
@@ -97,298 +438,27 @@ impl ScreenshotEditorInstances {
 
         match instances.entry(window.label().to_string()) {
             Entry::Vacant(entry) => {
-                let (frame_tx, frame_rx) = watch::channel(None);
-                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+                let pending = PendingScreenshotEditorInstances::get(window.app_handle());
 
-                let (data, width, height) = {
-                    let key = path
-                        .parent()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    let pending = window.try_state::<PendingScreenshots>();
-                    let pending_frame = pending.and_then(|p| p.remove(&key));
-
-                    if let Some(frame) = pending_frame {
-                        let width = frame.width;
-                        let height = frame.height;
-
-                        if width > MAX_DIMENSION || height > MAX_DIMENSION {
-                            return Err(format!(
-                                "Image dimensions exceed maximum: {width}x{height}"
-                            ));
-                        }
-
-                        let expected_len = width
-                            .checked_mul(height)
-                            .and_then(|p| p.checked_mul(3))
-                            .ok_or_else(|| {
-                                format!("Image dimensions overflow: {width}x{height}")
-                            })?;
-                        let expected_len = usize::try_from(expected_len)
-                            .map_err(|_| format!("Image size too large: {width}x{height}"))?;
-
-                        let data = frame.data;
-
-                        if data.len() != expected_len {
-                            return Err(format!(
-                                "Image data length mismatch: expected {expected_len} bytes for {width}x{height} frame, got {}",
-                                data.len()
-                            ));
-                        }
-
-                        let rgb_img = RgbImage::from_raw(width, height, data).ok_or_else(|| {
-                            format!("Invalid RGB data for {width}x{height} frame")
-                        })?;
-                        let rgba_img: image::RgbaImage = rgb_img.convert();
-                        (rgba_img.into_raw(), width, height)
-                    } else {
-                        let image_path = if path.is_dir() {
-                            let original = path.join("original.png");
-                            if original.exists() {
-                                original
-                            } else {
-                                std::fs::read_dir(&path)
-                                    .ok()
-                                    .and_then(|dir| {
-                                        dir.flatten()
-                                            .find(|e| {
-                                                e.path().extension().and_then(|s| s.to_str())
-                                                    == Some("png")
-                                            })
-                                            .map(|e| e.path())
-                                    })
-                                    .ok_or_else(|| {
-                                        format!("No PNG file found in directory: {path:?}")
-                                    })?
-                            }
-                        } else {
-                            path.clone()
-                        };
-
-                        let img = image::open(&image_path)
-                            .map_err(|e| format!("Failed to open image: {e}"))?;
-                        let (w, h) = img.dimensions();
-
-                        if w > MAX_DIMENSION || h > MAX_DIMENSION {
-                            return Err(format!("Image dimensions exceed maximum: {w}x{h}"));
-                        }
-
-                        w.checked_mul(h)
-                            .and_then(|p| p.checked_mul(4))
-                            .ok_or_else(|| format!("Image dimensions overflow: {w}x{h}"))?;
-
-                        (img.to_rgba8().into_raw(), w, h)
-                    }
-                };
-
-                let cap_dir = if path.extension().and_then(|s| s.to_str()) == Some("cap") {
-                    Some(path.clone())
-                } else if let Some(parent) = path.parent() {
-                    if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
-                        Some(parent.to_path_buf())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                let (recording_meta, loaded_config) = if let Some(cap_dir) = &cap_dir {
-                    let meta = RecordingMeta::load_for_project(cap_dir).ok();
-                    let config = ProjectConfiguration::load(cap_dir).ok();
-                    (meta, config)
-                } else {
-                    (None, None)
-                };
-
-                let recording_meta = if let Some(meta) = recording_meta {
-                    meta
-                } else {
-                    // Create dummy meta
-                    let filename = path
-                        .file_name()
-                        .ok_or_else(|| "Invalid path".to_string())?
-                        .to_string_lossy();
-                    let relative_path = RelativePathBuf::from(filename.as_ref());
-                    let video_meta = VideoMeta {
-                        path: relative_path.clone(),
-                        fps: 30,
-                        start_time: Some(0.0),
-                    };
-                    let segment = SingleSegment {
-                        display: video_meta.clone(),
-                        camera: None,
-                        audio: None,
-                        cursor: None,
-                    };
-                    let studio_meta = StudioRecordingMeta::SingleSegment { segment };
-                    RecordingMeta {
-                        platform: None,
-                        project_path: path.parent().unwrap().to_path_buf(),
-                        pretty_name: "Screenshot".to_string(),
-                        sharing: None,
-                        inner: RecordingMetaInner::Studio(studio_meta.clone()),
-                        upload: None,
-                    }
-                };
-
-                let (instance, adapter, device, queue, is_software_adapter) =
-                    if let Some(shared) = gpu_context::get_shared_gpu().await {
-                        (
-                            shared.instance.clone(),
-                            shared.adapter.clone(),
-                            shared.device.clone(),
-                            shared.queue.clone(),
-                            shared.is_software_adapter,
-                        )
-                    } else {
-                        let instance =
-                            Arc::new(wgpu::Instance::new(&wgpu::InstanceDescriptor::default()));
-                        let adapter = Arc::new(
-                            instance
-                                .request_adapter(&wgpu::RequestAdapterOptions {
-                                    power_preference: wgpu::PowerPreference::HighPerformance,
-                                    force_fallback_adapter: false,
-                                    compatible_surface: None,
-                                })
-                                .await
-                                .map_err(|_| "No GPU adapter found".to_string())?,
-                        );
-
-                        let (device, queue) = adapter
-                            .request_device(&wgpu::DeviceDescriptor {
-                                label: Some("cap-rendering-device"),
-                                required_features: wgpu::Features::empty(),
-                                ..Default::default()
-                            })
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        (instance, adapter, Arc::new(device), Arc::new(queue), false)
-                    };
-
-                let options = cap_rendering::RenderOptions {
-                    screen_size: cap_project::XY::new(width, height),
-                    camera_size: None,
-                };
-
-                // We need to extract the studio meta from the recording meta
-                let studio_meta = match &recording_meta.inner {
-                    RecordingMetaInner::Studio(meta) => meta.clone(),
-                    _ => return Err("Invalid recording meta for screenshot".to_string()),
-                };
-
-                let constants = RenderVideoConstants {
-                    _instance: (*instance).clone(),
-                    _adapter: (*adapter).clone(),
-                    queue: (*queue).clone(),
-                    device: (*device).clone(),
-                    options,
-                    meta: studio_meta,
-                    recording_meta: recording_meta.clone(),
-                    background_textures: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-                    is_software_adapter,
-                };
-
-                let (config_tx, mut config_rx) = watch::channel(loaded_config.unwrap_or_default());
-
-                let render_shutdown_token = ws_shutdown_token.clone();
-
-                let instance = Arc::new(ScreenshotEditorInstance {
-                    ws_port,
-                    ws_shutdown_token,
-                    config_tx,
-                    path: path.clone(),
-                    pretty_name: recording_meta.pretty_name.clone(),
-                });
-
-                // Spawn render loop
-                let decoded_frame = DecodedFrame::new(data, width, height);
-
-                tokio::spawn(async move {
-                    let mut frame_renderer = FrameRenderer::new(&constants);
-                    let mut layers = RendererLayers::new_with_options(
-                        &constants.device,
-                        &constants.queue,
-                        constants.is_software_adapter,
-                    );
-                    let shutdown_token = render_shutdown_token;
-
-                    // Initial render
-                    let mut current_config = config_rx.borrow().clone();
-
+                if let Some(mut prewarmed_rx) = pending.take_prewarmed(window.label()).await {
                     loop {
-                        if shutdown_token.is_cancelled() {
+                        if let Some(result) = prewarmed_rx.borrow_and_update().clone() {
+                            let instance = result?;
+                            entry.insert(instance.clone());
+                            return Ok(instance);
+                        }
+                        if prewarmed_rx.changed().await.is_err() {
                             break;
                         }
-                        let segment_frames = DecodedSegmentFrames {
-                            screen_frame: DecodedFrame::new(
-                                decoded_frame.data().to_vec(),
-                                decoded_frame.width(),
-                                decoded_frame.height(),
-                            ),
-                            camera_frame: None,
-                            segment_time: 0.0,
-                            recording_time: 0.0,
-                        };
-
-                        let (base_w, base_h) =
-                            ProjectUniforms::get_base_size(&constants.options, &current_config);
-
-                        let uniforms = ProjectUniforms::new(
-                            &constants,
-                            &current_config,
-                            0,
-                            30,
-                            cap_project::XY::new(base_w, base_h),
-                            &cap_project::CursorEvents::default(),
-                            &segment_frames,
-                        );
-
-                        let rendered_frame = frame_renderer
-                            .render(
-                                segment_frames,
-                                uniforms,
-                                &cap_project::CursorEvents::default(),
-                                &mut layers,
-                            )
-                            .await;
-
-                        match rendered_frame {
-                            Ok(frame) => {
-                                let _ = frame_tx.send(Some(WSFrame {
-                                    data: frame.data,
-                                    width: frame.width,
-                                    height: frame.height,
-                                    stride: frame.padded_bytes_per_row,
-                                    created_at: Instant::now(),
-                                }));
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to render frame: {e}");
-                            }
-                        }
-
-                        tokio::select! {
-                            res = config_rx.changed() => {
-                                if res.is_err() {
-                                    break;
-                                }
-                                current_config = config_rx.borrow().clone();
-                            }
-                            _ = shutdown_token.cancelled() => {
-                                break;
-                            }
-                        }
                     }
-                    let _ = frame_tx.send(None);
-                });
+                }
 
+                let instance = Self::create_instance(window.app_handle(), path).await?;
                 entry.insert(instance.clone());
                 Ok(instance)
             }
             Entry::Occupied(entry) => {
                 let instance = entry.get().clone();
-                // Force a re-render for the new client by sending the current config again
                 let config = instance.config_tx.borrow().clone();
                 let _ = instance.config_tx.send(config);
                 Ok(instance)
@@ -409,6 +479,82 @@ impl ScreenshotEditorInstances {
     }
 }
 
+impl PendingScreenshotEditorInstances {
+    pub fn get(app: &AppHandle) -> Self {
+        match app.try_state::<Self>() {
+            Some(s) => (*s).clone(),
+            None => {
+                let pending = Self::default();
+                app.manage(pending.clone());
+                pending
+            }
+        }
+    }
+
+    pub async fn start_prewarm(app: &AppHandle, window_label: String, path: PathBuf) {
+        let pending = Self::get(app);
+        let app = app.clone();
+
+        {
+            let instances = pending.0.read().await;
+            if instances.contains_key(&window_label) {
+                return;
+            }
+        }
+
+        let (tx, rx) = watch::channel(None);
+
+        {
+            let mut instances = pending.0.write().await;
+            instances.insert(window_label.clone(), rx);
+        }
+
+        tokio::spawn(async move {
+            let result = ScreenshotEditorInstances::create_instance(&app, path).await;
+            tx.send(Some(result)).ok();
+        });
+    }
+
+    pub async fn take_prewarmed(&self, window_label: &str) -> Option<PendingReceiver> {
+        let mut instances = self.0.write().await;
+        instances.remove(window_label)
+    }
+
+    pub async fn cancel_prewarm(&self, window_label: &str) {
+        let mut instances = self.0.write().await;
+        if let Some(mut rx) = instances.remove(window_label) {
+            tokio::spawn(async move {
+                let timeout = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    loop {
+                        let instance_to_dispose = {
+                            let borrowed = rx.borrow_and_update().clone();
+                            match borrowed {
+                                Some(Ok(instance)) => Some(instance),
+                                Some(Err(_)) => break,
+                                None => None,
+                            }
+                        };
+
+                        if let Some(instance) = instance_to_dispose {
+                            instance.dispose().await;
+                            break;
+                        }
+
+                        if rx.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                if timeout.await.is_err() {
+                    tracing::warn!(
+                        "Timed out waiting for prewarmed screenshot editor instance to complete for cleanup"
+                    );
+                }
+            });
+        }
+    }
+}
+
 #[derive(Serialize, Type, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SerializedScreenshotEditorInstance {
@@ -416,6 +562,8 @@ pub struct SerializedScreenshotEditorInstance {
     pub path: PathBuf,
     pub config: Option<ProjectConfiguration>,
     pub pretty_name: String,
+    pub image_width: u32,
+    pub image_height: u32,
 }
 
 #[tauri::command]
@@ -439,13 +587,15 @@ pub async fn create_screenshot_editor_instance(
     };
 
     let instance = ScreenshotEditorInstances::get_or_create(&window, path).await?;
-    let config = instance.config_tx.borrow().clone();
+    let config = instance.config_tx.borrow().config.clone();
 
     Ok(SerializedScreenshotEditorInstance {
         frames_socket_url: format!("ws://localhost:{}", instance.ws_port),
         path: instance.path.clone(),
         config: Some(config),
         pretty_name: instance.pretty_name.clone(),
+        image_width: instance.image_width,
+        image_height: instance.image_height,
     })
 }
 
@@ -455,10 +605,14 @@ pub async fn update_screenshot_config(
     instance: WindowScreenshotEditorInstance,
     config: ProjectConfiguration,
     save: bool,
+    revision: u32,
 ) -> Result<(), String> {
     config.validate().map_err(|error| error.to_string())?;
 
-    let _ = instance.config_tx.send(config.clone());
+    let _ = instance.config_tx.send(ScreenshotConfigUpdate {
+        revision,
+        config: config.clone(),
+    });
 
     if !save {
         return Ok(());
@@ -479,4 +633,252 @@ pub async fn update_screenshot_config(
         println!("Not saving config: parent {parent:?} is not a .cap directory");
     }
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn render_screenshot_for_export(
+    instance: WindowScreenshotEditorInstance,
+) -> Result<Vec<u8>, String> {
+    render_screenshot_png(&instance).await
+}
+
+pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Result<Vec<u8>, String> {
+    let path = instance.path.clone();
+    let config = instance.config_tx.borrow().config.clone();
+    let width = instance.image_width;
+    let height = instance.image_height;
+
+    if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        return Err(format!("Image dimensions exceed maximum: {width}x{height}"));
+    }
+
+    let data = instance.source_rgba.as_ref().clone();
+
+    let cap_dir = if path.extension().and_then(|s| s.to_str()) == Some("cap") {
+        Some(path.clone())
+    } else if let Some(parent) = path.parent() {
+        if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
+            Some(parent.to_path_buf())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let recording_meta = if let Some(cap_dir) = &cap_dir {
+        RecordingMeta::load_for_project(cap_dir).map_err(|e| e.to_string())?
+    } else {
+        let filename = path
+            .file_name()
+            .ok_or_else(|| "Invalid path".to_string())?
+            .to_string_lossy();
+        let relative_path = RelativePathBuf::from(filename.as_ref());
+        let video_meta = VideoMeta {
+            path: relative_path.clone(),
+            fps: 30,
+            start_time: Some(0.0),
+            device_id: None,
+        };
+        let segment = SingleSegment {
+            display: video_meta.clone(),
+            camera: None,
+            audio: None,
+            cursor: None,
+        };
+        let studio_meta = StudioRecordingMeta::SingleSegment { segment };
+        RecordingMeta {
+            platform: None,
+            project_path: path.parent().unwrap_or(&path).to_path_buf(),
+            pretty_name: "Screenshot".to_string(),
+            sharing: None,
+            inner: RecordingMetaInner::Studio(Box::new(studio_meta)),
+            upload: None,
+        }
+    };
+
+    let shared = if let Some(gpu) = gpu_context::get_shared_gpu().await {
+        cap_rendering::SharedWgpuDevice {
+            instance: (*gpu.instance).clone(),
+            adapter: (*gpu.adapter).clone(),
+            device: (*gpu.device).clone(),
+            queue: (*gpu.queue).clone(),
+            is_software_adapter: gpu.is_software_adapter,
+        }
+    } else {
+        let instance = cap_rendering::create_wgpu_instance().await;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .map_err(|_| "No GPU adapter found".to_string())?;
+        let adapter_info = adapter.get_info();
+        let is_software_adapter = cap_rendering::is_software_wgpu_adapter(&adapter_info);
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("cap-rendering-device"),
+                required_features: wgpu::Features::empty(),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        cap_rendering::SharedWgpuDevice {
+            instance,
+            adapter,
+            device,
+            queue,
+            is_software_adapter,
+        }
+    };
+
+    let options = cap_rendering::RenderOptions {
+        screen_size: cap_project::XY::new(width, height),
+        camera_size: None,
+    };
+
+    let studio_meta = match &recording_meta.inner {
+        RecordingMetaInner::Studio(meta) => meta.clone(),
+        _ => return Err("Invalid recording meta for screenshot".to_string()),
+    };
+
+    let constants = RenderVideoConstants::from_shared_device(
+        shared,
+        options,
+        *studio_meta,
+        recording_meta.clone(),
+    );
+
+    let (base_width, base_height) = ProjectUniforms::get_base_size(&constants.options, &config);
+    let display_size = ProjectUniforms::display_size(
+        &constants.options,
+        &config,
+        cap_project::XY::new(base_width, base_height),
+    )
+    .coord;
+    let crop = ProjectUniforms::get_crop(&constants.options, &config);
+    let export_scale = f64::max(
+        f64::max(
+            crop.size.x as f64 / f64::max(display_size.x, 1.0),
+            crop.size.y as f64 / f64::max(display_size.y, 1.0),
+        ),
+        1.0,
+    );
+
+    let resolution_base = cap_project::XY::new(
+        (((base_width as f64 * export_scale).ceil() as u32) + 3) & !3,
+        (((base_height as f64 * export_scale).ceil() as u32) + 1) & !1,
+    );
+
+    if resolution_base.x > MAX_DIMENSION || resolution_base.y > MAX_DIMENSION {
+        return Err(format!(
+            "Export dimensions exceed maximum: {}x{}",
+            resolution_base.x, resolution_base.y
+        ));
+    }
+
+    let mut frame_renderer = FrameRenderer::new(&constants);
+    let mut layers = RendererLayers::new_with_options(
+        &constants.device,
+        &constants.queue,
+        constants.is_software_adapter,
+    );
+    let decoded_frame = DecodedFrame::new(data, width, height);
+    let segment_frames = DecodedSegmentFrames {
+        screen_frame: Some(DecodedFrame::new(
+            decoded_frame.data().to_vec(),
+            decoded_frame.width(),
+            decoded_frame.height(),
+        )),
+        camera_frame: None,
+        segment_time: 0.0,
+        recording_time: 0.0,
+    };
+    let cursor_events = cap_project::CursorEvents::default();
+    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+        &cursor_events,
+        None,
+        config.cursor.click_spring_config(),
+        config.screen_movement_spring,
+        0.0,
+        config
+            .timeline
+            .as_ref()
+            .map(|timeline| timeline.zoom_segments.as_slice())
+            .unwrap_or(&[]),
+    );
+    let uniforms = ProjectUniforms::new(
+        &constants,
+        &config,
+        0,
+        30,
+        resolution_base,
+        &cursor_events,
+        &segment_frames,
+        0.0,
+        &zoom_focus_interpolator,
+    );
+    let rendered_frame = frame_renderer
+        .render_immediate(
+            segment_frames,
+            uniforms,
+            &cap_project::CursorEvents::default(),
+            true,
+            &mut layers,
+        )
+        .await
+        .map_err(|e| format!("Failed to render screenshot export: {e}"))?;
+
+    let width_usize =
+        usize::try_from(rendered_frame.width).map_err(|_| "Invalid export width".to_string())?;
+    let height_usize =
+        usize::try_from(rendered_frame.height).map_err(|_| "Invalid export height".to_string())?;
+    let unpadded_bytes_per_row = width_usize
+        .checked_mul(4)
+        .ok_or_else(|| "Export row size overflow".to_string())?;
+    let padded_bytes_per_row = usize::try_from(rendered_frame.padded_bytes_per_row)
+        .map_err(|_| "Invalid export stride".to_string())?;
+
+    if padded_bytes_per_row < unpadded_bytes_per_row {
+        return Err(format!(
+            "Invalid export stride: {} for {}x{} image",
+            rendered_frame.padded_bytes_per_row, rendered_frame.width, rendered_frame.height
+        ));
+    }
+
+    let expected_padded_len = padded_bytes_per_row
+        .checked_mul(height_usize)
+        .ok_or_else(|| "Export buffer size overflow".to_string())?;
+    if rendered_frame.data.len() < expected_padded_len {
+        return Err(format!(
+            "Invalid export buffer length: expected at least {} got {} for {}x{} image",
+            expected_padded_len,
+            rendered_frame.data.len(),
+            rendered_frame.width,
+            rendered_frame.height
+        ));
+    }
+
+    let rgba_data: Vec<u8> = rendered_frame
+        .data
+        .chunks(padded_bytes_per_row)
+        .take(height_usize)
+        .flat_map(|row| row[..unpadded_bytes_per_row].iter().copied())
+        .collect();
+
+    let mut png_data = Cursor::new(Vec::new());
+    let encoder = PngEncoder::new(&mut png_data);
+    encoder
+        .write_image(
+            &rgba_data,
+            rendered_frame.width,
+            rendered_frame.height,
+            image::ExtendedColorType::Rgba8,
+        )
+        .map_err(|e| format!("Failed to encode screenshot export: {e}"))?;
+
+    Ok(png_data.into_inner())
 }

@@ -50,7 +50,9 @@ use windows::{
     core::{BOOL, PCWSTR, PWSTR},
 };
 
-use crate::bounds::{LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize};
+use crate::bounds::{
+    LogicalBounds, LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
+};
 
 // All of this assumes PROCESS_PER_MONITOR_DPI_AWARE
 //
@@ -146,6 +148,29 @@ impl DisplayImpl {
         Some(LogicalSize::new(
             physical_size.width() / scale,
             physical_size.height() / scale,
+        ))
+    }
+
+    pub fn logical_bounds(&self) -> Option<LogicalBounds> {
+        let physical_bounds = self.physical_bounds()?;
+
+        let dpi = unsafe {
+            let mut dpi_x = 0;
+            GetDpiForMonitor(self.0, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut 0).ok()?;
+            dpi_x
+        };
+
+        let scale = dpi as f64 / 96.0;
+
+        Some(LogicalBounds::new(
+            LogicalPosition::new(
+                physical_bounds.position().x() / scale,
+                physical_bounds.position().y() / scale,
+            ),
+            LogicalSize::new(
+                physical_bounds.size().width() / scale,
+                physical_bounds.size().height() / scale,
+            ),
         ))
     }
 
@@ -1028,6 +1053,30 @@ impl WindowImpl {
                 },
             })
         }
+    }
+
+    pub fn logical_bounds(&self) -> Option<LogicalBounds> {
+        let physical_bounds = self.physical_bounds()?;
+
+        const BASE_DPI: f64 = 96.0;
+        let dpi = unsafe {
+            match GetDpiForWindow(self.0) {
+                0 => BASE_DPI as u32,
+                dpi => dpi,
+            }
+        } as f64;
+        let scale_factor = dpi / BASE_DPI;
+
+        Some(LogicalBounds::new(
+            LogicalPosition::new(
+                physical_bounds.position().x() / scale_factor,
+                physical_bounds.position().y() / scale_factor,
+            ),
+            LogicalSize::new(
+                physical_bounds.size().width() / scale_factor,
+                physical_bounds.size().height() / scale_factor,
+            ),
+        ))
     }
 
     pub fn physical_size(&self) -> Option<PhysicalSize> {

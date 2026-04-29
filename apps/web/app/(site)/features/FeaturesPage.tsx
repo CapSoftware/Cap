@@ -251,6 +251,14 @@ const features: Feature[] = [
 	},
 
 	{
+		icon: faDownload,
+		title: "Loom Video Importer",
+		description:
+			"Switching from Loom? Import your existing Loom recordings directly into Cap and keep all your content in one place",
+		category: "platform",
+		size: "medium",
+	},
+	{
 		icon: faMobileAlt,
 		title: "Cross-Platform",
 		description: "Native apps for macOS (Apple Silicon & Intel) and Windows",

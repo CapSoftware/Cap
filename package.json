@@ -7,6 +7,7 @@
 		"cap-setup": "dotenv -e .env -- node scripts/setup.js",
 		"analytics:migrate-dub": "dotenv -e .env -- node scripts/analytics/migrate-dub-to-tinybird.js --dry-run",
 		"analytics:migrate-dub:apply": "dotenv -e .env -- node scripts/analytics/migrate-dub-to-tinybird.js --apply",
+		"analytics:posthog-growth": "dotenv -e .env -- node scripts/analytics/posthog-growth-audit.mjs",
 		"analytics:setup": "dotenv -e .env -- node scripts/analytics/setup-analytics.js",
 		"analytics:check": "dotenv -e .env -- node scripts/analytics/check-analytics.js",
 		"analytics:delete-all": "dotenv -e .env -- node scripts/analytics/delete-all-data.js",
@@ -14,7 +15,7 @@
 		"db:generate": "dotenv -e .env -- pnpm --filter @cap/database db:generate",
 		"db:push": "dotenv -e .env -- pnpm --filter @cap/database db:push",
 		"db:studio": "dotenv -e .env -- pnpm --filter @cap/database db:studio",
-		"dev": "(pnpm run docker:up > /dev/null &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+		"dev": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
 		"dev:desktop": "pnpm run --filter=@cap/desktop dev",
 		"dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
 		"dev:web": "pnpm dev --filter=!@cap/desktop",
@@ -26,6 +27,20 @@
 		"lint": "pnpm exec biome lint",
 		"tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
 		"typecheck": "pnpm tsc -b",
+		"test": "turbo run test",
+		"test:web": "pnpm --filter=@cap/web test",
+		"test:discover": "pnpm with-env cargo run -p cap-test -- discover",
+		"test:matrix": "pnpm with-env cargo run -p cap-test -- matrix",
+		"test:matrix:quick": "pnpm with-env cargo run -p cap-test -- matrix --quick",
+		"test:matrix:exhaustive": "pnpm with-env cargo run -p cap-test -- matrix --exhaustive",
+		"test:synthetic": "pnpm with-env cargo run -p cap-test -- synthetic",
+		"test:benchmark": "pnpm with-env cargo run -p cap-test -- benchmark",
+		"test:suite:recording": "pnpm with-env cargo run -p cap-test -- suite recording",
+		"test:suite:encoding": "pnpm with-env cargo run -p cap-test -- suite encoding",
+		"test:suite:playback": "pnpm with-env cargo run -p cap-test -- suite playback",
+		"test:suite:sync": "pnpm with-env cargo run -p cap-test -- suite sync",
+		"test:desktop:memory": "pnpm --dir apps/desktop test:memory",
+		"test:desktop:memory:unit": "pnpm --dir apps/desktop test:memory:unit",
 		"web": "pnpm --filter=@cap/web",
 		"env-setup": "node scripts/env-cli.js",
 		"check-tauri-versions": "node scripts/check-tauri-plugin-versions.js",
@@ -42,6 +57,13 @@
 		"tsdown": "^0.15.6",
 		"turbo": "^2.3.4",
 		"typescript": "^5.8.3"
+	},
+	"pnpm": {
+		"peerDependencyRules": {
+			"allowedVersions": {
+				"next-auth>next": ">=16.0.0"
+			}
+		}
 	},
 	"packageManager": "pnpm@10.5.2",
 	"name": "cap",

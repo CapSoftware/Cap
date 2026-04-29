@@ -227,6 +227,42 @@ pub async fn upload_signed(
 }
 
 #[instrument(skip(app))]
+pub async fn upload_signed_batch(
+    app: &AppHandle,
+    video_id: &str,
+    subpaths: &[String],
+) -> Result<std::collections::HashMap<String, String>, AuthedApiError> {
+    #[derive(Deserialize)]
+    struct Response {
+        urls: std::collections::HashMap<String, String>,
+    }
+
+    let resp = app
+        .authed_api_request("/api/upload/signed/batch", |client, url| {
+            client.post(url).json(&serde_json::json!({
+                "videoId": video_id,
+                "subpaths": subpaths,
+            }))
+        })
+        .await
+        .map_err(|err| format!("api/upload_signed_batch/request: {err}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let error_body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        return Err(format!("api/upload_signed_batch/{status}: {error_body}").into());
+    }
+
+    resp.json::<Response>()
+        .await
+        .map_err(|err| format!("api/upload_signed_batch/response: {err}").into())
+        .map(|data| data.urls)
+}
+
+#[instrument(skip(app))]
 pub async fn desktop_video_progress(
     app: &AppHandle,
     video_id: &str,
@@ -263,6 +299,34 @@ pub struct Organization {
     pub id: String,
     pub name: String,
     pub owner_id: String,
+}
+
+pub async fn signal_recording_complete(
+    app: &AppHandle,
+    video_id: &str,
+) -> Result<(), AuthedApiError> {
+    let resp = app
+        .authed_api_request("/api/upload/recording-complete", |client, url| {
+            client
+                .post(url)
+                .header("Content-Type", "application/json")
+                .json(&serde_json::json!({
+                    "videoId": video_id,
+                }))
+        })
+        .await
+        .map_err(|err| format!("api/signal_recording_complete/request: {err}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let error_body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        return Err(format!("api/signal_recording_complete/{status}: {error_body}").into());
+    }
+
+    Ok(())
 }
 
 pub async fn fetch_organizations(app: &AppHandle) -> Result<Vec<Organization>, AuthedApiError> {

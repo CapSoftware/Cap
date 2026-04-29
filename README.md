@@ -24,12 +24,38 @@ Cap is the open source alternative to Loom. It's a video messaging tool that all
 
 # Self Hosting
 
-Cap Web is available to self-host using Docker or Railway, see our [self-hosting docs](https://cap.so/docs/self-hosting) to learn more.
-You can also use the button below to deploy Cap Web to Railway:
+### Quick Start (One Command)
+
+```bash
+git clone https://github.com/CapSoftware/Cap.git && cd Cap && docker compose up -d
+```
+
+Cap will be running at `http://localhost:3000`. That's it!
+
+> **Note:** Login links appear in the logs (`docker compose logs cap-web`) since email isn't configured by default.
+
+### Other Deployment Options
+
+| Method | Best For |
+|--------|----------|
+| **Docker Compose** | VPS, home servers, any Docker host |
+| **[Railway](https://railway.com/new/template/PwpGcf)** | One-click managed hosting |
+| **Coolify** | Self-hosted PaaS (use `docker-compose.coolify.yml`) |
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
 
-Cap Desktop can connect to your self-hosted Cap Web instance regardless of if you build it yourself or [download from our website](https://cap.so/download).
+### Production Configuration
+
+For production, create a `.env` file:
+
+```bash
+CAP_URL=https://cap.yourdomain.com
+S3_PUBLIC_URL=https://s3.yourdomain.com
+```
+
+See our [self-hosting docs](https://cap.so/docs/self-hosting) for full configuration options including email setup, AI features, and SSL.
+
+Cap Desktop can connect to your self-hosted instance via Settings → Cap Server URL.
 
 # Monorepo App Architecture
 

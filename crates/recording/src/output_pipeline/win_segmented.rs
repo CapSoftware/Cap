@@ -1,3 +1,4 @@
+use super::core::{BlockingThreadFinish, combine_finish_errors, wait_for_blocking_thread_finish};
 use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, fragmentation, screen_capture};
 use anyhow::{Context, anyhow};
 use cap_media_info::{AudioInfo, VideoInfo};
@@ -49,7 +50,7 @@ struct Manifest {
 }
 
 struct SegmentState {
-    video_tx: SyncSender<Option<(scap_direct3d::Frame, Duration)>>,
+    video_tx: SyncSender<Option<(screen_capture::ScreenFrame, Duration)>>,
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
 }
@@ -103,7 +104,7 @@ impl PauseTracker {
     }
 
     fn adjust(&mut self, timestamp: Duration) -> anyhow::Result<Option<Duration>> {
-        if self.flag.load(Ordering::Relaxed) {
+        if self.flag.load(Ordering::Acquire) {
             if self.paused_at.is_none() {
                 self.paused_at = Some(timestamp);
             }
@@ -111,26 +112,42 @@ impl PauseTracker {
         }
 
         if let Some(start) = self.paused_at.take() {
-            let delta = timestamp.checked_sub(start).ok_or_else(|| {
-                anyhow!(
-                    "Frame timestamp went backward during unpause (resume={start:?}, current={timestamp:?})"
-                )
-            })?;
+            let delta = match timestamp.checked_sub(start) {
+                Some(d) => d,
+                None => {
+                    warn!(
+                        resume_at = ?start,
+                        current = ?timestamp,
+                        "Timestamp anomaly: frame timestamp went backward during unpause (clock skew?), treating as zero delta"
+                    );
+                    Duration::ZERO
+                }
+            };
 
-            self.offset = self.offset.checked_add(delta).ok_or_else(|| {
-                anyhow!(
-                    "Pause offset overflow (offset={:?}, delta={delta:?})",
-                    self.offset
-                )
-            })?;
+            self.offset = match self.offset.checked_add(delta) {
+                Some(o) => o,
+                None => {
+                    warn!(
+                        offset = ?self.offset,
+                        delta = ?delta,
+                        "Timestamp anomaly: pause offset overflow, clamping to MAX"
+                    );
+                    Duration::MAX
+                }
+            };
         }
 
-        let adjusted = timestamp.checked_sub(self.offset).ok_or_else(|| {
-            anyhow!(
-                "Adjusted timestamp underflow (timestamp={timestamp:?}, offset={:?})",
-                self.offset
-            )
-        })?;
+        let adjusted = match timestamp.checked_sub(self.offset) {
+            Some(t) => t,
+            None => {
+                warn!(
+                    timestamp = ?timestamp,
+                    offset = ?self.offset,
+                    "Timestamp anomaly: adjusted timestamp underflow (clock skew?), using zero"
+                );
+                Duration::ZERO
+            }
+        };
 
         Ok(Some(adjusted))
     }
@@ -217,6 +234,8 @@ impl Muxer for WindowsSegmentedMuxer {
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
         let segment_path = self.current_segment_path();
         let segment_start = self.segment_start_time;
+        let mut finish_error = None;
+        let mut final_segment = None;
 
         if let Some(mut state) = self.current_state.take() {
             if let Err(e) = state.video_tx.send(None) {
@@ -224,26 +243,19 @@ impl Muxer for WindowsSegmentedMuxer {
             }
 
             if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        if let Err(panic_payload) = handle.join() {
-                            warn!(
-                                "Screen encoder thread panicked during finish: {:?}",
-                                panic_payload
-                            );
-                        }
-                        break;
+                match wait_for_blocking_thread_finish(
+                    handle,
+                    Duration::from_secs(5),
+                    "Screen encoder thread",
+                ) {
+                    BlockingThreadFinish::Clean => {}
+                    BlockingThreadFinish::Failed(error) => {
+                        finish_error = Some(error);
                     }
-                    if start.elapsed() > timeout {
-                        warn!(
-                            "Screen encoder thread did not finish within {:?}, abandoning",
-                            timeout
-                        );
-                        break;
+                    BlockingThreadFinish::TimedOut(error) => {
+                        self.write_in_progress_manifest();
+                        return Ok(Err(error));
                     }
-                    std::thread::sleep(Duration::from_millis(50));
                 }
             }
 
@@ -251,7 +263,13 @@ impl Muxer for WindowsSegmentedMuxer {
                 .output
                 .lock()
                 .map_err(|_| anyhow!("Failed to lock output"))?;
-            output.write_trailer()?;
+            if let Err(error) = output.write_trailer() {
+                let error = anyhow!("Failed to write screen trailer: {error:#}");
+                finish_error = Some(match finish_error.take() {
+                    Some(existing) => combine_finish_errors(existing, error),
+                    None => error,
+                });
+            }
 
             fragmentation::sync_file(&segment_path);
 
@@ -259,7 +277,7 @@ impl Muxer for WindowsSegmentedMuxer {
                 let final_duration = timestamp.saturating_sub(start);
                 let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
 
-                self.completed_segments.push(SegmentInfo {
+                final_segment = Some(SegmentInfo {
                     path: segment_path,
                     index: self.current_index,
                     duration: final_duration,
@@ -268,7 +286,19 @@ impl Muxer for WindowsSegmentedMuxer {
             }
         }
 
-        self.finalize_manifest();
+        if let Some(error) = finish_error {
+            self.write_in_progress_manifest();
+            return Ok(Err(error));
+        }
+
+        if let Some(segment) = final_segment {
+            self.completed_segments.push(segment);
+        }
+
+        if let Err(error) = self.finalize_manifest() {
+            self.write_in_progress_manifest();
+            return Ok(Err(error));
+        }
 
         Ok(Ok(()))
     }
@@ -312,7 +342,7 @@ impl WindowsSegmentedMuxer {
         }
     }
 
-    fn finalize_manifest(&self) {
+    fn finalize_manifest(&self) -> anyhow::Result<()> {
         let total_duration: Duration = self.completed_segments.iter().map(|s| s.duration).sum();
 
         let manifest = Manifest {
@@ -338,12 +368,12 @@ impl WindowsSegmentedMuxer {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        if let Err(e) = fragmentation::atomic_write_json(&manifest_path, &manifest) {
-            warn!(
-                "Failed to write final manifest to {}: {e}",
+        fragmentation::atomic_write_json(&manifest_path, &manifest).map_err(|error| {
+            anyhow!(
+                "Failed to write final manifest to {}: {error}",
                 manifest_path.display()
-            );
-        }
+            )
+        })
     }
 
     fn create_segment(&mut self) -> anyhow::Result<()> {
@@ -354,7 +384,9 @@ impl WindowsSegmentedMuxer {
         };
         let output_size = self.output_size.unwrap_or(input_size);
 
-        let (video_tx, video_rx) = sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(8);
+        let queue_depth = ((self.frame_rate as f32 / 30.0 * 5.0).ceil() as usize).clamp(3, 12);
+        let (video_tx, video_rx) =
+            sync_channel::<Option<(screen_capture::ScreenFrame, Duration)>>(queue_depth);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
         let output = ffmpeg::format::output(&segment_path)?;
         let output = Arc::new(Mutex::new(output));
@@ -422,6 +454,12 @@ impl WindowsSegmentedMuxer {
                         bitrate_multiplier,
                     ) {
                         Ok(encoder) => {
+                            if let Err(e) = encoder.validate() {
+                                return fallback(Some(format!(
+                                    "Hardware encoder validation failed: {e}"
+                                )));
+                            }
+
                             let width = match u32::try_from(output_size.Width) {
                                 Ok(width) if width > 0 => width,
                                 _ => {
@@ -493,44 +531,69 @@ impl WindowsSegmentedMuxer {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder for segment");
                         let mut first_timestamp: Option<Duration> = None;
-                        encoder
-                            .run(
-                                Arc::new(AtomicBool::default()),
-                                || {
-                                    let Ok(Some((frame, timestamp))) = video_rx.recv() else {
-                                        trace!("No more frames available for segment");
-                                        return Ok(None);
-                                    };
+                        let result = encoder.run(
+                            Arc::new(AtomicBool::default()),
+                            || {
+                                let Ok(Some((frame, timestamp))) = video_rx.recv() else {
+                                    trace!("No more frames available for segment");
+                                    return Ok(None);
+                                };
 
-                                    let relative = if let Some(first) = first_timestamp {
-                                        timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
-                                    } else {
-                                        first_timestamp = Some(timestamp);
-                                        Duration::ZERO
-                                    };
-                                    let frame_time = duration_to_timespan(relative);
+                                let relative = if let Some(first) = first_timestamp {
+                                    timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
+                                } else {
+                                    first_timestamp = Some(timestamp);
+                                    Duration::ZERO
+                                };
+                                let frame_time = duration_to_timespan(relative);
 
-                                    Ok(Some((frame.texture().clone(), frame_time)))
-                                },
-                                |output_sample| {
-                                    let mut output = output_clone.lock().unwrap();
+                                Ok(Some((frame.texture().clone(), frame_time)))
+                            },
+                            |output_sample| {
+                                let mut output = match output_clone.lock() {
+                                    Ok(guard) => guard,
+                                    Err(e) => {
+                                        error!("Failed to lock output mutex: {e}");
+                                        return Err(windows::core::Error::new(
+                                            windows::core::HRESULT(0x80004005u32 as i32),
+                                            format!("Mutex poisoned: {e}"),
+                                        ));
+                                    }
+                                };
 
-                                    let _ = muxer
-                                        .write_sample(&output_sample, &mut output)
-                                        .map_err(|e| format!("WriteSample: {e}"));
+                                if let Err(e) = muxer.write_sample(&output_sample, &mut output) {
+                                    warn!("WriteSample failed: {e}");
+                                }
 
-                                    Ok(())
-                                },
-                            )
-                            .context("run native encoder for segment")
+                                Ok(())
+                            },
+                        );
+
+                        match result {
+                            Ok(health_status) => {
+                                debug!(
+                                    "Hardware encoder completed for segment: {} frames encoded",
+                                    health_status.total_frames_encoded
+                                );
+                                Ok(())
+                            }
+                            Err(e) => {
+                                if e.should_fallback() {
+                                    error!(
+                                        "Hardware encoder failed with recoverable error, marking for software fallback: {}",
+                                        e
+                                    );
+                                    encoder_preferences.force_software_only();
+                                }
+                                Err(anyhow!("Hardware encoder error: {}", e))
+                            }
+                        }
                     }
                     either::Right(mut encoder) => {
                         while let Ok(Some((frame, time))) = video_rx.recv() {
                             let Ok(mut output) = output_clone.lock() else {
                                 continue;
                             };
-
-                            use scap_ffmpeg::AsFFmpeg;
 
                             frame
                                 .as_ffmpeg()
@@ -566,6 +629,8 @@ impl WindowsSegmentedMuxer {
         let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
         let segment_duration = timestamp.saturating_sub(segment_start);
         let completed_segment_path = self.current_segment_path();
+        let mut rotation_error = None;
+        let mut rotated_segment = None;
 
         if let Some(mut state) = self.current_state.take() {
             if let Err(e) = state.video_tx.send(None) {
@@ -573,26 +638,19 @@ impl WindowsSegmentedMuxer {
             }
 
             if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        if let Err(panic_payload) = handle.join() {
-                            warn!(
-                                "Screen encoder thread panicked during rotation: {:?}",
-                                panic_payload
-                            );
-                        }
-                        break;
+                match wait_for_blocking_thread_finish(
+                    handle,
+                    Duration::from_secs(5),
+                    "Screen encoder thread during rotation",
+                ) {
+                    BlockingThreadFinish::Clean => {}
+                    BlockingThreadFinish::Failed(error) => {
+                        rotation_error = Some(error);
                     }
-                    if start.elapsed() > timeout {
-                        warn!(
-                            "Screen encoder thread did not finish within {:?} during rotation, abandoning",
-                            timeout
-                        );
-                        break;
+                    BlockingThreadFinish::TimedOut(error) => {
+                        self.write_in_progress_manifest();
+                        return Err(error);
                     }
-                    std::thread::sleep(Duration::from_millis(50));
                 }
             }
 
@@ -600,7 +658,13 @@ impl WindowsSegmentedMuxer {
                 .output
                 .lock()
                 .map_err(|_| anyhow!("Failed to lock output"))?;
-            output.write_trailer()?;
+            if let Err(error) = output.write_trailer() {
+                let error = anyhow!("Failed to write rotated screen trailer: {error:#}");
+                rotation_error = Some(match rotation_error.take() {
+                    Some(existing) => combine_finish_errors(existing, error),
+                    None => error,
+                });
+            }
 
             fragmentation::sync_file(&completed_segment_path);
 
@@ -608,16 +672,24 @@ impl WindowsSegmentedMuxer {
                 .ok()
                 .map(|m| m.len());
 
-            self.completed_segments.push(SegmentInfo {
+            rotated_segment = Some(SegmentInfo {
                 path: completed_segment_path,
                 index: self.current_index,
                 duration: segment_duration,
                 file_size,
             });
-
-            self.write_manifest();
         }
 
+        if let Some(error) = rotation_error {
+            self.write_in_progress_manifest();
+            return Err(error);
+        }
+
+        if let Some(segment) = rotated_segment {
+            self.completed_segments.push(segment);
+        }
+
+        self.write_manifest();
         self.frame_drops.reset();
         self.current_index += 1;
         self.segment_start_time = Some(timestamp);
@@ -720,7 +792,7 @@ impl VideoMuxer for WindowsSegmentedMuxer {
                     self.frame_drops.record_drop();
                 }
                 std::sync::mpsc::TrySendError::Disconnected(_) => {
-                    trace!("Screen encoder channel disconnected");
+                    return Err(anyhow!("Screen encoder channel disconnected"));
                 }
             }
         }

@@ -1,6 +1,8 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
-use cap_project::{CursorClickEvent, CursorEvents, CursorMoveEvent, XY};
+use cap_project::{
+    CursorClickEvent, CursorEvents, CursorMoveEvent, KeyPressEvent, KeyboardEvents, XY,
+};
 use cap_timestamp::Timestamps;
 use futures::{FutureExt, future::Shared};
 use std::{
@@ -23,16 +25,21 @@ pub type Cursors = HashMap<u64, Cursor>;
 
 #[derive(Clone)]
 pub struct CursorActorResponse {
-    // pub cursor_images: HashMap<String, Vec<u8>>,
     pub cursors: Cursors,
     pub next_cursor_id: u32,
     pub moves: Vec<CursorMoveEvent>,
     pub clicks: Vec<CursorClickEvent>,
+    pub keyboard_presses: Vec<KeyPressEvent>,
 }
 
 pub struct CursorActor {
     stop: Option<DropGuard>,
     pub rx: Shared<oneshot::Receiver<CursorActorResponse>>,
+}
+
+pub struct IncrementalCaptureOutputs {
+    pub cursor: Option<PathBuf>,
+    pub keyboard: Option<PathBuf>,
 }
 
 impl CursorActor {
@@ -59,6 +66,126 @@ fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[Cu
     }
 }
 
+fn flush_keyboard_data(output_path: &Path, presses: &[KeyPressEvent]) {
+    let events = KeyboardEvents {
+        presses: presses.to_vec(),
+    };
+    if let Err(e) = events.write_to_file(output_path) {
+        tracing::error!(
+            "Failed to write keyboard data to {}: {}",
+            output_path.display(),
+            e
+        );
+    }
+}
+
+fn keycode_to_string(key: &device_query::Keycode) -> (String, String) {
+    use device_query::Keycode;
+    let (display, code) = match key {
+        Keycode::Key0 => ("0", "Key0"),
+        Keycode::Key1 => ("1", "Key1"),
+        Keycode::Key2 => ("2", "Key2"),
+        Keycode::Key3 => ("3", "Key3"),
+        Keycode::Key4 => ("4", "Key4"),
+        Keycode::Key5 => ("5", "Key5"),
+        Keycode::Key6 => ("6", "Key6"),
+        Keycode::Key7 => ("7", "Key7"),
+        Keycode::Key8 => ("8", "Key8"),
+        Keycode::Key9 => ("9", "Key9"),
+        Keycode::A => ("a", "A"),
+        Keycode::B => ("b", "B"),
+        Keycode::C => ("c", "C"),
+        Keycode::D => ("d", "D"),
+        Keycode::E => ("e", "E"),
+        Keycode::F => ("f", "F"),
+        Keycode::G => ("g", "G"),
+        Keycode::H => ("h", "H"),
+        Keycode::I => ("i", "I"),
+        Keycode::J => ("j", "J"),
+        Keycode::K => ("k", "K"),
+        Keycode::L => ("l", "L"),
+        Keycode::M => ("m", "M"),
+        Keycode::N => ("n", "N"),
+        Keycode::O => ("o", "O"),
+        Keycode::P => ("p", "P"),
+        Keycode::Q => ("q", "Q"),
+        Keycode::R => ("r", "R"),
+        Keycode::S => ("s", "S"),
+        Keycode::T => ("t", "T"),
+        Keycode::U => ("u", "U"),
+        Keycode::V => ("v", "V"),
+        Keycode::W => ("w", "W"),
+        Keycode::X => ("x", "X"),
+        Keycode::Y => ("y", "Y"),
+        Keycode::Z => ("z", "Z"),
+        Keycode::F1 => ("F1", "F1"),
+        Keycode::F2 => ("F2", "F2"),
+        Keycode::F3 => ("F3", "F3"),
+        Keycode::F4 => ("F4", "F4"),
+        Keycode::F5 => ("F5", "F5"),
+        Keycode::F6 => ("F6", "F6"),
+        Keycode::F7 => ("F7", "F7"),
+        Keycode::F8 => ("F8", "F8"),
+        Keycode::F9 => ("F9", "F9"),
+        Keycode::F10 => ("F10", "F10"),
+        Keycode::F11 => ("F11", "F11"),
+        Keycode::F12 => ("F12", "F12"),
+        Keycode::Escape => ("Escape", "Escape"),
+        Keycode::Space => ("Space", "Space"),
+        Keycode::LControl => ("LControl", "LControl"),
+        Keycode::RControl => ("RControl", "RControl"),
+        Keycode::LShift => ("LShift", "LShift"),
+        Keycode::RShift => ("RShift", "RShift"),
+        Keycode::LAlt => ("LAlt", "LAlt"),
+        Keycode::RAlt => ("RAlt", "RAlt"),
+        Keycode::LMeta => ("Meta", "Meta"),
+        Keycode::Enter => ("Enter", "Enter"),
+        Keycode::Up => ("Up", "Up"),
+        Keycode::Down => ("Down", "Down"),
+        Keycode::Left => ("Left", "Left"),
+        Keycode::Right => ("Right", "Right"),
+        Keycode::Backspace => ("Backspace", "Backspace"),
+        Keycode::CapsLock => ("CapsLock", "CapsLock"),
+        Keycode::Tab => ("Tab", "Tab"),
+        Keycode::Home => ("Home", "Home"),
+        Keycode::End => ("End", "End"),
+        Keycode::PageUp => ("PageUp", "PageUp"),
+        Keycode::PageDown => ("PageDown", "PageDown"),
+        Keycode::Insert => ("Insert", "Insert"),
+        Keycode::Delete => ("Delete", "Delete"),
+        Keycode::Numpad0 => ("0", "Numpad0"),
+        Keycode::Numpad1 => ("1", "Numpad1"),
+        Keycode::Numpad2 => ("2", "Numpad2"),
+        Keycode::Numpad3 => ("3", "Numpad3"),
+        Keycode::Numpad4 => ("4", "Numpad4"),
+        Keycode::Numpad5 => ("5", "Numpad5"),
+        Keycode::Numpad6 => ("6", "Numpad6"),
+        Keycode::Numpad7 => ("7", "Numpad7"),
+        Keycode::Numpad8 => ("8", "Numpad8"),
+        Keycode::Numpad9 => ("9", "Numpad9"),
+        Keycode::NumpadSubtract => ("-", "NumpadSubtract"),
+        Keycode::NumpadAdd => ("+", "NumpadAdd"),
+        Keycode::NumpadDivide => ("/", "NumpadDivide"),
+        Keycode::NumpadMultiply => ("*", "NumpadMultiply"),
+        Keycode::Grave => ("`", "Grave"),
+        Keycode::Minus => ("-", "Minus"),
+        Keycode::Equal => ("=", "Equal"),
+        Keycode::LeftBracket => ("[", "LeftBracket"),
+        Keycode::RightBracket => ("]", "RightBracket"),
+        Keycode::BackSlash => ("\\", "BackSlash"),
+        Keycode::Semicolon => (";", "Semicolon"),
+        Keycode::Apostrophe => ("'", "Apostrophe"),
+        Keycode::Comma => (",", "Comma"),
+        Keycode::Dot => (".", "Dot"),
+        Keycode::Slash => ("/", "Slash"),
+        _ => {
+            let s = format!("{key:?}");
+            return (s.clone(), s);
+        }
+    };
+    (display.to_string(), code.to_string())
+}
+
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
     crop_bounds: CursorCropBounds,
@@ -67,16 +194,13 @@ pub fn spawn_cursor_recorder(
     prev_cursors: Cursors,
     next_cursor_id: u32,
     start_time: Timestamps,
-    output_path: Option<PathBuf>,
+    incremental_outputs: IncrementalCaptureOutputs,
 ) -> CursorActor {
     use cap_utils::spawn_actor;
     use device_query::{DeviceQuery, DeviceState};
     use futures::future::Either;
-    use std::{
-        hash::{DefaultHasher, Hash, Hasher},
-        pin::pin,
-        time::Duration,
-    };
+    use sha2::{Digest, Sha256};
+    use std::{pin::pin, time::Duration};
     use tracing::{error, info};
 
     let stop_token = CancellationToken::new();
@@ -86,6 +210,7 @@ pub fn spawn_cursor_recorder(
     spawn_actor(async move {
         let device_state = DeviceState::new();
         let mut last_mouse_state = device_state.get_mouse();
+        let mut last_keys: Vec<device_query::Keycode> = device_state.get_keys();
 
         let mut last_position = cap_cursor_capture::RawCursorPosition::get();
 
@@ -96,13 +221,15 @@ pub fn spawn_cursor_recorder(
             next_cursor_id,
             moves: vec![],
             clicks: vec![],
+            keyboard_presses: vec![],
         };
 
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
+        let mut last_cursor_id: Option<String> = None;
 
         loop {
-            let sleep = tokio::time::sleep(Duration::from_millis(10));
+            let sleep = tokio::time::sleep(Duration::from_millis(16));
             let Either::Right(_) =
                 futures::future::select(pin!(stop_token_child.cancelled()), pin!(sleep)).await
             else {
@@ -112,13 +239,22 @@ pub fn spawn_cursor_recorder(
             let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
-            let cursor_data = get_cursor_data();
-            let cursor_id = if let Some(data) = cursor_data {
-                let mut hasher = DefaultHasher::default();
-                data.image.hash(&mut hasher);
-                let id = hasher.finish();
+            let position = cap_cursor_capture::RawCursorPosition::get();
+            let position_changed = position != last_position;
 
-                if let Some(existing_id) = response.cursors.get(&id) {
+            if position_changed {
+                last_position = position;
+            }
+
+            let cursor_id = if let Some(data) = get_cursor_data() {
+                let hash_bytes = Sha256::digest(&data.image);
+                let id = u64::from_le_bytes(
+                    hash_bytes[..8]
+                        .try_into()
+                        .expect("sha256 produces at least 8 bytes"),
+                );
+
+                let cursor_id = if let Some(existing_id) = response.cursors.get(&id) {
                     existing_id.id.to_string()
                 } else {
                     let cursor_id = response.next_cursor_id.to_string();
@@ -146,34 +282,33 @@ pub fn spawn_cursor_recorder(
                     }
 
                     cursor_id
-                }
+                };
+                last_cursor_id = Some(cursor_id.clone());
+                Some(cursor_id)
             } else {
-                "default".to_string()
+                last_cursor_id.clone()
             };
 
-            let position = cap_cursor_capture::RawCursorPosition::get();
+            let Some(cursor_id) = cursor_id else {
+                continue;
+            };
 
-            let position = (position != last_position).then(|| {
-                last_position = position;
-
+            if position_changed {
                 let cropped_norm_pos = position
-                    .relative_to_display(display)?
-                    .normalize()?
-                    .with_crop(crop_bounds);
+                    .relative_to_display(display)
+                    .and_then(|p| p.normalize())
+                    .map(|p| p.with_crop(crop_bounds));
 
-                Some((cropped_norm_pos.x(), cropped_norm_pos.y()))
-            });
-
-            if let Some((x, y)) = position.flatten() {
-                let mouse_event = CursorMoveEvent {
-                    active_modifiers: vec![],
-                    cursor_id: cursor_id.clone(),
-                    time_ms: elapsed,
-                    x,
-                    y,
-                };
-
-                response.moves.push(mouse_event);
+                if let Some(pos) = cropped_norm_pos {
+                    let mouse_event = CursorMoveEvent {
+                        active_modifiers: vec![],
+                        cursor_id: cursor_id.clone(),
+                        time_ms: elapsed,
+                        x: pos.x(),
+                        y: pos.y(),
+                    };
+                    response.moves.push(mouse_event);
+                }
             }
 
             for (num, &pressed) in mouse_state.button_pressed.iter().enumerate() {
@@ -197,18 +332,53 @@ pub fn spawn_cursor_recorder(
 
             last_mouse_state = mouse_state;
 
-            if let Some(ref path) = output_path
-                && last_flush.elapsed() >= flush_interval
-            {
-                flush_cursor_data(path, &response.moves, &response.clicks);
+            let current_keys = device_state.get_keys();
+
+            for key in &current_keys {
+                if !last_keys.contains(key) {
+                    let (display, code) = keycode_to_string(key);
+                    response.keyboard_presses.push(KeyPressEvent {
+                        key: display,
+                        key_code: code,
+                        time_ms: elapsed,
+                        down: true,
+                    });
+                }
+            }
+
+            for key in &last_keys {
+                if !current_keys.contains(key) {
+                    let (display, code) = keycode_to_string(key);
+                    response.keyboard_presses.push(KeyPressEvent {
+                        key: display,
+                        key_code: code,
+                        time_ms: elapsed,
+                        down: false,
+                    });
+                }
+            }
+
+            last_keys = current_keys;
+
+            if last_flush.elapsed() >= flush_interval {
+                if let Some(ref path) = incremental_outputs.cursor {
+                    flush_cursor_data(path, &response.moves, &response.clicks);
+                }
+                if let Some(ref kb_path) = incremental_outputs.keyboard {
+                    flush_keyboard_data(kb_path, &response.keyboard_presses);
+                }
                 last_flush = Instant::now();
             }
         }
 
         info!("cursor recorder done");
 
-        if let Some(ref path) = output_path {
+        if let Some(ref path) = incremental_outputs.cursor {
             flush_cursor_data(path, &response.moves, &response.clicks);
+        }
+
+        if let Some(ref kb_path) = incremental_outputs.keyboard {
+            flush_keyboard_data(kb_path, &response.keyboard_presses);
         }
 
         let _ = tx.send(response);

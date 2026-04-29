@@ -88,6 +88,7 @@ impl Muxer for AsyncCameraMp4Muxer {
                         input_capacity: config.input_capacity,
                         output_capacity: config.output_capacity,
                         drop_strategy: DropStrategy::DropOldest,
+                        ..Default::default()
                     };
 
                     let pool = AsyncConverterPool::from_config(conversion_config, pool_config)

@@ -9,7 +9,7 @@ use crate::iosurface_texture::{
 use cidre::cv;
 
 #[cfg(target_os = "windows")]
-use crate::d3d_texture::D3DTextureError;
+use crate::d3d_texture::{D3D11WgpuInterop, D3DTextureError};
 
 #[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Direct3D11::{
@@ -121,57 +121,137 @@ fn validate_dimensions(
     let new_width = ((width as f32 * scale) as u32).max(2) & !1;
     let new_height = ((height as f32 * scale) as u32).max(2) & !1;
 
-    tracing::warn!(
-        original_width = width,
-        original_height = height,
-        scaled_width = new_width,
-        scaled_height = new_height,
-        gpu_max = gpu_max_texture_size,
-        "Video dimensions exceed GPU limits, downscaling enabled"
-    );
-
     Ok((new_width, new_height, true))
 }
 
-pub struct YuvToRgbaConverter {
-    nv12_pipeline: wgpu::ComputePipeline,
-    yuv420p_pipeline: wgpu::ComputePipeline,
-    nv12_bind_group_layout: wgpu::BindGroupLayout,
-    yuv420p_bind_group_layout: wgpu::BindGroupLayout,
-    y_texture: wgpu::Texture,
-    y_view: wgpu::TextureView,
-    uv_texture: wgpu::Texture,
-    uv_view: wgpu::TextureView,
-    u_texture: wgpu::Texture,
-    u_view: wgpu::TextureView,
-    v_texture: wgpu::Texture,
-    v_view: wgpu::TextureView,
-    output_textures: [wgpu::Texture; 2],
-    output_views: [wgpu::TextureView; 2],
-    current_output: usize,
-    allocated_width: u32,
-    allocated_height: u32,
-    gpu_max_texture_size: u32,
-    #[cfg(target_os = "macos")]
-    iosurface_cache: Option<IOSurfaceTextureCache>,
-    #[cfg(target_os = "windows")]
-    d3d11_staging_texture: Option<ID3D11Texture2D>,
-    #[cfg(target_os = "windows")]
-    d3d11_staging_width: u32,
-    #[cfg(target_os = "windows")]
-    d3d11_staging_height: u32,
-    #[cfg(target_os = "windows")]
-    zero_copy_failed: bool,
+struct BindGroupCache {
+    nv12_bind_groups: [Option<wgpu::BindGroup>; 2],
+    yuv420p_bind_groups: [Option<wgpu::BindGroup>; 2],
+    cached_width: u32,
+    cached_height: u32,
 }
 
-impl YuvToRgbaConverter {
-    pub fn new(device: &wgpu::Device) -> Self {
-        let gpu_max_texture_size = device.limits().max_texture_dimension_2d;
+impl BindGroupCache {
+    fn new() -> Self {
+        Self {
+            nv12_bind_groups: [None, None],
+            yuv420p_bind_groups: [None, None],
+            cached_width: 0,
+            cached_height: 0,
+        }
+    }
 
-        tracing::info!(
-            gpu_max_texture_size = gpu_max_texture_size,
-            "Initializing YUV converter with GPU texture limit"
-        );
+    fn invalidate(&mut self) {
+        self.nv12_bind_groups = [None, None];
+        self.yuv420p_bind_groups = [None, None];
+        self.cached_width = 0;
+        self.cached_height = 0;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn get_or_create_nv12(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        y_view: &wgpu::TextureView,
+        uv_view: &wgpu::TextureView,
+        output_view: &wgpu::TextureView,
+        output_index: usize,
+        width: u32,
+        height: u32,
+    ) -> &wgpu::BindGroup {
+        if self.cached_width != width || self.cached_height != height {
+            self.invalidate();
+            self.cached_width = width;
+            self.cached_height = height;
+        }
+
+        if self.nv12_bind_groups[output_index].is_none() {
+            self.nv12_bind_groups[output_index] =
+                Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("NV12 Converter Bind Group (Cached)"),
+                    layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(y_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(uv_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(output_view),
+                        },
+                    ],
+                }));
+        }
+
+        self.nv12_bind_groups[output_index].as_ref().unwrap()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn get_or_create_yuv420p(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        y_view: &wgpu::TextureView,
+        u_view: &wgpu::TextureView,
+        v_view: &wgpu::TextureView,
+        output_view: &wgpu::TextureView,
+        output_index: usize,
+        width: u32,
+        height: u32,
+    ) -> &wgpu::BindGroup {
+        if self.cached_width != width || self.cached_height != height {
+            self.invalidate();
+            self.cached_width = width;
+            self.cached_height = height;
+        }
+
+        if self.yuv420p_bind_groups[output_index].is_none() {
+            self.yuv420p_bind_groups[output_index] =
+                Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("YUV420P Converter Bind Group (Cached)"),
+                    layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(y_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(u_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(v_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(output_view),
+                        },
+                    ],
+                }));
+        }
+
+        self.yuv420p_bind_groups[output_index].as_ref().unwrap()
+    }
+}
+
+use std::sync::Arc;
+
+pub struct YuvConverterPipelines {
+    pub nv12_pipeline: wgpu::ComputePipeline,
+    pub yuv420p_pipeline: wgpu::ComputePipeline,
+    pub nv12_bind_group_layout: wgpu::BindGroupLayout,
+    pub yuv420p_bind_group_layout: wgpu::BindGroupLayout,
+}
+
+impl YuvConverterPipelines {
+    pub fn new(device: &wgpu::Device) -> Self {
+        tracing::info!("Creating shared YUV converter pipelines (shader compilation)");
 
         let nv12_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("NV12 to RGBA Converter"),
@@ -302,6 +382,65 @@ impl YuvToRgbaConverter {
             cache: None,
         });
 
+        tracing::info!("Shared YUV converter pipelines created successfully");
+
+        Self {
+            nv12_pipeline,
+            yuv420p_pipeline,
+            nv12_bind_group_layout,
+            yuv420p_bind_group_layout,
+        }
+    }
+}
+
+pub struct YuvToRgbaConverter {
+    pipelines: Arc<YuvConverterPipelines>,
+    y_texture: wgpu::Texture,
+    y_view: wgpu::TextureView,
+    uv_texture: wgpu::Texture,
+    uv_view: wgpu::TextureView,
+    u_texture: wgpu::Texture,
+    u_view: wgpu::TextureView,
+    v_texture: wgpu::Texture,
+    v_view: wgpu::TextureView,
+    output_textures: [wgpu::Texture; 2],
+    output_views: [wgpu::TextureView; 2],
+    current_output: usize,
+    allocated_width: u32,
+    allocated_height: u32,
+    gpu_max_texture_size: u32,
+    bind_group_cache: BindGroupCache,
+    #[cfg(target_os = "macos")]
+    iosurface_cache: Option<IOSurfaceTextureCache>,
+    #[cfg(target_os = "windows")]
+    d3d11_staging_texture: Option<ID3D11Texture2D>,
+    #[cfg(target_os = "windows")]
+    d3d11_staging_width: u32,
+    #[cfg(target_os = "windows")]
+    d3d11_staging_height: u32,
+    #[cfg(target_os = "windows")]
+    zero_copy_failed: bool,
+    #[cfg(target_os = "windows")]
+    d3d11_interop: D3D11WgpuInterop,
+}
+
+impl YuvToRgbaConverter {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let pipelines = Arc::new(YuvConverterPipelines::new(device));
+        Self::new_with_shared_pipelines(device, pipelines)
+    }
+
+    pub fn new_with_shared_pipelines(
+        device: &wgpu::Device,
+        pipelines: Arc<YuvConverterPipelines>,
+    ) -> Self {
+        let gpu_max_texture_size = device.limits().max_texture_dimension_2d;
+
+        tracing::info!(
+            gpu_max_texture_size = gpu_max_texture_size,
+            "Initializing YUV converter textures (using shared pipelines)"
+        );
+
         let initial_width = INITIAL_TEXTURE_WIDTH;
         let initial_height = INITIAL_TEXTURE_HEIGHT;
 
@@ -313,10 +452,7 @@ impl YuvToRgbaConverter {
             Self::create_output_textures(device, initial_width, initial_height);
 
         Self {
-            nv12_pipeline,
-            yuv420p_pipeline,
-            nv12_bind_group_layout,
-            yuv420p_bind_group_layout,
+            pipelines,
             y_texture,
             y_view,
             uv_texture,
@@ -331,6 +467,7 @@ impl YuvToRgbaConverter {
             allocated_width: initial_width,
             allocated_height: initial_height,
             gpu_max_texture_size,
+            bind_group_cache: BindGroupCache::new(),
             #[cfg(target_os = "macos")]
             iosurface_cache: IOSurfaceTextureCache::new(),
             #[cfg(target_os = "windows")]
@@ -341,6 +478,8 @@ impl YuvToRgbaConverter {
             d3d11_staging_height: 0,
             #[cfg(target_os = "windows")]
             zero_copy_failed: false,
+            #[cfg(target_os = "windows")]
+            d3d11_interop: D3D11WgpuInterop::new(),
         }
     }
 
@@ -507,10 +646,23 @@ impl YuvToRgbaConverter {
         self.output_views = output_views;
         self.allocated_width = new_width;
         self.allocated_height = new_height;
+        self.bind_group_cache.invalidate();
     }
 
     pub fn gpu_max_texture_size(&self) -> u32 {
         self.gpu_max_texture_size
+    }
+
+    pub fn prepare_for_dimensions(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> Result<(), YuvConversionError> {
+        let (effective_width, effective_height, _) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
+        Ok(())
     }
 
     fn swap_output_buffer(&mut self) {
@@ -574,24 +726,17 @@ impl YuvToRgbaConverter {
             },
         );
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("NV12 Converter Bind Group"),
-            layout: &self.nv12_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.y_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&self.uv_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(self.current_output_view()),
-                },
-            ],
-        });
+        let output_index = self.current_output;
+        let bind_group = self.bind_group_cache.get_or_create_nv12(
+            device,
+            &self.pipelines.nv12_bind_group_layout,
+            &self.y_view,
+            &self.uv_view,
+            &self.output_views[output_index],
+            output_index,
+            self.allocated_width,
+            self.allocated_height,
+        );
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("NV12 Conversion Encoder"),
@@ -602,12 +747,87 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.nv12_pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
+            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
+            compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
 
         queue.submit(std::iter::once(encoder.finish()));
+
+        Ok(self.current_output_view())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn convert_nv12_to_encoder(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        y_data: &[u8],
+        uv_data: &[u8],
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
+        self.swap_output_buffer();
+
+        upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
+
+        let half_height = height / 2;
+        let expected_uv_size = (uv_stride * half_height) as usize;
+        if uv_data.len() < expected_uv_size {
+            return Err(YuvConversionError::PlaneSizeMismatch {
+                plane: "UV",
+                expected: expected_uv_size,
+                actual: uv_data.len(),
+            });
+        }
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.uv_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            uv_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(uv_stride),
+                rows_per_image: Some(half_height),
+            },
+            wgpu::Extent3d {
+                width: width / 2,
+                height: half_height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let output_index = self.current_output;
+        let bind_group = self.bind_group_cache.get_or_create_nv12(
+            device,
+            &self.pipelines.nv12_bind_group_layout,
+            &self.y_view,
+            &self.uv_view,
+            &self.output_views[output_index],
+            output_index,
+            self.allocated_width,
+            self.allocated_height,
+        );
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("NV12 Conversion Pass (Batched)"),
+                ..Default::default()
+            });
+            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
+            compute_pass.set_bind_group(0, bind_group, &[]);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+        }
 
         Ok(self.current_output_view())
     }
@@ -662,7 +882,7 @@ impl YuvToRgbaConverter {
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("NV12 IOSurface Converter Bind Group"),
-            layout: &self.nv12_bind_group_layout,
+            layout: &self.pipelines.nv12_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -688,7 +908,7 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 IOSurface Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.nv12_pipeline);
+            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
@@ -740,28 +960,18 @@ impl YuvToRgbaConverter {
             "V",
         )?;
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("YUV420P Converter Bind Group"),
-            layout: &self.yuv420p_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.y_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&self.u_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&self.v_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(self.current_output_view()),
-                },
-            ],
-        });
+        let output_index = self.current_output;
+        let bind_group = self.bind_group_cache.get_or_create_yuv420p(
+            device,
+            &self.pipelines.yuv420p_bind_group_layout,
+            &self.y_view,
+            &self.u_view,
+            &self.v_view,
+            &self.output_views[output_index],
+            output_index,
+            self.allocated_width,
+            self.allocated_height,
+        );
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("YUV420P Conversion Encoder"),
@@ -772,12 +982,81 @@ impl YuvToRgbaConverter {
                 label: Some("YUV420P Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.yuv420p_pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
+            compute_pass.set_pipeline(&self.pipelines.yuv420p_pipeline);
+            compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
 
         queue.submit(std::iter::once(encoder.finish()));
+
+        Ok(self.current_output_view())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn convert_yuv420p_to_encoder(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        y_data: &[u8],
+        u_data: &[u8],
+        v_data: &[u8],
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
+        self.swap_output_buffer();
+
+        upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
+
+        let half_width = width / 2;
+        let half_height = height / 2;
+
+        upload_plane_with_stride(
+            queue,
+            &self.u_texture,
+            u_data,
+            half_width,
+            half_height,
+            uv_stride,
+            "U",
+        )?;
+        upload_plane_with_stride(
+            queue,
+            &self.v_texture,
+            v_data,
+            half_width,
+            half_height,
+            uv_stride,
+            "V",
+        )?;
+
+        let output_index = self.current_output;
+        let bind_group = self.bind_group_cache.get_or_create_yuv420p(
+            device,
+            &self.pipelines.yuv420p_bind_group_layout,
+            &self.y_view,
+            &self.u_view,
+            &self.v_view,
+            &self.output_views[output_index],
+            output_index,
+            self.allocated_width,
+            self.allocated_height,
+        );
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("YUV420P Conversion Pass (Batched)"),
+                ..Default::default()
+            });
+            compute_pass.set_pipeline(&self.pipelines.yuv420p_pipeline);
+            compute_pass.set_bind_group(0, bind_group, &[]);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+        }
 
         Ok(self.current_output_view())
     }
@@ -797,6 +1076,11 @@ impl YuvToRgbaConverter {
         let (effective_width, effective_height, _downscaled) =
             validate_dimensions(width, height, self.gpu_max_texture_size)?;
         self.ensure_texture_size(wgpu_device, effective_width, effective_height);
+        tracing::debug!(
+            width = width,
+            height = height,
+            "Using staging NV12 conversion path"
+        );
 
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
 
@@ -904,7 +1188,7 @@ impl YuvToRgbaConverter {
 
         let bind_group = wgpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("NV12 D3D11 Converter Bind Group"),
-            layout: &self.nv12_bind_group_layout,
+            layout: &self.pipelines.nv12_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -930,7 +1214,7 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 D3D11 Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.nv12_pipeline);
+            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
@@ -950,102 +1234,88 @@ impl YuvToRgbaConverter {
         width: u32,
         height: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        if self.zero_copy_failed {
+            return Err(YuvConversionError::D3D11Error(
+                "D3D11 zero-copy path disabled after prior failure".to_string(),
+            ));
+        }
+
         let (effective_width, effective_height, _downscaled) =
             validate_dimensions(width, height, self.gpu_max_texture_size)?;
         self.ensure_texture_size(device, effective_width, effective_height);
 
-        use crate::d3d_texture::import_d3d11_texture_to_wgpu;
-
         self.swap_output_buffer();
 
-        let y_import_result = import_d3d11_texture_to_wgpu(
-            device,
-            y_handle,
-            wgpu::TextureFormat::R8Unorm,
-            width,
-            height,
-            Some("D3D11 Y Plane Zero-Copy"),
+        let (y_wgpu_texture, uv_wgpu_texture) = match self
+            .d3d11_interop
+            .import_nv12_planes(device, y_handle, uv_handle, width, height)
+        {
+            Ok(textures) => textures,
+            Err(err) => {
+                tracing::debug!(
+                    error = %err,
+                    width = width,
+                    height = height,
+                    "Zero-copy D3D11 texture import failed, disabling zero-copy path"
+                );
+                self.zero_copy_failed = true;
+                self.d3d11_interop.invalidate();
+                return Err(err.into());
+            }
+        };
+
+        tracing::debug!(
+            width = width,
+            height = height,
+            y_handle = y_handle.0 as usize,
+            uv_handle = uv_handle.0 as usize,
+            "Zero-copy D3D11 texture import starting"
+        );
+        tracing::debug!(
+            width = width,
+            height = height,
+            "Zero-copy D3D11 texture import succeeded"
         );
 
-        let uv_import_result = import_d3d11_texture_to_wgpu(
-            device,
-            uv_handle,
-            wgpu::TextureFormat::Rg8Unorm,
-            width / 2,
-            height / 2,
-            Some("D3D11 UV Plane Zero-Copy"),
-        );
+        let y_view = y_wgpu_texture.create_view(&Default::default());
+        let uv_view = uv_wgpu_texture.create_view(&Default::default());
 
-        match (y_import_result, uv_import_result) {
-            (Ok(y_wgpu_texture), Ok(uv_wgpu_texture)) => {
-                tracing::debug!(
-                    width = width,
-                    height = height,
-                    "Zero-copy D3D11 texture import succeeded"
-                );
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("NV12 D3D11 Zero-Copy Converter Bind Group"),
+            layout: &self.pipelines.nv12_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&y_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&uv_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(self.current_output_view()),
+                },
+            ],
+        });
 
-                let y_view = y_wgpu_texture.create_view(&Default::default());
-                let uv_view = uv_wgpu_texture.create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("NV12 D3D11 Zero-Copy Conversion Encoder"),
+        });
 
-                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("NV12 D3D11 Zero-Copy Converter Bind Group"),
-                    layout: &self.nv12_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&y_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&uv_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::TextureView(
-                                self.current_output_view(),
-                            ),
-                        },
-                    ],
-                });
-
-                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("NV12 D3D11 Zero-Copy Conversion Encoder"),
-                });
-
-                {
-                    let mut compute_pass =
-                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("NV12 D3D11 Zero-Copy Conversion Pass"),
-                            ..Default::default()
-                        });
-                    compute_pass.set_pipeline(&self.nv12_pipeline);
-                    compute_pass.set_bind_group(0, &bind_group, &[]);
-                    compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
-                }
-
-                queue.submit(std::iter::once(encoder.finish()));
-
-                Ok(self.current_output_view())
-            }
-            (Err(y_err), _) => {
-                tracing::debug!(
-                    error = %y_err,
-                    width = width,
-                    height = height,
-                    "Zero-copy D3D11 Y texture import failed, returning error"
-                );
-                Err(y_err.into())
-            }
-            (_, Err(uv_err)) => {
-                tracing::debug!(
-                    error = %uv_err,
-                    width = width,
-                    height = height,
-                    "Zero-copy D3D11 UV texture import failed, returning error"
-                );
-                Err(uv_err.into())
-            }
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("NV12 D3D11 Zero-Copy Conversion Pass"),
+                ..Default::default()
+            });
+            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        Ok(self.current_output_view())
     }
 
     #[cfg(target_os = "windows")]
@@ -1119,6 +1389,7 @@ impl YuvToRgbaConverter {
     #[cfg(target_os = "windows")]
     pub fn reset_zero_copy_state(&mut self) {
         self.zero_copy_failed = false;
+        self.d3d11_interop.invalidate();
     }
 
     #[allow(clippy::too_many_arguments)]

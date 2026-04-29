@@ -5,6 +5,7 @@ export const useStreamManagement = () => {
 	const cameraStreamRef = useRef<MediaStream | null>(null);
 	const micStreamRef = useRef<MediaStream | null>(null);
 	const mixedStreamRef = useRef<MediaStream | null>(null);
+	const audioContextRef = useRef<AudioContext | null>(null);
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const detectionTimeoutsRef = useRef<number[]>([]);
 	const detectionCleanupRef = useRef<Array<() => void>>([]);
@@ -40,6 +41,11 @@ export const useStreamManagement = () => {
 		micStreamRef.current = null;
 		mixedStreamRef.current = null;
 
+		if (audioContextRef.current) {
+			audioContextRef.current.close().catch(() => {});
+			audioContextRef.current = null;
+		}
+
 		if (videoRef.current) {
 			videoRef.current.srcObject = null;
 		}
@@ -50,6 +56,7 @@ export const useStreamManagement = () => {
 		cameraStreamRef,
 		micStreamRef,
 		mixedStreamRef,
+		audioContextRef,
 		videoRef,
 		detectionTimeoutsRef,
 		detectionCleanupRef,

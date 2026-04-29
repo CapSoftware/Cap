@@ -1,13 +1,27 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useInvalidateTranscript, useTranscript } from "hooks/use-transcript";
-import { Check, Copy, Download, Edit3, MessageSquare, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+	Check,
+	ChevronDown,
+	Copy,
+	Download,
+	Edit3,
+	Globe,
+	MessageSquare,
+	X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { editTranscriptEntry } from "@/actions/videos/edit-transcript";
+import {
+	type LanguageCode,
+	SUPPORTED_LANGUAGES,
+} from "@/actions/videos/translation-languages";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { VideoData } from "../../types";
+import { type CaptionLanguage, useCaptionContext } from "../CaptionContext";
 
 interface TranscriptProps {
 	data: VideoData;
@@ -121,18 +135,45 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 
 export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const user = useCurrentUser();
+	const queryClient = useQueryClient();
+	const captionContext = useCaptionContext();
 	const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
-	const [isLoading, setIsLoading] = useState(true);
 	const [selectedEntry, setSelectedEntry] = useState<number | null>(null);
-	const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
-		useState(false);
-	const [hasTimedOut, setHasTimedOut] = useState(false);
+	const [retryTriggered, setRetryTriggered] = useState(false);
 	const [editingEntry, setEditingEntry] = useState<number | null>(null);
 	const [editText, setEditText] = useState<string>("");
 	const [isSaving, setIsSaving] = useState(false);
 	const [isCopying, setIsCopying] = useState(false);
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [downloadPressed, setDownloadPressed] = useState(false);
+	const [showLanguageMenu, setShowLanguageMenu] = useState(false);
+	const languageMenuRef = useRef<HTMLDivElement>(null);
+
+	const selectedLanguage =
+		captionContext.selectedLanguage === "off"
+			? "original"
+			: captionContext.selectedLanguage;
+	const isTranslating = captionContext.isTranslating;
+	const _translatedContent = captionContext.translatedVttContent;
+
+	useEffect(() => {
+		const handleClickOutside = (event: MouseEvent) => {
+			if (
+				languageMenuRef.current &&
+				!languageMenuRef.current.contains(event.target as Node)
+			) {
+				setShowLanguageMenu(false);
+			}
+		};
+
+		if (showLanguageMenu) {
+			document.addEventListener("mousedown", handleClickOutside);
+		}
+
+		return () => {
+			document.removeEventListener("mousedown", handleClickOutside);
+		};
+	}, [showLanguageMenu]);
 
 	const {
 		data: transcriptContent,
@@ -160,84 +201,59 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 			return response.json();
 		},
 		onSuccess: () => {
-			// Reset status - Share.tsx polling will automatically detect the change and trigger transcription
-			setIsTranscriptionProcessing(true);
+			setRetryTriggered(true);
 			invalidateTranscript(data.id);
-		},
-		onError: (error) => {
-			console.error("Failed to retry transcription:", error);
+			queryClient.invalidateQueries({
+				queryKey: ["videoStatus", data.id],
+			});
 		},
 	});
 
 	useEffect(() => {
-		if (transcriptContent) {
+		const vttContent = captionContext.currentVttContent;
+		if (vttContent) {
+			const parsed = parseVTT(vttContent);
+			setTranscriptData(parsed);
+		} else if (transcriptContent && selectedLanguage === "original") {
 			const parsed = parseVTT(transcriptContent);
 			setTranscriptData(parsed);
-			setIsTranscriptionProcessing(false);
-			setIsLoading(false);
-		} else if (transcriptError) {
-			console.error(
-				"[Transcript] Transcript error from React Query:",
-				transcriptError.message,
-			);
-			if (transcriptError.message === "TRANSCRIPT_NOT_READY") {
-				setIsTranscriptionProcessing(true);
-			} else {
-				setIsTranscriptionProcessing(false);
-			}
-			setIsLoading(false);
 		}
-	}, [transcriptContent, transcriptError]);
+	}, [captionContext.currentVttContent, transcriptContent, selectedLanguage]);
 
-	useEffect(() => {
-		if (isTranscriptLoading) {
-			setIsLoading(true);
+	const handleLanguageChange = async (language: CaptionLanguage) => {
+		setShowLanguageMenu(false);
+		captionContext.setSelectedLanguage(language);
+	};
+
+	const isTranscriptionProcessing = useMemo(() => {
+		if (
+			data.transcriptionStatus === "SKIPPED" ||
+			data.transcriptionStatus === "NO_AUDIO"
+		) {
+			return false;
 		}
-	}, [isTranscriptLoading]);
+		if (retryTriggered && data.transcriptionStatus !== "COMPLETE") {
+			return true;
+		}
+		return (
+			data.transcriptionStatus === "PROCESSING" || !data.transcriptionStatus
+		);
+	}, [data.transcriptionStatus, retryTriggered]);
 
-	useEffect(() => {
+	const isQueryLoading =
+		isTranscriptLoading && data.transcriptionStatus === "COMPLETE";
+
+	const hasTimedOut = useMemo(() => {
 		const videoCreationTime = new Date(data.createdAt).getTime();
 		const fiveMinutesInMs = 5 * 60 * 1000;
 		const isVideoOlderThanFiveMinutes =
 			Date.now() - videoCreationTime > fiveMinutesInMs;
-
-		if (data.transcriptionStatus === "PROCESSING") {
-			setIsTranscriptionProcessing(true);
-			setIsLoading(true);
-		} else if (data.transcriptionStatus === "ERROR") {
-			setIsTranscriptionProcessing(false);
-			setIsLoading(false);
-		} else if (isVideoOlderThanFiveMinutes && !data.transcriptionStatus) {
-			setIsLoading(false);
-			setHasTimedOut(true);
-		} else if (!data.transcriptionStatus) {
-			const startTime = Date.now();
-			const maxDuration = 2 * 60 * 1000;
-
-			const intervalId = setInterval(() => {
-				if (Date.now() - startTime > maxDuration) {
-					clearInterval(intervalId);
-					setIsLoading(false);
-					return;
-				}
-
-				fetch(`/api/video/transcribe/status?videoId=${data.id}`)
-					.then((response) => response.json())
-					.then(({ transcriptionStatus }) => {
-						if (transcriptionStatus === "PROCESSING") {
-							setIsTranscriptionProcessing(true);
-						} else if (transcriptionStatus === "COMPLETE") {
-							clearInterval(intervalId);
-						} else if (transcriptionStatus === "ERROR") {
-							clearInterval(intervalId);
-							setIsLoading(false);
-						}
-					});
-			}, 1000);
-
-			return () => clearInterval(intervalId);
-		}
-	}, [data.id, data.transcriptionStatus, data.createdAt]);
+		return (
+			isVideoOlderThanFiveMinutes &&
+			!data.transcriptionStatus &&
+			!retryTriggered
+		);
+	}, [data.createdAt, data.transcriptionStatus, retryTriggered]);
 
 	const handleTranscriptClick = (entry: TranscriptEntry) => {
 		if (editingEntry === entry.id) {
@@ -363,9 +379,11 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		const blob = new Blob([vttContent], { type: "text/vtt" });
 		const url = URL.createObjectURL(blob);
 
+		const langSuffix =
+			selectedLanguage === "original" ? "" : `.${selectedLanguage}`;
 		const link = document.createElement("a");
 		link.href = url;
-		link.download = `transcript-${data.id}.vtt`;
+		link.download = `transcript-${data.id}${langSuffix}.vtt`;
 		document.body.appendChild(link);
 		link.click();
 		document.body.removeChild(link);
@@ -378,38 +396,9 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		}, 2000);
 	};
 
-	const canEdit = user?.id === data.owner.id;
+	const canEdit = user?.id === data.owner.id && selectedLanguage === "original";
 
-	if (isLoading) {
-		return (
-			<div className="flex justify-center items-center h-full">
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					className="w-8 h-8"
-					viewBox="0 0 24 24"
-				>
-					<style>
-						{"@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"}
-					</style>
-					<path
-						fill="#4B5563"
-						d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
-						opacity={0.25}
-					/>
-					<path
-						fill="#4B5563"
-						d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
-						style={{
-							transformOrigin: "center",
-							animation: "spinner_AtaB .75s infinite linear",
-						}}
-					/>
-				</svg>
-			</div>
-		);
-	}
-
-	if (isTranscriptionProcessing) {
+	if (isTranscriptionProcessing && !hasTimedOut) {
 		return (
 			<div className="flex justify-center items-center h-full text-gray-1">
 				<div className="text-center">
@@ -443,10 +432,98 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		);
 	}
 
+	if (isQueryLoading) {
+		return (
+			<div className="flex justify-center items-center h-full">
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					className="w-8 h-8"
+					viewBox="0 0 24 24"
+				>
+					<style>
+						{"@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"}
+					</style>
+					<path
+						fill="#4B5563"
+						d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
+						opacity={0.25}
+					/>
+					<path
+						fill="#4B5563"
+						d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
+						style={{
+							transformOrigin: "center",
+							animation: "spinner_AtaB .75s infinite linear",
+						}}
+					/>
+				</svg>
+			</div>
+		);
+	}
+
+	if (data.transcriptionStatus === "NO_AUDIO") {
+		return (
+			<div className="flex justify-center items-center h-full text-gray-1">
+				<div className="text-center">
+					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
+					<p className="text-sm font-medium text-gray-12">
+						No audio track detected
+					</p>
+					<p className="mt-1 text-xs text-gray-9">
+						This video doesn't contain audio for transcription
+					</p>
+					{canEdit && (
+						<>
+							<Button
+								type="button"
+								onClick={() => {
+									retryTranscriptionMutation.mutate();
+								}}
+								disabled={retryTranscriptionMutation.isPending}
+								variant="primary"
+								size="sm"
+								spinner={retryTranscriptionMutation.isPending}
+								className="mt-4"
+							>
+								{retryTranscriptionMutation.isPending
+									? "Retrying..."
+									: "Retry transcription"}
+							</Button>
+							{retryTranscriptionMutation.isError && (
+								<p className="mt-2 text-xs text-red-500">
+									Failed to retry. Please try again.
+								</p>
+							)}
+						</>
+					)}
+				</div>
+			</div>
+		);
+	}
+
+	if (data.transcriptionStatus === "SKIPPED") {
+		return (
+			<div className="flex justify-center items-center h-full text-gray-1">
+				<div className="text-center">
+					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
+					<p className="text-sm font-medium text-gray-12">
+						Transcription disabled
+					</p>
+					<p className="mt-1 text-xs text-gray-9">
+						Transcription has been disabled for this video
+					</p>
+				</div>
+			</div>
+		);
+	}
+
 	const showRetryButton =
 		data.transcriptionStatus === "ERROR" ||
-		data.transcriptionStatus === null ||
-		(!transcriptData.length && !isTranscriptionProcessing);
+		hasTimedOut ||
+		(data.transcriptionStatus === "COMPLETE" &&
+			!transcriptData.length &&
+			!isQueryLoading &&
+			transcriptError);
 
 	if (showRetryButton) {
 		return (
@@ -458,10 +535,8 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 							? "Transcript not available"
 							: "No transcript available"}
 					</p>
-					{canEdit &&
-						(data.transcriptionStatus === "ERROR" ||
-							data.transcriptionStatus === null ||
-							hasTimedOut) && (
+					{canEdit && (
+						<>
 							<Button
 								onClick={() => {
 									retryTranscriptionMutation.mutate();
@@ -475,7 +550,13 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 									? "Retrying..."
 									: "Retry Transcription"}
 							</Button>
-						)}
+							{retryTranscriptionMutation.isError && (
+								<p className="mt-2 text-xs text-red-500">
+									Failed to retry. Please try again.
+								</p>
+							)}
+						</>
+					)}
 				</div>
 			</div>
 		);
@@ -484,64 +565,153 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	return (
 		<div className="flex flex-col h-full">
 			<div className="p-4 border-b border-gray-3">
-				<div className="flex gap-2 justify-end">
-					<Button
-						onClick={copyTranscriptToClipboard}
-						disabled={isCopying || transcriptData.length === 0}
-						variant="white"
-						size="xs"
-						spinner={isCopying}
-					>
-						{!copyPressed ? (
-							<Copy className="mr-1 w-3 h-3" />
-						) : (
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								width="12"
-								height="12"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-								className="mr-1 w-3 h-3 svgpathanimation"
-							>
-								<path d="M20 6 9 17l-5-5" />
-							</svg>
+				<div className="flex flex-col gap-3">
+					<div className="flex gap-2 justify-end">
+						<Button
+							onClick={copyTranscriptToClipboard}
+							disabled={isCopying || transcriptData.length === 0}
+							variant="white"
+							size="xs"
+							spinner={isCopying}
+						>
+							{!copyPressed ? (
+								<Copy className="mr-1 w-3 h-3" />
+							) : (
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									width="12"
+									height="12"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									className="mr-1 w-3 h-3 svgpathanimation"
+								>
+									<path d="M20 6 9 17l-5-5" />
+								</svg>
+							)}
+							{copyPressed ? "Copied" : "Copy Transcript"}
+						</Button>
+						<Button
+							onClick={downloadTranscriptFile}
+							disabled={transcriptData.length === 0}
+							variant="white"
+							size="xs"
+						>
+							{!downloadPressed ? (
+								<Download className="mr-1 w-3 h-3" />
+							) : (
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									width="12"
+									height="12"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									className="mr-1 w-3 h-3 svgpathanimation"
+								>
+									<path d="M20 6 9 17l-5-5" />
+								</svg>
+							)}
+							{downloadPressed ? "Downloaded" : "Download"}
+						</Button>
+					</div>
+					<div className="relative" ref={languageMenuRef}>
+						<button
+							onClick={() => setShowLanguageMenu(!showLanguageMenu)}
+							disabled={isTranslating || transcriptData.length === 0}
+							className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-3 bg-gray-1 hover:bg-gray-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+							type="button"
+						>
+							<Globe className="w-3 h-3 text-gray-9" />
+							<span className="text-gray-12">
+								{isTranslating
+									? "Translating..."
+									: selectedLanguage === "original"
+										? "Original"
+										: SUPPORTED_LANGUAGES[selectedLanguage]}
+							</span>
+							<ChevronDown className="w-3 h-3 text-gray-9" />
+						</button>
+						{showLanguageMenu && (
+							<div className="absolute left-0 top-full mt-1 z-50 w-48 py-1 bg-gray-1 border border-gray-3 rounded-lg shadow-lg max-h-64 overflow-y-auto">
+								<button
+									onClick={() => handleLanguageChange("original")}
+									className={`w-full px-3 py-1.5 text-left text-xs hover:bg-gray-2 transition-colors ${
+										selectedLanguage === "original"
+											? "text-blue-500 font-medium"
+											: "text-gray-12"
+									}`}
+									type="button"
+								>
+									Original
+								</button>
+								<div className="my-1 border-t border-gray-3" />
+								{(
+									Object.entries(SUPPORTED_LANGUAGES) as [
+										LanguageCode,
+										string,
+									][]
+								).map(([code, name]) => (
+									<button
+										key={code}
+										onClick={() => handleLanguageChange(code)}
+										className={`w-full px-3 py-1.5 text-left text-xs hover:bg-gray-2 transition-colors ${
+											selectedLanguage === code
+												? "text-blue-500 font-medium"
+												: "text-gray-12"
+										}`}
+										type="button"
+									>
+										{name}
+										{captionContext.translatedVttContent.has(code) && (
+											<span className="ml-1.5 text-gray-9">(cached)</span>
+										)}
+									</button>
+								))}
+							</div>
 						)}
-						{copyPressed ? "Copied" : "Copy Transcript"}
-					</Button>
-					<Button
-						onClick={downloadTranscriptFile}
-						disabled={transcriptData.length === 0}
-						variant="white"
-						size="xs"
-					>
-						{!downloadPressed ? (
-							<Download className="mr-1 w-3 h-3" />
-						) : (
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								width="12"
-								height="12"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-								className="mr-1 w-3 h-3 svgpathanimation"
-							>
-								<path d="M20 6 9 17l-5-5" />
-							</svg>
-						)}
-						{downloadPressed ? "Downloaded" : "Download"}
-					</Button>
+					</div>
 				</div>
 			</div>
 
-			<div className="overflow-y-auto flex-1">
+			<div className="overflow-y-auto flex-1 relative">
+				{isTranslating && (
+					<div className="absolute inset-0 bg-gray-1/80 flex items-center justify-center z-10">
+						<div className="text-center">
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								className="mx-auto w-8 h-8"
+								viewBox="0 0 24 24"
+							>
+								<style>
+									{"@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"}
+								</style>
+								<path
+									fill="#9CA3AF"
+									d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
+									opacity={0.25}
+								/>
+								<path
+									fill="#9CA3AF"
+									d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
+									style={{
+										transformOrigin: "center",
+										animation: "spinner_AtaB .75s infinite linear",
+									}}
+								/>
+							</svg>
+							<p className="mt-2 text-sm text-gray-11">
+								Translating transcript...
+							</p>
+						</div>
+					</div>
+				)}
 				<div className="p-4 space-y-3">
 					{transcriptData.map((entry) => (
 						<div

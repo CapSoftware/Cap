@@ -93,6 +93,14 @@ const WALLPAPER_NAMES = [
 	"purple/4",
 	"purple/5",
 	"purple/6",
+	"cities/liverpool",
+	"cities/santorini",
+	"cities/miami",
+	"cities/monaco",
+	"cities/london",
+	"cities/rome",
+	"cities/sf",
+	"cities/nyc",
 	"dark/1",
 	"dark/2",
 	"dark/3",
@@ -117,6 +125,7 @@ const BACKGROUND_THEMES = {
 	macOS: "macOS",
 	dark: "Dark",
 	blue: "Blue",
+	cities: "Cities",
 	purple: "Purple",
 	orange: "Orange",
 };
@@ -170,17 +179,14 @@ export function BackgroundSettingsPopover() {
 		setProject("background", "source", source);
 	};
 
-	// Debounced set project for history
-	const debouncedSetProject = (wallpaperPath: string) => {
+	const setWallpaperSource = (wallpaperPath: string) => {
 		const resumeHistory = projectHistory.pause();
-		queueMicrotask(() => {
-			batch(() => {
-				setProject("background", "source", {
-					type: "wallpaper",
-					path: wallpaperPath,
-				} as const);
-				resumeHistory();
-			});
+		batch(() => {
+			setProject("background", "source", {
+				type: "wallpaper",
+				path: wallpaperPath,
+			} as const);
+			resumeHistory();
 		});
 	};
 
@@ -203,10 +209,17 @@ export function BackgroundSettingsPopover() {
 		<Popover
 			placement="bottom-start"
 			open={activePopover() === "background"}
-			onOpenChange={(open) => setActivePopover(open ? "background" : null)}
+			onOpenChange={(open) => {
+				if (!open && activePopover() === "background") setActivePopover(null);
+			}}
 		>
-			<Popover.Trigger
+			<Popover.Anchor
 				as={EditorButton}
+				onClick={() =>
+					setActivePopover(
+						activePopover() === "background" ? null : "background",
+					)
+				}
 				leftIcon={<IconCapImage class="size-4" />}
 				tooltipText="Background"
 				kbd={["B"]}
@@ -319,7 +332,7 @@ export function BackgroundSettingsPopover() {
 												(w) => w.url === photoUrl,
 											);
 											if (wallpaper) {
-												debouncedSetProject(wallpaper.rawPath);
+												setWallpaperSource(wallpaper.rawPath);
 												ensurePaddingForBackground();
 											}
 										}}

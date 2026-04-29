@@ -1,45 +1,21 @@
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
-use tauri::{AppHandle, Manager, Runtime, Window, ipc::CommandArg};
+use tauri::{AppHandle, Listener, Manager, Runtime, Window, ipc::CommandArg};
 use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
 
-use cap_rendering::RenderedFrame;
+use cap_rendering::GpuOutputFormat;
 
 use crate::{
     create_editor_instance_impl,
-    frame_ws::{WSFrame, create_watch_frame_ws},
+    frame_ws::{WSFrame, WSFrameFormat, create_watch_frame_ws},
 };
-
-fn strip_frame_padding(frame: RenderedFrame) -> Result<(Vec<u8>, u32), &'static str> {
-    let expected_stride = frame
-        .width
-        .checked_mul(4)
-        .ok_or("overflow computing expected_stride")?;
-
-    if frame.padded_bytes_per_row == expected_stride {
-        Ok((frame.data, expected_stride))
-    } else {
-        let capacity = expected_stride
-            .checked_mul(frame.height)
-            .ok_or("overflow computing buffer capacity")?;
-        let mut stripped = Vec::with_capacity(capacity as usize);
-        for row in 0..frame.height {
-            let start = row
-                .checked_mul(frame.padded_bytes_per_row)
-                .ok_or("overflow computing row start")? as usize;
-            let end = start + expected_stride as usize;
-            stripped.extend_from_slice(&frame.data[start..end]);
-        }
-
-        Ok((stripped, expected_stride))
-    }
-}
 
 pub struct EditorInstance {
     inner: Arc<cap_editor::EditorInstance>,
     pub ws_port: u16,
     pub ws_shutdown_token: CancellationToken,
+    app_handle: AppHandle,
+    render_frame_event_id: tauri::EventId,
 }
 
 type PendingResult = Result<Arc<EditorInstance>, String>;
@@ -52,23 +28,39 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
     let (frame_tx, frame_rx) = watch::channel(None);
 
     let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
-    let inner = create_editor_instance_impl(
+    let (inner, render_frame_event_id) = create_editor_instance_impl(
         &app,
         path,
-        Box::new(move |frame| {
-            let width = frame.width;
-            let height = frame.height;
-            if let Ok((data, stride)) = strip_frame_padding(frame)
-                && let Err(e) = frame_tx.send(Some(WSFrame {
-                    data,
-                    width,
-                    height,
-                    stride,
+        Box::new(move |output| {
+            let ws_frame = match output {
+                cap_editor::EditorFrameOutput::Nv12(frame) => {
+                    let ws_format = match frame.format {
+                        GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                        GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
+                    };
+                    WSFrame {
+                        data: Arc::new(frame.data.into_vec()),
+                        width: frame.width,
+                        height: frame.height,
+                        stride: frame.y_stride,
+                        frame_number: frame.frame_number,
+                        target_time_ns: frame.target_time_ns,
+                        format: ws_format,
+                        created_at: Instant::now(),
+                    }
+                }
+                cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
+                    data: frame.data,
+                    width: frame.width,
+                    height: frame.height,
+                    stride: frame.padded_bytes_per_row,
+                    frame_number: frame.frame_number,
+                    target_time_ns: frame.target_time_ns,
+                    format: WSFrameFormat::Rgba,
                     created_at: Instant::now(),
-                }))
-            {
-                debug!("Frame receiver dropped during prewarm: {e}");
-            }
+                },
+            };
+            let _ = frame_tx.send(Some(std::sync::Arc::new(ws_frame)));
         }),
     )
     .await?;
@@ -77,6 +69,8 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
         inner,
         ws_port,
         ws_shutdown_token,
+        app_handle: app,
+        render_frame_event_id,
     }))
 }
 
@@ -120,6 +114,40 @@ impl PendingEditorInstances {
         let mut instances = self.0.write().await;
         instances.remove(window_label)
     }
+
+    pub async fn cancel_prewarm(&self, window_label: &str) {
+        let mut instances = self.0.write().await;
+        if let Some(mut rx) = instances.remove(window_label) {
+            tokio::spawn(async move {
+                let timeout = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    loop {
+                        let instance_to_dispose = {
+                            let borrowed = rx.borrow_and_update().clone();
+                            match borrowed {
+                                Some(Ok(instance)) => Some(instance),
+                                Some(Err(_)) => break,
+                                None => None,
+                            }
+                        };
+
+                        if let Some(instance) = instance_to_dispose {
+                            instance.dispose().await;
+                            break;
+                        }
+
+                        if rx.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                if timeout.await.is_err() {
+                    tracing::warn!(
+                        "Timed out waiting for prewarmed editor instance to complete for cleanup"
+                    );
+                }
+            });
+        }
+    }
 }
 
 impl EditorInstance {
@@ -127,6 +155,7 @@ impl EditorInstance {
         self.inner.dispose().await;
 
         self.ws_shutdown_token.cancel();
+        self.app_handle.unlisten(self.render_frame_event_id);
     }
 }
 
@@ -169,10 +198,49 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowEditorInstance {
     ) -> Result<Self, tauri::ipc::InvokeError> {
         let window = Window::from_command(command)?;
 
-        let instances = window.state::<EditorInstances>();
+        let Some(instances) = window.try_state::<EditorInstances>() else {
+            return Err("editor instance registry unavailable".into());
+        };
         let instance = futures::executor::block_on(instances.0.read());
 
-        Ok(Self(instance.get(window.label()).cloned().unwrap()))
+        let Some(instance) = instance.get(window.label()).cloned() else {
+            return Err("editor instance unavailable".into());
+        };
+
+        Ok(Self(instance))
+    }
+}
+
+pub struct OptionalWindowEditorInstance(pub Option<Arc<EditorInstance>>);
+
+impl specta::function::FunctionArg for OptionalWindowEditorInstance {
+    fn to_datatype(_: &mut specta::TypeMap) -> Option<specta::DataType> {
+        None
+    }
+}
+
+impl Deref for OptionalWindowEditorInstance {
+    type Target = Option<Arc<EditorInstance>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'de, R: Runtime> CommandArg<'de, R> for OptionalWindowEditorInstance {
+    fn from_command(
+        command: tauri::ipc::CommandItem<'de, R>,
+    ) -> Result<Self, tauri::ipc::InvokeError> {
+        let Ok(window) = Window::from_command(command) else {
+            return Ok(Self(None));
+        };
+
+        let Some(instances) = window.try_state::<EditorInstances>() else {
+            return Ok(Self(None));
+        };
+
+        let instance = futures::executor::block_on(instances.0.read());
+        Ok(Self(instance.get(window.label()).cloned()))
     }
 }
 
@@ -214,31 +282,50 @@ impl EditorInstances {
                 let (frame_tx, frame_rx) = watch::channel(None);
 
                 let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
-                let instance = create_editor_instance_impl(
+                let app_handle = window.app_handle().clone();
+                let (inner, render_frame_event_id) = create_editor_instance_impl(
                     window.app_handle(),
                     path,
-                    Box::new(move |frame| {
-                        let width = frame.width;
-                        let height = frame.height;
-                        if let Ok((data, stride)) = strip_frame_padding(frame)
-                            && let Err(e) = frame_tx.send(Some(WSFrame {
-                                data,
-                                width,
-                                height,
-                                stride,
+                    Box::new(move |output| {
+                        let ws_frame = match output {
+                            cap_editor::EditorFrameOutput::Nv12(frame) => {
+                                let ws_format = match frame.format {
+                                    GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                                    GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
+                                };
+                                WSFrame {
+                                    data: Arc::new(frame.data.into_vec()),
+                                    width: frame.width,
+                                    height: frame.height,
+                                    stride: frame.y_stride,
+                                    frame_number: frame.frame_number,
+                                    target_time_ns: frame.target_time_ns,
+                                    format: ws_format,
+                                    created_at: Instant::now(),
+                                }
+                            }
+                            cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
+                                data: frame.data,
+                                width: frame.width,
+                                height: frame.height,
+                                stride: frame.padded_bytes_per_row,
+                                frame_number: frame.frame_number,
+                                target_time_ns: frame.target_time_ns,
+                                format: WSFrameFormat::Rgba,
                                 created_at: Instant::now(),
-                            }))
-                        {
-                            debug!("Frame receiver dropped in get_or_create: {e}");
-                        }
+                            },
+                        };
+                        let _ = frame_tx.send(Some(std::sync::Arc::new(ws_frame)));
                     }),
                 )
                 .await?;
 
                 let instance = Arc::new(EditorInstance {
-                    inner: instance.clone(),
+                    inner,
                     ws_port,
                     ws_shutdown_token,
+                    app_handle,
+                    render_frame_event_id,
                 });
 
                 entry.insert(instance.clone());

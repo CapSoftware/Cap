@@ -1,9 +1,25 @@
 use crate::{ConversionConfig, ConvertError, ConverterBackend, FrameConverter};
 use ffmpeg::{format::Pixel, frame, software::scaling};
-use parking_lot::Mutex;
+use std::cell::UnsafeCell;
+use thread_local::ThreadLocal;
+
+struct SendableContext(UnsafeCell<scaling::Context>);
+
+unsafe impl Send for SendableContext {}
+
+impl SendableContext {
+    fn new(ctx: scaling::Context) -> Self {
+        Self(UnsafeCell::new(ctx))
+    }
+
+    fn run(&self, input: &frame::Video, output: &mut frame::Video) -> Result<(), ffmpeg::Error> {
+        unsafe { (*self.0.get()).run(input, output) }
+    }
+}
 
 pub struct SwscaleConverter {
-    context: Mutex<scaling::Context>,
+    contexts: ThreadLocal<SendableContext>,
+    config: ConversionConfig,
     output_format: Pixel,
     output_width: u32,
     output_height: u32,
@@ -11,13 +27,25 @@ pub struct SwscaleConverter {
 
 impl SwscaleConverter {
     pub fn new(config: ConversionConfig) -> Result<Self, ConvertError> {
+        Self::create_context(&config)?;
+
+        Ok(Self {
+            contexts: ThreadLocal::new(),
+            output_format: config.output_format,
+            output_width: config.output_width,
+            output_height: config.output_height,
+            config,
+        })
+    }
+
+    fn create_context(config: &ConversionConfig) -> Result<scaling::Context, ConvertError> {
         let flags = if config.needs_scaling() {
             scaling::flag::Flags::BICUBIC
         } else {
             scaling::flag::Flags::FAST_BILINEAR
         };
 
-        let context = scaling::Context::get(
+        scaling::Context::get(
             config.input_format,
             config.input_width,
             config.input_height,
@@ -26,30 +54,37 @@ impl SwscaleConverter {
             config.output_height,
             flags,
         )
-        .map_err(|_| ConvertError::UnsupportedFormat(config.input_format, config.output_format))?;
+        .map_err(|_| ConvertError::UnsupportedFormat(config.input_format, config.output_format))
+    }
 
-        Ok(Self {
-            context: Mutex::new(context),
-            output_format: config.output_format,
-            output_width: config.output_width,
-            output_height: config.output_height,
-        })
+    fn get_or_create_context(&self) -> Result<&SendableContext, ConvertError> {
+        self.contexts
+            .get_or_try(|| Self::create_context(&self.config).map(SendableContext::new))
     }
 }
 
 impl FrameConverter for SwscaleConverter {
     fn convert(&self, input: frame::Video) -> Result<frame::Video, ConvertError> {
-        let pts = input.pts();
         let mut output =
             frame::Video::new(self.output_format, self.output_width, self.output_height);
+        self.convert_into(input, &mut output)?;
+        Ok(output)
+    }
 
-        self.context
-            .lock()
-            .run(&input, &mut output)
+    fn convert_into(
+        &self,
+        input: frame::Video,
+        output: &mut frame::Video,
+    ) -> Result<(), ConvertError> {
+        let pts = input.pts();
+
+        let context = self.get_or_create_context()?;
+        context
+            .run(&input, output)
             .map_err(|e| ConvertError::ConversionFailed(e.to_string()))?;
 
         output.set_pts(pts);
-        Ok(output)
+        Ok(())
     }
 
     fn name(&self) -> &'static str {
