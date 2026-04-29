@@ -3,7 +3,7 @@ name: cap
 services:
   cap-web:
     container_name: cap-web
-    image: ghcr.io/capsoftware/cap-web:latest
+    image: cap-web:local
     restart: unless-stopped
     depends_on:
       mysql:
@@ -41,9 +41,7 @@ services:
 
   media-server:
     container_name: cap-media-server
-    build:
-      context: ./apps/media-server
-      dockerfile: Dockerfile.standalone
+    image: cap-media-server:local
     restart: unless-stopped
     environment:
       PORT: 3456
