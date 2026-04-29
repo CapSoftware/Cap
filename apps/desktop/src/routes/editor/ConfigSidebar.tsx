@@ -2341,14 +2341,14 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 								<KSelect.Value<{
 									name: string;
 									value: string;
-								}> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+								}> class="flex-1 text-sm text-left truncate text-(--gray-500) font-normal">
 									{(state) => <span>{state.selectedOption().name}</span>}
 								</KSelect.Value>
 								<KSelect.Icon<ValidComponent>
 									as={(iconProps) => (
 										<IconCapChevronDown
 											{...iconProps}
-											class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-[--gray-500]"
+											class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
 										/>
 									)}
 								/>
