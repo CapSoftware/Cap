@@ -60,6 +60,10 @@ fn default_alpha() -> u8 {
     u8::MAX
 }
 
+fn default_rounding_smoothness() -> f32 {
+    0.6
+}
+
 impl Default for BackgroundSource {
     fn default() -> Self {
         BackgroundSource::Color {
@@ -228,7 +232,7 @@ pub struct BackgroundConfiguration {
     pub blur: f64,
     pub padding: f64,
     pub rounding: f64,
-    #[serde(default)]
+    #[serde(default = "default_rounding_smoothness")]
     pub rounding_smoothness: f32,
     pub inset: u32,
     pub crop: Option<Crop>,
