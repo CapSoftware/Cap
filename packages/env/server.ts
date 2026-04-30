@@ -30,6 +30,15 @@ function createServerEnv() {
 			RESEND_API_KEY: z.string().optional(),
 			RESEND_FROM_DOMAIN: z.string().optional(),
 
+			// SMTP configuration (alternative to Resend)
+			// If SMTP_HOST is set, emails will be sent via SMTP instead of Resend
+			SMTP_HOST: z.string().optional().describe("SMTP server hostname"),
+			SMTP_PORT: z.coerce.number().optional().default(587).describe("SMTP server port"),
+			SMTP_USER: z.string().optional().describe("SMTP username"),
+			SMTP_PASS: z.string().optional().describe("SMTP password"),
+			SMTP_FROM: z.string().optional().describe("Default From address (e.g. cap@mail.example.com)"),
+			SMTP_SECURE: boolString(false).describe("Use TLS/SSL (true for port 465, false for 587/STARTTLS)"),
+
 			/// S3 configuration
 			// Though they are prefixed with `CAP_AWS`, these don't have to be
 			// for AWS, and can instead be for any S3-compatible service
