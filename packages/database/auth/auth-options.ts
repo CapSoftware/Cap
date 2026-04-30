@@ -73,7 +73,7 @@ export const authOptions = (): NextAuthOptions => {
 					async sendVerificationRequest({ identifier, token }) {
 						console.log("sendVerificationRequest");
 
-						if (!serverEnv().RESEND_API_KEY) {
+						if (!serverEnv().RESEND_API_KEY && !serverEnv().SMTP_HOST) {
 							console.log("\n");
 							console.log(
 								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
