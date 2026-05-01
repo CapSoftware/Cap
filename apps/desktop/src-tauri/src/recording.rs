@@ -948,6 +948,13 @@ pub async fn start_recording(
                 let actor_result: Result<InProgressRecording, anyhow::Error> = async {
                     match inputs.mode {
                         RecordingMode::Studio => {
+                            let max_fps =
+                                general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60);
+                            let max_fps = if camera_feed.is_some() {
+                                max_fps.min(30)
+                            } else {
+                                max_fps
+                            };
                             let mut builder = studio_recording::Actor::builder(
                                 recording_dir.clone(),
                                 inputs.capture_target.clone(),
@@ -977,15 +984,16 @@ pub async fn start_recording(
                                     .map(|s| s.out_of_process_muxer)
                                     .unwrap_or(false),
                             )
-                            .with_max_fps(
-                                general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60),
-                            )
+                            .with_max_fps(max_fps)
                             .with_quality(
                                 match general_settings
                                     .as_ref()
                                     .map(|s| s.studio_recording_quality)
                                     .unwrap_or_default()
                                 {
+                                    crate::general_settings::StudioRecordingQuality::Compatibility => {
+                                        cap_recording::StudioQuality::Compatibility
+                                    }
                                     crate::general_settings::StudioRecordingQuality::Balanced => {
                                         cap_recording::StudioQuality::Balanced
                                     }
