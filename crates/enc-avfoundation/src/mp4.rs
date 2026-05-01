@@ -799,10 +799,8 @@ impl MP4Encoder {
             dts: cm::Time::invalid(),
         };
 
-        let timed_frame = match pending
-            .raw_frame
-            .copy_with_new_timing(&[timing])
-            .or_else(|_| rebuild_video_sample_buf(&pending.raw_frame, timing))
+        let timed_frame = match rebuild_video_sample_buf(&pending.raw_frame, timing)
+            .or_else(|_| pending.raw_frame.copy_with_new_timing(&[timing]))
         {
             Ok(f) => f,
             Err(e) => {
