@@ -347,13 +347,6 @@ impl Muxer for AVFoundationMp4Muxer {
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
         let fatal_error = Arc::new(Mutex::new(None));
-        } else if config.compatibility_quality {
-            cap_enc_avfoundation::MP4Encoder::init_compatibility(
-                output_path.clone(),
-                video_config,
-                audio_config,
-                config.output_height,
-            )
         let video_fatal_error = fatal_error.clone();
         let disk_check_path = output_path.clone();
         let is_instant = config.instant_mode;
@@ -379,6 +372,8 @@ impl Muxer for AVFoundationMp4Muxer {
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-video-encoder".to_string())
             .spawn(move || {
+                #[cfg(target_os = "macos")]
+                boost_encoder_thread_qos();
                 if ready_tx.send(Ok(())).is_err() {
                     return Err(anyhow!("Failed to send ready signal - receiver dropped"));
                 }
@@ -523,6 +518,8 @@ impl Muxer for AVFoundationMp4Muxer {
             let audio_handle = std::thread::Builder::new()
                 .name("mp4-audio-encoder".to_string())
                 .spawn(move || {
+                    #[cfg(target_os = "macos")]
+                    boost_encoder_thread_qos();
                     if audio_ready_tx.send(Ok(())).is_err() {
                         return Err(anyhow!("Failed to send audio ready signal"));
                     }
@@ -903,6 +900,7 @@ pub struct AVFoundationCameraMuxer {
 #[derive(Default)]
 pub struct AVFoundationCameraMuxerConfig {
     pub output_height: Option<u32>,
+    pub compatibility_quality: bool,
 }
 
 impl Muxer for AVFoundationCameraMuxer {
@@ -920,7 +918,6 @@ impl Muxer for AVFoundationCameraMuxer {
             video_config.ok_or_else(|| anyhow!("Invariant: No video source provided"))?;
 
         let buffer_size = get_mp4_muxer_buffer_size(false);
-    pub compatibility_quality: bool,
         debug!(buffer_size, "Camera MP4 muxer encoder channel buffer size");
 
         let (video_tx, video_rx) = sync_channel::<Option<CameraFrameMessage>>(buffer_size);
@@ -951,6 +948,8 @@ impl Muxer for AVFoundationCameraMuxer {
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-camera-encoder".to_string())
             .spawn(move || {
+                #[cfg(target_os = "macos")]
+                boost_encoder_thread_qos();
                 if ready_tx.send(Ok(())).is_err() {
                     return Err(anyhow!("Failed to send ready signal - receiver dropped"));
                 }
