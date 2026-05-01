@@ -1,3 +1,5 @@
+use libc::qos_class_t::{QOS_CLASS_USER_INITIATED, QOS_CLASS_USER_INTERACTIVE};
+
 #[derive(Clone, Copy, Debug)]
 pub enum MacOsQosClass {
     UserInteractive,
@@ -7,8 +9,8 @@ pub enum MacOsQosClass {
 impl MacOsQosClass {
     fn as_raw(self) -> libc::qos_class_t {
         match self {
-            Self::UserInteractive => libc::QOS_CLASS_USER_INTERACTIVE,
-            Self::UserInitiated => libc::QOS_CLASS_USER_INITIATED,
+            Self::UserInteractive => QOS_CLASS_USER_INTERACTIVE,
+            Self::UserInitiated => QOS_CLASS_USER_INITIATED,
         }
     }
 }
