@@ -32,6 +32,14 @@ static TOOLBAR_HEIGHT: f32 = 56.0;
 
 static GPU_SURFACE_SCALE: u32 = 2;
 
+#[cfg(target_os = "macos")]
+const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+}
+
 pub const MIN_CAMERA_SIZE: f32 = 150.0;
 pub const MAX_CAMERA_SIZE: f32 = 600.0;
 pub const DEFAULT_CAMERA_SIZE: f32 = 230.0;
@@ -260,6 +268,10 @@ impl CameraPreviewManager {
         });
 
         thread::spawn(move || {
+            #[cfg(target_os = "macos")]
+            unsafe {
+                pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            }
             LocalSet::new().block_on(
                 &rt,
                 renderer.run(window.clone(), default_state, reconfigure_rx, camera_rx),
