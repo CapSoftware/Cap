@@ -1379,21 +1379,22 @@ impl AudioPlayback {
 
         let mut output_info = AudioInfo::from_stream_config(&supported_config);
         output_info.sample_format = output_info.sample_format.packed();
-        // Clamp output info for FFmpeg compatibility (max 8 channels)
         output_info = output_info.for_ffmpeg_output();
 
         let mut config = supported_config.config();
-        // Match stream config channels to clamped output info
         config.channels = output_info.channels as u16;
 
+        #[cfg(not(target_os = "windows"))]
         let sample_rate = output_info.sample_rate;
+        #[cfg(not(target_os = "windows"))]
+        let buffer_size = output_info.buffer_size;
 
         let playhead = f64::from(start_frame_number) / f64::from(fps);
 
         info!(
             duration_secs = duration_secs,
             start_playhead = playhead,
-            sample_rate = sample_rate,
+            sample_rate = output_info.sample_rate,
             "Creating pre-rendered audio stream"
         );
 
@@ -1405,7 +1406,32 @@ impl AudioPlayback {
             duration_secs,
         );
 
-        audio_buffer.set_playhead(playhead);
+        #[cfg(not(target_os = "windows"))]
+        let mut latency_corrector = {
+            let hint = default_output_latency_hint(sample_rate, buffer_size);
+            if let Some(hint) = hint
+                && hint.latency_secs > 0.0
+            {
+                if hint.transport.is_wireless() {
+                    info!(
+                        "Applying wireless pre-rendered audio output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    );
+                } else {
+                    info!(
+                        "Applying pre-rendered audio output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    );
+                }
+            }
+            LatencyCorrector::new(hint, LatencyCorrectionConfig::default())
+        };
+        #[cfg(not(target_os = "windows"))]
+        let initial_compensation_secs = latency_corrector.initial_compensation_secs();
+        #[cfg(target_os = "windows")]
+        let initial_compensation_secs = 0.0;
+
+        audio_buffer.set_playhead(playhead + initial_compensation_secs);
 
         let mut playhead_rx_for_stream = playhead_rx.clone();
         let mut last_video_playhead = playhead;
@@ -1413,13 +1439,23 @@ impl AudioPlayback {
         let stream = device
             .build_output_stream(
                 &config,
-                move |buffer: &mut [T], _info| {
+                move |buffer: &mut [T], info| {
+                    #[cfg(not(target_os = "windows"))]
+                    let latency_secs = latency_corrector.update_from_callback(info);
+                    #[cfg(target_os = "windows")]
+                    let latency_secs = {
+                        let _ = info;
+                        0.0
+                    };
+
                     if playhead_rx_for_stream.has_changed().unwrap_or(false) {
                         let video_playhead = *playhead_rx_for_stream.borrow_and_update();
                         let jump = (video_playhead - last_video_playhead).abs();
+                        let audible_playhead = audio_buffer.current_audible_playhead(latency_secs);
+                        let drift = (video_playhead - audible_playhead).abs();
 
-                        if jump > 0.05 {
-                            audio_buffer.set_playhead(video_playhead);
+                        if jump > 0.05 || drift > 0.04 {
+                            audio_buffer.set_playhead(video_playhead + latency_secs);
                         }
 
                         last_video_playhead = video_playhead;

@@ -16,6 +16,8 @@ import {
 	createResource,
 	createSignal,
 	For,
+	type JSX,
+	onCleanup,
 	onMount,
 	type ParentProps,
 	Show,
@@ -70,16 +72,6 @@ const getWindowOptionLabel = (window: CaptureWindow) => {
 
 type ExtendedGeneralSettingsStore = GeneralSettingsStore;
 
-const INSTANT_MODE_RESOLUTION_OPTIONS = [
-	{ value: 1280, label: "720p" },
-	{ value: 1920, label: "1080p" },
-	{ value: 2560, label: "1440p" },
-	{ value: 3840, label: "4K" },
-] satisfies {
-	value: number;
-	label: string;
-}[];
-
 const MAX_FPS_OPTIONS = [
 	{ value: 30, label: "30 FPS" },
 	{ value: 60, label: "60 FPS (Recommended)" },
@@ -107,18 +99,9 @@ function AppearanceSection(props: {
 	onThemeChange: (theme: AppTheme) => void;
 }) {
 	const options = [
-		{
-			id: "system",
-			name: "System",
-		},
-		{
-			id: "light",
-			name: "Light",
-		},
-		{
-			id: "dark",
-			name: "Dark",
-		},
+		{ id: "system", name: "System" },
+		{ id: "light", name: "Light" },
+		{ id: "dark", name: "Dark" },
 	] satisfies { id: AppTheme; name: string }[];
 
 	const previews = {
@@ -128,65 +111,60 @@ function AppearanceSection(props: {
 	};
 
 	return (
-		<div class="flex flex-col gap-4">
-			<div class="flex flex-col border-b border-gray-2">
-				<h2 class="text-lg font-medium text-gray-12">General Settings</h2>
-			</div>
-			<div
-				class="flex justify-start items-center text-gray-12"
-				onContextMenu={(e) => e.preventDefault()}
-			>
-				<div class="flex flex-col gap-3">
-					<p class="text-sm text-gray-12">Appearance</p>
-					<div class="flex justify-between m-1 min-w-[20rem] w-[22.2rem] flex-nowrap">
-						<For each={options}>
-							{(theme) => (
+		<Section
+			title="Appearance"
+			description="Match Cap to your system theme or pick a fixed look."
+		>
+			<SectionCard padded>
+				<div
+					class="grid grid-cols-3 gap-3"
+					onContextMenu={(e) => e.preventDefault()}
+				>
+					<For each={options}>
+						{(theme) => {
+							const isSelected = () => props.currentTheme === theme.id;
+							return (
 								<button
 									type="button"
-									aria-checked={props.currentTheme === theme.id}
-									class="flex flex-col items-center rounded-md group focus:outline-none focus-visible:ring-gray-300 focus-visible:ring-offset-gray-50 focus-visible:ring-offset-2 focus-visible:ring-4"
+									aria-checked={isSelected()}
+									aria-label={`Select theme: ${theme.name}`}
 									onClick={() => props.onThemeChange(theme.id)}
+									class="flex flex-col gap-2 items-center group focus:outline-none"
 								>
 									<div
 										class={cx(
-											`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200`,
-											{
-												"ring-2 ring-gray-12 ring-offset-2":
-													props.currentTheme === theme.id,
-												"group-hover:ring-2 ring-offset-2 group-hover:ring-gray-5":
-													props.currentTheme !== theme.id,
-											},
+											"w-full aspect-[5/3] rounded-lg overflow-hidden border-2 transition-all duration-150",
+											isSelected()
+												? "border-blue-9"
+												: "border-gray-4 group-hover:border-gray-6",
 										)}
-										aria-label={`Select theme: ${theme.name}`}
 									>
-										<div class="flex justify-center items-center w-full h-full">
-											<Show when={previews[theme.id]} keyed>
-												{(preview) => (
-													<img
-														class="animate-in fade-in duration-300"
-														draggable={false}
-														src={preview}
-														alt={`Preview of ${theme.name} theme`}
-													/>
-												)}
-											</Show>
-										</div>
+										<Show when={previews[theme.id]} keyed>
+											{(preview) => (
+												<img
+													class="object-cover w-full h-full animate-in fade-in duration-200"
+													draggable={false}
+													src={preview}
+													alt={`Preview of ${theme.name} theme`}
+												/>
+											)}
+										</Show>
 									</div>
 									<span
-										class={cx(`mt-2 text-sm transition-color duration-200`, {
-											"text-gray-12": props.currentTheme === theme.id,
-											"text-gray-10": props.currentTheme !== theme.id,
-										})}
+										class={cx(
+											"text-xs font-medium transition-colors",
+											isSelected() ? "text-gray-12" : "text-gray-10",
+										)}
 									>
 										{theme.name}
 									</span>
 								</button>
-							)}
-						</For>
-					</div>
+							);
+						}}
+					</For>
 				</div>
-			</div>
-		</div>
+			</SectionCard>
+		</Section>
 	);
 }
 
@@ -197,6 +175,51 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	createEffect(() => {
 		setSettings(reconcile(deriveGeneralSettings(props.initialStore)));
+	});
+
+	let scrollContainerRef: HTMLDivElement | undefined;
+
+	const scrollToSection = (section: string) => {
+		try {
+			localStorage.removeItem("cap.settings.scrollToSection");
+		} catch {}
+		const attempt = (remaining: number) => {
+			const target = document.getElementById(`settings-section-${section}`);
+			const container = scrollContainerRef;
+			if (!target || !container) {
+				if (remaining > 0) {
+					window.setTimeout(() => attempt(remaining - 1), 50);
+				}
+				return;
+			}
+			const containerRect = container.getBoundingClientRect();
+			const targetRect = target.getBoundingClientRect();
+			const offset =
+				targetRect.top - containerRect.top + container.scrollTop - 8;
+			container.scrollTo({ top: offset, behavior: "smooth" });
+			target.classList.add("settings-section-pulse");
+			window.setTimeout(() => {
+				target.classList.remove("settings-section-pulse");
+			}, 1600);
+		};
+		attempt(10);
+	};
+
+	onMount(() => {
+		let pending: string | null = null;
+		try {
+			pending = localStorage.getItem("cap.settings.scrollToSection");
+		} catch {}
+		if (pending) {
+			scrollToSection(pending);
+		}
+
+		const unlisten = events.requestScrollToSettingsSection.listen((event) => {
+			scrollToSection(event.payload.section);
+		});
+		onCleanup(() => {
+			unlisten.then((cb) => cb()).catch(() => {});
+		});
 	});
 
 	const [windows, { refetch: refetchWindows }] = createResource(
@@ -342,7 +365,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			<SettingItem label={props.label} description={props.description}>
 				<button
 					type="button"
-					class="flex flex-row gap-1 text-xs bg-gray-3 items-center px-2.5 py-1.5 rounded-md border border-gray-4"
+					class="flex flex-row gap-1.5 text-xs items-center px-2.5 py-1.5 rounded-lg border transition-colors bg-gray-3 hover:bg-gray-4 text-gray-12 border-gray-4"
 					onClick={async () => {
 						const currentValue = props.value;
 						const items = props.options.map((option) =>
@@ -366,15 +389,15 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						);
 						return option ? option.text : currentValue;
 					})()}
-					<IconCapChevronDown class="size-4" />
+					<IconCapChevronDown class="size-3.5 text-gray-10" />
 				</button>
 			</SettingItem>
 		);
 	};
 
 	return (
-		<div class="flex flex-col h-full custom-scroll">
-			<div class="p-4 space-y-6">
+		<div ref={scrollContainerRef} class="flex flex-col h-full custom-scroll">
+			<div class="px-6 py-6 space-y-7 max-w-[42rem]">
 				<AppearanceSection
 					currentTheme={settings.theme ?? "system"}
 					onThemeChange={(newTheme) => {
@@ -384,157 +407,144 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				/>
 
 				{ostype === "macos" && (
-					<SettingGroup title="App">
-						<ToggleSettingItem
-							label="Always show dock icon"
-							description="Show Cap in the dock even when there are no windows available to close."
-							value={!settings.hideDockIcon}
-							onChange={(v) => handleChange("hideDockIcon", !v)}
-						/>
-						<ToggleSettingItem
-							label="Enable system notifications"
-							description="Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings."
-							value={!!settings.enableNotifications}
-							onChange={async (value) => {
-								if (value) {
-									// Check current permission state
-									console.log("Checking notification permission status");
-									const permissionGranted = await isPermissionGranted();
-									console.log(
-										`Current permission status: ${permissionGranted}`,
-									);
-
-									if (!permissionGranted) {
-										// Request permission if not granted
-										console.log(
-											"Permission not granted, requesting permission",
-										);
-										const permission = await requestPermission();
-										console.log(`Permission request result: ${permission}`);
-										if (permission !== "granted") {
-											// If permission denied, don't enable the setting
-											console.log("Permission denied, aborting setting change");
-											return;
+					<Section
+						title="App"
+						description="Choose how Cap shows up on your system."
+					>
+						<SectionRows>
+							<ToggleSettingItem
+								label="Always show dock icon"
+								description="Keep Cap in the dock even when no windows are open."
+								value={!settings.hideDockIcon}
+								onChange={(v) => handleChange("hideDockIcon", !v)}
+							/>
+							<ToggleSettingItem
+								label="System notifications"
+								description="Show notifications for clipboard copies, saved files, and more. You may need to allow Cap in your system's notification settings."
+								value={!!settings.enableNotifications}
+								onChange={async (value) => {
+									if (value) {
+										const permissionGranted = await isPermissionGranted();
+										if (!permissionGranted) {
+											const permission = await requestPermission();
+											if (permission !== "granted") return;
 										}
 									}
-								}
-								handleChange("enableNotifications", value);
-							}}
-						/>
-					</SettingGroup>
+									handleChange("enableNotifications", value);
+								}}
+							/>
+						</SectionRows>
+					</Section>
 				)}
 
-				<SettingGroup title="Recording">
-					<SelectSettingItem
-						label="Studio mode quality"
-						description="Balanced uses less storage and CPU. Ultra records at higher bitrate for maximum quality."
-						value={settings.studioRecordingQuality ?? "balanced"}
-						onChange={(value) => handleChange("studioRecordingQuality", value)}
-						options={[
-							{ text: "Balanced", value: "balanced" as StudioRecordingQuality },
-							{ text: "Ultra", value: "ultra" as StudioRecordingQuality },
-						]}
-					/>
-					<SelectSettingItem
-						label="Instant mode max resolution"
-						description="Choose the maximum resolution for Instant Mode recordings."
-						value={settings.instantModeMaxResolution ?? 1920}
-						onChange={(value) =>
-							handleChange("instantModeMaxResolution", value)
-						}
-						options={INSTANT_MODE_RESOLUTION_OPTIONS.map((option) => ({
-							text: option.label,
-							value: option.value,
-						}))}
-					/>
-					<SelectSettingItem
-						label="Recording countdown"
-						description="Countdown before recording starts"
-						value={settings.recordingCountdown ?? 0}
-						onChange={(value) => handleChange("recordingCountdown", value)}
-						options={[
-							{ text: "Off", value: 0 },
-							{ text: "3 seconds", value: 3 },
-							{ text: "5 seconds", value: 5 },
-							{ text: "10 seconds", value: 10 },
-						]}
-					/>
-					<SelectSettingItem
-						label="Main window recording start behaviour"
-						description="The main window recording start behaviour"
-						value={settings.mainWindowRecordingStartBehaviour ?? "close"}
-						onChange={(value) =>
-							handleChange("mainWindowRecordingStartBehaviour", value)
-						}
-						options={[
-							{ text: "Close", value: "close" },
-							{ text: "Minimise", value: "minimise" },
-						]}
-					/>
-					<SelectSettingItem
-						label="Studio recording finish behaviour"
-						description="The studio recording finish behaviour"
-						value={settings.postStudioRecordingBehaviour ?? "openEditor"}
-						onChange={(value) =>
-							handleChange("postStudioRecordingBehaviour", value)
-						}
-						options={[
-							{ text: "Open editor", value: "openEditor" },
-							{
-								text: "Show in overlay",
-								value: "showOverlay",
-							},
-						]}
-					/>
-					<SelectSettingItem
-						label="After deleting recording behaviour"
-						description="Should Cap reopen after deleting an in progress recording?"
-						value={settings.postDeletionBehaviour ?? "doNothing"}
-						onChange={(value) => handleChange("postDeletionBehaviour", value)}
-						options={[
-							{ text: "Do Nothing", value: "doNothing" },
-							{
-								text: "Reopen Recording Window",
-								value: "reopenRecordingWindow",
-							},
-						]}
-					/>
-					<ToggleSettingItem
-						label="Delete instant mode recordings after upload"
-						description="After finishing an instant recording, should Cap will delete it from your device?"
-						value={settings.deleteInstantRecordingsAfterUpload ?? false}
-						onChange={(v) =>
-							handleChange("deleteInstantRecordingsAfterUpload", v)
-						}
-					/>
-					<ToggleSettingItem
-						label="Crash-recoverable recording"
-						description="Records in fragmented segments that can be recovered if the app crashes or your system loses power. May have slightly higher storage usage during recording."
-						value={settings.crashRecoveryRecording ?? true}
-						onChange={(value) => handleChange("crashRecoveryRecording", value)}
-					/>
-					<ToggleSettingItem
-						label="Custom cursor capture in Studio Mode"
-						description="Studio Mode recordings capture cursor state separately so you can adjust cursor size and smoothing later in the editor."
-						value={!!settings.custom_cursor_capture2}
-						onChange={(value) => handleChange("custom_cursor_capture2", value)}
-					/>
-					<ToggleSettingItem
-						label="Auto zoom on clicks"
-						description="Automatically generate zoom segments around mouse clicks during Studio Mode recordings."
-						value={!!settings.autoZoomOnClicks}
-						onChange={(value) => handleChange("autoZoomOnClicks", value)}
-					/>
-					<ToggleSettingItem
-						label="Capture keyboard presses for the editor"
-						description="Records keyboard presses during Studio Mode so you can generate keyboard overlays in the editor. This data is only used in the editor."
-						value={!!settings.captureKeyboardEvents}
-						onChange={(value) => handleChange("captureKeyboardEvents", value)}
-					/>
-					<div class="flex flex-col gap-1">
+				<QualitySection
+					studioQuality={settings.studioRecordingQuality ?? "balanced"}
+					onStudioQualityChange={(value) =>
+						handleChange("studioRecordingQuality", value)
+					}
+					instantResolution={settings.instantModeMaxResolution ?? 1920}
+					onInstantResolutionChange={(value) =>
+						handleChange("instantModeMaxResolution", value)
+					}
+				/>
+
+				<Section
+					title="Recording"
+					description="Behaviour while you record and after you stop."
+				>
+					<SectionRows>
+						<SelectSettingItem
+							label="Countdown"
+							description="Wait before the recording starts."
+							value={settings.recordingCountdown ?? 0}
+							onChange={(value) => handleChange("recordingCountdown", value)}
+							options={[
+								{ text: "Off", value: 0 },
+								{ text: "3 seconds", value: 3 },
+								{ text: "5 seconds", value: 5 },
+								{ text: "10 seconds", value: 10 },
+							]}
+						/>
+						<SelectSettingItem
+							label="Main window when recording starts"
+							description="What happens to the main window once a recording begins."
+							value={settings.mainWindowRecordingStartBehaviour ?? "close"}
+							onChange={(value) =>
+								handleChange("mainWindowRecordingStartBehaviour", value)
+							}
+							options={[
+								{ text: "Close", value: "close" },
+								{ text: "Minimise", value: "minimise" },
+							]}
+						/>
+						<SelectSettingItem
+							label="After a Studio recording"
+							description="What happens once you stop a Studio recording."
+							value={settings.postStudioRecordingBehaviour ?? "openEditor"}
+							onChange={(value) =>
+								handleChange("postStudioRecordingBehaviour", value)
+							}
+							options={[
+								{ text: "Open editor", value: "openEditor" },
+								{ text: "Show in overlay", value: "showOverlay" },
+							]}
+						/>
+						<SelectSettingItem
+							label="After deleting a recording"
+							description="Whether the recording window should reopen."
+							value={settings.postDeletionBehaviour ?? "doNothing"}
+							onChange={(value) => handleChange("postDeletionBehaviour", value)}
+							options={[
+								{ text: "Do nothing", value: "doNothing" },
+								{
+									text: "Reopen recording window",
+									value: "reopenRecordingWindow",
+								},
+							]}
+						/>
+						<ToggleSettingItem
+							label="Delete Instant recordings after upload"
+							description="Cap removes the local file once it has uploaded successfully."
+							value={settings.deleteInstantRecordingsAfterUpload ?? false}
+							onChange={(v) =>
+								handleChange("deleteInstantRecordingsAfterUpload", v)
+							}
+						/>
+						<ToggleSettingItem
+							label="Crash-recoverable recording"
+							description="Record in fragments that can be recovered after a crash or power loss. Slightly larger files during capture."
+							value={settings.crashRecoveryRecording ?? true}
+							onChange={(value) =>
+								handleChange("crashRecoveryRecording", value)
+							}
+						/>
+						<ToggleSettingItem
+							label="Custom cursor capture (Studio)"
+							description="Capture cursor state separately so you can adjust size and smoothing in the editor."
+							value={!!settings.custom_cursor_capture2}
+							onChange={(value) =>
+								handleChange("custom_cursor_capture2", value)
+							}
+						/>
+						<ToggleSettingItem
+							label="Auto zoom on clicks"
+							description="Automatically add zoom segments around mouse clicks in Studio recordings."
+							value={!!settings.autoZoomOnClicks}
+							onChange={(value) => handleChange("autoZoomOnClicks", value)}
+						/>
+						<ToggleSettingItem
+							label="Capture keyboard presses"
+							description="Record key presses so you can add keyboard overlays in the editor."
+							value={!!settings.captureKeyboardEvents}
+							onChange={(value) => handleChange("captureKeyboardEvents", value)}
+						/>
 						<SelectSettingItem
 							label="Max capture framerate"
-							description="Maximum framerate for screen capture. Higher values may cause instability on some systems."
+							description={
+								(settings.maxFps ?? 60) > 60
+									? "Maximum framerate for screen capture. Higher values may cause drops or increased CPU usage on some systems."
+									: "Maximum framerate for screen capture."
+							}
 							value={settings.maxFps ?? 60}
 							onChange={(value) => handleChange("maxFps", value)}
 							options={MAX_FPS_OPTIONS.map((option) => ({
@@ -542,26 +552,23 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								value: option.value,
 							}))}
 						/>
-						{(settings.maxFps ?? 60) > 60 && (
-							<p class="text-xs text-amber-500 px-1 pb-2">
-								⚠️ Higher framerates may cause frame drops or increased CPU usage
-								on some systems.
-							</p>
-						)}
-					</div>
-				</SettingGroup>
+					</SectionRows>
+				</Section>
 
-				<SettingGroup
-					title="Cap Pro Settings"
-					titleStyling="bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg"
+				<Section
+					title="Cap Pro"
+					description="Settings available with a Cap Pro license."
+					pro
 				>
-					<ToggleSettingItem
-						label="Automatically open shareable links"
-						description="Whether Cap should automatically open instant recordings in your browser"
-						value={!settings.disableAutoOpenLinks}
-						onChange={(v) => handleChange("disableAutoOpenLinks", !v)}
-					/>
-				</SettingGroup>
+					<SectionRows>
+						<ToggleSettingItem
+							label="Auto-open shareable links"
+							description="Open the share link in your browser as soon as the upload finishes."
+							value={!settings.disableAutoOpenLinks}
+							onChange={(v) => handleChange("disableAutoOpenLinks", !v)}
+						/>
+					</SectionRows>
+				</Section>
 
 				<DefaultProjectNameCard
 					onChange={(value) =>
@@ -614,47 +621,252 @@ function TelemetryCard(props: {
 	onChange: (value: boolean) => void;
 }) {
 	return (
-		<div class="flex flex-col gap-3 mt-6">
-			<h3 class="text-sm text-gray-12 w-fit">Privacy</h3>
-			<div class="flex flex-col gap-3 px-4 py-3 rounded-xl border border-gray-3 bg-gray-2">
-				<div class="flex items-center justify-between gap-6">
-					<div class="flex flex-col gap-1">
-						<p class="text-sm text-gray-12">Share anonymous telemetry</p>
-						<p class="text-xs text-gray-10 max-w-[34rem]">
-							Cap uses anonymous telemetry to improve recording reliability,
-							upload accuracy, and bug fixes. We <strong>never</strong> collect
-							recording contents, window titles, file paths, or any personal
-							information. Events only include aggregate counts like frame
-							drops, A/V drift, and crash recovery outcomes.
-						</p>
-					</div>
-					<label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
-						<input
-							type="checkbox"
-							class="sr-only peer"
-							checked={props.value}
-							onChange={(e) => props.onChange(e.currentTarget.checked)}
-						/>
-						<div class="w-9 h-5 bg-gray-5 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-gray-1 after:border-gray-6 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500" />
-					</label>
+		<Section title="Privacy">
+			<SectionRows>
+				<ToggleSettingItem
+					label="Share anonymous telemetry"
+					description="Cap uses anonymous telemetry to improve reliability and fix bugs. We never collect recording contents, window titles, file paths, or personal information."
+					value={props.value}
+					onChange={props.onChange}
+				/>
+			</SectionRows>
+		</Section>
+	);
+}
+
+type StudioQualityTier = {
+	value: StudioRecordingQuality;
+	label: string;
+	summary: string;
+	bestFor: string;
+};
+
+const STUDIO_QUALITY_TIERS: StudioQualityTier[] = [
+	{
+		value: "compatibility",
+		label: "Compatibility",
+		summary: "Lower bitrate to keep older or low-power machines smooth.",
+		bestFor: "Older Intel Macs, 8GB MacBook Air, weaker laptops.",
+	},
+	{
+		value: "balanced",
+		label: "Balanced",
+		summary: "Sharp footage with sensible CPU and disk usage.",
+		bestFor: "Most modern Macs and PCs with 16GB+ RAM.",
+	},
+	{
+		value: "ultra",
+		label: "Ultra",
+		summary: "Maximum detail for color-graded, large-display edits.",
+		bestFor: "M-series Pro/Max, discrete GPUs, 32GB+ RAM, NVMe.",
+	},
+];
+
+type InstantResolutionTier = {
+	value: number;
+	label: string;
+	summary: string;
+};
+
+const INSTANT_RESOLUTION_TIERS: InstantResolutionTier[] = [
+	{ value: 1280, label: "720p", summary: "Smallest size, low bandwidth." },
+	{
+		value: 1920,
+		label: "1080p",
+		summary: "Recommended. Sharp on most networks.",
+	},
+	{ value: 2560, label: "1440p", summary: "More detail for desktop content." },
+	{ value: 3840, label: "4K", summary: "Max clarity. Needs fast upload." },
+];
+
+function SegmentedControl<T extends string | number>(props: {
+	value: T;
+	onChange: (value: T) => void;
+	options: { value: T; label: string }[];
+}) {
+	return (
+		<div class="inline-flex p-0.5 rounded-lg border border-gray-3 bg-gray-3">
+			<For each={props.options}>
+				{(option) => {
+					const isSelected = () => props.value === option.value;
+					return (
+						<button
+							type="button"
+							onClick={() => props.onChange(option.value)}
+							class={cx(
+								"px-3 py-1 text-xs font-medium rounded-md transition-all",
+								isSelected()
+									? "bg-gray-1 text-gray-12 shadow-sm"
+									: "text-gray-10 hover:text-gray-12",
+							)}
+						>
+							{option.label}
+						</button>
+					);
+				}}
+			</For>
+		</div>
+	);
+}
+
+function StudioQualitySubsection(props: {
+	value: StudioRecordingQuality;
+	onChange: (value: StudioRecordingQuality) => void;
+}) {
+	const currentTier = createMemo(
+		() =>
+			STUDIO_QUALITY_TIERS.find((t) => t.value === props.value) ??
+			STUDIO_QUALITY_TIERS[1],
+	);
+
+	return (
+		<div
+			id="settings-section-studio-quality"
+			class="flex flex-col gap-3 px-4 py-4"
+		>
+			<div class="flex justify-between items-start gap-4">
+				<div class="flex flex-col gap-0.5 min-w-0">
+					<p class="text-[13px] font-medium text-gray-12">Studio mode</p>
+					<p class="text-xs leading-snug text-gray-10">
+						Encoder profile for local Studio recordings.
+					</p>
 				</div>
+				<SegmentedControl
+					value={props.value}
+					onChange={props.onChange}
+					options={STUDIO_QUALITY_TIERS.map((tier) => ({
+						value: tier.value,
+						label: tier.label,
+					}))}
+				/>
+			</div>
+			<div class="flex flex-col gap-1.5 px-3 py-2.5 rounded-lg bg-gray-3">
+				<p class="text-xs text-gray-12">{currentTier().summary}</p>
+				<p class="text-[11px] text-gray-10 leading-snug">
+					<span class="text-gray-11">Best for:</span> {currentTier().bestFor}
+				</p>
 			</div>
 		</div>
 	);
 }
 
-function SettingGroup(
-	props: ParentProps<{ title: string; titleStyling?: string }>,
-) {
+function InstantQualitySubsection(props: {
+	value: number;
+	onChange: (value: number) => void;
+}) {
+	const currentTier = createMemo(
+		() =>
+			INSTANT_RESOLUTION_TIERS.find((t) => t.value === props.value) ??
+			INSTANT_RESOLUTION_TIERS[1],
+	);
+
 	return (
-		<div>
-			<h3 class={cx("mb-3 text-sm text-gray-12 w-fit", props.titleStyling)}>
-				{props.title}
-			</h3>
-			<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
-				{props.children}
+		<div
+			id="settings-section-instant-quality"
+			class="flex flex-col gap-3 px-4 py-4"
+		>
+			<div class="flex justify-between items-start gap-4">
+				<div class="flex flex-col gap-0.5 min-w-0">
+					<p class="text-[13px] font-medium text-gray-12">Instant mode</p>
+					<p class="text-xs leading-snug text-gray-10">
+						Maximum upload resolution for Instant recordings.
+					</p>
+				</div>
+				<SegmentedControl
+					value={props.value}
+					onChange={props.onChange}
+					options={INSTANT_RESOLUTION_TIERS.map((tier) => ({
+						value: tier.value,
+						label: tier.label,
+					}))}
+				/>
+			</div>
+			<div class="flex flex-col gap-1.5 px-3 py-2.5 rounded-lg bg-gray-3">
+				<p class="text-xs text-gray-12">{currentTier().summary}</p>
 			</div>
 		</div>
+	);
+}
+
+function QualitySection(props: {
+	studioQuality: StudioRecordingQuality;
+	onStudioQualityChange: (value: StudioRecordingQuality) => void;
+	instantResolution: number;
+	onInstantResolutionChange: (value: number) => void;
+}) {
+	return (
+		<Section
+			title="Quality"
+			description="Pick the right profile for each recording mode."
+		>
+			<SectionCard class="divide-y divide-gray-3">
+				<StudioQualitySubsection
+					value={props.studioQuality}
+					onChange={props.onStudioQualityChange}
+				/>
+				<InstantQualitySubsection
+					value={props.instantResolution}
+					onChange={props.onInstantResolutionChange}
+				/>
+			</SectionCard>
+		</Section>
+	);
+}
+
+function Section(
+	props: ParentProps<{
+		title: string;
+		description?: string;
+		right?: JSX.Element;
+		pro?: boolean;
+	}>,
+) {
+	return (
+		<section class="space-y-2.5">
+			<header class="flex justify-between items-end gap-3 px-1">
+				<div class="flex flex-col gap-0.5 min-w-0">
+					<div class="flex gap-2 items-center">
+						<h3 class="text-sm font-semibold tracking-tight text-gray-12">
+							{props.title}
+						</h3>
+						<Show when={props.pro}>
+							<span class="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-blue-9 text-white">
+								Pro
+							</span>
+						</Show>
+					</div>
+					<Show when={props.description}>
+						<p class="text-xs leading-relaxed text-gray-10">
+							{props.description}
+						</p>
+					</Show>
+				</div>
+				<Show when={props.right}>
+					<div class="flex shrink-0 gap-2 items-center">{props.right}</div>
+				</Show>
+			</header>
+			{props.children}
+		</section>
+	);
+}
+
+function SectionCard(props: ParentProps<{ class?: string; padded?: boolean }>) {
+	return (
+		<div
+			class={cx(
+				"overflow-hidden rounded-xl border border-gray-3 bg-gray-2",
+				props.padded && "px-4 py-4",
+				props.class,
+			)}
+		>
+			{props.children}
+		</div>
+	);
+}
+
+function SectionRows(props: ParentProps) {
+	return (
+		<SectionCard class="divide-y divide-gray-3">{props.children}</SectionCard>
 	);
 }
 
@@ -665,22 +877,23 @@ function ServerURLSetting(props: {
 	const [value, setValue] = createWritableMemo(() => props.value);
 
 	return (
-		<div class="flex flex-col gap-3">
-			<h3 class="text-sm text-gray-12 w-fit">Self host</h3>
-			<div class="flex flex-col gap-2 px-4 rounded-xl border border-gray-3 bg-gray-2">
-				<SettingItem
-					label="Cap Server URL"
-					description="This setting should only be changed if you are self hosting your own instance of Cap Web."
-				>
-					<div class="flex flex-col gap-2 items-end">
+		<Section
+			title="Self-host"
+			description="Only change this if you are running your own instance of Cap Web."
+		>
+			<SectionCard padded>
+				<div class="flex flex-col gap-3">
+					<label class="flex flex-col gap-1.5">
+						<span class="text-[13px] text-gray-12">Cap Server URL</span>
 						<Input
 							class="bg-gray-3"
 							value={value()}
 							onInput={(e) => setValue(e.currentTarget.value)}
 						/>
+					</label>
+					<div class="flex justify-end">
 						<Button
 							size="sm"
-							class="mt-2"
 							variant="dark"
 							disabled={props.value === value()}
 							onClick={() => props.onChange(value())}
@@ -688,9 +901,9 @@ function ServerURLSetting(props: {
 							Update
 						</Button>
 					</div>
-				</SettingItem>
-			</div>
-		</div>
+				</div>
+			</SectionCard>
+		</Section>
 	);
 }
 
@@ -762,24 +975,20 @@ function DefaultProjectNameCard(props: {
 			<button
 				type="button"
 				title="Click to copy"
-				class="bg-gray-1 hover:bg-gray-5 rounded-md m-0.5 p-0.5 cursor-pointer transition-[color,background-color,transform] ease-out duration-200 active:scale-95"
+				class="px-1.5 py-0.5 mx-0.5 font-mono text-[11px] rounded-md transition-all duration-150 ease-out cursor-pointer bg-gray-3 hover:bg-gray-4 active:scale-95 text-gray-12"
 				onClick={() => commands.writeClipboardString(props.children)}
 			>
-				<code>{props.children}</code>
+				{props.children}
 			</button>
 		);
 	}
 
 	return (
-		<div class="flex flex-col gap-3 px-4 py-3 mt-6 rounded-xl border border-gray-3 bg-gray-2">
-			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-				<div class="flex flex-col gap-1">
-					<p class="text-sm text-gray-12">Default Project Name</p>
-					<p class="text-xs text-gray-10">
-						Choose the template to use as the default project and file name.
-					</p>
-				</div>
-				<div class="flex flex-shrink-0 gap-2">
+		<Section
+			title="Default project name"
+			description="Template used for new recordings and exported files."
+			right={
+				<>
 					<Button
 						size="sm"
 						variant="gray"
@@ -797,7 +1006,6 @@ function DefaultProjectNameCard(props: {
 					>
 						Reset
 					</Button>
-
 					<Button
 						size="sm"
 						variant="dark"
@@ -809,91 +1017,83 @@ function DefaultProjectNameCard(props: {
 					>
 						Save
 					</Button>
+				</>
+			}
+		>
+			<SectionCard padded>
+				<div class="flex flex-col gap-3">
+					<Input
+						autocorrect="off"
+						ref={inputRef}
+						type="text"
+						class="bg-gray-3 font-mono"
+						value={inputValue()}
+						onInput={(e) => {
+							setInputValue(e.currentTarget.value);
+							updatePreview(e.currentTarget.value);
+						}}
+					/>
+
+					<div class="flex gap-2 items-center px-3 py-2 rounded-lg border border-dashed bg-gray-3 border-gray-5">
+						<IconCapLogo class="pointer-events-none size-4 shrink-0" />
+						<p class="text-xs text-gray-12 whitespace-pre-wrap">{preview()}</p>
+					</div>
+
+					<Collapsible class="w-full rounded-lg">
+						<Collapsible.Trigger class="inline-flex gap-1 items-center text-xs transition-colors text-gray-10 hover:text-gray-12 group">
+							<IconCapChevronDown class="size-3.5 ui-group-expanded:rotate-180 transition-transform duration-200" />
+							<span>Available placeholders</span>
+						</Collapsible.Trigger>
+
+						<Collapsible.Content class="space-y-3 pt-3 text-xs text-gray-12 opacity-0 transition animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
+							<p class="text-gray-10">
+								Click any placeholder to copy it. Time supports custom formats
+								via <code class="text-gray-12">{"{moment:HH:mm}"}</code>.
+							</p>
+
+							<div class="space-y-1">
+								<p class="font-medium text-gray-12">Recording mode</p>
+								<p>
+									<CodeView>{"{recording_mode}"}</CodeView> → "Studio",
+									"Instant", or "Screenshot"
+								</p>
+								<p>
+									<CodeView>{"{mode}"}</CodeView> → "studio", "instant", or
+									"screenshot"
+								</p>
+							</div>
+
+							<div class="space-y-1">
+								<p class="font-medium text-gray-12">Target</p>
+								<p>
+									<CodeView>{"{target_kind}"}</CodeView> → "Display", "Window",
+									or "Area"
+								</p>
+								<p>
+									<CodeView>{"{target_name}"}</CodeView> → Monitor name or
+									window title.
+								</p>
+							</div>
+
+							<div class="space-y-1">
+								<p class="font-medium text-gray-12">Date &amp; time</p>
+								<p>
+									<CodeView>{"{date}"}</CodeView> → {dateString}
+								</p>
+								<p>
+									<CodeView>{"{time}"}</CodeView> →{" "}
+									{macos ? "09:41 AM" : "12:00 PM"}
+								</p>
+								<p class="flex flex-col items-start pt-1">
+									<CodeView>{MOMENT_EXAMPLE_TEMPLATE}</CodeView> →{" "}
+									{momentExample()}
+								</p>
+							</div>
+						</Collapsible.Content>
+					</Collapsible>
 				</div>
-			</div>
-
-			<div class="flex flex-col gap-2 w-full">
-				<Input
-					autocorrect="off"
-					ref={inputRef}
-					type="text"
-					class="bg-gray-3 font-mono"
-					value={inputValue()}
-					onInput={(e) => {
-						setInputValue(e.currentTarget.value);
-						updatePreview(e.currentTarget.value);
-					}}
-				/>
-
-				<div class="w-full flex items-center py-2 px-2 rounded-lg bg-gray-transparent-50 border border-dashed border-gray-5">
-					<IconCapLogo class="size-4 pointer-events-none mr-2" />
-					<p class="whitespace-pre-wrap">{preview()}</p>
-				</div>
-
-				<Collapsible class="w-full rounded-lg">
-					<Collapsible.Trigger class="group inline-flex items-center w-full text-xs rounded-lg outline-none px-0.5 py-1">
-						<IconCapChevronDown class="size-4 ui-group-expanded:rotate-180 transition-transform duration-300 ease-in-out" />
-						<p class="py-0.5 px-1">How to customize?</p>
-					</Collapsible.Trigger>
-
-					<Collapsible.Content class="opacity-0 transition animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100 text-xs text-gray-12 space-y-3 px-1 pb-2">
-						<p class="border-t pt-3">
-							Use placeholders in your template that will be automatically
-							filled in.
-						</p>
-
-						<div class="space-y-1">
-							<p class="font-medium text-foreground">Recording Mode</p>
-							<p>
-								<CodeView>{"{recording_mode}"}</CodeView> → "Studio", "Instant",
-								or "Screenshot"
-							</p>
-							<p>
-								<CodeView>{"{mode}"}</CodeView> → "studio", "instant", or
-								"screenshot"
-							</p>
-						</div>
-
-						<div class="space-y-1">
-							<p class="font-medium text-foreground">Target</p>
-							<p>
-								<CodeView>{"{target_kind}"}</CodeView> → "Display", "Window", or
-								"Area"
-							</p>
-							<p>
-								<CodeView>{"{target_name}"}</CodeView> → The name of the monitor
-								or the title of the app depending on the recording mode.
-							</p>
-						</div>
-
-						<div class="space-y-1">
-							<p class="font-medium text-foreground">Date &amp; Time</p>
-							<p>
-								<CodeView>{"{date}"}</CodeView> → {dateString}
-							</p>
-							<p>
-								<CodeView>{"{time}"}</CodeView> →{" "}
-								{macos ? "09:41 AM" : "12:00 PM"}
-							</p>
-						</div>
-
-						<div class="space-y-1">
-							<p class="font-medium text-foreground">Custom Formats</p>
-							<p>
-								You can also use a custom format for time. The placeholders are
-								case-sensitive. For 24-hour time, use{" "}
-								<CodeView>{"{moment:HH:mm}"}</CodeView> or use lower cased{" "}
-								<code>hh</code> for 12-hour format.
-							</p>
-							<p class="flex flex-col items-start pt-1">
-								<CodeView>{MOMENT_EXAMPLE_TEMPLATE}</CodeView> →{" "}
-								{momentExample()}
-							</p>
-						</div>
-					</Collapsible.Content>
-				</Collapsible>
-			</div>
-		</div>
+			</SectionCard>
+		</Section>
 	);
 }
 
@@ -964,22 +1164,15 @@ function ExcludedWindowsCard(props: {
 	};
 
 	return (
-		<div class="flex flex-col gap-3 px-4 py-3 mt-6 rounded-xl border border-gray-3 bg-gray-2">
-			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-				<div class="flex flex-col gap-1">
-					<p class="text-sm text-gray-12">Excluded Windows</p>
-					<p class="text-xs text-gray-10">
-						Choose which windows Cap hides from your recordings.
-					</p>
-					<Show when={props.isWindows}>
-						<p class="text-xs text-gray-9">
-							<span class="font-medium text-gray-11">Note:</span> Only Cap
-							related windows can be excluded on Windows due to technical
-							limitations.
-						</p>
-					</Show>
-				</div>
-				<div class="flex flex-shrink-0 gap-2">
+		<Section
+			title="Excluded windows"
+			description={
+				props.isWindows
+					? "Hide windows from recordings. On Windows, only Cap-related windows can be excluded."
+					: "Hide windows from recordings."
+			}
+			right={
+				<>
 					<Button
 						variant="gray"
 						size="sm"
@@ -989,76 +1182,77 @@ function ExcludedWindowsCard(props: {
 							void props.onReset();
 						}}
 					>
-						Reset to Default
+						Reset
 					</Button>
 					<Button
 						variant="dark"
 						size="sm"
 						disabled={!canAdd()}
 						onClick={(e) => void handleAddClick(e)}
-						class="flex items-center gap-2"
+						class="flex gap-1.5 items-center"
 					>
-						<IconLucidePlus class="size-4" />
+						<IconLucidePlus class="size-3.5" />
 						Add
 					</Button>
-				</div>
-			</div>
-			<Show when={!props.isLoading} fallback={<ExcludedWindowsSkeleton />}>
-				<Show
-					when={hasExclusions()}
-					fallback={
-						<p class="text-xs text-gray-10">
-							No windows are currently excluded.
-						</p>
-					}
-				>
-					<div class="flex flex-wrap gap-2">
-						<For each={props.excludedWindows}>
-							{(entry, index) => (
-								<div class="group flex items-center gap-2 rounded-full border border-gray-4 bg-gray-3 px-3 py-1.5">
-									<div class="flex flex-col leading-tight">
-										<span class="text-sm text-gray-12">
-											{getExclusionPrimaryLabel(entry)}
-										</span>
-										<Show when={getExclusionSecondaryLabel(entry)}>
-											{(label) => (
-												<span class="text-[0.65rem] text-gray-9">
-													{label()}
-												</span>
-											)}
-										</Show>
+				</>
+			}
+		>
+			<SectionCard padded>
+				<Show when={!props.isLoading} fallback={<ExcludedWindowsSkeleton />}>
+					<Show
+						when={hasExclusions()}
+						fallback={
+							<p class="text-xs text-gray-10">
+								No windows are currently excluded.
+							</p>
+						}
+					>
+						<div class="flex flex-wrap gap-2">
+							<For each={props.excludedWindows}>
+								{(entry, index) => (
+									<div class="flex gap-2 items-center pr-1 pl-3 py-1.5 rounded-full border bg-gray-3 border-gray-4">
+										<div class="flex flex-col leading-tight">
+											<span class="text-xs text-gray-12">
+												{getExclusionPrimaryLabel(entry)}
+											</span>
+											<Show when={getExclusionSecondaryLabel(entry)}>
+												{(label) => (
+													<span class="text-[10px] text-gray-9">{label()}</span>
+												)}
+											</Show>
+										</div>
+										<button
+											type="button"
+											class="flex justify-center items-center rounded-full transition-colors size-5 text-gray-10 hover:bg-gray-5 hover:text-gray-12"
+											onClick={() => void props.onRemove(index())}
+											aria-label="Remove excluded window"
+										>
+											<IconLucideX class="size-3" />
+										</button>
 									</div>
-									<button
-										type="button"
-										class="flex items-center justify-center rounded-full bg-gray-4/70 text-gray-11 transition-colors hover:bg-gray-5 hover:text-gray-12 size-6"
-										onClick={() => void props.onRemove(index())}
-										aria-label="Remove excluded window"
-									>
-										<IconLucideX class="size-3" />
-									</button>
-								</div>
-							)}
-						</For>
-					</div>
+								)}
+							</For>
+						</div>
+					</Show>
 				</Show>
-			</Show>
-		</div>
+			</SectionCard>
+		</Section>
 	);
 }
 
 function ExcludedWindowsSkeleton() {
-	const chipWidths = ["w-32", "w-28", "w-36"] as const;
+	const chipWidths = ["w-28", "w-24", "w-32"] as const;
 
 	return (
 		<div class="flex flex-wrap gap-2" aria-hidden="true">
 			<For each={chipWidths}>
 				{(width) => (
-					<div class="flex items-center gap-2 rounded-full border border-gray-4 bg-gray-3 px-3 py-1.5 animate-pulse">
+					<div class="flex gap-2 items-center pr-1 pl-3 py-1.5 rounded-full border bg-gray-3 border-gray-4 animate-pulse">
 						<div class="flex flex-col gap-1 leading-tight">
-							<div class={cx("h-3 rounded bg-gray-4", width)} />
-							<div class="h-2 w-16 rounded bg-gray-4" />
+							<div class={cx("h-2.5 rounded bg-gray-4", width)} />
+							<div class="w-14 h-2 rounded bg-gray-4" />
 						</div>
-						<div class="size-6 rounded-full bg-gray-4" />
+						<div class="rounded-full size-5 bg-gray-4" />
 					</div>
 				)}
 			</For>

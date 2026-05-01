@@ -1,6 +1,8 @@
 import { Config, Data, Effect, Option } from "effect";
 
-export class FetchIpError extends Data.TaggedError("FetchIpError")<{}> {}
+export class FetchIpError extends Data.TaggedError("FetchIpError")<
+	Record<never, never>
+> {}
 
 class EcsContainerMetadata extends Effect.Service<EcsContainerMetadata>()(
 	"EcsContainerMetadata",

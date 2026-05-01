@@ -235,6 +235,10 @@ pub struct AddSender(pub flume::Sender<FFmpegVideoFrame>);
 
 pub struct AddNativeSender(pub flume::Sender<NativeCameraFrame>);
 
+pub struct RemoveSender(pub flume::Sender<FFmpegVideoFrame>);
+
+pub struct RemoveNativeSender(pub flume::Sender<NativeCameraFrame>);
+
 pub struct ListenForReady(pub oneshot::Sender<()>);
 
 pub struct OnFeedDisconnect(pub Box<dyn Fn() + Send>);
@@ -449,6 +453,10 @@ struct SetupCameraResult {
 }
 
 static CAMERA_CALLBACK_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+const TARGET_CAMERA_WIDTH: u32 = 1280;
+const TARGET_CAMERA_HEIGHT: u32 = 720;
+const TARGET_CAMERA_FRAME_RATE: f32 = 30.0;
+const MIN_CAMERA_FRAME_RATE: f32 = 24.0;
 
 fn select_camera_format(
     camera: &cap_camera::CameraInfo,
@@ -461,8 +469,36 @@ fn select_camera_format(
     let mut ideal_formats = formats
         .clone()
         .into_iter()
-        .filter(|f| f.frame_rate() >= 30.0 && f.width() < 2000 && f.height() < 2000)
+        .filter(|f| {
+            f.frame_rate() >= MIN_CAMERA_FRAME_RATE
+                && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
+                && f.width() <= TARGET_CAMERA_WIDTH
+                && f.height() <= TARGET_CAMERA_HEIGHT
+        })
         .collect::<Vec<_>>();
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats
+            .clone()
+            .into_iter()
+            .filter(|f| {
+                f.frame_rate() >= MIN_CAMERA_FRAME_RATE
+                    && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
+                    && f.width() < 2000
+                    && f.height() < 2000
+            })
+            .collect::<Vec<_>>();
+    }
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats
+            .clone()
+            .into_iter()
+            .filter(|f| {
+                f.frame_rate() >= MIN_CAMERA_FRAME_RATE && f.width() < 2000 && f.height() < 2000
+            })
+            .collect::<Vec<_>>();
+    }
 
     if ideal_formats.is_empty() {
         ideal_formats = formats;
@@ -479,12 +515,14 @@ fn select_camera_format(
 
         let aspect_cmp = aspect_cmp_a.partial_cmp(&aspect_cmp_b);
         let resolution_cmp = (a.width() * a.height()).cmp(&(b.width() * b.height()));
-        let fr_cmp = a.frame_rate().partial_cmp(&b.frame_rate());
+        let fr_cmp_a = (a.frame_rate() - TARGET_CAMERA_FRAME_RATE).abs();
+        let fr_cmp_b = (b.frame_rate() - TARGET_CAMERA_FRAME_RATE).abs();
+        let fr_cmp = fr_cmp_a.partial_cmp(&fr_cmp_b);
 
         aspect_cmp
             .unwrap_or(Ordering::Equal)
             .then(resolution_cmp.reverse())
-            .then(fr_cmp.unwrap_or(Ordering::Equal).reverse())
+            .then(fr_cmp.unwrap_or(Ordering::Equal))
     });
 
     Ok(ideal_formats.swap_remove(0))
@@ -810,6 +848,31 @@ impl Message<AddNativeSender> for CameraFeed {
 
         debug!("CameraFeed: Adding new native sender");
         self.native_senders.push(msg.0);
+    }
+}
+
+impl Message<RemoveSender> for CameraFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: RemoveSender,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.senders.retain(|sender| !sender.same_channel(&msg.0));
+    }
+}
+
+impl Message<RemoveNativeSender> for CameraFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: RemoveNativeSender,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.native_senders
+            .retain(|sender| !sender.same_channel(&msg.0));
     }
 }
 

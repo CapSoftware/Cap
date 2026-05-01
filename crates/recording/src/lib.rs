@@ -45,6 +45,7 @@ pub enum RecordingMode {
 
 #[derive(Clone, Debug, Copy, Default, PartialEq, Eq)]
 pub enum StudioQuality {
+    Compatibility,
     #[default]
     Balanced,
     Ultra,

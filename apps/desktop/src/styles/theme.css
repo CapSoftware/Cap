@@ -237,14 +237,29 @@
 	animation-iteration-count: infinite;
 }
 
+@keyframes settings-section-pulse {
+	0% {
+		box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+	}
+	30% {
+		box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.45);
+	}
+	100% {
+		box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+	}
+}
+
+.settings-section-pulse {
+	animation: settings-section-pulse 1.6s ease-out forwards;
+	border-radius: 0.75rem;
+}
+
 /* SVG path animation */
 
 @keyframes svgpathframes {
 	0% {
 		stroke-dasharray: 100;
 		stroke-dashoffset: 100;
-	}
-	50% {
 	}
 	100% {
 		stroke-dashoffset: 0;

@@ -438,7 +438,7 @@ impl DecodedFrame {
 }
 
 pub enum VideoDecoderMessage {
-    GetFrame(f32, tokio::sync::oneshot::Sender<DecodedFrame>),
+    GetFrame(f32, u32, tokio::sync::oneshot::Sender<DecodedFrame>),
 }
 
 pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
@@ -447,12 +447,14 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
 }
 
 pub const FRAME_CACHE_SIZE: usize = 90;
+const DEFAULT_MAX_FALLBACK_DISTANCE: u32 = 90;
 
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
     sender: mpsc::Sender<VideoDecoderMessage>,
     offset: f64,
     status: DecoderStatus,
+    max_fallback_distance: u32,
 }
 
 impl AsyncVideoDecoderHandle {
@@ -485,7 +487,11 @@ impl AsyncVideoDecoderHandle {
 
         if self
             .sender
-            .send(VideoDecoderMessage::GetFrame(adjusted_time, tx))
+            .send(VideoDecoderMessage::GetFrame(
+                adjusted_time,
+                self.max_fallback_distance,
+                tx,
+            ))
             .is_err()
         {
             return None;
@@ -527,6 +533,11 @@ impl AsyncVideoDecoderHandle {
     pub fn fallback_reason(&self) -> Option<&str> {
         self.status.fallback_reason.as_deref()
     }
+
+    pub fn with_max_fallback_distance(mut self, max_fallback_distance: u32) -> Self {
+        self.max_fallback_distance = max_fallback_distance;
+        self
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -560,6 +571,7 @@ async fn spawn_ffmpeg_decoder(
                 sender: tx,
                 offset,
                 status,
+                max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
             })
         }
         Ok(Ok(Err(e))) => Err(format!(
@@ -615,6 +627,7 @@ pub async fn spawn_decoder(
                         sender: tx,
                         offset,
                         status,
+                        max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
                     })
                 }
                 Ok(Ok(Err(e))) => Err(format!("AVAssetReader initialization failed: {e}")),
@@ -659,6 +672,7 @@ pub async fn spawn_decoder(
                             sender: tx,
                             offset,
                             status,
+                            max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
                         })
                     }
                     Ok(Ok(Err(e))) => Err(format!(
@@ -704,6 +718,7 @@ pub async fn spawn_decoder(
                         sender: tx,
                         offset,
                         status,
+                        max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
                     })
                 }
                 Ok(Ok(Err(e))) => Err(format!(
@@ -737,6 +752,7 @@ pub async fn spawn_decoder(
                             sender: tx,
                             offset,
                             status,
+                            max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
                         })
                     }
                     Ok(Ok(Err(e))) => Err(format!(
@@ -789,6 +805,7 @@ pub async fn spawn_decoder(
                             sender: tx,
                             offset,
                             status,
+                            max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
                         })
                     }
                     Ok(Ok(Err(e))) => Err(format!(
@@ -830,6 +847,7 @@ pub async fn spawn_decoder(
                     sender: tx,
                     offset,
                     status,
+                    max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
                 })
             }
             Ok(Ok(Err(e))) => Err(format!("'{name}' decoder initialization failed: {e}")),

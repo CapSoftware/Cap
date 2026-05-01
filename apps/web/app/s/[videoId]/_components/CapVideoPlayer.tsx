@@ -481,7 +481,7 @@ export function CapVideoPlayer({
 	const generateVideoFrameThumbnail = useCallback(
 		(_time: number): string | undefined =>
 			captureVideoFrameDataUrl({ video: videoRef.current }),
-		[],
+		[videoRef.current],
 	);
 
 	const isUploadFailed = uploadProgress?.status === "failed";

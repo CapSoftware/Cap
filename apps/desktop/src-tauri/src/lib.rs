@@ -746,19 +746,35 @@ async fn set_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
-            let camera_ws_sender = {
+            let (camera_ws_sender, native_preview_active) = {
                 let app = &mut *state.write().await;
                 app.selected_camera_id = Some(id.clone());
                 app.camera_in_use = true;
                 app.camera_cleanup_done = false;
                 #[allow(deprecated)]
-                app.camera_ws_sender.clone()
+                (
+                    app.camera_ws_sender.clone(),
+                    app.camera_preview.is_initialized(),
+                )
             };
 
-            #[allow(deprecated)]
-            let _ = camera_feed
-                .ask(feeds::camera::AddSender(camera_ws_sender))
-                .await;
+            if native_preview_active {
+                #[allow(deprecated)]
+                let result = camera_feed
+                    .ask(feeds::camera::RemoveSender(camera_ws_sender))
+                    .await;
+                if let Err(err) = result {
+                    warn!(error = %err, "Failed to remove camera sender");
+                }
+            } else {
+                #[allow(deprecated)]
+                let result = camera_feed
+                    .ask(feeds::camera::AddSender(camera_ws_sender))
+                    .await;
+                if let Err(err) = result {
+                    warn!(error = %err, "Failed to add camera sender");
+                }
+            }
 
             let mut attempts = 0;
             let init_result: Result<(), String> = loop {
@@ -1576,6 +1592,11 @@ pub struct RequestSetTargetMode {
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenSettings {
     page: String,
+}
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestScrollToSettingsSection {
+    pub section: String,
 }
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
@@ -3415,17 +3436,23 @@ async fn refresh_camera_feed(state: MutableState<'_, App>) -> Result<(), String>
 
     drop(app);
 
-    #[allow(deprecated)]
-    camera_feed
-        .ask(feeds::camera::AddSender(camera_ws_sender))
-        .await
-        .map_err(|err| format!("error re-adding camera ws sender: {err}"))?;
-
     if let Some(sender) = camera_preview_sender {
+        #[allow(deprecated)]
+        camera_feed
+            .ask(feeds::camera::RemoveSender(camera_ws_sender))
+            .await
+            .map_err(|err| format!("error removing camera ws sender: {err}"))?;
+
         camera_feed
             .ask(feeds::camera::AddSender(sender))
             .await
             .map_err(|err| format!("error re-adding camera preview sender: {err}"))?;
+    } else {
+        #[allow(deprecated)]
+        camera_feed
+            .ask(feeds::camera::AddSender(camera_ws_sender))
+            .await
+            .map_err(|err| format!("error re-adding camera ws sender: {err}"))?;
     }
 
     Ok(())
@@ -3656,6 +3683,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             RequestOpenRecordingPicker,
             RequestSetTargetMode,
             RequestOpenSettings,
+            RequestScrollToSettingsSection,
             RequestScreenCapturePrewarm,
             NewNotification,
             audio_meter::AudioInputLevelChange,
