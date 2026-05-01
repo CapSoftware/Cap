@@ -108,6 +108,7 @@ function InProgressRecordingInner() {
 	const [issueKey, setIssueKey] = createSignal("");
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
 	const [startingDismissed, setStartingDismissed] = createSignal(false);
+	const [stopRequested, setStopRequested] = createSignal(false);
 	const [interactiveAreaRef, setInteractiveAreaRef] =
 		createSignal<HTMLDivElement | null>(null);
 	let settingsButtonRef: HTMLButtonElement | undefined;
@@ -189,6 +190,7 @@ function InProgressRecordingInner() {
 				setRecordingFailure(null);
 				setDegradedReason(null);
 				setPauseResumes([]);
+				setStopRequested(false);
 				setState({
 					variant: "countdown",
 					from: payload.value,
@@ -202,6 +204,7 @@ function InProgressRecordingInner() {
 				setRecordingFailure(null);
 				setDegradedReason(null);
 				setPauseResumes([]);
+				setStopRequested(false);
 				aborted = false;
 				setState({ variant: "recording" });
 				setStart(Date.now());
@@ -262,6 +265,7 @@ function InProgressRecordingInner() {
 			setRecordingFailure(null);
 			setDegradedReason(null);
 			setPauseResumes([]);
+			setStopRequested(false);
 			aborted = false;
 			if (recording.status === "recording") {
 				setState({ variant: "recording" });
@@ -382,10 +386,20 @@ function InProgressRecordingInner() {
 
 	const stopRecording = createMutation(() => ({
 		mutationFn: async () => {
+			setStopRequested(true);
 			setState({ variant: "stopped" });
+			void getCurrentWindow().hide();
 			await commands.stopRecording();
 		},
+		onError: () => {
+			setStopRequested(false);
+		},
 	}));
+
+	const requestStopRecording = () => {
+		if (isCountdown() || stopRequested() || stopRecording.isPending) return;
+		stopRecording.mutate();
+	};
 
 	const togglePause = createMutation(() => ({
 		mutationFn: async () => {
@@ -669,10 +683,20 @@ function InProgressRecordingInner() {
 									}
 								>
 									<button
-										disabled={stopRecording.isPending || isCountdown()}
+										disabled={
+											stopRequested() ||
+											stopRecording.isPending ||
+											isCountdown()
+										}
 										class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-colors duration-100 hover:bg-red-500/[0.08] active:bg-red-500/[0.12] disabled:opacity-60 disabled:hover:bg-transparent"
 										type="button"
-										onClick={() => stopRecording.mutate()}
+										onPointerDown={(event) => {
+											if (event.button !== 0) return;
+											event.preventDefault();
+											event.stopPropagation();
+											requestStopRecording();
+										}}
+										onClick={requestStopRecording}
 										title="Stop recording"
 										aria-label="Stop recording"
 									>
