@@ -31,6 +31,19 @@ const DISK_SPACE_MIN_START_MB: u64 = 500;
 const DISK_SPACE_CRITICAL_MB: u64 = 200;
 const DISK_SPACE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 
+#[cfg(target_os = "macos")]
+const QOS_CLASS_USER_INITIATED: u32 = 0x19;
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+}
+
+#[cfg(target_os = "macos")]
+fn boost_encoder_thread_qos() {
+    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0) };
+}
+
 fn get_available_disk_space_mb(path: &std::path::Path) -> Option<u64> {
     use std::ffi::CString;
     let c_path = CString::new(path.parent().unwrap_or(path).to_str()?).ok()?;
@@ -260,6 +273,7 @@ pub struct AVFoundationMp4MuxerConfig {
     pub output_height: Option<u32>,
     pub instant_mode: bool,
     pub ultra_quality: bool,
+    pub compatibility_quality: bool,
 }
 
 impl Muxer for AVFoundationMp4Muxer {
@@ -273,7 +287,6 @@ impl Muxer for AVFoundationMp4Muxer {
         pause_flag: Arc<AtomicBool>,
         _tasks: &mut TaskPool,
     ) -> anyhow::Result<Self> {
-    pub compatibility_quality: bool,
         let video_config =
             video_config.ok_or_else(|| anyhow!("Invariant: No video source provided"))?;
 
@@ -309,6 +322,13 @@ impl Muxer for AVFoundationMp4Muxer {
             )
         } else if config.ultra_quality {
             cap_enc_avfoundation::MP4Encoder::init_ultra(
+                output_path.clone(),
+                video_config,
+                audio_config,
+                config.output_height,
+            )
+        } else if config.compatibility_quality {
+            cap_enc_avfoundation::MP4Encoder::init_compatibility(
                 output_path.clone(),
                 video_config,
                 audio_config,
