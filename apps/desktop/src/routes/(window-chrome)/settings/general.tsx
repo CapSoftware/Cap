@@ -1041,7 +1041,7 @@ function DefaultProjectNameCard(props: {
 
 					<Collapsible class="w-full rounded-lg">
 						<Collapsible.Trigger class="inline-flex gap-1 items-center text-xs transition-colors text-gray-10 hover:text-gray-12 group">
-							<IconCapChevronDown class="size-3.5 ui-group-expanded:rotate-180 transition-transform duration-200" />
+							<IconCapChevronDown class="size-3.5 data-group-expanded:rotate-180 transition-transform duration-200" />
 							<span>Available placeholders</span>
 						</Collapsible.Trigger>
 

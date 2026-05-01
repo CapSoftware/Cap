@@ -178,13 +178,13 @@ export const Dialog = {
 			<KDialog {...props}>
 				<KDialog.Portal>
 					{!props.hideOverlay && (
-						<KDialog.Overlay class="fixed inset-0 z-50 bg-black/80 data-expanded:animate-in data-expanded:fade-in ui-closed:animate-out ui-closed:fade-out" />
+						<KDialog.Overlay class="fixed inset-0 z-50 bg-black/80 data-expanded:animate-in data-expanded:fade-in data-closed:animate-out data-closed:fade-out" />
 					)}
 					<div class="flex fixed inset-0 z-50 justify-center items-center">
 						<KDialog.Content
 							class={cx(
 								props.contentClass,
-								"z-50 text-sm rounded-[1.25rem] overflow-hidden border border-gray-3 bg-gray-1 min-w-88 data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
+								"z-50 text-sm rounded-[1.25rem] overflow-hidden border border-gray-3 bg-gray-1 min-w-88 data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 origin-top data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95",
 								(props.size ?? "sm") === "sm" ? "max-w-96" : "max-w-3xl",
 							)}
 						>
@@ -278,7 +278,7 @@ export function MenuItem<T extends ValidComponent = "button">(
 			class={cx(
 				props.class,
 				"flex flex-row shrink-0 items-center gap-1.5 px-[0.675rem] py-1.5 rounded-lg outline-hidden text-nowrap overflow-hidden text-ellipsis w-full max-w-full",
-				"text-[0.875rem] text-gray-10 disabled:text-gray-10 ui-highlighted:bg-gray-3 ui-highlighted:text-gray-12",
+				"text-[0.875rem] text-gray-10 disabled:text-gray-10 data-highlighted:bg-gray-3 data-highlighted:text-gray-12",
 			)}
 		/>
 	);
@@ -326,7 +326,7 @@ const editorButtonStyles = cva(
 				primary:
 					"text-gray-12 enabled:hover:not-data-pressed:bg-gray-3 data-expanded:bg-gray-3 outline-blue-300 focus:bg-transparent",
 				danger:
-					"text-gray-12 enabled:hover:not-data-pressed:bg-gray-3 data-expanded:bg-red-300 ui-pressed:bg-red-300 data-expanded:text-gray-1 ui-pressed:text-gray-1 outline-red-300",
+					"text-gray-12 enabled:hover:not-data-pressed:bg-gray-3 data-expanded:bg-red-300 data-pressed:bg-red-300 data-expanded:text-gray-1 data-pressed:text-gray-1 outline-red-300",
 			},
 		},
 		defaultVariants: { variant: "primary" },
@@ -337,9 +337,9 @@ const editorButtonLeftIconStyles = cva("transition-colors duration-100", {
 	variants: {
 		variant: {
 			primary:
-				"text-gray-12 enabled:group-hover:not-ui-group-disabled:text-gray-12 ui-group-expanded:text-gray-12",
+				"text-gray-12 enabled:group-hover:not-data-group-disabled:text-gray-12 data-group-expanded:text-gray-12",
 			danger:
-				"text-gray-12 group-hover:enabled:text-gray-12 ui-group-expanded:text-gray-1 ui-group-pressed:text-gray-1",
+				"text-gray-12 group-hover:enabled:text-gray-12 data-group-expanded:text-gray-1 data-group-pressed:text-gray-1",
 		},
 	},
 	defaultVariants: { variant: "primary" },
@@ -427,16 +427,16 @@ export const dropdownContainerClasses =
 	"z-60 flex flex-col rounded-xl border border-gray-3 bg-gray-1 shadow-s overflow-y-hidden outline-hidden";
 
 export const topLeftAnimateClasses =
-	"data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-left";
+	"data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95 origin-top-left";
 
 export const topCenterAnimateClasses =
-	"data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-center";
+	"data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95 origin-top-center";
 
 export const topRightAnimateClasses =
-	"data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-right";
+	"data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95 origin-top-right";
 
 export const topSlideAnimateClasses =
-	"data-expanded:animate-in data-expanded:fade-in data-expanded:slide-in-from-top-1 ui-closed:animate-out ui-closed:fade-out ui-closed:slide-out-to-top-1 origin-top-center";
+	"data-expanded:animate-in data-expanded:fade-in data-expanded:slide-in-from-top-1 data-closed:animate-out data-closed:fade-out data-closed:slide-out-to-top-1 origin-top-center";
 
 export function ComingSoonTooltip(
 	props: ComponentProps<typeof KTooltip> & { as?: ValidComponent },
@@ -448,7 +448,7 @@ export function ComingSoonTooltip(
 				{trigger.children}
 			</KTooltip.Trigger>
 			<KTooltip.Portal>
-				<KTooltip.Content class="p-2 font-medium bg-gray-12 text-gray-1 data-expanded:animate-in data-expanded:slide-in-from-bottom-1 data-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-1000">
+				<KTooltip.Content class="p-2 font-medium bg-gray-12 text-gray-1 data-expanded:animate-in data-expanded:slide-in-from-bottom-1 data-expanded:fade-in data-closed:animate-out data-closed:slide-out-to-bottom-1 data-closed:fade-out rounded-lg text-xs z-1000">
 					Coming Soon
 				</KTooltip.Content>
 			</KTooltip.Portal>
