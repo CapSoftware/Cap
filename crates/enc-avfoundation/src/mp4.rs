@@ -861,6 +861,8 @@ impl MP4Encoder {
         let nanos = (numerator / denominator).max(1);
 
         Duration::from_nanos(nanos as u64)
+    }
+
     fn minimum_video_pts_step(&self) -> Duration {
         let nanos = (self.video_frame_duration().as_nanos() / 4).max(1);
         Duration::from_nanos(nanos.min(u64::MAX as u128) as u64)
