@@ -5,8 +5,8 @@ const mockDb = vi.fn();
 type DbRow = Record<string, unknown>;
 type JsonBody = Record<string, unknown>;
 type TransactionValues = {
-	type?: string;
-	amountMicroCredits?: number;
+	type: string;
+	amountMicroCredits: number;
 };
 type MockDbChain = {
 	select: ReturnType<typeof vi.fn>;
@@ -136,7 +136,19 @@ function setupDbSequence(
 }
 
 function isTransactionValues(value: unknown): value is TransactionValues {
-	return typeof value === "object" && value !== null;
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"type" in value &&
+		typeof value.type === "string" &&
+		"amountMicroCredits" in value &&
+		typeof value.amountMicroCredits === "number"
+	);
+}
+
+function getCapturedJsonBody() {
+	if (capturedJsonBody === null) throw new Error("Expected JSON response body");
+	return capturedJsonBody;
 }
 
 beforeEach(() => {
@@ -199,7 +211,7 @@ describe("developer-storage cron job", () => {
 				success: true,
 				appsProcessed: 1,
 			});
-			expect(capturedJsonBody.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+			expect(getCapturedJsonBody().date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 		});
 
 		it("skips already-processed apps", async () => {
@@ -257,7 +269,7 @@ describe("developer-storage cron job", () => {
 	describe("transaction behavior", () => {
 		it("creates negative transaction for storage_daily", async () => {
 			const GET = await importGET();
-			let insertValues: TransactionValues | null = null;
+			let insertValues: unknown = null;
 
 			setupDbSequence(
 				[
@@ -281,7 +293,8 @@ describe("developer-storage cron job", () => {
 
 			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
 
-			expect(insertValues).not.toBeNull();
+			if (!isTransactionValues(insertValues))
+				throw new Error("Expected storage transaction");
 			expect(insertValues.type).toBe("storage_daily");
 			expect(insertValues.amountMicroCredits).toBe(-33);
 		});
@@ -324,11 +337,12 @@ describe("developer-storage cron job", () => {
 
 			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
 
-			expect(capturedJsonBody).toHaveProperty("success", true);
-			expect(capturedJsonBody).toHaveProperty("date");
-			expect(capturedJsonBody).toHaveProperty("appsProcessed");
-			expect(capturedJsonBody.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-			expect(typeof capturedJsonBody.appsProcessed).toBe("number");
+			const body = getCapturedJsonBody();
+			expect(body).toHaveProperty("success", true);
+			expect(body).toHaveProperty("date");
+			expect(body).toHaveProperty("appsProcessed");
+			expect(body.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+			expect(typeof body.appsProcessed).toBe("number");
 		});
 	});
 

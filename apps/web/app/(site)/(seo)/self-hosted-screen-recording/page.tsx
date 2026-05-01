@@ -45,9 +45,7 @@ export default function Page() {
 	return (
 		<>
 			<script type="application/ld+json">
-				{JSON.stringify(
-					createFAQSchema(selfHostedScreenRecordingContent.faqs),
-				)}
+				{JSON.stringify(createFAQSchema(selfHostedScreenRecordingContent.faqs))}
 			</script>
 			<SelfHostedScreenRecordingPage />
 		</>

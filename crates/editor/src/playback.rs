@@ -1384,7 +1384,9 @@ impl AudioPlayback {
         let mut config = supported_config.config();
         config.channels = output_info.channels as u16;
 
+        #[cfg(not(target_os = "windows"))]
         let sample_rate = output_info.sample_rate;
+        #[cfg(not(target_os = "windows"))]
         let buffer_size = output_info.buffer_size;
 
         let playhead = f64::from(start_frame_number) / f64::from(fps);
@@ -1392,7 +1394,7 @@ impl AudioPlayback {
         info!(
             duration_secs = duration_secs,
             start_playhead = playhead,
-            sample_rate = sample_rate,
+            sample_rate = output_info.sample_rate,
             "Creating pre-rendered audio stream"
         );
 

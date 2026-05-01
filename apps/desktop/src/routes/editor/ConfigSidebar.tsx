@@ -412,8 +412,7 @@ export function ConfigSidebar() {
 						{
 							id: TAB_IDS.cursor,
 							icon: IconCapCursor,
-							disabled:
-								meta().type !== "multiple" || !meta().segments[0]?.cursor,
+							disabled: !meta().hasRecordedCursorData,
 						},
 						{
 							id: TAB_IDS.keyboard,
@@ -1244,9 +1243,7 @@ export function ConfigSidebar() {
 											index: idx,
 										}))
 										.filter(
-											(
-												s,
-											): s is { segment: SceneSegment; index: number } =>
+											(s): s is { segment: SceneSegment; index: number } =>
 												s.segment !== undefined,
 										);
 
@@ -1319,9 +1316,7 @@ export function ConfigSidebar() {
 											index: idx,
 										}))
 										.filter(
-											(
-												s,
-											): s is { segment: TimelineSegment; index: number } =>
+											(s): s is { segment: TimelineSegment; index: number } =>
 												s.segment !== undefined,
 										);
 
@@ -1412,13 +1407,14 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 		// Load initial batch
 		const initialPaths = await Promise.all(visibleWallpaperPaths);
 
-		return initialPaths
-			.filter((p): p is { id: string; path: string } => p.path !== null)
-			.map(({ id, path }) => ({
+		return initialPaths.flatMap(({ id, path }) => {
+			if (path === null) return [];
+			return {
 				id,
 				url: convertFileSrc(path),
 				rawPath: path,
-			}));
+			};
+		});
 	});
 
 	// set padding if background is selected

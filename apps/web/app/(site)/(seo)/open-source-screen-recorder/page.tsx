@@ -42,9 +42,7 @@ export default function Page() {
 	return (
 		<>
 			<script type="application/ld+json">
-				{JSON.stringify(
-					createFAQSchema(openSourceScreenRecorderContent.faqs),
-				)}
+				{JSON.stringify(createFAQSchema(openSourceScreenRecorderContent.faqs))}
 			</script>
 			<OpenSourceScreenRecorderPage />
 		</>
