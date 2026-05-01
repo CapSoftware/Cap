@@ -124,7 +124,7 @@ impl MP4Encoder {
             video_config,
             audio_config,
             output_height,
-            false,
+            BitrateProfile::Balanced,
             false,
         )
     }
@@ -140,8 +140,24 @@ impl MP4Encoder {
             video_config,
             audio_config,
             output_height,
+            BitrateProfile::Ultra,
             false,
-            true,
+        )
+    }
+
+    pub fn init_compatibility(
+        output: PathBuf,
+        video_config: VideoInfo,
+        audio_config: Option<AudioInfo>,
+        output_height: Option<u32>,
+    ) -> Result<Self, InitError> {
+        Self::init_with_options(
+            output,
+            video_config,
+            audio_config,
+            output_height,
+            BitrateProfile::Compatibility,
+            false,
         )
     }
 
@@ -156,8 +172,8 @@ impl MP4Encoder {
             video_config,
             audio_config,
             output_height,
+            BitrateProfile::Balanced,
             true,
-            false,
         )
     }
 
@@ -166,9 +182,10 @@ impl MP4Encoder {
         video_config: VideoInfo,
         audio_config: Option<AudioInfo>,
         output_height: Option<u32>,
+        bitrate_profile: BitrateProfile,
         instant_mode: bool,
-        ultra_quality: bool,
     ) -> Result<Self, InitError> {
+        let ultra_quality = matches!(bitrate_profile, BitrateProfile::Ultra);
         info!(
             width = video_config.width,
             height = video_config.height,
@@ -258,19 +275,27 @@ impl MP4Encoder {
 
             let bitrate = if instant_mode {
                 get_instant_mode_bitrate(output_width as f32, output_height as f32, fps)
-            } else if ultra_quality {
-                get_ultra_bitrate(output_width as f32, output_height as f32, fps)
             } else {
-                get_average_bitrate(output_width as f32, output_height as f32, fps)
+                match bitrate_profile {
+                    BitrateProfile::Ultra => {
+                        get_ultra_bitrate(output_width as f32, output_height as f32, fps)
+                    }
+                    BitrateProfile::Balanced => {
+                        get_average_bitrate(output_width as f32, output_height as f32, fps)
+                    }
+                    BitrateProfile::Compatibility => {
+                        get_compatibility_bitrate(output_width as f32, output_height as f32, fps)
+                    }
+                }
             };
 
-            debug!(instant_mode, ultra_quality, "recording bitrate: {bitrate}");
+            debug!(
+                instant_mode,
+                ?bitrate_profile,
+                "recording bitrate: {bitrate}"
+            );
 
-            let keyframe_interval = if instant_mode {
-                fps as i32
-            } else {
-                (fps * 2.0) as i32
-            };
+            let keyframe_interval = fps as i32;
 
             let allow_frame_reordering = ultra_quality && !instant_mode;
 
@@ -991,6 +1016,16 @@ const MAX_ULTRA_BITRATE: f32 = 120_000_000.0;
 
 fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
     let pixels = width * height;
+const MIN_COMPATIBILITY_BITRATE: f32 = 2_500_000.0;
+const MAX_COMPATIBILITY_BITRATE: f32 = 10_000_000.0;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub enum BitrateProfile {
+    Compatibility,
+    #[default]
+    Balanced,
+    Ultra,
+}
     let fps_factor = fps.min(60.0) / 30.0;
     (pixels * fps_factor * 5.0).max(MIN_STUDIO_BITRATE)
 }
@@ -1004,6 +1039,12 @@ fn get_ultra_bitrate(width: f32, height: f32, fps: f32) -> f32 {
 fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {
     let pixel_ratio = width * height / (1920.0 * 1080.0);
     let fps_ratio = fps.min(60.0) / 30.0;
+fn get_compatibility_bitrate(width: f32, height: f32, fps: f32) -> f32 {
+    let pixels = width * height;
+    let fps_factor = fps.min(60.0) / 30.0;
+    (pixels * fps_factor * 2.5).clamp(MIN_COMPATIBILITY_BITRATE, MAX_COMPATIBILITY_BITRATE)
+}
+
     1_500_000.0 + pixel_ratio * 1_500_000.0 + fps_ratio * 500_000.0
 }
 
