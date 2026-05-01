@@ -235,6 +235,10 @@ pub struct AddSender(pub flume::Sender<FFmpegVideoFrame>);
 
 pub struct AddNativeSender(pub flume::Sender<NativeCameraFrame>);
 
+pub struct RemoveSender(pub flume::Sender<FFmpegVideoFrame>);
+
+pub struct RemoveNativeSender(pub flume::Sender<NativeCameraFrame>);
+
 pub struct ListenForReady(pub oneshot::Sender<()>);
 
 pub struct OnFeedDisconnect(pub Box<dyn Fn() + Send>);
@@ -844,6 +848,31 @@ impl Message<OnFeedDisconnect> for CameraFeed {
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.on_disconnect.push(msg.0);
+    }
+}
+
+impl Message<RemoveSender> for CameraFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: RemoveSender,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.senders.retain(|sender| !sender.same_channel(&msg.0));
+    }
+}
+
+impl Message<RemoveNativeSender> for CameraFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: RemoveNativeSender,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.native_senders
+            .retain(|sender| !sender.same_channel(&msg.0));
     }
 }
 
