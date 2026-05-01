@@ -1553,7 +1553,7 @@ where
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
     let Some(current_recording) = state.clear_current_recording() else {
-        return Err("Recording not in progress".to_string())?;
+        return Ok(());
     };
 
     let recording_dir = current_recording.recording_dir().clone();
