@@ -9,6 +9,7 @@ use anyhow::anyhow;
 use cap_enc_avfoundation::QueueFrameError;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
+use cap_utils::macos_qos::{MacOsQosClass, set_current_thread_qos};
 use cidre::arc;
 use std::{
     path::PathBuf,
@@ -31,17 +32,11 @@ const DISK_SPACE_MIN_START_MB: u64 = 500;
 const DISK_SPACE_CRITICAL_MB: u64 = 200;
 const DISK_SPACE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 
-#[cfg(target_os = "macos")]
-const QOS_CLASS_USER_INITIATED: u32 = 0x19;
-
-#[cfg(target_os = "macos")]
-unsafe extern "C" {
-    fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
-}
-
-#[cfg(target_os = "macos")]
 fn boost_encoder_thread_qos() {
-    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0) };
+    let result = set_current_thread_qos(MacOsQosClass::UserInitiated);
+    if result != 0 {
+        warn!(result, "pthread_set_qos_class_self_np failed");
+    }
 }
 
 fn get_available_disk_space_mb(path: &std::path::Path) -> Option<u64> {

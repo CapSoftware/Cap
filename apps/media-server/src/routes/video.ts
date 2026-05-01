@@ -1149,7 +1149,11 @@ async function downloadSegmentsBatchTracked(
 
 function sendCurrentJobWebhook(jobId: string): void {
 	const job = getJob(jobId);
-	if (job) sendWebhook(job);
+	if (!job) {
+		console.warn(`[mux-segments] Job ${jobId} not found for webhook`);
+		return;
+	}
+	sendWebhook(job);
 }
 
 async function muxSegmentsAsync(

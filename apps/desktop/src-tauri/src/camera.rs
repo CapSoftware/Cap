@@ -3,6 +3,8 @@ use cap_recording::{
     FFmpegVideoFrame,
     feeds::{self, camera::CameraFeed},
 };
+#[cfg(target_os = "macos")]
+use cap_utils::macos_qos::{MacOsQosClass, set_current_thread_qos};
 use ffmpeg::{
     format::{self, Pixel},
     frame,
@@ -31,14 +33,6 @@ use wgpu::{CompositeAlphaMode, SurfaceTexture};
 static TOOLBAR_HEIGHT: f32 = 56.0;
 
 static GPU_SURFACE_SCALE: u32 = 2;
-
-#[cfg(target_os = "macos")]
-const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
-
-#[cfg(target_os = "macos")]
-unsafe extern "C" {
-    fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
-}
 
 pub const MIN_CAMERA_SIZE: f32 = 150.0;
 pub const MAX_CAMERA_SIZE: f32 = 600.0;
@@ -269,8 +263,11 @@ impl CameraPreviewManager {
 
         thread::spawn(move || {
             #[cfg(target_os = "macos")]
-            unsafe {
-                pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            {
+                let result = set_current_thread_qos(MacOsQosClass::UserInteractive);
+                if result != 0 {
+                    warn!(result, "pthread_set_qos_class_self_np failed");
+                }
             }
             LocalSet::new().block_on(
                 &rt,

@@ -760,14 +760,20 @@ async fn set_camera_input(
 
             if native_preview_active {
                 #[allow(deprecated)]
-                let _ = camera_feed
+                let result = camera_feed
                     .ask(feeds::camera::RemoveSender(camera_ws_sender))
                     .await;
+                if let Err(err) = result {
+                    warn!(error = %err, "Failed to remove camera sender");
+                }
             } else {
                 #[allow(deprecated)]
-                let _ = camera_feed
+                let result = camera_feed
                     .ask(feeds::camera::AddSender(camera_ws_sender))
                     .await;
+                if let Err(err) = result {
+                    warn!(error = %err, "Failed to add camera sender");
+                }
             }
 
             let mut attempts = 0;
@@ -3427,18 +3433,15 @@ async fn refresh_camera_feed(state: MutableState<'_, App>) -> Result<(), String>
     let camera_ws_sender = app.camera_ws_sender.clone();
 
     let camera_preview_sender = app.camera_preview.sender();
-    let native_preview_active = app.camera_preview.is_initialized();
 
     drop(app);
 
     if let Some(sender) = camera_preview_sender {
-        if native_preview_active {
-            #[allow(deprecated)]
-            camera_feed
-                .ask(feeds::camera::RemoveSender(camera_ws_sender))
-                .await
-                .map_err(|err| format!("error removing camera ws sender: {err}"))?;
-        }
+        #[allow(deprecated)]
+        camera_feed
+            .ask(feeds::camera::RemoveSender(camera_ws_sender))
+            .await
+            .map_err(|err| format!("error removing camera ws sender: {err}"))?;
 
         camera_feed
             .ask(feeds::camera::AddSender(sender))

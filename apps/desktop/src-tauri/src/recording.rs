@@ -1561,6 +1561,7 @@ where
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
     let Some(current_recording) = state.clear_current_recording() else {
+        warn!("Stop recording requested without active recording");
         return Ok(());
     };
 
