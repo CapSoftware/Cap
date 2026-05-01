@@ -797,6 +797,21 @@ mod tests {
     }
 
     #[test]
+    fn prerendered_audio_reports_audible_playhead_after_output_latency() {
+        let mut buffer = PrerenderedAudioBuffer::<f32> {
+            samples: vec![0.0; AudioData::SAMPLE_RATE as usize * 2],
+            read_position: 0,
+            sample_rate: AudioData::SAMPLE_RATE,
+            channels: 2,
+        };
+
+        buffer.set_playhead(0.5);
+
+        assert!((buffer.current_audible_playhead(0.2) - 0.3).abs() < 0.000_1);
+        assert_eq!(buffer.current_audible_playhead(1.0), 0.0);
+    }
+
+    #[test]
     fn speed_segment_start_cuts_audio_inside_a_single_request() {
         let (_dir, mut renderer, project) = build_renderer_fixture();
         let boundary = 1.0 + 0.25 + 1.0 + 1.0;
