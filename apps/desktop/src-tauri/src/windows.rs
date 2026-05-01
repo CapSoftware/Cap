@@ -1165,8 +1165,7 @@ impl ShowCapWindow {
                 let should_protect = should_protect_window(app, &title);
 
                 #[cfg(target_os = "macos")]
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                    .ok();
+                permissions::prepare_macos_panel_window(app);
 
                 let window = self
                     .window_builder(app, "/")
@@ -1242,7 +1241,7 @@ impl ShowCapWindow {
 
                             crate::platform::apply_squircle_corners(&window, 16.0);
 
-                            crate::permissions::sync_macos_dock_visibility(&app);
+                            crate::permissions::schedule_macos_dock_visibility_sync(&app);
                         }
                     })
                     .ok();
@@ -1299,8 +1298,7 @@ impl ShowCapWindow {
                 };
 
                 #[cfg(target_os = "macos")]
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                    .ok();
+                permissions::prepare_macos_panel_window(app);
 
                 let mut window_builder = self
                     .window_builder(
@@ -1411,7 +1409,7 @@ impl ShowCapWindow {
                             panel.order_front_regardless();
                             panel.show();
 
-                            crate::permissions::sync_macos_dock_visibility(&app);
+                            crate::permissions::schedule_macos_dock_visibility_sync(&app);
                         }
                     })
                     .ok();
@@ -1710,8 +1708,7 @@ impl ShowCapWindow {
                     let should_protect = should_protect_window(app, &title);
 
                     #[cfg(target_os = "macos")]
-                    app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                        .ok();
+                    permissions::prepare_macos_panel_window(app);
 
                     let mut window_builder = self
                         .window_builder(app, "/camera")
@@ -1883,7 +1880,7 @@ impl ShowCapWindow {
 
                                 panel.order_front_regardless();
                                 panel.show();
-                                crate::permissions::sync_macos_dock_visibility(&app);
+                                crate::permissions::schedule_macos_dock_visibility_sync(&app);
                                 let _ = panel_tx.send(true);
                             }
                         })
@@ -2037,8 +2034,7 @@ impl ShowCapWindow {
                 let should_protect = should_protect_window(app, &title);
 
                 #[cfg(target_os = "macos")]
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                    .ok();
+                permissions::prepare_macos_panel_window(app);
 
                 #[cfg(target_os = "macos")]
                 let window = {
@@ -2153,7 +2149,7 @@ impl ShowCapWindow {
                             panel.order_front_regardless();
                             panel.show();
 
-                            crate::permissions::sync_macos_dock_visibility(&app);
+                            crate::permissions::schedule_macos_dock_visibility_sync(&app);
                         }
                     })
                     .ok();
