@@ -1588,6 +1588,11 @@ pub struct RequestScreenCapturePrewarm {
 pub struct NewNotification {
     title: String,
     body: String,
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestScrollToSettingsSection {
+    pub section: String,
+}
+
     is_error: bool,
 }
 
@@ -3675,6 +3680,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .typ::<presets::PresetsStore>()
         .typ::<hotkeys::HotkeysStore>()
         .typ::<general_settings::GeneralSettingsStore>()
+            RequestScrollToSettingsSection,
         .typ::<recording_settings::RecordingSettingsStore>()
         .typ::<cap_flags::Flags>()
         .typ::<crate::window_exclusion::WindowExclusion>();
