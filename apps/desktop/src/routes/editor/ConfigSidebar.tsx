@@ -651,6 +651,36 @@ export function ConfigSidebar() {
 								step={1}
 							/>
 						</Field>
+						<Field name="Opacity" icon={<IconLucideDroplet class="size-4" />}>
+							<Slider
+								value={[project.cursor.cursorOpacity ?? 1]}
+								onChange={(v) => setProject("cursor", "cursorOpacity", v[0])}
+								minValue={0}
+								maxValue={2}
+								step={0.01}
+								formatTooltip={(value) => `${Math.round(value * 100)}%`}
+							/>
+						</Field>
+						<Show when={project.cursor.type === "circle"}>
+							<Field
+								name="Circle Color"
+								icon={<IconLucidePalette class="size-4" />}
+								value={
+									<input
+										type="color"
+										value={project.cursor.circleColor ?? "#FFFFFF"}
+										onInput={(e) =>
+											setProject(
+												"cursor",
+												"circleColor",
+												e.currentTarget.value.toUpperCase(),
+											)
+										}
+										class="h-7 w-10 cursor-pointer rounded border border-gray-3 bg-transparent"
+									/>
+								}
+							/>
+						</Show>
 						<Field name="Tilt" icon={<IconLucideRotate3d class="size-4" />}>
 							<Slider
 								value={[project.cursor.rotationAmount ?? 0.15]}
