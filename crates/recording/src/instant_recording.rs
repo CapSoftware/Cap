@@ -567,6 +567,7 @@ pub async fn spawn_instant_recording_actor(
                 crop_bounds,
                 true,
                 30,
+                None,
                 timestamps.system_time(),
                 inputs.capture_system_audio,
                 #[cfg(windows)]
