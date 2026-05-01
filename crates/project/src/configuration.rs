@@ -544,6 +544,10 @@ pub struct CursorConfiguration {
     pub rotation_amount: f32,
     #[serde(default)]
     pub base_rotation: f32,
+    #[serde(default = "CursorConfiguration::default_cursor_opacity")]
+    pub cursor_opacity: f32,
+    #[serde(default = "CursorConfiguration::default_circle_color")]
+    pub circle_color: String,
     #[serde(default)]
     pub click_spring: Option<ClickSpringConfig>,
     #[serde(default)]
@@ -568,6 +572,8 @@ impl Default for CursorConfiguration {
             use_svg: true,
             rotation_amount: Self::default_rotation_amount(),
             base_rotation: 0.0,
+            cursor_opacity: Self::default_cursor_opacity(),
+            circle_color: Self::default_circle_color(),
             click_spring: None,
             stop_movement_in_last_seconds: None,
         };
@@ -588,6 +594,14 @@ impl CursorConfiguration {
 
     fn default_rotation_amount() -> f32 {
         0.15
+    }
+
+    fn default_cursor_opacity() -> f32 {
+        1.0
+    }
+
+    fn default_circle_color() -> String {
+        "#FFFFFF".to_string()
     }
 
     pub fn cursor_type(&self) -> &CursorType {

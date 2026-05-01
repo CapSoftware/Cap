@@ -75,6 +75,7 @@ declare global {
   const IconLucideCircleOff: typeof import('~icons/lucide/circle-off.jsx')['default']
   const IconLucideClapperboard: typeof import('~icons/lucide/clapperboard.jsx')['default']
   const IconLucideClock: typeof import('~icons/lucide/clock.jsx')['default']
+  const IconLucideDroplet: typeof import('~icons/lucide/droplet.jsx')['default']
   const IconLucideEdit: typeof import('~icons/lucide/edit.jsx')['default']
   const IconLucideEyeOff: typeof import('~icons/lucide/eye-off.jsx')['default']
   const IconLucideFastForward: typeof import('~icons/lucide/fast-forward.jsx')['default']
