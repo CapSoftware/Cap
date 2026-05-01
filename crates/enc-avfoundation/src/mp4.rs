@@ -868,8 +868,6 @@ impl MP4Encoder {
         Duration::from_nanos(nanos.min(u64::MAX as u128) as u64)
     }
 
-    }
-
     pub fn pause(&mut self) {
         if self.is_paused || !self.is_writing {
             return;
@@ -1018,9 +1016,6 @@ fn timescale_value_to_duration(value: i64, timescale: i32) -> Duration {
 
 const MIN_STUDIO_BITRATE: f32 = 8_000_000.0;
 const MAX_ULTRA_BITRATE: f32 = 120_000_000.0;
-
-fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
-    let pixels = width * height;
 const MIN_COMPATIBILITY_BITRATE: f32 = 2_500_000.0;
 const MAX_COMPATIBILITY_BITRATE: f32 = 10_000_000.0;
 
@@ -1031,6 +1026,9 @@ pub enum BitrateProfile {
     Balanced,
     Ultra,
 }
+
+fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
+    let pixels = width * height;
     let fps_factor = fps.min(60.0) / 30.0;
     (pixels * fps_factor * 5.0).max(MIN_STUDIO_BITRATE)
 }
@@ -1041,15 +1039,15 @@ fn get_ultra_bitrate(width: f32, height: f32, fps: f32) -> f32 {
     (pixels * fps_factor * 10.0).clamp(MIN_STUDIO_BITRATE, MAX_ULTRA_BITRATE)
 }
 
-fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {
-    let pixel_ratio = width * height / (1920.0 * 1080.0);
-    let fps_ratio = fps.min(60.0) / 30.0;
 fn get_compatibility_bitrate(width: f32, height: f32, fps: f32) -> f32 {
     let pixels = width * height;
     let fps_factor = fps.min(60.0) / 30.0;
     (pixels * fps_factor * 2.5).clamp(MIN_COMPATIBILITY_BITRATE, MAX_COMPATIBILITY_BITRATE)
 }
 
+fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {
+    let pixel_ratio = width * height / (1920.0 * 1080.0);
+    let fps_ratio = fps.min(60.0) / 30.0;
     1_500_000.0 + pixel_ratio * 1_500_000.0 + fps_ratio * 500_000.0
 }
 
@@ -3515,6 +3513,49 @@ mod tests {
         );
 
         let _ = encoder.finish(Some(Duration::from_secs(15)));
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_tiny_positive_pts_step_is_expanded() {
+        let output = test_output_path("tiny_positive_pts_step");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        let timestamps = [0u64, 33_333, 33_334, 66_666, 100_000, 133_333];
+        let mut errors = Vec::new();
+
+        for ts_us in timestamps {
+            let frame = create_test_video_frame(&pool, ts_us as i64, 33_333);
+            match encoder.queue_video_frame(frame, Duration::from_micros(ts_us)) {
+                Ok(()) => {}
+                Err(QueueFrameError::WriterFailed(e)) => {
+                    errors.push(format!("WriterFailed at {ts_us}: {e}"));
+                    break;
+                }
+                Err(QueueFrameError::Failed) => {
+                    errors.push(format!("Failed at {ts_us}"));
+                    break;
+                }
+                Err(QueueFrameError::Finished) => {
+                    errors.push(format!("Finished at {ts_us}"));
+                    break;
+                }
+                Err(_) => {}
+            }
+        }
+
+        assert!(
+            errors.is_empty(),
+            "Tiny positive PTS steps should not reach AVFoundation: {:?}",
+            errors
+        );
+
+        let result = encoder.finish(Some(Duration::from_micros(166_666)));
+        assert!(result.is_ok(), "Finish failed: {result:?}");
+
         let _ = std::fs::remove_file(&output);
     }
 
