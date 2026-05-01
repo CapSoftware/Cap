@@ -23,7 +23,7 @@ export const getCurrentUser = Effect.gen(function* () {
 					db
 						.select()
 						.from(Db.users)
-						.where(Dz.eq(Db.users.id, (session.user as any).id)),
+						.where(Dz.eq(Db.users.id, (session.user as { id: string }).id)),
 				);
 
 				return Option.fromNullable(currentUser);
@@ -60,7 +60,7 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 				);
 				const authHeader = headers.authorization?.split(" ")[1];
 
-				let user;
+				let user: Option.Option<typeof Db.users.$inferSelect>;
 
 				if (authHeader?.length === 36) {
 					user = yield* database

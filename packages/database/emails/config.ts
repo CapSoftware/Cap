@@ -18,7 +18,7 @@ export const sendEmail = async ({
 }: {
 	email: string;
 	subject: string;
-	react: ReactElement<any, string | JSXElementConstructor<any>>;
+	react: ReactElement<unknown, string | JSXElementConstructor<unknown>>;
 	marketing?: boolean;
 	test?: boolean;
 	scheduledAt?: string;
@@ -32,7 +32,7 @@ export const sendEmail = async ({
 	}
 
 	if (marketing && !buildEnv.NEXT_PUBLIC_IS_CAP) return;
-	let from;
+	let from: string;
 
 	if (fromOverride) from = fromOverride;
 	else if (marketing) from = "Richie from Cap <richie@send.cap.so>";
@@ -48,5 +48,5 @@ export const sendEmail = async ({
 		scheduledAt,
 		cc: test ? undefined : cc,
 		replyTo: replyTo,
-	}) as any;
+	});
 };

@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import {
 	SelfHostedScreenRecordingPage,
 	selfHostedScreenRecordingContent,
@@ -45,15 +44,11 @@ export const metadata: Metadata = {
 export default function Page() {
 	return (
 		<>
-			<Script
-				id="faq-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{
-					__html: JSON.stringify(
-						createFAQSchema(selfHostedScreenRecordingContent.faqs),
-					),
-				}}
-			/>
+			<script type="application/ld+json">
+				{JSON.stringify(
+					createFAQSchema(selfHostedScreenRecordingContent.faqs),
+				)}
+			</script>
 			<SelfHostedScreenRecordingPage />
 		</>
 	);

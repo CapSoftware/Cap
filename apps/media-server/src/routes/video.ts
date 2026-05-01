@@ -1027,7 +1027,7 @@ video.post("/mux-segments", async (c) => {
 				phase: "error",
 				error: err instanceof Error ? err.message : String(err),
 			});
-			sendWebhook(getJob(jobId)!);
+			sendCurrentJobWebhook(jobId);
 		}
 	});
 
@@ -1147,6 +1147,11 @@ async function downloadSegmentsBatchTracked(
 	return failed;
 }
 
+function sendCurrentJobWebhook(jobId: string): void {
+	const job = getJob(jobId);
+	if (job) sendWebhook(job);
+}
+
 async function muxSegmentsAsync(
 	jobId: string,
 	videoId: string,
@@ -1170,7 +1175,7 @@ async function muxSegmentsAsync(
 	try {
 		await ensureTempDir();
 		updateJob(jobId, { phase: "downloading", progress: 0 });
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 
 		await mkdir(workDir, { recursive: true });
 		const videoDir = join(workDir, "video");
@@ -1180,7 +1185,7 @@ async function muxSegmentsAsync(
 
 		await downloadUrlToFile(videoInitUrl, join(videoDir, "init.mp4"));
 		updateJob(jobId, { phase: "downloading", progress: 5 });
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 
 		const videoFailed = await downloadSegmentsBatchTracked(
 			videoSegmentUrls,
@@ -1202,36 +1207,38 @@ async function muxSegmentsAsync(
 			);
 		}
 
-		let hasAudio =
+		let audioInput =
 			audioInitUrl !== null &&
 			audioSegmentUrls !== null &&
-			audioSegmentUrls.length > 0;
-		if (hasAudio) {
-			await downloadUrlToFile(audioInitUrl!, join(audioDir, "init.mp4"));
+			audioSegmentUrls.length > 0
+				? { initUrl: audioInitUrl, segmentUrls: audioSegmentUrls }
+				: null;
+		if (audioInput) {
+			await downloadUrlToFile(audioInput.initUrl, join(audioDir, "init.mp4"));
 			const audioFailed = await downloadSegmentsBatchTracked(
-				audioSegmentUrls!,
+				audioInput.segmentUrls,
 				audioDir,
 				jobId,
 				50,
 				10,
 			);
 			if (audioFailed > 0) {
-				const audioFailRatio = audioFailed / audioSegmentUrls!.length;
+				const audioFailRatio = audioFailed / audioInput.segmentUrls.length;
 				if (audioFailRatio >= 0.5) {
 					console.warn(
-						`[mux-segments] ${audioFailed}/${audioSegmentUrls!.length} audio segments failed for ${videoId} (${Math.round(audioFailRatio * 100)}%), proceeding without audio`,
+						`[mux-segments] ${audioFailed}/${audioInput.segmentUrls.length} audio segments failed for ${videoId} (${Math.round(audioFailRatio * 100)}%), proceeding without audio`,
 					);
-					hasAudio = false;
+					audioInput = null;
 				} else {
 					console.warn(
-						`[mux-segments] ${audioFailed}/${audioSegmentUrls!.length} audio segments failed to download for ${videoId}`,
+						`[mux-segments] ${audioFailed}/${audioInput.segmentUrls.length} audio segments failed to download for ${videoId}`,
 					);
 				}
 			}
 		}
 
 		updateJob(jobId, { phase: "processing", progress: 60 });
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 
 		const combinedVideoPath = join(workDir, "combined_video.mp4");
 		const videoInitPath = join(videoDir, "init.mp4");
@@ -1257,7 +1264,7 @@ async function muxSegmentsAsync(
 
 		let resultPath: string;
 
-		if (hasAudio) {
+		if (audioInput) {
 			const combinedAudioPath = join(workDir, "combined_audio.mp4");
 			const audioInitPath = join(audioDir, "init.mp4");
 			const audioSegmentFiles = (await readdir(audioDir))
@@ -1298,7 +1305,7 @@ async function muxSegmentsAsync(
 		}
 
 		updateJob(jobId, { phase: "uploading", progress: 80 });
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 
 		await uploadFileToS3(resultPath, outputPresignedUrl, "video/mp4");
 
@@ -1319,7 +1326,7 @@ async function muxSegmentsAsync(
 				progress: 90,
 				message: "Generating thumbnail...",
 			});
-			sendWebhook(getJob(jobId)!);
+			sendCurrentJobWebhook(jobId);
 
 			try {
 				const duration = metadata?.duration ?? 0;
@@ -1338,7 +1345,7 @@ async function muxSegmentsAsync(
 			progress: 100,
 			metadata,
 		});
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 
 		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (error: unknown) {
@@ -1347,7 +1354,7 @@ async function muxSegmentsAsync(
 			phase: "error",
 			error: error instanceof Error ? error.message : "Unknown error",
 		});
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 	} finally {
 		const { rm } = await import("node:fs/promises");
 		await rm(workDir, { recursive: true, force: true }).catch(() => {});
