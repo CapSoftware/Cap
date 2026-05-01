@@ -1277,7 +1277,10 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     close_target_select_overlays(app);
 
     let (mic_feed, camera_feed, camera_shutdown) = {
-        let state = app.state::<ArcLock<App>>();
+        let Some(state) = app.try_state::<ArcLock<App>>() else {
+            warn!("App state unavailable during exit cleanup");
+            return;
+        };
         let mut app_state = state.write().await;
         let camera_shutdown = app_state.camera_preview.begin_shutdown();
         app_state.camera_in_use = false;
@@ -1333,7 +1336,14 @@ fn finalize_app_exit(app: &AppHandle, exit_code: i32) {
 }
 
 pub async fn request_app_exit(app: AppHandle) {
-    if !app.state::<AppExitState>().begin() {
+    let Some(exit_state) = app.try_state::<AppExitState>() else {
+        warn!("Exit state unavailable while requesting app exit");
+        finalize_app_exit(&app, 0);
+        #[cfg(not(target_os = "macos"))]
+        return;
+    };
+
+    if !exit_state.begin() {
         return;
     }
 
@@ -4073,18 +4083,22 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     if let Ok(window_id) = CapWindowId::from_str(label) {
                         match window_id {
                             CapWindowId::Camera => {
-                                let close_gate = app.state::<CameraWindowCloseGate>();
-                                if close_gate.allow_close() {
+                                if app
+                                    .try_state::<CameraWindowCloseGate>()
+                                    .is_some_and(|close_gate| close_gate.allow_close())
+                                {
                                     return;
                                 }
 
                                 api.prevent_close();
                                 let _ = window.hide();
                                 tracing::warn!("Camera window CloseRequested event received!");
-                                let session_id =
-                                    app.state::<Arc<AtomicU64>>().load(Ordering::Acquire);
+                                let session_id = app
+                                    .try_state::<Arc<AtomicU64>>()
+                                    .map(|state| state.load(Ordering::Acquire))
+                                    .unwrap_or(0);
                                 let app = app.clone();
-                                tokio::spawn(async move {
+                                spawn_on_runtime(async move {
                                     cleanup_camera_window(app, session_id).await;
                                 });
                             }
@@ -4092,7 +4106,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 api.prevent_close();
                                 let _ = window.hide();
 
-                                let state = app.state::<ArcLock<App>>();
+                                let Some(state) = app.try_state::<ArcLock<App>>() else {
+                                    warn!("App state unavailable during main window close request");
+                                    return;
+                                };
                                 let is_recording = state
                                     .try_read()
                                     .map(|s| s.is_recording_active_or_pending())
@@ -4106,8 +4123,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     close_target_select_overlays(app);
 
                                     let app = app.clone();
-                                    tokio::spawn(async move {
-                                        let state = app.state::<ArcLock<App>>();
+                                    spawn_on_runtime(async move {
+                                        let Some(state) = app.try_state::<ArcLock<App>>() else {
+                                            warn!("App state unavailable during main window close cleanup");
+                                            return;
+                                        };
 
                                         let (mic_feed, camera_feed) = {
                                             let mut app_state = state.write().await;
@@ -4158,8 +4178,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     let _ = camera.hide();
                                 }
 
-                                tokio::spawn(async move {
-                                    let state = app.state::<ArcLock<App>>();
+                                spawn_on_runtime(async move {
+                                    let Some(state) = app.try_state::<ArcLock<App>>() else {
+                                        warn!("App state unavailable during main window destroyed cleanup");
+                                        return;
+                                    };
 
                                     let feeds = {
                                         let app_state = state.read().await;
@@ -4196,30 +4219,38 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             }
                             CapWindowId::Editor { id } => {
                                 let window_ids = EditorWindowIds::get(window.app_handle());
-                                window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
+                                match window_ids.ids.lock() {
+                                    Ok(mut ids) => ids.retain(|(_, _id)| *_id != id),
+                                    Err(err) => warn!(error = %err, "Editor window ids lock poisoned"),
+                                }
 
                                 let label = window.label().to_string();
                                 let pending = editor_window::PendingEditorInstances::get(app);
-                                tokio::spawn(async move {
+                                spawn_on_runtime(async move {
                                     pending.cancel_prewarm(&label).await;
                                 });
 
-                                tokio::spawn(EditorInstances::remove(window.clone()));
+                                spawn_on_runtime(EditorInstances::remove(window.clone()));
 
                                 restore_main_windows_if_no_editors(app);
                             }
                             CapWindowId::ScreenshotEditor { id } => {
                                 let window_ids =
                                     ScreenshotEditorWindowIds::get(window.app_handle());
-                                window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
+                                match window_ids.ids.lock() {
+                                    Ok(mut ids) => ids.retain(|(_, _id)| *_id != id),
+                                    Err(err) => {
+                                        warn!(error = %err, "Screenshot editor window ids lock poisoned");
+                                    }
+                                }
 
                                 let label = window.label().to_string();
                                 let pending = PendingScreenshotEditorInstances::get(app);
-                                tokio::spawn(async move {
+                                spawn_on_runtime(async move {
                                     pending.cancel_prewarm(&label).await;
                                 });
 
-                                tokio::spawn(ScreenshotEditorInstances::remove(window.clone()));
+                                spawn_on_runtime(ScreenshotEditorInstances::remove(window.clone()));
 
                                 restore_main_windows_if_no_editors(app);
                             }
@@ -4267,11 +4298,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 return;
                             }
                             CapWindowId::TargetSelectOverlay { display_id } => {
-                                app.state::<target_select_overlay::WindowFocusManager>()
-                                    .destroy(&display_id, app.global_shortcut());
-                                let session_id =
-                                    app.state::<Arc<AtomicU64>>().load(Ordering::Acquire);
-                                tokio::spawn(cleanup_camera_after_overlay_close(
+                                if let Some(focus_manager) =
+                                    app.try_state::<target_select_overlay::WindowFocusManager>()
+                                {
+                                    focus_manager.destroy(&display_id, app.global_shortcut());
+                                }
+                                let session_id = app
+                                    .try_state::<Arc<AtomicU64>>()
+                                    .map(|state| state.load(Ordering::Acquire))
+                                    .unwrap_or(0);
+                                spawn_on_runtime(cleanup_camera_after_overlay_close(
                                     app.clone(),
                                     session_id,
                                 ));
@@ -4280,17 +4316,21 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 tracing::info!(
                                     "Camera window Destroyed event - resetting panel state"
                                 );
-                                let session_id =
-                                    app.state::<Arc<AtomicU64>>().load(Ordering::Acquire);
+                                let session_id = app
+                                    .try_state::<Arc<AtomicU64>>()
+                                    .map(|state| state.load(Ordering::Acquire))
+                                    .unwrap_or(0);
                                 let app = app.clone();
-                                tokio::spawn(async move {
+                                spawn_on_runtime(async move {
                                     #[cfg(target_os = "macos")]
                                     {
-                                        let panel_manager =
-                                            app.state::<panel_manager::PanelManager>();
-                                        panel_manager
-                                            .force_reset(panel_manager::PanelWindowType::Camera)
-                                            .await;
+                                        if let Some(panel_manager) =
+                                            app.try_state::<panel_manager::PanelManager>()
+                                        {
+                                            panel_manager
+                                                .force_reset(panel_manager::PanelWindowType::Camera)
+                                                .await;
+                                        }
                                     }
                                     cleanup_camera_window(app, session_id).await;
                                 });
@@ -4365,82 +4405,131 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         })
         .build(tauri_context)
         .expect("error while running tauri application")
-        .run(move |_handle, event| match event {
-            #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => {
-                let should_focus_onboarding = should_show_onboarding(_handle);
+        .run(move |_handle, event| {
+            let handle = _handle.clone();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                handle_run_event(&handle, event);
+            }));
 
-                if should_focus_onboarding
-                    && let Some(onboarding) = CapWindowId::Onboarding.get(_handle)
+            if let Err(panic) = result {
+                let message = panic_payload_message(&panic);
+                tracing::error!(panic = %message, "Suppressed panic in Tauri RunEvent handler");
+                sentry::capture_message(
+                    &format!("Tauri RunEvent panic suppressed: {message}"),
+                    sentry::Level::Error,
+                );
+            }
+        });
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
+
+fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
+    match event {
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            let should_focus_onboarding = should_show_onboarding(_handle);
+
+            if should_focus_onboarding
+                && let Some(onboarding) = CapWindowId::Onboarding.get(_handle)
+            {
+                onboarding.show().ok();
+                onboarding.set_focus().ok();
+                return;
+            }
+
+            let has_window = _handle.webview_windows().iter().any(|(label, _)| {
+                label.starts_with("editor-")
+                    || label.starts_with("screenshot-editor-")
+                    || label.as_str() == "settings"
+                    || label.as_str() == "signin"
+                    || (should_focus_onboarding && label.as_str() == "onboarding")
+            });
+
+            if has_window {
+                if let Some(window) = _handle
+                    .webview_windows()
+                    .iter()
+                    .find(|(label, _)| {
+                        label.starts_with("editor-")
+                            || label.starts_with("screenshot-editor-")
+                            || label.as_str() == "settings"
+                            || label.as_str() == "signin"
+                            || (should_focus_onboarding && label.as_str() == "onboarding")
+                    })
+                    .map(|(_, window)| window.clone())
                 {
-                    onboarding.show().ok();
-                    onboarding.set_focus().ok();
-                    return;
+                    window.set_focus().ok();
                 }
-
-                let has_window = _handle.webview_windows().iter().any(|(label, _)| {
-                    label.starts_with("editor-")
-                        || label.starts_with("screenshot-editor-")
-                        || label.as_str() == "settings"
-                        || label.as_str() == "signin"
-                        || (should_focus_onboarding && label.as_str() == "onboarding")
-                });
-
-                if has_window {
-                    if let Some(window) = _handle
-                        .webview_windows()
-                        .iter()
-                        .find(|(label, _)| {
-                            label.starts_with("editor-")
-                                || label.starts_with("screenshot-editor-")
-                                || label.as_str() == "settings"
-                                || label.as_str() == "signin"
-                                || (should_focus_onboarding && label.as_str() == "onboarding")
-                        })
-                        .map(|(_, window)| window.clone())
-                    {
-                        window.set_focus().ok();
+            } else {
+                let handle = _handle.clone();
+                spawn_on_runtime(async move {
+                    let _ = ShowCapWindow::Main {
+                        init_target_mode: None,
                     }
-                } else {
-                    let handle = _handle.clone();
-                    tokio::spawn(async move {
-                        let _ = ShowCapWindow::Main {
-                            init_target_mode: None,
-                        }
-                        .show(&handle)
-                        .await;
-                    });
-                }
-            }
-            tauri::RunEvent::ExitRequested { code, api, .. } => {
-                if _handle.state::<AppExitState>().is_exiting() {
-                    return;
-                }
-
-                api.prevent_exit();
-
-                let _ = code;
-                let handle = _handle.clone();
-                tokio::spawn(async move {
-                    request_app_exit(handle).await;
-                });
-            }
-            tauri::RunEvent::Exit => {
-                if !_handle.state::<AppExitState>().begin() {
-                    return;
-                }
-
-                let handle = _handle.clone();
-                tokio::spawn(async move {
-                    let _ = tokio::time::timeout(
-                        Duration::from_secs(2),
-                        cleanup_app_resources_for_exit(&handle),
-                    )
+                    .show(&handle)
                     .await;
                 });
             }
-            _ => {}
-        });
+        }
+        tauri::RunEvent::ExitRequested { code, api, .. } => {
+            if _handle
+                .try_state::<AppExitState>()
+                .is_some_and(|state| state.is_exiting())
+            {
+                return;
+            }
+
+            api.prevent_exit();
+
+            let _ = code;
+            let handle = _handle.clone();
+            spawn_on_runtime(async move {
+                request_app_exit(handle).await;
+            });
+        }
+        tauri::RunEvent::Exit => {
+            let already_exiting = match _handle.try_state::<AppExitState>() {
+                Some(state) => !state.begin(),
+                None => false,
+            };
+            if already_exiting {
+                return;
+            }
+
+            let handle = _handle.clone();
+            spawn_on_runtime(async move {
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    cleanup_app_resources_for_exit(&handle),
+                )
+                .await;
+            });
+        }
+        _ => {}
+    }
+}
+
+fn spawn_on_runtime<F>(future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(future);
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "No tokio runtime available; dropping background task");
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -4467,21 +4556,28 @@ fn restore_main_windows_if_no_editors(app: &AppHandle) {
             restore_camera_window(app);
         }
 
-        tokio::spawn(captions::release_ml_models());
+        spawn_on_runtime(captions::release_ml_models());
     }
 }
 
 fn restore_camera_window(app: &AppHandle) {
     let should_restore_camera = app
-        .state::<ArcLock<App>>()
-        .try_read()
-        .map(|state| state.selected_camera_id.is_some() && !state.camera_cleanup_done)
+        .try_state::<ArcLock<App>>()
+        .and_then(|state| {
+            state
+                .try_read()
+                .ok()
+                .map(|state| state.selected_camera_id.is_some() && !state.camera_cleanup_done)
+        })
         .unwrap_or(false);
 
     if should_restore_camera {
         let app = app.clone();
-        tokio::spawn(async move {
-            let operation_lock = app.state::<CameraWindowOperationLock>();
+        spawn_on_runtime(async move {
+            let Some(operation_lock) = app.try_state::<CameraWindowOperationLock>() else {
+                warn!("Camera window operation lock unavailable during restore");
+                return;
+            };
             let _operation_guard = operation_lock.lock().await;
             let _ = ShowCapWindow::Camera { centered: false }.show(&app).await;
         });
@@ -4489,18 +4585,20 @@ fn restore_camera_window(app: &AppHandle) {
 }
 
 fn close_target_select_overlays(app: &AppHandle) {
-    let focus_manager = app.state::<target_select_overlay::WindowFocusManager>();
+    let focus_manager = app.try_state::<target_select_overlay::WindowFocusManager>();
     let mut saw_overlay = false;
 
     for (label, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&label) {
             saw_overlay = true;
             hide_overlay(&window);
-            focus_manager.destroy(&display_id, app.global_shortcut());
+            if let Some(focus_manager) = focus_manager.as_ref() {
+                focus_manager.destroy(&display_id, app.global_shortcut());
+            }
         }
     }
 
-    if !saw_overlay {
+    if !saw_overlay && let Some(focus_manager) = focus_manager {
         focus_manager.shutdown(app);
     }
 }
