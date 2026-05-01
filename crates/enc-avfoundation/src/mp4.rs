@@ -534,7 +534,7 @@ impl MP4Encoder {
         let effective_last_pts = self.effective_video_pts();
 
         if let Some(last_pts) = effective_last_pts
-            && pts_duration <= last_pts
+            && pts_duration <= last_pts.saturating_add(self.minimum_video_pts_step())
         {
             let frame_duration = self.video_frame_duration();
             let adjusted_pts = last_pts + frame_duration;
@@ -863,6 +863,11 @@ impl MP4Encoder {
         let nanos = (numerator / denominator).max(1);
 
         Duration::from_nanos(nanos as u64)
+    fn minimum_video_pts_step(&self) -> Duration {
+        let nanos = (self.video_frame_duration().as_nanos() / 4).max(1);
+        Duration::from_nanos(nanos.min(u64::MAX as u128) as u64)
+    }
+
     }
 
     pub fn pause(&mut self) {
