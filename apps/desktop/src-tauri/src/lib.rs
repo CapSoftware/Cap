@@ -746,19 +746,29 @@ async fn set_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
-            let camera_ws_sender = {
+            let (camera_ws_sender, native_preview_active) = {
                 let app = &mut *state.write().await;
                 app.selected_camera_id = Some(id.clone());
                 app.camera_in_use = true;
                 app.camera_cleanup_done = false;
                 #[allow(deprecated)]
-                app.camera_ws_sender.clone()
+                (
+                    app.camera_ws_sender.clone(),
+                    app.camera_preview.is_initialized(),
+                )
             };
 
-            #[allow(deprecated)]
-            let _ = camera_feed
-                .ask(feeds::camera::AddSender(camera_ws_sender))
-                .await;
+            if native_preview_active {
+                #[allow(deprecated)]
+                let _ = camera_feed
+                    .ask(feeds::camera::RemoveSender(camera_ws_sender))
+                    .await;
+            } else {
+                #[allow(deprecated)]
+                let _ = camera_feed
+                    .ask(feeds::camera::AddSender(camera_ws_sender))
+                    .await;
+            }
 
             let mut attempts = 0;
             let init_result: Result<(), String> = loop {
@@ -1579,6 +1589,11 @@ pub struct RequestOpenSettings {
 }
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestScrollToSettingsSection {
+    pub section: String,
+}
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestScreenCapturePrewarm {
     #[serde(default)]
     pub force: bool,
@@ -1588,11 +1603,6 @@ pub struct RequestScreenCapturePrewarm {
 pub struct NewNotification {
     title: String,
     body: String,
-#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct RequestScrollToSettingsSection {
-    pub section: String,
-}
-
     is_error: bool,
 }
 
@@ -3417,20 +3427,29 @@ async fn refresh_camera_feed(state: MutableState<'_, App>) -> Result<(), String>
     let camera_ws_sender = app.camera_ws_sender.clone();
 
     let camera_preview_sender = app.camera_preview.sender();
+    let native_preview_active = app.camera_preview.is_initialized();
 
     drop(app);
 
-    #[allow(deprecated)]
-    camera_feed
-        .ask(feeds::camera::AddSender(camera_ws_sender))
-        .await
-        .map_err(|err| format!("error re-adding camera ws sender: {err}"))?;
-
     if let Some(sender) = camera_preview_sender {
+        if native_preview_active {
+            #[allow(deprecated)]
+            camera_feed
+                .ask(feeds::camera::RemoveSender(camera_ws_sender))
+                .await
+                .map_err(|err| format!("error removing camera ws sender: {err}"))?;
+        }
+
         camera_feed
             .ask(feeds::camera::AddSender(sender))
             .await
             .map_err(|err| format!("error re-adding camera preview sender: {err}"))?;
+    } else {
+        #[allow(deprecated)]
+        camera_feed
+            .ask(feeds::camera::AddSender(camera_ws_sender))
+            .await
+            .map_err(|err| format!("error re-adding camera ws sender: {err}"))?;
     }
 
     Ok(())
@@ -3661,6 +3680,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             RequestOpenRecordingPicker,
             RequestSetTargetMode,
             RequestOpenSettings,
+            RequestScrollToSettingsSection,
             RequestScreenCapturePrewarm,
             NewNotification,
             audio_meter::AudioInputLevelChange,
@@ -3680,7 +3700,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .typ::<presets::PresetsStore>()
         .typ::<hotkeys::HotkeysStore>()
         .typ::<general_settings::GeneralSettingsStore>()
-            RequestScrollToSettingsSection,
         .typ::<recording_settings::RecordingSettingsStore>()
         .typ::<cap_flags::Flags>()
         .typ::<crate::window_exclusion::WindowExclusion>();
