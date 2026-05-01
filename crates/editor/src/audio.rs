@@ -619,6 +619,11 @@ impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
         self.read_position = sample_position.min(self.samples.len());
     }
 
+    pub fn current_audible_playhead(&self, device_latency_secs: f64) -> f64 {
+        let generated_secs = (self.read_position / self.channels) as f64 / self.sample_rate as f64;
+        (generated_secs - device_latency_secs.max(0.0)).max(0.0)
+    }
+
     #[allow(dead_code)]
     pub fn current_playhead_secs(&self) -> f64 {
         (self.read_position / self.channels) as f64 / self.sample_rate as f64
