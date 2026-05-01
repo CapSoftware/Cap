@@ -193,13 +193,17 @@ async fn restore_main_window_inputs(app: &AppHandle) {
             )
         };
 
-        #[allow(deprecated)]
-        let _ = camera_feed
-            .ask(feeds::camera::AddSender(camera_ws_sender))
-            .await;
-
         if let Some(sender) = native_sender {
+            #[allow(deprecated)]
+            let _ = camera_feed
+                .ask(feeds::camera::RemoveSender(camera_ws_sender))
+                .await;
             let _ = camera_feed.ask(feeds::camera::AddSender(sender)).await;
+        } else {
+            #[allow(deprecated)]
+            let _ = camera_feed
+                .ask(feeds::camera::AddSender(camera_ws_sender))
+                .await;
         }
 
         let mut attempts = 0;
@@ -1899,6 +1903,11 @@ impl ShowCapWindow {
 
                     if enable_native_camera_preview {
                         let camera_feed = state.camera_feed.clone();
+                        #[allow(deprecated)]
+                        let camera_ws_sender = state.camera_ws_sender.clone();
+                        let _ = camera_feed
+                            .ask(feeds::camera::RemoveSender(camera_ws_sender))
+                            .await;
                         if let Err(err) = state
                             .camera_preview
                             .init_window(window.clone(), camera_feed)

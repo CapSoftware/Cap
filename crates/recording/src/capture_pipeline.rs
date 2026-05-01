@@ -93,10 +93,12 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         quality: StudioQuality,
     ) -> anyhow::Result<OutputPipeline> {
         let ultra = quality == StudioQuality::Ultra;
+        let compatibility = quality == StudioQuality::Compatibility;
 
         tracing::debug!(
             ?quality,
             ultra,
+            compatibility,
             fragmented,
             use_oop_muxer,
             "Studio mode capture pipeline quality selection"
@@ -110,6 +112,8 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
 
             let bpp = if ultra {
                 H264EncoderBuilder::ULTRA_BPP
+            } else if compatibility {
+                H264EncoderBuilder::QUALITY_BPP * 0.5
             } else {
                 H264EncoderBuilder::QUALITY_BPP
             };
@@ -186,6 +190,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                     output_height: output_size.map(|(_, h)| h),
                     instant_mode: false,
                     ultra_quality: ultra,
+                    compatibility_quality: compatibility,
                 })
                 .await
         }

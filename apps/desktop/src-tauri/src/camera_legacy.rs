@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use cap_recording::FFmpegVideoFrame;
 use flume::Sender;
@@ -25,6 +25,7 @@ struct WsReadback {
 
 const WS_PREVIEW_MAX_WIDTH: u32 = 640;
 const WS_PREVIEW_MAX_HEIGHT: u32 = 360;
+const WS_PREVIEW_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
 pub async fn create_camera_preview_ws(
     blur_rx: watch::Receiver<cap_project::BackgroundBlurMode>,
@@ -40,6 +41,7 @@ pub async fn create_camera_preview_ws(
         let mut blur_rx = blur_rx;
 
         let mut blur_state = WsBlurState::new();
+        let mut next_preview_at = Instant::now();
 
         while let Ok(raw_frame) = camera_rx.recv() {
             let mut frame = raw_frame.inner;
@@ -47,6 +49,12 @@ pub async fn create_camera_preview_ws(
             while let Ok(newer) = camera_rx.try_recv() {
                 frame = newer.inner;
             }
+
+            let now = Instant::now();
+            if now < next_preview_at {
+                continue;
+            }
+            next_preview_at = now + WS_PREVIEW_FRAME_INTERVAL;
 
             let blur_mode = *blur_rx.borrow_and_update();
             let blur_enabled = blur_mode != cap_project::BackgroundBlurMode::Off;
