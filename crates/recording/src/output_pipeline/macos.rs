@@ -9,6 +9,7 @@ use anyhow::anyhow;
 use cap_enc_avfoundation::QueueFrameError;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
+use cap_utils::macos_qos::{MacOsQosClass, set_current_thread_qos};
 use cidre::arc;
 use std::{
     path::PathBuf,
@@ -30,6 +31,13 @@ const DEFAULT_MP4_AUDIO_FINISH_TIMEOUT_INSTANT: Duration = Duration::from_secs(8
 const DISK_SPACE_MIN_START_MB: u64 = 500;
 const DISK_SPACE_CRITICAL_MB: u64 = 200;
 const DISK_SPACE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+
+fn boost_encoder_thread_qos() {
+    let result = set_current_thread_qos(MacOsQosClass::UserInitiated);
+    if result != 0 {
+        warn!(result, "pthread_set_qos_class_self_np failed");
+    }
+}
 
 fn get_available_disk_space_mb(path: &std::path::Path) -> Option<u64> {
     use std::ffi::CString;
@@ -260,6 +268,7 @@ pub struct AVFoundationMp4MuxerConfig {
     pub output_height: Option<u32>,
     pub instant_mode: bool,
     pub ultra_quality: bool,
+    pub compatibility_quality: bool,
 }
 
 impl Muxer for AVFoundationMp4Muxer {
@@ -313,6 +322,13 @@ impl Muxer for AVFoundationMp4Muxer {
                 audio_config,
                 config.output_height,
             )
+        } else if config.compatibility_quality {
+            cap_enc_avfoundation::MP4Encoder::init_compatibility(
+                output_path.clone(),
+                video_config,
+                audio_config,
+                config.output_height,
+            )
         } else {
             cap_enc_avfoundation::MP4Encoder::init(
                 output_path.clone(),
@@ -351,6 +367,8 @@ impl Muxer for AVFoundationMp4Muxer {
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-video-encoder".to_string())
             .spawn(move || {
+                #[cfg(target_os = "macos")]
+                boost_encoder_thread_qos();
                 if ready_tx.send(Ok(())).is_err() {
                     return Err(anyhow!("Failed to send ready signal - receiver dropped"));
                 }
@@ -495,6 +513,8 @@ impl Muxer for AVFoundationMp4Muxer {
             let audio_handle = std::thread::Builder::new()
                 .name("mp4-audio-encoder".to_string())
                 .spawn(move || {
+                    #[cfg(target_os = "macos")]
+                    boost_encoder_thread_qos();
                     if audio_ready_tx.send(Ok(())).is_err() {
                         return Err(anyhow!("Failed to send audio ready signal"));
                     }
@@ -875,6 +895,7 @@ pub struct AVFoundationCameraMuxer {
 #[derive(Default)]
 pub struct AVFoundationCameraMuxerConfig {
     pub output_height: Option<u32>,
+    pub compatibility_quality: bool,
 }
 
 impl Muxer for AVFoundationCameraMuxer {
@@ -897,12 +918,21 @@ impl Muxer for AVFoundationCameraMuxer {
         let (video_tx, video_rx) = sync_channel::<Option<CameraFrameMessage>>(buffer_size);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
 
-        let encoder = cap_enc_avfoundation::MP4Encoder::init(
-            output_path.clone(),
-            video_config,
-            None,
-            config.output_height,
-        )
+        let encoder = if config.compatibility_quality {
+            cap_enc_avfoundation::MP4Encoder::init_compatibility(
+                output_path.clone(),
+                video_config,
+                None,
+                config.output_height,
+            )
+        } else {
+            cap_enc_avfoundation::MP4Encoder::init(
+                output_path.clone(),
+                video_config,
+                None,
+                config.output_height,
+            )
+        }
         .map_err(|e| anyhow!("{e}"))?;
 
         let encoder = Arc::new(Mutex::new(encoder));
@@ -913,6 +943,8 @@ impl Muxer for AVFoundationCameraMuxer {
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-camera-encoder".to_string())
             .spawn(move || {
+                #[cfg(target_os = "macos")]
+                boost_encoder_thread_qos();
                 if ready_tx.send(Ok(())).is_err() {
                     return Err(anyhow!("Failed to send ready signal - receiver dropped"));
                 }

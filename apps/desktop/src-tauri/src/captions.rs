@@ -14,6 +14,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 use tempfile::tempdir;
@@ -1631,64 +1632,77 @@ pub async fn download_whisper_model(
 ) -> Result<(), String> {
     let validated_path = validate_model_path(&app, &output_path)?;
 
-    let model_url = match model_name.as_str() {
-        "tiny" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
-        "base" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
-        "small" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
-        "medium" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
-        "large" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
-        "large-v3" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
-        _ => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+    let model_parts: &[&str] = match model_name.as_str() {
+        "tiny" => &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/whisper-v1/ggml-tiny.bin",
+        ],
+        "base" => &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/whisper-v1/ggml-base.bin",
+        ],
+        "small" => &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/whisper-v1/ggml-small.bin",
+        ],
+        "medium" => &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/whisper-v1/ggml-medium.bin.part0",
+            "https://github.com/CapSoftware/transcription-models/releases/download/whisper-v1/ggml-medium.bin.part1",
+        ],
+        _ => &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/whisper-v1/ggml-tiny.bin",
+        ],
     };
-
-    let response = app
-        .state::<http_client::HttpClient>()
-        .get(model_url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to download model: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "Failed to download model: HTTP {}",
-            response.status()
-        ));
-    }
-
-    let total_size = response.content_length().unwrap_or(0);
 
     if let Some(parent) = validated_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create parent directories: {e}"))?;
     }
+
+    let http_client = app.state::<http_client::HttpClient>();
+    let total_size = total_content_length(&http_client, model_parts).await;
+
     let mut file = tokio::fs::File::create(&validated_path)
         .await
         .map_err(|e| format!("Failed to create file: {e}"))?;
 
     let mut downloaded: u64 = 0;
-    let mut stream = response.bytes_stream();
 
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("Error while downloading: {e}"))?;
-
-        file.write_all(&chunk)
+    for url in model_parts {
+        let response = http_client
+            .get(*url)
+            .timeout(MODEL_DOWNLOAD_REQUEST_TIMEOUT)
+            .send()
             .await
-            .map_err(|e| format!("Error while writing to file: {e}"))?;
+            .map_err(|e| format!("Failed to download model: {e}"))?;
 
-        downloaded += chunk.len() as u64;
-
-        let progress = if total_size > 0 {
-            (downloaded as f64 / total_size as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        DownloadProgress {
-            progress,
-            message: format!("Downloading model: {progress:.1}%"),
+        if !response.status().is_success() {
+            return Err(format!(
+                "Failed to download model: HTTP {}",
+                response.status()
+            ));
         }
-        .emit(&app)
-        .ok();
+
+        let mut stream = response.bytes_stream();
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.map_err(|e| format!("Error while downloading: {e}"))?;
+
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| format!("Error while writing to file: {e}"))?;
+
+            downloaded = downloaded.saturating_add(chunk.len() as u64);
+
+            let progress = if total_size > 0 {
+                (downloaded as f64 / total_size as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            DownloadProgress {
+                progress,
+                message: format!("Downloading model: {progress:.1}%"),
+            }
+            .emit(&app)
+            .ok();
+        }
     }
 
     file.flush()
@@ -1696,6 +1710,28 @@ pub async fn download_whisper_model(
         .map_err(|e| format!("Failed to flush file: {e}"))?;
 
     Ok(())
+}
+
+async fn total_content_length(client: &reqwest::Client, urls: &[&str]) -> u64 {
+    let mut total: u64 = 0;
+    for url in urls {
+        let Ok(resp) = client
+            .head(*url)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+        else {
+            return 0;
+        };
+        if !resp.status().is_success() {
+            return 0;
+        }
+        match resp.content_length() {
+            Some(size) => total = total.saturating_add(size),
+            None => return 0,
+        }
+    }
+    total
 }
 
 #[tauri::command]
@@ -1723,37 +1759,54 @@ pub async fn delete_whisper_model(app: AppHandle, model_path: String) -> Result<
     Ok(())
 }
 
-const PARAKEET_TDT_INT8_MODEL_FILES: &[(&str, &str)] = &[
+const MODEL_DOWNLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+const PARAKEET_TDT_INT8_MODEL_FILES: &[(&str, &[&str])] = &[
     (
         "encoder-model.int8.onnx",
-        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/encoder-model.int8.onnx",
+        &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/parakeet-tdt-v1/encoder-model.int8.onnx",
+        ],
     ),
     (
         "decoder_joint-model.int8.onnx",
-        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/decoder_joint-model.int8.onnx",
+        &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/parakeet-tdt-v1/decoder_joint-model.int8.onnx",
+        ],
     ),
     (
         "vocab.txt",
-        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/vocab.txt",
+        &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/parakeet-tdt-v1/vocab.txt",
+        ],
     ),
 ];
 
-const PARAKEET_TDT_FULL_MODEL_FILES: &[(&str, &str)] = &[
+const PARAKEET_TDT_FULL_MODEL_FILES: &[(&str, &[&str])] = &[
     (
         "encoder-model.onnx",
-        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/encoder-model.onnx",
+        &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/parakeet-tdt-v1/encoder-model.onnx",
+        ],
     ),
     (
         "encoder-model.onnx.data",
-        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/encoder-model.onnx.data",
+        &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/parakeet-tdt-v1/encoder-model.onnx.data.part0",
+            "https://github.com/CapSoftware/transcription-models/releases/download/parakeet-tdt-v1/encoder-model.onnx.data.part1",
+        ],
     ),
     (
         "decoder_joint-model.onnx",
-        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/decoder_joint-model.onnx",
+        &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/parakeet-tdt-v1/decoder_joint-model.onnx",
+        ],
     ),
     (
         "vocab.txt",
-        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/vocab.txt",
+        &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/parakeet-tdt-v1/vocab.txt",
+        ],
     ),
 ];
 
@@ -1769,7 +1822,7 @@ const PARAKEET_MODEL_CLEANUP_FILES: &[&str] = &[
 
 fn parakeet_model_files_for_dir(
     output_dir: &std::path::Path,
-) -> &'static [(&'static str, &'static str)] {
+) -> &'static [(&'static str, &'static [&'static str])] {
     let dir_name = output_dir.file_name().and_then(|name| name.to_str());
 
     match dir_name {
@@ -1806,65 +1859,67 @@ pub async fn download_parakeet_model(app: AppHandle, output_dir: String) -> Resu
     let model_files = parakeet_model_files_for_dir(&validated_dir);
 
     let mut total_size: u64 = 0;
-    let mut file_sizes: Vec<u64> = Vec::new();
-
-    for (filename, url) in model_files {
-        let resp = http_client
-            .head(*url)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to get size for {filename}: {e}"))?;
-        let size = resp.content_length().unwrap_or(0);
-        file_sizes.push(size);
-        total_size += size;
+    for (filename, urls) in model_files {
+        for url in *urls {
+            let resp = http_client
+                .head(*url)
+                .timeout(Duration::from_secs(30))
+                .send()
+                .await
+                .map_err(|e| format!("Failed to get size for {filename}: {e}"))?;
+            total_size = total_size.saturating_add(resp.content_length().unwrap_or(0));
+        }
     }
 
     let mut downloaded_total: u64 = 0;
 
     let download_result: Result<(), String> = async {
-        for (idx, (filename, url)) in model_files.iter().enumerate() {
-            tracing::info!("Downloading {filename} from {url}");
-
-            let response = http_client
-                .get(*url)
-                .send()
-                .await
-                .map_err(|e| format!("Failed to download {filename}: {e}"))?;
-
-            if !response.status().is_success() {
-                return Err(format!(
-                    "Failed to download {filename}: HTTP {}",
-                    response.status()
-                ));
-            }
-
+        for (idx, (filename, urls)) in model_files.iter().enumerate() {
             let file_path = staging_dir.join(filename);
             let mut file = tokio::fs::File::create(&file_path)
                 .await
                 .map_err(|e| format!("Failed to create {filename}: {e}"))?;
 
-            let mut stream = response.bytes_stream();
-            while let Some(chunk_result) = stream.next().await {
-                let chunk =
-                    chunk_result.map_err(|e| format!("Download error for {filename}: {e}"))?;
-                file.write_all(&chunk)
+            for url in *urls {
+                tracing::info!("Downloading {filename} part from {url}");
+
+                let response = http_client
+                    .get(*url)
+                    .timeout(MODEL_DOWNLOAD_REQUEST_TIMEOUT)
+                    .send()
                     .await
-                    .map_err(|e| format!("Write error for {filename}: {e}"))?;
+                    .map_err(|e| format!("Failed to download {filename}: {e}"))?;
 
-                downloaded_total += chunk.len() as u64;
-
-                let progress = if total_size > 0 {
-                    (downloaded_total as f64 / total_size as f64) * 100.0
-                } else {
-                    ((idx as f64 + 0.5) / model_files.len() as f64) * 100.0
-                };
-
-                DownloadProgress {
-                    progress,
-                    message: format!("Downloading {filename}: {progress:.1}%"),
+                if !response.status().is_success() {
+                    return Err(format!(
+                        "Failed to download {filename}: HTTP {}",
+                        response.status()
+                    ));
                 }
-                .emit(&app)
-                .ok();
+
+                let mut stream = response.bytes_stream();
+                while let Some(chunk_result) = stream.next().await {
+                    let chunk =
+                        chunk_result.map_err(|e| format!("Download error for {filename}: {e}"))?;
+                    file.write_all(&chunk)
+                        .await
+                        .map_err(|e| format!("Write error for {filename}: {e}"))?;
+
+                    downloaded_total = downloaded_total.saturating_add(chunk.len() as u64);
+
+                    let progress = if total_size > 0 {
+                        (downloaded_total as f64 / total_size as f64) * 100.0
+                    } else {
+                        ((idx as f64 + 0.5) / model_files.len() as f64) * 100.0
+                    };
+
+                    DownloadProgress {
+                        progress,
+                        message: format!("Downloading {filename}: {progress:.1}%"),
+                    }
+                    .emit(&app)
+                    .ok();
+                }
             }
 
             file.flush()

@@ -210,6 +210,7 @@ export function createImageDataWS(
 	let mainThreadWebGPU: WebGPURenderer | null = null;
 	let mainThreadWebGPUInitializing = false;
 	let pendingNv12Frame: ArrayBuffer | null = null;
+	let pendingNv12RafId: number | null = null;
 
 	let lastRenderedFrameData: {
 		data: Uint8ClampedArray;
@@ -280,6 +281,10 @@ export function createImageDataWS(
 
 		mainThreadWebGPUInitializing = false;
 		pendingNv12Frame = null;
+		if (pendingNv12RafId !== null) {
+			cancelAnimationFrame(pendingNv12RafId);
+			pendingNv12RafId = null;
+		}
 		mainThreadNv12Buffer = null;
 		mainThreadNv12BufferSize = 0;
 		cachedDirectImageData = null;
@@ -342,8 +347,19 @@ export function createImageDataWS(
 			);
 
 			storeRenderedFrame(frameData, width, height, yStride, true);
+			actualRendersCount++;
 			onmessage({ width, height });
 		}
+	}
+
+	function schedulePendingNv12Frame(buffer: ArrayBuffer) {
+		pendingNv12Frame = buffer;
+		if (pendingNv12RafId !== null) return;
+
+		pendingNv12RafId = requestAnimationFrame(() => {
+			pendingNv12RafId = null;
+			renderPendingNv12Frame();
+		});
 	}
 
 	function renderPendingFrameCanvas2D() {
@@ -616,12 +632,7 @@ export function createImageDataWS(
 	let frameCount = 0;
 	let frameTimeSum = 0;
 	let totalBytesReceived = 0;
-	let lastLogTime = 0;
-	let framesReceived = 0;
-	let framesDropped = 0;
-	let framesSentToWorker = 0;
 	let actualRendersCount = 0;
-	let renderFrameCount = 0;
 	let minFrameTime = Number.MAX_VALUE;
 	let maxFrameTime = 0;
 	const getLocalFpsStats = (): FpsStats => ({
@@ -646,7 +657,6 @@ export function createImageDataWS(
 		const buffer = event.data as ArrayBuffer;
 		const now = performance.now();
 		totalBytesReceived += buffer.byteLength;
-		framesReceived++;
 
 		let isNv12Format = false;
 		if (buffer.byteLength >= 28) {
@@ -662,32 +672,13 @@ export function createImageDataWS(
 			maxFrameTime = Math.max(maxFrameTime, delta);
 
 			if (frameCount % 60 === 0) {
-				const avgDelta = frameTimeSum / 60;
-				const elapsedSec = (now - lastLogTime) / 1000;
-				const mbPerSec = totalBytesReceived / 1_000_000 / elapsedSec;
-				const recvFps = framesReceived / elapsedSec;
-				const sentFps = framesSentToWorker / elapsedSec;
-				const actualFps = actualRendersCount / elapsedSec;
-				const dropRate =
-					framesReceived > 0 ? (framesDropped / framesReceived) * 100 : 0;
-
-				console.log(
-					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, ${isNv12Format ? "NV12" : "RGBA"}`,
-				);
-
 				frameCount = 0;
 				frameTimeSum = 0;
 				totalBytesReceived = 0;
-				lastLogTime = now;
-				framesReceived = 0;
-				framesDropped = 0;
-				framesSentToWorker = 0;
 				actualRendersCount = 0;
 				minFrameTime = Number.MAX_VALUE;
 				maxFrameTime = 0;
 			}
-		} else {
-			lastLogTime = now;
 		}
 		lastFrameTime = now;
 
@@ -695,34 +686,16 @@ export function createImageDataWS(
 			if (mainThreadWebGPU && directCanvas) {
 				const metadataOffset = buffer.byteLength - 28;
 				const meta = new DataView(buffer, metadataOffset, 28);
-				const yStride = meta.getUint32(0, true);
 				const height = meta.getUint32(4, true);
 				const width = meta.getUint32(8, true);
 
 				if (width > 0 && height > 0) {
-					const ySize = yStride * height;
-					const uvSize = yStride * (height / 2);
-					const totalSize = ySize + uvSize;
-
-					const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
-
 					if (directCanvas.width !== width || directCanvas.height !== height) {
 						directCanvas.width = width;
 						directCanvas.height = height;
 					}
 
-					renderNv12FrameWebGPU(
-						mainThreadWebGPU,
-						frameData,
-						width,
-						height,
-						yStride,
-					);
-					actualRendersCount++;
-					renderFrameCount++;
-
-					storeRenderedFrame(frameData, width, height, yStride, true);
-					onmessage({ width, height });
+					schedulePendingNv12Frame(buffer);
 				}
 				return;
 			}
@@ -796,7 +769,6 @@ export function createImageDataWS(
 
 					storeRenderedFrame(nv12Data, width, height, yStride, true);
 					actualRendersCount++;
-					renderFrameCount++;
 
 					onmessage({ width, height });
 				}
@@ -804,10 +776,8 @@ export function createImageDataWS(
 			}
 
 			if (isProcessing) {
-				framesDropped++;
 				nextFrame = buffer;
 			} else {
-				framesSentToWorker++;
 				pendingFrame = buffer;
 				processNextFrame();
 			}
@@ -838,7 +808,6 @@ export function createImageDataWS(
 					strideBytes,
 				);
 				actualRendersCount++;
-				renderFrameCount++;
 
 				storeRenderedFrame(frameData, width, height, strideBytes, false);
 				onmessage({ width, height });
@@ -865,22 +834,11 @@ export function createImageDataWS(
 						minFrameTime = Math.min(minFrameTime, delta);
 						maxFrameTime = Math.max(maxFrameTime, delta);
 						if (frameCount % 60 === 0) {
-							const avgDelta = frameTimeSum / 60;
-							const elapsedSec = (now - lastLogTime) / 1000;
-							const mbPerSec = totalBytesReceived / 1_000_000 / elapsedSec;
-							const actualRenderFps = renderFrameCount / elapsedSec;
-							console.log(
-								`[Frame] recv_fps: ${(1000 / avgDelta).toFixed(1)}, render_fps: ${actualRenderFps.toFixed(1)}, mb/s: ${mbPerSec.toFixed(1)}, frame_ms: ${avgDelta.toFixed(1)} (min: ${minFrameTime.toFixed(1)}, max: ${maxFrameTime.toFixed(1)}), size: ${(buffer.byteLength / 1024).toFixed(0)}KB, format: ${isNv12Format ? "NV12" : "RGBA"}`,
-							);
 							frameTimeSum = 0;
 							totalBytesReceived = 0;
-							lastLogTime = now;
-							renderFrameCount = 0;
 							minFrameTime = Number.MAX_VALUE;
 							maxFrameTime = 0;
 						}
-					} else {
-						lastLogTime = now;
 					}
 					lastFrameTime = now;
 
@@ -918,8 +876,6 @@ export function createImageDataWS(
 							width * 4,
 							false,
 						);
-						renderFrameCount++;
-
 						onmessage({ width, height });
 					} else {
 						strideWorker.postMessage(

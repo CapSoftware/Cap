@@ -1293,6 +1293,8 @@ function CameraPreviewInline() {
 
 		socket.onmessage = (event) => {
 			lastFrameTime = Date.now();
+			if (pendingRender) return;
+
 			const buffer = event.data as ArrayBuffer;
 			const clamped = new Uint8ClampedArray(buffer);
 			if (clamped.length < 24) return;

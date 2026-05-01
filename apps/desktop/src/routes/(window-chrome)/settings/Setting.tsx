@@ -1,4 +1,5 @@
 import type { JSX } from "solid-js";
+import { Show } from "solid-js";
 import { Toggle } from "~/components/Toggle";
 
 export function SettingItem(props: {
@@ -8,16 +9,14 @@ export function SettingItem(props: {
 	children: JSX.Element;
 }) {
 	return (
-		<div class="flex flex-row gap-2 justify-between items-center py-3 text-sm">
-			<div class="flex flex-col justify-between items-start space-y-1">
-				<div class="flex gap-2 items-center">
-					<p class="text-gray-12">{props.label}</p>
-				</div>
-				{props.description && (
-					<p class="text-xs text-gray-11">{props.description}</p>
-				)}
+		<div class="flex flex-row gap-4 justify-between items-center px-4 py-3.5">
+			<div class="flex flex-col flex-1 min-w-0 gap-0.5">
+				<p class="text-[13px] text-gray-12">{props.label}</p>
+				<Show when={props.description}>
+					<p class="text-xs leading-snug text-gray-10">{props.description}</p>
+				</Show>
 			</div>
-			{props.children}
+			<div class="flex shrink-0 items-center">{props.children}</div>
 		</div>
 	);
 }

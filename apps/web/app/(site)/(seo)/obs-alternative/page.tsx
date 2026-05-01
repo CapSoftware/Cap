@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import {
 	ObsAlternativePage,
 	obsAlternativeContent,
@@ -44,13 +43,9 @@ export const metadata: Metadata = {
 export default function Page() {
 	return (
 		<>
-			<Script
-				id="faq-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{
-					__html: JSON.stringify(createFAQSchema(obsAlternativeContent.faqs)),
-				}}
-			/>
+			<script type="application/ld+json">
+				{JSON.stringify(createFAQSchema(obsAlternativeContent.faqs))}
+			</script>
 			<ObsAlternativePage />
 		</>
 	);

@@ -58,7 +58,9 @@ export const publicPolicy = <E, R>(
 		);
 	}) as PublicPolicy<E, R>;
 
-export class DenyAccess extends Data.TaggedError("DenyAccess")<{}> {}
+export class DenyAccess extends Data.TaggedError("DenyAccess")<
+	Record<never, never>
+> {}
 
 /**
  * Applies a policy as a pre-check to an effect.

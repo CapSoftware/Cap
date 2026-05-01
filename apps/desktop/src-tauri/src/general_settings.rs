@@ -42,12 +42,37 @@ pub enum EditorPreviewQuality {
     Full,
 }
 
-#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Type, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum StudioRecordingQuality {
-    #[default]
+    Compatibility,
     Balanced,
     Ultra,
+}
+
+impl Default for StudioRecordingQuality {
+    fn default() -> Self {
+        default_studio_recording_quality()
+    }
+}
+
+fn detect_total_memory_bytes() -> Option<u64> {
+    let system = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing()
+            .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
+    );
+    Some(system.total_memory()).filter(|m| *m > 0)
+}
+
+const COMPATIBILITY_MEMORY_THRESHOLD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+pub fn default_studio_recording_quality() -> StudioRecordingQuality {
+    match detect_total_memory_bytes() {
+        Some(memory) if memory < COMPATIBILITY_MEMORY_THRESHOLD_BYTES => {
+            StudioRecordingQuality::Compatibility
+        }
+        _ => StudioRecordingQuality::Balanced,
+    }
 }
 
 impl MainWindowRecordingStartBehaviour {
@@ -247,7 +272,7 @@ impl Default for GeneralSettingsStore {
             max_fps: 60,
             transcription_hints: default_transcription_hints(),
             editor_preview_quality: EditorPreviewQuality::Half,
-            studio_recording_quality: StudioRecordingQuality::Balanced,
+            studio_recording_quality: default_studio_recording_quality(),
             main_window_position: None,
             camera_window_position: None,
             camera_window_positions_by_monitor_name: BTreeMap::new(),

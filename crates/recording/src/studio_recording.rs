@@ -44,6 +44,11 @@ use std::{
 use tokio::{sync::watch, task::JoinHandle};
 use tracing::{Instrument, debug, error_span, info, trace, warn};
 
+const CAMERA_ACTIVE_MAX_SCREEN_WIDTH: u32 = 1920;
+const CAMERA_ACTIVE_MAX_SCREEN_HEIGHT: u32 = 1200;
+const COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH: u32 = 1600;
+const COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT: u32 = 1000;
+
 #[allow(clippy::large_enum_variant)]
 enum ActorState {
     Recording {
@@ -1279,8 +1284,14 @@ async fn create_segment_pipeline(
 
     trace!("preparing segment pipeline {index}");
 
+    let camera_active = base_inputs.camera_feed.is_some();
     #[cfg(target_os = "macos")]
-    let shared_pause_state = if fragmented {
+    let segment_fragmented = fragmented && !camera_active;
+    #[cfg(not(target_os = "macos"))]
+    let segment_fragmented = fragmented;
+
+    #[cfg(target_os = "macos")]
+    let shared_pause_state = if segment_fragmented {
         Some(SharedPauseState::new(Arc::new(
             std::sync::atomic::AtomicBool::new(false),
         )))
@@ -1289,7 +1300,7 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(windows)]
-    let shared_pause_state = if fragmented {
+    let shared_pause_state = if segment_fragmented {
         Some(SharedPauseState::new(Arc::new(
             std::sync::atomic::AtomicBool::new(false),
         )))
@@ -1342,12 +1353,34 @@ async fn create_segment_pipeline(
 
         let (display, crop) =
             target_to_display_and_crop(&capture_target).context("target_display_crop")?;
+        let compatibility_quality = matches!(quality, crate::StudioQuality::Compatibility);
+        let max_capture_size = if camera_active {
+            if compatibility_quality {
+                Some((
+                    COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH,
+                    COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT,
+                ))
+            } else {
+                Some((
+                    CAMERA_ACTIVE_MAX_SCREEN_WIDTH,
+                    CAMERA_ACTIVE_MAX_SCREEN_HEIGHT,
+                ))
+            }
+        } else {
+            None
+        };
+        let effective_max_fps = if compatibility_quality && camera_active {
+            max_fps.min(24)
+        } else {
+            max_fps
+        };
 
         let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
             display,
             crop,
             !custom_cursor_capture,
-            max_fps,
+            effective_max_fps,
+            max_capture_size,
             start_time.system_time(),
             base_inputs.capture_system_audio,
             #[cfg(windows)]
@@ -1376,7 +1409,7 @@ async fn create_segment_pipeline(
             capture_source,
             screen_output_path.clone(),
             start_time,
-            fragmented,
+            segment_fragmented,
             use_oop_muxer,
             shared_pause_state.clone(),
             output_size,
@@ -1395,7 +1428,7 @@ async fn create_segment_pipeline(
     let camera = if camera_only {
         None
     } else if let Some(camera_feed) = base_inputs.camera_feed {
-        let pipeline = if fragmented {
+        let pipeline = if segment_fragmented {
             let fragments_dir = dir.join("camera");
             OutputPipeline::builder(fragments_dir)
                 .with_video::<sources::NativeCamera>(camera_feed)
@@ -1410,7 +1443,10 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(dir.join("camera.mp4"))
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
-                .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
+                .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig {
+                    compatibility_quality: matches!(quality, crate::StudioQuality::Compatibility),
+                    ..Default::default()
+                })
                 .instrument(error_span!("camera-out"))
                 .await
         };
@@ -1423,7 +1459,7 @@ async fn create_segment_pipeline(
     let camera = if camera_only {
         None
     } else if let Some(camera_feed) = base_inputs.camera_feed {
-        let pipeline = if fragmented {
+        let pipeline = if segment_fragmented {
             let fragments_dir = dir.join("camera");
             OutputPipeline::builder(fragments_dir)
                 .with_video::<sources::NativeCamera>(camera_feed)
@@ -1451,7 +1487,7 @@ async fn create_segment_pipeline(
     };
 
     let microphone = if let Some(mic_feed) = base_inputs.mic_feed {
-        let pipeline = if fragmented {
+        let pipeline = if segment_fragmented {
             let output_path = dir.join("audio-input.m4a");
             OutputPipeline::builder(output_path)
                 .with_audio_source::<sources::Microphone>(mic_feed)
@@ -1475,7 +1511,7 @@ async fn create_segment_pipeline(
     };
 
     let system_audio = if let Some(system_audio_source) = system_audio {
-        let pipeline = if fragmented {
+        let pipeline = if segment_fragmented {
             let output_path = dir.join("system_audio.m4a");
             OutputPipeline::builder(output_path)
                 .with_audio_source::<screen_capture::SystemAudioSource>(system_audio_source)

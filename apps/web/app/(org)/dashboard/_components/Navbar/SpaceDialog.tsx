@@ -223,14 +223,19 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 						form.reset();
 						setSelectedFile(null);
 						props.onSpaceCreated();
-					} catch (error: any) {
+					} catch (error) {
 						console.error(
 							edit ? "Error updating space:" : "Error creating space:",
 							error,
 						);
+						const message =
+							error instanceof Error
+								? error.message
+								: edit
+									? "Failed to update space"
+									: "Failed to create space";
 						toast.error(
-							error?.message ||
-								error?.error ||
+							message ||
 								(edit ? "Failed to update space" : "Failed to create space"),
 						);
 					} finally {

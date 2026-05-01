@@ -251,14 +251,14 @@ impl MFDecoder {
                     };
 
                 match r {
-                    VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                    VideoDecoderMessage::GetFrame(requested_time, _, sender) => {
                         push_request(requested_time, sender);
                     }
                 }
 
                 while let Ok(msg) = rx.try_recv() {
                     match msg {
-                        VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                        VideoDecoderMessage::GetFrame(requested_time, _, sender) => {
                             push_request(requested_time, sender);
                         }
                     }

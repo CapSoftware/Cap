@@ -45,6 +45,8 @@ import type {
 	BackgroundBlurMode,
 	BackgroundSource,
 	CameraShape,
+	CameraXPosition,
+	CameraYPosition,
 	CaptionTrackSegment,
 	ClipOffsets,
 	CursorAnimationStyle,
@@ -210,6 +212,13 @@ const CAMERA_SHAPES = [
 		value: "source",
 	},
 ] satisfies Array<{ name: string; value: CameraShape }>;
+
+const CAMERA_X_POSITIONS = [
+	"left",
+	"center",
+	"right",
+] satisfies CameraXPosition[];
+const CAMERA_Y_POSITIONS = ["top", "bottom"] satisfies CameraYPosition[];
 
 const BACKGROUND_THEMES = {
 	macOS: "macOS",
@@ -398,9 +407,7 @@ export function ConfigSidebar() {
 						{
 							id: TAB_IDS.cursor,
 							icon: IconCapCursor,
-							disabled: !(
-								meta().type === "multiple" && (meta() as any).segments[0].cursor
-							),
+							disabled: !meta().hasRecordedCursorData,
 						},
 						{
 							id: TAB_IDS.keyboard,
@@ -669,7 +676,7 @@ export function ConfigSidebar() {
 										value={[cursorIdleDelay()]}
 										onChange={(v) => {
 											const rounded = clampIdleDelay(v[0]);
-											setProject("cursor", "hideWhenIdleDelay" as any, rounded);
+											setProject("cursor", "hideWhenIdleDelay", rounded);
 										}}
 										minValue={0.5}
 										maxValue={5}
@@ -765,9 +772,9 @@ export function ConfigSidebar() {
 							icon={<IconLucideSparkles />}
 							value={
 								<Toggle
-									checked={(project.cursor as any).useSvg ?? true}
+									checked={project.cursor.useSvg ?? true}
 									onChange={(value) => {
-										setProject("cursor", "useSvg" as any, value);
+										setProject("cursor", "useSvg", value);
 									}}
 								/>
 							}
@@ -1230,59 +1237,66 @@ export function ConfigSidebar() {
 											segment: project.timeline?.sceneSegments?.[idx],
 											index: idx,
 										}))
-										.filter((s) => s.segment !== undefined);
+										.filter(
+											(s): s is { segment: SceneSegment; index: number } =>
+												s.segment !== undefined,
+										);
 
 									if (segments.length === 0) return;
 									return { selection: sceneSelection, segments };
 								})()}
 							>
 								{(value) => (
-									<Show
-										when={value().segments.length > 1}
-										fallback={
-											<SceneSegmentConfig
-												segment={value().segments[0].segment!}
-												segmentIndex={value().segments[0].index}
-											/>
-										}
-									>
-										<div class="space-y-4">
-											<div class="flex flex-row justify-between items-center">
-												<div class="flex gap-2 items-center">
-													<EditorButton
-														onClick={() =>
-															setEditorState("timeline", "selection", null)
-														}
-														leftIcon={<IconLucideCheck />}
-													>
-														Done
-													</EditorButton>
-													<span class="text-sm text-gray-10">
-														{value().segments.length} scene{" "}
-														{value().segments.length === 1
-															? "segment"
-															: "segments"}{" "}
-														selected
-													</span>
-												</div>
-												<EditorButton
-													variant="danger"
-													onClick={() => {
-														const indices = value().selection.indices;
+									<Show when={value().segments[0]}>
+										{(firstSegment) => (
+											<Show
+												when={value().segments.length > 1}
+												fallback={
+													<SceneSegmentConfig
+														segment={firstSegment().segment}
+														segmentIndex={firstSegment().index}
+													/>
+												}
+											>
+												<div class="space-y-4">
+													<div class="flex flex-row justify-between items-center">
+														<div class="flex gap-2 items-center">
+															<EditorButton
+																onClick={() =>
+																	setEditorState("timeline", "selection", null)
+																}
+																leftIcon={<IconLucideCheck />}
+															>
+																Done
+															</EditorButton>
+															<span class="text-sm text-gray-10">
+																{value().segments.length} scene{" "}
+																{value().segments.length === 1
+																	? "segment"
+																	: "segments"}{" "}
+																selected
+															</span>
+														</div>
+														<EditorButton
+															variant="danger"
+															onClick={() => {
+																const indices = value().selection.indices;
 
-														// Delete segments in reverse order to maintain indices
-														[...indices]
-															.sort((a, b) => b - a)
-															.forEach((idx) => {
-																projectActions.deleteSceneSegment(idx);
-															});
-													}}
-													leftIcon={<IconCapTrash />}
-												>
-													Delete
-												</EditorButton>
-											</div>
-										</div>
+																// Delete segments in reverse order to maintain indices
+																[...indices]
+																	.sort((a, b) => b - a)
+																	.forEach((idx) => {
+																		projectActions.deleteSceneSegment(idx);
+																	});
+															}}
+															leftIcon={<IconCapTrash />}
+														>
+															Delete
+														</EditorButton>
+													</div>
+												</div>
+											</Show>
+										)}
 									</Show>
 								)}
 							</Show>
@@ -1296,59 +1310,66 @@ export function ConfigSidebar() {
 											segment: project.timeline?.segments?.[idx],
 											index: idx,
 										}))
-										.filter((s) => s.segment !== undefined);
+										.filter(
+											(s): s is { segment: TimelineSegment; index: number } =>
+												s.segment !== undefined,
+										);
 
 									if (segments.length === 0) return;
 									return { selection: clipSelection, segments };
 								})()}
 							>
 								{(value) => (
-									<Show
-										when={value().segments.length > 1}
-										fallback={
-											<ClipSegmentConfig
-												segment={value().segments[0].segment!}
-												segmentIndex={value().segments[0].index}
-											/>
-										}
-									>
-										<div class="space-y-4">
-											<div class="flex flex-row justify-between items-center">
-												<div class="flex gap-2 items-center">
-													<EditorButton
-														onClick={() =>
-															setEditorState("timeline", "selection", null)
-														}
-														leftIcon={<IconLucideCheck />}
-													>
-														Done
-													</EditorButton>
-													<span class="text-sm text-gray-10">
-														{value().segments.length} clip{" "}
-														{value().segments.length === 1
-															? "segment"
-															: "segments"}{" "}
-														selected
-													</span>
-												</div>
-												<EditorButton
-													variant="danger"
-													onClick={() => {
-														const indices = value().selection.indices;
+									<Show when={value().segments[0]}>
+										{(firstSegment) => (
+											<Show
+												when={value().segments.length > 1}
+												fallback={
+													<ClipSegmentConfig
+														segment={firstSegment().segment}
+														segmentIndex={firstSegment().index}
+													/>
+												}
+											>
+												<div class="space-y-4">
+													<div class="flex flex-row justify-between items-center">
+														<div class="flex gap-2 items-center">
+															<EditorButton
+																onClick={() =>
+																	setEditorState("timeline", "selection", null)
+																}
+																leftIcon={<IconLucideCheck />}
+															>
+																Done
+															</EditorButton>
+															<span class="text-sm text-gray-10">
+																{value().segments.length} clip{" "}
+																{value().segments.length === 1
+																	? "segment"
+																	: "segments"}{" "}
+																selected
+															</span>
+														</div>
+														<EditorButton
+															variant="danger"
+															onClick={() => {
+																const indices = value().selection.indices;
 
-														// Delete segments in reverse order to maintain indices
-														[...indices]
-															.sort((a, b) => b - a)
-															.forEach((idx) => {
-																projectActions.deleteClipSegment(idx);
-															});
-													}}
-													leftIcon={<IconCapTrash />}
-												>
-													Delete
-												</EditorButton>
-											</div>
-										</div>
+																// Delete segments in reverse order to maintain indices
+																[...indices]
+																	.sort((a, b) => b - a)
+																	.forEach((idx) => {
+																		projectActions.deleteClipSegment(idx);
+																	});
+															}}
+															leftIcon={<IconCapTrash />}
+														>
+															Delete
+														</EditorButton>
+													</div>
+												</div>
+											</Show>
+										)}
 									</Show>
 								)}
 							</Show>
@@ -1381,13 +1402,14 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 		// Load initial batch
 		const initialPaths = await Promise.all(visibleWallpaperPaths);
 
-		return initialPaths
-			.filter((p) => p.path !== null)
-			.map(({ id, path }) => ({
+		return initialPaths.flatMap(({ id, path }) => {
+			if (path === null) return [];
+			return {
 				id,
-				url: convertFileSrc(path!),
-				rawPath: path!,
-			}));
+				url: convertFileSrc(path),
+				rawPath: path,
+			};
+		});
 	});
 
 	// set padding if background is selected
@@ -1781,13 +1803,13 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 								<For each={filteredWallpapers().slice(0, 21)}>
 									{(photo) => (
 										<KRadioGroup.Item
-											value={photo.url!}
+											value={photo.url}
 											class="relative aspect-square group"
 										>
 											<KRadioGroup.ItemInput class="peer" />
 											<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition cursor-pointer ui-not-checked:ring-offset-1 ui-not-checked:ring-offset-gray-200 ui-not-checked:hover:ring-1 ui-not-checked:hover:ring-gray-400 ui-checked:ring-2 ui-checked:ring-gray-500 ui-checked:ring-offset-2 ui-checked:ring-offset-gray-200">
 												<img
-													src={photo.url!}
+													src={photo.url}
 													loading="eager"
 													class="object-cover w-full h-full"
 													alt="Wallpaper option"
@@ -1802,13 +1824,13 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 											<For each={filteredWallpapers()}>
 												{(photo) => (
 													<KRadioGroup.Item
-														value={photo.url!}
+														value={photo.url}
 														class="relative aspect-square group"
 													>
 														<KRadioGroup.ItemInput class="peer" />
 														<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border cursor-pointer border-gray-5 ui-checked:border-blue-9 ui-checked:ring-2 ui-checked:ring-blue-9 peer-focus-visible:border-2 peer-focus-visible:border-blue-9">
 															<img
-																src={photo.url!}
+																src={photo.url}
 																alt="Wallpaper option"
 																class="object-cover w-full h-full"
 																loading="lazy"
@@ -2049,7 +2071,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 			<Field name="Motion Blur" icon={<IconLucideWind class="size-4" />}>
 				<Slider
 					value={[project.cursor.motionBlur ?? DEFAULT_CURSOR_MOTION_BLUR]}
-					onChange={(v) => setProject("cursor", "motionBlur" as any, v[0])}
+					onChange={(v) => setProject("cursor", "motionBlur", v[0])}
 					minValue={0}
 					maxValue={1}
 					step={0.01}
@@ -2156,7 +2178,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 			</KCollapsible>
 			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
 				<Slider
-					value={[project.background.shadow!]}
+					value={[project.background.shadow ?? 0]}
 					onChange={(v) => {
 						batch(() => {
 							setProject("background", "shadow", v[0]);
@@ -2250,7 +2272,17 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 							value={`${project.camera.position.x}:${project.camera.position.y}`}
 							onChange={(v) => {
 								const [x, y] = v.split(":");
-								setProject("camera", "position", { x, y } as any);
+								const xPosition = CAMERA_X_POSITIONS.find(
+									(position) => position === x,
+								);
+								const yPosition = CAMERA_Y_POSITIONS.find(
+									(position) => position === y,
+								);
+								if (!xPosition || !yPosition) return;
+								setProject("camera", "position", {
+									x: xPosition,
+									y: yPosition,
+								});
 							}}
 							class="mt-[0.75rem] rounded-[0.5rem] border border-gray-3 bg-gray-2 w-full h-[7.5rem] relative"
 						>
@@ -2474,7 +2506,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
 				<div class="space-y-8">
 					<Slider
-						value={[project.camera.shadow!]}
+						value={[project.camera.shadow ?? 0]}
 						onChange={(v) => setProject("camera", "shadow", v[0])}
 						minValue={0}
 						maxValue={100}
@@ -2707,7 +2739,7 @@ function TextSegmentConfig(props: {
 						)}
 					>
 						<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-none focus:ring-1 focus:ring-blue-9">
-							<KSelect.Value<any> class="truncate">
+							<KSelect.Value<{ label: string; value: number }> class="truncate">
 								{(state) => {
 									const selected = state.selectedOption();
 									if (selected) return selected.label;
@@ -3286,13 +3318,8 @@ function ZoomSegmentConfig(props: {
 	segment: ZoomSegment;
 }) {
 	const generalSettings = generalSettingsStore.createQuery();
-	const {
-		project,
-		setProject,
-		editorInstance,
-		setEditorState,
-		projectHistory,
-	} = useEditorContext();
+	const { project, setProject, editorInstance, projectHistory } =
+		useEditorContext();
 
 	const states = {
 		manual:
@@ -3454,8 +3481,8 @@ function ZoomSegmentConfig(props: {
 										croppedSize().y,
 										0,
 										0,
-										canvasRef.width!,
-										canvasRef.height!,
+										canvasRef.width,
+										canvasRef.height,
 									);
 								};
 
@@ -3499,7 +3526,7 @@ function ZoomSegmentConfig(props: {
 								};
 
 								const visualHeight = () =>
-									(bounds.width! / croppedSize().x) * croppedSize().y;
+									((bounds.width ?? 0) / croppedSize().x) * croppedSize().y;
 
 								return (
 									<div
@@ -3599,7 +3626,8 @@ function ClipSegmentConfig(props: {
 
 		setProject(
 			produce((proj) => {
-				const clips = (proj.clips ??= []);
+				if (!proj.clips) proj.clips = [];
+				const clips = proj.clips;
 				let clip = clips.find(
 					(clip) => clip.index === (props.segment.recordingSegment ?? 0),
 				);

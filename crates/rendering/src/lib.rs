@@ -304,6 +304,7 @@ impl RecordingSegmentDecoders {
                 force_ffmpeg,
             )
             .await
+            .map(|decoder| decoder.with_max_fallback_distance(2))
             .map_err(|e| format!("Camera:{e}"))?;
             Ok(Some(camera))
         };

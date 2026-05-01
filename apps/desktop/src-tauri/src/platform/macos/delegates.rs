@@ -95,24 +95,37 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         func(ptr);
     }
 
+    fn suppress_delegate_panic<T, F>(selector: &'static str, fallback: T, operation: F) -> T
+    where
+        F: FnOnce() -> T,
+    {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)) {
+            Ok(value) => value,
+            Err(_) => {
+                tracing::error!(selector, "Suppressed panic in macOS window delegate");
+                fallback
+            }
+        }
+    }
+
     unsafe {
         let ns_win_id = ns_win as id;
         let current_delegate: id = ns_win_id.delegate();
 
         extern "C" fn on_window_should_close(this: &Object, _cmd: Sel, sender: id) -> BOOL {
-            unsafe {
+            suppress_delegate_panic("windowShouldClose:", cocoa::base::NO, || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 msg_send![super_del, windowShouldClose: sender]
-            }
+            })
         }
         extern "C" fn on_window_will_close(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            suppress_delegate_panic("windowWillClose:", (), || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowWillClose: notification];
-            }
+            });
         }
         extern "C" fn on_window_did_resize<R: Runtime>(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            suppress_delegate_panic("windowDidResize:", (), || unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
                     if let Ok(window_handle) = state.window.ns_window() {
                         position_window_controls(
@@ -126,69 +139,69 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
 
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowDidResize: notification];
-            }
+            });
         }
         extern "C" fn on_window_did_move(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            suppress_delegate_panic("windowDidMove:", (), || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowDidMove: notification];
-            }
+            });
         }
         extern "C" fn on_window_did_change_backing_properties(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            suppress_delegate_panic("windowDidChangeBackingProperties:", (), || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowDidChangeBackingProperties: notification];
-            }
+            });
         }
         extern "C" fn on_window_did_become_key(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            suppress_delegate_panic("windowDidBecomeKey:", (), || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowDidBecomeKey: notification];
-            }
+            });
         }
         extern "C" fn on_window_did_resign_key(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            suppress_delegate_panic("windowDidResignKey:", (), || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowDidResignKey: notification];
-            }
+            });
         }
         extern "C" fn on_dragging_entered(this: &Object, _cmd: Sel, notification: id) -> BOOL {
-            unsafe {
+            suppress_delegate_panic("draggingEntered:", cocoa::base::NO, || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 msg_send![super_del, draggingEntered: notification]
-            }
+            })
         }
         extern "C" fn on_prepare_for_drag_operation(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) -> BOOL {
-            unsafe {
+            suppress_delegate_panic("prepareForDragOperation:", cocoa::base::NO, || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 msg_send![super_del, prepareForDragOperation: notification]
-            }
+            })
         }
         extern "C" fn on_perform_drag_operation(this: &Object, _cmd: Sel, sender: id) -> BOOL {
-            unsafe {
+            suppress_delegate_panic("performDragOperation:", cocoa::base::NO, || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 msg_send![super_del, performDragOperation: sender]
-            }
+            })
         }
         extern "C" fn on_conclude_drag_operation(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            suppress_delegate_panic("concludeDragOperation:", (), || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, concludeDragOperation: notification];
-            }
+            });
         }
         extern "C" fn on_dragging_exited(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            suppress_delegate_panic("draggingExited:", (), || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, draggingExited: notification];
-            }
+            });
         }
         extern "C" fn on_window_will_use_full_screen_presentation_options(
             this: &Object,
@@ -196,17 +209,21 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
             window: id,
             proposed_options: NSUInteger,
         ) -> NSUInteger {
-            unsafe {
-                let super_del: id = *this.get_ivar("super_delegate");
-                msg_send![super_del, window: window willUseFullScreenPresentationOptions: proposed_options]
-            }
+            suppress_delegate_panic(
+                "window:willUseFullScreenPresentationOptions:",
+                proposed_options,
+                || unsafe {
+                    let super_del: id = *this.get_ivar("super_delegate");
+                    msg_send![super_del, window: window willUseFullScreenPresentationOptions: proposed_options]
+                },
+            )
         }
         extern "C" fn on_window_did_enter_full_screen<R: Runtime>(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            suppress_delegate_panic("windowDidEnterFullScreen:", (), || unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
                     if let Err(err) = state.window.emit("did-enter-fullscreen", ()) {
                         tracing::warn!("Failed to emit did-enter-fullscreen: {err}");
@@ -215,14 +232,14 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
 
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowDidEnterFullScreen: notification];
-            }
+            });
         }
         extern "C" fn on_window_will_enter_full_screen<R: Runtime>(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            suppress_delegate_panic("windowWillEnterFullScreen:", (), || unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
                     if let Err(err) = state.window.emit("will-enter-fullscreen", ()) {
                         tracing::warn!("Failed to emit will-enter-fullscreen: {err}");
@@ -231,14 +248,14 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
 
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowWillEnterFullScreen: notification];
-            }
+            });
         }
         extern "C" fn on_window_did_exit_full_screen<R: Runtime>(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            suppress_delegate_panic("windowDidExitFullScreen:", (), || unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
                     if let Err(err) = state.window.emit("did-exit-fullscreen", ()) {
                         tracing::warn!("Failed to emit did-exit-fullscreen: {err}");
@@ -256,14 +273,14 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
 
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowDidExitFullScreen: notification];
-            }
+            });
         }
         extern "C" fn on_window_will_exit_full_screen<R: Runtime>(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            suppress_delegate_panic("windowWillExitFullScreen:", (), || unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
                     if let Err(err) = state.window.emit("will-exit-fullscreen", ()) {
                         tracing::warn!("Failed to emit will-exit-fullscreen: {err}");
@@ -272,40 +289,44 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
 
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowWillExitFullScreen: notification];
-            }
+            });
         }
         extern "C" fn on_window_did_fail_to_enter_full_screen(
             this: &Object,
             _cmd: Sel,
             window: id,
         ) {
-            unsafe {
+            suppress_delegate_panic("windowDidFailToEnterFullScreen:", (), || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowDidFailToEnterFullScreen: window];
-            }
+            });
         }
         extern "C" fn on_effective_appearance_did_change(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            suppress_delegate_panic("effectiveAppearanceDidChange:", (), || unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, effectiveAppearanceDidChange: notification];
-            }
+            });
         }
         extern "C" fn on_effective_appearance_did_changed_on_main_thread(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
-                let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![
-                    super_del,
-                    effectiveAppearanceDidChangedOnMainThread: notification
-                ];
-            }
+            suppress_delegate_panic(
+                "effectiveAppearanceDidChangedOnMainThread:",
+                (),
+                || unsafe {
+                    let super_del: id = *this.get_ivar("super_delegate");
+                    let _: () = msg_send![
+                        super_del,
+                        effectiveAppearanceDidChangedOnMainThread: notification
+                    ];
+                },
+            );
         }
 
         let window_label = window.label().to_string();
