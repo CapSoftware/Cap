@@ -404,12 +404,21 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 ChannelLayout::STEREO,
                             );
                             frame.set_rate(48_000);
-                            let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
+                            let data_bytes_size =
+                                buf_list.list().buffers[0].data_bytes_size as usize;
                             for i in 0..frame.planes() {
-                                frame.data_mut(i).copy_from_slice(
-                                    &slice[i * data_bytes_size as usize
-                                        ..(i + 1) * data_bytes_size as usize],
-                                );
+                                let start = i.saturating_mul(data_bytes_size);
+                                let end = start.saturating_add(data_bytes_size);
+                                let Some(source) = slice.get(start..end) else {
+                                    warn!("Audio buffer slice too small for plane data, dropping audio chunk");
+                                    return;
+                                };
+                                let destination = frame.data_mut(i);
+                                if destination.len() != source.len() {
+                                    warn!("Audio frame plane size mismatch, dropping audio chunk");
+                                    return;
+                                }
+                                destination.copy_from_slice(source);
                             }
 
                             match output_pipeline::send_with_stall_budget_futures(
