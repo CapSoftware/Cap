@@ -3,6 +3,8 @@ use cap_recording::{
     FFmpegVideoFrame,
     feeds::{self, camera::CameraFeed},
 };
+#[cfg(target_os = "macos")]
+use cap_utils::macos_qos::{MacOsQosClass, set_current_thread_qos};
 use ffmpeg::{
     format::{self, Pixel},
     frame,
@@ -260,6 +262,13 @@ impl CameraPreviewManager {
         });
 
         thread::spawn(move || {
+            #[cfg(target_os = "macos")]
+            {
+                let result = set_current_thread_qos(MacOsQosClass::UserInteractive);
+                if result != 0 {
+                    warn!(result, "pthread_set_qos_class_self_np failed");
+                }
+            }
             LocalSet::new().block_on(
                 &rt,
                 renderer.run(window.clone(), default_state, reconfigure_rx, camera_rx),

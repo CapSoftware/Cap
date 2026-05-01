@@ -316,14 +316,14 @@ impl FfmpegDecoder {
                         };
 
                     match r {
-                        VideoDecoderMessage::GetFrame(requested_time, reply) => {
+                        VideoDecoderMessage::GetFrame(requested_time, _, reply) => {
                             push_request(requested_time, reply);
                         }
                     }
 
                     while let Ok(msg) = rx.try_recv() {
                         match msg {
-                            VideoDecoderMessage::GetFrame(requested_time, reply) => {
+                            VideoDecoderMessage::GetFrame(requested_time, _, reply) => {
                                 push_request(requested_time, reply);
                             }
                         }
@@ -627,14 +627,14 @@ impl FfmpegDecoder {
                     };
 
                 match r {
-                    VideoDecoderMessage::GetFrame(requested_time, reply) => {
+                    VideoDecoderMessage::GetFrame(requested_time, _, reply) => {
                         push_request(requested_time, reply);
                     }
                 }
 
                 while let Ok(msg) = rx.try_recv() {
                     match msg {
-                        VideoDecoderMessage::GetFrame(requested_time, reply) => {
+                        VideoDecoderMessage::GetFrame(requested_time, _, reply) => {
                             push_request(requested_time, reply);
                         }
                     }

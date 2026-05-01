@@ -10,6 +10,8 @@ use aho_corasick::{AhoCorasickBuilder, MatchKind};
 use tracing::Instrument;
 
 pub mod disk_space;
+#[cfg(target_os = "macos")]
+pub mod macos_qos;
 
 /// Wrapper around tokio::spawn that inherits the current tracing subscriber and span.
 pub fn spawn_actor<F>(future: F) -> tokio::task::JoinHandle<F::Output>

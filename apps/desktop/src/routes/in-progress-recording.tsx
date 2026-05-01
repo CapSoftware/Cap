@@ -75,10 +75,10 @@ function InProgressRecordingInner() {
 		window.COUNTDOWN === 0
 			? { variant: "initializing" }
 			: {
-					variant: "countdown",
-					from: window.COUNTDOWN,
-					current: window.COUNTDOWN,
-				},
+				variant: "countdown",
+				from: window.COUNTDOWN,
+				current: window.COUNTDOWN,
+			},
 	);
 	const [start, setStart] = createSignal(Date.now());
 	const [time, setTime] = createSignal(Date.now());
@@ -108,6 +108,7 @@ function InProgressRecordingInner() {
 	const [issueKey, setIssueKey] = createSignal("");
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
 	const [startingDismissed, setStartingDismissed] = createSignal(false);
+	const [stopRequested, setStopRequested] = createSignal(false);
 	const [interactiveAreaRef, setInteractiveAreaRef] =
 		createSignal<HTMLDivElement | null>(null);
 	let settingsButtonRef: HTMLButtonElement | undefined;
@@ -162,9 +163,9 @@ function InProgressRecordingInner() {
 	const [pauseResumes, setPauseResumes] = createStore<
 		| []
 		| [
-				...Array<{ pause: number; resume?: number }>,
-				{ pause: number; resume?: number },
-		  ]
+			...Array<{ pause: number; resume?: number }>,
+			{ pause: number; resume?: number },
+		]
 	>([]);
 
 	createEffect(() => {
@@ -189,6 +190,7 @@ function InProgressRecordingInner() {
 				setRecordingFailure(null);
 				setDegradedReason(null);
 				setPauseResumes([]);
+				setStopRequested(false);
 				setState({
 					variant: "countdown",
 					from: payload.value,
@@ -202,6 +204,7 @@ function InProgressRecordingInner() {
 				setRecordingFailure(null);
 				setDegradedReason(null);
 				setPauseResumes([]);
+				setStopRequested(false);
 				aborted = false;
 				setState({ variant: "recording" });
 				setStart(Date.now());
@@ -262,6 +265,7 @@ function InProgressRecordingInner() {
 			setRecordingFailure(null);
 			setDegradedReason(null);
 			setPauseResumes([]);
+			setStopRequested(false);
 			aborted = false;
 			if (recording.status === "recording") {
 				setState({ variant: "recording" });
@@ -382,10 +386,20 @@ function InProgressRecordingInner() {
 
 	const stopRecording = createMutation(() => ({
 		mutationFn: async () => {
+			setStopRequested(true);
 			setState({ variant: "stopped" });
+			void getCurrentWindow().hide();
 			await commands.stopRecording();
 		},
+		onError: () => {
+			setStopRequested(false);
+		},
 	}));
+
+	const requestStopRecording = () => {
+		if (isCountdown() || stopRequested() || stopRecording.isPending) return;
+		stopRecording.mutate();
+	};
 
 	const togglePause = createMutation(() => ({
 		mutationFn: async () => {
@@ -669,10 +683,20 @@ function InProgressRecordingInner() {
 									}
 								>
 									<button
-										disabled={stopRecording.isPending || isCountdown()}
+										disabled={
+											stopRequested() ||
+											stopRecording.isPending ||
+											isCountdown()
+										}
 										class="flex flex-row items-center gap-1 rounded-lg py-1 px-2 text-red-300 transition-colors duration-100 hover:bg-red-500/8 active:bg-red-500/12 disabled:opacity-60 disabled:hover:bg-transparent"
 										type="button"
-										onClick={() => stopRecording.mutate()}
+										onPointerDown={(event) => {
+											if (event.button !== 0) return;
+											event.preventDefault();
+											event.stopPropagation();
+											requestStopRecording();
+										}}
+										onClick={requestStopRecording}
 										title="Stop recording"
 										aria-label="Stop recording"
 									>
@@ -753,9 +777,8 @@ function InProgressRecordingInner() {
 														<div
 															class="absolute inset-0 bg-blue-9 transition-transform duration-100"
 															style={{
-																transform: `translateX(-${
-																	(1 - audioLevel()) * 100
-																}%)`,
+																transform: `translateX(-${(1 - audioLevel()) * 100
+																	}%)`,
 															}}
 														/>
 													</div>
@@ -806,7 +829,7 @@ function InProgressRecordingInner() {
 												class={cx(
 													"text-red-10 hover:bg-red-3/40",
 													issuePanelVisible() &&
-														"bg-red-3/40 ring-1 ring-red-8",
+													"bg-red-3/40 ring-1 ring-red-8",
 												)}
 												onClick={() => toggleIssuePanel()}
 												title={issueMessages().join(", ")}

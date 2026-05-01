@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import {
 	HowToScreenRecordPage,
 	howToScreenRecordContent,
@@ -61,30 +60,20 @@ const howToSteps = [
 export default function Page() {
 	return (
 		<>
-			<Script
-				id="faq-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{
-					__html: JSON.stringify(
-						createFAQSchema(howToScreenRecordContent.faqs),
-					),
-				}}
-			/>
-			<Script
-				id="howto-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{
-					__html: JSON.stringify(
-						createHowToSchema({
-							name: "How to Screen Record on Mac, Windows & Chrome",
-							description:
-								"Learn how to screen record with audio on Mac, Windows, or in your browser using Cap, the free open-source screen recorder.",
-							totalTime: "PT2M",
-							steps: howToSteps,
-						}),
-					),
-				}}
-			/>
+			<script type="application/ld+json">
+				{JSON.stringify(createFAQSchema(howToScreenRecordContent.faqs))}
+			</script>
+			<script type="application/ld+json">
+				{JSON.stringify(
+					createHowToSchema({
+						name: "How to Screen Record on Mac, Windows & Chrome",
+						description:
+							"Learn how to screen record with audio on Mac, Windows, or in your browser using Cap, the free open-source screen recorder.",
+						totalTime: "PT2M",
+						steps: howToSteps,
+					}),
+				)}
+			</script>
 			<HowToScreenRecordPage />
 		</>
 	);

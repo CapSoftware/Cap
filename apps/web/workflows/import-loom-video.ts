@@ -130,17 +130,23 @@ export async function importLoomVideoWorkflow(
 ): Promise<VideoProcessingResult> {
 	"use workflow";
 
-	const processingInput = await downloadLoomToS3(payload);
+	try {
+		const processingInput = await downloadLoomToS3(payload);
 
-	const result = await processVideoOnMediaServer(payload, processingInput);
+		const result = await processVideoOnMediaServer(payload, processingInput);
 
-	await saveMetadataAndComplete(payload.videoId, result.metadata);
+		await saveMetadataAndComplete(payload.videoId, result.metadata);
 
-	return {
-		success: true,
-		message: "Loom video imported successfully",
-		metadata: result.metadata,
-	};
+		return {
+			success: true,
+			message: "Loom video imported successfully",
+			metadata: result.metadata,
+		};
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		await setProcessingError(payload.videoId, errorMessage);
+		throw new FatalError(errorMessage);
+	}
 }
 
 function getInputExtension(url: string): string | undefined {
@@ -270,13 +276,21 @@ async function startMediaServerProcessJob(
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
 		webhookUrl: string;
+		webhookSecret?: string;
 		inputExtension?: string;
 	},
 ): Promise<string> {
 	for (let attempt = 0; attempt < MEDIA_SERVER_START_MAX_ATTEMPTS; attempt++) {
+		const headers: Record<string, string> = {
+			"Content-Type": "application/json",
+		};
+		if (body.webhookSecret) {
+			headers["x-media-server-secret"] = body.webhookSecret;
+		}
+
 		const response = await fetch(`${mediaServerUrl}/video/process`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers,
 			body: JSON.stringify(body),
 		});
 
@@ -355,6 +369,7 @@ async function processVideoOnMediaServer(
 		}).pipe(runPromise);
 
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
+	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 	const sourceVideoUrl = processingInput.sourceVideoUrl ?? rawVideoUrl;
 
 	const jobId = await startMediaServerProcessJob(mediaServerUrl, {
@@ -364,6 +379,7 @@ async function processVideoOnMediaServer(
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		webhookUrl,
+		webhookSecret: webhookSecret || undefined,
 		inputExtension: processingInput.inputExtension,
 	});
 
@@ -438,5 +454,23 @@ async function saveMetadataAndComplete(
 
 	await db()
 		.delete(videoUploads)
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+}
+
+async function setProcessingError(
+	videoId: string,
+	errorMessage: string,
+): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videoUploads)
+		.set({
+			phase: "error",
+			processingProgress: 0,
+			processingMessage: "Loom import failed",
+			processingError: errorMessage,
+			updatedAt: new Date(),
+		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 }

@@ -44,9 +44,11 @@ describe("createBreadcrumbSchema", () => {
 			{ name: "Home", url: "https://cap.so" },
 			{ name: "Current Page" },
 		]);
+		const currentPageItem = schema.itemListElement[1];
 
 		expect(schema.itemListElement[0]?.item).toBe("https://cap.so");
-		expect("item" in schema.itemListElement[1]!).toBe(false);
+		expect(currentPageItem).toBeDefined();
+		expect(currentPageItem && "item" in currentPageItem).toBe(false);
 	});
 
 	it("handles single item breadcrumb", () => {
@@ -165,7 +167,7 @@ describe("Breadcrumb structured data in tools pages", () => {
 		const content = readPage("(site)/tools/convert/[conversionPath]/page.tsx");
 		expect(content).toContain("createBreadcrumbSchema");
 		expect(content).toContain(
-			"`https://cap.so/tools/convert/${conversionPath}`",
+			"`https://cap.so/tools/convert/$" + "{conversionPath}`",
 		);
 	});
 });

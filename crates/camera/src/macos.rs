@@ -116,6 +116,7 @@ pub(super) fn start_capturing_impl(
     let mut output = av::capture::VideoDataOutput::new();
     let mut session = av::capture::Session::new();
     let mut added_input = false;
+    let pixel_format = format.native().format_desc().media_sub_type();
 
     session.configure(|s| {
         if s.can_add_input(&input) {
@@ -134,6 +135,16 @@ pub(super) fn start_capturing_impl(
         )
         .into());
     }
+
+    let video_settings = ns::Dictionary::with_keys_values(
+        &[cv::pixel_buffer_keys::pixel_format().as_ns()],
+        &[ns::Number::with_u32(pixel_format).as_id_ref()],
+    );
+    output
+        .set_video_settings(Some(video_settings.as_ref()))
+        .map_err(|err| {
+            AVFoundationError::Message(format!("Failed to set camera video settings: {err}"))
+        })?;
 
     output.set_sample_buf_delegate(Some(delegate.as_ref()), Some(&queue));
 
