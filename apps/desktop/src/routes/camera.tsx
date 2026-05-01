@@ -798,6 +798,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			if (!isWindowVisible()) return;
 
 			lastFrameTime = Date.now();
+			if (pendingRender) return;
 
 			const buffer = event.data as ArrayBuffer;
 			const clamped = new Uint8ClampedArray(buffer);
