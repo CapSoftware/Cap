@@ -228,13 +228,13 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 					(pointerX -
 						(sizeData.width - sizeData.width * props.zoom) / 2 -
 						currentPan.x) /
-					currentScale;
+						currentScale;
 				const contentY =
 					boundsData.y +
 					(pointerY -
 						(sizeData.height - sizeData.height * props.zoom) / 2 -
 						currentPan.y) /
-					currentScale;
+						currentScale;
 
 				setPan({
 					x:

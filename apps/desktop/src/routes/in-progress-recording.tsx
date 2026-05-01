@@ -75,10 +75,10 @@ function InProgressRecordingInner() {
 		window.COUNTDOWN === 0
 			? { variant: "initializing" }
 			: {
-				variant: "countdown",
-				from: window.COUNTDOWN,
-				current: window.COUNTDOWN,
-			},
+					variant: "countdown",
+					from: window.COUNTDOWN,
+					current: window.COUNTDOWN,
+				},
 	);
 	const [start, setStart] = createSignal(Date.now());
 	const [time, setTime] = createSignal(Date.now());
@@ -163,9 +163,9 @@ function InProgressRecordingInner() {
 	const [pauseResumes, setPauseResumes] = createStore<
 		| []
 		| [
-			...Array<{ pause: number; resume?: number }>,
-			{ pause: number; resume?: number },
-		]
+				...Array<{ pause: number; resume?: number }>,
+				{ pause: number; resume?: number },
+		  ]
 	>([]);
 
 	createEffect(() => {
@@ -777,8 +777,9 @@ function InProgressRecordingInner() {
 														<div
 															class="absolute inset-0 bg-blue-9 transition-transform duration-100"
 															style={{
-																transform: `translateX(-${(1 - audioLevel()) * 100
-																	}%)`,
+																transform: `translateX(-${
+																	(1 - audioLevel()) * 100
+																}%)`,
 															}}
 														/>
 													</div>
@@ -829,7 +830,7 @@ function InProgressRecordingInner() {
 												class={cx(
 													"text-red-10 hover:bg-red-3/40",
 													issuePanelVisible() &&
-													"bg-red-3/40 ring-1 ring-red-8",
+														"bg-red-3/40 ring-1 ring-red-8",
 												)}
 												onClick={() => toggleIssuePanel()}
 												title={issueMessages().join(", ")}

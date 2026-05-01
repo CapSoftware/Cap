@@ -138,7 +138,7 @@ export function CaptionsTab() {
 
 	const selectedCaptionIndex = () =>
 		editorState.timeline.selection?.type === "caption" &&
-			editorState.timeline.selection.indices.length === 1
+		editorState.timeline.selection.indices.length === 1
 			? editorState.timeline.selection.indices[0]
 			: -1;
 

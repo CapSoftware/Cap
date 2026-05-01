@@ -321,10 +321,10 @@ export function BackgroundSettingsPopover() {
 										value={
 											project.background.source.type === "wallpaper"
 												? (wallpapers()?.find((w) =>
-													(
-														project.background.source as { path?: string }
-													).path?.includes(w.id),
-												)?.url ?? undefined)
+														(
+															project.background.source as { path?: string }
+														).path?.includes(w.id),
+													)?.url ?? undefined)
 												: undefined
 										}
 										onChange={(photoUrl) => {

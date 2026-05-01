@@ -213,11 +213,11 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			isCameraOnlyMode()
 				? getCameraOnlyInitialState()
 				: {
-					size: CAMERA_DEFAULT_SIZE,
-					shape: "round",
-					mirrored: false,
-					backgroundBlur: "off" as BackgroundBlurMode,
-				},
+						size: CAMERA_DEFAULT_SIZE,
+						shape: "round",
+						mirrored: false,
+						backgroundBlur: "off" as BackgroundBlurMode,
+					},
 		),
 		{ name: "cameraWindowState" },
 	);
@@ -246,7 +246,7 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		const handleVisibilityChange = () => {
 			if (!document.hidden) {
 				setTimeout(() => {
-					commands.refreshCameraFeed().catch(() => { });
+					commands.refreshCameraFeed().catch(() => {});
 				}, 500);
 			}
 		};
@@ -570,11 +570,11 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			isCameraOnlyMode()
 				? getCameraOnlyInitialState()
 				: {
-					size: CAMERA_DEFAULT_SIZE,
-					shape: "round",
-					mirrored: false,
-					backgroundBlur: "off" as BackgroundBlurMode,
-				},
+						size: CAMERA_DEFAULT_SIZE,
+						shape: "round",
+						mirrored: false,
+						backgroundBlur: "off" as BackgroundBlurMode,
+					},
 		),
 		{ name: "cameraWindowState" },
 	);
@@ -757,7 +757,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			setIsWindowVisible(!document.hidden);
 			if (!document.hidden) {
 				lastFrameTime = Date.now();
-				commands.refreshCameraFeed().catch(() => { });
+				commands.refreshCameraFeed().catch(() => {});
 			}
 		};
 		document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -896,7 +896,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				Date.now() - lastFrameTime > STALL_TIMEOUT_MS
 			) {
 				lastFrameTime = Date.now();
-				commands.refreshCameraFeed().catch(() => { });
+				commands.refreshCameraFeed().catch(() => {});
 				if (ws) ws.close();
 				ws = createSocket();
 			}

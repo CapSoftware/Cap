@@ -305,11 +305,11 @@ const findCursorPreset = (
 		(option) =>
 			option.preset &&
 			Math.abs(option.preset.tension - values.tension) <=
-			CURSOR_PRESET_TOLERANCE.tension &&
+				CURSOR_PRESET_TOLERANCE.tension &&
 			Math.abs(option.preset.mass - values.mass) <=
-			CURSOR_PRESET_TOLERANCE.mass &&
+				CURSOR_PRESET_TOLERANCE.mass &&
 			Math.abs(option.preset.friction - values.friction) <=
-			CURSOR_PRESET_TOLERANCE.friction,
+				CURSOR_PRESET_TOLERANCE.friction,
 	);
 
 	return preset?.value ?? null;
@@ -450,7 +450,7 @@ export function ConfigSidebar() {
 								class={cx(
 									"flex justify-center relative border-transparent border z-10 items-center rounded-md size-9 transition will-change-transform",
 									state.selectedTab !== item.id &&
-									"group-hover:border-gray-300 group-disabled:border-none",
+										"group-hover:border-gray-300 group-disabled:border-none",
 								)}
 							>
 								<Dynamic component={item.icon} />
@@ -1737,13 +1737,17 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 								ref={setBackgroundRef}
 								class="flex overflow-x-auto overscroll-contain relative z-10 flex-row gap-2 items-center mb-3 text-xs hide-scroll"
 								style={{
-									"-webkit-mask-image": `linear-gradient(to right, transparent, black ${scrollX() > 0 ? "24px" : "0"
-										}, black calc(100% - ${reachedEndOfScroll() ? "0px" : "24px"
-										}), transparent)`,
+									"-webkit-mask-image": `linear-gradient(to right, transparent, black ${
+										scrollX() > 0 ? "24px" : "0"
+									}, black calc(100% - ${
+										reachedEndOfScroll() ? "0px" : "24px"
+									}), transparent)`,
 
-									"mask-image": `linear-gradient(to right, transparent, black ${scrollX() > 0 ? "24px" : "0"
-										}, black calc(100% - ${reachedEndOfScroll() ? "0px" : "24px"
-										}), transparent);`,
+									"mask-image": `linear-gradient(to right, transparent, black ${
+										scrollX() > 0 ? "24px" : "0"
+									}, black calc(100% - ${
+										reachedEndOfScroll() ? "0px" : "24px"
+									}), transparent);`,
 								}}
 							>
 								<For each={Object.entries(BACKGROUND_THEMES)}>
@@ -1770,10 +1774,10 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 							value={
 								project.background.source.type === "wallpaper"
 									? (wallpapers()?.find((w) =>
-										(
-											project.background.source as { path?: string }
-										).path?.includes(w.id),
-									)?.url ?? undefined)
+											(
+												project.background.source as { path?: string }
+											).path?.includes(w.id),
+										)?.url ?? undefined)
 									: undefined
 							}
 							onChange={(photoUrl) => {
@@ -3281,7 +3285,8 @@ function ZoomSegmentPreview(props: {
 	createEffect(() => {
 		// TODO: make this not hardcoded
 		const path = convertFileSrc(
-			`${editorInstance.path}/content/segments/segment-${clipSegment()?.recordingSegment ?? 0
+			`${editorInstance.path}/content/segments/segment-${
+				clipSegment()?.recordingSegment ?? 0
 			}/display.mp4`,
 		);
 		video.src = path;
@@ -3484,7 +3489,8 @@ function ZoomSegmentConfig(props: {
 								createEffect(() => {
 									const path = convertFileSrc(
 										// TODO: this shouldn't be so hardcoded
-										`${editorInstance.path
+										`${
+											editorInstance.path
 										}/content/segments/segment-${segmentIndex()}/display.mp4`,
 									);
 									video.src = path;
@@ -3614,7 +3620,7 @@ function ZoomSegmentConfig(props: {
 																x: Math.max(
 																	Math.min(
 																		(moveEvent.clientX - bounds.left) /
-																		bounds.width,
+																			bounds.width,
 																		1,
 																	),
 																	0,
@@ -3622,7 +3628,7 @@ function ZoomSegmentConfig(props: {
 																y: Math.max(
 																	Math.min(
 																		(moveEvent.clientY - bounds.top) /
-																		bounds.height,
+																			bounds.height,
 																		1,
 																	),
 																	0,
