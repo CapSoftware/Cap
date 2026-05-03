@@ -1,0 +1,89 @@
+{
+	"name": "@cap/raycast",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "ray build",
+		"lint": "ray lint",
+		"dev": "ray develop",
+		"typecheck": "tsc --noEmit"
+	},
+	"raycast": {
+		"schemaVersion": 1,
+		"title": "Cap Recorder",
+		"description": "Control Cap through cap-desktop deeplinks",
+		"icon": "icon.png",
+		"author": "Cap",
+		"categories": [
+			"Productivity"
+		],
+		"commands": [
+			{
+				"name": "start-recording",
+				"title": "Start Cap Recording",
+				"description": "Start a Cap recording via deeplink",
+				"mode": "view"
+			},
+			{
+				"name": "stop-recording",
+				"title": "Stop Cap Recording",
+				"description": "Stop the current Cap recording",
+				"mode": "no-view"
+			},
+			{
+				"name": "pause-recording",
+				"title": "Pause Cap Recording",
+				"description": "Pause the current Cap recording",
+				"mode": "no-view"
+			},
+			{
+				"name": "resume-recording",
+				"title": "Resume Cap Recording",
+				"description": "Resume the current Cap recording",
+				"mode": "no-view"
+			},
+			{
+				"name": "toggle-pause-recording",
+				"title": "Toggle Pause Cap Recording",
+				"description": "Toggle pause for the current Cap recording",
+				"mode": "no-view"
+			},
+			{
+				"name": "restart-recording",
+				"title": "Restart Cap Recording",
+				"description": "Restart the current Cap recording",
+				"mode": "no-view"
+			},
+			{
+				"name": "switch-microphone",
+				"title": "Switch Cap Microphone",
+				"description": "Switch the active microphone in Cap",
+				"mode": "view"
+			},
+			{
+				"name": "switch-camera",
+				"title": "Switch Cap Camera",
+				"description": "Switch the active camera in Cap",
+				"mode": "view"
+			},
+			{
+				"name": "open-settings",
+				"title": "Open Cap Settings",
+				"description": "Open Cap settings via deeplink",
+				"mode": "view"
+			}
+		]
+	},
+	"dependencies": {
+		"@raycast/api": "^1.95.0",
+		"react": "19.0.0"
+	},
+	"devDependencies": {
+		"@raycast/eslint-config": "^2.0.2",
+		"@types/node": "22.13.10",
+		"@types/react": "19.0.10",
+		"eslint": "^8.57.0",
+		"typescript": "^5.8.3"
+	}
+}
