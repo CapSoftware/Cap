@@ -245,6 +245,7 @@ async function trimMacOSFramework(frameworkDir) {
 async function signMacOSFrameworkLibs(frameworkDir) {
 	const signId = env.APPLE_SIGNING_IDENTITY || "-";
 	const keychain = env.APPLE_KEYCHAIN ? `--keychain ${env.APPLE_KEYCHAIN}` : "";
+	const timestamp = signId === "-" ? "" : "--timestamp";
 
 	// Sign dylibs (Required for them to work on macOS 13+)
 	await fs
@@ -258,7 +259,7 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 					.filter((entry) => entry.isFile() && entry.name.endsWith(".dylib"))
 					.map((entry) =>
 						exec(
-							`codesign ${keychain} -s "${signId}" -f "${path.join(
+							`codesign ${keychain} ${timestamp} -s "${signId}" -f "${path.join(
 								entry.parentPath,
 								entry.name,
 							)}"`,
@@ -310,7 +311,10 @@ async function setupMacOSOnnxRuntime() {
 		await signMacOSDylib(outputPath);
 		await fs.writeFile(markerPath, asset.name);
 		console.log("Prepared ONNX Runtime dylib");
-	} else console.log("Using cached ONNX Runtime dylib");
+	} else {
+		console.log("Using cached ONNX Runtime dylib");
+		if (env.APPLE_SIGNING_IDENTITY) await signMacOSDylib(outputPath);
+	}
 
 	return outputPath;
 }
@@ -318,8 +322,11 @@ async function setupMacOSOnnxRuntime() {
 async function signMacOSDylib(filePath) {
 	const signId = env.APPLE_SIGNING_IDENTITY || "-";
 	const keychain = env.APPLE_KEYCHAIN ? `--keychain ${env.APPLE_KEYCHAIN}` : "";
+	const timestamp = signId === "-" ? "" : "--timestamp";
 
-	await exec(`codesign ${keychain} -s "${signId}" -f "${filePath}"`);
+	await exec(
+		`codesign ${keychain} ${timestamp} -s "${signId}" -f "${filePath}"`,
+	);
 }
 
 async function fileExists(path) {
