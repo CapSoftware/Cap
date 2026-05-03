@@ -26,6 +26,15 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    SetMicrophone {
+        mic_label: Option<String>,
+    },
+    SetCamera {
+        camera: Option<DeviceOrModelID>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -147,6 +156,21 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SetMicrophone { mic_label } => {
+                crate::set_mic_input(app.state(), mic_label).await
+            }
+            DeepLinkAction::SetCamera { camera } => {
+                crate::set_camera_input(app.clone(), app.state(), camera, Some(true)).await
+            }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
@@ -154,5 +178,51 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_pause_recording_legacy_json_deeplink() {
+        let url = Url::parse("cap-desktop://action?value=%22pause_recording%22").unwrap();
+        let action = DeepLinkAction::try_from(&url).unwrap();
+
+        assert!(matches!(action, DeepLinkAction::PauseRecording));
+    }
+
+    #[test]
+    fn parses_set_microphone_legacy_json_deeplink() {
+        let url = Url::parse(
+            "cap-desktop://action?value=%7B%22set_microphone%22:%7B%22mic_label%22:%22External%20Microphone%22%7D%7D",
+        )
+        .unwrap();
+
+        let action = DeepLinkAction::try_from(&url).unwrap();
+
+        assert!(matches!(
+            action,
+            DeepLinkAction::SetMicrophone { mic_label }
+            if mic_label.as_deref() == Some("External Microphone")
+        ));
+    }
+
+    #[test]
+    fn parses_set_camera_legacy_json_deeplink() {
+        let url = Url::parse(
+            "cap-desktop://action?value=%7B%22set_camera%22:%7B%22camera%22:%7B%22DeviceID%22:%22camera-1%22%7D%7D%7D",
+        )
+        .unwrap();
+
+        let action = DeepLinkAction::try_from(&url).unwrap();
+
+        assert!(matches!(
+            action,
+            DeepLinkAction::SetCamera {
+                camera: Some(DeviceOrModelID::DeviceID(id))
+            } if id == "camera-1"
+        ));
     }
 }
