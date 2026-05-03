@@ -13,6 +13,7 @@ use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindo
 pub enum CaptureMode {
     Screen(String),
     Window(String),
+    PrimaryScreen,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,6 +27,14 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    SwitchMicrophone {
+        mic_label: Option<String>,
+    },
+    SwitchCamera {
+        camera: Option<DeviceOrModelID>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -121,6 +130,11 @@ impl DeepLinkAction {
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
                 let capture_target: ScreenCaptureTarget = match capture_mode {
+                    CaptureMode::PrimaryScreen => cap_recording::screen_capture::list_displays()
+                        .into_iter()
+                        .next()
+                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+                        .ok_or("No screens available".to_string())?,
                     CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
                         .into_iter()
                         .find(|(s, _)| s.name == name)
@@ -146,6 +160,18 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                crate::set_mic_input(app.state(), mic_label).await
+            }
+            DeepLinkAction::SwitchCamera { camera } => {
+                crate::set_camera_input(app.clone(), app.state(), camera, None).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
