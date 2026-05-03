@@ -57,6 +57,14 @@ impl ExportSettings {
             _ => false,
         }
     }
+
+    fn format_label(&self) -> &'static str {
+        match self {
+            ExportSettings::Mp4(_) => "mp4",
+            ExportSettings::Gif(_) => "gif",
+            ExportSettings::Mov(_) => "mov",
+        }
+    }
 }
 
 fn export_project_config(
@@ -169,6 +177,10 @@ pub async fn export_video(
 
     let result = do_export(&project_path, &settings, &progress, force_ffmpeg).await;
 
+    let format = settings.format_label();
+    let fps = settings.fps();
+    let cursor_only = settings.cursor_only();
+
     match result {
         Ok(path) => {
             info!("Exported to {} completed", path.display());
@@ -191,16 +203,48 @@ pub async fn export_video(
                     Ok(path)
                 }
                 Err(retry_e) => {
-                    sentry::capture_message(&retry_e, sentry::Level::Error);
+                    capture_export_failure(
+                        &retry_e,
+                        format,
+                        fps,
+                        cursor_only,
+                        true,
+                        &project_path,
+                    );
                     Err(retry_e)
                 }
             }
         }
         Err(e) => {
-            sentry::capture_message(&e, sentry::Level::Error);
+            capture_export_failure(&e, format, fps, cursor_only, force_ffmpeg, &project_path);
             Err(e)
         }
     }
+}
+
+fn capture_export_failure(
+    error: &str,
+    format: &'static str,
+    fps: u32,
+    cursor_only: bool,
+    force_ffmpeg: bool,
+    project_path: &Path,
+) {
+    sentry::with_scope(
+        |scope| {
+            scope.set_tag("export.format", format);
+            scope.set_tag("export.fps", fps.to_string());
+            scope.set_tag("export.cursor_only", cursor_only.to_string());
+            scope.set_tag("export.force_ffmpeg", force_ffmpeg.to_string());
+            scope.set_extra(
+                "project_path",
+                serde_json::Value::String(project_path.display().to_string()),
+            );
+        },
+        || {
+            sentry::capture_message(error, sentry::Level::Error);
+        },
+    );
 }
 
 #[derive(Debug, serde::Serialize, specta::Type)]

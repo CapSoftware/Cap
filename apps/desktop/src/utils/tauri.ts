@@ -17,6 +17,12 @@ async setRecordingMode(mode: RecordingMode) : Promise<null> {
 async uploadLogs() : Promise<null> {
     return await TAURI_INVOKE("upload_logs");
 },
+async openLogsFolder() : Promise<null> {
+    return await TAURI_INVOKE("open_logs_folder");
+},
+async setVerboseLogging(enabled: boolean) : Promise<null> {
+    return await TAURI_INVOKE("set_verbose_logging", { enabled });
+},
 async getSystemDiagnostics() : Promise<SystemDiagnostics> {
     return await TAURI_INVOKE("get_system_diagnostics");
 },
@@ -493,7 +499,7 @@ export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format
 export type FileType = "recording" | "screenshot"
 export type Flags = { captions: boolean }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; mainWindowPosition?: WindowPosition | null; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean }
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; mainWindowPosition?: WindowPosition | null; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean; verboseLogging?: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
 export type GifQuality = { 
 /**
