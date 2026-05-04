@@ -72,7 +72,7 @@ import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
 import { syncCaptionWordsWithText } from "./captions";
 import { getColorPreviewBorderColor, hexToRgb, RgbInput } from "./color-utils";
-import { type CornerRoundingType, useEditorContext } from "./context";
+import { useEditorContext } from "./context";
 import { GradientEditor } from "./GradientEditor";
 import { KeyboardTab } from "./KeyboardTab";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
@@ -220,11 +220,6 @@ const CAMERA_X_POSITIONS = [
 ] satisfies CameraXPosition[];
 const CAMERA_Y_POSITIONS = ["top", "bottom"] satisfies CameraYPosition[];
 
-const CORNER_STYLE_OPTIONS = [
-	{ name: "Squircle", value: "squircle" },
-	{ name: "Rounded", value: "rounded" },
-] satisfies Array<{ name: string; value: CornerRoundingType }>;
-
 const BACKGROUND_THEMES = {
 	macOS: "macOS",
 	dark: "Dark",
@@ -305,11 +300,11 @@ const findCursorPreset = (
 		(option) =>
 			option.preset &&
 			Math.abs(option.preset.tension - values.tension) <=
-				CURSOR_PRESET_TOLERANCE.tension &&
+			CURSOR_PRESET_TOLERANCE.tension &&
 			Math.abs(option.preset.mass - values.mass) <=
-				CURSOR_PRESET_TOLERANCE.mass &&
+			CURSOR_PRESET_TOLERANCE.mass &&
 			Math.abs(option.preset.friction - values.friction) <=
-				CURSOR_PRESET_TOLERANCE.friction,
+			CURSOR_PRESET_TOLERANCE.friction,
 	);
 
 	return preset?.value ?? null;
@@ -450,7 +445,7 @@ export function ConfigSidebar() {
 								class={cx(
 									"flex justify-center relative border-transparent border z-10 items-center rounded-md size-9 transition will-change-transform",
 									state.selectedTab !== item.id &&
-										"group-hover:border-gray-300 group-disabled:border-none",
+									"group-hover:border-gray-300 group-disabled:border-none",
 								)}
 							>
 								<Dynamic component={item.icon} />
@@ -1737,17 +1732,13 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 								ref={setBackgroundRef}
 								class="flex overflow-x-auto overscroll-contain relative z-10 flex-row gap-2 items-center mb-3 text-xs hide-scroll"
 								style={{
-									"-webkit-mask-image": `linear-gradient(to right, transparent, black ${
-										scrollX() > 0 ? "24px" : "0"
-									}, black calc(100% - ${
-										reachedEndOfScroll() ? "0px" : "24px"
-									}), transparent)`,
+									"-webkit-mask-image": `linear-gradient(to right, transparent, black ${scrollX() > 0 ? "24px" : "0"
+										}, black calc(100% - ${reachedEndOfScroll() ? "0px" : "24px"
+										}), transparent)`,
 
-									"mask-image": `linear-gradient(to right, transparent, black ${
-										scrollX() > 0 ? "24px" : "0"
-									}, black calc(100% - ${
-										reachedEndOfScroll() ? "0px" : "24px"
-									}), transparent);`,
+									"mask-image": `linear-gradient(to right, transparent, black ${scrollX() > 0 ? "24px" : "0"
+										}, black calc(100% - ${reachedEndOfScroll() ? "0px" : "24px"
+										}), transparent);`,
 								}}
 							>
 								<For each={Object.entries(BACKGROUND_THEMES)}>
@@ -1774,10 +1765,10 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 							value={
 								project.background.source.type === "wallpaper"
 									? (wallpapers()?.find((w) =>
-											(
-												project.background.source as { path?: string }
-											).path?.includes(w.id),
-										)?.url ?? undefined)
+										(
+											project.background.source as { path?: string }
+										).path?.includes(w.id),
+									)?.url ?? undefined)
 									: undefined
 							}
 							onChange={(photoUrl) => {
@@ -1907,9 +1898,9 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 								if (!file) return;
 
 								/*
-                    this is a Tauri bug in WebKit so we need to validate the file type manually
-                    https://github.com/tauri-apps/tauri/issues/9158
-                    */
+					this is a Tauri bug in WebKit so we need to validate the file type manually
+					https://github.com/tauri-apps/tauri/issues/9158
+					*/
 								const validExtensions = [
 									"jpg",
 									"jpeg",
@@ -2055,23 +2046,27 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 				/>
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
-				<div class="flex flex-col gap-3">
-					<Slider
-						value={[project.background.rounding]}
-						onChange={(v) => setProject("background", "rounding", v[0])}
-						minValue={0}
-						maxValue={100}
-						step={0.1}
-						formatTooltip="%"
-					/>
-					<CornerStyleSelect
-						label="Corner Style"
-						value={project.background.roundingType}
-						onChange={(value) =>
-							setProject("background", "roundingType", value)
-						}
-					/>
-				</div>
+				<Slider
+					value={[project.background.rounding]}
+					onChange={(v) => setProject("background", "rounding", v[0])}
+					minValue={0}
+					maxValue={100}
+					step={0.1}
+					formatTooltip="%"
+				/>
+			</Field>
+			<Field
+				name="Corner Smoothness"
+				icon={<IconLucideSquareRoundCorner class="size-4" />}
+			>
+				<Slider
+					value={[project.background.roundingSmoothness ?? 0]}
+					onChange={(v) => setProject("background", "roundingSmoothness", v[0])}
+					minValue={0}
+					maxValue={1}
+					step={0.01}
+					formatTooltip={(value) => `${Math.round(value * 100)}%`}
+				/>
 			</Field>
 			<Field name="Motion Blur" icon={<IconLucideWind class="size-4" />}>
 				<Slider
@@ -2486,21 +2481,27 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 				/>
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
-				<div class="flex flex-col gap-3">
-					<Slider
-						value={[project.camera.rounding ?? 0]}
-						onChange={(v) => setProject("camera", "rounding", v[0])}
-						minValue={0}
-						maxValue={100}
-						step={0.1}
-						formatTooltip="%"
-					/>
-					<CornerStyleSelect
-						label="Corner Style"
-						value={project.camera.roundingType}
-						onChange={(value) => setProject("camera", "roundingType", value)}
-					/>
-				</div>
+				<Slider
+					value={[project.camera.rounding ?? 0]}
+					onChange={(v) => setProject("camera", "rounding", v[0])}
+					minValue={0}
+					maxValue={100}
+					step={0.1}
+					formatTooltip="%"
+				/>
+			</Field>
+			<Field
+				name="Corner Smoothness"
+				icon={<IconLucideSquareRoundCorner class="size-4" />}
+			>
+				<Slider
+					value={[project.camera.roundingSmoothness ?? 0]}
+					onChange={(v) => setProject("camera", "roundingSmoothness", v[0])}
+					minValue={0}
+					maxValue={1}
+					step={0.01}
+					formatTooltip={(value) => `${Math.round(value * 100)}%`}
+				/>
 			</Field>
 			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
 				<div class="space-y-8">
@@ -2568,72 +2569,6 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
             </Field>
           </ComingSoonTooltip> */}
 		</KTabs.Content>
-	);
-}
-
-function CornerStyleSelect(props: {
-	label?: string;
-	value: CornerRoundingType;
-	onChange: (value: CornerRoundingType) => void;
-}) {
-	return (
-		<div class="flex flex-col gap-1.5">
-			<Show when={props.label}>
-				{(label) => (
-					<span class="text-[0.65rem] uppercase tracking-wide text-gray-11">
-						{label()}
-					</span>
-				)}
-			</Show>
-			<KSelect<{ name: string; value: CornerRoundingType }>
-				options={CORNER_STYLE_OPTIONS}
-				optionValue="value"
-				optionTextValue="name"
-				value={CORNER_STYLE_OPTIONS.find(
-					(option) => option.value === props.value,
-				)}
-				onChange={(option) => option && props.onChange(option.value)}
-				disallowEmptySelection
-				itemComponent={(itemProps) => (
-					<MenuItem<typeof KSelect.Item>
-						as={KSelect.Item}
-						item={itemProps.item}
-					>
-						<KSelect.ItemLabel class="flex-1">
-							{itemProps.item.rawValue.name}
-						</KSelect.ItemLabel>
-					</MenuItem>
-				)}
-			>
-				<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
-					<KSelect.Value<{
-						name: string;
-						value: CornerRoundingType;
-					}> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
-						{(state) => <span>{state.selectedOption().name}</span>}
-					</KSelect.Value>
-					<KSelect.Icon<ValidComponent>
-						as={(iconProps) => (
-							<IconCapChevronDown
-								{...iconProps}
-								class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
-							/>
-						)}
-					/>
-				</KSelect.Trigger>
-				<KSelect.Portal>
-					<PopperContent<typeof KSelect.Content>
-						as={KSelect.Content}
-						class={cx(topSlideAnimateClasses, "z-50")}
-					>
-						<MenuItemList<typeof KSelect.Listbox>
-							class="overflow-y-auto max-h-32"
-							as={KSelect.Listbox}
-						/>
-					</PopperContent>
-				</KSelect.Portal>
-			</KSelect>
-		</div>
 	);
 }
 
@@ -3285,8 +3220,7 @@ function ZoomSegmentPreview(props: {
 	createEffect(() => {
 		// TODO: make this not hardcoded
 		const path = convertFileSrc(
-			`${editorInstance.path}/content/segments/segment-${
-				clipSegment()?.recordingSegment ?? 0
+			`${editorInstance.path}/content/segments/segment-${clipSegment()?.recordingSegment ?? 0
 			}/display.mp4`,
 		);
 		video.src = path;
@@ -3489,8 +3423,7 @@ function ZoomSegmentConfig(props: {
 								createEffect(() => {
 									const path = convertFileSrc(
 										// TODO: this shouldn't be so hardcoded
-										`${
-											editorInstance.path
+										`${editorInstance.path
 										}/content/segments/segment-${segmentIndex()}/display.mp4`,
 									);
 									video.src = path;
@@ -3620,7 +3553,7 @@ function ZoomSegmentConfig(props: {
 																x: Math.max(
 																	Math.min(
 																		(moveEvent.clientX - bounds.left) /
-																			bounds.width,
+																		bounds.width,
 																		1,
 																	),
 																	0,
@@ -3628,7 +3561,7 @@ function ZoomSegmentConfig(props: {
 																y: Math.max(
 																	Math.min(
 																		(moveEvent.clientY - bounds.top) /
-																			bounds.height,
+																		bounds.height,
 																		1,
 																	),
 																	0,
