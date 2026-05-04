@@ -1,5 +1,6 @@
 import { createTimer } from "@solid-primitives/timer";
 import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import { cx } from "cva";
 import {
 	type Component,
 	type ComponentProps,
@@ -15,6 +16,13 @@ import {
 	type DeviceOrModelID,
 	type OSPermissionsCheck,
 } from "~/utils/tauri";
+import {
+	DEVICE_ROW_CLASS,
+	DEVICE_ROW_ICON_CLASS,
+	DEVICE_ROW_LABEL_CLASS,
+	DEVICE_ROW_TRAILING_CLASS,
+	DEVICE_SHORTCUT_BUTTON_CLASS,
+} from "./deviceRowStyles";
 import InfoPill from "./InfoPill";
 import TargetSelectInfoPill from "./TargetSelectInfoPill";
 import useRequestPermission from "./useRequestPermission";
@@ -25,10 +33,13 @@ export default function CameraSelect(props: {
 	disabled?: boolean;
 	options: CameraInfo[];
 	value: CameraInfo | null;
+	selectedLabel?: string | null;
+	isSelected?: boolean;
 	onChange: (camera: CameraInfo | null) => void;
 	permissions?: OSPermissionsCheck;
 	hidePreviewButton?: boolean;
 	onOpen?: () => void;
+	onOpenSettings?: () => void;
 }) {
 	const currentRecording = createCurrentRecordingQuery();
 	const requestPermission = useRequestPermission();
@@ -74,8 +85,16 @@ export default function CameraSelect(props: {
 	};
 
 	const permissionGranted = () =>
-		props.permissions?.camera === "granted" ||
-		props.permissions?.camera === "notNeeded";
+		props.permissions === undefined ||
+		props.permissions.camera === "granted" ||
+		props.permissions.camera === "notNeeded";
+
+	const hasSelection = () => props.isSelected ?? props.value !== null;
+
+	const label = () =>
+		props.value?.display_name ??
+		props.selectedLabel ??
+		(hasSelection() ? "Camera" : NO_CAMERA);
 
 	const showHiddenIndicator = () =>
 		props.value !== null &&
@@ -83,11 +102,16 @@ export default function CameraSelect(props: {
 		!cameraWindowOpen() &&
 		!props.hidePreviewButton;
 
+	const showSettingsShortcut = () =>
+		props.value !== null && permissionGranted() && !!props.onOpenSettings;
+
+	const isDisabled = () => !!currentRecording.data || props.disabled;
+
 	return (
-		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+		<div class="flex flex-col items-stretch text-[--text-primary]">
 			<button
 				type="button"
-				disabled={!!currentRecording.data || props.disabled}
+				disabled={isDisabled()}
 				onClick={() => {
 					if (!permissionGranted()) {
 						requestPermission("camera", props.permissions?.camera);
@@ -95,34 +119,50 @@ export default function CameraSelect(props: {
 					}
 					props.onOpen?.();
 				}}
-				class="flex flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg border border-gray-5 transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+				class={cx(DEVICE_ROW_CLASS, "KSelect")}
+				aria-haspopup="menu"
 			>
-				<IconCapCamera class="text-gray-10 size-4" />
-				<p class="flex-1 text-sm text-left truncate">
-					{props.value?.display_name ?? NO_CAMERA}
-				</p>
-				<div class="flex items-center gap-1">
+				<IconCapCamera class={DEVICE_ROW_ICON_CLASS} />
+				<p class={DEVICE_ROW_LABEL_CLASS}>{label()}</p>
+				<div class={DEVICE_ROW_TRAILING_CLASS}>
 					<Show when={showHiddenIndicator()}>
 						<button
 							type="button"
 							onClick={openCameraWindow}
 							onPointerDown={(e) => e.stopPropagation()}
-							class="flex items-center justify-center px-2 py-1 rounded-full bg-gray-6 text-gray-11 hover:bg-gray-7 transition-colors"
+							class={DEVICE_SHORTCUT_BUTTON_CLASS}
 							title="Show camera preview"
+							aria-label="Show camera preview"
 						>
 							<IconLucideEyeOff class="size-3.5" />
 						</button>
 					</Show>
+					<Show when={showSettingsShortcut()}>
+						<button
+							type="button"
+							onClick={(e) => {
+								e.preventDefault();
+								e.stopPropagation();
+								props.onOpenSettings?.();
+							}}
+							onPointerDown={(e) => e.stopPropagation()}
+							class={DEVICE_SHORTCUT_BUTTON_CLASS}
+							title="Camera settings"
+							aria-label="Camera settings"
+						>
+							<IconLucideSettings class="size-3.5" />
+						</button>
+					</Show>
 					<TargetSelectInfoPill
 						PillComponent={InfoPill}
-						value={props.value}
+						value={hasSelection() ? true : null}
 						permissionGranted={permissionGranted()}
 						requestPermission={() =>
 							requestPermission("camera", props.permissions?.camera)
 						}
 						onClick={(e) => {
 							if (!props.options) return;
-							if (props.value !== null) {
+							if (hasSelection()) {
 								e.stopPropagation();
 								props.onChange(null);
 							}
@@ -140,7 +180,7 @@ export function CameraSelectBase(props: {
 	value: CameraInfo | null;
 	onChange: (camera: CameraInfo | null) => void;
 	PillComponent: Component<
-		ComponentProps<"button"> & { variant: "blue" | "red" }
+		ComponentProps<"button"> & { variant: "blue" | "red" | "gray" }
 	>;
 	class: string;
 	iconClass: string;
@@ -191,8 +231,9 @@ export function CameraSelectBase(props: {
 	};
 
 	const permissionGranted = () =>
-		props.permissions?.camera === "granted" ||
-		props.permissions?.camera === "notNeeded";
+		props.permissions === undefined ||
+		props.permissions.camera === "granted" ||
+		props.permissions.camera === "notNeeded";
 
 	const onChange = (cameraLabel: CameraInfo | null) => {
 		if (!cameraLabel && !permissionGranted())
