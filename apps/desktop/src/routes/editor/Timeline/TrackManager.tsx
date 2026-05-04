@@ -80,7 +80,7 @@ export function TrackIcon(props: { icon: JSX.Element; class?: string }) {
 	return (
 		<div
 			class={cx(
-				"relative z-10 w-[3.5rem] h-[3.25rem] flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/60 text-gray-12 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)] dark:border-gray-4/60 dark:bg-gray-3/40",
+				"relative z-10 w-14 h-13 flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/60 text-gray-12 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)] dark:border-gray-4/60 dark:bg-gray-3/40",
 				props.class,
 			)}
 			onMouseDown={(e) => e.stopPropagation()}

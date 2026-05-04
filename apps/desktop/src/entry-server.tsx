@@ -23,7 +23,7 @@ export default createHandler(() => (
 					{assets}
 				</head>
 				<body class="w-screen h-screen cursor-default select-none">
-					<div id="app" class="h-full text-[--text-primary]">
+					<div id="app" class="h-full text-(--text-primary)">
 						{children}
 					</div>
 					{scripts}

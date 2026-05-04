@@ -106,10 +106,10 @@ function Header() {
 			data-tauri-drag-region
 		>
 			{ctx.state()?.items}
-			{isWindows && <CaptionControlsWindows11 class="!ml-auto" />}
+			{isWindows && <CaptionControlsWindows11 class="ml-auto!" />}
 			{isMacOS && (
 				<CaptionControlsMacOS
-					class="!mr-auto ml-3"
+					class="mr-auto! ml-3"
 					showMinimize={false}
 					showZoom={false}
 				/>

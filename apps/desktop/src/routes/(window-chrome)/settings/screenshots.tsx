@@ -124,7 +124,7 @@ export default function Screenshots() {
 			<Show
 				when={screenshots.data && screenshots.data.length > 0}
 				fallback={
-					<p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
+					<p class="text-center text-(--text-tertiary) absolute flex items-center justify-center w-full h-full">
 						No screenshots found
 					</p>
 				}
@@ -155,11 +155,11 @@ export default function Screenshots() {
 
 				<div class="flex relative flex-col flex-1 mt-4 rounded-xl border custom-scroll bg-gray-2 border-gray-3">
 					<Show when={filteredScreenshots().length === 0}>
-						<p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
+						<p class="text-center text-(--text-tertiary) absolute flex items-center justify-center w-full h-full">
 							{emptyMessage()}
 						</p>
 					</Show>
-					<ul class="flex flex-col w-full text-[--text-primary]">
+					<ul class="flex flex-col w-full text-(--text-primary)">
 						<For each={visibleScreenshots()}>
 							{(screenshot) => (
 								<ScreenshotItem
@@ -208,15 +208,15 @@ function ScreenshotItem(props: {
 	return (
 		<li
 			onClick={props.onClick}
-			class="flex flex-row justify-between p-3 [&:not(:last-child)]:border-b [&:not(:last-child)]:border-gray-3 items-center w-full cursor-pointer hover:bg-gray-3 transition-colors duration-200"
+			class="flex flex-row justify-between p-3 not-last:border-b not-last:border-gray-3 items-center w-full cursor-pointer hover:bg-gray-3 transition-colors duration-200"
 		>
 			<div class="flex gap-5 items-center">
 				<Show
 					when={imageExists()}
-					fallback={<div class="mr-4 rounded bg-gray-10 size-11" />}
+					fallback={<div class="mr-4 rounded-sm bg-gray-10 size-11" />}
 				>
 					<img
-						class="object-cover rounded size-12"
+						class="object-cover rounded-sm size-12"
 						alt="Screenshot thumbnail"
 						src={convertFileSrc(props.screenshot.path)}
 						onError={() => setImageExists(false)}

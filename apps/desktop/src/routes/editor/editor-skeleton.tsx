@@ -9,7 +9,10 @@ const RESIZE_HANDLE_HEIGHT = 16;
 function SkeletonPulse(props: { class?: string }) {
 	return (
 		<div
-			class={cx("animate-pulse rounded bg-gray-3 dark:bg-gray-4", props.class)}
+			class={cx(
+				"animate-pulse rounded-sm bg-gray-3 dark:bg-gray-4",
+				props.class,
+			)}
 		/>
 	);
 }
@@ -32,7 +35,7 @@ function HeaderSkeleton() {
 				data-tauri-drag-region
 				class="flex flex-row flex-1 gap-2 items-center px-4 h-full"
 			>
-				{ostype() === "macos" && <div class="h-full w-[4rem]" />}
+				{ostype() === "macos" && <div class="h-full w-16" />}
 				<SkeletonButton />
 				<SkeletonButton />
 				<SkeletonPulse class="h-5 w-32" />
@@ -59,7 +62,7 @@ function HeaderSkeleton() {
 				<SkeletonButton />
 				<SkeletonButton />
 				<div data-tauri-drag-region class="flex-1 h-full" />
-				<SkeletonPulse class="h-[40px] w-[100px] rounded-[0.5rem]" />
+				<SkeletonPulse class="h-[40px] w-[100px] rounded-lg" />
 				{ostype() === "windows" && <CaptionControlsWindows11 />}
 			</div>
 		</div>
@@ -87,7 +90,7 @@ function VideoPreviewSkeleton() {
 			<div class="relative w-full h-full flex justify-center items-center p-4">
 				<div class="relative bg-gray-3 dark:bg-gray-4 rounded-lg w-full max-w-[85%] aspect-video flex items-center justify-center">
 					<div class="animate-spin grayscale opacity-60">
-						<IconCapLogo class="size-[4rem] text-gray-6" />
+						<IconCapLogo class="size-16 text-gray-6" />
 					</div>
 				</div>
 			</div>
@@ -104,16 +107,16 @@ function PlayerControlsSkeleton() {
 				<SkeletonPulse class="h-4 w-12" />
 			</div>
 			<div class="flex flex-row items-center justify-center gap-8">
-				<SkeletonPulse class="size-3 rounded" />
+				<SkeletonPulse class="size-3 rounded-sm" />
 				<SkeletonPulse class="size-9 rounded-full" />
-				<SkeletonPulse class="size-3 rounded" />
+				<SkeletonPulse class="size-3 rounded-sm" />
 			</div>
 			<div class="flex flex-row flex-1 gap-4 justify-end items-center">
 				<div class="flex-1" />
 				<SkeletonButton />
 				<SkeletonPulse class="w-px h-8 rounded-full" />
-				<SkeletonPulse class="size-5 rounded" />
-				<SkeletonPulse class="size-5 rounded" />
+				<SkeletonPulse class="size-5 rounded-sm" />
+				<SkeletonPulse class="size-5 rounded-sm" />
 				<SkeletonPulse class="w-24 h-2 rounded-full" />
 			</div>
 		</div>
@@ -144,8 +147,8 @@ function PlayerSkeleton() {
 
 function SidebarSkeleton() {
 	return (
-		<div class="flex flex-col min-h-0 shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 bg-gray-1 dark:bg-gray-2 border border-gray-3">
-			<div class="flex overflow-hidden sticky top-0 z-[60] flex-row items-center justify-center gap-4 h-16 border-b border-gray-3 shrink-0 bg-gray-1 dark:bg-gray-2">
+		<div class="flex flex-col min-h-0 shrink-0 flex-1 max-w-104 overflow-hidden rounded-xl z-10 bg-gray-1 dark:bg-gray-2 border border-gray-3">
+			<div class="flex overflow-hidden sticky top-0 z-60 flex-row items-center justify-center gap-4 h-16 border-b border-gray-3 shrink-0 bg-gray-1 dark:bg-gray-2">
 				<SkeletonPulse class="size-9 rounded-lg" />
 				<SkeletonPulse class="size-9 rounded-lg" />
 				<SkeletonPulse class="size-9 rounded-lg" />
@@ -164,14 +167,14 @@ function SidebarSkeleton() {
 				<SkeletonPulse class="h-px w-full" />
 				<SkeletonPulse class="h-4 w-16" />
 				<div class="grid grid-cols-4 gap-2">
-					<SkeletonPulse class="aspect-video rounded" />
-					<SkeletonPulse class="aspect-video rounded" />
-					<SkeletonPulse class="aspect-video rounded" />
-					<SkeletonPulse class="aspect-video rounded" />
-					<SkeletonPulse class="aspect-video rounded" />
-					<SkeletonPulse class="aspect-video rounded" />
-					<SkeletonPulse class="aspect-video rounded" />
-					<SkeletonPulse class="aspect-video rounded" />
+					<SkeletonPulse class="aspect-video rounded-sm" />
+					<SkeletonPulse class="aspect-video rounded-sm" />
+					<SkeletonPulse class="aspect-video rounded-sm" />
+					<SkeletonPulse class="aspect-video rounded-sm" />
+					<SkeletonPulse class="aspect-video rounded-sm" />
+					<SkeletonPulse class="aspect-video rounded-sm" />
+					<SkeletonPulse class="aspect-video rounded-sm" />
+					<SkeletonPulse class="aspect-video rounded-sm" />
 				</div>
 			</div>
 		</div>
@@ -180,9 +183,9 @@ function SidebarSkeleton() {
 
 function TimelineTrackSkeleton() {
 	return (
-		<div class="flex items-center gap-2 h-[3.25rem]">
+		<div class="flex items-center gap-2 h-13">
 			<div class="w-16 flex items-center justify-center">
-				<SkeletonPulse class="size-4 rounded" />
+				<SkeletonPulse class="size-4 rounded-sm" />
 			</div>
 			<div class="flex-1 h-full py-1">
 				<SkeletonPulse class="h-full w-full rounded-lg" />
@@ -194,7 +197,7 @@ function TimelineTrackSkeleton() {
 function TimelineSkeleton() {
 	return (
 		<div class="h-full rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden">
-			<div class="pt-[2rem] relative flex flex-col gap-2 h-full px-4">
+			<div class="pt-8 relative flex flex-col gap-2 h-full px-4">
 				<div class="relative h-[32px] flex items-end">
 					<div class="flex items-center gap-8 w-full pl-16">
 						<SkeletonPulse class="h-3 w-8" />

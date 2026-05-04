@@ -669,14 +669,14 @@ function InProgressRecordingInner() {
 				</Show>
 				<div class="h-10 w-full rounded-2xl">
 					<div class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl bg-gray-1 border border-gray-5 shadow-[0_1px_3px_rgba(0,0,0,0.1)] animate-in fade-in">
-						<div class="flex flex-1 flex-col gap-2 p-[0.25rem]">
+						<div class="flex flex-1 flex-col gap-2 p-1">
 							<div class="flex flex-1 flex-row justify-between">
 								<Show
 									when={!isInitializing()}
 									fallback={
-										<div class="flex flex-row items-center gap-[0.375rem] rounded-lg py-[0.25rem] px-[0.5rem] text-gray-12">
+										<div class="flex flex-row items-center gap-1.5 rounded-lg py-1 px-2 text-gray-12">
 											<IconLucideLoader2 class="size-4 animate-spin" />
-											<span class="text-[0.875rem] font-[500] tabular-nums">
+											<span class="text-[0.875rem] font-medium tabular-nums">
 												Starting
 											</span>
 										</div>
@@ -688,7 +688,7 @@ function InProgressRecordingInner() {
 											stopRecording.isPending ||
 											isCountdown()
 										}
-										class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-colors duration-100 hover:bg-red-500/[0.08] active:bg-red-500/[0.12] disabled:opacity-60 disabled:hover:bg-transparent"
+										class="flex flex-row items-center gap-1 rounded-lg py-1 px-2 text-red-300 transition-colors duration-100 hover:bg-red-500/8 active:bg-red-500/12 disabled:opacity-60 disabled:hover:bg-transparent"
 										type="button"
 										onPointerDown={(event) => {
 											if (event.button !== 0) return;
@@ -701,7 +701,7 @@ function InProgressRecordingInner() {
 										aria-label="Stop recording"
 									>
 										<IconCapStopCircle />
-										<span class="text-[0.875rem] font-[500] tabular-nums">
+										<span class="text-[0.875rem] font-medium tabular-nums">
 											<Show
 												when={!isCountdown()}
 												fallback={
@@ -897,7 +897,7 @@ function InProgressRecordingInner() {
 							</div>
 						</div>
 						<div
-							class="non-styled-move flex cursor-move items-center justify-center border-l border-gray-5 p-[0.25rem] hover:cursor-move transition-colors duration-100 hover:bg-gray-12/[0.04] dark:hover:bg-white/[0.06]"
+							class="non-styled-move flex cursor-move items-center justify-center border-l border-gray-5 p-1 hover:cursor-move transition-colors duration-100 hover:bg-gray-12/4 dark:hover:bg-white/6"
 							data-tauri-drag-region
 						>
 							<IconCapMoreVertical class="pointer-events-none text-gray-10" />
@@ -914,10 +914,10 @@ function ActionButton(props: ComponentProps<"button">) {
 		<button
 			{...props}
 			class={cx(
-				"p-[0.25rem] rounded-lg transition-colors duration-100",
+				"p-1 rounded-lg transition-colors duration-100",
 				"text-gray-11 hover:text-gray-12",
-				"hover:bg-gray-12/[0.06] dark:hover:bg-white/[0.08]",
-				"active:bg-gray-12/[0.1] dark:active:bg-white/[0.12]",
+				"hover:bg-gray-12/6 dark:hover:bg-white/8",
+				"active:bg-gray-12/10 dark:active:bg-white/12",
 				"h-8 w-8 flex items-center justify-center",
 				"disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent",
 				props.class,
