@@ -168,7 +168,10 @@ impl ScenarioRunner {
             if let Some((label, _, _)) = MicrophoneFeed::default_device() {
                 let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx.clone()));
                 mic_feed
-                    .ask(cap_recording::feeds::microphone::SetInput { label })
+                    .ask(cap_recording::feeds::microphone::SetInput {
+                        label,
+                        settings: None,
+                    })
                     .await?
                     .await?;
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -188,6 +191,7 @@ impl ScenarioRunner {
                 let camera_feed = CameraFeed::spawn(CameraFeed::default());
                 camera_feed
                     .ask(cap_recording::feeds::camera::SetInput {
+                        settings: None,
                         id: cap_recording::feeds::camera::DeviceOrModelID::from_info(&camera_info),
                     })
                     .await?

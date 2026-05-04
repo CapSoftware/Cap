@@ -327,6 +327,7 @@ async fn run_camera_capture(duration_secs: u64) -> Vec<FFmpegVideoFrame> {
         .expect("AddSender failed");
 
     feed.ask(camera::SetInput {
+        settings: None,
         id: DeviceOrModelID::from_info(&camera_info),
     })
     .await
@@ -395,6 +396,7 @@ async fn profile_live_preview(duration_secs: u64, output_width: u32) {
         .expect("AddSender failed");
 
     feed.ask(camera::SetInput {
+        settings: None,
         id: DeviceOrModelID::from_info(&camera_info),
     })
     .await

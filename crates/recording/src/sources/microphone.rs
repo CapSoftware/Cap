@@ -363,7 +363,10 @@ impl AudioSource for Microphone {
                                     let in_flight = reconnect_in_flight.clone();
                                     tokio::spawn(async move {
                                         let ready = match feed
-                                            .ask(microphone::SetInput { label: name })
+                                            .ask(microphone::SetInput {
+                                                label: name,
+                                                settings: None,
+                                            })
                                             .await
                                         {
                                             Ok(r) => r,

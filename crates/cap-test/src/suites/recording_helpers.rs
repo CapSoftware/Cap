@@ -80,7 +80,10 @@ pub async fn record_studio_at_path(
         if let Some((label, _, _)) = MicrophoneFeed::default_device() {
             let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx.clone()));
             mic_feed
-                .ask(cap_recording::feeds::microphone::SetInput { label })
+                .ask(cap_recording::feeds::microphone::SetInput {
+                    label,
+                    settings: None,
+                })
                 .await?
                 .await?;
             tokio::time::sleep(Duration::from_millis(100)).await;

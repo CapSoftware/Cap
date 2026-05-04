@@ -27,6 +27,15 @@ pub type MicrophonesMap = IndexMap<String, (Device, SupportedStreamConfig)>;
 type StreamReadyFuture =
     BoxFuture<'static, Result<(SupportedStreamConfig, Option<u32>), SetInputError>>;
 
+#[derive(
+    serde::Serialize, serde::Deserialize, specta::Type, Clone, Copy, Debug, PartialEq, Eq, Default,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneDeviceSettings {
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u16>,
+}
+
 #[derive(Clone)]
 pub struct MicrophoneSamples {
     pub data: Vec<u8>,
@@ -172,22 +181,30 @@ impl MicrophoneFeed {
 
     pub fn default_device() -> Option<(String, Device, SupportedStreamConfig)> {
         let host = cpal::default_host();
-        host.default_input_device().and_then(get_usable_device)
+        host.default_input_device()
+            .and_then(|device| get_usable_device(device, None))
     }
 
     pub fn list() -> MicrophonesMap {
+        Self::list_with_settings(None)
+    }
+
+    pub fn list_with_settings(settings: Option<&MicrophoneDeviceSettings>) -> MicrophonesMap {
         let host = cpal::default_host();
         let mut device_map = IndexMap::new();
 
-        if let Some((name, device, config)) =
-            host.default_input_device().and_then(get_usable_device)
+        if let Some((name, device, config)) = host
+            .default_input_device()
+            .and_then(|device| get_usable_device(device, settings))
         {
             device_map.insert(name, (device, config));
         }
 
         match host.input_devices() {
             Ok(devices) => {
-                for (name, device, config) in devices.filter_map(get_usable_device) {
+                for (name, device, config) in
+                    devices.filter_map(|device| get_usable_device(device, settings))
+                {
                     device_map.entry(name).or_insert((device, config));
                 }
             }
@@ -339,7 +356,10 @@ impl MicrophoneFeed {
     }
 }
 
-fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamConfig)> {
+fn get_usable_device(
+    device: Device,
+    settings: Option<&MicrophoneDeviceSettings>,
+) -> Option<(String, Device, SupportedStreamConfig)> {
     let device_name_for_logging = device.name().ok();
 
     let preferred_rate = cpal::SampleRate(48_000);
@@ -364,8 +384,12 @@ fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamC
                     .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
             });
 
-            // First try to find a config that natively supports 48 kHz so we
-            // don't have to rely on resampling later.
+            if let Some(settings) = settings
+                && let Some(config) = select_preferred_config(&configs, settings)
+            {
+                return Some(config);
+            }
+
             if let Some(config) = configs.iter().find(|config| {
                 ffmpeg_sample_format_for(config.sample_format()).is_some()
                     && config.min_sample_rate().0 <= preferred_rate.0
@@ -381,6 +405,26 @@ fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamC
         });
 
     result.and_then(|config| device.name().ok().map(|name| (name, device, config)))
+}
+
+fn select_preferred_config(
+    configs: &[SupportedStreamConfigRange],
+    settings: &MicrophoneDeviceSettings,
+) -> Option<SupportedStreamConfig> {
+    let rate = settings.sample_rate.map(cpal::SampleRate);
+
+    configs
+        .iter()
+        .find(|config| {
+            ffmpeg_sample_format_for(config.sample_format()).is_some()
+                && settings
+                    .channels
+                    .is_none_or(|channels| config.channels() == channels)
+                && rate.is_none_or(|rate| {
+                    config.min_sample_rate().0 <= rate.0 && config.max_sample_rate().0 >= rate.0
+                })
+        })
+        .map(|config| config.with_sample_rate(rate.unwrap_or_else(|| select_sample_rate(config))))
 }
 
 fn select_sample_rate(config: &SupportedStreamConfigRange) -> cpal::SampleRate {
@@ -519,6 +563,7 @@ impl Drop for MicrophoneFeedLock {
 
 pub struct SetInput {
     pub label: String,
+    pub settings: Option<MicrophoneDeviceSettings>,
 }
 
 pub struct RemoveInput;
@@ -624,7 +669,9 @@ impl Message<SetInput> for MicrophoneFeed {
                 self.input_id_counter += 1;
 
                 let label = msg.label.clone();
-                let Some((device, config)) = Self::list().swap_remove(&label) else {
+                let Some((device, config)) =
+                    Self::list_with_settings(msg.settings.as_ref()).swap_remove(&label)
+                else {
                     return Err(SetInputError::DeviceNotFound);
                 };
 
@@ -709,7 +756,9 @@ impl Message<SetInput> for MicrophoneFeed {
                 }
 
                 let label = msg.label.clone();
-                let Some((device, config)) = Self::list().swap_remove(&label) else {
+                let Some((device, config)) =
+                    Self::list_with_settings(msg.settings.as_ref()).swap_remove(&label)
+                else {
                     return Err(SetInputError::DeviceNotFound);
                 };
 
