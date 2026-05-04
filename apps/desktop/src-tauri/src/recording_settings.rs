@@ -1,6 +1,12 @@
 use cap_recording::{
-    RecordingMode, feeds::camera::DeviceOrModelID, sources::screen_capture::ScreenCaptureTarget,
+    RecordingMode,
+    feeds::{
+        camera::{CameraDeviceSettings, DeviceOrModelID},
+        microphone::MicrophoneDeviceSettings,
+    },
+    sources::screen_capture::ScreenCaptureTarget,
 };
+use std::collections::HashMap;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
 
@@ -24,6 +30,8 @@ pub struct RecordingSettingsStore {
     pub mode: Option<RecordingMode>,
     pub system_audio: bool,
     pub organization_id: Option<String>,
+    pub camera_device_settings: HashMap<String, CameraDeviceSettings>,
+    pub microphone_device_settings: HashMap<String, MicrophoneDeviceSettings>,
 }
 
 impl RecordingSettingsStore {
@@ -47,6 +55,35 @@ impl RecordingSettingsStore {
 
         store.set(Self::KEY, serde_json::json!(settings));
         store.save().map_err(|e| e.to_string())
+    }
+
+    pub fn camera_settings_for(
+        app: &AppHandle<Wry>,
+        id: &DeviceOrModelID,
+    ) -> Option<CameraDeviceSettings> {
+        Self::get(app).ok().flatten().and_then(|settings| {
+            settings
+                .camera_device_settings
+                .get(&camera_key(id))
+                .copied()
+        })
+    }
+
+    pub fn microphone_settings_for(
+        app: &AppHandle<Wry>,
+        label: &str,
+    ) -> Option<MicrophoneDeviceSettings> {
+        Self::get(app)
+            .ok()
+            .flatten()
+            .and_then(|settings| settings.microphone_device_settings.get(label).copied())
+    }
+}
+
+pub fn camera_key(id: &DeviceOrModelID) -> String {
+    match id {
+        DeviceOrModelID::DeviceID(device_id) => format!("device:{device_id}"),
+        DeviceOrModelID::ModelID(model_id) => format!("model:{model_id}"),
     }
 }
 

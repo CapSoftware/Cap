@@ -608,6 +608,8 @@ impl output_pipeline::VideoSource for VideoSource {
         } = config;
 
         let monitor_cancel = cancel_token.clone();
+        let pipeline_cancel = ctx.stop_token();
+        let stop_signal = ctx.stop_signal();
         let health_tx = ctx.health_tx().clone();
 
         if let Some(mut stall_rx) = stall_health_rx {
@@ -644,6 +646,24 @@ impl output_pipeline::VideoSource for VideoSource {
                                 continue;
                             }
                         };
+
+                        if is_user_stop_error(err.as_ref()) {
+                            if let Ok(guard) = active_capturer.lock() {
+                                match guard.as_ref() {
+                                    Some(c) => c.mark_stopped(),
+                                    None => original_capturer.mark_stopped(),
+                                }
+                            } else {
+                                original_capturer.mark_stopped();
+                            }
+
+                            info!(
+                                "Screen capture stream stopped from macOS sharing controls"
+                            );
+                            stop_signal.mark_user_stopped();
+                            pipeline_cancel.cancel();
+                            break Ok(());
+                        }
 
                         if is_system_stop_error(err.as_ref()) {
                             if monitor_cancel.is_cancelled() {
@@ -855,6 +875,11 @@ impl output_pipeline::VideoSource for VideoSource {
 
 fn is_system_stop_error(err: &ns::Error) -> bool {
     err.code() == sc::error::code::SYSTEM_STOPPED_STREAM as ns::Integer
+        && err.domain().to_string() == sc::error::domain().to_string()
+}
+
+fn is_user_stop_error(err: &ns::Error) -> bool {
+    err.code() == sc::error::code::USER_STOPPED as ns::Integer
         && err.domain().to_string() == sc::error::domain().to_string()
 }
 
@@ -1165,6 +1190,9 @@ impl output_pipeline::AudioSource for SystemAudioSource {
         ) = config;
 
         let cancel_token = CancellationToken::new();
+        let pipeline_cancel = ctx.stop_token();
+        let stop_signal = ctx.stop_signal();
+        let capturer_for_monitor = capturer.clone();
 
         ctx.tasks().spawn("system-audio", {
             let cancel = cancel_token.child_token();
@@ -1178,6 +1206,15 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                         result = error_rx.recv() => {
                             match result {
                                 Ok(err) => {
+                                    if is_user_stop_error(err.as_ref()) {
+                                        capturer_for_monitor.mark_stopped();
+                                        info!(
+                                            "Screen capture audio stream stopped from macOS sharing controls"
+                                        );
+                                        stop_signal.mark_user_stopped();
+                                        pipeline_cancel.cancel();
+                                        break;
+                                    }
                                     if is_system_stop_error(err.as_ref()) {
                                         system_stop_count += 1;
                                         if system_stop_count > MAX_CAPTURE_RESTARTS {

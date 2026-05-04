@@ -111,6 +111,7 @@ impl Drop for ActorHandle {
 #[derive(kameo::Actor)]
 pub struct Actor {
     recording_dir: PathBuf,
+    output_dir: PathBuf,
     capture_target: ScreenCaptureTarget,
     video_info: VideoInfo,
     state: ActorState,
@@ -151,10 +152,6 @@ impl Message<Stop> for Actor {
     type Reply = anyhow::Result<CompletedRecording>;
 
     async fn handle(&mut self, _: Stop, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        if matches!(self.state, ActorState::Stopped) {
-            return Err(anyhow::anyhow!("Recording already stopped"));
-        }
-
         if let Some(pause_start) = self.pause_started_at.take() {
             let pause_elapsed = current_time_f64() - pause_start;
             if pause_elapsed > 0.0 {
@@ -167,7 +164,7 @@ impl Message<Stop> for Actor {
                 let result = match &state {
                     ActorState::Recording { pipeline, .. }
                     | ActorState::Paused { pipeline, .. } => pipeline.segments_dir.clone(),
-                    ActorState::Stopped => self.recording_dir.join("content").join("display"),
+                    ActorState::Stopped => self.output_dir.clone(),
                 };
                 (result, state)
             });
@@ -610,10 +607,12 @@ pub async fn spawn_instant_recording_actor(
     trace!("spawning recording actor");
 
     let segment_rx = pipeline.segment_rx.take();
+    let output_dir = pipeline.segments_dir.clone();
     let done_fut = pipeline.video.done_fut();
     let health_rx = pipeline.video.take_health_rx();
     let actor_ref = Actor::spawn(Actor {
         recording_dir,
+        output_dir,
         capture_target: inputs.capture_target.clone(),
         video_info,
         state: ActorState::Recording {

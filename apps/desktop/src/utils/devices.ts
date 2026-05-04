@@ -1,7 +1,14 @@
 import { queryOptions, useQuery } from "@tanstack/solid-query";
-import { createEffect, createMemo, onCleanup, untrack } from "solid-js";
+import {
+	type Accessor,
+	createEffect,
+	createMemo,
+	onCleanup,
+	untrack,
+} from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import {
+	type CameraFormatInfo,
 	type CameraInfo,
 	commands,
 	events,
@@ -16,12 +23,19 @@ export type DevicesSnapshot = {
 
 export type CameraWithDetails = CameraInfo & {
 	bestFormat?: { width: number; height: number; frameRate: number };
+	formats?: CameraFormatInfo[];
+};
+
+export type MicrophoneFormatInfo = {
+	sampleRate: number;
+	channels: number;
 };
 
 export type MicrophoneWithDetails = {
 	name: string;
 	sampleRate?: number;
 	channels?: number;
+	formats?: MicrophoneFormatInfo[];
 };
 
 export const devicesSnapshot = queryOptions({
@@ -31,11 +45,16 @@ export const devicesSnapshot = queryOptions({
 	refetchInterval: 5_000,
 });
 
-export function createDevicesQuery() {
-	const query = useQuery(() => devicesSnapshot);
+export function createDevicesQuery(enabled: Accessor<boolean> = () => true) {
+	const query = useQuery(() => ({
+		...devicesSnapshot,
+		enabled: enabled(),
+		refetchInterval: enabled() ? devicesSnapshot.refetchInterval : false,
+	}));
 
 	createEffect(() => {
 		const unlisten = events.devicesUpdated.listen(() => {
+			if (!enabled()) return;
 			query.refetch();
 		});
 
@@ -49,9 +68,12 @@ export function createDevicesQuery() {
 
 type CameraDetailsCache = Record<
 	string,
-	{ width: number; height: number; frameRate: number }
+	{ bestFormat?: CameraFormatInfo; formats?: CameraFormatInfo[] }
 >;
-type MicDetailsCache = Record<string, { sampleRate: number; channels: number }>;
+type MicDetailsCache = Record<
+	string,
+	{ sampleRate: number; channels: number; formats?: MicrophoneFormatInfo[] }
+>;
 
 function cameraListChanged(
 	oldList: CameraWithDetails[],
@@ -71,8 +93,10 @@ function micListChanged(
 	return newList.some((name) => !oldNames.has(name));
 }
 
-export function createStableDevicesQuery() {
-	const query = createDevicesQuery();
+export function createStableDevicesQuery(
+	enabled: Accessor<boolean> = () => true,
+) {
+	const query = createDevicesQuery(enabled);
 
 	const [cameras, setCameras] = createStore<CameraWithDetails[]>([]);
 	const [microphones, setMicrophones] = createStore<MicrophoneWithDetails[]>(
@@ -92,13 +116,15 @@ export function createStableDevicesQuery() {
 
 		if (hasListChanged) {
 			const existingMap = new Map(
-				currentCameras.map((c) => [c.device_id, c.bestFormat]),
+				currentCameras.map((c) => [
+					c.device_id,
+					{ bestFormat: c.bestFormat, formats: c.formats },
+				]),
 			);
 
 			const newCameras: CameraWithDetails[] = rawCameras.map((c) => ({
 				...c,
-				bestFormat:
-					cameraDetailsCache[c.device_id] ?? existingMap.get(c.device_id),
+				...(cameraDetailsCache[c.device_id] ?? existingMap.get(c.device_id)),
 			}));
 
 			setCameras(newCameras);
@@ -112,18 +138,18 @@ export function createStableDevicesQuery() {
 				pendingCameraFetches.add(camera.device_id);
 				commands.getCameraFormats(camera.device_id).then((formats) => {
 					pendingCameraFetches.delete(camera.device_id);
-					if (formats?.bestFormat) {
+					if (formats) {
 						const details = {
-							width: formats.bestFormat.width,
-							height: formats.bestFormat.height,
-							frameRate: formats.bestFormat.frameRate,
+							bestFormat: formats.bestFormat ?? undefined,
+							formats: formats.formats,
 						};
 						cameraDetailsCache[camera.device_id] = details;
 						setCameras(
 							produce((cams) => {
 								const cam = cams.find((c) => c.device_id === camera.device_id);
 								if (cam) {
-									cam.bestFormat = details;
+									cam.bestFormat = details.bestFormat;
+									cam.formats = details.formats;
 								}
 							}),
 						);
@@ -143,7 +169,11 @@ export function createStableDevicesQuery() {
 			const existingMap = new Map(
 				currentMics.map((m) => [
 					m.name,
-					{ sampleRate: m.sampleRate, channels: m.channels },
+					{
+						sampleRate: m.sampleRate,
+						channels: m.channels,
+						formats: m.formats,
+					},
 				]),
 			);
 
@@ -161,9 +191,13 @@ export function createStableDevicesQuery() {
 				commands.getMicrophoneInfo(name).then((info) => {
 					pendingMicFetches.delete(name);
 					if (info) {
+						const extendedInfo = info as typeof info & {
+							formats?: MicrophoneFormatInfo[];
+						};
 						const details = {
 							sampleRate: info.sampleRate,
 							channels: info.channels,
+							formats: extendedInfo.formats,
 						};
 						micDetailsCache[name] = details;
 						setMicrophones(
@@ -172,6 +206,7 @@ export function createStableDevicesQuery() {
 								if (mic) {
 									mic.sampleRate = details.sampleRate;
 									mic.channels = details.channels;
+									mic.formats = details.formats;
 								}
 							}),
 						);

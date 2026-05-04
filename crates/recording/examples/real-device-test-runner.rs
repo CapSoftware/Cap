@@ -1363,6 +1363,7 @@ async fn execute_recording(
         let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
         mic_feed
             .ask(microphone::SetInput {
+                settings: None,
                 label: mic_label.clone(),
             })
             .await?
@@ -1379,6 +1380,7 @@ async fn execute_recording(
         let camera_feed = CameraFeed::spawn(CameraFeed::default());
         camera_feed
             .ask(camera::SetInput {
+                settings: None,
                 id: camera::DeviceOrModelID::from_info(camera_info),
             })
             .await?
