@@ -1265,14 +1265,23 @@ pub struct SetupCtx {
     tasks: TaskPool,
     health_tx: HealthSender,
     master_clock: Arc<MasterClock>,
+    stop_token: CancellationToken,
+    stop_signal: PipelineStopSignal,
 }
 
 impl SetupCtx {
-    fn new(health_tx: HealthSender, master_clock: Arc<MasterClock>) -> Self {
+    fn new(
+        health_tx: HealthSender,
+        master_clock: Arc<MasterClock>,
+        stop_token: CancellationToken,
+        stop_signal: PipelineStopSignal,
+    ) -> Self {
         Self {
             tasks: TaskPool::default(),
             health_tx,
             master_clock,
+            stop_token,
+            stop_signal,
         }
     }
 
@@ -1286,6 +1295,14 @@ impl SetupCtx {
 
     pub fn master_clock(&self) -> &Arc<MasterClock> {
         &self.master_clock
+    }
+
+    pub fn stop_token(&self) -> CancellationToken {
+        self.stop_token.clone()
+    }
+
+    pub fn stop_signal(&self) -> PipelineStopSignal {
+        self.stop_signal.clone()
     }
 }
 
@@ -1427,7 +1444,12 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         let build_ctx = BuildCtx::new();
         let master_clock = master_clock
             .unwrap_or_else(|| MasterClock::new(timestamps, AudioMixer::INFO.rate() as u32));
-        let mut setup_ctx = SetupCtx::new(build_ctx.health_tx.clone(), master_clock.clone());
+        let mut setup_ctx = SetupCtx::new(
+            build_ctx.health_tx.clone(),
+            master_clock.clone(),
+            build_ctx.stop_token.clone(),
+            build_ctx.stop_signal.clone(),
+        );
 
         let (video_source, video_rx) =
             setup_video_source::<TVideo>(video.config, &mut setup_ctx).await?;
@@ -1486,6 +1508,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             shared_pause,
             true,
             video_start_gate,
+            build_ctx.stop_signal,
         )
         .await?;
 
@@ -1523,7 +1546,12 @@ impl OutputPipelineBuilder<NoVideo> {
         let build_ctx = BuildCtx::new();
         let master_clock = master_clock
             .unwrap_or_else(|| MasterClock::new(timestamps, AudioMixer::INFO.rate() as u32));
-        let mut setup_ctx = SetupCtx::new(build_ctx.health_tx.clone(), master_clock.clone());
+        let mut setup_ctx = SetupCtx::new(
+            build_ctx.health_tx.clone(),
+            master_clock.clone(),
+            build_ctx.stop_token.clone(),
+            build_ctx.stop_signal.clone(),
+        );
 
         let (first_tx, first_rx) = oneshot::channel();
 
@@ -1560,6 +1588,7 @@ impl OutputPipelineBuilder<NoVideo> {
             shared_pause,
             false,
             None,
+            build_ctx.stop_signal,
         )
         .await?;
 
@@ -1584,6 +1613,7 @@ struct BuildCtx {
     pause_flag: Arc<AtomicBool>,
     health_tx: HealthSender,
     health_rx: HealthReceiver,
+    stop_signal: PipelineStopSignal,
 }
 
 impl BuildCtx {
@@ -1592,6 +1622,7 @@ impl BuildCtx {
 
         let (done_tx, done_rx) = oneshot::channel();
         let (health_tx, health_rx) = new_health_channel();
+        let stop_signal = PipelineStopSignal::default();
 
         Self {
             stop_token,
@@ -1607,6 +1638,7 @@ impl BuildCtx {
             pause_flag: Arc::new(AtomicBool::new(false)),
             health_tx,
             health_rx,
+            stop_signal,
         }
     }
 }
@@ -1624,6 +1656,7 @@ async fn finish_build(
     shared_pause: SharedWallClockPause,
     has_video: bool,
     video_start_gate: Option<VideoStartGate>,
+    stop_signal: PipelineStopSignal,
 ) -> anyhow::Result<()> {
     if let Some(audio) = audio {
         audio.configure(
@@ -1667,7 +1700,7 @@ async fn finish_build(
         .then(async move |res| {
             let muxer_res = muxer.lock().await.finish(timestamps.instant().elapsed());
 
-            let _ = done_tx.send(resolve_pipeline_completion(res, muxer_res));
+            let _ = done_tx.send(resolve_pipeline_completion(res, muxer_res, &stop_signal));
         }),
     );
 
@@ -1679,9 +1712,11 @@ async fn finish_build(
 fn resolve_pipeline_completion(
     task_result: anyhow::Result<()>,
     muxer_result: anyhow::Result<anyhow::Result<()>>,
+    stop_signal: &PipelineStopSignal,
 ) -> anyhow::Result<()> {
     match (task_result, muxer_result) {
         (Err(error), _) | (_, Err(error)) => Err(error),
+        (_, Ok(Ok(()))) if stop_signal.user_stopped() => Err(anyhow!(PipelineStoppedByUser)),
         (_, Ok(Ok(()))) => Ok(()),
         (_, Ok(Err(error))) => Err(anyhow!("Muxer finish failed: {error:#}")),
     }
@@ -2473,6 +2508,25 @@ pub struct FinishedOutputPipeline {
     pub video_frame_count: u64,
 }
 
+#[derive(Clone, Default)]
+pub struct PipelineStopSignal {
+    user_stopped: Arc<AtomicBool>,
+}
+
+impl PipelineStopSignal {
+    pub fn mark_user_stopped(&self) {
+        self.user_stopped.store(true, Ordering::Release);
+    }
+
+    fn user_stopped(&self) -> bool {
+        self.user_stopped.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Screen capture stopped from macOS sharing controls")]
+pub struct PipelineStoppedByUser;
+
 #[derive(Clone, Debug)]
 pub struct PipelineDoneError(Arc<anyhow::Error>);
 
@@ -2488,6 +2542,17 @@ impl std::error::Error for PipelineDoneError {
     }
 }
 
+impl PipelineDoneError {
+    pub fn is_caused_by<T>(&self) -> bool
+    where
+        T: std::error::Error + 'static,
+    {
+        self.0
+            .chain()
+            .any(|cause| cause.downcast_ref::<T>().is_some())
+    }
+}
+
 impl OutputPipeline {
     pub fn path(&self) -> &PathBuf {
         &self.path
@@ -2498,6 +2563,7 @@ impl OutputPipeline {
 
         const PIPELINE_STOP_TIMEOUT: Duration = Duration::from_secs(10);
         match tokio::time::timeout(PIPELINE_STOP_TIMEOUT, self.done_fut.clone()).await {
+            Ok(Err(error)) if error.is_caused_by::<PipelineStoppedByUser>() => {}
             Ok(res) => res?,
             Err(_) => {
                 return Err(anyhow!(
@@ -3265,6 +3331,7 @@ mod tests {
             let result = resolve_pipeline_completion(
                 Ok(()),
                 Ok(Err(anyhow!("fragmented audio trailer write failed"))),
+                &PipelineStopSignal::default(),
             );
 
             let error = result.expect_err("inner muxer failure should fail the pipeline");
@@ -3278,8 +3345,11 @@ mod tests {
 
         #[test]
         fn preserves_task_failure_over_muxer_finish_success() {
-            let result =
-                resolve_pipeline_completion(Err(anyhow!("capture-video failed")), Ok(Ok(())));
+            let result = resolve_pipeline_completion(
+                Err(anyhow!("capture-video failed")),
+                Ok(Ok(())),
+                &PipelineStopSignal::default(),
+            );
 
             let error = result.expect_err("task failure should fail the pipeline");
             assert!(
@@ -3290,8 +3360,19 @@ mod tests {
 
         #[test]
         fn succeeds_only_when_tasks_and_muxer_finish_succeed() {
-            resolve_pipeline_completion(Ok(()), Ok(Ok(())))
+            resolve_pipeline_completion(Ok(()), Ok(Ok(())), &PipelineStopSignal::default())
                 .expect("pipeline should succeed when all work succeeds");
+        }
+
+        #[test]
+        fn surfaces_user_stop_after_clean_finish() {
+            let signal = PipelineStopSignal::default();
+            signal.mark_user_stopped();
+
+            let error = resolve_pipeline_completion(Ok(()), Ok(Ok(())), &signal)
+                .expect_err("user stop should surface as a typed pipeline completion");
+
+            assert!(error.is::<PipelineStoppedByUser>());
         }
     }
 
