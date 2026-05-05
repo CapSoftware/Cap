@@ -136,7 +136,7 @@ export function Header() {
 	return (
 		<div
 			data-tauri-drag-region
-			class="flex relative flex-row items-center w-full h-14"
+			class="flex relative flex-row items-center w-full h-[52px]"
 		>
 			<div
 				data-tauri-drag-region
@@ -366,8 +366,8 @@ const UploadIcon = (props: ComponentProps<"svg">) => {
 				stroke-linejoin="round"
 				class={cx(
 					exportState.type !== "idle" &&
-						exportState.type !== "done" &&
-						"bounce",
+					exportState.type !== "done" &&
+					"bounce",
 				)}
 			/>
 		</svg>
@@ -399,7 +399,7 @@ function NameEditor(props: { name: string }) {
 						"absolute inset-0 px-px m-0 opacity-0 overflow-hidden focus:opacity-100 bg-transparent border-b border-transparent focus:border-gray-7 focus:outline-none peer whitespace-pre",
 						truncated() && "truncate",
 						(prettyName().length < 5 || prettyName().length > 100) &&
-							"focus:border-red-500",
+						"focus:border-red-500",
 					)}
 					value={prettyName()}
 					onInput={(e) => setPrettyName(e.currentTarget.value)}

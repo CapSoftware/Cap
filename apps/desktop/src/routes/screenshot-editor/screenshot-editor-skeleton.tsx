@@ -22,7 +22,7 @@ function HeaderSkeleton() {
 	return (
 		<div
 			data-tauri-drag-region
-			class="flex relative flex-row items-center w-full h-14 px-4 border-b border-gray-3 bg-gray-1 dark:bg-gray-2 shrink-0 z-20 gap-4 justify-between"
+			class="flex relative flex-row items-center w-full h-[52px] px-4 border-b border-gray-3 bg-gray-1 dark:bg-gray-2 shrink-0 z-20 gap-4 justify-between"
 		>
 			<div class="flex items-center gap-4">
 				{ostype() === "macos" && <div class="w-14" />}

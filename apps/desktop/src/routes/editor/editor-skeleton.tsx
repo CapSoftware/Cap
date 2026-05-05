@@ -26,7 +26,7 @@ function HeaderSkeleton() {
 	return (
 		<div
 			data-tauri-drag-region
-			class="flex relative flex-row items-center w-full h-14"
+			class="flex relative flex-row items-center w-full h-[52px]"
 		>
 			<div
 				data-tauri-drag-region

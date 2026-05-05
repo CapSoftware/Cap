@@ -96,13 +96,7 @@ function Header() {
 		>
 			{ctx.state()?.items}
 			{isWindows && <CaptionControlsWindows11 class="!ml-auto" />}
-			{isMacOS && (
-				<CaptionControlsMacOS
-					class="!mr-auto ml-3"
-					showMinimize={false}
-					showZoom={false}
-				/>
-			)}
+			{isMacOS && <div class="h-full w-[4rem]" />}
 		</header>
 	);
 }
