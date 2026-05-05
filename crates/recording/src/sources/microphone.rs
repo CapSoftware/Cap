@@ -157,6 +157,10 @@ impl AudioSource for Microphone {
                 .with_channels(MICROPHONE_TARGET_CHANNELS as usize);
             let is_wireless = source_info.is_wireless_transport;
             let device_name = feed_lock.device_name().to_string();
+            let reconnect_settings = microphone::MicrophoneDeviceSettings {
+                sample_rate: Some(source_info.sample_rate),
+                channels: u16::try_from(source_info.channels).ok(),
+            };
             let cancel = CancellationToken::new();
             let (tx, rx) = flume::bounded(128);
 
@@ -363,7 +367,10 @@ impl AudioSource for Microphone {
                                     let in_flight = reconnect_in_flight.clone();
                                     tokio::spawn(async move {
                                         let ready = match feed
-                                            .ask(microphone::SetInput { label: name })
+                                            .ask(microphone::SetInput {
+                                                label: name,
+                                                settings: Some(reconnect_settings),
+                                            })
                                             .await
                                         {
                                             Ok(r) => r,

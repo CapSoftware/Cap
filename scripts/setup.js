@@ -28,10 +28,11 @@ async function main() {
 	await fs.mkdir(targetDir, { recursive: true });
 
 	let cargoConfigContents = BASE_CARGO_TOML;
+	let cargoBuildContents = "";
 	const sccachePath = await findExecutable("sccache");
 
 	if (sccachePath) {
-		cargoConfigContents += `\n[build]\nrustc-wrapper = "${sccachePath.replaceAll("\\", "/")}"\n`;
+		cargoBuildContents += `\n[build]\nrustc-wrapper = "${sccachePath.replaceAll("\\", "/")}"\n`;
 		console.log(`Using sccache at ${sccachePath}`);
 	} else console.log("sccache not found, using rustc directly");
 
@@ -106,6 +107,12 @@ async function main() {
 			}
 			console.log("Copied ffmpeg dylibs to target/debug");
 		} else console.log("Using cached macOS native deps setup");
+
+		const onnxRuntimePath = await setupMacOSOnnxRuntime();
+		cargoConfigContents += `ORT_DYLIB_PATH = { relative = true, force = true, value = "${path.relative(
+			__root,
+			onnxRuntimePath,
+		)}" }\n`;
 	} else if (process.platform === "win32") {
 		const FFMPEG_VERSION = "7.1";
 		const FFMPEG_ZIP_NAME = `ffmpeg-${FFMPEG_VERSION}-full_build-shared`;
@@ -188,7 +195,7 @@ async function main() {
 	await fs.mkdir(path.join(__root, ".cargo"), { recursive: true });
 	await fs.writeFile(
 		path.join(__root, ".cargo/config.toml"),
-		cargoConfigContents,
+		cargoConfigContents + cargoBuildContents,
 	);
 }
 
@@ -238,6 +245,7 @@ async function trimMacOSFramework(frameworkDir) {
 async function signMacOSFrameworkLibs(frameworkDir) {
 	const signId = env.APPLE_SIGNING_IDENTITY || "-";
 	const keychain = env.APPLE_KEYCHAIN ? `--keychain ${env.APPLE_KEYCHAIN}` : "";
+	const timestamp = signId === "-" ? "" : "--timestamp";
 
 	// Sign dylibs (Required for them to work on macOS 13+)
 	await fs
@@ -251,7 +259,7 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 					.filter((entry) => entry.isFile() && entry.name.endsWith(".dylib"))
 					.map((entry) =>
 						exec(
-							`codesign ${keychain} -s "${signId}" -f "${path.join(
+							`codesign ${keychain} ${timestamp} -s "${signId}" -f "${path.join(
 								entry.parentPath,
 								entry.name,
 							)}"`,
@@ -259,6 +267,66 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 					),
 			),
 		);
+}
+
+async function setupMacOSOnnxRuntime() {
+	const asset =
+		arch === "aarch64"
+			? {
+					version: "1.24.2",
+					name: "onnxruntime-osx-arm64-1.24.2.tgz",
+				}
+			: {
+					version: "1.23.2",
+					name: "onnxruntime-osx-x86_64-1.23.2.tgz",
+				};
+	const url = `https://github.com/microsoft/onnxruntime/releases/download/v${asset.version}/${asset.name}`;
+	const archivePath = path.join(targetDir, asset.name);
+	const extractDir = path.join(targetDir, asset.name.replace(/\.tgz$/, ""));
+	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
+	const outputPath = path.join(outputDir, "libonnxruntime.dylib");
+	const markerPath = path.join(outputDir, "asset.txt");
+	const marker = await fs
+		.readFile(markerPath, "utf-8")
+		.then((value) => value.trim())
+		.catch(() => null);
+
+	if (!(await fileExists(archivePath))) {
+		console.log(`Downloading ${asset.name}`);
+		const bytes = await fetch(url)
+			.then((r) => r.blob())
+			.then((b) => b.arrayBuffer());
+		await fs.writeFile(archivePath, Buffer.from(bytes));
+		console.log(`Downloaded ${asset.name}`);
+	} else console.log(`Using cached ${asset.name}`);
+
+	if (!(await fileExists(outputPath)) || marker !== asset.name) {
+		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
+		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
+		await fs.mkdir(outputDir, { recursive: true });
+		await fs.copyFile(
+			path.join(extractDir, "lib", "libonnxruntime.dylib"),
+			outputPath,
+		);
+		await signMacOSDylib(outputPath);
+		await fs.writeFile(markerPath, asset.name);
+		console.log("Prepared ONNX Runtime dylib");
+	} else {
+		console.log("Using cached ONNX Runtime dylib");
+		if (env.APPLE_SIGNING_IDENTITY) await signMacOSDylib(outputPath);
+	}
+
+	return outputPath;
+}
+
+async function signMacOSDylib(filePath) {
+	const signId = env.APPLE_SIGNING_IDENTITY || "-";
+	const keychain = env.APPLE_KEYCHAIN ? `--keychain ${env.APPLE_KEYCHAIN}` : "";
+	const timestamp = signId === "-" ? "" : "--timestamp";
+
+	await exec(
+		`codesign ${keychain} ${timestamp} -s "${signId}" -f "${filePath}"`,
+	);
 }
 
 async function fileExists(path) {

@@ -1,5 +1,6 @@
 use anyhow::anyhow;
 use cap_fail::fail;
+use cap_media_info::ffmpeg_sample_format_for;
 use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
@@ -27,6 +28,7 @@ use cap_recording::{
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, moment_format_to_chrono, spawn_actor};
+use cpal::traits::DeviceTrait;
 use futures::{FutureExt, stream};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -37,7 +39,7 @@ use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::{
     any::Any,
-    collections::{HashMap, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     str::FromStr,
@@ -401,6 +403,14 @@ pub struct MicrophoneInfo {
     pub name: String,
     pub sample_rate: u32,
     pub channels: u16,
+    pub formats: Vec<MicrophoneFormatInfo>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneFormatInfo {
+    pub sample_rate: u32,
+    pub channels: u16,
 }
 
 #[tauri::command(async)]
@@ -416,11 +426,50 @@ pub fn get_microphone_info(name: String) -> Option<MicrophoneInfo> {
     microphone::MicrophoneFeed::list()
         .into_iter()
         .find(|(n, _)| *n == name)
-        .map(|(name, (_device, config))| MicrophoneInfo {
-            name,
-            sample_rate: config.sample_rate().0,
-            channels: config.channels(),
+        .map(|(name, (device, config))| {
+            let formats = microphone_format_infos(&device);
+            MicrophoneInfo {
+                name,
+                sample_rate: config.sample_rate().0,
+                channels: config.channels(),
+                formats,
+            }
         })
+}
+
+fn microphone_format_infos(device: &cpal::Device) -> Vec<MicrophoneFormatInfo> {
+    let Ok(configs) = device.supported_input_configs() else {
+        return vec![];
+    };
+    let mut formats = BTreeSet::new();
+
+    for config in configs {
+        if ffmpeg_sample_format_for(config.sample_format()).is_none() {
+            continue;
+        }
+
+        for sample_rate in [
+            config.min_sample_rate().0,
+            44_100,
+            48_000,
+            96_000,
+            config.max_sample_rate().0,
+        ] {
+            if config.min_sample_rate().0 <= sample_rate
+                && sample_rate <= config.max_sample_rate().0
+            {
+                formats.insert((sample_rate, config.channels()));
+            }
+        }
+    }
+
+    formats
+        .into_iter()
+        .map(|(sample_rate, channels)| MicrophoneFormatInfo {
+            sample_rate,
+            channels,
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -851,9 +900,19 @@ pub async fn start_recording(
             use kameo::error::SendError;
 
             // Initialize camera if selected but not active
-            let (camera_feed_actor, selected_camera_id) = {
+            let (camera_feed_actor, selected_camera_id, selected_camera_settings) = {
                 let state = state_mtx.read().await;
-                (state.camera_feed.clone(), state.selected_camera_id.clone())
+                let selected_camera_settings = state.selected_camera_id.as_ref().and_then(|id| {
+                    crate::recording_settings::RecordingSettingsStore::camera_settings_for(
+                        &state.handle,
+                        id,
+                    )
+                });
+                (
+                    state.camera_feed.clone(),
+                    state.selected_camera_id.clone(),
+                    selected_camera_settings,
+                )
             };
 
             let camera_lock_result = camera_feed_actor.ask(camera::Lock).await;
@@ -867,7 +926,10 @@ pub async fn start_recording(
                             id
                         );
                         match camera_feed_actor
-                            .ask(camera::SetInput { id: id.clone() })
+                            .ask(camera::SetInput {
+                                id: id.clone(),
+                                settings: selected_camera_settings,
+                            })
                             .await
                         {
                             Ok(fut) => match fut.await {

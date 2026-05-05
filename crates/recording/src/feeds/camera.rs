@@ -223,10 +223,21 @@ impl DeviceOrModelID {
     }
 }
 
+#[derive(
+    serde::Serialize, serde::Deserialize, specta::Type, Clone, Copy, Debug, PartialEq, Default,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraDeviceSettings {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub frame_rate: Option<f32>,
+}
+
 // Public Requests
 
 pub struct SetInput {
     pub id: DeviceOrModelID,
+    pub settings: Option<CameraDeviceSettings>,
 }
 
 pub struct RemoveInput;
@@ -287,6 +298,7 @@ struct FinalizePendingRelease {
 
 fn spawn_camera_setup(
     id: DeviceOrModelID,
+    settings: Option<CameraDeviceSettings>,
     actor_ref: ActorRef<CameraFeed>,
     new_frame_recipient: Recipient<NewFrame>,
     native_frame_recipient: Recipient<NewNativeFrame>,
@@ -314,7 +326,8 @@ fn spawn_camera_setup(
             .expect("Failed to build camera tokio runtime");
 
         LocalSet::new().block_on(&runtime, async move {
-            let setup_result = setup_camera(&id, new_frame_recipient, native_frame_recipient).await;
+            let setup_result =
+                setup_camera(&id, settings, new_frame_recipient, native_frame_recipient).await;
 
             let handle = match setup_result {
                 Ok(result) => {
@@ -456,26 +469,116 @@ static CAMERA_CALLBACK_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic
 const TARGET_CAMERA_WIDTH: u32 = 1280;
 const TARGET_CAMERA_HEIGHT: u32 = 720;
 const TARGET_CAMERA_FRAME_RATE: f32 = 30.0;
+const PREFERRED_CAMERA_FRAME_RATE: f32 = 29.0;
 const MIN_CAMERA_FRAME_RATE: f32 = 24.0;
+
+fn select_preferred_camera_format(
+    formats: &[cap_camera::Format],
+    settings: CameraDeviceSettings,
+) -> Option<cap_camera::Format> {
+    let mut matches = formats
+        .iter()
+        .filter(|format| {
+            settings.width.is_none_or(|width| format.width() == width)
+                && settings
+                    .height
+                    .is_none_or(|height| format.height() == height)
+                && settings
+                    .frame_rate
+                    .is_none_or(|frame_rate| (format.frame_rate() - frame_rate).abs() < 0.5)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if matches.is_empty() && settings.width.is_some() && settings.height.is_some() {
+        matches = formats
+            .iter()
+            .filter(|format| {
+                settings.width.is_none_or(|width| format.width() == width)
+                    && settings
+                        .height
+                        .is_none_or(|height| format.height() == height)
+            })
+            .cloned()
+            .collect();
+    }
+
+    matches.sort_by(|a, b| {
+        let target_rate = settings.frame_rate.unwrap_or(TARGET_CAMERA_FRAME_RATE);
+        let fr_cmp_a = (a.frame_rate() - target_rate).abs();
+        let fr_cmp_b = (b.frame_rate() - target_rate).abs();
+        fr_cmp_a
+            .partial_cmp(&fr_cmp_b)
+            .unwrap_or(Ordering::Equal)
+            .then((b.width() * b.height()).cmp(&(a.width() * a.height())))
+    });
+
+    matches.into_iter().next()
+}
 
 fn select_camera_format(
     camera: &cap_camera::CameraInfo,
+    settings: Option<CameraDeviceSettings>,
 ) -> Result<cap_camera::Format, SetInputError> {
     let formats = camera.formats().ok_or(SetInputError::InvalidFormat)?;
     if formats.is_empty() {
         return Err(SetInputError::InvalidFormat);
     }
 
+    if let Some(settings) = settings
+        && let Some(format) = select_preferred_camera_format(&formats, settings)
+    {
+        return Ok(format);
+    }
+
     let mut ideal_formats = formats
         .clone()
         .into_iter()
         .filter(|f| {
-            f.frame_rate() >= MIN_CAMERA_FRAME_RATE
+            f.frame_rate() >= PREFERRED_CAMERA_FRAME_RATE
                 && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
                 && f.width() <= TARGET_CAMERA_WIDTH
                 && f.height() <= TARGET_CAMERA_HEIGHT
         })
         .collect::<Vec<_>>();
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats
+            .clone()
+            .into_iter()
+            .filter(|f| {
+                f.frame_rate() >= PREFERRED_CAMERA_FRAME_RATE
+                    && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
+                    && f.width() < 2000
+                    && f.height() < 2000
+            })
+            .collect::<Vec<_>>();
+    }
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats
+            .clone()
+            .into_iter()
+            .filter(|f| {
+                f.frame_rate() >= PREFERRED_CAMERA_FRAME_RATE
+                    && f.width() < 2000
+                    && f.height() < 2000
+            })
+            .collect::<Vec<_>>();
+    }
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats
+            .clone()
+            .into_iter()
+            .filter(|f| {
+                f.frame_rate() >= MIN_CAMERA_FRAME_RATE
+                    && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
+                    && f.width() <= TARGET_CAMERA_WIDTH
+                    && f.height() <= TARGET_CAMERA_HEIGHT
+            })
+            .collect::<Vec<_>>();
+    }
 
     if ideal_formats.is_empty() {
         ideal_formats = formats
@@ -531,11 +634,12 @@ fn select_camera_format(
 #[cfg(target_os = "macos")]
 async fn setup_camera(
     id: &DeviceOrModelID,
+    settings: Option<CameraDeviceSettings>,
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
-    let format = select_camera_format(&camera)?;
+    let format = select_camera_format(&camera, settings)?;
     let frame_rate = format.frame_rate().round().max(1.0) as u32;
 
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -605,11 +709,12 @@ async fn setup_camera(
 #[cfg(not(target_os = "macos"))]
 async fn setup_camera(
     id: &DeviceOrModelID,
+    settings: Option<CameraDeviceSettings>,
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
-    let format = select_camera_format(&camera)?;
+    let format = select_camera_format(&camera, settings)?;
     let frame_rate = format.frame_rate().round().max(1.0) as u32;
 
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -739,6 +844,7 @@ impl Message<SetInput> for CameraFeed {
 
                 let (ready, _done_tx, join_handle) = spawn_camera_setup(
                     id.clone(),
+                    msg.settings,
                     actor_ref,
                     new_frame_recipient,
                     native_frame_recipient,
@@ -767,6 +873,7 @@ impl Message<SetInput> for CameraFeed {
 
                 let (ready, _done_tx, join_handle) = spawn_camera_setup(
                     msg.id.clone(),
+                    msg.settings,
                     actor_ref,
                     new_frame_recipient,
                     native_frame_recipient,

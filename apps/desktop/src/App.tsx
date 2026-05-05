@@ -139,7 +139,8 @@ function Inner() {
 								if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
 							}
 
-							if (location.pathname !== "/camera") currentWindow.show();
+							if (location.pathname !== "/" && location.pathname !== "/camera")
+								currentWindow.show();
 						});
 
 						return <Suspense fallback={null}>{props.children}</Suspense>;
