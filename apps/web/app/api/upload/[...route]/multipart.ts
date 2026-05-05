@@ -1,12 +1,7 @@
-import {
-	CloudFrontClient,
-	CreateInvalidationCommand,
-} from "@aws-sdk/client-cloudfront";
 import { updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import {
-	AwsCredentials,
 	Database,
 	makeCurrentUserLayer,
 	provideOptionalAuth,
@@ -299,9 +294,7 @@ app.post(
 			const [video] = maybeVideo.value;
 
 			return yield* Effect.gen(function* () {
-				const [bucket, customBucket] = yield* S3Buckets.getBucketAccess(
-					video.bucketId,
-				);
+				const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
 
 				const { result, formattedParts } = yield* Effect.gen(function* () {
 					console.log(
@@ -527,44 +520,6 @@ app.post(
 								return Effect.succeed(null);
 							}),
 						);
-					}
-
-					if (Option.isNone(customBucket)) {
-						const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
-						if (distributionId) {
-							const cloudfront = new CloudFrontClient({
-								region: serverEnv().CAP_AWS_REGION || "us-east-1",
-								credentials: yield* Effect.map(
-									AwsCredentials,
-									(c) => c.credentials,
-								),
-							});
-
-							const pathToInvalidate = `/${fileKey}`;
-
-							yield* Effect.promise(() =>
-								cloudfront.send(
-									new CreateInvalidationCommand({
-										DistributionId: distributionId,
-										InvalidationBatch: {
-											CallerReference: `${Date.now()}`,
-											Paths: {
-												Quantity: 1,
-												Items: [pathToInvalidate],
-											},
-										},
-									}),
-								),
-							).pipe(
-								Effect.catchAll((e) =>
-									Effect.logError(
-										"Failed to create CloudFront invalidation:",
-										e,
-									),
-								),
-								Effect.withSpan("CloudFrontInvalidation"),
-							);
-						}
 					}
 
 					return c.json({

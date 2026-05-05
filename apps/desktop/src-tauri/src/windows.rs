@@ -121,9 +121,13 @@ async fn ensure_camera_input_active(app_state: &mut App) {
     if let Some(id) = app_state.selected_camera_id.clone()
         && !app_state.camera_in_use
     {
+        let settings = crate::recording_settings::RecordingSettingsStore::camera_settings_for(
+            &app_state.handle,
+            &id,
+        );
         match app_state
             .camera_feed
-            .ask(feeds::camera::SetInput { id })
+            .ask(feeds::camera::SetInput { id, settings })
             .await
         {
             Ok(ready_future) => {
@@ -180,6 +184,8 @@ async fn restore_main_window_inputs(app: &AppHandle) {
 
     if let Some(camera_id) = camera_to_restore {
         let state = app.state::<ArcLock<App>>();
+        let settings =
+            crate::recording_settings::RecordingSettingsStore::camera_settings_for(app, &camera_id);
 
         let (camera_feed, camera_ws_sender, native_sender) = {
             let app_state = &mut *state.write().await;
@@ -212,6 +218,7 @@ async fn restore_main_window_inputs(app: &AppHandle) {
             let request = camera_feed
                 .ask(feeds::camera::SetInput {
                     id: camera_id.clone(),
+                    settings,
                 })
                 .await
                 .map_err(|e| e.to_string());

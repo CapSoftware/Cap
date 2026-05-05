@@ -402,6 +402,20 @@ impl App {
         }
     }
 
+    fn microphone_settings_for_label(
+        &self,
+        label: &str,
+    ) -> Option<microphone::MicrophoneDeviceSettings> {
+        recording_settings::RecordingSettingsStore::microphone_settings_for(&self.handle, label)
+    }
+
+    fn camera_settings_for_id(
+        &self,
+        id: &DeviceOrModelID,
+    ) -> Option<feeds::camera::CameraDeviceSettings> {
+        recording_settings::RecordingSettingsStore::camera_settings_for(&self.handle, id)
+    }
+
     async fn restart_mic_feed(&mut self) -> Result<(), String> {
         info!("Restarting microphone feed after actor shutdown");
 
@@ -416,7 +430,8 @@ impl App {
             .map_err(|e| e.to_string())?;
 
         if let Some(label) = self.selected_mic_label.clone() {
-            match mic_feed.ask(microphone::SetInput { label }).await {
+            let settings = self.microphone_settings_for_label(&label);
+            match mic_feed.ask(microphone::SetInput { label, settings }).await {
                 Ok(ready) => {
                     if let Err(err) = ready.await {
                         if matches!(err, microphone::SetInputError::DeviceNotFound) {
@@ -536,9 +551,10 @@ impl App {
 
     async fn ensure_selected_mic_ready(&mut self) -> Result<(), String> {
         if let Some(label) = self.selected_mic_label.clone() {
+            let settings = self.microphone_settings_for_label(&label);
             let ready = self
                 .mic_feed
-                .ask(feeds::microphone::SetInput { label })
+                .ask(feeds::microphone::SetInput { label, settings })
                 .await
                 .map_err(|e| e.to_string())?;
 
@@ -550,9 +566,13 @@ impl App {
 
     async fn ensure_selected_camera_ready(&mut self) -> Result<(), String> {
         if let Some(id) = self.selected_camera_id.clone() {
+            let settings = self.camera_settings_for_id(&id);
             let ready = self
                 .camera_feed
-                .ask(feeds::camera::SetInput { id: id.clone() })
+                .ask(feeds::camera::SetInput {
+                    id: id.clone(),
+                    settings,
+                })
                 .await
                 .map_err(|e| e.to_string())?;
 
@@ -569,7 +589,7 @@ impl App {
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
     let desired_label = label;
 
-    let (mic_feed, studio_handle, previous_label) = {
+    let (mic_feed, studio_handle, previous_label, app_handle) = {
         let mut app = state.write().await;
         if desired_label == app.selected_mic_label {
             return Ok(());
@@ -583,7 +603,12 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
         let previous_label = app.selected_mic_label.clone();
         app.selected_mic_label = desired_label.clone();
 
-        (app.mic_feed.clone(), handle, previous_label)
+        (
+            app.mic_feed.clone(),
+            handle,
+            previous_label,
+            app.handle.clone(),
+        )
     };
 
     let has_studio = studio_handle.is_some();
@@ -609,9 +634,15 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
                 }
             }
             Some(label) => {
+                let settings =
+                    recording_settings::RecordingSettingsStore::microphone_settings_for(
+                        &app_handle,
+                        label,
+                    );
                 mic_feed
                     .ask(feeds::microphone::SetInput {
                         label: label.clone(),
+                        settings,
                     })
                     .await
                     .map_err(|e| e.to_string())?
@@ -746,6 +777,8 @@ async fn set_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
+            let settings =
+                recording_settings::RecordingSettingsStore::camera_settings_for(&app_handle, id);
             let (camera_ws_sender, native_preview_active) = {
                 let app = &mut *state.write().await;
                 app.selected_camera_id = Some(id.clone());
@@ -781,7 +814,10 @@ async fn set_camera_input(
                 attempts += 1;
 
                 let request = camera_feed
-                    .ask(feeds::camera::SetInput { id: id.clone() })
+                    .ask(feeds::camera::SetInput {
+                        id: id.clone(),
+                        settings,
+                    })
                     .await
                     .map_err(|e| e.to_string());
 

@@ -207,6 +207,7 @@ async fn run_memory_test(
             let feed = CameraFeed::spawn(CameraFeed::default());
 
             feed.ask(camera::SetInput {
+                settings: None,
                 id: DeviceOrModelID::from_info(&camera_info),
             })
             .await?
@@ -230,6 +231,7 @@ async fn run_memory_test(
 
             mic_feed
                 .ask(microphone::SetInput {
+                    settings: None,
                     label: mic_name.clone(),
                 })
                 .await?
@@ -313,6 +315,7 @@ async fn run_camera_only_test(duration_secs: u64) -> Result<(), Box<dyn std::err
         feed.ask(camera::AddNativeSender(frame_tx)).await?;
 
         feed.ask(camera::SetInput {
+            settings: None,
             id: DeviceOrModelID::from_info(&camera_info),
         })
         .await?

@@ -193,6 +193,8 @@ jobs:
         run: pnpm -w cap-setup
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain
 
       - name: Build cap-muxer sidecar
         shell: bash

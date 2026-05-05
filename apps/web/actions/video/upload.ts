@@ -1,16 +1,12 @@
 "use server";
 
-import {
-	CloudFrontClient,
-	CreateInvalidationCommand,
-} from "@aws-sdk/client-cloudfront";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
-import { AwsCredentials, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import {
 	type Folder,
 	type Organisation,
@@ -46,37 +42,6 @@ async function getVideoUploadPresignedUrl({
 		const bucketIdOption = Option.fromNullable(bucketId).pipe(
 			Option.map((id) => S3Bucket.S3BucketId.make(id)),
 		);
-
-		if (Option.isNone(bucketIdOption)) {
-			const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
-			if (distributionId) {
-				const cloudfront = new CloudFrontClient({
-					region: serverEnv().CAP_AWS_REGION || "us-east-1",
-					credentials: await runPromise(
-						Effect.map(AwsCredentials, (c) => c.credentials),
-					),
-				});
-
-				const pathToInvalidate = `/${fileKey}`;
-
-				try {
-					await cloudfront.send(
-						new CreateInvalidationCommand({
-							DistributionId: distributionId,
-							InvalidationBatch: {
-								CallerReference: `${Date.now()}`,
-								Paths: {
-									Quantity: 1,
-									Items: [pathToInvalidate],
-								},
-							},
-						}),
-					);
-				} catch (error) {
-					console.error("Failed to create CloudFront invalidation:", error);
-				}
-			}
-		}
 
 		const contentType = fileKey.endsWith(".aac")
 			? "audio/aac"

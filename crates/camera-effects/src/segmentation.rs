@@ -1,6 +1,8 @@
 use anyhow::Context;
 use ort::session::Session;
 use ort::value::Value;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 
 const MODEL_BYTES: &[u8] = include_bytes!("../assets/selfie_segmentation.onnx");
 const MODEL_INPUT_SIZE: usize = 256;
@@ -48,6 +50,8 @@ impl SegmentationModel {
 }
 
 fn create_session() -> anyhow::Result<Session> {
+    init_runtime()?;
+
     let mut builder = Session::builder().context("Failed to create ONNX session builder")?;
 
     #[cfg(target_os = "macos")]
@@ -79,6 +83,57 @@ fn create_session() -> anyhow::Result<Session> {
     );
 
     Ok(session)
+}
+
+#[cfg(target_os = "macos")]
+fn init_runtime() -> anyhow::Result<()> {
+    let path = std::env::var_os("ORT_DYLIB_PATH")
+        .map(PathBuf::from)
+        .or_else(|| {
+            onnx_runtime_candidates()
+                .into_iter()
+                .find(|path| path.exists())
+        })
+        .context("Failed to find macOS ONNX Runtime dylib")?;
+
+    let _ = ort::init_from(&path)
+        .with_context(|| format!("Failed to load ONNX Runtime from {}", path.display()))?
+        .commit();
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn init_runtime() -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn onnx_runtime_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        candidates.push(exe_dir.join("libonnxruntime.dylib"));
+
+        if let Some(contents_dir) = exe_dir.parent() {
+            candidates.push(
+                contents_dir
+                    .join("Resources")
+                    .join("onnxruntime")
+                    .join("lib")
+                    .join("libonnxruntime.dylib"),
+            );
+        }
+    }
+
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/native-deps/onnxruntime/lib/libonnxruntime.dylib"),
+    );
+
+    candidates
 }
 
 #[cfg(target_os = "macos")]

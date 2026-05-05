@@ -46,6 +46,7 @@ apps/storybook/storybook-static
 *.tsbuildinfo
 .cargo/config.toml
 tauri.windows.conf.json
+tauri.macos.conf.json
 .vercel
 
 # sst
@@ -66,6 +67,7 @@ scripts/releases-backfill-data.txt
 # SEO agent state (machine-local, contains sensitive ranking data)
 /seo/
 /docs/
+/.growth-agent/
 
 # OpenCode commands (local)
 .opencode/

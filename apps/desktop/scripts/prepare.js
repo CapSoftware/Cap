@@ -94,6 +94,19 @@ export async function createTauriPlatformConfigs(
 		};
 	}
 
+	if (platform === "darwin") {
+		configFileName = "tauri.macos.conf.json";
+		baseConfig = {
+			...baseConfig,
+			bundle: {
+				resources: {
+					"../../../target/native-deps/onnxruntime/lib/libonnxruntime.dylib":
+						"onnxruntime/lib/libonnxruntime.dylib",
+				},
+			},
+		};
+	}
+
 	if (!configFileName) return;
 
 	const mergedConfig = configOptions
