@@ -227,9 +227,6 @@ async seekTo(frameNumber: number) : Promise<null> {
 async getDisplayFrameForCropping(fps: number) : Promise<number[]> {
     return await TAURI_INVOKE("get_display_frame_for_cropping", { fps });
 },
-async positionTrafficLights(controlsInset: [number, number] | null) : Promise<void> {
-    await TAURI_INVOKE("position_traffic_lights", { controlsInset });
-},
 async setTheme(theme: AppTheme) : Promise<void> {
     await TAURI_INVOKE("set_theme", { theme });
 },

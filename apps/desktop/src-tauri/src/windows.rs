@@ -3,6 +3,7 @@
 
 use anyhow::anyhow;
 use futures::pin_mut;
+use objc2_foundation::NSObjectNSScriptKeyValueCoding;
 use scap_targets::{Display, DisplayId};
 use serde::Deserialize;
 use specta::Type;
@@ -36,6 +37,7 @@ use crate::{
     general_settings::{self, AppTheme, GeneralSettingsStore},
     permissions,
     recording::{RecordingEvent, RecordingInputKind},
+    platform::WebviewWindowExt,
     recording_settings::RecordingTargetMode,
     screenshot_editor::PendingScreenshotEditorInstances,
     target_select_overlay::WindowFocusManager,
@@ -44,7 +46,7 @@ use crate::{
 use cap_recording::{feeds, sources::screen_capture::ScreenCaptureTarget};
 
 #[cfg(target_os = "macos")]
-const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
+const DEFAULT_TRAFFIC_LIGHTS_POS: LogicalPosition<f64> = LogicalPosition::new(13.0, 16.0);
 
 const DEFAULT_FALLBACK_DISPLAY_WIDTH: f64 = 1920.0;
 const DEFAULT_FALLBACK_DISPLAY_HEIGHT: f64 = 1080.0;
@@ -801,9 +803,8 @@ impl CapWindowId {
     pub fn is_transparent(&self) -> bool {
         matches!(
             self,
-            Self::Main
-                | Self::Onboarding
-                | Self::Camera
+            // Self::Main
+            |Self::Onboarding| Self::Camera
                 | Self::WindowCaptureOccluder { .. }
                 | Self::CaptureArea
                 | Self::RecordingControls
@@ -825,10 +826,9 @@ impl CapWindowId {
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
             Self::Editor { .. } | Self::ScreenshotEditor { .. } => {
-                Some(Some(LogicalPosition::new(20.0, 32.0)))
+                Some(Some(LogicalPosition::new(20.0, 24.0)))
             }
             Self::Camera
-            | Self::Main
             | Self::Onboarding
             | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
@@ -1363,63 +1363,9 @@ impl ShowCapWindow {
                     ))
                     .build()?;
 
-                let saved_position = GeneralSettingsStore::get(app)
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.main_window_position)
-                    .filter(|pos| is_position_on_any_screen(pos.x, pos.y));
-
-                let (pos_x, pos_y) = if let Some(pos) = saved_position {
-                    (pos.x, pos.y)
-                } else {
-                    cursor_monitor.center_position(330.0, 395.0)
-                };
-
                 #[cfg(target_os = "macos")]
                 {
-                    app.run_on_main_thread({
-                        let window = window.clone();
-                        let app = app.clone();
-                        move || {
-                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::panel_delegate;
-                            use crate::panel_manager::try_to_panel;
-
-                            const MAIN_PANEL_LEVEL: i32 = 100;
-
-                            let delegate = panel_delegate!(MainPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
-
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
-
-                            let panel = match try_to_panel(&window) {
-                                Ok(p) => p,
-                                Err(e) => {
-                                    tracing::error!("Failed to convert main window to panel: {}", e);
-                                    crate::permissions::sync_macos_dock_visibility(&app);
-                                    return;
-                                }
-                            };
-
-                            panel.set_collection_behaviour(
-                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
-                            );
-
-                            panel.set_delegate(delegate);
-
-                            panel.set_level(MAIN_PANEL_LEVEL);
-
-                            let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
-
-                            crate::platform::apply_squircle_corners(&window, 16.0);
-
-                            crate::permissions::schedule_macos_dock_visibility_sync(&app);
-                        }
-                    })
-                    .ok();
+                    crate::permissions::schedule_macos_dock_visibility_sync(&app);
 
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
@@ -2431,14 +2377,6 @@ impl ShowCapWindow {
             }
         };
 
-        // removing this for now as it causes windows to just stay hidden sometimes -_-
-        // window.hide().ok();
-
-        #[cfg(target_os = "macos")]
-        if let Some(position) = _id.traffic_lights_position() {
-            add_traffic_lights(&window, position);
-        }
-
         #[cfg(target_os = "macos")]
         if _id.activates_dock() {
             crate::permissions::sync_macos_dock_visibility(app);
@@ -2505,10 +2443,11 @@ impl ShowCapWindow {
 
         #[cfg(target_os = "macos")]
         {
-            if id.traffic_lights_position().is_some() {
+            if let Some(pos) = id.traffic_lights_position() {
                 builder = builder
                     .hidden_title(true)
-                    .title_bar_style(tauri::TitleBarStyle::Overlay);
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .traffic_light_position(pos.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_POS));
             } else {
                 builder = builder.decorations(false)
             }
@@ -2559,29 +2498,6 @@ impl ShowCapWindow {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<LogicalPosition<f64>>) {
-    use crate::platform::delegates;
-
-    let target_window = window.clone();
-    window
-        .run_on_main_thread(move || {
-            delegates::setup(
-                target_window.as_ref().window(),
-                controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-            );
-
-            let c_win = target_window.clone();
-            target_window.on_window_event(move |event| match event {
-                tauri::WindowEvent::ThemeChanged(..) | tauri::WindowEvent::Focused(..) => {
-                    position_traffic_lights_impl(&c_win.as_ref().window(), controls_inset);
-                }
-                _ => {}
-            });
-        })
-        .ok();
-}
-
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(window))]
@@ -2591,49 +2507,6 @@ pub fn set_theme(window: tauri::Window, theme: AppTheme) {
         AppTheme::Light => Some(tauri::Theme::Light),
         AppTheme::Dark => Some(tauri::Theme::Dark),
     });
-
-    #[cfg(target_os = "macos")]
-    match CapWindowId::from_str(window.label()) {
-        Ok(win) if win.traffic_lights_position().is_some() => position_traffic_lights(window, None),
-        Ok(_) | Err(_) => {}
-    }
-}
-
-#[tauri::command]
-#[specta::specta]
-#[instrument(skip(_window))]
-pub fn position_traffic_lights(_window: tauri::Window, _controls_inset: Option<(f64, f64)>) {
-    #[cfg(target_os = "macos")]
-    position_traffic_lights_impl(
-        &_window,
-        _controls_inset.map(LogicalPosition::from).or_else(|| {
-            // Attempt to get the default inset from the window's traffic lights position
-            CapWindowId::from_str(_window.label())
-                .ok()
-                .and_then(|id| id.traffic_lights_position().flatten())
-        }),
-    );
-}
-
-#[cfg(target_os = "macos")]
-fn position_traffic_lights_impl(
-    window: &tauri::Window,
-    controls_inset: Option<LogicalPosition<f64>>,
-) {
-    use crate::platform::delegates::{UnsafeWindowHandle, position_window_controls};
-    let c_win = window.clone();
-    window
-        .run_on_main_thread(move || {
-            let ns_window = match c_win.ns_window() {
-                Ok(handle) => handle,
-                Err(_) => return,
-            };
-            position_window_controls(
-                UnsafeWindowHandle(ns_window),
-                &controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-            );
-        })
-        .ok();
 }
 
 fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
