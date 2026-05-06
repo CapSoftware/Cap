@@ -87,6 +87,16 @@ const ignoreMoveFor = (durationMs: number) => {
 
 const shouldIgnoreMove = () => Date.now() < ignoreMoveUntil;
 
+function createCameraWindowChromeVisibility() {
+	const [visible, setVisible] = createSignal(false);
+
+	return {
+		visible,
+		show: () => setVisible(true),
+		hide: () => setVisible(false),
+	};
+}
+
 const queueCameraPositionSave = (() => {
 	let pending: { x: number; y: number } | null = null;
 	let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -213,11 +223,11 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			isCameraOnlyMode()
 				? getCameraOnlyInitialState()
 				: {
-						size: CAMERA_DEFAULT_SIZE,
-						shape: "round",
-						mirrored: false,
-						backgroundBlur: "off" as BackgroundBlurMode,
-					},
+					size: CAMERA_DEFAULT_SIZE,
+					shape: "round",
+					mirrored: false,
+					backgroundBlur: "off" as BackgroundBlurMode,
+				},
 		),
 		{ name: "cameraWindowState" },
 	);
@@ -246,7 +256,7 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		const handleVisibilityChange = () => {
 			if (!document.hidden) {
 				setTimeout(() => {
-					commands.refreshCameraFeed().catch(() => {});
+					commands.refreshCameraFeed().catch(() => { });
 				}, 500);
 			}
 		};
@@ -307,11 +317,22 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			(state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
 		return 0.7 + normalized * 0.3;
 	};
+	const chrome = createCameraWindowChromeVisibility();
+	const toolbarClass = () =>
+		cx(
+			"flex flex-row gap-[0.25rem] p-[0.25rem] rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10",
+			chrome.visible()
+				? "opacity-100 translate-y-0"
+				: "opacity-0 translate-y-2",
+		);
 
 	return (
 		<div
 			data-tauri-drag-region
-			class="flex relative flex-col w-screen h-screen cursor-move group"
+			class="flex relative flex-col w-screen h-screen cursor-move"
+			onPointerMove={chrome.show}
+			onPointerLeave={chrome.hide}
+			onPointerCancel={chrome.hide}
 		>
 			<Show when={props.disconnected()}>
 				<CameraDisconnectedOverlay />
@@ -319,7 +340,7 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<div class="h-13">
 				<div class="flex flex-row justify-center items-center">
 					<div
-						class="flex flex-row gap-1 p-1 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10"
+						class={toolbarClass()}
 						style={{ transform: `scale(${scale()})` }}
 					>
 						<ControlButton onClick={() => getCurrentWindow().close()}>
@@ -388,6 +409,7 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				state={state}
 				setState={setState}
 				toolbarHeight={52}
+				visible={chrome.visible()}
 			/>
 
 			<Show when={cameraPreviewReady.loading}>
@@ -421,6 +443,7 @@ function CameraResizeHandles(props: {
 	state: CameraWindowState;
 	setState: SetStoreFunction<CameraWindowState>;
 	toolbarHeight: number;
+	visible: boolean;
 }) {
 	const [isResizing, setIsResizing] = createSignal(false);
 	const [activeCorner, setActiveCorner] = createSignal<ResizeCorner | null>(
@@ -495,6 +518,7 @@ function CameraResizeHandles(props: {
 					corner={corner}
 					onMouseDown={handleResizeStart(corner)}
 					active={activeCorner() === corner}
+					visible={props.visible || isResizing()}
 				/>
 			))}
 		</div>
@@ -505,6 +529,7 @@ function ResizeCornerHandle(props: {
 	corner: ResizeCorner;
 	onMouseDown: (e: MouseEvent) => void;
 	active: boolean;
+	visible: boolean;
 }) {
 	const hitAreaClass = () => {
 		switch (props.corner) {
@@ -547,7 +572,7 @@ function ResizeCornerHandle(props: {
 					"absolute w-3.5 h-3.5 border-white pointer-events-none",
 					"transition-[opacity,transform,border-color] duration-150 ease-out",
 					"opacity-0 scale-90",
-					"group-hover:opacity-70 group-hover:scale-100",
+					props.visible && "opacity-70 scale-100",
 					"group-hover/handle:!opacity-100 group-hover/handle:!scale-110",
 					props.active && "!opacity-100 !scale-110",
 					bracketPositionClass(),
@@ -570,11 +595,11 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			isCameraOnlyMode()
 				? getCameraOnlyInitialState()
 				: {
-						size: CAMERA_DEFAULT_SIZE,
-						shape: "round",
-						mirrored: false,
-						backgroundBlur: "off" as BackgroundBlurMode,
-					},
+					size: CAMERA_DEFAULT_SIZE,
+					shape: "round",
+					mirrored: false,
+					backgroundBlur: "off" as BackgroundBlurMode,
+				},
 		),
 		{ name: "cameraWindowState" },
 	);
@@ -757,7 +782,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			setIsWindowVisible(!document.hidden);
 			if (!document.hidden) {
 				lastFrameTime = Date.now();
-				commands.refreshCameraFeed().catch(() => {});
+				commands.refreshCameraFeed().catch(() => { });
 			}
 		};
 		document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -896,7 +921,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				Date.now() - lastFrameTime > STALL_TIMEOUT_MS
 			) {
 				lastFrameTime = Date.now();
-				commands.refreshCameraFeed().catch(() => {});
+				commands.refreshCameraFeed().catch(() => { });
 				if (ws) ws.close();
 				ws = createSocket();
 			}
@@ -928,6 +953,14 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			(state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
 		return 0.7 + normalized * 0.3;
 	};
+	const chrome = createCameraWindowChromeVisibility();
+	const toolbarClass = () =>
+		cx(
+			"flex flex-row gap-1 p-1 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10",
+			chrome.visible()
+				? "opacity-100 translate-y-0"
+				: "opacity-0 translate-y-2",
+		);
 
 	const [_windowSize] = createResource(
 		() =>
@@ -1051,8 +1084,11 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	return (
 		<div
 			data-tauri-drag-region
-			class="flex relative flex-col w-screen h-screen cursor-move group"
+			class="flex relative flex-col w-screen h-screen cursor-move"
 			style={{ "border-radius": cameraBorderRadius(state) }}
+			onPointerMove={chrome.show}
+			onPointerLeave={chrome.hide}
+			onPointerCancel={chrome.hide}
 		>
 			<Show when={props.disconnected()}>
 				<CameraDisconnectedOverlay />
@@ -1060,7 +1096,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<div class="h-14">
 				<div class="flex flex-row justify-center items-center">
 					<div
-						class="flex flex-row gap-1 p-1 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10"
+						class={toolbarClass()}
 						style={{ transform: `scale(${scale()})` }}
 					>
 						<ControlButton onClick={() => getCurrentWindow().close()}>
@@ -1128,6 +1164,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				state={state}
 				setState={setState}
 				toolbarHeight={56}
+				visible={chrome.visible()}
 			/>
 			<div
 				ref={containerRef}

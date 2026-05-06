@@ -103,7 +103,7 @@ export default function CameraSelect(props: {
 		!props.hidePreviewButton;
 
 	const showSettingsShortcut = () =>
-		props.value !== null && permissionGranted() && !!props.onOpenSettings;
+		hasSelection() && permissionGranted() && !!props.onOpenSettings;
 
 	const isDisabled = () => !!currentRecording.data || props.disabled;
 

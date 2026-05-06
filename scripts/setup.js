@@ -193,7 +193,7 @@ async function main() {
 	}
 
 	await fs.mkdir(path.join(__root, ".cargo"), { recursive: true });
-	await fs.writeFile(
+	await writeFileIfChanged(
 		path.join(__root, ".cargo/config.toml"),
 		cargoConfigContents + cargoBuildContents,
 	);
@@ -317,6 +317,14 @@ async function setupMacOSOnnxRuntime() {
 	}
 
 	return outputPath;
+}
+
+async function writeFileIfChanged(filePath, contents) {
+	const currentContents = await fs
+		.readFile(filePath, "utf-8")
+		.catch(() => undefined);
+
+	if (currentContents !== contents) await fs.writeFile(filePath, contents);
 }
 
 async function signMacOSDylib(filePath) {
