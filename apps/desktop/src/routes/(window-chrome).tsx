@@ -45,16 +45,9 @@ export default function (props: RouteSectionProps) {
 		window.removeEventListener("keydown", handleKeyDown);
 	});
 
-	const isMacOS = ostype() === "macos";
-
 	return (
 		<WindowChromeContext>
-			<div
-				class={cx(
-					"flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5 bg-gray-1",
-					isMacOS && "rounded-[16px]",
-				)}
-			>
+			<div class="flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5 bg-gray-1">
 				<Header />
 
 				{/* breaks sometimes */}
@@ -102,9 +95,9 @@ function Header() {
 }
 
 function Inner(props: ParentProps) {
-	onMount(() => {
-		if (location.pathname !== "/") getCurrentWindow().show();
-	});
+	// onMount(() => {
+	// if (location.pathname !== "/") getCurrentWindow().show();
+	// });
 
 	return (
 		<div

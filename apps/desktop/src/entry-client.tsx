@@ -1,5 +1,6 @@
 // @refresh reload
 import { mount, StartClient } from "@solidjs/start/client";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 async function initApp() {
 	try {
@@ -9,11 +10,11 @@ async function initApp() {
 	} catch (error) {
 		console.error("Failed to get OS type:", error);
 	}
-
 	const app = document.getElementById("app");
 	if (!app) throw new Error("App root element not found");
 
 	mount(() => <StartClient />, app);
+	getCurrentWindow().show();
 }
 
 initApp();

@@ -3,7 +3,6 @@
 
 use anyhow::anyhow;
 use futures::pin_mut;
-use objc2_foundation::NSObjectNSScriptKeyValueCoding;
 use scap_targets::{Display, DisplayId};
 use serde::Deserialize;
 use specta::Type;
@@ -34,10 +33,10 @@ use crate::{
     camera_preview_error_message,
     editor_window::PendingEditorInstances,
     emit_camera_preview_clear, emit_camera_preview_error, fake_window,
-    general_settings::{self, AppTheme, GeneralSettingsStore},
+    general_settings::{self, Appearance, GeneralSettingsStore},
     permissions,
-    recording::{RecordingEvent, RecordingInputKind},
     platform::WebviewWindowExt,
+    recording::{RecordingEvent, RecordingInputKind},
     recording_settings::RecordingTargetMode,
     screenshot_editor::PendingScreenshotEditorInstances,
     target_select_overlay::WindowFocusManager,
@@ -797,19 +796,6 @@ impl CapWindowId {
                 | Self::Upgrade
                 | Self::ModeSelect
                 | Self::Onboarding
-        )
-    }
-
-    pub fn is_transparent(&self) -> bool {
-        matches!(
-            self,
-            // Self::Main
-            |Self::Onboarding| Self::Camera
-                | Self::WindowCaptureOccluder { .. }
-                | Self::CaptureArea
-                | Self::RecordingControls
-                | Self::RecordingsOverlay
-                | Self::TargetSelectOverlay { .. }
         )
     }
 
@@ -1576,8 +1562,8 @@ impl ShowCapWindow {
                     }
                 }
 
-                window.show().ok();
-                window.set_focus().ok();
+                // window.show().ok();
+                // window.set_focus().ok();
                 ensure_settings_window_bounds(&window);
 
                 window
@@ -1656,9 +1642,6 @@ impl ShowCapWindow {
                     }
                 }
 
-                window.show().ok();
-                window.set_focus().ok();
-
                 window
             }
             Self::Upgrade => {
@@ -1691,9 +1674,6 @@ impl ShowCapWindow {
                     }
                 }
 
-                window.show().ok();
-                window.set_focus().ok();
-
                 window
             }
             Self::ModeSelect => {
@@ -1725,9 +1705,6 @@ impl ShowCapWindow {
                         warn!("Failed to position ModeSelect window on Windows: {}", e);
                     }
                 }
-
-                window.show().ok();
-                window.set_focus().ok();
 
                 window
             }
@@ -1765,9 +1742,6 @@ impl ShowCapWindow {
                         warn!("Failed to position Onboarding window on Windows: {}", e);
                     }
                 }
-
-                window.show().ok();
-                window.set_focus().ok();
 
                 window
             }
@@ -2402,38 +2376,17 @@ impl ShowCapWindow {
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
         let id = self.id(app);
 
-        let theme = GeneralSettingsStore::get(app)
+        let theme: Option<tauri::Theme> = GeneralSettingsStore::get(app)
             .ok()
             .flatten()
-            .map(|s| match s.theme {
-                AppTheme::System => None,
-                AppTheme::Light => Some(tauri::Theme::Light),
-                AppTheme::Dark => Some(tauri::Theme::Dark),
-            })
-            .unwrap_or(None);
+            .and_then(|s| s.appearance.into());
 
         let mut builder = WebviewWindow::builder(app, label, WebviewUrl::App(url.into()))
             .title(id.title())
-            .visible(false)
             .accept_first_mouse(true)
             .shadow(true)
             .theme(theme)
             .devtools(cfg!(debug_assertions));
-
-        if !id.is_transparent() {
-            let is_dark = match theme {
-                Some(tauri::Theme::Dark) => true,
-                Some(tauri::Theme::Light) => false,
-                None | Some(_) => is_system_dark_mode(),
-            };
-
-            let bg_color = if is_dark { "#141414" } else { "#ffffff" };
-            let init_script = format!(
-                r#"(function(){{var s=document.createElement('style');s.textContent='html,body{{background-color:{bg}}}';document.documentElement.appendChild(s);}})();"#,
-                bg = bg_color
-            );
-            builder = builder.initialization_script(&init_script);
-        }
 
         if let Some(min) = id.min_size() {
             builder = builder
@@ -2458,7 +2411,7 @@ impl ShowCapWindow {
             builder = builder.decorations(false);
         }
 
-        builder
+        builder.visible(false)
     }
 
     pub fn id(&self, app: &AppHandle) -> CapWindowId {
@@ -2501,11 +2454,11 @@ impl ShowCapWindow {
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(window))]
-pub fn set_theme(window: tauri::Window, theme: AppTheme) {
+pub fn set_theme(window: tauri::Window, theme: Appearance) {
     let _ = window.set_theme(match theme {
-        AppTheme::System => None,
-        AppTheme::Light => Some(tauri::Theme::Light),
-        AppTheme::Dark => Some(tauri::Theme::Dark),
+        Appearance::System => None,
+        Appearance::Light => Some(tauri::Theme::Light),
+        Appearance::Dark => Some(tauri::Theme::Dark),
     });
 }
 
