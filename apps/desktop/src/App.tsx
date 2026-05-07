@@ -1,4 +1,4 @@
-import { Route, Router, useCurrentMatches } from "@solidjs/router";
+import { Route, Router } from "@solidjs/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import {
 	getCurrentWebviewWindow,
@@ -12,10 +12,13 @@ import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 
+import { createEventListener } from "@solid-primitives/event-listener";
+import { setTheme } from "@tauri-apps/api/app";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
 import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
-import { type AppTheme, commands } from "./utils/tauri";
+import { createTauriEventListener } from "./utils/createEventListener";
+import { type Appearance, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
 const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
@@ -131,20 +134,9 @@ function Inner() {
 			/>
 			<CapErrorBoundary>
 				<Router
-					root={(props) => {
-						const matches = useCurrentMatches();
-
-						onMount(() => {
-							for (const match of matches()) {
-								if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
-							}
-
-							if (location.pathname !== "/" && location.pathname !== "/camera")
-								currentWindow.show();
-						});
-
-						return <Suspense fallback={null}>{props.children}</Suspense>;
-					}}
+					root={(props) => (
+						<Suspense fallback={null}>{props.children}</Suspense>
+					)}
 				>
 					<Route path="/" component={WindowChromeLayout}>
 						<Route path="/" component={NewMainPage} />
@@ -205,39 +197,32 @@ function Inner() {
 }
 
 function createThemeListener(currentWindow: WebviewWindow) {
-	const generalSettings = generalSettingsStore.createQuery();
+	const settings = generalSettingsStore.createQuery();
+	const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
 
-	createEffect(() => {
-		update(generalSettings.data?.theme ?? null);
-	});
+	createEffect(() => applyTheme(settings.data?.appearance ?? null));
 
 	onMount(async () => {
-		const unlisten = await currentWindow.onThemeChanged((_) =>
-			update(generalSettings.data?.theme),
+		const unlisten = currentWindow.onThemeChanged(() =>
+			applyTheme(settings.data?.appearance),
 		);
-		onCleanup(() => unlisten?.());
+		onCleanup(() => unlisten.then((u) => u()));
+
+		createEventListener(prefersDark, "change", () => {
+			if (settings.data?.appearance === "system") applyTheme("system");
+		});
 	});
 
-	function update(appTheme: AppTheme | null | undefined) {
+	function applyTheme(appearance: Appearance | null | undefined) {
 		if (location.pathname === "/camera") return;
+		if (appearance === undefined || appearance === null) return;
 
-		if (appTheme === undefined || appTheme === null) return;
-
-		const isDark =
-			appTheme === "dark" ||
-			(appTheme === "system" &&
-				window.matchMedia("(prefers-color-scheme: dark)").matches);
-
-		try {
-			if (appTheme === "system") {
-				localStorage.removeItem("cap-theme");
-			} else {
-				localStorage.setItem("cap-theme", appTheme);
-			}
-		} catch {}
-
-		commands.setTheme(appTheme).then(() => {
-			document.documentElement.classList.toggle("dark", isDark);
-		});
+		setTheme(appearance === "system" ? null : appearance).then(() =>
+			document.documentElement.classList.toggle(
+				"dark",
+				appearance === "dark" ||
+					(appearance === "system" && prefersDark.matches),
+			),
+		);
 	}
 }

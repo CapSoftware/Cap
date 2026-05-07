@@ -136,8 +136,8 @@ pub struct GeneralSettingsStore {
     pub disable_auto_open_links: bool,
     #[serde(default = "default_true")]
     pub has_completed_startup: bool,
-    #[serde(default)]
-    pub theme: AppTheme,
+    #[serde(default, alias = "theme")]
+    pub appearance: Appearance,
     #[serde(default)]
     pub commercial_license: Option<CommercialLicense>,
     #[serde(default)]
@@ -251,7 +251,7 @@ impl Default for GeneralSettingsStore {
             enable_notifications: true,
             disable_auto_open_links: false,
             has_completed_startup: false,
-            theme: AppTheme::System,
+            appearance: Appearance::System,
             commercial_license: None,
             last_version: None,
             window_transparency: false,
@@ -285,11 +285,21 @@ impl Default for GeneralSettingsStore {
 
 #[derive(Default, Debug, Copy, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub enum AppTheme {
+pub enum Appearance {
     #[default]
     System,
     Light,
     Dark,
+}
+
+impl Into<Option<tauri::Theme>> for Appearance {
+    fn into(self) -> Option<tauri::Theme> {
+        match self {
+            Self::Light => Some(tauri::Theme::Light),
+            Self::Dark => Some(tauri::Theme::Dark),
+            Self::System => None,
+        }
+    }
 }
 
 impl GeneralSettingsStore {

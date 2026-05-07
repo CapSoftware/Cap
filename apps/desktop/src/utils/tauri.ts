@@ -5,6 +5,9 @@
 
 
 export const commands = {
+async log(string: string) : Promise<void> {
+    await TAURI_INVOKE("log", { string });
+},
 async setMicInput(label: string | null) : Promise<null> {
     return await TAURI_INVOKE("set_mic_input", { label });
 },
@@ -227,7 +230,7 @@ async seekTo(frameNumber: number) : Promise<null> {
 async getDisplayFrameForCropping(fps: number) : Promise<number[]> {
     return await TAURI_INVOKE("get_display_frame_for_cropping", { fps });
 },
-async setTheme(theme: AppTheme) : Promise<void> {
+async setTheme(theme: Appearance) : Promise<void> {
     await TAURI_INVOKE("set_theme", { theme });
 },
 async globalMessageDialog(message: string) : Promise<void> {
@@ -428,14 +431,14 @@ videoImportProgress: "video-import-progress"
 
 export type Annotation = { id: string; type: AnnotationType; x: number; y: number; width: number; height: number; strokeColor: string; strokeWidth: number; fillColor: string; opacity: number; rotation: number; text: string | null; maskType?: MaskType | null; maskLevel?: number | null }
 export type AnnotationType = "arrow" | "circle" | "rectangle" | "text" | "mask"
-export type AppTheme = "system" | "light" | "dark"
+export type Appearance = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb: number; micStereoMode: StereoMode; systemVolumeDb: number }
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null }
 export type AuthSecret = { api_key: string } | { token: string; expires: number }
-export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; organizations?: Organization[] }
+export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; organizations?: Organization[]; organizations_updated_at?: number | null }
 export type BackgroundBlurConfig = { mode: BackgroundBlurMode }
 export type BackgroundBlurMode = "off" | "light" | "heavy"
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; roundingType: CornerStyle; inset: number; crop: Crop | null; shadow: number; advancedShadow: ShadowConfiguration | null; border: BorderConfiguration | null }
@@ -491,7 +494,7 @@ export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format
 export type FileType = "recording" | "screenshot"
 export type Flags = { captions: boolean }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; mainWindowPosition?: WindowPosition | null; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean }
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; appearance?: Appearance; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; mainWindowPosition?: WindowPosition | null; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
 export type GifQuality = { 
 /**
@@ -543,7 +546,8 @@ export type OSPermission = "screenRecording" | "camera" | "microphone" | "access
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnEscapePress = null
-export type Organization = { id: string; name: string; ownerId: string }
+export type Organization = { id: string; name: string; ownerId: string; role?: string; canEditBrand?: boolean; iconUrl?: string | null; brandColors?: OrganizationBrandColors }
+export type OrganizationBrandColors = { primary: string | null; secondary: string | null; accent: string | null; background: string | null }
 export type PhysicalSize = { width: number; height: number }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows"

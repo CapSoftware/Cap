@@ -3683,6 +3683,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
     let specta_builder = tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
+            log,
             set_mic_input,
             set_camera_input,
             recording_settings::set_recording_mode,
@@ -3924,9 +3925,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({
                     use tauri_plugin_window_state::StateFlags;
-                    let mut flags = StateFlags::all();
-                    flags.remove(StateFlags::VISIBLE);
-                    flags
+                    StateFlags::all() - StateFlags::VISIBLE -  StateFlags::DECORATIONS
                 })
                 .with_denylist(&[
                     CapWindowId::Onboarding.label().as_str(),
@@ -5227,6 +5226,12 @@ fn format_project_name(
         recording_mode,
         datetime,
     )
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+fn log(window: tauri::WebviewWindow, string: String) {
+    println!("[{}] {}", window.label(), string);
 }
 
 trait EventExt: tauri_specta::Event {
