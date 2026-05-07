@@ -222,6 +222,7 @@ export default function CaptureArea() {
 										title="Aspect Ratio"
 										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
 										type="button"
+										onMouseDown={showCropOptionsMenu}
 										onClick={showCropOptionsMenu}
 									>
 										<div class="relative size-5 pointer-events-none">
