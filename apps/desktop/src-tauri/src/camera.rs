@@ -743,17 +743,16 @@ impl Renderer {
 
             let frame_timeout = if received_first_frame {
                 Duration::from_secs(5)
-            } else {
+            } else if start_time.elapsed() < startup_timeout {
                 startup_timeout.saturating_sub(start_time.elapsed())
+            } else {
+                Duration::from_secs(1)
             };
 
             let event = loop {
                 if frame_timeout.is_zero() {
-                    warn!(
-                        "Camera preview timed out waiting for first frame, entering paused state"
-                    );
-                    is_paused = true;
-                    pause_and_hide();
+                    warn!("Camera preview timed out waiting for first frame, waiting for recovery");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                     continue 'main_loop;
                 }
 
@@ -780,9 +779,7 @@ impl Renderer {
                             warn!("Camera preview: frames stalled, waiting for feed refresh");
                             continue;
                         }
-                        warn!("Camera preview: no frames received within startup timeout, entering paused state");
-                        is_paused = true;
-                        pause_and_hide();
+                        warn!("Camera preview: no frames received within startup timeout, waiting for recovery");
                         continue 'main_loop;
                     }
                 }

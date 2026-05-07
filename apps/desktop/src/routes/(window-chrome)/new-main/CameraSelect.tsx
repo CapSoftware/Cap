@@ -73,13 +73,17 @@ export default function CameraSelect(props: {
 
 	const openCameraWindow = async (e: MouseEvent) => {
 		e.stopPropagation();
-		if (props.value) {
-			const id: DeviceOrModelID = props.value.model_id
-				? { ModelID: props.value.model_id }
-				: { DeviceID: props.value.device_id };
-			await commands.setCameraInput(id, false);
-		} else {
-			await commands.showWindow({ Camera: { centered: false } });
+		try {
+			if (props.value) {
+				const id: DeviceOrModelID = props.value.model_id
+					? { ModelID: props.value.model_id }
+					: { DeviceID: props.value.device_id };
+				await commands.setCameraInput(id, false);
+			} else {
+				await commands.showWindow({ Camera: { centered: false } });
+			}
+		} catch (error) {
+			console.warn("Failed to open camera preview:", error);
 		}
 		await refreshCameraWindowState();
 	};
@@ -93,7 +97,7 @@ export default function CameraSelect(props: {
 
 	const label = () =>
 		props.value?.display_name ??
-		props.selectedLabel ??
+		(hasSelection() ? props.selectedLabel : null) ??
 		(hasSelection() ? "Camera" : NO_CAMERA);
 
 	const showHiddenIndicator = () =>
@@ -219,13 +223,17 @@ export function CameraSelectBase(props: {
 
 	const openCameraWindow = async (e: MouseEvent) => {
 		e.stopPropagation();
-		if (props.value) {
-			const id: DeviceOrModelID = props.value.model_id
-				? { ModelID: props.value.model_id }
-				: { DeviceID: props.value.device_id };
-			await commands.setCameraInput(id, false);
-		} else {
-			await commands.showWindow({ Camera: { centered: false } });
+		try {
+			if (props.value) {
+				const id: DeviceOrModelID = props.value.model_id
+					? { ModelID: props.value.model_id }
+					: { DeviceID: props.value.device_id };
+				await commands.setCameraInput(id, false);
+			} else {
+				await commands.showWindow({ Camera: { centered: false } });
+			}
+		} catch (error) {
+			console.warn("Failed to open camera preview:", error);
 		}
 		await refreshCameraWindowState();
 	};

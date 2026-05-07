@@ -2,6 +2,14 @@ import { z } from "zod";
 import desktop from "./desktop";
 import { c } from "./util";
 
+export {
+	DesktopOrganization,
+	OrganizationBrandColors,
+	OrganizationBrandingPatchBody,
+	OrganizationHexColor,
+	OrganizationLogoUpdate,
+} from "./desktop";
+
 export const NotificationAuthor = z.object({
 	id: z.string(),
 	name: z.string(),

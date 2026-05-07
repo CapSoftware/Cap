@@ -1,5 +1,6 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { makePersisted } from "@solid-primitives/storage";
+import { listen } from "@tauri-apps/api/event";
 import {
 	availableMonitors,
 	currentMonitor,
@@ -37,12 +38,22 @@ type CameraWindowState = {
 	mirrored: boolean;
 	backgroundBlur: BackgroundBlurMode | boolean;
 };
+type CameraPreviewIssue = {
+	title: string;
+	message: string;
+};
 
 const CAMERA_MIN_SIZE = 150;
 const CAMERA_MAX_SIZE = 600;
 const CAMERA_DEFAULT_SIZE = 230;
 const CAMERA_PRESET_SMALL = 230;
 const CAMERA_PRESET_LARGE = 400;
+const CAMERA_PREVIEW_ERROR_EVENT = "camera-preview-error";
+const CAMERA_PREVIEW_CLEAR_EVENT = "camera-preview-clear";
+const CAMERA_DISCONNECTED_ISSUE: CameraPreviewIssue = {
+	title: "Camera disconnected",
+	message: "The selected camera stopped sending video.",
+};
 
 const getCameraOnlyMode = () => {
 	return window.__CAP__?.cameraOnlyMode === true;
@@ -139,16 +150,30 @@ export default function () {
 		(type() !== "windows" && generalSettings.data?.enableNativeCameraPreview) ||
 		false;
 
-	const [cameraDisconnected, setCameraDisconnected] = createSignal(false);
+	const [cameraIssue, setCameraIssue] = createSignal<CameraPreviewIssue | null>(
+		null,
+	);
+
+	const unlistenCameraPreviewError = listen<CameraPreviewIssue>(
+		CAMERA_PREVIEW_ERROR_EVENT,
+		({ payload }) => setCameraIssue(payload),
+	);
+	const unlistenCameraPreviewClear = listen(CAMERA_PREVIEW_CLEAR_EVENT, () =>
+		setCameraIssue(null),
+	);
+	onCleanup(() => {
+		void unlistenCameraPreviewError.then((unlisten) => unlisten());
+		void unlistenCameraPreviewClear.then((unlisten) => unlisten());
+	});
 
 	createTauriEventListener(events.recordingEvent, (payload) => {
 		if (payload.variant === "InputLost" && payload.input === "camera") {
-			setCameraDisconnected(true);
+			setCameraIssue(CAMERA_DISCONNECTED_ISSUE);
 		} else if (
 			payload.variant === "InputRestored" &&
 			payload.input === "camera"
 		) {
-			setCameraDisconnected(false);
+			setCameraIssue(null);
 		}
 	});
 
@@ -207,15 +232,17 @@ export default function () {
 		<RecordingOptionsProvider>
 			<Show
 				when={isNativePreviewEnabled}
-				fallback={<LegacyCameraPreviewPage disconnected={cameraDisconnected} />}
+				fallback={<LegacyCameraPreviewPage issue={cameraIssue} />}
 			>
-				<NativeCameraPreviewPage disconnected={cameraDisconnected} />
+				<NativeCameraPreviewPage issue={cameraIssue} />
 			</Show>
 		</RecordingOptionsProvider>
 	);
 }
 
-function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
+function NativeCameraPreviewPage(props: {
+	issue: Accessor<CameraPreviewIssue | null>;
+}) {
 	const isCameraOnlyMode = () => getCameraOnlyMode();
 
 	const [state, setState] = makePersisted(
@@ -334,8 +361,8 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			onPointerLeave={chrome.hide}
 			onPointerCancel={chrome.hide}
 		>
-			<Show when={props.disconnected()}>
-				<CameraDisconnectedOverlay />
+			<Show when={props.issue()}>
+				{(issue) => <CameraIssueOverlay issue={issue()} />}
 			</Show>
 			<div class="h-13">
 				<div class="flex flex-row justify-center items-center">
@@ -587,7 +614,9 @@ function ResizeCornerHandle(props: {
 
 // Legacy stuff below
 
-function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
+function LegacyCameraPreviewPage(props: {
+	issue: Accessor<CameraPreviewIssue | null>;
+}) {
 	const isCameraOnlyMode = () => getCameraOnlyMode();
 
 	const [state, setState] = makePersisted(
@@ -1090,8 +1119,8 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			onPointerLeave={chrome.hide}
 			onPointerCancel={chrome.hide}
 		>
-			<Show when={props.disconnected()}>
-				<CameraDisconnectedOverlay />
+			<Show when={props.issue()}>
+				{(issue) => <CameraIssueOverlay issue={issue()} />}
 			</Show>
 			<div class="h-14">
 				<div class="flex flex-row justify-center items-center">
@@ -1281,15 +1310,16 @@ function cameraBorderRadius(state: CameraWindowState) {
 	return `${radius}rem`;
 }
 
-function CameraDisconnectedOverlay() {
+function CameraIssueOverlay(props: { issue: CameraPreviewIssue }) {
 	return (
 		<div
 			class="absolute inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs px-4 pointer-events-none"
 			style={{ "border-radius": "inherit" }}
 		>
-			<p class="text-center text-sm font-medium text-white/90">
-				Camera disconnected
-			</p>
+			<div class="flex max-w-[18rem] flex-col items-center gap-2 text-center text-white">
+				<p class="text-sm font-semibold text-white">{props.issue.title}</p>
+				<p class="text-xs leading-5 text-white/75">{props.issue.message}</p>
+			</div>
 		</div>
 	);
 }

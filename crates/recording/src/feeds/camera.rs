@@ -101,6 +101,7 @@ impl OpenState {
 struct ConnectingState {
     id: DeviceOrModelID,
     ready: BoxFuture<'static, Result<InputConnected, SetInputError>>,
+    done_tx: SyncSender<()>,
 }
 
 struct AttachedState {
@@ -426,6 +427,34 @@ fn spawn_camera_setup(
     });
 
     (ready, done_tx, join_handle)
+}
+
+fn release_camera_thread(handle: std::thread::JoinHandle<()>) {
+    if handle.is_finished() {
+        let _ = handle.join();
+    } else {
+        warn!("Camera setup thread is still running after cancellation");
+    }
+}
+
+fn camera_ready_future(
+    ready: ReadyFuture,
+    actor_ref: ActorRef<CameraFeed>,
+    id: DeviceOrModelID,
+    flow: CameraSetupFlow,
+) -> BoxFuture<'static, Result<(CameraInfo, VideoInfo), SetInputError>> {
+    async move {
+        match tokio::time::timeout(CAMERA_INIT_TIMEOUT, ready).await {
+            Ok(result) => result.map(|v| (v.camera_info, v.video_info)),
+            Err(err) => {
+                if matches!(flow, CameraSetupFlow::Open) {
+                    let _ = actor_ref.tell(InputConnectFailed { id }).await;
+                }
+                Err(SetInputError::Timeout(err.to_string()))
+            }
+        }
+    }
+    .boxed()
 }
 
 // Impls
@@ -822,6 +851,9 @@ impl Message<SetInput> for CameraFeed {
 
         match &self.state {
             State::Open(state) => {
+                if let Some(connecting) = &state.connecting {
+                    let _ = connecting.done_tx.send(());
+                }
                 if let Some(attached) = &state.attached {
                     let _ = attached.done_tx.send(());
                 }
@@ -832,7 +864,7 @@ impl Message<SetInput> for CameraFeed {
         }
 
         if let Some(handle) = self.previous_thread.take() {
-            let _ = handle.join();
+            release_camera_thread(handle);
         }
 
         match &mut self.state {
@@ -842,7 +874,7 @@ impl Message<SetInput> for CameraFeed {
                 let native_frame_recipient = actor_ref.clone().recipient();
                 let id = msg.id.clone();
 
-                let (ready, _done_tx, join_handle) = spawn_camera_setup(
+                let (ready, done_tx, join_handle) = spawn_camera_setup(
                     id.clone(),
                     msg.settings,
                     actor_ref,
@@ -854,13 +886,17 @@ impl Message<SetInput> for CameraFeed {
                 self.previous_thread = Some(join_handle);
 
                 state.connecting = Some(ConnectingState {
-                    id,
+                    id: id.clone(),
                     ready: ready.clone().boxed(),
+                    done_tx,
                 });
 
-                Ok(ready
-                    .map(|v| v.map(|v| (v.camera_info, v.video_info)))
-                    .boxed())
+                Ok(camera_ready_future(
+                    ready,
+                    ctx.actor_ref(),
+                    id,
+                    CameraSetupFlow::Open,
+                ))
             }
             State::Locked { inner, .. } => {
                 if inner.id != msg.id {
@@ -882,9 +918,12 @@ impl Message<SetInput> for CameraFeed {
 
                 self.previous_thread = Some(join_handle);
 
-                Ok(ready
-                    .map(|v| v.map(|v| (v.camera_info, v.video_info)))
-                    .boxed())
+                Ok(camera_ready_future(
+                    ready,
+                    ctx.actor_ref(),
+                    msg.id,
+                    CameraSetupFlow::Locked,
+                ))
             }
         }
     }
@@ -898,7 +937,9 @@ impl Message<RemoveInput> for CameraFeed {
 
         let state = self.state.try_as_open()?;
 
-        state.connecting = None;
+        if let Some(connecting) = state.connecting.take() {
+            let _ = connecting.done_tx.send(());
+        }
 
         if let Some(mut attached) = state.attached.take() {
             attached.finalize_pending_release();
@@ -909,7 +950,7 @@ impl Message<RemoveInput> for CameraFeed {
         self.native_senders.clear();
 
         if let Some(handle) = self.previous_thread.take() {
-            let _ = handle.join();
+            release_camera_thread(handle);
         }
 
         for cb in &self.on_disconnect {
@@ -1147,7 +1188,11 @@ impl Message<Lock> for CameraFeed {
         if let Some(connecting) = &mut state.connecting {
             let id = connecting.id.clone();
             let ready = &mut connecting.ready;
-            let data = ready.await?;
+            let data = tokio::time::timeout(CAMERA_INIT_TIMEOUT, ready)
+                .await
+                .map_err(|err| {
+                    LockFeedError::InitializeFailed(SetInputError::Timeout(err.to_string()))
+                })??;
 
             if state.handle_input_connected(data, id)
                 && let Some(attached) = &mut state.attached
@@ -1236,10 +1281,15 @@ impl Message<InputConnectFailed> for CameraFeed {
 
         let state = self.state.try_as_open()?;
 
-        if let Some(connecting) = &state.connecting
-            && connecting.id == msg.id
-        {
-            state.connecting = None;
+        let should_clear = state
+            .connecting
+            .as_ref()
+            .is_some_and(|connecting| connecting.id == msg.id);
+
+        if should_clear {
+            if let Some(connecting) = state.connecting.take() {
+                let _ = connecting.done_tx.send(());
+            }
 
             for tx in &mut self.on_ready.drain(..) {
                 tx.send(()).ok();

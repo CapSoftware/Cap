@@ -1,6 +1,7 @@
 import { file } from "bun";
 import { Hono } from "hono";
 import { z } from "zod";
+import { validateMediaServerSecret } from "../lib/auth";
 import type { ResilientInputFlags } from "../lib/ffmpeg-video";
 import {
 	downloadVideoToTemp,
@@ -36,19 +37,6 @@ import type { TempFileHandle } from "../lib/temp-files";
 import { cleanupStaleTempFiles } from "../lib/temp-files";
 
 const video = new Hono();
-
-function validateMediaServerSecret(c: {
-	req: { header: (name: string) => string | undefined };
-}): boolean {
-	const secret = process.env.MEDIA_SERVER_WEBHOOK_SECRET;
-	if (!secret) {
-		console.warn(
-			"[media-server] MEDIA_SERVER_WEBHOOK_SECRET is not set — rejecting request. Set this env var to enable authenticated access.",
-		);
-		return false;
-	}
-	return c.req.header("x-media-server-secret") === secret;
-}
 
 const probeSchema = z.object({
 	videoUrl: z.string().url(),
@@ -184,6 +172,10 @@ video.get("/status", (c) => {
 });
 
 video.post("/probe", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = probeSchema.safeParse(body);
 
@@ -238,6 +230,10 @@ video.post("/probe", async (c) => {
 });
 
 video.post("/thumbnail", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = thumbnailSchema.safeParse(body);
 
@@ -309,6 +305,10 @@ video.post("/thumbnail", async (c) => {
 });
 
 video.post("/convert", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = convertSchema.safeParse(body);
 

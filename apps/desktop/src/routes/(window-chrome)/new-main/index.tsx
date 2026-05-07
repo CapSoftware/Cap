@@ -2003,7 +2003,12 @@ function Page() {
 
 	createEffect(() => {
 		const cameraList = devices.cameras;
-		if (!rawOptions.cameraID) return;
+		if (!rawOptions.cameraID) {
+			if (rawOptions.cameraLabel !== null) {
+				setOptions("cameraLabel", null);
+			}
+			return;
+		}
 		const camera = findCamera(cameraList, rawOptions.cameraID);
 		if (camera && rawOptions.cameraLabel !== camera.display_name) {
 			setOptions("cameraLabel", camera.display_name);

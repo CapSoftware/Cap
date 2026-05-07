@@ -18,6 +18,8 @@ pub struct AuthStore {
     pub plan: Option<Plan>,
     #[serde(default)]
     pub organizations: Vec<Organization>,
+    #[serde(default)]
+    pub organizations_updated_at: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -101,6 +103,7 @@ impl AuthStore {
         auth.organizations = api::fetch_organizations(app)
             .await
             .map_err(|e| e.to_string())?;
+        auth.organizations_updated_at = Some(chrono::Utc::now().timestamp() as i32);
 
         Self::set(app, Some(auth))?;
 

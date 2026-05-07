@@ -293,12 +293,33 @@ pub async fn desktop_video_progress(
     Ok(())
 }
 
+#[derive(Serialize, Deserialize, Type, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationBrandColors {
+    pub primary: Option<String>,
+    pub secondary: Option<String>,
+    pub accent: Option<String>,
+    pub background: Option<String>,
+}
+
+fn default_organization_role() -> String {
+    "member".to_string()
+}
+
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Organization {
     pub id: String,
     pub name: String,
     pub owner_id: String,
+    #[serde(default = "default_organization_role")]
+    pub role: String,
+    #[serde(default)]
+    pub can_edit_brand: bool,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub brand_colors: OrganizationBrandColors,
 }
 
 pub async fn signal_recording_complete(

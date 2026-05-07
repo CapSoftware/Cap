@@ -29,7 +29,7 @@ import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
 import { createExportTask } from "~/utils/export";
-import { createOrganizationsQuery } from "~/utils/queries";
+import { createSelectedOrganization } from "~/utils/organization-branding";
 import {
 	commands,
 	type ExportCompression,
@@ -169,7 +169,8 @@ export function ExportPage() {
 	const projectPath = editorInstance.path;
 
 	const auth = authStore.createQuery();
-	const organisations = createOrganizationsQuery();
+	const organizationSelection = createSelectedOrganization();
+	const organisations = organizationSelection.organizations;
 
 	const hasTransparentBackground = () => {
 		const backgroundSource =
@@ -254,10 +255,18 @@ export function ExportPage() {
 
 		Object.defineProperty(ret, "organizationId", {
 			get() {
-				if (!_settings.organizationId && organisations().length > 0)
-					return organisations()[0].id;
+				const selectedOrganizationId =
+					organizationSelection.selectedOrganizationId();
+				if (!_settings.organizationId) return selectedOrganizationId;
+				if (
+					organisations().some(
+						(organization) => organization.id === _settings.organizationId,
+					)
+				) {
+					return _settings.organizationId;
+				}
 
-				return _settings.organizationId;
+				return selectedOrganizationId;
 			},
 		});
 
@@ -919,6 +928,9 @@ export function ExportPage() {
 															text: org.name,
 															action: () => {
 																setSettings("organizationId", org.id);
+																void organizationSelection
+																	.setSelectedOrganizationId(org.id)
+																	.catch(console.error);
 															},
 															checked: settings.organizationId === org.id,
 														}),

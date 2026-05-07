@@ -4,6 +4,21 @@ import { getActiveProcessCount } from "../../lib/ffmpeg";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO = `file://${join(FIXTURES_DIR, "test-with-audio.mp4")}`;
+const MEDIA_SERVER_SECRET = "test-secret";
+const AUTH_HEADERS = {
+	"Content-Type": "application/json",
+	"x-media-server-secret": MEDIA_SERVER_SECRET,
+};
+
+process.env.MEDIA_SERVER_WEBHOOK_SECRET = MEDIA_SERVER_SECRET;
+
+function audioPostRequest(path: string, body: unknown): Request {
+	return new Request(`http://localhost${path}`, {
+		method: "POST",
+		headers: AUTH_HEADERS,
+		body: JSON.stringify(body),
+	});
+}
 
 async function waitForProcessCleanup(
 	expectedCount: number,
@@ -41,11 +56,7 @@ describe("audio routes memory management", () => {
 		test("cleans up after successful check", async () => {
 			const app = await getFreshApp();
 			const response = await app.fetch(
-				new Request("http://localhost/audio/check", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ videoUrl: TEST_VIDEO_WITH_AUDIO }),
-				}),
+				audioPostRequest("/audio/check", { videoUrl: TEST_VIDEO_WITH_AUDIO }),
 			);
 
 			expect(response.status).toBe(200);
@@ -59,11 +70,7 @@ describe("audio routes memory management", () => {
 			const app = await getFreshApp();
 			const requests = Array.from({ length: 5 }, () =>
 				app.fetch(
-					new Request("http://localhost/audio/check", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ videoUrl: TEST_VIDEO_WITH_AUDIO }),
-					}),
+					audioPostRequest("/audio/check", { videoUrl: TEST_VIDEO_WITH_AUDIO }),
 				),
 			);
 
@@ -82,13 +89,9 @@ describe("audio routes memory management", () => {
 		test("cleans up after stream is fully consumed", async () => {
 			const app = await getFreshApp();
 			const response = await app.fetch(
-				new Request("http://localhost/audio/extract", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						videoUrl: TEST_VIDEO_WITH_AUDIO,
-						stream: true,
-					}),
+				audioPostRequest("/audio/extract", {
+					videoUrl: TEST_VIDEO_WITH_AUDIO,
+					stream: true,
 				}),
 			);
 
@@ -107,13 +110,9 @@ describe("audio routes memory management", () => {
 		test("cleans up when stream is cancelled early", async () => {
 			const app = await getFreshApp();
 			const response = await app.fetch(
-				new Request("http://localhost/audio/extract", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						videoUrl: TEST_VIDEO_WITH_AUDIO,
-						stream: true,
-					}),
+				audioPostRequest("/audio/extract", {
+					videoUrl: TEST_VIDEO_WITH_AUDIO,
+					stream: true,
 				}),
 			);
 
@@ -129,13 +128,9 @@ describe("audio routes memory management", () => {
 		test("cleans up when response body is not read at all", async () => {
 			const app = await getFreshApp();
 			const response = await app.fetch(
-				new Request("http://localhost/audio/extract", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						videoUrl: TEST_VIDEO_WITH_AUDIO,
-						stream: true,
-					}),
+				audioPostRequest("/audio/extract", {
+					videoUrl: TEST_VIDEO_WITH_AUDIO,
+					stream: true,
 				}),
 			);
 
@@ -150,13 +145,9 @@ describe("audio routes memory management", () => {
 			const app = await getFreshApp();
 			const requests = Array.from({ length: 3 }, () =>
 				app.fetch(
-					new Request("http://localhost/audio/extract", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							videoUrl: TEST_VIDEO_WITH_AUDIO,
-							stream: true,
-						}),
+					audioPostRequest("/audio/extract", {
+						videoUrl: TEST_VIDEO_WITH_AUDIO,
+						stream: true,
 					}),
 				),
 			);

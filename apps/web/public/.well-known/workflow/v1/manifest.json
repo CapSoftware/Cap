@@ -1,6 +1,36 @@
 {
 	"version": "1.0.0",
 	"steps": {
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
+			"fetch": {
+				"stepId": "step//workflow@4.2.0-beta.73//fetch"
+			}
+		},
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
+			"__builtin_response_array_buffer": {
+				"stepId": "__builtin_response_array_buffer"
+			},
+			"__builtin_response_json": {
+				"stepId": "__builtin_response_json"
+			},
+			"__builtin_response_text": {
+				"stepId": "__builtin_response_text"
+			}
+		},
+		"workflows/import-loom-video.ts": {
+			"downloadLoomToS3": {
+				"stepId": "step//./workflows/import-loom-video//downloadLoomToS3"
+			},
+			"processVideoOnMediaServer": {
+				"stepId": "step//./workflows/import-loom-video//processVideoOnMediaServer"
+			},
+			"saveMetadataAndComplete": {
+				"stepId": "step//./workflows/import-loom-video//saveMetadataAndComplete"
+			},
+			"setProcessingError": {
+				"stepId": "step//./workflows/import-loom-video//setProcessingError"
+			}
+		},
 		"workflows/process-video.ts": {
 			"cleanupRawUpload": {
 				"stepId": "step//./workflows/process-video//cleanupRawUpload"
@@ -18,15 +48,21 @@
 				"stepId": "step//./workflows/process-video//validateProcessingRequest"
 			}
 		},
-		"workflows/import-loom-video.ts": {
-			"downloadLoomToS3": {
-				"stepId": "step//./workflows/import-loom-video//downloadLoomToS3"
+		"workflows/generate-ai.ts": {
+			"fetchTranscript": {
+				"stepId": "step//./workflows/generate-ai//fetchTranscript"
 			},
-			"processVideoOnMediaServer": {
-				"stepId": "step//./workflows/import-loom-video//processVideoOnMediaServer"
+			"generateWithAi": {
+				"stepId": "step//./workflows/generate-ai//generateWithAi"
 			},
-			"saveMetadataAndComplete": {
-				"stepId": "step//./workflows/import-loom-video//saveMetadataAndComplete"
+			"markSkipped": {
+				"stepId": "step//./workflows/generate-ai//markSkipped"
+			},
+			"saveResults": {
+				"stepId": "step//./workflows/generate-ai//saveResults"
+			},
+			"validateAndSetProcessing": {
+				"stepId": "step//./workflows/generate-ai//validateAndSetProcessing"
 			}
 		},
 		"workflows/transcribe.ts": {
@@ -60,75 +96,9 @@
 			"validateVideo": {
 				"stepId": "step//./workflows/transcribe//validateVideo"
 			}
-		},
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
-			"__builtin_response_array_buffer": {
-				"stepId": "__builtin_response_array_buffer"
-			},
-			"__builtin_response_json": {
-				"stepId": "__builtin_response_json"
-			},
-			"__builtin_response_text": {
-				"stepId": "__builtin_response_text"
-			}
-		},
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
-			"fetch": {
-				"stepId": "step//workflow@4.2.0-beta.73//fetch"
-			}
-		},
-		"workflows/generate-ai.ts": {
-			"fetchTranscript": {
-				"stepId": "step//./workflows/generate-ai//fetchTranscript"
-			},
-			"generateWithAi": {
-				"stepId": "step//./workflows/generate-ai//generateWithAi"
-			},
-			"markSkipped": {
-				"stepId": "step//./workflows/generate-ai//markSkipped"
-			},
-			"saveResults": {
-				"stepId": "step//./workflows/generate-ai//saveResults"
-			},
-			"validateAndSetProcessing": {
-				"stepId": "step//./workflows/generate-ai//validateAndSetProcessing"
-			}
 		}
 	},
 	"workflows": {
-		"workflows/process-video.ts": {
-			"processVideoWorkflow": {
-				"workflowId": "workflow//./workflows/process-video//processVideoWorkflow",
-				"graph": {
-					"nodes": [
-						{
-							"id": "start",
-							"type": "workflowStart",
-							"data": {
-								"label": "Start: processVideoWorkflow",
-								"nodeKind": "workflow_start"
-							}
-						},
-						{
-							"id": "end",
-							"type": "workflowEnd",
-							"data": {
-								"label": "Return",
-								"nodeKind": "workflow_end"
-							}
-						}
-					],
-					"edges": [
-						{
-							"id": "e_start_end",
-							"source": "start",
-							"target": "end",
-							"type": "default"
-						}
-					]
-				}
-			}
-		},
 		"workflows/import-loom-video.ts": {
 			"importLoomVideoWorkflow": {
 				"workflowId": "workflow//./workflows/import-loom-video//importLoomVideoWorkflow",
@@ -162,16 +132,16 @@
 				}
 			}
 		},
-		"workflows/transcribe.ts": {
-			"transcribeVideoWorkflow": {
-				"workflowId": "workflow//./workflows/transcribe//transcribeVideoWorkflow",
+		"workflows/process-video.ts": {
+			"processVideoWorkflow": {
+				"workflowId": "workflow//./workflows/process-video//processVideoWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: transcribeVideoWorkflow",
+								"label": "Start: processVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},
@@ -205,6 +175,39 @@
 							"type": "workflowStart",
 							"data": {
 								"label": "Start: generateAiWorkflow",
+								"nodeKind": "workflow_start"
+							}
+						},
+						{
+							"id": "end",
+							"type": "workflowEnd",
+							"data": {
+								"label": "Return",
+								"nodeKind": "workflow_end"
+							}
+						}
+					],
+					"edges": [
+						{
+							"id": "e_start_end",
+							"source": "start",
+							"target": "end",
+							"type": "default"
+						}
+					]
+				}
+			}
+		},
+		"workflows/transcribe.ts": {
+			"transcribeVideoWorkflow": {
+				"workflowId": "workflow//./workflows/transcribe//transcribeVideoWorkflow",
+				"graph": {
+					"nodes": [
+						{
+							"id": "start",
+							"type": "workflowStart",
+							"data": {
+								"label": "Start: transcribeVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},

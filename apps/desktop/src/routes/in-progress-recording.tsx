@@ -7,7 +7,6 @@ import {
 	MenuItem,
 	PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
@@ -25,6 +24,7 @@ import {
 import { createStore, produce } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
 import { authStore } from "~/store";
+import { getCameraWindow } from "~/utils/camera-window";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	createCurrentRecordingQuery,
@@ -445,7 +445,7 @@ function InProgressRecordingInner() {
 	const toggleCameraPreview = createMutation(() => ({
 		mutationFn: async () => {
 			if (cameraWindowOpen()) {
-				const cameraWindow = await WebviewWindow.getByLabel("camera");
+				const cameraWindow = await getCameraWindow();
 				if (cameraWindow) await cameraWindow.close();
 			} else {
 				await commands.showWindow({ Camera: { centered: false } });
@@ -489,7 +489,7 @@ function InProgressRecordingInner() {
 			try {
 				await commands.setCameraInput(next, null);
 				if (!next && cameraWindowOpen()) {
-					const cameraWindow = await WebviewWindow.getByLabel("camera");
+					const cameraWindow = await getCameraWindow();
 					if (cameraWindow) await cameraWindow.close();
 					await refreshCameraWindowState();
 				}

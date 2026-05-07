@@ -476,22 +476,36 @@ fn microphone_format_infos(device: &cpal::Device) -> Vec<MicrophoneFormatInfo> {
 #[specta::specta]
 #[instrument]
 pub async fn list_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThumbnail>, String> {
-    tokio::task::spawn_blocking(|| {
-        tauri::async_runtime::block_on(collect_displays_with_thumbnails())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    run_non_send_thumbnail_future(collect_displays_with_thumbnails())
 }
 
 #[tauri::command]
 #[specta::specta]
 #[instrument]
 pub async fn list_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithThumbnail>, String> {
-    tokio::task::spawn_blocking(
-        || tauri::async_runtime::block_on(collect_windows_with_thumbnails()),
-    )
-    .await
-    .map_err(|e| e.to_string())?
+    run_non_send_thumbnail_future(collect_windows_with_thumbnails())
+}
+
+fn run_non_send_thumbnail_future<T, F>(future: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| tauri::async_runtime::block_on(future))
+        } else {
+            tauri::async_runtime::block_on(future)
+        }
+    }));
+
+    match result {
+        Ok(result) => result,
+        Err(panic) => {
+            let message = crate::panic_payload_message(&panic);
+            error!(panic = %message, "Suppressed panic while collecting capture thumbnails");
+            Err(format!("Failed to collect capture thumbnails: {message}"))
+        }
+    }
 }
 
 #[derive(Deserialize, Type, Clone, Debug)]

@@ -1,6 +1,51 @@
-import type { AppRoute } from "@ts-rest/core";
 import { z } from "zod";
 import { c } from "./util";
+
+export const OrganizationHexColor = z.string().regex(/^#[0-9A-Fa-f]{6}$/);
+
+export const OrganizationBrandColors = z.object({
+	primary: OrganizationHexColor.nullable(),
+	secondary: OrganizationHexColor.nullable(),
+	accent: OrganizationHexColor.nullable(),
+	background: OrganizationHexColor.nullable(),
+});
+export type OrganizationBrandColors = z.infer<typeof OrganizationBrandColors>;
+
+export const DesktopOrganization = z.object({
+	id: z.string(),
+	name: z.string(),
+	ownerId: z.string(),
+	role: z.enum(["owner", "member"]),
+	canEditBrand: z.boolean(),
+	iconUrl: z.string().nullable(),
+	brandColors: OrganizationBrandColors,
+});
+export type DesktopOrganization = z.infer<typeof DesktopOrganization>;
+
+export const OrganizationLogoUpdate = z.discriminatedUnion("action", [
+	z.object({ action: z.literal("keep") }),
+	z.object({ action: z.literal("remove") }),
+	z.object({
+		action: z.literal("upload"),
+		contentType: z.enum([
+			"image/png",
+			"image/jpeg",
+			"image/webp",
+			"image/gif",
+			"image/avif",
+		]),
+		data: z.string().min(1),
+	}),
+]);
+export type OrganizationLogoUpdate = z.infer<typeof OrganizationLogoUpdate>;
+
+export const OrganizationBrandingPatchBody = z.object({
+	brandColors: OrganizationBrandColors,
+	logo: OrganizationLogoUpdate.optional(),
+});
+export type OrganizationBrandingPatchBody = z.infer<
+	typeof OrganizationBrandingPatchBody
+>;
 
 const CHANGELOG = z.object({
 	metadata: z.object({
@@ -38,11 +83,6 @@ const publicContract = c.router({
 		},
 	},
 });
-
-const a = publicContract.getChangelogPosts;
-type A = typeof a;
-
-type B = A extends AppRoute ? number : string;
 
 const protectedContract = c.router(
 	{
@@ -139,6 +179,22 @@ const protectedContract = c.router(
 			path: "/desktop/video/delete",
 			query: z.object({ videoId: z.string() }),
 			responses: { 200: z.unknown() },
+		},
+		getOrganizations: {
+			method: "GET",
+			path: "/desktop/organizations",
+			responses: { 200: z.array(DesktopOrganization) },
+		},
+		updateOrganizationBranding: {
+			method: "PATCH",
+			path: "/desktop/organizations/:organizationId/branding",
+			body: OrganizationBrandingPatchBody,
+			responses: {
+				200: DesktopOrganization,
+				400: z.object({ error: z.string() }),
+				403: z.object({ error: z.string() }),
+				404: z.object({ error: z.string() }),
+			},
 		},
 	},
 	{

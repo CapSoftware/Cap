@@ -157,6 +157,7 @@ export default function CaptureArea() {
 
 	async function showCropOptionsMenu(e: UIEvent, positionAtCursor = false) {
 		e.preventDefault();
+		e.stopPropagation();
 		const items = createCropOptionsMenuItems({
 			aspect: aspect(),
 			snapToRatioEnabled: state.snapToRatio,
@@ -166,11 +167,10 @@ export default function CaptureArea() {
 		const menu = await Menu.new({ items });
 		let pos: LogicalPosition | undefined;
 		if (!positionAtCursor) {
-			const rect = (e.target as HTMLDivElement).getBoundingClientRect();
+			const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
 			pos = new LogicalPosition(rect.x, rect.y + 50);
 		}
 		await menu.popup(pos);
-		await menu.close();
 	}
 
 	return (
@@ -222,7 +222,6 @@ export default function CaptureArea() {
 										title="Aspect Ratio"
 										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
 										type="button"
-										onMouseDown={showCropOptionsMenu}
 										onClick={showCropOptionsMenu}
 									>
 										<div class="relative size-5 pointer-events-none">
