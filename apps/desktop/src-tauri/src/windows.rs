@@ -815,7 +815,6 @@ impl CapWindowId {
                 Some(Some(LogicalPosition::new(20.0, 24.0)))
             }
             Self::Camera
-            | Self::Onboarding
             | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
             | Self::RecordingsOverlay
@@ -2383,6 +2382,7 @@ impl ShowCapWindow {
 
         let mut builder = WebviewWindow::builder(app, label, WebviewUrl::App(url.into()))
             .title(id.title())
+            .visible(false)
             .accept_first_mouse(true)
             .shadow(true)
             .theme(theme)
@@ -2411,7 +2411,7 @@ impl ShowCapWindow {
             builder = builder.decorations(false);
         }
 
-        builder.visible(false)
+        builder
     }
 
     pub fn id(&self, app: &AppHandle) -> CapWindowId {
