@@ -3,7 +3,7 @@ use cap_recording::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager, Url};
+use tauri::{AppHandle, Manager, Url, Runtime};
 use tracing::trace;
 
 use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
@@ -26,12 +26,27 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    SwitchCamera {
+        camera_id: DeviceOrModelID,
+    },
+    SwitchMic {
+        mic_label: String,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
     OpenSettings {
         page: Option<String>,
     },
+    GetStatus, 
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RecordingStatusPayload {
+    status: String,
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
@@ -49,7 +64,6 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
                     ActionParseFromUrlError::Invalid => {
                         eprintln!("Invalid deep link format \"{}\"", &url)
                     }
-                    // Likely login action, not handled here.
                     ActionParseFromUrlError::NotAction => {}
                 })
                 .ok()
@@ -67,6 +81,12 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
                 eprintln!("Failed to handle deep link action: {e}");
             }
         }
+    });
+}
+
+fn emit_status_change<R: Runtime>(app: &AppHandle<R>, status: &str) {
+    let _ = app.emit_all("cap://recording-status", RecordingStatusPayload {
+        status: status.to_string(),
     });
 }
 
@@ -142,10 +162,60 @@ impl DeepLinkAction {
 
                 crate::recording::start_recording(app.clone(), state, inputs)
                     .await
-                    .map(|_| ())
+                    .map(|_| {
+                        emit_status_change(app, "recording");
+                    })
             }
             DeepLinkAction::StopRecording => {
-                crate::recording::stop_recording(app.clone(), app.state()).await
+                crate::recording::stop_recording(app.clone(), app.state()).await.map(|_| {
+                    emit_status_change(app, "idle");
+                })
+            }
+            DeepLinkAction::PauseRecording => {
+                let state = app.state::<ArcLock<App>>();
+                crate::recording::pause_recording(app.clone(), state).await.map(|_| {
+                    emit_status_change(app, "paused");
+                })
+            }
+            DeepLinkAction::ResumeRecording => {
+                let state = app.state::<ArcLock<App>>();
+                crate::recording::resume_recording(app.clone(), state).await.map(|_| {
+                    emit_status_change(app, "recording");
+                })
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                let state = app.state::<ArcLock<App>>();
+                let app_state = state.read().unwrap();
+                if app_state.recording_state.is_paused() {
+                    drop(app_state);
+                    crate::recording::resume_recording(app.clone(), state).await.map(|_| {
+                        emit_status_change(app, "recording");
+                    })
+                } else {
+                    drop(app_state);
+                    crate::recording::pause_recording(app.clone(), state).await.map(|_| {
+                        emit_status_change(app, "paused");
+                    })
+                }
+            }
+            DeepLinkAction::SwitchCamera { camera_id } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state, Some(camera_id), None).await
+            }
+            DeepLinkAction::SwitchMic { mic_label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state, Some(mic_label)).await
+            }
+            DeepLinkAction::GetStatus => {
+                let state = app.state::<ArcLock<App>>();
+                let app_state = state.read().unwrap();
+                let status = if app_state.recording_state.is_recording() {
+                    if app_state.recording_state.is_paused() { "paused" } else { "recording" }
+                } else {
+                    "idle"
+                };
+                emit_status_change(app, status);
+                Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
