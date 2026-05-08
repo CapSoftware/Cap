@@ -3,10 +3,11 @@ use cap_recording::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager, Url, Runtime};
+use tauri::{AppHandle, Manager, Url, Runtime, Emitter};
 use tracing::trace;
 
-use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
+use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow, MutableState};
+use crate::recording::{InProgressRecording, RecordingEvent, RecordingState};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -41,7 +42,7 @@ pub enum DeepLinkAction {
     OpenSettings {
         page: Option<String>,
     },
-    GetStatus, 
+    GetStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -135,7 +136,7 @@ impl DeepLinkAction {
                 capture_system_audio,
                 mode,
             } => {
-                let state = app.state::<ArcLock<App>>();
+                let state: MutableState<'_, App> = app.state();
 
                 crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
@@ -167,52 +168,69 @@ impl DeepLinkAction {
                     })
             }
             DeepLinkAction::StopRecording => {
-                crate::recording::stop_recording(app.clone(), app.state()).await.map(|_| {
+                let state: MutableState<'_, App> = app.state();
+                crate::recording::stop_recording(app.clone(), state).await.map(|_| {
                     emit_status_change(app, "idle");
                 })
             }
             DeepLinkAction::PauseRecording => {
-                let state = app.state::<ArcLock<App>>();
-                crate::recording::pause_recording(app.clone(), state).await.map(|_| {
+                let state: MutableState<'_, App> = app.state();
+                let mut state_guard = state.write().await;
+                if let RecordingState::Active(recording) = &mut state_guard.recording_state {
+                    recording.pause().await.map_err(|e| e.to_string())?;
+                    RecordingEvent::Paused.emit(app).ok();
                     emit_status_change(app, "paused");
-                })
+                }
+                Ok(())
             }
             DeepLinkAction::ResumeRecording => {
-                let state = app.state::<ArcLock<App>>();
-                crate::recording::resume_recording(app.clone(), state).await.map(|_| {
+                let state: MutableState<'_, App> = app.state();
+                let mut state_guard = state.write().await;
+                if let RecordingState::Active(recording) = &mut state_guard.recording_state {
+                    recording.resume().await.map_err(|e| e.to_string())?;
+                    RecordingEvent::Resumed.emit(app).ok();
                     emit_status_change(app, "recording");
-                })
+                }
+                Ok(())
             }
             DeepLinkAction::TogglePauseRecording => {
-                let state = app.state::<ArcLock<App>>();
-                let app_state = state.read().unwrap();
-                if app_state.recording_state.is_paused() {
-                    drop(app_state);
-                    crate::recording::resume_recording(app.clone(), state).await.map(|_| {
+                let state: MutableState<'_, App> = app.state();
+                let mut state_guard = state.write().await;
+                if let RecordingState::Active(recording) = &mut state_guard.recording_state {
+                    let is_paused = recording.is_paused().await.map_err(|e| e.to_string())?;
+                    if is_paused {
+                        recording.resume().await.map_err(|e| e.to_string())?;
+                        RecordingEvent::Resumed.emit(app).ok();
                         emit_status_change(app, "recording");
-                    })
-                } else {
-                    drop(app_state);
-                    crate::recording::pause_recording(app.clone(), state).await.map(|_| {
+                    } else {
+                        recording.pause().await.map_err(|e| e.to_string())?;
+                        RecordingEvent::Paused.emit(app).ok();
                         emit_status_change(app, "paused");
-                    })
+                    }
                 }
+                Ok(())
             }
             DeepLinkAction::SwitchCamera { camera_id } => {
-                let state = app.state::<ArcLock<App>>();
+                let state: MutableState<'_, App> = app.state();
                 crate::set_camera_input(app.clone(), state, Some(camera_id), None).await
             }
             DeepLinkAction::SwitchMic { mic_label } => {
-                let state = app.state::<ArcLock<App>>();
+                let state: MutableState<'_, App> = app.state();
                 crate::set_mic_input(state, Some(mic_label)).await
             }
             DeepLinkAction::GetStatus => {
-                let state = app.state::<ArcLock<App>>();
-                let app_state = state.read().unwrap();
-                let status = if app_state.recording_state.is_recording() {
-                    if app_state.recording_state.is_paused() { "paused" } else { "recording" }
-                } else {
-                    "idle"
+                let state: MutableState<'_, App> = app.state();
+                let state_guard = state.read().await;
+                let status = match &state_guard.recording_state {
+                    RecordingState::None => "idle",
+                    RecordingState::Pending { .. } => "pending",
+                    RecordingState::Active(recording) => {
+                        if recording.is_paused().await.unwrap_or(false) {
+                            "paused"
+                        } else {
+                            "recording"
+                        }
+                    }
                 };
                 emit_status_change(app, status);
                 Ok(())
