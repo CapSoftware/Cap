@@ -2,15 +2,20 @@ import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import type { MySqlInsertBase } from "drizzle-orm/mysql-core";
 import { Effect, Option } from "effect";
 import type { Schema } from "effect/Schema";
 import { Database } from "../Database.ts";
 
 export type CreateVideoInput = Omit<
 	Schema.Type<typeof Video.Video>,
-	"id" | "createdAt" | "updatedAt"
-> & { password?: string; importSource?: Video.ImportSource };
+	"id" | "createdAt" | "updatedAt" | "expiresAt"
+> & {
+	password?: string;
+	importSource?: Video.ImportSource;
+	expiresAt?: Option.Option<Date>;
+};
+
+type VideoMetadataInput = Schema.Type<typeof Video.Video>["metadata"];
 
 export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 	effect: Effect.gen(function* () {
@@ -37,7 +42,8 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 									storageIntegrationId: v.storageIntegrationId,
 									createdAt: v.createdAt.toISOString(),
 									updatedAt: v.updatedAt.toISOString(),
-									metadata: v.metadata as any,
+									expiresAt: v.expiresAt?.toISOString() ?? null,
+									metadata: v.metadata as VideoMetadataInput,
 								}),
 								Option.fromNullable(video?.password),
 							] as const,
@@ -49,12 +55,23 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 			db.use(async (db) => {
 				await db.transaction(async (db) => {
 					await Promise.all([
+						db.delete(Db.comments).where(Dz.eq(Db.comments.videoId, id)),
 						db.delete(Db.importedVideos).where(Dz.eq(Db.importedVideos.id, id)),
-						db.delete(Db.videos).where(Dz.eq(Db.videos.id, id)),
+						db
+							.delete(Db.notifications)
+							.where(Dz.eq(Db.notifications.videoId, id)),
+						db
+							.delete(Db.sharedVideos)
+							.where(Dz.eq(Db.sharedVideos.videoId, id)),
+						db.delete(Db.spaceVideos).where(Dz.eq(Db.spaceVideos.videoId, id)),
+						db
+							.delete(Db.storageObjects)
+							.where(Dz.eq(Db.storageObjects.videoId, id)),
 						db
 							.delete(Db.videoUploads)
 							.where(Dz.eq(Db.videoUploads.videoId, id)),
 					]);
+					await db.delete(Db.videos).where(Dz.eq(Db.videos.id, id));
 				});
 			});
 
@@ -64,48 +81,83 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 
 				yield* db.use((db) =>
 					db.transaction(async (db) => {
-						const promises: MySqlInsertBase<any, any, any>[] = [
-							db.insert(Db.videos).values([
-								{
-									...data,
-									id,
-									orgId: data.orgId,
-									bucket: Option.getOrNull(data.bucketId ?? Option.none()),
-									storageIntegrationId: Option.getOrNull(
-										data.storageIntegrationId ?? Option.none(),
-									),
-									metadata: Option.getOrNull(data.metadata ?? Option.none()),
-									transcriptionStatus: Option.getOrNull(
-										data.transcriptionStatus ?? Option.none(),
-									),
-									folderId: Option.getOrNull(data.folderId ?? Option.none()),
-									width: Option.getOrNull(data.width ?? Option.none()),
-									height: Option.getOrNull(data.height ?? Option.none()),
-									duration: Option.getOrNull(data.duration ?? Option.none()),
-								},
-							]),
-						];
+						const {
+							bucketId,
+							duration,
+							expiresAt,
+							folderId,
+							height,
+							importSource,
+							metadata,
+							storageIntegrationId,
+							transcriptionStatus,
+							width,
+							...videoData
+						} = data;
 
-						if (data.importSource)
-							promises.push(
-								db.insert(Db.importedVideos).values([
+						const insertVideo = db.insert(Db.videos).values([
+							{
+								...videoData,
+								id,
+								orgId: videoData.orgId,
+								bucket: Option.getOrNull(bucketId ?? Option.none()),
+								storageIntegrationId: Option.getOrNull(
+									storageIntegrationId ?? Option.none(),
+								),
+								metadata: Option.getOrNull(metadata ?? Option.none()),
+								transcriptionStatus: Option.getOrNull(
+									transcriptionStatus ?? Option.none(),
+								),
+								folderId: Option.getOrNull(folderId ?? Option.none()),
+								width: Option.getOrNull(width ?? Option.none()),
+								height: Option.getOrNull(height ?? Option.none()),
+								duration: Option.getOrNull(duration ?? Option.none()),
+								expiresAt: Option.getOrNull(expiresAt ?? Option.none<Date>()),
+							},
+						]);
+
+						const insertImport = importSource
+							? db.insert(Db.importedVideos).values([
 									{
 										id,
-										orgId: data.orgId,
-										source: data.importSource.source,
-										sourceId: data.importSource.id,
+										orgId: videoData.orgId,
+										source: importSource.source,
+										sourceId: importSource.id,
 									},
-								]),
-							);
+								])
+							: undefined;
 
-						await Promise.all(promises);
+						if (insertImport) await Promise.all([insertVideo, insertImport]);
+						else await insertVideo;
 					}),
 				);
 
 				return id;
 			});
 
-		return { getById, delete: delete_, create };
+		const setExpiresAt = (id: Video.VideoId, expiresAt: Option.Option<Date>) =>
+			db.use((db) =>
+				db
+					.update(Db.videos)
+					.set({ expiresAt: Option.getOrNull(expiresAt) })
+					.where(Dz.eq(Db.videos.id, id)),
+			);
+
+		const getExpiredIds = (now: Date, limit: number) =>
+			db.use((db) =>
+				db
+					.select({ id: Db.videos.id })
+					.from(Db.videos)
+					.where(
+						Dz.and(
+							Dz.isNotNull(Db.videos.expiresAt),
+							Dz.lte(Db.videos.expiresAt, now),
+						),
+					)
+					.limit(limit),
+			);
+
+		return { getById, delete: delete_, create, setExpiresAt, getExpiredIds };
 	}),
 	dependencies: [Database.Default],
 }) {}

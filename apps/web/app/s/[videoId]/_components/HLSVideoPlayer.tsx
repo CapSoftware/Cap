@@ -1,6 +1,5 @@
 "use client";
 
-import { LogoSpinner } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
@@ -627,7 +626,7 @@ export function HLSVideoPlayer({
 				)}
 			>
 				<div className="flex flex-col gap-2 items-center">
-					<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
+					<div className="rounded-full border-2 animate-spin size-8 sm:size-10 border-white/20 border-t-white" />
 				</div>
 			</div>
 			<AnimatePresence>

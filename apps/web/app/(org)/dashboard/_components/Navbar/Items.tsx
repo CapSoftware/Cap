@@ -36,7 +36,6 @@ import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import { useDashboardContext } from "../../Contexts";
 import {
-	CapIcon,
 	ChartLineIcon,
 	CodeIcon,
 	CogIcon,
@@ -65,10 +64,10 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 
 	const manageNavigation = [
 		{
-			name: "My Caps",
+			name: "Videos",
 			href: `/dashboard/caps`,
 			extraText: userCapsCount,
-			icon: <CapIcon />,
+			icon: <RecordIcon />,
 			subNav: [],
 		},
 		{
@@ -79,7 +78,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			subNav: [],
 		},
 		{
-			name: "Record a Cap",
+			name: "Record Video",
 			href: `/dashboard/caps/record`,
 			icon: <RecordIcon />,
 			subNav: [],
@@ -371,9 +370,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 							</Link>
 						</div>
 					)}
-					<p className="mt-2 text-xs text-center truncate text-gray-10">
-						Cap Software, Inc. {new Date().getFullYear()}.
-					</p>
 				</div>
 			</nav>
 			<DialogContent className="p-0 w-full max-w-md rounded-xl bg-gray-2">

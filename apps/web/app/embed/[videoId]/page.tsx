@@ -28,14 +28,15 @@ export async function generateMetadata(
 ): Promise<Metadata> {
 	const params = await props.params;
 	const videoId = params.videoId as Video.VideoId;
+	await deleteExpiredVideo(videoId);
 
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
-					title: `${video.name} | Cap Recording`,
-					description: "Watch this video on Cap",
+					title: video.name,
+					description: "Watch this video",
 					openGraph: {
 						images: [
 							{
@@ -61,8 +62,8 @@ export async function generateMetadata(
 					},
 					twitter: {
 						card: "player",
-						title: `${video.name} | Cap Recording`,
-						description: "Watch this video on Cap",
+						title: video.name,
+						description: "Watch this video",
 						images: [
 							new URL(
 								`/api/video/og?videoId=${videoId}`,
@@ -87,15 +88,17 @@ export async function generateMetadata(
 			}),
 		),
 		Effect.catchTags({
-			PolicyDenied: () =>
-				Effect.succeed({
-					title: "Cap: This video is private",
-					description: "This video is private and cannot be shared.",
-					robots: "noindex, nofollow",
-				}),
+			PolicyDenied: (error) =>
+				error.reason === "expired"
+					? Effect.sync(() => notFound())
+					: Effect.succeed({
+							title: "This video is private",
+							description: "This video is private and cannot be shared.",
+							robots: "noindex, nofollow",
+						}),
 			VerifyVideoPasswordError: () =>
 				Effect.succeed({
-					title: "Cap: Password Protected Video",
+					title: "Password Protected Video",
 					description: "This video is password protected.",
 					robots: "noindex, nofollow",
 				}),
@@ -112,6 +115,7 @@ export default async function EmbedVideoPage(
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
 	const autoplay = searchParams.autoplay === "true";
+	await deleteExpiredVideo(videoId);
 
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
@@ -127,6 +131,7 @@ export default async function EmbedVideoPage(
 					createdAt: videos.createdAt,
 					effectiveCreatedAt: videos.effectiveCreatedAt,
 					updatedAt: videos.updatedAt,
+					expiresAt: videos.expiresAt,
 					bucket: videos.bucket,
 					storageIntegrationId: videos.storageIntegrationId,
 					metadata: videos.metadata,
@@ -179,22 +184,31 @@ export default async function EmbedVideoPage(
 			</div>
 		)),
 		Effect.catchTags({
-			PolicyDenied: () =>
-				Effect.succeed(
-					<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
-						<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
-						<p className="text-gray-400">
-							If you own this video, please <Link href="/login">sign in</Link>{" "}
-							to manage sharing.
-						</p>
-					</div>,
-				),
+			PolicyDenied: (error) =>
+				error.reason === "expired"
+					? Effect.sync(() => notFound())
+					: Effect.succeed(
+							<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
+								<h1 className="mb-4 text-2xl font-bold">
+									This video is private
+								</h1>
+								<p className="text-gray-400">
+									If you own this video, please{" "}
+									<Link href="/login">sign in</Link> to manage sharing.
+								</p>
+							</div>,
+						),
 			NoSuchElementException: () => Effect.sync(() => notFound()),
 		}),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
 	);
 }
+
+const deleteExpiredVideo = (videoId: Video.VideoId) =>
+	Effect.flatMap(Videos, (videos) => videos.deleteExpiredById(videoId))
+		.pipe(Effect.catchAll(() => Effect.void))
+		.pipe(EffectRuntime.runPromise);
 
 async function EmbedContent({
 	video,

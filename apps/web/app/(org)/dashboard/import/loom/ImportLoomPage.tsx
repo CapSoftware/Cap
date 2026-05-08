@@ -74,7 +74,7 @@ export const ImportLoomPage = () => {
 				</Link>
 				<h1 className="text-2xl font-medium text-gray-12">Import from Loom</h1>
 				<p className="mt-1 text-sm text-gray-10">
-					Paste a Loom video URL to import it to Cap.
+					Paste a Loom video URL to import it to your library.
 				</p>
 			</div>
 

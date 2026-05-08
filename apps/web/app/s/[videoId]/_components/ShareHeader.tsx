@@ -228,7 +228,10 @@ export const ShareHeader = ({
 		}
 	};
 
-	const userIsOwnerAndNotPro = user?.id === data.owner.id && !data.owner.isPro;
+	const userIsOwnerAndNotPro =
+		buildEnv.NEXT_PUBLIC_IS_CAP &&
+		user?.id === data.owner.id &&
+		!data.owner.isPro;
 
 	return (
 		<>
@@ -243,7 +246,7 @@ export const ShareHeader = ({
 						size="sm"
 						variant="blue"
 					>
-						Upgrade To Cap Pro
+						Upgrade To Pro
 					</Button>
 				</div>
 			)}

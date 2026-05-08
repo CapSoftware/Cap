@@ -34,7 +34,7 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
 		>
 			<DialogHeader icon={<FontAwesomeIcon icon={faInfoCircle} />}>
 				<DialogTitle className="flex gap-2 items-center text-lg font-medium text-gray-12">
-					Cap AI
+					AI
 					<span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 text-white">
 						Pro
 					</span>
@@ -44,8 +44,8 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
 				<CapAIArt className="w-full max-w-[450px] mx-auto h-[240px]" />
 				<div className="pt-5 space-y-4">
 					<p className="text-base text-gray-11">
-						Cap AI automatically processes your recordings to make them more
-						useful and accessible.
+						AI automatically processes your recordings to make them more useful
+						and accessible.
 					</p>
 					<h4 className="text-sm font-medium text-gray-12">
 						Features include:

@@ -43,7 +43,7 @@ export function ClientMyCapsLink({
 				if (activeSpace) {
 					toast.success(`Moved "${capData.name}" to "${activeSpace.name}"`);
 				} else {
-					toast.success(`Moved "${capData.name}" to My Caps`);
+					toast.success(`Moved "${capData.name}" to Videos`);
 				}
 			} catch (error) {
 				console.error("Error moving video:", error);
@@ -132,7 +132,7 @@ export function ClientMyCapsLink({
 					className="relative flex-shrink-0 size-5"
 				/>
 			)}
-			{activeSpace ? activeSpace.name : "My Caps"}
+			{activeSpace ? activeSpace.name : "Videos"}
 		</Link>
 	);
 }

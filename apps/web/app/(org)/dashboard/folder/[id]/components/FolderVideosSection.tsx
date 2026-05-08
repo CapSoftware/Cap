@@ -52,28 +52,28 @@ export default function FolderVideosSection({
 				} else {
 					return yield* Effect.fail(
 						new Error(
-							`Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`,
+							`Failed to delete ${errorCount} video${errorCount === 1 ? "" : "s"}`,
 						),
 					);
 				}
 			}).pipe(Effect.fork);
 
 			toast.promise(Effect.runPromise(fiber.await.pipe(Effect.flatten)), {
-				loading: `Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
+				loading: `Deleting ${ids.length} video${ids.length === 1 ? "" : "s"}...`,
 				success: (data) => {
 					if (data.error) {
-						return `Successfully deleted ${data.success} cap${
+						return `Successfully deleted ${data.success} video${
 							data.success === 1 ? "" : "s"
-						}, but failed to delete ${data.error} cap${
+						}, but failed to delete ${data.error} video${
 							data.error === 1 ? "" : "s"
 						}`;
 					}
-					return `Successfully deleted ${data.success} cap${
+					return `Successfully deleted ${data.success} video${
 						data.success === 1 ? "" : "s"
 					}`;
 				},
 				error: (error) =>
-					error.message || "An error occurred while deleting caps",
+					error.message || "An error occurred while deleting videos",
 			});
 
 			return yield* fiber.await.pipe(Effect.flatten);
@@ -87,11 +87,11 @@ export default function FolderVideosSection({
 	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
 		mutationFn: (id: Video.VideoId) => rpc.VideoDelete(id),
 		onSuccess: () => {
-			toast.success("Cap deleted successfully");
+			toast.success("Video deleted successfully");
 			router.refresh();
 		},
 		onError: () => {
-			toast.error("Failed to delete cap");
+			toast.error("Failed to delete video");
 		},
 	});
 

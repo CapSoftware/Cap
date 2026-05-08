@@ -1,5 +1,6 @@
 import { isEmailAllowedByRestriction } from "@cap/utils";
-import { Policy, Video } from "@cap/web-domain";
+import type { Organisation, User } from "@cap/web-domain";
+import { type DatabaseError, Policy, Video } from "@cap/web-domain";
 import { Array, Effect, Option } from "effect";
 
 import { Database } from "../Database.ts";
@@ -13,23 +14,23 @@ export type VideosPolicyDeps = {
 			id: Video.VideoId,
 		) => Effect.Effect<
 			Option.Option<readonly [Video.Video, Option.Option<string>]>,
-			any
+			DatabaseError
 		>;
 	};
 	orgsRepo: {
 		membershipForVideo: (
-			userId: any,
+			userId: User.UserId,
 			videoId: Video.VideoId,
-		) => Effect.Effect<readonly { membershipId: string }[], any>;
+		) => Effect.Effect<readonly { membershipId: string }[], DatabaseError>;
 		allowedEmailDomain: (
-			orgId: any,
-		) => Effect.Effect<Option.Option<string>, any>;
+			orgId: Organisation.OrganisationId,
+		) => Effect.Effect<Option.Option<string>, DatabaseError>;
 	};
 	spacesRepo: {
 		membershipForVideo: (
-			userId: any,
+			userId: User.UserId,
 			videoId: Video.VideoId,
-		) => Effect.Effect<Option.Option<{ membershipId: string }>, any>;
+		) => Effect.Effect<Option.Option<{ membershipId: string }>, DatabaseError>;
 	};
 };
 
@@ -47,6 +48,17 @@ export function buildCanView(
 			}
 
 			const [video, password] = res.value;
+
+			if (
+				Option.isSome(video.expiresAt) &&
+				video.expiresAt.value <= new Date()
+			) {
+				yield* Effect.fail(
+					new Policy.PolicyDeniedError({
+						reason: "expired",
+					}),
+				);
+			}
 
 			if (Option.isSome(user)) {
 				const userId = user.value.id;

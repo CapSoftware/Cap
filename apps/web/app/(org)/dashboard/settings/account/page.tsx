@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Settings } from "./Settings";
 
 export const metadata: Metadata = {
-	title: "Settings — Cap",
+	title: "Settings",
 };
 
 export default async function SettingsPage() {

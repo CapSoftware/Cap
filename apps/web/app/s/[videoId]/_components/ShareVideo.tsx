@@ -1,6 +1,5 @@
 import type { comments as commentsSchema } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
-import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
 import { useTranscript } from "hooks/use-transcript";
 import { useRouter } from "next/navigation";
@@ -11,7 +10,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { UpgradeModal } from "@/components/UpgradeModal";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
@@ -76,7 +74,6 @@ export const ShareVideo = forwardRef<
 			captionContext.setSelectedLanguage(language as CaptionLanguage);
 		};
 
-		const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 		const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
@@ -317,35 +314,6 @@ export const ShareVideo = forwardRef<
 						/>
 					)}
 				</div>
-
-				{!data.owner.isPro && (
-					<div className="absolute top-4 left-4 z-30">
-						<button
-							type="button"
-							className="block"
-							onClick={(e) => {
-								e.stopPropagation();
-								setUpgradeModalOpen(true);
-							}}
-						>
-							<div className="relative">
-								<div className="opacity-50 transition-opacity hover:opacity-100 peer">
-									<Logo className="w-auto h-4 sm:h-8" white={true} />
-								</div>
-
-								<div className="absolute left-0 top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
-									<p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
-										Remove watermark
-									</p>
-								</div>
-							</div>
-						</button>
-					</div>
-				)}
-				<UpgradeModal
-					open={upgradeModalOpen}
-					onOpenChange={setUpgradeModalOpen}
-				/>
 			</>
 		);
 	},

@@ -18,6 +18,7 @@ function makeVideo(
 		public: boolean;
 		ownerId: string;
 		orgId: string;
+		expiresAt: Option.Option<Date>;
 	}> = {},
 ) {
 	return Video.Video.make({
@@ -37,6 +38,7 @@ function makeVideo(
 		duration: Option.none(),
 		createdAt: new Date(),
 		updatedAt: new Date(),
+		expiresAt: overrides.expiresAt ?? Option.none(),
 	});
 }
 
@@ -431,6 +433,28 @@ describe("VideosPolicy.canView", () => {
 	describe("video not found", () => {
 		it("allows access when video does not exist", async () => {
 			const deps = makeDeps({ video: null });
+
+			expect(await runCanView(deps, noUser)).toBe("allowed");
+		});
+	});
+
+	describe("expiry", () => {
+		it("denies expired videos", async () => {
+			const deps = makeDeps({
+				video: makeVideo({
+					expiresAt: Option.some(new Date(Date.now() - 1000)),
+				}),
+			});
+
+			expect(await runCanView(deps, noUser)).toBe("denied");
+		});
+
+		it("allows videos with a future expiry", async () => {
+			const deps = makeDeps({
+				video: makeVideo({
+					expiresAt: Option.some(new Date(Date.now() + 60_000)),
+				}),
+			});
 
 			expect(await runCanView(deps, noUser)).toBe("allowed");
 		});

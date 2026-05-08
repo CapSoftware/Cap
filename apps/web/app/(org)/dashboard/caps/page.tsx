@@ -12,9 +12,19 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Database, ImageUploads } from "@cap/web-backend";
+import { Database, ImageUploads, Videos } from "@cap/web-backend";
 import { type ImageUpload, Video } from "@cap/web-domain";
-import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import {
+	and,
+	count,
+	desc,
+	eq,
+	gt,
+	inArray,
+	isNull,
+	or,
+	sql,
+} from "drizzle-orm";
 import { type Array, Effect } from "effect";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
@@ -22,7 +32,7 @@ import { runPromise } from "@/lib/server";
 import { Caps } from "./Caps";
 
 export const metadata: Metadata = {
-	title: "My Caps — Cap",
+	title: "Videos",
 };
 
 // Helper function to fetch shared spaces data for videos
@@ -119,6 +129,11 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 
 	const userId = user.id;
 	const offset = (page - 1) * limit;
+	const now = new Date();
+
+	await Effect.flatMap(Videos, (videos) => videos.deleteExpired(100))
+		.pipe(Effect.catchAll(() => Effect.void))
+		.pipe(runPromise);
 
 	const totalCountResult = await db()
 		.select({ count: count() })
@@ -129,6 +144,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 				eq(videos.ownerId, userId),
 				eq(organizations.id, user.activeOrganizationId),
 				isNull(organizations.tombstoneAt),
+				or(isNull(videos.expiresAt), gt(videos.expiresAt, now)),
 			),
 		);
 
@@ -140,6 +156,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			ownerId: videos.ownerId,
 			name: videos.name,
 			createdAt: videos.createdAt,
+			expiresAt: videos.expiresAt,
 			metadata: videos.metadata,
 			duration: videos.duration,
 			public: videos.public,
@@ -182,6 +199,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 				eq(videos.orgId, user.activeOrganizationId),
 				isNull(videos.folderId),
 				isNull(organizations.tombstoneAt),
+				or(isNull(videos.expiresAt), gt(videos.expiresAt, now)),
 			),
 		)
 		.groupBy(
@@ -189,6 +207,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			videos.ownerId,
 			videos.name,
 			videos.createdAt,
+			videos.expiresAt,
 			videos.metadata,
 			videos.orgId,
 			users.name,

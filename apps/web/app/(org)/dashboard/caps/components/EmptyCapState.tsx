@@ -1,6 +1,3 @@
-import { Button } from "@cap/ui";
-import { faDownload } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRive } from "@rive-app/react-canvas";
 import { useTheme } from "../../Contexts";
 import { UploadCapButton } from "./UploadCapButton";
@@ -25,22 +22,13 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
 				</div>
 				<div className="flex flex-col items-center px-5">
 					<p className="mb-1 text-xl font-semibold text-gray-12">
-						Hey{userName ? ` ${userName}` : ""}! Record your first Cap
+						Hey{userName ? ` ${userName}` : ""}! Record your first video
 					</p>
 					<p className="max-w-md text-gray-10 text-md">
-						Craft your narrative with Cap - get projects done quicker.
+						Record, upload, and share videos from your own dashboard.
 					</p>
 				</div>
 				<div className="flex flex-wrap gap-3 justify-center items-center mt-4">
-					<Button
-						href="/download"
-						className="flex relative gap-2 justify-center items-center"
-						variant="primary"
-					>
-						<FontAwesomeIcon className="size-3.5" icon={faDownload} />
-						Download Cap
-					</Button>
-					<p className="text-sm text-gray-10">or</p>
 					<WebRecorderDialog />
 					<p className="text-sm text-gray-10">or</p>
 					<UploadCapButton />

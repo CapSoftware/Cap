@@ -183,12 +183,12 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 			{data.topCaps && data.topCaps.length > 0 && (
 				<OtherStatBox
 					className="col-span-2"
-					title="Top Caps"
+					title="Top Videos"
 					icon={faRecordVinyl}
 				>
 					<div className="flex flex-col flex-1 gap-5 justify-center w-full">
 						<TableCard
-							title="Caps"
+							title="Videos"
 							columns={["Name", "Views", "Percentage"]}
 							rows={data.topCaps.map(toCapRow)}
 							type="cap"

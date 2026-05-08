@@ -1,5 +1,5 @@
 "use client";
-import { Button, Logo } from "@cap/ui";
+import { Button } from "@cap/ui";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
@@ -10,6 +10,7 @@ import { Tooltip } from "@/components/Tooltip";
 import { useDashboardContext } from "../../Contexts";
 import { DeveloperSidebarContent } from "../../developers/_components/DeveloperSidebarContent";
 import AdminNavItems from "./Items";
+import { StorageUsageIndicator } from "./StorageUsageIndicator";
 
 export const DesktopNav = () => {
 	const { toggleSidebarCollapsed, sidebarCollapsed, isDeveloperSection } =
@@ -63,17 +64,14 @@ export const DesktopNav = () => {
 							)}
 						</Link>
 					) : (
-						<Link href="/dashboard">
-							<Logo
-								hideLogoName={sidebarCollapsed}
-								viewBoxDimensions={
-									sidebarCollapsed ? "0 0 40 40" : "0 0 120 40"
-								}
-								className={clsx(
-									"w-[120px] h-[40px]",
-									sidebarCollapsed ? "mx-auto" : "",
-								)}
-							/>
+						<Link
+							href="/dashboard"
+							className={clsx(
+								"flex items-center h-10 rounded-lg px-2 text-sm font-semibold text-gray-12",
+								sidebarCollapsed ? "justify-center w-full" : "w-fit",
+							)}
+						>
+							{sidebarCollapsed ? "V" : "Dashboard"}
 						</Link>
 					)}
 					<Tooltip
@@ -108,6 +106,9 @@ export const DesktopNav = () => {
 						)}
 					</div>
 				</div>
+				{!isDeveloperSection && (
+					<StorageUsageIndicator collapsed={sidebarCollapsed} />
+				)}
 			</div>
 		</motion.aside>
 	);

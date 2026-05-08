@@ -11,10 +11,10 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { Database, ImageUploads } from "@cap/web-backend";
+import { Database, ImageUploads, Videos } from "@cap/web-backend";
 import type { ImageUpload, Organisation, Space, Video } from "@cap/web-domain";
 import { CurrentUser, Folder } from "@cap/web-domain";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
 import { Effect } from "effect";
 
@@ -164,6 +164,12 @@ export const getVideosByFolderId = Effect.fn(function* (
 	if (!folderId) throw new Error("Folder ID is required");
 	const db = yield* Database;
 	const imageUploads = yield* ImageUploads;
+	const videosService = yield* Videos;
+	const now = new Date();
+
+	yield* videosService
+		.deleteExpired(100)
+		.pipe(Effect.catchAll(() => Effect.void));
 
 	const videoData = yield* db.use((db) =>
 		db
@@ -172,6 +178,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 				ownerId: videos.ownerId,
 				name: videos.name,
 				createdAt: videos.createdAt,
+				expiresAt: videos.expiresAt,
 				public: videos.public,
 				metadata: videos.metadata,
 				duration: videos.duration,
@@ -218,19 +225,25 @@ export const getVideosByFolderId = Effect.fn(function* (
 					? and(
 							eq(spaceVideos.folderId, folderId),
 							isNull(organizations.tombstoneAt),
+							or(isNull(videos.expiresAt), gt(videos.expiresAt, now)),
 						)
 					: root.variant === "org"
 						? and(
 								eq(sharedVideos.folderId, folderId),
 								isNull(organizations.tombstoneAt),
+								or(isNull(videos.expiresAt), gt(videos.expiresAt, now)),
 							)
-						: eq(videos.folderId, folderId),
+						: and(
+								eq(videos.folderId, folderId),
+								or(isNull(videos.expiresAt), gt(videos.expiresAt, now)),
+							),
 			)
 			.groupBy(
 				videos.id,
 				videos.ownerId,
 				videos.name,
 				videos.createdAt,
+				videos.expiresAt,
 				videos.public,
 				videos.metadata,
 				users.name,
@@ -251,6 +264,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 					ownerId: video.ownerId,
 					name: video.name,
 					createdAt: video.createdAt,
+					expiresAt: video.expiresAt,
 					public: video.public,
 					totalComments: video.totalComments,
 					totalReactions: video.totalReactions,

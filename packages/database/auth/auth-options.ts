@@ -19,6 +19,7 @@ export const maxDuration = 120;
 export const authOptions = (): NextAuthOptions => {
 	let _adapter: Adapter | undefined;
 	let _providers: Provider[] | undefined;
+	const isProduction = process.env.NODE_ENV === "production";
 
 	return {
 		get adapter() {
@@ -26,7 +27,7 @@ export const authOptions = (): NextAuthOptions => {
 			_adapter = DrizzleAdapter(db());
 			return _adapter;
 		},
-		debug: true,
+		debug: !isProduction,
 		session: {
 			strategy: "jwt",
 		},
@@ -71,35 +72,33 @@ export const authOptions = (): NextAuthOptions => {
 						return crypto.randomInt(100000, 1000000).toString();
 					},
 					async sendVerificationRequest({ identifier, token }) {
-						console.log("sendVerificationRequest");
-
 						if (!serverEnv().RESEND_API_KEY) {
-							console.log("\n");
-							console.log(
-								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-							);
-							console.log("🔐 VERIFICATION CODE (Development Mode)");
-							console.log(
-								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-							);
-							console.log(`📧 Email: ${identifier}`);
-							console.log(`🔢 Code: ${token}`);
-							console.log(`⏱  Expires in: 10 minutes`);
-							console.log(
-								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-							);
-							console.log("\n");
-						} else {
-							console.log({ identifier, token });
-							const { OTPEmail } = await import("../emails/otp-email");
-							const email = OTPEmail({ code: token, email: identifier });
-							console.log({ email });
-							await sendEmail({
-								email: identifier,
-								subject: `Your Cap Verification Code`,
-								react: email,
-							});
+							if (!isProduction) {
+								console.log("\n");
+								console.log(
+									"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+								);
+								console.log("🔐 VERIFICATION CODE (Development Mode)");
+								console.log(
+									"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+								);
+								console.log(`📧 Email: ${identifier}`);
+								console.log(`🔢 Code: ${token}`);
+								console.log(`⏱  Expires in: 10 minutes`);
+								console.log(
+									"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+								);
+								console.log("\n");
+							}
+							return;
 						}
+						const { OTPEmail } = await import("../emails/otp-email");
+						const email = OTPEmail({ code: token, email: identifier });
+						await sendEmail({
+							email: identifier,
+							subject: `Your Cap Verification Code`,
+							react: email,
+						});
 					},
 				}),
 			];

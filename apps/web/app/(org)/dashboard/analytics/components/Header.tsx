@@ -229,8 +229,8 @@ export default function Header({
 		? selectedSpace.name
 		: isMyCapsSelected
 			? user?.name
-				? `${user.name}'s Caps`
-				: "My Caps"
+				? `${user.name}'s Videos`
+				: "Videos"
 			: selectedOrg?.organization.name || "Select organization";
 
 	const displayIcon = selectedSpace
@@ -242,7 +242,7 @@ export default function Header({
 	const displayIconName = selectedSpace
 		? selectedSpace.name
 		: isMyCapsSelected
-			? user?.name || selectedOrg?.organization.name || "My Caps"
+			? user?.name || selectedOrg?.organization.name || "Videos"
 			: selectedOrg?.organization.name || "Select organization";
 
 	if (!activeOrganization) {
@@ -323,7 +323,7 @@ export default function Header({
 										className="size-5 flex-shrink-0"
 									/>
 									<SelectPrimitive.ItemText>
-										{user?.name ? `${user.name}'s Caps` : "My Caps"}
+										{user?.name ? `${user.name}'s Videos` : "Videos"}
 									</SelectPrimitive.ItemText>
 								</SelectPrimitive.Item>
 								{filteredSpaces && filteredSpaces.length > 0 && (

@@ -31,6 +31,7 @@ export type VideoData = {
 	ownerId: string;
 	name: string;
 	createdAt: Date;
+	expiresAt?: Date | null;
 	public: boolean;
 	totalComments: number;
 	totalReactions: number;
@@ -120,14 +121,14 @@ export const Caps = ({
 			} else {
 				return yield* Effect.fail(
 					new Error(
-						`Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`,
+						`Failed to delete ${errorCount} video${errorCount === 1 ? "" : "s"}`,
 					),
 				);
 			}
 		}),
 		onMutate: (ids: Video.VideoId[]) => {
 			toast.loading(
-				`Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
+				`Deleting ${ids.length} video${ids.length === 1 ? "" : "s"}...`,
 			);
 		},
 		onSuccess: (data: { success: number; error?: number }) => {
@@ -135,15 +136,15 @@ export const Caps = ({
 			router.refresh();
 			if (data.error) {
 				toast.success(
-					`Successfully deleted ${data.success} cap${
+					`Successfully deleted ${data.success} video${
 						data.success === 1 ? "" : "s"
-					}, but failed to delete ${data.error} cap${
+					}, but failed to delete ${data.error} video${
 						data.error === 1 ? "" : "s"
 					}`,
 				);
 			} else {
 				toast.success(
-					`Successfully deleted ${data.success} cap${
+					`Successfully deleted ${data.success} video${
 						data.success === 1 ? "" : "s"
 					}`,
 				);
@@ -153,7 +154,7 @@ export const Caps = ({
 			const message =
 				error instanceof Error
 					? error.message
-					: "An error occurred while deleting caps";
+					: "An error occurred while deleting videos";
 			toast.error(message);
 		},
 	});
@@ -163,10 +164,10 @@ export const Caps = ({
 			yield* rpc.VideoDelete(id);
 		}),
 		onSuccess: () => {
-			toast.success("Cap deleted successfully");
+			toast.success("Video deleted successfully");
 			router.refresh();
 		},
-		onError: (_error: unknown) => toast.error("Failed to delete cap"),
+		onError: (_error: unknown) => toast.error("Failed to delete video"),
 	});
 
 	useEffect(() => {

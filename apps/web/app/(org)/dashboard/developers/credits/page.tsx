@@ -8,7 +8,7 @@ import { getDeveloperApps } from "../developer-data";
 import { CreditsClient } from "./CreditsClient";
 
 export const metadata: Metadata = {
-	title: "Developer Credits — Cap",
+	title: "Developer Credits",
 };
 
 export default async function CreditsPage() {

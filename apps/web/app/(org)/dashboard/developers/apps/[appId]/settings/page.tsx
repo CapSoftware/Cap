@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { AppSettingsClient } from "./AppSettingsClient";
 
 export const metadata: Metadata = {
-	title: "App Settings — Cap",
+	title: "App Settings",
 };
 
 export default async function AppSettingsPage() {

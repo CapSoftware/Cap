@@ -3,13 +3,13 @@
 import { Check } from "lucide-react";
 import { cloneElement, type SVGProps, useMemo, useRef, useState } from "react";
 import {
-	CapIcon,
 	ChatIcon,
 	ClapIcon,
 	ReactionIcon,
+	RecordIcon,
 } from "@/app/(org)/dashboard/_components/AnimatedIcons";
 import { classNames } from "@/utils/helpers";
-import type { CapIconHandle } from "../../_components/AnimatedIcons/Cap";
+import type { RecordIconHandle } from "../../_components/AnimatedIcons/Record";
 import ChartArea from "./ChartArea";
 
 type boxes = "caps" | "views" | "comments" | "reactions";
@@ -44,10 +44,10 @@ export default function StatsBox({
 		new Set(["views", "comments", "reactions"]),
 	);
 
-	const capsBoxRef = useRef<CapIconHandle | null>(null);
-	const viewsBoxRef = useRef<CapIconHandle | null>(null);
-	const chatsBoxRef = useRef<CapIconHandle | null>(null);
-	const reactionsBoxRef = useRef<CapIconHandle | null>(null);
+	const capsBoxRef = useRef<RecordIconHandle | null>(null);
+	const viewsBoxRef = useRef<RecordIconHandle | null>(null);
+	const chatsBoxRef = useRef<RecordIconHandle | null>(null);
+	const reactionsBoxRef = useRef<RecordIconHandle | null>(null);
 
 	const toggleHandler = (box: boxes) => {
 		setSelectedBoxes((prev) => {
@@ -114,12 +114,12 @@ export default function StatsBox({
 							<StatBox
 								onClick={() => toggleHandler("caps")}
 								isSelected={selectedBoxes.has("caps")}
-								title="Caps"
+								title="Videos"
 								value={formattedCounts.caps}
 								metric="caps"
 								onMouseEnter={() => capsBoxRef.current?.startAnimation()}
 								onMouseLeave={() => capsBoxRef.current?.stopAnimation()}
-								icon={<CapIcon ref={capsBoxRef} size={20} />}
+								icon={<RecordIcon ref={capsBoxRef} size={20} />}
 							/>
 						)}
 					</>

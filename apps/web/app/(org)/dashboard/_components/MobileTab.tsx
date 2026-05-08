@@ -16,12 +16,12 @@ import {
 } from "react";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../Contexts";
-import { CapIcon, CogIcon, LayersIcon } from "./AnimatedIcons";
+import { CogIcon, LayersIcon, RecordIcon } from "./AnimatedIcons";
 import { updateActiveOrganization } from "./Navbar/server";
 
 const Tabs = [
 	{ icon: <LayersIcon size={20} />, href: "/dashboard/spaces/browse" },
-	{ icon: <CapIcon size={25} />, href: "/dashboard/caps" },
+	{ icon: <RecordIcon size={25} />, href: "/dashboard/caps" },
 	{
 		icon: <CogIcon size={22} />,
 		href: "/dashboard/settings/organization",

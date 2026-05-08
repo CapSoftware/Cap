@@ -25,7 +25,7 @@ export function AppsListClient() {
 				<div className="flex flex-col items-center justify-center py-16 rounded-xl border border-dashed border-gray-6">
 					<p className="mb-2 text-sm text-gray-11">No apps yet</p>
 					<p className="mb-4 text-xs text-gray-9">
-						Create your first app to get started with the Cap Developer SDK
+						Create your first app to get started with the developer SDK
 					</p>
 					<Button variant="dark" size="sm" onClick={() => setCreateOpen(true)}>
 						Create your first app

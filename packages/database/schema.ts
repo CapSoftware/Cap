@@ -346,6 +346,7 @@ export const videos = mysqlTable(
 			{ mode: "stored" },
 		),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+		expiresAt: timestamp("expiresAt"),
 		// PRIVATE
 		password: encryptedTextNullable("password"),
 		// LEGACY

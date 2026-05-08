@@ -10,6 +10,9 @@ import {
 } from "@aws-sdk/client-s3";
 import { migrateDb } from "@cap/database/migrate";
 import { buildEnv, serverEnv } from "@cap/env";
+import { Videos } from "@cap/web-backend";
+import { Effect } from "effect";
+import { runPromiseWithoutRequest } from "./lib/server";
 
 export async function register() {
 	if (process.env.NEXT_PUBLIC_IS_CAP) return;
@@ -38,6 +41,16 @@ export async function register() {
 	// Add a timeout to trigger migrations after 5 seconds on server start
 	setTimeout(() => triggerMigrations(), 5000);
 	setTimeout(() => createS3Bucket(), 5000);
+	setTimeout(() => cleanupExpiredVideos(), 15000);
+	setInterval(() => cleanupExpiredVideos(), 60 * 60 * 1000);
+}
+
+async function cleanupExpiredVideos() {
+	await Effect.flatMap(Videos, (videos) => videos.deleteExpired(100))
+		.pipe(runPromiseWithoutRequest)
+		.catch((error) => {
+			console.error("Expired video cleanup failed", error);
+		});
 }
 
 async function createS3Bucket() {

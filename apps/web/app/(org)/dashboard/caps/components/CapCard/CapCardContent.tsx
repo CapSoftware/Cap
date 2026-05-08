@@ -213,7 +213,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						/>
 					</div>
 				) : (
-					<Tooltip content={`Cap created at ${effectiveDate}`}>
+					<Tooltip content={`Video created at ${effectiveDate}`}>
 						<p
 							className="text-sm truncate text-gray-10 cursor-pointer flex items-center h-full leading-[1.5rem]"
 							onClick={handleDateClick}
@@ -225,6 +225,11 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 					</Tooltip>
 				)}
 			</div>
+			{cap.expiresAt && (
+				<p className="text-xs truncate text-amber-11">
+					Deletes {moment(cap.expiresAt).fromNow()}
+				</p>
+			)}
 		</div>
 	);
 };

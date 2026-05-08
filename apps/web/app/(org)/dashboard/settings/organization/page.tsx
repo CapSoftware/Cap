@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { GeneralPage } from "./GeneralPage";
 
 export const metadata: Metadata = {
-	title: "Organization Settings — Cap",
+	title: "Organization Settings",
 };
 
 export default function OrganizationPage() {

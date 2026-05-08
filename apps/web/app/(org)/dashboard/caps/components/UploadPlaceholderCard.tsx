@@ -1,6 +1,5 @@
 "use client";
 
-import { LogoSpinner } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import { useStore } from "@tanstack/react-store";
 import { type UploadStatus, useUploadingContext } from "../UploadingContext";
@@ -32,7 +31,7 @@ export const UploadPlaceholderCard = () => {
 					/>
 				) : (
 					<div className="flex justify-center items-center w-full h-full">
-						<LogoSpinner className="w-8 h-8 animate-spin" />
+						<div className="rounded-full border-2 animate-spin size-8 border-white/20 border-t-white" />
 					</div>
 				)}
 

@@ -33,6 +33,16 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					),
 				),
 
+			VideoSetExpiry: (input) =>
+				videos
+					.setExpiry(input)
+					.pipe(
+						Effect.catchTag(
+							"DatabaseError",
+							() => new InternalError({ type: "database" }),
+						),
+					),
+
 			GetUploadProgress: (videoId) =>
 				videos.getUploadProgress(videoId).pipe(
 					provideOptionalAuth,

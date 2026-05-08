@@ -1,4 +1,3 @@
-import { LogoSpinner } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect } from "effect";
@@ -109,7 +108,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 					) : (
 						showLoading &&
 						!thumbnailUrl.data && (
-							<LogoSpinner className="w-5 h-auto animate-spin md:w-8" />
+							<div className="rounded-full border-2 animate-spin size-5 md:size-8 border-white/20 border-t-white" />
 						)
 					)}
 				</div>

@@ -18,6 +18,7 @@ import {
 	ImageUploads,
 	makeCurrentUserLayer,
 	Spaces,
+	Videos,
 } from "@cap/web-backend";
 import {
 	type ImageUpload,
@@ -25,7 +26,7 @@ import {
 	Space,
 	Video,
 } from "@cap/web-domain";
-import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -33,7 +34,7 @@ import { runPromise } from "@/lib/server";
 import { SharedCaps } from "./SharedCaps";
 
 export const metadata: Metadata = {
-	title: "Shared Caps — Cap",
+	title: "Shared Videos",
 };
 
 export type SpaceMemberData = {
@@ -153,6 +154,10 @@ export default async function SharedCapsPage(props: {
 	const user = await getCurrentUser();
 	if (!user) notFound();
 
+	await Effect.flatMap(Videos, (videos) => videos.deleteExpired(100))
+		.pipe(Effect.catchAll(() => Effect.void))
+		.pipe(runPromise);
+
 	const spaceOrOrg = await Effect.flatMap(Spaces, (s) =>
 		s.getSpaceOrOrg(Space.SpaceId.make(params.spaceId)),
 	).pipe(
@@ -208,6 +213,7 @@ export default async function SharedCapsPage(props: {
 							eq(spaceVideos.spaceId, spaceId),
 							isNull(spaceVideos.folderId),
 							isNull(organizations.tombstoneAt),
+							or(isNull(videos.expiresAt), gt(videos.expiresAt, new Date())),
 						),
 					)
 					.groupBy(
@@ -224,8 +230,13 @@ export default async function SharedCapsPage(props: {
 				db()
 					.select({ count: count() })
 					.from(spaceVideos)
+					.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
 					.where(
-						and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId)),
+						and(
+							eq(spaceVideos.spaceId, spaceId),
+							isNull(spaceVideos.folderId),
+							or(isNull(videos.expiresAt), gt(videos.expiresAt, new Date())),
+						),
 					),
 			]);
 			return {
@@ -304,6 +315,7 @@ export default async function SharedCapsPage(props: {
 						and(
 							eq(sharedVideos.organizationId, orgId),
 							isNull(sharedVideos.folderId),
+							or(isNull(videos.expiresAt), gt(videos.expiresAt, new Date())),
 						),
 					)
 					.groupBy(
@@ -326,6 +338,7 @@ export default async function SharedCapsPage(props: {
 						and(
 							eq(sharedVideos.organizationId, orgId),
 							isNull(videos.folderId),
+							or(isNull(videos.expiresAt), gt(videos.expiresAt, new Date())),
 						),
 					),
 			]);

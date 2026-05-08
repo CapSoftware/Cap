@@ -36,11 +36,16 @@ type UploadProgressUpdateInput = Schema.Type<
 type InstantRecordingCreateInput = Schema.Type<
 	typeof Video.InstantRecordingCreateInput
 >;
+type VideoSetExpiryInput = Schema.Type<typeof Video.VideoSetExpiryInput>;
 type OptionValue<T> = T extends Option.Option<infer Value> ? Value : never;
 type RepoMetadataValue = OptionValue<RepoCreateVideoInput["metadata"]>;
 type RepoTranscriptionStatusValue = OptionValue<
 	RepoCreateVideoInput["transcriptionStatus"]
 >;
+const expiryPresetDays = {
+	"7d": 7,
+	"30d": 30,
+} as const;
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {
@@ -50,13 +55,58 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const storage = yield* StorageService;
 		const tinybird = yield* Tinybird;
 
+		const deleteStoredObjects = Effect.fn("Videos.deleteStoredObjects")(
+			function* (video: Video.Video) {
+				const [bucket] = yield* storage.getAccessForVideo(video);
+				const prefix = `${video.ownerId}/${video.id}/`;
+				let continuationToken: string | undefined;
+
+				do {
+					const listedObjects = yield* bucket.listObjects({
+						prefix,
+						continuationToken,
+					});
+					const objects = listedObjects.Contents ?? [];
+
+					if (objects.length > 0) {
+						yield* bucket.deleteObjects(objects);
+					}
+
+					continuationToken = listedObjects.NextContinuationToken;
+				} while (continuationToken);
+			},
+		);
+
+		const deleteVideoWithoutPolicy = Effect.fn("Videos.deleteWithoutPolicy")(
+			function* (video: Video.Video) {
+				yield* deleteStoredObjects(video);
+				yield* repo.delete(video.id);
+				yield* Effect.log(`Deleted video ${video.id}`);
+			},
+		);
+
+		const deleteExpiredById = Effect.fn("Videos.deleteExpiredById")(function* (
+			videoId: Video.VideoId,
+		) {
+			const maybeVideo = yield* repo.getById(videoId);
+			if (Option.isNone(maybeVideo)) return false;
+			const [video] = maybeVideo.value;
+
+			if (Option.isNone(video.expiresAt) || video.expiresAt.value > new Date())
+				return false;
+
+			yield* deleteVideoWithoutPolicy(video);
+			return true;
+		});
+
 		const getByIdForViewing = (id: Video.VideoId) =>
-			repo
-				.getById(id)
-				.pipe(
-					Policy.withPublicPolicy(policy.canView(id)),
-					Effect.withSpan("Videos.getById"),
-				);
+			deleteExpiredById(id).pipe(
+				Effect.catchAll(() => Effect.void),
+				Effect.zipRight(
+					repo.getById(id).pipe(Policy.withPublicPolicy(policy.canView(id))),
+				),
+				Effect.withSpan("Videos.getById"),
+			);
 
 		const getAnalyticsBulkInternal = Effect.fn("Videos.getAnalyticsBulk")(
 			function* (videoIds: ReadonlyArray<Video.VideoId>) {
@@ -212,25 +262,54 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
 
-				const [bucket] = yield* storage.getAccessForVideo(video);
+				yield* Effect.void.pipe(Policy.withPolicy(policy.isOwner(video.id)));
+				yield* deleteVideoWithoutPolicy(video);
+			}),
 
-				yield* repo
-					.delete(video.id)
-					.pipe(Policy.withPolicy(policy.isOwner(video.id)));
+			setExpiry: Effect.fn("Videos.setExpiry")(function* (
+				input: VideoSetExpiryInput,
+			) {
+				const maybeVideo = yield* repo
+					.getById(input.videoId)
+					.pipe(Policy.withPolicy(policy.isOwner(input.videoId)));
+				if (Option.isNone(maybeVideo))
+					return yield* Effect.fail(new Video.NotFoundError());
 
-				yield* Effect.log(`Deleted video ${video.id}`);
+				const expiresAt =
+					input.preset === "never"
+						? Option.none<Date>()
+						: Option.some(
+								new Date(
+									Date.now() +
+										expiryPresetDays[input.preset] * 24 * 60 * 60 * 1000,
+								),
+							);
 
-				const prefix = `${video.ownerId}/${video.id}/`;
+				yield* repo.setExpiresAt(input.videoId, expiresAt);
+				return expiresAt;
+			}),
 
-				const listedObjects = yield* bucket.listObjects({ prefix });
+			deleteExpiredById,
 
-				if (listedObjects.Contents) {
-					yield* bucket.deleteObjects(
-						listedObjects.Contents.map((content) => ({
-							Key: content.Key,
-						})),
-					);
-				}
+			deleteExpired: Effect.fn("Videos.deleteExpired")(function* (limit = 100) {
+				const expiredVideos = yield* repo.getExpiredIds(new Date(), limit);
+				const results = yield* Effect.forEach(
+					expiredVideos,
+					(video) => deleteExpiredById(video.id).pipe(Effect.exit),
+					{ concurrency: 2 },
+				);
+
+				yield* Effect.forEach(results, (result) =>
+					Exit.isFailure(result) ? Effect.logError(result.cause) : Effect.void,
+				);
+
+				return {
+					scanned: expiredVideos.length,
+					deleted: results.filter(
+						(result) => Exit.isSuccess(result) && result.value,
+					).length,
+					failed: results.filter(Exit.isFailure).length,
+				};
 			}),
 
 			/*

@@ -1,5 +1,5 @@
 import { NODE_ENV } from "@cap/env";
-import { Button, Dialog, DialogContent, Input, LogoBadge } from "@cap/ui";
+import { Button, Dialog, DialogContent, Input } from "@cap/ui";
 import { faArrowLeft, faEnvelope } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Image from "next/image";
@@ -50,8 +50,6 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
 					</div>
 				)}
 				<div className="space-y-6">
-					<LogoBadge className="mx-auto w-auto h-12" />
-
 					<div className="text-center">
 						<h1 className="text-xl font-semibold">
 							{step === 1 ? "Sign in to comment" : "Email sent"}
@@ -89,7 +87,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
 						)}
 						<p className="mt-6 text-xs text-center text-gray-9">
 							By entering your email, you acknowledge that you have both read
-							and agree to Cap's{" "}
+							and agree to the{" "}
 							<Link
 								href="/terms"
 								target="_blank"

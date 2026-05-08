@@ -13,7 +13,6 @@ import {
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
-import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
 	Database,
@@ -142,7 +141,6 @@ function PolicyDeniedView({ reason }: { reason?: string }) {
 
 	return (
 		<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
-			<Logo className="size-32" />
 			<h1 className="mb-2 text-2xl font-semibold">{title}</h1>
 			<p className="text-gray-400">{description}</p>
 		</div>
@@ -154,9 +152,16 @@ const renderPolicyDenied = (videoId: Video.VideoId, reason?: string) =>
 
 const renderNoSuchElement = () => Effect.sync(() => notFound());
 
+const deleteExpiredVideo = (videoId: Video.VideoId) =>
+	Effect.flatMap(Videos, (videos) => videos.deleteExpiredById(videoId))
+		.pipe(Effect.catchAll(() => Effect.void))
+		.pipe(EffectRuntime.runPromise);
+
 const getShareVideoPageCatchers = (videoId: Video.VideoId) => ({
 	PolicyDenied: (e: Policy.PolicyDeniedError) =>
-		renderPolicyDenied(videoId, e.reason),
+		e.reason === "expired"
+			? renderNoSuchElement()
+			: renderPolicyDenied(videoId, e.reason),
 	NoSuchElementException: renderNoSuchElement,
 });
 
@@ -165,6 +170,7 @@ export async function generateMetadata(
 ): Promise<Metadata> {
 	const params = await props.params;
 	const videoId = params.videoId as Video.VideoId;
+	await deleteExpiredVideo(videoId);
 
 	const referrer = (await headers()).get("x-referrer") || "";
 	const isAllowedReferrer = ALLOWED_REFERRERS.some((domain) =>
@@ -176,8 +182,8 @@ export async function generateMetadata(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
-					title: `${video.name} | Cap Recording`,
-					description: "Watch this video on Cap",
+					title: video.name,
+					description: "Watch this video",
 					openGraph: {
 						images: [
 							{
@@ -203,8 +209,8 @@ export async function generateMetadata(
 					},
 					twitter: {
 						card: "player",
-						title: `${video.name} | Cap Recording`,
-						description: "Watch this video on Cap",
+						title: video.name,
+						description: "Watch this video",
 						images: [
 							new URL(
 								`/api/video/og?videoId=${videoId}`,
@@ -229,38 +235,40 @@ export async function generateMetadata(
 			}),
 		),
 		Effect.catchTags({
-			PolicyDenied: () =>
-				Effect.succeed({
-					title: "Cap: This video is restricted",
-					description: "This video has restricted access.",
-					openGraph: {
-						images: [
-							{
-								url: new URL(
-									`/api/video/og?videoId=${videoId}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1200,
-								height: 630,
+			PolicyDenied: (error) =>
+				error.reason === "expired"
+					? Effect.sync(() => notFound())
+					: Effect.succeed({
+							title: "This video is restricted",
+							description: "This video has restricted access.",
+							openGraph: {
+								images: [
+									{
+										url: new URL(
+											`/api/video/og?videoId=${videoId}`,
+											buildEnv.NEXT_PUBLIC_WEB_URL,
+										).toString(),
+										width: 1200,
+										height: 630,
+									},
+								],
+								videos: [
+									{
+										url: new URL(
+											`/api/playlist?videoId=${videoId}`,
+											buildEnv.NEXT_PUBLIC_WEB_URL,
+										).toString(),
+										width: 1280,
+										height: 720,
+										type: "video/mp4",
+									},
+								],
 							},
-						],
-						videos: [
-							{
-								url: new URL(
-									`/api/playlist?videoId=${videoId}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1280,
-								height: 720,
-								type: "video/mp4",
-							},
-						],
-					},
-					robots: "noindex, nofollow",
-				}),
+							robots: "noindex, nofollow",
+						}),
 			VerifyVideoPasswordError: () =>
 				Effect.succeed({
-					title: "Cap: Password Protected Video",
+					title: "Password Protected Video",
 					description: "This video is password protected.",
 					openGraph: {
 						images: [
@@ -276,7 +284,7 @@ export async function generateMetadata(
 					},
 					twitter: {
 						card: "summary_large_image",
-						title: "Cap: Password Protected Video",
+						title: "Password Protected Video",
 						description: "This video is password protected.",
 						images: [
 							new URL(
@@ -297,6 +305,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const params = await props.params;
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
+	await deleteExpiredVideo(videoId);
 
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
@@ -309,6 +318,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
+					expiresAt: videos.expiresAt,
 					effectiveCreatedAt: videos.effectiveCreatedAt,
 					bucket: videos.bucket,
 					storageIntegrationId: videos.storageIntegrationId,
@@ -685,16 +695,6 @@ async function AuthorizedContent({
 					initialAiData={initialAiData}
 					aiGenerationEnabled={aiGenerationEnabled}
 				/>
-			</div>
-			<div className="py-4 mt-auto">
-				<a
-					target="_blank"
-					href={`/?ref=video_${video.id}`}
-					className="flex justify-center items-center px-4 py-2 mx-auto mb-2 space-x-2 bg-white rounded-full border border-gray-5 w-fit"
-				>
-					<span className="text-sm">Recorded with</span>
-					<Logo className="w-14 h-auto" />
-				</a>
 			</div>
 		</>
 	);

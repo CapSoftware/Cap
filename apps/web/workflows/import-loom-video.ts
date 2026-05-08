@@ -238,6 +238,7 @@ async function downloadLoomToS3(
 			storageIntegrationId: video.storageIntegrationId,
 			createdAt: video.createdAt.toISOString(),
 			updatedAt: video.updatedAt.toISOString(),
+			expiresAt: video.expiresAt?.toISOString() ?? null,
 			metadata: video.metadata,
 		});
 		const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
@@ -395,6 +396,7 @@ async function processVideoOnMediaServer(
 				storageIntegrationId: video.storageIntegrationId,
 				createdAt: video.createdAt.toISOString(),
 				updatedAt: video.updatedAt.toISOString(),
+				expiresAt: video.expiresAt?.toISOString() ?? null,
 				metadata: video.metadata,
 			});
 			const [bucket] = yield* Storage.getAccessForVideo(videoDomain);

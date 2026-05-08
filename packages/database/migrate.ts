@@ -6,7 +6,7 @@ import { migrate } from "drizzle-orm/mysql2/migrator";
 import { runOrgIdBackfill } from "./migrations/orgid_backfill.ts";
 
 async function runMigrate() {
-	await migrate(db() as any, {
+	await migrate(db(), {
 		migrationsFolder: path.join(process.cwd(), "/migrations"),
 	});
 }
@@ -20,19 +20,23 @@ function errorIsOrgIdMigration(e: unknown): e is DrizzleQueryError {
 }
 
 export async function migrateDb() {
-	runMigrate()
-		.catch(async (e) => {
-			if (errorIsOrgIdMigration(e)) {
-				console.log("non-null videos.orgId migration failed, running backfill");
+	try {
+		await runMigrate();
+	} catch (e) {
+		if (errorIsOrgIdMigration(e)) {
+			console.log("non-null videos.orgId migration failed, running backfill");
 
-				await runOrgIdBackfill();
+			await runOrgIdBackfill();
+			try {
 				await runMigrate();
-			} else throw e;
-		})
-		.catch((e) => {
-			if (errorIsOrgIdMigration(e))
-				throw new Error(
-					"videos.orgId backfill failed, you will need to manually update the videos.orgId column before attempting to migrate again.",
-				);
-		});
+			} catch (retryError) {
+				if (errorIsOrgIdMigration(retryError))
+					throw new Error(
+						"videos.orgId backfill failed, you will need to manually update the videos.orgId column before attempting to migrate again.",
+					);
+
+				throw retryError;
+			}
+		} else throw e;
+	}
 }

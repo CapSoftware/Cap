@@ -27,7 +27,7 @@ const HOW_IT_WORKS_ITEMS = [
 	{
 		title: "Keep your webcam visible",
 		description:
-			"On compatible browsers, selecting a camera opens a picture‑in‑picture window that's captured when you record fullscreen. We recommend fullscreen to keep it on top. If PiP capture isn't supported, your camera is limited to the Cap recorder page.",
+			"On compatible browsers, selecting a camera opens a picture-in-picture window that's captured when you record fullscreen. We recommend fullscreen to keep it on top. If PiP capture isn't supported, your camera is limited to the recorder page.",
 		Icon: PictureInPictureIcon,
 		accent: "bg-purple-3 text-purple-11 dark:bg-purple-4 dark:text-purple-10",
 	},

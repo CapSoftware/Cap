@@ -14,6 +14,7 @@ import { HttpClient } from "@effect/platform";
 import {
 	faChartSimple,
 	faCheck,
+	faClock,
 	faCopy,
 	faDownload,
 	faEllipsis,
@@ -44,6 +45,7 @@ import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { usePublicEnv } from "@/utils/public-env";
 
+import { ExpiryDialog } from "../ExpiryDialog";
 import { PasswordDialog } from "../PasswordDialog";
 import { SettingsDialog } from "../SettingsDialog";
 import { SharingDialog } from "../SharingDialog";
@@ -90,6 +92,7 @@ export interface CapCardProps extends PropsWithChildren {
 		metadata?: VideoMetadata;
 		hasPassword?: boolean;
 		hasActiveUpload: boolean | undefined;
+		expiresAt?: Date | null;
 		duration?: number;
 		settings?: {
 			disableComments?: boolean;
@@ -134,6 +137,7 @@ export const CapCard = ({
 
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+	const [isExpiryDialogOpen, setIsExpiryDialogOpen] = useState(false);
 	const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 	const [passwordProtected, setPasswordProtected] = useState(
 		cap.hasPassword || false,
@@ -374,6 +378,13 @@ export const CapCard = ({
 				hasPassword={passwordProtected}
 				onPasswordUpdated={handlePasswordUpdated}
 			/>
+			<ExpiryDialog
+				isOpen={isExpiryDialogOpen}
+				onClose={() => setIsExpiryDialogOpen(false)}
+				videoId={cap.id}
+				expiresAt={cap.expiresAt}
+				onExpiryUpdated={() => router.refresh()}
+			/>
 			<div
 				onClick={handleCardClick}
 				draggable={isOwner && !anyCapSelected}
@@ -514,9 +525,9 @@ export const CapCard = ({
 									<DropdownMenuItem
 										onClick={() => {
 											toast.promise(duplicateMutation.mutateAsync(), {
-												loading: "Duplicating cap...",
-												success: "Cap duplicated successfully",
-												error: "Failed to duplicate cap",
+												loading: "Duplicating video...",
+												success: "Video duplicated successfully",
+												error: "Failed to duplicate video",
 											});
 										}}
 										disabled={
@@ -545,12 +556,22 @@ export const CapCard = ({
 									<DropdownMenuItem
 										onClick={(e) => {
 											e.stopPropagation();
+											setIsExpiryDialogOpen(true);
+										}}
+										className="flex gap-2 items-center rounded-lg"
+									>
+										<FontAwesomeIcon className="size-3" icon={faClock} />
+										<p className="text-sm text-gray-12">Set expiry</p>
+									</DropdownMenuItem>
+									<DropdownMenuItem
+										onClick={(e) => {
+											e.stopPropagation();
 											setConfirmOpen(true);
 										}}
 										className="flex gap-2 items-center rounded-lg"
 									>
 										<FontAwesomeIcon className="size-3" icon={faTrash} />
-										<p className="text-sm text-gray-12">Delete Cap</p>
+										<p className="text-sm text-gray-12">Delete video</p>
 									</DropdownMenuItem>
 								</>
 							)}
@@ -560,8 +581,8 @@ export const CapCard = ({
 					<ConfirmationDialog
 						open={confirmOpen}
 						icon={<FontAwesomeIcon icon={faVideo} />}
-						title="Delete Cap"
-						description={`Are you sure you want to delete the cap "${cap.name}"? This action cannot be undone.`}
+						title="Delete video"
+						description={`Are you sure you want to delete "${cap.name}"? This action cannot be undone.`}
 						confirmLabel={deleteMutation.isPending ? "Deleting..." : "Delete"}
 						cancelLabel="Cancel"
 						loading={deleteMutation.isPending}

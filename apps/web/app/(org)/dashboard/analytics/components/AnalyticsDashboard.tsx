@@ -88,7 +88,7 @@ export function AnalyticsDashboard() {
 			}
 
 			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
+				toast.success("You are already on the Pro plan");
 				return;
 			}
 
@@ -231,7 +231,7 @@ export function AnalyticsDashboard() {
 								<div className="flex relative flex-col flex-1 justify-center items-center py-6 w-full bg-gray-2 bg-opacity-75 backdrop-blur-md">
 									<div className="flex flex-col items-center">
 										<h1 className="text-3xl font-medium text-gray-12">
-											Upgrade to unlock Cap Analytics
+											Upgrade to unlock analytics
 										</h1>
 									</div>
 									<p className="mt-1 text-lg text-center text-gray-11">
@@ -314,7 +314,7 @@ export function AnalyticsDashboard() {
 									>
 										{proCheckoutMutation.isPending
 											? "Loading..."
-											: "Upgrade to Cap Pro"}
+											: "Upgrade to Pro"}
 									</Button>
 								</div>
 							</div>

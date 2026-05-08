@@ -83,15 +83,13 @@ const WorkflowRpcLive = Layer.unwrapScoped(
 		const authMiddleware = RpcMiddleware.layerClient(
 			Workflows.SecretAuthMiddleware,
 			({ request }) =>
-				Effect.gen(function* () {
-					return {
-						...request,
-						headers: Headers.set(
-							request.headers,
-							"authorization",
-							Redacted.value(authSecret.value),
-						),
-					};
+				Effect.succeed({
+					...request,
+					headers: Headers.set(
+						request.headers,
+						"authorization",
+						Redacted.value(authSecret.value),
+					),
 				}),
 		);
 
@@ -146,6 +144,18 @@ export const runPromise = <A, E>(
 	EffectRuntime.runPromiseExit(
 		effect.pipe(Effect.provide(CookiePasswordAttachmentLive)),
 	).then((res) => {
+		if (Exit.isFailure(res)) {
+			if (Cause.isDieType(res.cause)) throw res.cause.defect;
+			throw res;
+		}
+
+		return res.value;
+	});
+
+export const runPromiseWithoutRequest = <A, E>(
+	effect: Effect.Effect<A, E, Layer.Layer.Success<typeof Dependencies>>,
+) =>
+	EffectRuntime.runPromiseExit(effect).then((res) => {
 		if (Exit.isFailure(res)) {
 			if (Cause.isDieType(res.cause)) throw res.cause.defect;
 			throw res;

@@ -15,4 +15,5 @@ export const decodeStorageVideo = (video: DbVideo) =>
 		width: Option.fromNullable(video.width),
 		height: Option.fromNullable(video.height),
 		duration: Option.fromNullable(video.duration),
+		expiresAt: Option.fromNullable(video.expiresAt),
 	});

@@ -149,6 +149,7 @@ export async function createVideoAndGetUploadUrl({
 					storageIntegrationId: existingVideo.storageIntegrationId,
 					createdAt: existingVideo.createdAt.toISOString(),
 					updatedAt: existingVideo.updatedAt.toISOString(),
+					expiresAt: existingVideo.expiresAt?.toISOString() ?? null,
 					metadata: existingVideo.metadata,
 				});
 				const fileKey = `${user.id}/${videoId}/${
@@ -189,7 +190,7 @@ export async function createVideoAndGetUploadUrl({
 
 		const videoData = {
 			id: idToUse,
-			name: `Cap ${
+			name: `${
 				isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
 			} - ${formattedDate}`,
 			ownerId: user.id,
@@ -262,6 +263,7 @@ export async function deleteVideoResultFile({
 		createdAt: video.createdAt.toISOString(),
 		updatedAt: video.updatedAt.toISOString(),
 		metadata: video.metadata,
+		expiresAt: video.expiresAt?.toISOString() ?? null,
 	});
 	const fileKey = `${video.ownerId}/${video.id}/result.mp4`;
 	const logContext = {

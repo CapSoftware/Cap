@@ -1,7 +1,5 @@
 "use client";
 
-import { LogoSpinner } from "@cap/ui";
-
 export function RecordingInProgressOverlay({
 	onConfirmStopped,
 	className,
@@ -42,7 +40,7 @@ export function PreparingVideoOverlay({ className }: { className?: string }) {
 		<div
 			className={`flex flex-col gap-3 justify-center items-center bg-black rounded-xl ${className ?? ""}`}
 		>
-			<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
+			<div className="rounded-full border-2 animate-spin size-8 sm:size-10 border-white/20 border-t-white" />
 			<p className="text-white/50 text-sm">Preparing video...</p>
 		</div>
 	);

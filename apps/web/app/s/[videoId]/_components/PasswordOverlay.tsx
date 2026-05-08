@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Dialog, DialogContent, Input, Logo } from "@cap/ui";
+import { Button, Dialog, DialogContent, Input } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -40,7 +40,6 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
 			<DialogContent className="w-[95vw] max-w-sm p-4 sm:p-6 md:p-8 sm:max-w-md">
 				<div className="flex flex-col items-center space-y-4 sm:space-y-6">
 					<div className="flex flex-col items-center space-y-3 sm:space-y-4">
-						<Logo className="w-16 sm:w-20 md:w-24 h-auto" />
 						<div className="text-center space-y-2">
 							<h2 className="text-lg sm:text-xl font-semibold text-gray-12">
 								Protected Video

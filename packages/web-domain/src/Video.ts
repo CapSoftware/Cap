@@ -43,6 +43,7 @@ export class Video extends Schema.Class<Video>("Video")({
 	duration: Schema.OptionFromNullOr(Schema.Number),
 	createdAt: Schema.Date,
 	updatedAt: Schema.Date,
+	expiresAt: Schema.OptionFromNullOr(Schema.Date),
 }) {
 	static decodeSync = Schema.decodeSync(Video);
 
@@ -121,6 +122,15 @@ export const InstantRecordingCreateSuccess = Schema.Struct({
 	shareUrl: Schema.String,
 	upload: UploadTarget,
 });
+
+export const VideoExpiryPreset = Schema.Literal("never", "7d", "30d");
+export type VideoExpiryPreset = typeof VideoExpiryPreset.Type;
+
+export const VideoSetExpiryInput = Schema.Struct({
+	videoId: VideoId,
+	preset: VideoExpiryPreset,
+});
+export type VideoSetExpiryInput = typeof VideoSetExpiryInput.Type;
 
 export class ImportSource extends Schema.Class<ImportSource>("ImportSource")({
 	source: Schema.Literal("loom"),
@@ -253,6 +263,11 @@ export class VideoRpcs extends RpcGroup.make(
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("VideoDuplicate", {
 		payload: VideoId,
+		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("VideoSetExpiry", {
+		payload: VideoSetExpiryInput,
+		success: Schema.Option(Schema.Date),
 		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("GetUploadProgress", {
