@@ -1,5 +1,6 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { makePersisted } from "@solid-primitives/storage";
+import { listen } from "@tauri-apps/api/event";
 import {
 	availableMonitors,
 	currentMonitor,
@@ -37,12 +38,22 @@ type CameraWindowState = {
 	mirrored: boolean;
 	backgroundBlur: BackgroundBlurMode | boolean;
 };
+type CameraPreviewIssue = {
+	title: string;
+	message: string;
+};
 
 const CAMERA_MIN_SIZE = 150;
 const CAMERA_MAX_SIZE = 600;
 const CAMERA_DEFAULT_SIZE = 230;
 const CAMERA_PRESET_SMALL = 230;
 const CAMERA_PRESET_LARGE = 400;
+const CAMERA_PREVIEW_ERROR_EVENT = "camera-preview-error";
+const CAMERA_PREVIEW_CLEAR_EVENT = "camera-preview-clear";
+const CAMERA_DISCONNECTED_ISSUE: CameraPreviewIssue = {
+	title: "Camera disconnected",
+	message: "The selected camera stopped sending video.",
+};
 
 const getCameraOnlyMode = () => {
 	return window.__CAP__?.cameraOnlyMode === true;
@@ -87,6 +98,16 @@ const ignoreMoveFor = (durationMs: number) => {
 
 const shouldIgnoreMove = () => Date.now() < ignoreMoveUntil;
 
+function createCameraWindowChromeVisibility() {
+	const [visible, setVisible] = createSignal(false);
+
+	return {
+		visible,
+		show: () => setVisible(true),
+		hide: () => setVisible(false),
+	};
+}
+
 const queueCameraPositionSave = (() => {
 	let pending: { x: number; y: number } | null = null;
 	let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -129,16 +150,30 @@ export default function () {
 		(type() !== "windows" && generalSettings.data?.enableNativeCameraPreview) ||
 		false;
 
-	const [cameraDisconnected, setCameraDisconnected] = createSignal(false);
+	const [cameraIssue, setCameraIssue] = createSignal<CameraPreviewIssue | null>(
+		null,
+	);
+
+	const unlistenCameraPreviewError = listen<CameraPreviewIssue>(
+		CAMERA_PREVIEW_ERROR_EVENT,
+		({ payload }) => setCameraIssue(payload),
+	);
+	const unlistenCameraPreviewClear = listen(CAMERA_PREVIEW_CLEAR_EVENT, () =>
+		setCameraIssue(null),
+	);
+	onCleanup(() => {
+		void unlistenCameraPreviewError.then((unlisten) => unlisten());
+		void unlistenCameraPreviewClear.then((unlisten) => unlisten());
+	});
 
 	createTauriEventListener(events.recordingEvent, (payload) => {
 		if (payload.variant === "InputLost" && payload.input === "camera") {
-			setCameraDisconnected(true);
+			setCameraIssue(CAMERA_DISCONNECTED_ISSUE);
 		} else if (
 			payload.variant === "InputRestored" &&
 			payload.input === "camera"
 		) {
-			setCameraDisconnected(false);
+			setCameraIssue(null);
 		}
 	});
 
@@ -197,15 +232,17 @@ export default function () {
 		<RecordingOptionsProvider>
 			<Show
 				when={isNativePreviewEnabled}
-				fallback={<LegacyCameraPreviewPage disconnected={cameraDisconnected} />}
+				fallback={<LegacyCameraPreviewPage issue={cameraIssue} />}
 			>
-				<NativeCameraPreviewPage disconnected={cameraDisconnected} />
+				<NativeCameraPreviewPage issue={cameraIssue} />
 			</Show>
 		</RecordingOptionsProvider>
 	);
 }
 
-function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
+function NativeCameraPreviewPage(props: {
+	issue: Accessor<CameraPreviewIssue | null>;
+}) {
 	const isCameraOnlyMode = () => getCameraOnlyMode();
 
 	const [state, setState] = makePersisted(
@@ -307,19 +344,30 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			(state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
 		return 0.7 + normalized * 0.3;
 	};
+	const chrome = createCameraWindowChromeVisibility();
+	const toolbarClass = () =>
+		cx(
+			"flex flex-row gap-[0.25rem] p-[0.25rem] rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10",
+			chrome.visible()
+				? "opacity-100 translate-y-0"
+				: "opacity-0 translate-y-2",
+		);
 
 	return (
 		<div
 			data-tauri-drag-region
-			class="flex relative flex-col w-screen h-screen cursor-move group"
+			class="flex relative flex-col w-screen h-screen cursor-move"
+			onPointerMove={chrome.show}
+			onPointerLeave={chrome.hide}
+			onPointerCancel={chrome.hide}
 		>
-			<Show when={props.disconnected()}>
-				<CameraDisconnectedOverlay />
+			<Show when={props.issue()}>
+				{(issue) => <CameraIssueOverlay issue={issue()} />}
 			</Show>
 			<div class="h-13">
 				<div class="flex flex-row justify-center items-center">
 					<div
-						class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10"
+						class={toolbarClass()}
 						style={{ transform: `scale(${scale()})` }}
 					>
 						<ControlButton onClick={() => getCurrentWindow().close()}>
@@ -388,6 +436,7 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				state={state}
 				setState={setState}
 				toolbarHeight={52}
+				visible={chrome.visible()}
 			/>
 
 			<Show when={cameraPreviewReady.loading}>
@@ -421,6 +470,7 @@ function CameraResizeHandles(props: {
 	state: CameraWindowState;
 	setState: SetStoreFunction<CameraWindowState>;
 	toolbarHeight: number;
+	visible: boolean;
 }) {
 	const [isResizing, setIsResizing] = createSignal(false);
 	const [activeCorner, setActiveCorner] = createSignal<ResizeCorner | null>(
@@ -495,6 +545,7 @@ function CameraResizeHandles(props: {
 					corner={corner}
 					onMouseDown={handleResizeStart(corner)}
 					active={activeCorner() === corner}
+					visible={props.visible || isResizing()}
 				/>
 			))}
 		</div>
@@ -505,6 +556,7 @@ function ResizeCornerHandle(props: {
 	corner: ResizeCorner;
 	onMouseDown: (e: MouseEvent) => void;
 	active: boolean;
+	visible: boolean;
 }) {
 	const hitAreaClass = () => {
 		switch (props.corner) {
@@ -547,7 +599,7 @@ function ResizeCornerHandle(props: {
 					"absolute w-3.5 h-3.5 border-white pointer-events-none",
 					"transition-[opacity,transform,border-color] duration-150 ease-out",
 					"opacity-0 scale-90",
-					"group-hover:opacity-70 group-hover:scale-100",
+					props.visible && "opacity-70 scale-100",
 					"group-hover/handle:!opacity-100 group-hover/handle:!scale-110",
 					props.active && "!opacity-100 !scale-110",
 					bracketPositionClass(),
@@ -562,7 +614,9 @@ function ResizeCornerHandle(props: {
 
 // Legacy stuff below
 
-function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
+function LegacyCameraPreviewPage(props: {
+	issue: Accessor<CameraPreviewIssue | null>;
+}) {
 	const isCameraOnlyMode = () => getCameraOnlyMode();
 
 	const [state, setState] = makePersisted(
@@ -928,6 +982,14 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			(state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
 		return 0.7 + normalized * 0.3;
 	};
+	const chrome = createCameraWindowChromeVisibility();
+	const toolbarClass = () =>
+		cx(
+			"flex flex-row gap-[0.25rem] p-[0.25rem] rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10",
+			chrome.visible()
+				? "opacity-100 translate-y-0"
+				: "opacity-0 translate-y-2",
+		);
 
 	const [_windowSize] = createResource(
 		() =>
@@ -1051,16 +1113,19 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	return (
 		<div
 			data-tauri-drag-region
-			class="flex relative flex-col w-screen h-screen cursor-move group"
+			class="flex relative flex-col w-screen h-screen cursor-move"
 			style={{ "border-radius": cameraBorderRadius(state) }}
+			onPointerMove={chrome.show}
+			onPointerLeave={chrome.hide}
+			onPointerCancel={chrome.hide}
 		>
-			<Show when={props.disconnected()}>
-				<CameraDisconnectedOverlay />
+			<Show when={props.issue()}>
+				{(issue) => <CameraIssueOverlay issue={issue()} />}
 			</Show>
 			<div class="h-14">
 				<div class="flex flex-row justify-center items-center">
 					<div
-						class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10"
+						class={toolbarClass()}
 						style={{ transform: `scale(${scale()})` }}
 					>
 						<ControlButton onClick={() => getCurrentWindow().close()}>
@@ -1128,6 +1193,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				state={state}
 				setState={setState}
 				toolbarHeight={56}
+				visible={chrome.visible()}
 			/>
 			<div
 				ref={containerRef}
@@ -1244,15 +1310,16 @@ function cameraBorderRadius(state: CameraWindowState) {
 	return `${radius}rem`;
 }
 
-function CameraDisconnectedOverlay() {
+function CameraIssueOverlay(props: { issue: CameraPreviewIssue }) {
 	return (
 		<div
 			class="absolute inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm px-4 pointer-events-none"
 			style={{ "border-radius": "inherit" }}
 		>
-			<p class="text-center text-sm font-medium text-white/90">
-				Camera disconnected
-			</p>
+			<div class="flex max-w-[18rem] flex-col items-center gap-2 text-center text-white">
+				<p class="text-sm font-semibold text-white">{props.issue.title}</p>
+				<p class="text-xs leading-5 text-white/75">{props.issue.message}</p>
+			</div>
 		</div>
 	);
 }

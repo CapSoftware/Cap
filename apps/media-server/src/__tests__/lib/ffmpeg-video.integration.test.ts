@@ -1,9 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	generateThumbnail,
+	materializeMpdManifest,
 	normalizeVideoInputExtension,
 	processVideo,
 	uploadToS3,
@@ -118,6 +120,61 @@ describe("processVideo integration tests", () => {
 			expect(attempts).toBe(2);
 		} finally {
 			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test("does not retry non-retryable S3 upload failures", async () => {
+		const originalFetch = globalThis.fetch;
+		let attempts = 0;
+
+		globalThis.fetch = (async () => {
+			attempts++;
+			return new Response(null, {
+				status: 403,
+				statusText: "Forbidden",
+			});
+		}) as typeof fetch;
+
+		try {
+			await expect(
+				uploadToS3(
+					new Uint8Array([1, 2, 3, 4]),
+					"https://uploads.example/result.mp4",
+					"video/mp4",
+				),
+			).rejects.toThrow("Storage upload failed: 403 Forbidden");
+			expect(attempts).toBe(1);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test("escapes signed DASH manifest URLs in XML attributes", async () => {
+		const originalFetch = globalThis.fetch;
+		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-"));
+
+		globalThis.fetch = (async () =>
+			new Response(
+				'<MPD><Period><AdaptationSet><Representation><SegmentTemplate initialization="init.mp4" media="chunk-$Number$.m4s"/></Representation></AdaptationSet></Period></MPD>',
+				{ status: 200, statusText: "OK" },
+			)) as typeof fetch;
+
+		try {
+			const path = await materializeMpdManifest(
+				"https://cdn.example/video/manifest.mpd?Policy=a&Signature=b&Key-Pair-Id=c",
+				manifestDir,
+			);
+			const content = readFileSync(path, "utf8");
+
+			expect(content).toContain(
+				"init.mp4?Policy=a&amp;Signature=b&amp;Key-Pair-Id=c",
+			);
+			expect(content).toContain(
+				"chunk-$Number$.m4s?Policy=a&amp;Signature=b&amp;Key-Pair-Id=c",
+			);
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(manifestDir, { recursive: true, force: true });
 		}
 	});
 

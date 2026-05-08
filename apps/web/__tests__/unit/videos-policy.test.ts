@@ -29,6 +29,7 @@ function makeVideo(
 		source: { type: "desktopMP4" },
 		metadata: Option.none(),
 		bucketId: Option.none(),
+		storageIntegrationId: Option.none(),
 		folderId: Option.none(),
 		transcriptionStatus: Option.none(),
 		width: Option.none(),

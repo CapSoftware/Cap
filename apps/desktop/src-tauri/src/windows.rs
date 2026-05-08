@@ -25,15 +25,17 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, instrument, warn};
 
 #[cfg(target_os = "macos")]
-use crate::panel_manager::{PanelManager, PanelState, PanelWindowType};
+use crate::panel_manager::{PanelManager, PanelState, PanelWindowType, is_window_handle_valid};
 
 use crate::{
     App, ArcLock, CameraWindowCloseGate, CameraWindowPositionGuard, MainWindowReadyState,
-    RequestScreenCapturePrewarm, RequestSetTargetMode,
+    NewNotification, RequestScreenCapturePrewarm, RequestSetTargetMode,
+    camera_preview_error_message,
     editor_window::PendingEditorInstances,
-    fake_window,
+    emit_camera_preview_clear, emit_camera_preview_error, fake_window,
     general_settings::{self, AppTheme, GeneralSettingsStore},
     permissions,
+    recording::{RecordingEvent, RecordingInputKind},
     recording_settings::RecordingTargetMode,
     screenshot_editor::PendingScreenshotEditorInstances,
     target_select_overlay::WindowFocusManager,
@@ -96,6 +98,21 @@ pub fn show_overlay(window: &WebviewWindow) {
     let _ = window.show();
 }
 
+fn emit_app_event<E>(app: &AppHandle, event: E)
+where
+    E: Event + serde::Serialize + Clone,
+{
+    let event_name = std::any::type_name::<E>();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| event.emit(app))) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!(event = event_name, %error, "Failed to emit app event"),
+        Err(panic) => {
+            let message = crate::panic_payload_message(&panic);
+            error!(event = event_name, panic = %message, "Suppressed panic while emitting app event");
+        }
+    }
+}
+
 fn hide_recording_windows(app: &AppHandle) {
     for (label, window) in app.webview_windows() {
         if let Ok(id) = CapWindowId::from_str(&label)
@@ -113,8 +130,88 @@ fn hide_recording_windows(app: &AppHandle) {
     }
 }
 
-fn bump_camera_window_session(app: &AppHandle) {
-    app.state::<Arc<AtomicU64>>().fetch_add(1, Ordering::AcqRel);
+fn bump_camera_window_session(app: &AppHandle) -> u64 {
+    app.state::<Arc<AtomicU64>>().fetch_add(1, Ordering::AcqRel) + 1
+}
+
+fn camera_window_label_for_session(session_id: u64) -> String {
+    format!("camera-{session_id}")
+}
+
+fn is_camera_window_label(label: &str) -> bool {
+    label == "camera"
+        || label
+            .strip_prefix("camera-")
+            .is_some_and(|suffix| suffix.parse::<u64>().is_ok())
+}
+
+fn camera_window_rank(label: &str) -> u64 {
+    if label == "camera" {
+        return 0;
+    }
+
+    label
+        .strip_prefix("camera-")
+        .and_then(|suffix| suffix.parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+#[cfg(target_os = "macos")]
+fn camera_window_labels(app: &AppHandle<Wry>) -> Vec<String> {
+    app.webview_windows()
+        .into_keys()
+        .filter(|label| is_camera_window_label(label))
+        .collect()
+}
+
+fn camera_webview_window_entries(app: &AppHandle<Wry>) -> Vec<(String, WebviewWindow)> {
+    app.webview_windows()
+        .into_iter()
+        .filter(|(label, _)| is_camera_window_label(label))
+        .collect()
+}
+
+fn camera_webview_windows(app: &AppHandle<Wry>) -> Vec<WebviewWindow> {
+    camera_webview_window_entries(app)
+        .into_iter()
+        .map(|(_, window)| window)
+        .collect()
+}
+
+fn current_camera_window(app: &AppHandle<Wry>) -> Option<WebviewWindow> {
+    #[cfg(target_os = "macos")]
+    {
+        camera_webview_window_entries(app)
+            .into_iter()
+            .filter(|(_, window)| is_window_handle_valid(window))
+            .max_by_key(|(label, _)| camera_window_rank(label))
+            .map(|(_, window)| window)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        camera_webview_window_entries(app)
+            .into_iter()
+            .max_by_key(|(label, _)| camera_window_rank(label))
+            .map(|(_, window)| window)
+    }
+}
+
+fn destroy_camera_window_handle(
+    app: &AppHandle<Wry>,
+    window: WebviewWindow,
+) -> tokio::sync::oneshot::Receiver<()> {
+    let (destroy_tx, destroy_rx) = tokio::sync::oneshot::channel();
+    let _ = window.as_ref().close();
+    app.run_on_main_thread({
+        let window = window.clone();
+        move || {
+            let _ = window.destroy();
+            let _ = destroy_tx.send(());
+        }
+    })
+    .ok();
+    destroy_rx
 }
 
 async fn ensure_camera_input_active(app_state: &mut App) {
@@ -148,8 +245,12 @@ async fn ensure_camera_input_active(app_state: &mut App) {
 }
 
 async fn restore_main_window_inputs(app: &AppHandle) {
-    let should_restore = app
-        .state::<ArcLock<App>>()
+    let Some(state) = app.try_state::<ArcLock<App>>() else {
+        warn!("App state unavailable while restoring main window inputs");
+        return;
+    };
+
+    let should_restore = state
         .try_read()
         .map(|state| !state.is_recording_active_or_pending())
         .unwrap_or(false);
@@ -162,20 +263,25 @@ async fn restore_main_window_inputs(app: &AppHandle) {
         .ok()
         .flatten()
         .unwrap_or_default();
+    let stored_camera_id = settings.camera_id.clone();
 
-    if let Err(err) = crate::set_mic_input(app.state(), settings.mic_name).await {
+    if let Err(err) = crate::set_mic_input(state.clone(), settings.mic_name).await {
         warn!("Failed to restore microphone input for main window: {err}");
     }
 
-    let operation_lock = app.state::<crate::CameraWindowOperationLock>();
+    let Some(operation_lock) = app.try_state::<crate::CameraWindowOperationLock>() else {
+        warn!("CameraWindowOperationLock unavailable while restoring main window inputs");
+        return;
+    };
     let operation_guard = operation_lock.lock().await;
 
-    let camera_to_restore = app
-        .state::<ArcLock<App>>()
+    let camera_to_restore = state
         .try_read()
         .map(|s| {
-            if s.selected_camera_id.is_some() && !s.camera_cleanup_done && !s.camera_in_use {
-                s.selected_camera_id.clone()
+            if !s.camera_cleanup_done && !s.camera_in_use {
+                s.selected_camera_id
+                    .clone()
+                    .or_else(|| stored_camera_id.clone())
             } else {
                 None
             }
@@ -183,12 +289,13 @@ async fn restore_main_window_inputs(app: &AppHandle) {
         .unwrap_or(None);
 
     if let Some(camera_id) = camera_to_restore {
-        let state = app.state::<ArcLock<App>>();
+        emit_camera_preview_clear(app);
         let settings =
             crate::recording_settings::RecordingSettingsStore::camera_settings_for(app, &camera_id);
 
         let (camera_feed, camera_ws_sender, native_sender) = {
             let app_state = &mut *state.write().await;
+            app_state.selected_camera_id = Some(camera_id.clone());
             app_state.camera_in_use = true;
             app_state.camera_cleanup_done = false;
             #[allow(deprecated)]
@@ -212,6 +319,7 @@ async fn restore_main_window_inputs(app: &AppHandle) {
                 .await;
         }
 
+        let mut showed_camera_window = false;
         let mut attempts = 0;
         let init_result: Result<(), String> = loop {
             attempts += 1;
@@ -223,10 +331,24 @@ async fn restore_main_window_inputs(app: &AppHandle) {
                 .await
                 .map_err(|e| e.to_string());
 
+            if !showed_camera_window {
+                showed_camera_window = true;
+                crate::show_camera_window_unlocked(app);
+            }
+
             match request {
                 Ok(future) => match future.await {
-                    Ok(_) => break Ok(()),
+                    Ok(_) => {
+                        emit_camera_preview_clear(app);
+                        break Ok(());
+                    }
                     Err(e) => {
+                        if attempts == 1 {
+                            emit_camera_preview_error(
+                                app,
+                                camera_preview_error_message(&e.to_string()),
+                            );
+                        }
                         if attempts >= 3 {
                             break Err(format!(
                                 "Failed to restore camera after {attempts} attempts: {e}"
@@ -248,15 +370,35 @@ async fn restore_main_window_inputs(app: &AppHandle) {
 
         drop(operation_guard);
 
-        if init_result.is_ok() {
-            crate::restore_camera_window(app);
-        } else {
-            warn!("Failed to restore camera input for main window");
-            let _ = camera_feed.ask(feeds::camera::RemoveInput).await;
-            let app_state = &mut *state.write().await;
-            app_state.selected_camera_id = None;
-            app_state.camera_in_use = false;
-            app_state.camera_preview.pause();
+        match init_result {
+            Ok(()) => crate::restore_camera_window(app),
+            Err(error) => {
+                let message = camera_preview_error_message(&error);
+                warn!("Failed to restore camera input for main window: {error}");
+                let _ = camera_feed.ask(feeds::camera::RemoveInput).await;
+                let emit_input_lost = {
+                    let app_state = &mut *state.write().await;
+                    app_state.selected_camera_id = None;
+                    app_state.camera_in_use = false;
+                    app_state
+                        .disconnected_inputs
+                        .insert(RecordingInputKind::Camera)
+                };
+                crate::show_camera_window_unlocked(app);
+                if emit_input_lost {
+                    let _ = RecordingEvent::InputLost {
+                        input: RecordingInputKind::Camera,
+                    }
+                    .emit(app);
+                }
+                emit_camera_preview_error(app, message.clone());
+                let _ = NewNotification {
+                    title: "Camera unavailable".to_string(),
+                    body: message,
+                    is_error: true,
+                }
+                .emit(app);
+            }
         }
     }
 }
@@ -279,14 +421,18 @@ pub(crate) async fn cleanup_camera_window(
 
     #[cfg(target_os = "macos")]
     {
+        let panel_labels = window
+            .map(|window| vec![window.label().to_string()])
+            .unwrap_or_else(|| camera_window_labels(app));
         let (panel_close_tx, panel_close_rx) = tokio::sync::oneshot::channel();
         let app_for_close = app.clone();
         app.run_on_main_thread(move || {
             use tauri_nspanel::ManagerExt;
-            let label = CapWindowId::Camera.label();
-            if let Ok(panel) = app_for_close.get_webview_panel(&label) {
-                panel.released_when_closed(false);
-                panel.close();
+            for label in panel_labels {
+                if let Ok(panel) = app_for_close.get_webview_panel(&label) {
+                    panel.released_when_closed(false);
+                    panel.close();
+                }
             }
             let _ = panel_close_tx.send(());
         })
@@ -294,39 +440,24 @@ pub(crate) async fn cleanup_camera_window(
         let _ = tokio::time::timeout(std::time::Duration::from_millis(500), panel_close_rx).await;
     }
 
-    if let Some(window) = window {
-        let (destroy_tx, destroy_rx) = tokio::sync::oneshot::channel();
-        app.run_on_main_thread({
-            let window = window.clone();
-            move || {
-                let _ = window.destroy();
-                let _ = destroy_tx.send(());
-            }
-        })
-        .ok();
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), destroy_rx).await;
-    } else if let Some(stale) = CapWindowId::Camera.get(app) {
-        let (destroy_tx, destroy_rx) = tokio::sync::oneshot::channel();
-        app.run_on_main_thread({
-            let stale = stale.clone();
-            move || {
-                let _ = stale.destroy();
-                let _ = destroy_tx.send(());
-            }
-        })
-        .ok();
+    let windows = window
+        .cloned()
+        .map(|window| vec![window])
+        .unwrap_or_else(|| camera_webview_windows(app));
+    for window in windows {
+        let destroy_rx = destroy_camera_window_handle(app, window);
         let _ = tokio::time::timeout(std::time::Duration::from_millis(500), destroy_rx).await;
     }
 
     if wait_for_removal {
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_millis(2000);
-        while start.elapsed() < timeout && CapWindowId::Camera.get(app).is_some() {
+        while start.elapsed() < timeout && !camera_webview_windows(app).is_empty() {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
 
-    let still_exists = CapWindowId::Camera.get(app).is_some();
+    let still_exists = !camera_webview_windows(app).is_empty();
     app.state::<CameraWindowCloseGate>().set_allow_close(false);
 
     !still_exists
@@ -420,11 +551,13 @@ impl CursorMonitorInfo {
 }
 
 fn center_camera_window(app: &AppHandle, window: &WebviewWindow) {
-    let state = app.state::<ArcLock<crate::App>>();
-    let camera_state = if let Ok(guard) = state.try_read() {
-        guard.camera_preview.get_state().ok().unwrap_or_default()
-    } else {
-        crate::camera::CameraPreviewState::default()
+    let camera_state = match app.try_state::<ArcLock<crate::App>>() {
+        Some(state) => state
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.camera_preview.get_state().ok())
+            .unwrap_or_default(),
+        None => crate::camera::CameraPreviewState::default(),
     };
 
     let toolbar_height = 56.0;
@@ -439,10 +572,14 @@ fn center_camera_window(app: &AppHandle, window: &WebviewWindow) {
     let (pos_x, pos_y) = monitor_info.center_position(window_width, window_height);
 
     let _ = window.set_size(tauri::LogicalSize::new(window_width, window_height));
-    app.state::<CameraWindowPositionGuard>().ignore_for(1000);
+    if let Some(guard) = app.try_state::<CameraWindowPositionGuard>() {
+        guard.ignore_for(1000);
+    }
     let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
-    if let Ok(guard) = state.try_read() {
+    if let Some(state) = app.try_state::<ArcLock<crate::App>>()
+        && let Ok(guard) = state.try_read()
+    {
         guard
             .camera_preview
             .notify_window_resized(window_width as u32, window_height as u32);
@@ -562,7 +699,7 @@ impl FromStr for CapWindowId {
         Ok(match s {
             "main" => Self::Main,
             "settings" => Self::Settings,
-            "camera" => Self::Camera,
+            s if is_camera_window_label(s) => Self::Camera,
             "capture-area" => Self::CaptureArea,
             // legacy identifier
             "in-progress-recording" => Self::RecordingControls,
@@ -676,6 +813,10 @@ impl CapWindowId {
     }
 
     pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
+        if matches!(self, Self::Camera) {
+            return current_camera_window(app);
+        }
+
         let label = self.label();
         app.get_webview_window(&label)
     }
@@ -785,6 +926,14 @@ impl ShowCapWindow {
             }
         }
 
+        let camera_window_label = if matches!(self, Self::Camera { .. }) {
+            Some(camera_window_label_for_session(bump_camera_window_session(
+                app,
+            )))
+        } else {
+            None
+        };
+
         if let Self::Camera { centered } = self {
             #[cfg(target_os = "macos")]
             {
@@ -819,8 +968,6 @@ impl ShowCapWindow {
                         .await;
                 }
             }
-
-            bump_camera_window_session(app);
 
             if let Some(window) = self.id(app).get(app) {
                 #[cfg(target_os = "macos")]
@@ -870,7 +1017,10 @@ impl ShowCapWindow {
                             panel_manager.mark_ready(PanelWindowType::Camera, 0).await;
                         }
 
-                        let state = app.state::<ArcLock<App>>();
+                        let Some(state) = app.try_state::<ArcLock<App>>() else {
+                            warn!("App state unavailable while showing camera window");
+                            return Err(tauri::Error::WindowNotFound);
+                        };
                         let mut app_state = state.write().await;
 
                         let enable_native_camera_preview = GeneralSettingsStore::get(app)
@@ -952,7 +1102,10 @@ impl ShowCapWindow {
 
                 #[cfg(not(target_os = "macos"))]
                 {
-                    let state = app.state::<ArcLock<App>>();
+                    let Some(state) = app.try_state::<ArcLock<App>>() else {
+                        warn!("App state unavailable while showing camera window");
+                        return Err(tauri::Error::WindowNotFound);
+                    };
                     let mut app_state = state.write().await;
 
                     let enable_native_camera_preview = GeneralSettingsStore::get(app)
@@ -1001,19 +1154,26 @@ impl ShowCapWindow {
             hide_recording_windows(app);
 
             let is_recording = app
-                .state::<ArcLock<App>>()
-                .try_read()
-                .map(|state| state.is_recording_active_or_pending())
+                .try_state::<ArcLock<App>>()
+                .and_then(|state| {
+                    state
+                        .try_read()
+                        .ok()
+                        .map(|state| state.is_recording_active_or_pending())
+                })
                 .unwrap_or(true);
 
             if !is_recording {
                 let app = app.clone();
                 tokio::spawn(async move {
-                    let state = app.state::<ArcLock<App>>();
-                    let app_state = &mut *state.write().await;
-                    app_state.camera_preview.pause();
-                    let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
-                    app_state.camera_in_use = false;
+                    if let Some(state) = app.try_state::<ArcLock<App>>() {
+                        let app_state = &mut *state.write().await;
+                        app_state.camera_preview.pause();
+                        let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
+                        app_state.camera_in_use = false;
+                    } else {
+                        warn!("App state unavailable while pausing camera preview");
+                    }
                 });
             }
         }
@@ -1124,11 +1284,13 @@ impl ShowCapWindow {
             } = self
             {
                 window.hide().ok();
-                let _ = RequestSetTargetMode {
-                    target_mode: Some(*target_mode),
-                    display_id: cursor_display_id,
-                }
-                .emit(app);
+                emit_app_event(
+                    app,
+                    RequestSetTargetMode {
+                        target_mode: Some(*target_mode),
+                        display_id: cursor_display_id,
+                    },
+                );
             } else {
                 if let Self::Main { .. } = self {
                     restore_main_window_inputs(app).await;
@@ -1147,11 +1309,13 @@ impl ShowCapWindow {
                 }
 
                 if let Self::Main { init_target_mode } = self {
-                    let _ = RequestSetTargetMode {
-                        target_mode: *init_target_mode,
-                        display_id: cursor_display_id,
-                    }
-                    .emit(app);
+                    emit_app_event(
+                        app,
+                        RequestSetTargetMode {
+                            target_mode: *init_target_mode,
+                            display_id: cursor_display_id,
+                        },
+                    );
                 }
             }
 
@@ -1259,14 +1423,18 @@ impl ShowCapWindow {
 
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
-                        let prewarmer =
-                            app_handle.state::<crate::platform::ScreenCapturePrewarmer>();
-                        prewarmer.request(false).await;
+                        if let Some(prewarmer) =
+                            app_handle.try_state::<crate::platform::ScreenCapturePrewarmer>()
+                        {
+                            prewarmer.request(false).await;
+                        } else {
+                            warn!(
+                                "ScreenCapturePrewarmer state unavailable during main window creation"
+                            );
+                        }
                     });
 
-                    if let Err(error) = (RequestScreenCapturePrewarm { force: false }).emit(app) {
-                        warn!(%error, "Failed to emit ScreenCaptureKit prewarm event");
-                    }
+                    emit_app_event(app, RequestScreenCapturePrewarm { force: false });
                 }
 
                 #[cfg(not(target_os = "macos"))]
@@ -1303,7 +1471,10 @@ impl ShowCapWindow {
                 };
 
                 let camera_ws_port = {
-                    let state = app.state::<ArcLock<App>>();
+                    let Some(state) = app.try_state::<ArcLock<App>>() else {
+                        warn!("App state unavailable during target select overlay creation");
+                        return Err(tauri::Error::WindowNotFound);
+                    };
                     let state = state.read().await;
                     state.camera_ws_port
                 };
@@ -1701,7 +1872,10 @@ impl ShowCapWindow {
                     .unwrap_or_default();
 
                 {
-                    let state = app.state::<ArcLock<App>>();
+                    let Some(state) = app.try_state::<ArcLock<App>>() else {
+                        warn!("App state unavailable while creating camera window");
+                        return Err(tauri::Error::WindowNotFound);
+                    };
                     let mut state = state.write().await;
 
                     let shutdown_preview =
@@ -1721,8 +1895,11 @@ impl ShowCapWindow {
                     #[cfg(target_os = "macos")]
                     permissions::prepare_macos_panel_window(app);
 
+                    let label = camera_window_label
+                        .clone()
+                        .unwrap_or_else(|| CapWindowId::Camera.label());
                     let mut window_builder = self
-                        .window_builder(app, "/camera")
+                        .window_builder_with_label(app, "/camera", label)
                         .maximized(false)
                         .resizable(false)
                         .shadow(false)
@@ -1826,7 +2003,9 @@ impl ShowCapWindow {
 
                     #[cfg(not(target_os = "macos"))]
                     {
-                        app.state::<CameraWindowPositionGuard>().ignore_for(1000);
+                        if let Some(guard) = app.try_state::<CameraWindowPositionGuard>() {
+                            guard.ignore_for(1000);
+                        }
                         let _ = window
                             .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
                     }
@@ -1883,7 +2062,9 @@ impl ShowCapWindow {
                                     unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
                                 panel.set_level(max_level);
 
-                                app.state::<CameraWindowPositionGuard>().ignore_for(1000);
+                                if let Some(guard) = app.try_state::<CameraWindowPositionGuard>() {
+                                    guard.ignore_for(1000);
+                                }
                                 let _ = window.set_position(tauri::LogicalPosition::new(
                                     camera_pos_x,
                                     camera_pos_y,
@@ -2272,6 +2453,16 @@ impl ShowCapWindow {
         url: impl Into<PathBuf>,
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
         let id = self.id(app);
+        self.window_builder_with_label(app, url, id.label())
+    }
+
+    fn window_builder_with_label<'a>(
+        &'a self,
+        app: &'a AppHandle<Wry>,
+        url: impl Into<PathBuf>,
+        label: impl Into<String>,
+    ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
+        let id = self.id(app);
 
         let theme = GeneralSettingsStore::get(app)
             .ok()
@@ -2283,7 +2474,7 @@ impl ShowCapWindow {
             })
             .unwrap_or(None);
 
-        let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
+        let mut builder = WebviewWindow::builder(app, label, WebviewUrl::App(url.into()))
             .title(id.title())
             .visible(false)
             .accept_first_mouse(true)

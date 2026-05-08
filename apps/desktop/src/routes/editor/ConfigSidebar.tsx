@@ -41,6 +41,11 @@ import transparentBg from "~/assets/illustrations/transparent.webp";
 import { Toggle } from "~/components/Toggle";
 import { generalSettingsStore } from "~/store";
 import { normalizeOpaqueHexColor } from "~/utils/hex-color";
+import {
+	createSelectedOrganization,
+	getOrganizationBrandColorSwatches,
+	type OrganizationBrandColorSwatch,
+} from "~/utils/organization-branding";
 import type {
 	BackgroundBlurMode,
 	BackgroundSource,
@@ -69,6 +74,7 @@ import IconLucideSparkles from "~icons/lucide/sparkles";
 import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
 import IconLucideWind from "~icons/lucide/wind";
+import { BrandColorsDropdown } from "./BrandColorsDropdown";
 import { CaptionsTab } from "./CaptionsTab";
 import { syncCaptionWordsWithText } from "./captions";
 import { getColorPreviewBorderColor, hexToRgb, RgbInput } from "./color-utils";
@@ -331,6 +337,12 @@ export function ConfigSidebar() {
 		editorState,
 		meta,
 	} = useEditorContext();
+	const organizationSelection = createSelectedOrganization();
+	const brandColorSwatches = createMemo(() =>
+		getOrganizationBrandColorSwatches(
+			organizationSelection.selectedOrganization(),
+		),
+	);
 
 	const cursorIdleDelay = () =>
 		((project.cursor as { hideWhenIdleDelay?: number }).hideWhenIdleDelay ??
@@ -471,7 +483,10 @@ export function ConfigSidebar() {
 					hidden: !!editorState.timeline.selection,
 				}}
 			>
-				<BackgroundConfig scrollRef={scrollRef} />
+				<BackgroundConfig
+					scrollRef={scrollRef}
+					brandColorSwatches={brandColorSwatches()}
+				/>
 				<CameraConfig scrollRef={scrollRef} />
 				<KTabs.Content
 					value="audio"
@@ -840,13 +855,13 @@ export function ConfigSidebar() {
 					value={TAB_IDS.captions}
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
-					<CaptionsTab />
+					<CaptionsTab brandColorSwatches={brandColorSwatches()} />
 				</KTabs.Content>
 				<KTabs.Content
 					value={TAB_IDS.keyboard}
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
-					<KeyboardTab />
+					<KeyboardTab brandColorSwatches={brandColorSwatches()} />
 				</KTabs.Content>
 			</div>
 			<div
@@ -1068,6 +1083,7 @@ export function ConfigSidebar() {
 													<TextSegmentConfig
 														segment={item.segment}
 														segmentIndex={item.index}
+														brandColorSwatches={brandColorSwatches()}
 													/>
 												</div>
 											)}
@@ -1381,7 +1397,10 @@ export function ConfigSidebar() {
 	);
 }
 
-function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
+function BackgroundConfig(props: {
+	scrollRef: HTMLDivElement;
+	brandColorSwatches: OrganizationBrandColorSwatch[];
+}) {
 	const { project, setProject, projectHistory } = useEditorContext();
 
 	// Background tabs
@@ -1544,6 +1563,36 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 			from: DEFAULT_GRADIENT_FROM,
 			to: DEFAULT_GRADIENT_TO,
 		},
+	};
+
+	const setColorBackgroundSource = (color: string) => {
+		const rgbValue = hexToRgb(color);
+		if (!rgbValue) return;
+
+		const [r, g, b, a] = rgbValue;
+		backgrounds.color = {
+			type: "color",
+			value: [r, g, b],
+			alpha: a,
+		};
+
+		setProject("background", "source", backgrounds.color);
+	};
+
+	const setBackgroundBorderColor = (color: string) => {
+		const rgbValue = hexToRgb(color);
+		if (!rgbValue) return;
+		const [r, g, b] = rgbValue;
+
+		setProject("background", "border", {
+			...(project.background.border ?? {
+				enabled: true,
+				width: 5.0,
+				color: [0, 0, 0],
+				opacity: 50.0,
+			}),
+			color: [r, g, b],
+		});
 	};
 
 	return (
@@ -1944,7 +1993,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 							}
 						>
 							<div class="flex flex-col flex-wrap gap-3">
-								<div class="flex flex-row items-center w-full h-10">
+								<div class="flex flex-col gap-2">
 									<RgbInput
 										value={
 											project.background.source.type === "color"
@@ -1957,6 +2006,10 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 												value,
 											});
 										}}
+									/>
+									<BrandColorsDropdown
+										swatches={props.brandColorSwatches}
+										onSelect={setColorBackgroundSource}
 									/>
 								</div>
 
@@ -2018,7 +2071,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 						</Show>
 					</KTabs.Content>
 					<KTabs.Content value="gradient">
-						<GradientEditor />
+						<GradientEditor brandColorSwatches={props.brandColorSwatches} />
 					</KTabs.Content>
 				</KTabs>
 			</Field>
@@ -2135,20 +2188,26 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 							/>
 						</Field>
 						<Field name="Border Color" icon={<IconCapImage class="size-4" />}>
-							<RgbInput
-								value={project.background.border?.color ?? [0, 0, 0]}
-								onChange={(color) =>
-									setProject("background", "border", {
-										...(project.background.border ?? {
-											enabled: true,
-											width: 5.0,
-											color: [0, 0, 0],
-											opacity: 50.0,
-										}),
-										color,
-									})
-								}
-							/>
+							<div class="flex flex-col gap-2">
+								<RgbInput
+									value={project.background.border?.color ?? [0, 0, 0]}
+									onChange={(color) =>
+										setProject("background", "border", {
+											...(project.background.border ?? {
+												enabled: true,
+												width: 5.0,
+												color: [0, 0, 0],
+												opacity: 50.0,
+											}),
+											color,
+										})
+									}
+								/>
+								<BrandColorsDropdown
+									swatches={props.brandColorSwatches}
+									onSelect={setBackgroundBorderColor}
+								/>
+							</div>
 						</Field>
 						<Field
 							name="Border Opacity"
@@ -2575,54 +2634,68 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 function HexColorInput(props: {
 	value: string;
 	onChange: (value: string) => void;
+	brandColorSwatches?: OrganizationBrandColorSwatch[];
 }) {
 	const [text, setText] = createWritableMemo(() => props.value);
 	let prevColor = props.value;
 	let colorInput: HTMLInputElement | undefined;
+	const selectBrandColor = (color: string) => {
+		setText(color);
+		prevColor = color;
+		props.onChange(color);
+	};
 
 	return (
-		<div class="flex items-center gap-3">
-			<div class="relative">
-				<button
-					type="button"
-					class="size-[2rem] rounded-[0.5rem] cursor-pointer transition-[box-shadow]"
-					style={{
-						"background-color": text(),
-						"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(text())}`,
-					}}
-					onClick={() => colorInput?.click()}
-				/>
-				<input
-					ref={(el) => {
-						colorInput = el;
-					}}
-					type="color"
-					class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+		<div class="flex flex-col gap-2">
+			<div class="flex items-center gap-3">
+				<div class="relative">
+					<button
+						type="button"
+						class="size-[2rem] rounded-[0.5rem] cursor-pointer transition-[box-shadow]"
+						style={{
+							"background-color": text(),
+							"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(
+								text(),
+							)}`,
+						}}
+						onClick={() => colorInput?.click()}
+					/>
+					<input
+						ref={(el) => {
+							colorInput = el;
+						}}
+						type="color"
+						class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+						value={text()}
+						onInput={(e) => {
+							const next = e.currentTarget.value;
+							setText(next);
+							prevColor = next;
+							props.onChange(next);
+						}}
+					/>
+				</div>
+				<TextInput
+					class="flex-1 px-3 py-2 rounded-lg border border-gray-3 bg-gray-2 text-sm text-gray-12"
 					value={text()}
+					onFocus={() => {
+						prevColor = props.value;
+					}}
 					onInput={(e) => {
-						const next = e.currentTarget.value;
+						setText(e.currentTarget.value);
+					}}
+					onBlur={(e) => {
+						const next =
+							normalizeOpaqueHexColor(e.currentTarget.value) ?? prevColor;
 						setText(next);
 						prevColor = next;
 						props.onChange(next);
 					}}
 				/>
 			</div>
-			<TextInput
-				class="flex-1 px-3 py-2 rounded-lg border border-gray-3 bg-gray-2 text-sm text-gray-12"
-				value={text()}
-				onFocus={() => {
-					prevColor = props.value;
-				}}
-				onInput={(e) => {
-					setText(e.currentTarget.value);
-				}}
-				onBlur={(e) => {
-					const next =
-						normalizeOpaqueHexColor(e.currentTarget.value) ?? prevColor;
-					setText(next);
-					prevColor = next;
-					props.onChange(next);
-				}}
+			<BrandColorsDropdown
+				swatches={props.brandColorSwatches ?? []}
+				onSelect={selectBrandColor}
 			/>
 		</div>
 	);
@@ -2631,6 +2704,7 @@ function HexColorInput(props: {
 function TextSegmentConfig(props: {
 	segmentIndex: number;
 	segment: TextSegment;
+	brandColorSwatches: OrganizationBrandColorSwatch[];
 }) {
 	const { setProject } = useEditorContext();
 	const clampNumber = (value: number, min: number, max: number) =>
@@ -2787,6 +2861,7 @@ function TextSegmentConfig(props: {
 			<Field name="Color" icon={<IconLucidePalette class="size-4" />}>
 				<HexColorInput
 					value={props.segment.color}
+					brandColorSwatches={props.brandColorSwatches}
 					onChange={(value) =>
 						updateSegment((segment) => {
 							segment.color = value;

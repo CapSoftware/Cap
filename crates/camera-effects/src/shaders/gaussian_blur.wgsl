@@ -39,7 +39,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let weights = array<f32, 5>(0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
     let offsets = array<f32, 5>(0.0, 1.0, 2.0, 3.0, 4.0);
 
-    let blur_scale = uniforms.intensity * 2.0;
+    let blur_scale = uniforms.intensity;
     let step = uniforms.direction * uniforms.texel_size * blur_scale;
 
     var color = textureSample(input_tex, input_sampler, in.uv) * weights[0];

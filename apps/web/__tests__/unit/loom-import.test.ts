@@ -1,9 +1,11 @@
+import { Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const whereMock = vi.fn();
 const valuesMock = vi.fn();
 const startMock = vi.fn();
 const revalidatePathMock = vi.fn();
+const storageGetWritableAccessForUserMock = vi.hoisted(() => vi.fn());
 
 const mockDb = {
 	select: vi.fn(() => mockDb),
@@ -65,6 +67,12 @@ vi.mock("@cap/utils", () => ({
 	userIsPro: vi.fn(() => true),
 }));
 
+vi.mock("@cap/web-backend", () => ({
+	Storage: {
+		getWritableAccessForUser: storageGetWritableAccessForUserMock,
+	},
+}));
+
 vi.mock("@cap/web-domain", () => ({
 	Video: {
 		VideoId: {
@@ -81,6 +89,11 @@ vi.mock("drizzle-orm", () => ({
 vi.mock("next/cache", () => ({
 	revalidatePath: revalidatePathMock,
 }));
+
+vi.mock("@/lib/server", async () => {
+	const { Effect } = await import("effect");
+	return { runPromise: Effect.runPromise };
+});
 
 vi.mock("workflow/api", () => ({
 	start: startMock,
@@ -107,6 +120,12 @@ describe("importFromLoom", () => {
 		valuesMock.mockResolvedValue(undefined);
 		whereMock.mockResolvedValue([]);
 		startMock.mockResolvedValue(undefined);
+		storageGetWritableAccessForUserMock.mockReturnValue(
+			Effect.succeed({
+				bucketId: Option.some("bucket-1"),
+				storageIntegrationId: Option.none(),
+			}),
+		);
 		mockGetCurrentUser.mockResolvedValue({
 			id: "user-123",
 		});
@@ -137,8 +156,7 @@ describe("importFromLoom", () => {
 	it("removes a stale Loom row and recreates it with the Cap video id", async () => {
 		whereMock
 			.mockResolvedValueOnce([{ importedVideoId: "stale-row", videoId: null }])
-			.mockResolvedValueOnce(undefined)
-			.mockResolvedValueOnce([{ id: "bucket-1" }]);
+			.mockResolvedValueOnce(undefined);
 
 		const fetchMock = vi.mocked(fetch);
 		fetchMock.mockImplementation(async (input) => {

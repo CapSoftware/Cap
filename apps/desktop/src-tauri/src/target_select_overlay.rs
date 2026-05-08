@@ -258,8 +258,8 @@ pub async fn update_camera_overlay_bounds(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    let window = app
-        .get_webview_window("camera")
+    let window = CapWindowId::Camera
+        .get(&app)
         .ok_or("Camera window not found")?;
 
     let width_u32 = width as u32;

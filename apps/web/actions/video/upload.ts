@@ -3,14 +3,14 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
+import { videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
-import { S3Buckets } from "@cap/web-backend";
+import { Storage as StorageService } from "@cap/web-backend";
 import {
 	type Folder,
 	type Organisation,
-	S3Bucket,
+	type User,
 	Video,
 } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -27,7 +27,7 @@ async function getVideoUploadPresignedUrl({
 	resolution,
 	videoCodec,
 	audioCodec,
-	bucketId,
+	video,
 	userId,
 }: {
 	fileKey: string;
@@ -35,14 +35,10 @@ async function getVideoUploadPresignedUrl({
 	resolution?: string;
 	videoCodec?: string;
 	audioCodec?: string;
-	bucketId: string | undefined;
-	userId: string;
+	video?: Video.Video;
+	userId: User.UserId;
 }) {
 	try {
-		const bucketIdOption = Option.fromNullable(bucketId).pipe(
-			Option.map((id) => S3Bucket.S3BucketId.make(id)),
-		);
-
 		const contentType = fileKey.endsWith(".aac")
 			? "audio/aac"
 			: fileKey.endsWith(".webm")
@@ -56,7 +52,6 @@ async function getVideoUploadPresignedUrl({
 							: "video/mp2t";
 
 		const Fields = {
-			"Content-Type": contentType,
 			"x-amz-meta-userid": userId,
 			"x-amz-meta-duration": duration ?? "",
 			"x-amz-meta-resolution": resolution ?? "",
@@ -64,16 +59,36 @@ async function getVideoUploadPresignedUrl({
 			"x-amz-meta-audiocodec": audioCodec ?? "",
 		};
 
-		const presignedPostData = await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(bucketIdOption);
+		const result = await Effect.gen(function* () {
+			if (video) {
+				const upload = yield* StorageService.createUploadTargetForVideo(
+					video,
+					fileKey,
+					{
+						contentType,
+						fields: Fields,
+					},
+				);
+				return {
+					upload,
+					bucketId: video.bucketId,
+					storageIntegrationId: video.storageIntegrationId,
+				};
+			}
 
-			return yield* bucket.getPresignedPostUrl(fileKey, {
-				Fields,
-				Expires: 1800,
+			return yield* StorageService.createUploadTargetForUser(userId, fileKey, {
+				contentType,
+				fields: Fields,
 			});
 		}).pipe(runPromise);
 
-		return { presignedPostData };
+		return {
+			...result,
+			presignedPostData:
+				result.upload.type === "s3Post"
+					? { url: result.upload.url, fields: result.upload.fields }
+					: null,
+		};
 	} catch (error) {
 		console.error("Error getting presigned URL:", error);
 		throw new Error(
@@ -114,11 +129,6 @@ export async function createVideoAndGetUploadUrl({
 		if (!userIsPro(user) && duration && duration > 300)
 			throw new Error("upgrade_required");
 
-		const [customBucket] = await db()
-			.select()
-			.from(s3Buckets)
-			.where(eq(s3Buckets.ownerId, user.id));
-
 		const date = new Date();
 		const formattedDate = `${date.getDate()} ${date.toLocaleString("default", {
 			month: "long",
@@ -131,27 +141,51 @@ export async function createVideoAndGetUploadUrl({
 				.where(eq(videos.id, videoId));
 
 			if (existingVideo) {
+				if (existingVideo.ownerId !== user.id) throw new Error("Forbidden");
+
+				const existingVideoDomain = Video.Video.decodeSync({
+					...existingVideo,
+					bucketId: existingVideo.bucket,
+					storageIntegrationId: existingVideo.storageIntegrationId,
+					createdAt: existingVideo.createdAt.toISOString(),
+					updatedAt: existingVideo.updatedAt.toISOString(),
+					metadata: existingVideo.metadata,
+				});
 				const fileKey = `${user.id}/${videoId}/${
 					isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"
 				}`;
-				const { presignedPostData } = await getVideoUploadPresignedUrl({
+				const { presignedPostData, upload } = await getVideoUploadPresignedUrl({
 					fileKey,
 					duration: duration?.toString(),
 					resolution,
 					videoCodec,
 					audioCodec,
-					bucketId: existingVideo.bucket ?? customBucket?.id,
+					video: existingVideoDomain,
 					userId: user.id,
 				});
 
 				return {
 					id: existingVideo.id,
 					presignedPostData,
+					uploadTarget: upload,
 				};
 			}
 		}
 
 		const idToUse = Video.VideoId.make(videoId || nanoId());
+
+		const fileKey = `${user.id}/${idToUse}/${
+			isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"
+		}`;
+		const { presignedPostData, upload, bucketId, storageIntegrationId } =
+			await getVideoUploadPresignedUrl({
+				fileKey,
+				duration: duration?.toString(),
+				resolution,
+				videoCodec,
+				audioCodec,
+				userId: user.id,
+			});
 
 		const videoData = {
 			id: idToUse,
@@ -162,7 +196,8 @@ export async function createVideoAndGetUploadUrl({
 			orgId,
 			source: { type: "webMP4" as const },
 			isScreenshot,
-			bucket: customBucket?.id,
+			bucket: Option.getOrNull(bucketId),
+			storageIntegrationId: Option.getOrNull(storageIntegrationId),
 			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
 			...(folderId ? { folderId } : {}),
 		};
@@ -173,19 +208,6 @@ export async function createVideoAndGetUploadUrl({
 			await db().insert(videoUploads).values({
 				videoId: idToUse,
 			});
-
-		const fileKey = `${user.id}/${idToUse}/${
-			isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"
-		}`;
-		const { presignedPostData } = await getVideoUploadPresignedUrl({
-			fileKey,
-			duration: duration?.toString(),
-			resolution,
-			videoCodec,
-			audioCodec,
-			bucketId: customBucket?.id,
-			userId: user.id,
-		});
 
 		if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
 			await dub()
@@ -206,6 +228,7 @@ export async function createVideoAndGetUploadUrl({
 		return {
 			id: idToUse,
 			presignedPostData,
+			uploadTarget: upload,
 		};
 	} catch (error) {
 		console.error("Error creating video and getting upload URL:", error);
@@ -225,25 +248,27 @@ export async function deleteVideoResultFile({
 	if (!user) throw new Error("Unauthorized");
 
 	const [video] = await db()
-		.select({
-			id: videos.id,
-			ownerId: videos.ownerId,
-			bucketId: videos.bucket,
-		})
+		.select()
 		.from(videos)
 		.where(eq(videos.id, videoId));
 
 	if (!video) throw new Error("Video not found");
 	if (video.ownerId !== user.id) throw new Error("Forbidden");
 
-	const bucketIdOption = Option.fromNullable(video.bucketId).pipe(
-		Option.map((id) => S3Bucket.S3BucketId.make(id)),
-	);
+	const videoDomain = Video.Video.decodeSync({
+		...video,
+		bucketId: video.bucket,
+		storageIntegrationId: video.storageIntegrationId,
+		createdAt: video.createdAt.toISOString(),
+		updatedAt: video.updatedAt.toISOString(),
+		metadata: video.metadata,
+	});
 	const fileKey = `${video.ownerId}/${video.id}/result.mp4`;
 	const logContext = {
 		videoId: video.id,
 		ownerId: video.ownerId,
-		bucketId: video.bucketId ?? null,
+		bucketId: video.bucket ?? null,
+		storageIntegrationId: video.storageIntegrationId ?? null,
 		fileKey,
 	};
 
@@ -261,7 +286,7 @@ export async function deleteVideoResultFile({
 
 	try {
 		await deleteResultObjectWithRetry({
-			bucketIdOption,
+			video: videoDomain,
 			fileKey,
 			logContext,
 		});
@@ -282,16 +307,17 @@ export async function deleteVideoResultFile({
 }
 
 async function deleteResultObjectWithRetry({
-	bucketIdOption,
+	video,
 	fileKey,
 	logContext,
 }: {
-	bucketIdOption: Option.Option<S3Bucket.S3BucketId>;
+	video: Video.Video;
 	fileKey: string;
 	logContext: {
 		videoId: Video.VideoId;
 		ownerId: string;
 		bucketId: string | null;
+		storageIntegrationId: string | null;
 		fileKey: string;
 	};
 }) {
@@ -301,7 +327,7 @@ async function deleteResultObjectWithRetry({
 		attempt += 1;
 		try {
 			await Effect.gen(function* () {
-				const [bucket] = yield* S3Buckets.getBucketAccess(bucketIdOption);
+				const [bucket] = yield* StorageService.getAccessForVideo(video);
 				yield* bucket.deleteObject(fileKey);
 			}).pipe(runPromise);
 			return;

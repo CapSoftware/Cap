@@ -5,6 +5,7 @@ import { createResource, Suspense } from "solid-js";
 import { Input } from "~/routes/editor/ui";
 import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
+import { IntegrationConfigHeader } from "./config-header";
 
 interface S3Config {
 	provider: string;
@@ -74,7 +75,7 @@ export default function S3ConfigPage() {
 	const testConfig = useMutation(() => ({
 		mutationFn: async (config: S3Config) => {
 			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), 5500); // 5.5s timeout (slightly longer than backend)
+			const timeoutId = setTimeout(() => controller.abort(), 5500);
 
 			try {
 				const response = await apiClient.desktop.testS3Config({
@@ -144,6 +145,7 @@ export default function S3ConfigPage() {
 
 	return (
 		<div class="flex flex-col p-4 h-full">
+			<IntegrationConfigHeader title="S3 Config" />
 			<div class="rounded-xl border bg-gray-2 border-gray-4 custom-scroll">
 				<div class="flex-1">
 					<Suspense

@@ -25,7 +25,10 @@ pub enum BlurMode {
 
 const SEGMENTATION_SIZE: u32 = 256;
 const INFERENCE_INTERVAL_MS: u64 = 66;
-const EMA_ALPHA: f32 = 0.7;
+const MASK_GROWTH_ALPHA: f32 = 0.25;
+const MASK_SHRINK_ALPHA: f32 = 0.12;
+const MASK_STABILITY_EPSILON: f32 = 0.025;
+const MASK_EDGE_CONTRAST: f32 = 4.0;
 
 pub struct BlurProcessor {
     model: SegmentationModel,
@@ -36,6 +39,7 @@ pub struct BlurProcessor {
     mask_data: Vec<f32>,
     smoothed_mask: Vec<f32>,
     mask_scratch: Vec<f32>,
+    mask_upload: Vec<f32>,
     last_inference: Instant,
     downsample_texture: wgpu::Texture,
     downsample_view: wgpu::TextureView,
@@ -183,6 +187,7 @@ impl BlurProcessor {
             mask_data: vec![0.0; pixel_count],
             smoothed_mask: vec![0.0; pixel_count],
             mask_scratch: vec![0.0; pixel_count],
+            mask_upload: vec![0.0; pixel_count],
             last_inference: Instant::now()
                 .checked_sub(std::time::Duration::from_secs(1))
                 .unwrap_or_else(Instant::now),
@@ -241,9 +246,11 @@ impl BlurProcessor {
         let input_view = input_texture.create_view(&Default::default());
 
         if self.last_inference.elapsed().as_millis() >= INFERENCE_INTERVAL_MS as u128 {
-            self.run_segmentation(device, queue, input_texture);
+            let mask_updated = self.run_segmentation(device, queue, input_texture);
             self.last_inference = Instant::now();
-            self.mask_dirty = true;
+            if mask_updated {
+                self.mask_dirty = true;
+            }
         }
 
         if self.mask_dirty {
@@ -253,23 +260,31 @@ impl BlurProcessor {
 
         let textures = self.textures.as_ref().expect("textures initialized above");
 
-        let blur_intensity = match mode {
-            BlurMode::Light => 0.75,
-            BlurMode::Heavy => 2.0,
+        let (blur_intensity, blur_passes) = match mode {
+            BlurMode::Light => (1.5, 1),
+            BlurMode::Heavy => (2.0, 3),
         };
 
-        self.blur_pipeline.blur_two_pass(
-            device,
-            encoder,
-            BlurPassInputs {
-                source: &input_view,
-                intermediate: &textures.blur_intermediate_view,
-                output: &textures.blurred_view,
-                width,
-                height,
-                intensity: blur_intensity,
-            },
-        );
+        for pass_index in 0..blur_passes {
+            let source = if pass_index == 0 {
+                &input_view
+            } else {
+                &textures.blurred_view
+            };
+
+            self.blur_pipeline.blur_two_pass(
+                device,
+                encoder,
+                BlurPassInputs {
+                    source,
+                    intermediate: &textures.blur_intermediate_view,
+                    output: &textures.blurred_view,
+                    width,
+                    height,
+                    intensity: blur_intensity,
+                },
+            );
+        }
 
         self.composite_pipeline.composite(
             device,
@@ -354,10 +369,10 @@ impl BlurProcessor {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         input_texture: &wgpu::Texture,
-    ) {
+    ) -> bool {
         let rgba_256 = match self.readback_downsampled(device, queue, input_texture) {
             Some(data) => data,
-            None => return,
+            None => return false,
         };
 
         match self.model.run_inference(&rgba_256) {
@@ -366,15 +381,17 @@ impl BlurProcessor {
                 if new_mask.len() >= pixel_count {
                     for (i, &raw) in new_mask.iter().take(pixel_count).enumerate() {
                         let v = refine_mask_value(raw);
-                        self.smoothed_mask[i] =
-                            EMA_ALPHA * v + (1.0 - EMA_ALPHA) * self.smoothed_mask[i];
+                        self.smoothed_mask[i] = smooth_mask_value(self.smoothed_mask[i], v);
                     }
                     self.mask_data
                         .copy_from_slice(&self.smoothed_mask[..pixel_count]);
+                    return true;
                 }
+                false
             }
             Err(e) => {
                 tracing::warn!("Segmentation inference failed: {e:#}");
+                false
             }
         }
     }
@@ -506,12 +523,12 @@ impl BlurProcessor {
         let w = SEGMENTATION_SIZE as usize;
 
         blur_mask_1d(&self.mask_data, &mut self.mask_scratch, w, true);
-        blur_mask_1d(&self.mask_scratch, &mut self.mask_data, w, false);
-        blur_mask_1d(&self.mask_data, &mut self.mask_scratch, w, true);
-        blur_mask_1d(&self.mask_scratch, &mut self.mask_data, w, false);
+        blur_mask_1d(&self.mask_scratch, &mut self.mask_upload, w, false);
+        blur_mask_1d(&self.mask_upload, &mut self.mask_scratch, w, true);
+        blur_mask_1d(&self.mask_scratch, &mut self.mask_upload, w, false);
 
         let mask_u8: Vec<u8> = self
-            .mask_data
+            .mask_upload
             .iter()
             .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
             .collect();
@@ -567,8 +584,22 @@ fn blur_mask_1d(src: &[f32], dst: &mut [f32], width: usize, horizontal: bool) {
 
 fn refine_mask_value(raw: f32) -> f32 {
     let clamped = raw.clamp(0.0, 1.0);
-    let shifted = (clamped - 0.5) * 6.0;
+    let shifted = (clamped - 0.5) * MASK_EDGE_CONTRAST;
     1.0 / (1.0 + (-shifted).exp())
+}
+
+fn smooth_mask_value(previous: f32, next: f32) -> f32 {
+    let delta = next - previous;
+    if delta.abs() < MASK_STABILITY_EPSILON {
+        previous
+    } else {
+        let alpha = if delta > 0.0 {
+            MASK_GROWTH_ALPHA
+        } else {
+            MASK_SHRINK_ALPHA
+        };
+        (previous + delta * alpha).clamp(0.0, 1.0)
+    }
 }
 
 const BLIT_SHADER: &str = r"

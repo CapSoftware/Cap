@@ -4,19 +4,17 @@ import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import {
-	importedVideos,
-	s3Buckets,
-	videos,
-	videoUploads,
-} from "@cap/database/schema";
+import { importedVideos, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
+import { Storage } from "@cap/web-backend";
 import type { Organisation } from "@cap/web-domain";
 import { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
+import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
+import { runPromise } from "@/lib/server";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
 interface LoomUrlResponse {
@@ -297,10 +295,9 @@ export async function importFromLoom({
 		fetchLoomOEmbed(loomVideoId),
 	]);
 
-	const [customBucket] = await db()
-		.select()
-		.from(s3Buckets)
-		.where(eq(s3Buckets.ownerId, user.id));
+	const writable = await Storage.getWritableAccessForUser(user.id).pipe(
+		runPromise,
+	);
 
 	const videoId = Video.VideoId.make(nanoId());
 	const name =
@@ -315,7 +312,8 @@ export async function importFromLoom({
 			ownerId: user.id,
 			orgId,
 			source: { type: "webMP4" as const },
-			bucket: customBucket?.id,
+			bucket: Option.getOrNull(writable.bucketId),
+			storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
 			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
 			...(oembedMeta?.duration ? { duration: oembedMeta.duration } : {}),
 			...(oembedMeta?.width ? { width: oembedMeta.width } : {}),
@@ -353,7 +351,7 @@ export async function importFromLoom({
 			videoId,
 			userId: user.id,
 			rawFileKey,
-			bucketId: customBucket?.id ?? null,
+			bucketId: Option.getOrNull(writable.bucketId),
 			loomDownloadUrl: downloadUrl,
 			loomVideoId,
 		},

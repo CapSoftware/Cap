@@ -7,6 +7,7 @@ import { FolderId } from "./Folder.ts";
 import { OrganisationId } from "./Organisation.ts";
 import { PolicyDeniedError } from "./Policy.ts";
 import { S3BucketId } from "./S3Bucket.ts";
+import { StorageIntegrationId, UploadTarget } from "./Storage.ts";
 import { UserId } from "./User.ts";
 
 export const VideoId = Schema.String.pipe(Schema.brand("VideoId"));
@@ -32,6 +33,7 @@ export class Video extends Schema.Class<Video>("Video")({
 		Schema.Record({ key: Schema.String, value: Schema.Any }),
 	),
 	bucketId: Schema.OptionFromNullOr(S3BucketId),
+	storageIntegrationId: Schema.OptionFromNullOr(StorageIntegrationId),
 	folderId: Schema.OptionFromNullOr(FolderId),
 	transcriptionStatus: Schema.OptionFromNullOr(
 		Schema.Literal("PROCESSING", "COMPLETE", "ERROR", "SKIPPED", "NO_AUDIO"),
@@ -117,7 +119,7 @@ export const InstantRecordingCreateInput = Schema.Struct({
 export const InstantRecordingCreateSuccess = Schema.Struct({
 	id: VideoId,
 	shareUrl: Schema.String,
-	upload: PresignedPost,
+	upload: UploadTarget,
 });
 
 export class ImportSource extends Schema.Class<ImportSource>("ImportSource")({

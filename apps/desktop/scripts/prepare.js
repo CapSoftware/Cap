@@ -112,7 +112,7 @@ export async function createTauriPlatformConfigs(
 	const mergedConfig = configOptions
 		? deepMerge(baseConfig, configOptions)
 		: baseConfig;
-	await fs.writeFile(
+	await writeFileIfChanged(
 		`${srcTauri}/${configFileName}`,
 		JSON.stringify(mergedConfig, null, 2),
 	);
@@ -129,3 +129,11 @@ main().catch((err) => {
 	console.error(err);
 	console.error("---");
 });
+
+async function writeFileIfChanged(filePath, contents) {
+	const currentContents = await fs
+		.readFile(filePath, "utf-8")
+		.catch(() => undefined);
+
+	if (currentContents !== contents) await fs.writeFile(filePath, contents);
+}

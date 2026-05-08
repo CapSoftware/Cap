@@ -62,7 +62,7 @@ use cap_rendering::ProjectRecordingsMeta;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use cpal::StreamError;
-use editor_window::{EditorInstances, WindowEditorInstance};
+use editor_window::{EditorInstances, PendingEditorInstances, WindowEditorInstance};
 use ffmpeg::ffi::AV_TIME_BASE;
 use general_settings::GeneralSettingsStore;
 use kameo::{Actor, actor::ActorRef};
@@ -91,10 +91,10 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::Listener;
-use tauri::{AppHandle, Manager, State, Window, WindowEvent, ipc::Channel};
+use tauri::{AppHandle, Emitter, Manager, State, Window, WindowEvent, ipc::Channel};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -193,21 +193,69 @@ where
     E: std::fmt::Display,
     F: Future<Output = Result<T, E>>,
 {
+    let started = Instant::now();
     match tokio::time::timeout(timeout, fut).await {
-        Ok(Ok(value)) => Some(value),
+        Ok(Ok(value)) => {
+            info!(
+                step = name,
+                elapsed_ms = started.elapsed().as_millis(),
+                "Exit cleanup step completed"
+            );
+            Some(value)
+        }
         Ok(Err(err)) => {
-            warn!(step = name, error = %err, "Exit cleanup step failed");
+            warn!(
+                step = name,
+                elapsed_ms = started.elapsed().as_millis(),
+                error = %err,
+                "Exit cleanup step failed"
+            );
             None
         }
         Err(_) => {
             warn!(
                 step = name,
                 timeout_ms = timeout.as_millis(),
+                elapsed_ms = started.elapsed().as_millis(),
                 "Exit cleanup step timed out"
             );
             None
         }
     }
+}
+
+fn log_process_memory_snapshot(stage: &'static str) {
+    let Ok(pid) = sysinfo::get_current_pid() else {
+        return;
+    };
+
+    let mut system = sysinfo::System::new();
+    system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+
+    if let Some(process) = system.process(pid) {
+        info!(
+            stage = stage,
+            rss_mb = process.memory() / 1_048_576,
+            virtual_mb = process.virtual_memory() / 1_048_576,
+            "Process memory snapshot"
+        );
+    }
+}
+
+fn spawn_process_memory_sampler(app: AppHandle) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+
+        loop {
+            interval.tick().await;
+
+            if app_is_exiting(&app) {
+                break;
+            }
+
+            log_process_memory_snapshot("periodic");
+        }
+    });
 }
 
 fn force_exit(code: i32) -> ! {
@@ -368,6 +416,51 @@ pub enum UploadResult {
 pub struct VideoRecordingMetadata {
     pub duration: f64,
     pub size: f64,
+}
+
+const CAMERA_PREVIEW_ERROR_EVENT: &str = "camera-preview-error";
+const CAMERA_PREVIEW_CLEAR_EVENT: &str = "camera-preview-clear";
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CameraPreviewErrorPayload {
+    title: String,
+    message: String,
+}
+
+fn camera_preview_error_message(err: &str) -> String {
+    if err.contains("DeviceNotFound") {
+        return "This camera is no longer available. Check that it is connected and allowed by system permissions.".to_string();
+    }
+
+    if err.contains("CameraTimeout") {
+        return "No frames were received from this camera. It may be closed, disconnected, covered, or in use by another app.".to_string();
+    }
+
+    if err.contains("StartCapturing") {
+        return "The system could not start this camera. It may be unavailable or in use by another app.".to_string();
+    }
+
+    if err.contains("InvalidFormat") {
+        return "This camera did not report a usable capture format.".to_string();
+    }
+
+    "The selected camera could not be started. Choose another camera or reconnect this one."
+        .to_string()
+}
+
+fn emit_camera_preview_error(app_handle: &AppHandle, message: String) {
+    let _ = app_handle.emit(
+        CAMERA_PREVIEW_ERROR_EVENT,
+        CameraPreviewErrorPayload {
+            title: "Camera unavailable".to_string(),
+            message,
+        },
+    );
+}
+
+fn emit_camera_preview_clear(app_handle: &AppHandle) {
+    let _ = app_handle.emit(CAMERA_PREVIEW_CLEAR_EVENT, ());
 }
 
 impl App {
@@ -731,26 +824,24 @@ async fn set_camera_input(
 
     let skip_camera_window = skip_camera_window.unwrap_or(false);
 
-    if id == current_id && camera_in_use {
-        if id.is_some() && !skip_camera_window {
-            let camera_window_is_visible = CapWindowId::Camera
-                .get(&app_handle)
-                .and_then(|window| window.is_visible().ok())
-                .unwrap_or(false);
+    if id == current_id && camera_in_use && !skip_camera_window {
+        let camera_window_is_visible = CapWindowId::Camera
+            .get(&app_handle)
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false);
 
-            let show_result = if camera_window_is_visible {
-                Ok(())
-            } else {
-                ShowCapWindow::Camera { centered: false }
-                    .show(&app_handle)
-                    .await
-                    .map(|_| ())
-            };
+        let show_result = if camera_window_is_visible {
+            Ok(())
+        } else {
+            ShowCapWindow::Camera { centered: false }
+                .show(&app_handle)
+                .await
+                .map(|_| ())
+        };
 
-            show_result
-                .map_err(|err| error!("Failed to show camera preview window: {err}"))
-                .ok();
-        }
+        show_result
+            .map_err(|err| error!("Failed to show camera preview window: {err}"))
+            .ok();
 
         return Ok(());
     }
@@ -764,19 +855,28 @@ async fn set_camera_input(
 
     match &id {
         None => {
-            {
+            let shutdown_rx = {
                 let app = &mut *state.write().await;
                 app.camera_in_use = false;
                 app.selected_camera_id = None;
-                app.camera_preview.pause();
+                app.camera_preview.begin_shutdown()
             };
 
             camera_feed
                 .ask(feeds::camera::RemoveInput)
                 .await
                 .map_err(|e| e.to_string())?;
+
+            if let Some(rx) = shutdown_rx {
+                let _ = tokio::time::timeout(Duration::from_millis(500), rx).await;
+            }
+
+            if !skip_camera_window {
+                windows::cleanup_camera_window(&app_handle, None, true, true).await;
+            }
         }
         Some(id) => {
+            emit_camera_preview_clear(&app_handle);
             let settings =
                 recording_settings::RecordingSettingsStore::camera_settings_for(&app_handle, id);
             let (camera_ws_sender, native_preview_active) = {
@@ -809,6 +909,7 @@ async fn set_camera_input(
                 }
             }
 
+            let mut showed_camera_window = skip_camera_window;
             let mut attempts = 0;
             let init_result: Result<(), String> = loop {
                 attempts += 1;
@@ -821,6 +922,16 @@ async fn set_camera_input(
                     .await
                     .map_err(|e| e.to_string());
 
+                if !showed_camera_window {
+                    showed_camera_window = true;
+                    let show_result = ShowCapWindow::Camera { centered: false }
+                        .show(&app_handle)
+                        .await;
+                    show_result
+                        .map_err(|err| error!("Failed to show camera preview window: {err}"))
+                        .ok();
+                }
+
                 let result = match request {
                     Ok(future) => future.await.map_err(|e| e.to_string()),
                     Err(e) => Err(e),
@@ -828,9 +939,16 @@ async fn set_camera_input(
 
                 match result {
                     Ok(_) => {
+                        emit_camera_preview_clear(&app_handle);
                         break Ok(());
                     }
                     Err(e) => {
+                        if attempts == 1 && !skip_camera_window {
+                            emit_camera_preview_error(
+                                &app_handle,
+                                camera_preview_error_message(&e),
+                            );
+                        }
                         if attempts >= 3 {
                             break Err(format!(
                                 "Failed to initialize camera after {attempts} attempts: {e}"
@@ -846,21 +964,27 @@ async fn set_camera_input(
             };
 
             if let Err(e) = init_result {
+                let message = camera_preview_error_message(&e);
                 let _ = camera_feed.ask(feeds::camera::RemoveInput).await;
-                let app = &mut *state.write().await;
-                app.selected_camera_id = None;
-                app.camera_in_use = false;
-                app.camera_preview.pause();
-                return Err(e);
-            }
-
-            if !skip_camera_window {
-                let show_result = ShowCapWindow::Camera { centered: false }
-                    .show(&app_handle)
-                    .await;
-                show_result
-                    .map_err(|err| error!("Failed to show camera preview window: {err}"))
-                    .ok();
+                let emit_input_lost = {
+                    let app = &mut *state.write().await;
+                    app.camera_in_use = false;
+                    app.disconnected_inputs.insert(RecordingInputKind::Camera)
+                };
+                if emit_input_lost {
+                    let _ = RecordingEvent::InputLost {
+                        input: RecordingInputKind::Camera,
+                    }
+                    .emit(&app_handle);
+                }
+                emit_camera_preview_error(&app_handle, message.clone());
+                let _ = NewNotification {
+                    title: "Camera unavailable".to_string(),
+                    body: message,
+                    is_error: true,
+                }
+                .emit(&app_handle);
+                return Ok(());
             }
         }
     }
@@ -1170,17 +1294,22 @@ pub(crate) fn schedule_resume_recovery(app_handle: AppHandle) {
 
         #[cfg(target_os = "macos")]
         {
-            let prewarmer = app_handle.state::<crate::platform::ScreenCapturePrewarmer>();
-            prewarmer.request(true).await;
+            if let Some(prewarmer) =
+                app_handle.try_state::<crate::platform::ScreenCapturePrewarmer>()
+            {
+                prewarmer.request(true).await;
+            } else {
+                warn!("ScreenCapturePrewarmer state unavailable during resume recovery");
+            }
         }
 
         if !app_is_exiting(&app_handle) {
-            let _ = RequestScreenCapturePrewarm { force: true }.emit(&app_handle);
+            emit_app_event_safely(&app_handle, RequestScreenCapturePrewarm { force: true });
         }
 
         if !app_is_exiting(&app_handle) {
             let snapshot = get_devices_snapshot().await;
-            let _ = snapshot.emit(&app_handle);
+            emit_app_event_safely(&app_handle, snapshot);
         }
     });
 }
@@ -1324,9 +1453,59 @@ async fn cleanup_camera_after_overlay_close(app: AppHandle, captured_session_id:
 }
 
 async fn cleanup_app_resources_for_exit(app: &AppHandle) {
+    let started = Instant::now();
+    log_process_memory_snapshot("exit_cleanup_begin");
+
     power_observer::uninstall(app);
     fake_window::cancel_all_fake_window_listeners(app);
     close_target_select_overlays(app);
+
+    let app_for_pending_editors = app.clone();
+    let _ = await_exit_step(
+        "dispose_pending_editor_instances",
+        APP_EXIT_STEP_TIMEOUT,
+        async move {
+            PendingEditorInstances::dispose_all(&app_for_pending_editors).await;
+            Ok::<(), String>(())
+        },
+    )
+    .await;
+
+    let app_for_editors = app.clone();
+    let _ = await_exit_step(
+        "dispose_editor_instances",
+        APP_EXIT_STEP_TIMEOUT,
+        async move {
+            EditorInstances::dispose_all(&app_for_editors).await;
+            Ok::<(), String>(())
+        },
+    )
+    .await;
+
+    let app_for_pending_screenshot_editors = app.clone();
+    let _ = await_exit_step(
+        "dispose_pending_screenshot_editor_instances",
+        APP_EXIT_STEP_TIMEOUT,
+        async move {
+            PendingScreenshotEditorInstances::dispose_all(&app_for_pending_screenshot_editors)
+                .await;
+            Ok::<(), String>(())
+        },
+    )
+    .await;
+
+    let app_for_screenshot_editors = app.clone();
+    let _ = await_exit_step(
+        "dispose_screenshot_editor_instances",
+        APP_EXIT_STEP_TIMEOUT,
+        async move {
+            ScreenshotEditorInstances::dispose_all(&app_for_screenshot_editors).await;
+            Ok::<(), String>(())
+        },
+    )
+    .await;
+
+    log_process_memory_snapshot("exit_after_editor_dispose");
 
     let (mic_feed, camera_feed, camera_shutdown) = {
         let Some(state) = app.try_state::<ArcLock<App>>() else {
@@ -1365,6 +1544,11 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     }
 
     captions::release_ml_models().await;
+    log_process_memory_snapshot("exit_cleanup_end");
+    info!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "Exit cleanup completed"
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -2490,7 +2674,9 @@ async fn set_project_config(
     editor_instance: WindowEditorInstance,
     config: ProjectConfiguration,
 ) -> Result<(), String> {
-    config.write(&editor_instance.project_path).unwrap();
+    config
+        .write(&editor_instance.project_path)
+        .map_err(|error| format!("Failed to write project config: {error}"))?;
 
     editor_instance.project_config.0.send(config).ok();
 
@@ -3056,6 +3242,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
             last_checked: chrono::Utc::now().timestamp() as i32,
         }),
         organizations: auth.organizations,
+        organizations_updated_at: auth.organizations_updated_at,
     };
     println!("Updating auth store with new pro status");
     AuthStore::set(&app, Some(updated_auth)).map_err(|e| e.to_string())?;
@@ -3445,8 +3632,10 @@ async fn set_camera_preview_state(
 #[specta::specta]
 #[instrument(skip(app))]
 fn set_camera_window_position(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
-    let guard = app.state::<CameraWindowPositionGuard>();
-    if guard.should_ignore() {
+    if app
+        .try_state::<CameraWindowPositionGuard>()
+        .is_some_and(|guard| guard.should_ignore())
+    {
         return Ok(());
     }
 
@@ -3858,6 +4047,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     "screenshot-editor",
                 ])
                 .map_label(|label| match label {
+                    label if label.starts_with("camera-") => "camera",
                     label if label.starts_with("editor-") => "editor",
                     label if label.starts_with("screenshot-editor-") => "screenshot-editor",
                     label if label.starts_with("window-capture-occluder-") => {
@@ -4012,6 +4202,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 app.manage(CameraWindowOperationLock::default());
                 app.manage(AppExitState::default());
                 app.manage(MainWindowReadyState::default());
+                spawn_process_memory_sampler(app.clone());
 
                 app.manage(Arc::new(RwLock::new(
                     ClipboardContext::new().expect("Failed to create clipboard context"),
@@ -4117,8 +4308,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             #[cfg(target_os = "macos")]
             RequestScreenCapturePrewarm::listen_any_spawn(&app, async |event, app| {
-                let prewarmer = app.state::<crate::platform::ScreenCapturePrewarmer>();
-                prewarmer.request(event.force).await;
+                if let Some(prewarmer) = app.try_state::<crate::platform::ScreenCapturePrewarmer>()
+                {
+                    prewarmer.request(event.force).await;
+                } else {
+                    warn!("ScreenCapturePrewarmer state unavailable during prewarm request");
+                }
             });
 
             let app_handle = app.clone();
@@ -4129,30 +4324,31 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             Ok(())
         })
         .on_window_event(|window, event| {
-            let label = window.label();
-            let app = window.app_handle();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let label = window.label();
+                let app = window.app_handle();
 
-            if matches!(
-                event,
-                WindowEvent::CloseRequested { .. }
-                    | WindowEvent::Moved(_)
-                    | WindowEvent::Focused(_)
-            ) && app_is_exiting(app)
-            {
-                return;
-            }
+                if matches!(
+                    event,
+                    WindowEvent::CloseRequested { .. }
+                        | WindowEvent::Moved(_)
+                        | WindowEvent::Focused(_)
+                ) && app_is_exiting(app)
+                {
+                    return;
+                }
 
-            match event {
-                WindowEvent::CloseRequested { api, .. } => {
-                    if let Ok(window_id) = CapWindowId::from_str(label) {
-                        match window_id {
-                            CapWindowId::Camera => {
-                                if app
-                                    .try_state::<CameraWindowCloseGate>()
-                                    .is_some_and(|close_gate| close_gate.allow_close())
-                                {
-                                    return;
-                                }
+                match event {
+                    WindowEvent::CloseRequested { api, .. } => {
+                        if let Ok(window_id) = CapWindowId::from_str(label) {
+                            match window_id {
+                                CapWindowId::Camera => {
+                                    if app
+                                        .try_state::<CameraWindowCloseGate>()
+                                        .is_some_and(|close_gate| close_gate.allow_close())
+                                    {
+                                        return;
+                                    }
 
                                 api.prevent_close();
                                 let _ = window.hide();
@@ -4450,8 +4646,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 );
                             }
                             CapWindowId::Camera => {
-                                let guard = app.state::<CameraWindowPositionGuard>();
-                                if guard.should_ignore() {
+                                if app
+                                    .try_state::<CameraWindowPositionGuard>()
+                                    .is_some_and(|guard| guard.should_ignore())
+                                {
                                     return;
                                 }
                                 window_position_persistence::queue_camera_position(
@@ -4464,7 +4662,17 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         }
                     }
                 }
-                _ => {}
+                    _ => {}
+                }
+            }));
+
+            if let Err(panic) = result {
+                let message = panic_payload_message(&panic);
+                tracing::error!(panic = %message, "Suppressed panic in Tauri WindowEvent handler");
+                sentry::capture_message(
+                    &format!("Tauri WindowEvent panic suppressed: {message}"),
+                    sentry::Level::Error,
+                );
             }
         })
         .build(tauri_context)
@@ -4486,13 +4694,28 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         });
 }
 
-fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
         s.clone()
     } else {
         "<non-string panic payload>".to_string()
+    }
+}
+
+fn emit_app_event_safely<E>(app: &AppHandle, event: E)
+where
+    E: Event + Serialize + Clone,
+{
+    let event_name = std::any::type_name::<E>();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| event.emit(app))) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!(event = event_name, %error, "Failed to emit app event"),
+        Err(panic) => {
+            let message = panic_payload_message(&panic);
+            error!(event = event_name, panic = %message, "Suppressed panic while emitting app event");
+        }
     }
 }
 
@@ -4594,6 +4817,13 @@ where
             tracing::warn!(error = %err, "No tokio runtime available; dropping background task");
         }
     }
+}
+
+fn show_camera_window_unlocked(app: &AppHandle) {
+    let app = app.clone();
+    spawn_on_runtime(async move {
+        let _ = ShowCapWindow::Camera { centered: false }.show(&app).await;
+    });
 }
 
 #[cfg(target_os = "windows")]

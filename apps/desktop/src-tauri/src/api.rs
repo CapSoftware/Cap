@@ -9,17 +9,18 @@ use tracing::{instrument, trace};
 
 use crate::web_api::{AuthedApiError, ManagerExt};
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultipartUploadInitiateResponse {
+    pub upload_id: String,
+    pub provider: Option<String>,
+}
+
 #[instrument(skip(app))]
 pub async fn upload_multipart_initiate(
     app: &AppHandle,
     video_id: &str,
-) -> Result<String, AuthedApiError> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct Response {
-        upload_id: String,
-    }
-
+) -> Result<MultipartUploadInitiateResponse, AuthedApiError> {
     let resp = app
         .authed_api_request("/api/upload/multipart/initiate", |c, url| {
             c.post(url)
@@ -41,10 +42,9 @@ pub async fn upload_multipart_initiate(
         return Err(format!("api/upload_multipart_initiate/{status}: {error_body}").into());
     }
 
-    resp.json::<Response>()
+    resp.json::<MultipartUploadInitiateResponse>()
         .await
         .map_err(|err| format!("api/upload_multipart_initiate/response: {err}").into())
-        .map(|data| data.upload_id)
 }
 
 #[instrument(skip(app, upload_id))]
@@ -293,12 +293,33 @@ pub async fn desktop_video_progress(
     Ok(())
 }
 
+#[derive(Serialize, Deserialize, Type, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationBrandColors {
+    pub primary: Option<String>,
+    pub secondary: Option<String>,
+    pub accent: Option<String>,
+    pub background: Option<String>,
+}
+
+fn default_organization_role() -> String {
+    "member".to_string()
+}
+
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Organization {
     pub id: String,
     pub name: String,
     pub owner_id: String,
+    #[serde(default = "default_organization_role")]
+    pub role: String,
+    #[serde(default)]
+    pub can_edit_brand: bool,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub brand_colors: OrganizationBrandColors,
 }
 
 pub async fn signal_recording_complete(
