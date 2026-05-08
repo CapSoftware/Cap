@@ -74,10 +74,7 @@ impl Renderer {
         )?);
         let mut max_duration = recordings.duration();
 
-        if let Some(camera_path) = meta.camera_path()
-            && let Ok(camera_duration) =
-                recordings.get_source_duration(&recording_meta.path(&camera_path))
-        {
+        if let Some(camera_duration) = recordings.first_camera_duration() {
             max_duration = max_duration.max(camera_duration);
         }
 
