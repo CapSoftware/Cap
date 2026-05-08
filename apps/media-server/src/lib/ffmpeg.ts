@@ -106,6 +106,22 @@ async function readStreamWithLimit(
 
 const MAX_STDERR_BYTES = 64 * 1024;
 
+function redactUrl(value: string): string {
+	try {
+		const url = new URL(value);
+		if (url.protocol === "file:") {
+			return url.pathname;
+		}
+		return `${url.origin}${url.pathname}`;
+	} catch {
+		return value.split("?")[0] ?? value;
+	}
+}
+
+function redactProcessOutput(output: string, url: string): string {
+	return output.split(url).join(redactUrl(url));
+}
+
 export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 	if (!canAcceptNewProcess()) {
 		throw new Error("Server is busy, please try again later");
@@ -113,7 +129,7 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 
 	activeProcesses++;
 
-	const truncatedUrl = videoUrl.substring(0, 100);
+	const displayUrl = redactUrl(videoUrl);
 
 	const proc = registerSubprocess(
 		spawn({
@@ -132,6 +148,7 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 					proc.stderr as ReadableStream<Uint8Array>,
 					MAX_STDERR_BYTES,
 				);
+				const safeStderrText = redactProcessOutput(stderrText, videoUrl);
 				await proc.exited;
 
 				const hasVideoStream = /Stream #\d+:\d+.*Video:/.test(stderrText);
@@ -139,15 +156,15 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 
 				if (!hasVideoStream) {
 					console.error(
-						`[checkHasAudioTrack] No video stream found for ${truncatedUrl}... — ffmpeg may not be able to access the URL. stderr: ${stderrText.substring(0, 500)}`,
+						`[checkHasAudioTrack] No video stream found for ${displayUrl}. ffmpeg may not be able to access the URL. stderr: ${safeStderrText.substring(0, 500)}`,
 					);
 					throw new Error(
-						`ffmpeg could not read video file: no streams detected. stderr: ${stderrText.substring(0, 300)}`,
+						`ffmpeg could not read video file: no streams detected. stderr: ${safeStderrText.substring(0, 300)}`,
 					);
 				}
 
 				console.log(
-					`[checkHasAudioTrack] Result for ${truncatedUrl}...: hasVideo=${hasVideoStream}, hasAudio=${hasAudioStream}`,
+					`[checkHasAudioTrack] Result for ${displayUrl}: hasVideo=${hasVideoStream}, hasAudio=${hasAudioStream}`,
 				);
 
 				return hasAudioStream;
@@ -231,9 +248,12 @@ export async function extractAudio(
 					stderrPromise,
 					proc.exited,
 				]);
+				const safeStderrText = redactProcessOutput(stderrText, videoUrl);
 
 				if (exitCode !== 0) {
-					throw new Error(`FFmpeg exited with code ${exitCode}: ${stderrText}`);
+					throw new Error(
+						`FFmpeg exited with code ${exitCode}: ${safeStderrText}`,
+					);
 				}
 
 				const output = new Uint8Array(totalBytes);

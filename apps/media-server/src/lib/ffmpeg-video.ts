@@ -106,6 +106,39 @@ function resolveResourceUrl(
 	return withQuery(new URL(resource, baseUrl).toString(), query);
 }
 
+function redactUrl(value: string): string {
+	try {
+		const url = new URL(value);
+		if (url.protocol === "file:") {
+			return url.pathname;
+		}
+		return `${url.origin}${url.pathname}`;
+	} catch {
+		return value.split("?")[0] ?? value;
+	}
+}
+
+function redactUrlQueries(value: string): string {
+	return value.replace(/https?:\/\/[^\s"'<>]+/g, (url) => redactUrl(url));
+}
+
+function escapeXmlAttribute(value: string): string {
+	return value.replace(/[&<>"']/g, (char) => {
+		switch (char) {
+			case "&":
+				return "&amp;";
+			case "<":
+				return "&lt;";
+			case ">":
+				return "&gt;";
+			case '"':
+				return "&quot;";
+			default:
+				return "&apos;";
+		}
+	});
+}
+
 async function materializeHlsPlaylist(
 	playlistUrl: string,
 	dirPath: string,
@@ -184,7 +217,7 @@ async function materializeHlsPlaylist(
 	return filePath;
 }
 
-async function materializeMpdManifest(
+export async function materializeMpdManifest(
 	manifestUrl: string,
 	dirPath: string,
 ): Promise<string> {
@@ -208,7 +241,7 @@ async function materializeMpdManifest(
 		/(initialization|media)="([^"]+)"/g,
 		(_, attribute: string, resource: string) => {
 			const resolved = resolveResourceUrl(resource, baseUrl, query);
-			return `${attribute}="${resolved}"`;
+			return `${attribute}="${escapeXmlAttribute(resolved)}"`;
 		},
 	);
 
@@ -296,7 +329,7 @@ async function downloadStreamingVideoToTemp(
 
 					if (exitCode !== 0) {
 						console.error(
-							`[downloadStreamingVideoToTemp] FFmpeg stderr:\n${stderrText}`,
+							`[downloadStreamingVideoToTemp] FFmpeg stderr:\n${redactUrlQueries(stderrText)}`,
 						);
 						throw new Error(
 							`Streaming download failed with exit code ${exitCode}`,
@@ -449,10 +482,9 @@ export async function downloadVideoToTemp(
 	const tempFile = await createTempFile(
 		normalizeVideoInputExtension(inputExtension),
 	);
+	const displayUrl = redactUrl(videoUrl);
 
-	console.log(
-		`[downloadVideoToTemp] Downloading from URL: ${videoUrl.substring(0, 100)}...`,
-	);
+	console.log(`[downloadVideoToTemp] Downloading from URL: ${displayUrl}`);
 
 	try {
 		const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
@@ -471,7 +503,7 @@ export async function downloadVideoToTemp(
 		if (!response.ok) {
 			const errorBody = await response.text().catch(() => "");
 			console.error(
-				`[downloadVideoToTemp] Error response body: ${errorBody.substring(0, 500)}`,
+				`[downloadVideoToTemp] Error response body: ${redactUrlQueries(errorBody).substring(0, 500)}`,
 			);
 			throw new Error(
 				`Failed to download video: ${response.status} ${response.statusText}`,
@@ -504,7 +536,7 @@ export async function downloadVideoToTemp(
 		if (fileSize < 1000) {
 			const content = await fileHandle.text();
 			console.error(
-				`[downloadVideoToTemp] Small file content: ${content.substring(0, 500)}`,
+				`[downloadVideoToTemp] Small file content: ${redactUrlQueries(content).substring(0, 500)}`,
 			);
 		}
 
@@ -571,7 +603,9 @@ export async function repairContainer(
 				const exitCode = await proc.exited;
 
 				if (exitCode !== 0) {
-					console.error(`[repairContainer] FFmpeg stderr:\n${stderrText}`);
+					console.error(
+						`[repairContainer] FFmpeg stderr:\n${redactUrlQueries(stderrText)}`,
+					);
 					throw new Error(`Container repair failed with exit code ${exitCode}`);
 				}
 
@@ -664,6 +698,10 @@ function getErrorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
+function isGoogleDriveResumableUrl(url: string): boolean {
+	return url.includes("googleapis.com/upload/drive/");
+}
+
 async function uploadWithRetry(
 	presignedUrl: string,
 	contentType: string,
@@ -673,38 +711,24 @@ async function uploadWithRetry(
 	let lastError: Error | undefined;
 
 	for (let attempt = 0; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+		let response: Response;
+
 		try {
-			const response = await fetch(presignedUrl, {
+			const headers: Record<string, string> = {
+				"Content-Type": contentType,
+				"Content-Length": contentLength.toString(),
+			};
+			if (isGoogleDriveResumableUrl(presignedUrl) && contentLength > 0) {
+				headers["Content-Range"] =
+					`bytes 0-${contentLength - 1}/${contentLength}`;
+			}
+
+			response = await fetch(presignedUrl, {
 				method: "PUT",
-				headers: {
-					"Content-Type": contentType,
-					"Content-Length": contentLength.toString(),
-				},
+				headers,
 				body: bodyFactory(),
 				signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
 			});
-
-			if (response.ok) {
-				return;
-			}
-
-			const responseError = new Error(
-				`S3 upload failed: ${response.status} ${response.statusText}`,
-			);
-
-			if (
-				!isRetryableUploadStatus(response.status) ||
-				attempt === MAX_UPLOAD_RETRIES
-			) {
-				throw responseError;
-			}
-
-			lastError = responseError;
-			const delay = INITIAL_UPLOAD_RETRY_DELAY_MS * 2 ** attempt;
-			console.warn(
-				`[uploadWithRetry] Retrying upload after ${response.status} in ${delay}ms (attempt ${attempt + 1}/${MAX_UPLOAD_RETRIES})`,
-			);
-			await sleep(delay);
 		} catch (err) {
 			const uploadError = err instanceof Error ? err : new Error(String(err));
 
@@ -718,10 +742,33 @@ async function uploadWithRetry(
 				`[uploadWithRetry] Upload attempt failed: ${getErrorMessage(uploadError)}; retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_UPLOAD_RETRIES})`,
 			);
 			await sleep(delay);
+			continue;
 		}
+
+		if (response.ok) {
+			return;
+		}
+
+		const responseError = new Error(
+			`Storage upload failed: ${response.status} ${response.statusText}`,
+		);
+
+		if (
+			!isRetryableUploadStatus(response.status) ||
+			attempt === MAX_UPLOAD_RETRIES
+		) {
+			throw responseError;
+		}
+
+		lastError = responseError;
+		const delay = INITIAL_UPLOAD_RETRY_DELAY_MS * 2 ** attempt;
+		console.warn(
+			`[uploadWithRetry] Retrying upload after ${response.status} in ${delay}ms (attempt ${attempt + 1}/${MAX_UPLOAD_RETRIES})`,
+		);
+		await sleep(delay);
 	}
 
-	throw lastError ?? new Error("S3 upload failed after retries");
+	throw lastError ?? new Error("Storage upload failed after retries");
 }
 
 export async function processVideo(

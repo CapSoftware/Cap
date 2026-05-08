@@ -1,19 +1,22 @@
-import type { PresignedPost } from "@aws-sdk/s3-presigned-post";
 import { db, updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
+import { Storage } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
 
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 import { isFromDesktopSemver, UPLOAD_PROGRESS_VERSION } from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 import { parseVideoIdOrFileKey } from "../utils";
+
+const decodeVideo = (video: typeof Db.videos.$inferSelect) =>
+	decodeStorageVideo(video);
 
 function contentTypeForSubpath(subpath: string): string {
 	if (subpath.endsWith(".json")) return "application/json";
@@ -52,34 +55,39 @@ app.post(
 		const { videoId, subpaths } = c.req.valid("json");
 
 		try {
-			const [customBucket] = await db()
+			const [video] = await db()
 				.select()
-				.from(Db.s3Buckets)
-				.where(eq(Db.s3Buckets.ownerId, user.id));
+				.from(Db.videos)
+				.where(eq(Db.videos.id, Video.VideoId.make(videoId)));
 
-			const urls = await Effect.gen(function* () {
-				const [bucket] = yield* S3Buckets.getBucketAccess(
-					Option.fromNullable(customBucket?.id),
-				);
+			if (!video) return c.json({ error: "Video not found" }, 404);
+			if (video.ownerId !== user.id) return c.json({ error: "Forbidden" }, 403);
+			const videoDomain = decodeVideo(video);
+
+			const batch = await Effect.gen(function* () {
+				const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
 
 				const entries = yield* Effect.all(
 					subpaths.map((subpath) => {
 						const fileKey = `${user.id}/${videoId}/${subpath}`;
 						return bucket
-							.getPresignedPutUrl(
-								fileKey,
-								{ ContentType: contentTypeForSubpath(subpath) },
-								{ expiresIn: 1800 },
-							)
-							.pipe(Effect.map((url) => [subpath, url] as const));
+							.createUploadTarget(fileKey, {
+								contentType: contentTypeForSubpath(subpath),
+								method: "put",
+							})
+							.pipe(Effect.map((upload) => [subpath, upload] as const));
 					}),
 					{ concurrency: "unbounded" },
 				);
 
-				return Object.fromEntries(entries);
+				const uploads = Object.fromEntries(entries);
+				const urls = Object.fromEntries(
+					entries.map(([subpath, upload]) => [subpath, upload.url]),
+				);
+				return { uploads, urls };
 			}).pipe(runPromise);
 
-			return c.json({ urls });
+			return c.json(batch);
 		} catch (error) {
 			console.error("Batch signed URL generation failed:", error);
 			return c.json({ error: "Internal server error" }, 500);
@@ -113,12 +121,19 @@ app.post(
 			c.req.valid("json");
 
 		const fileKey = parseVideoIdOrFileKey(user.id, body);
+		const videoIdFromKey = fileKey.split("/")[1];
+		const videoIdToUse = "videoId" in body ? body.videoId : videoIdFromKey;
+		if (!videoIdToUse) return c.json({ error: "Video id not found" }, 400);
 
 		try {
-			const [customBucket] = await db()
+			const [video] = await db()
 				.select()
-				.from(Db.s3Buckets)
-				.where(eq(Db.s3Buckets.ownerId, user.id));
+				.from(Db.videos)
+				.where(eq(Db.videos.id, Video.VideoId.make(videoIdToUse)));
+
+			if (!video) return c.json({ error: "Video not found" }, 404);
+			if (video.ownerId !== user.id) return c.json({ error: "Forbidden" }, 403);
+			const videoDomain = decodeVideo(video);
 
 			const contentType = fileKey.endsWith(".aac")
 				? "audio/aac"
@@ -133,45 +148,24 @@ app.post(
 								: "video/mp2t";
 
 			const data = await Effect.gen(function* () {
-				const [bucket] = yield* S3Buckets.getBucketAccess(
-					Option.fromNullable(customBucket?.id),
-				);
+				const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
 
-				if (method === "post") {
-					const Fields = {
-						"Content-Type": contentType,
-						"x-amz-meta-userid": user.id,
-						"x-amz-meta-duration": durationInSecs
-							? durationInSecs.toString()
-							: "",
-					};
+				const Fields = {
+					"x-amz-meta-userid": user.id,
+					"x-amz-meta-duration": durationInSecs
+						? durationInSecs.toString()
+						: "",
+				};
 
-					return yield* bucket.getPresignedPostUrl(fileKey, {
-						Fields,
-						Expires: 1800,
-					});
-				}
-
-				const presignedUrl = yield* bucket.getPresignedPutUrl(
-					fileKey,
-					{
-						ContentType: contentType,
-						Metadata: {
-							userid: user.id,
-							duration: durationInSecs ? durationInSecs.toString() : "",
-						},
-					},
-					{ expiresIn: 1800 },
-				);
-
-				return { url: presignedUrl, fields: {} } satisfies PresignedPost;
+				return yield* bucket.createUploadTarget(fileKey, {
+					contentType,
+					fields: Fields,
+					method,
+				});
 			}).pipe(runPromise);
 
 			console.log("Presigned URL created successfully");
 
-			const videoIdFromKey = fileKey.split("/")[1];
-
-			const videoIdToUse = "videoId" in body ? body.videoId : videoIdFromKey;
 			if (videoIdToUse) {
 				const videoId = Video.VideoId.make(videoIdToUse);
 				await db()
@@ -197,8 +191,19 @@ app.post(
 						.where(eq(Db.videoUploads.videoId, videoId));
 			}
 
-			if (method === "post") return c.json({ presignedPostData: data });
-			else return c.json({ presignedPutData: data });
+			if (data.type === "s3Post") {
+				return c.json({
+					presignedPostData: { url: data.url, fields: data.fields },
+				});
+			}
+			return c.json({
+				presignedPutData: {
+					url: data.url,
+					fields: {},
+					headers: data.headers,
+					type: data.type,
+				},
+			});
 		} catch (s3Error) {
 			console.error("S3 operation failed:", s3Error);
 			throw new Error(

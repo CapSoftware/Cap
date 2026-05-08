@@ -7,7 +7,7 @@ import { Array, Effect, Exit, Option } from "effect";
 import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
-import { S3Buckets } from "../S3Buckets/index.ts";
+import { Storage as StorageService } from "../Storage/index.ts";
 import { Tinybird } from "../Tinybird/index.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
@@ -47,7 +47,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const db = yield* Database;
 		const repo = yield* VideosRepo;
 		const policy = yield* VideosPolicy;
-		const s3Buckets = yield* S3Buckets;
+		const storage = yield* StorageService;
 		const tinybird = yield* Tinybird;
 
 		const getByIdForViewing = (id: Video.VideoId) =>
@@ -212,7 +212,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
 
-				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
+				const [bucket] = yield* storage.getAccessForVideo(video);
 
 				yield* repo
 					.delete(video.id)
@@ -247,7 +247,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
 
-				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
+				const [bucket] = yield* storage.getAccessForVideo(video);
 
 				// Don't duplicate password or sharing data
 				const newVideoId = yield* repo.create(video);
@@ -377,15 +377,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					if (user.activeOrganizationId !== input.orgId)
 						return yield* Effect.fail(new Policy.PolicyDeniedError());
 
-					const [customBucket] = yield* db.use((db) =>
-						db
-							.select()
-							.from(Db.s3Buckets)
-							.where(Dz.eq(Db.s3Buckets.ownerId, user.id)),
-					);
-
-					const bucketId: RepoCreateVideoInput["bucketId"] =
-						Option.fromNullable(customBucket?.id);
+					const writable = yield* storage.getWritableAccessForUser(user.id);
+					const bucketId: RepoCreateVideoInput["bucketId"] = writable.bucketId;
+					const storageIntegrationId: RepoCreateVideoInput["storageIntegrationId"] =
+						writable.storageIntegrationId;
 					const folderId: RepoCreateVideoInput["folderId"] =
 						input.folderId ?? Option.none<Folder.FolderId>();
 					const width: RepoCreateVideoInput["width"] = Option.fromNullable(
@@ -412,6 +407,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
 						source: { type: "webMP4" },
 						bucketId,
+						storageIntegrationId,
 						folderId,
 						width,
 						height,
@@ -430,9 +426,9 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						);
 
 					const fileKey = `${user.id}/${videoId}/result.mp4`;
-					const [bucket] = yield* s3Buckets.getBucketAccess(bucketId);
-					const presignedPostData = yield* bucket.getPresignedPostUrl(fileKey, {
-						Fields: {
+					const upload = yield* writable.access.createUploadTarget(fileKey, {
+						contentType: "video/mp4",
+						fields: {
 							"Content-Type": "video/mp4",
 							"x-amz-meta-userid": user.id,
 							"x-amz-meta-duration": input.durationSeconds
@@ -442,7 +438,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							"x-amz-meta-videocodec": input.videoCodec ?? "",
 							"x-amz-meta-audiocodec": input.audioCodec ?? "",
 						},
-						Expires: 1800,
 					});
 
 					const shareUrl = `${serverEnv().WEB_URL}/s/${videoId}`;
@@ -463,10 +458,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					return {
 						id: videoId,
 						shareUrl,
-						upload: {
-							url: presignedPostData.url,
-							fields: presignedPostData.fields,
-						},
+						upload,
 					};
 				},
 			),
@@ -483,7 +475,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
 
-				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
+				const [bucket] = yield* storage.getAccessForVideo(video);
 				const src = Video.Video.getSource(video);
 
 				if (src instanceof Video.Mp4Source && video.source.type === "webMP4") {
@@ -542,7 +534,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				if (Option.isNone(maybeVideo)) return Option.none();
 				const [video] = maybeVideo.value;
 
-				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
+				const [bucket] = yield* storage.getAccessForVideo(video);
 				const listResponse = yield* bucket.listObjects({
 					prefix: `${video.ownerId}/${video.id}/`,
 				});
@@ -572,7 +564,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		VideosPolicy.Default,
 		VideosRepo.Default,
 		Database.Default,
-		S3Buckets.Default,
+		StorageService.Default,
 		Tinybird.Default,
 	],
 }) {}

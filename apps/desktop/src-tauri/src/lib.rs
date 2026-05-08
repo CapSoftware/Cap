@@ -62,7 +62,7 @@ use cap_rendering::ProjectRecordingsMeta;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use cpal::StreamError;
-use editor_window::{EditorInstances, WindowEditorInstance};
+use editor_window::{EditorInstances, PendingEditorInstances, WindowEditorInstance};
 use ffmpeg::ffi::AV_TIME_BASE;
 use general_settings::GeneralSettingsStore;
 use kameo::{Actor, actor::ActorRef};
@@ -91,7 +91,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::Listener;
 use tauri::{AppHandle, Emitter, Manager, State, Window, WindowEvent, ipc::Channel};
@@ -193,21 +193,69 @@ where
     E: std::fmt::Display,
     F: Future<Output = Result<T, E>>,
 {
+    let started = Instant::now();
     match tokio::time::timeout(timeout, fut).await {
-        Ok(Ok(value)) => Some(value),
+        Ok(Ok(value)) => {
+            info!(
+                step = name,
+                elapsed_ms = started.elapsed().as_millis(),
+                "Exit cleanup step completed"
+            );
+            Some(value)
+        }
         Ok(Err(err)) => {
-            warn!(step = name, error = %err, "Exit cleanup step failed");
+            warn!(
+                step = name,
+                elapsed_ms = started.elapsed().as_millis(),
+                error = %err,
+                "Exit cleanup step failed"
+            );
             None
         }
         Err(_) => {
             warn!(
                 step = name,
                 timeout_ms = timeout.as_millis(),
+                elapsed_ms = started.elapsed().as_millis(),
                 "Exit cleanup step timed out"
             );
             None
         }
     }
+}
+
+fn log_process_memory_snapshot(stage: &'static str) {
+    let Ok(pid) = sysinfo::get_current_pid() else {
+        return;
+    };
+
+    let mut system = sysinfo::System::new();
+    system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+
+    if let Some(process) = system.process(pid) {
+        info!(
+            stage = stage,
+            rss_mb = process.memory() / 1_048_576,
+            virtual_mb = process.virtual_memory() / 1_048_576,
+            "Process memory snapshot"
+        );
+    }
+}
+
+fn spawn_process_memory_sampler(app: AppHandle) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+
+        loop {
+            interval.tick().await;
+
+            if app_is_exiting(&app) {
+                break;
+            }
+
+            log_process_memory_snapshot("periodic");
+        }
+    });
 }
 
 fn force_exit(code: i32) -> ! {
@@ -1405,9 +1453,59 @@ async fn cleanup_camera_after_overlay_close(app: AppHandle, captured_session_id:
 }
 
 async fn cleanup_app_resources_for_exit(app: &AppHandle) {
+    let started = Instant::now();
+    log_process_memory_snapshot("exit_cleanup_begin");
+
     power_observer::uninstall(app);
     fake_window::cancel_all_fake_window_listeners(app);
     close_target_select_overlays(app);
+
+    let app_for_pending_editors = app.clone();
+    let _ = await_exit_step(
+        "dispose_pending_editor_instances",
+        APP_EXIT_STEP_TIMEOUT,
+        async move {
+            PendingEditorInstances::dispose_all(&app_for_pending_editors).await;
+            Ok::<(), String>(())
+        },
+    )
+    .await;
+
+    let app_for_editors = app.clone();
+    let _ = await_exit_step(
+        "dispose_editor_instances",
+        APP_EXIT_STEP_TIMEOUT,
+        async move {
+            EditorInstances::dispose_all(&app_for_editors).await;
+            Ok::<(), String>(())
+        },
+    )
+    .await;
+
+    let app_for_pending_screenshot_editors = app.clone();
+    let _ = await_exit_step(
+        "dispose_pending_screenshot_editor_instances",
+        APP_EXIT_STEP_TIMEOUT,
+        async move {
+            PendingScreenshotEditorInstances::dispose_all(&app_for_pending_screenshot_editors)
+                .await;
+            Ok::<(), String>(())
+        },
+    )
+    .await;
+
+    let app_for_screenshot_editors = app.clone();
+    let _ = await_exit_step(
+        "dispose_screenshot_editor_instances",
+        APP_EXIT_STEP_TIMEOUT,
+        async move {
+            ScreenshotEditorInstances::dispose_all(&app_for_screenshot_editors).await;
+            Ok::<(), String>(())
+        },
+    )
+    .await;
+
+    log_process_memory_snapshot("exit_after_editor_dispose");
 
     let (mic_feed, camera_feed, camera_shutdown) = {
         let Some(state) = app.try_state::<ArcLock<App>>() else {
@@ -1446,6 +1544,11 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     }
 
     captions::release_ml_models().await;
+    log_process_memory_snapshot("exit_cleanup_end");
+    info!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "Exit cleanup completed"
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -4099,6 +4202,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 app.manage(CameraWindowOperationLock::default());
                 app.manage(AppExitState::default());
                 app.manage(MainWindowReadyState::default());
+                spawn_process_memory_sampler(app.clone());
 
                 app.manage(Arc::new(RwLock::new(
                     ClipboardContext::new().expect("Failed to create clipboard context"),
@@ -4204,8 +4308,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             #[cfg(target_os = "macos")]
             RequestScreenCapturePrewarm::listen_any_spawn(&app, async |event, app| {
-                let prewarmer = app.state::<crate::platform::ScreenCapturePrewarmer>();
-                prewarmer.request(event.force).await;
+                if let Some(prewarmer) = app.try_state::<crate::platform::ScreenCapturePrewarmer>()
+                {
+                    prewarmer.request(event.force).await;
+                } else {
+                    warn!("ScreenCapturePrewarmer state unavailable during prewarm request");
+                }
             });
 
             let app_handle = app.clone();

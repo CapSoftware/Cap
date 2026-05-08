@@ -66,6 +66,23 @@ function resolveResourceUrl(
 	return withQuery(new URL(resource, baseUrl).toString(), query);
 }
 
+function escapeXmlAttribute(value: string): string {
+	return value.replace(/[&<>"']/g, (char) => {
+		switch (char) {
+			case "&":
+				return "&amp;";
+			case "<":
+				return "&lt;";
+			case ">":
+				return "&gt;";
+			case '"':
+				return "&quot;";
+			default:
+				return "&apos;";
+		}
+	});
+}
+
 async function materializeHlsPlaylist(
 	playlistUrl: string,
 	dirPath: string,
@@ -162,7 +179,7 @@ async function materializeMpdManifest(
 		/(initialization|media)="([^"]+)"/g,
 		(_, attribute: string, resource: string) => {
 			const resolved = resolveResourceUrl(resource, baseUrl, query);
-			return `${attribute}="${resolved}"`;
+			return `${attribute}="${escapeXmlAttribute(resolved)}"`;
 		},
 	);
 

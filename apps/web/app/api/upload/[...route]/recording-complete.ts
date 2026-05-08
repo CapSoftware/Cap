@@ -1,15 +1,20 @@
 import { db } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
-import { S3Bucket, Video } from "@cap/web-domain";
+import { Storage } from "@cap/web-backend";
+import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq, notInArray } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 import { withAuth } from "../../utils";
+
+const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
 
 export const app = new Hono().post(
 	"/",
@@ -48,16 +53,16 @@ export const app = new Hono().post(
 			await db()
 				.delete(Db.videoUploads)
 				.where(eq(Db.videoUploads.videoId, videoId));
+			await invalidateGoogleDriveStorageQuotaCache(video.storageIntegrationId);
 
 			return c.json({ success: true });
 		}
 
 		try {
 			const muxPayload = await Effect.gen(function* () {
-				const bucketId = Option.fromNullable(video.bucket).pipe(
-					Option.map(S3Bucket.S3BucketId.make),
+				const [bucket] = yield* Storage.getAccessForVideo(
+					decodeStorageVideo(video),
 				);
-				const [bucket] = yield* S3Buckets.getBucketAccess(bucketId);
 
 				const segSource = new Video.SegmentsSource({
 					videoId: videoIdRaw,
@@ -70,7 +75,7 @@ export const app = new Hono().post(
 						Effect.andThen(
 							Option.match({
 								onNone: () =>
-									Effect.fail(new Error("Segment manifest not found on S3")),
+									Effect.fail(new Error("Segment manifest not found")),
 								onSome: (c) => Effect.succeed(c),
 							}),
 						),
@@ -106,6 +111,7 @@ export const app = new Hono().post(
 
 				const videoInitUrl = yield* bucket.getSignedObjectUrl(
 					segSource.getVideoInitKey(),
+					{ expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS },
 				);
 
 				const videoSegmentUrls = yield* Effect.all(
@@ -113,6 +119,9 @@ export const app = new Hono().post(
 						const entry = Video.normalizeSegmentEntry(seg);
 						return bucket.getSignedObjectUrl(
 							segSource.getVideoSegmentKey(entry.index),
+							{
+								expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+							},
 						);
 					}),
 					{ concurrency: "unbounded" },
@@ -127,12 +136,16 @@ export const app = new Hono().post(
 				) {
 					audioInitUrl = yield* bucket.getSignedObjectUrl(
 						segSource.getAudioInitKey(),
+						{ expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS },
 					);
 					audioSegmentUrls = yield* Effect.all(
 						manifest.audio_segments.map((seg) => {
 							const entry = Video.normalizeSegmentEntry(seg);
 							return bucket.getSignedObjectUrl(
 								segSource.getAudioSegmentKey(entry.index),
+								{
+									expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+								},
 							);
 						}),
 						{ concurrency: "unbounded" },
@@ -147,12 +160,14 @@ export const app = new Hono().post(
 					{
 						ContentType: "video/mp4",
 					},
+					{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 				);
 				const thumbnailPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
 					thumbnailKey,
 					{
 						ContentType: "image/jpeg",
 					},
+					{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 				);
 
 				return {
@@ -164,6 +179,7 @@ export const app = new Hono().post(
 					audioSegmentUrls,
 				};
 			}).pipe(runPromise);
+			await invalidateGoogleDriveStorageQuotaCache(video.storageIntegrationId);
 
 			const claimResult = await db()
 				.update(Db.videoUploads)

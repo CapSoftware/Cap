@@ -47,6 +47,31 @@ export type OrganizationBrandingPatchBody = z.infer<
 	typeof OrganizationBrandingPatchBody
 >;
 
+export const DesktopStorageIntegrations = z.object({
+	activeProvider: z.enum(["s3", "googleDrive"]),
+	googleDrive: z.object({
+		id: z.string().nullable(),
+		connected: z.boolean(),
+		active: z.boolean(),
+		status: z.enum(["active", "disconnected", "error"]).nullable(),
+		displayName: z.string().nullable(),
+		storageQuota: z
+			.object({
+				limit: z.string().nullable(),
+				usage: z.string().nullable(),
+				usageInDrive: z.string().nullable(),
+				usageInDriveTrash: z.string().nullable(),
+				remaining: z.string().nullable(),
+				fetchedAt: z.string(),
+				stale: z.boolean(),
+			})
+			.nullable(),
+	}),
+});
+export type DesktopStorageIntegrations = z.infer<
+	typeof DesktopStorageIntegrations
+>;
+
 const CHANGELOG = z.object({
 	metadata: z.object({
 		title: z.string(),
@@ -157,6 +182,56 @@ const protectedContract = c.router(
 				region: z.string(),
 			}),
 			responses: { 200: z.object({ success: z.literal(true) }) },
+		},
+		getStorageIntegrations: {
+			method: "GET",
+			path: "/desktop/storage/integrations",
+			query: z
+				.object({
+					refreshStorageQuota: z.boolean().optional(),
+				})
+				.optional(),
+			responses: {
+				200: DesktopStorageIntegrations,
+			},
+		},
+		connectGoogleDriveStorage: {
+			method: "POST",
+			path: "/desktop/storage/google-drive/connect",
+			body: z.object({}).optional(),
+			responses: {
+				200: z.object({ url: z.string() }),
+				403: z.object({ error: z.literal("upgrade_required") }),
+			},
+		},
+		testGoogleDriveStorage: {
+			method: "POST",
+			path: "/desktop/storage/google-drive/test",
+			body: z.object({}).optional(),
+			responses: {
+				200: z.object({
+					success: z.literal(true),
+					email: z.string().nullable(),
+				}),
+				404: z.object({ error: z.literal("not_connected") }),
+			},
+		},
+		setActiveStorageProvider: {
+			method: "POST",
+			path: "/desktop/storage/set-active",
+			body: z.object({
+				provider: z.enum(["s3", "googleDrive"]),
+			}),
+			responses: {
+				200: z.object({ success: z.literal(true) }),
+			},
+		},
+		disconnectGoogleDriveStorage: {
+			method: "DELETE",
+			path: "/desktop/storage/google-drive/disconnect",
+			responses: {
+				200: z.object({ success: z.literal(true) }),
+			},
 		},
 		getProSubscribeURL: {
 			method: "POST",

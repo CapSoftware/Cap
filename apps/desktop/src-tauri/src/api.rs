@@ -9,17 +9,18 @@ use tracing::{instrument, trace};
 
 use crate::web_api::{AuthedApiError, ManagerExt};
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultipartUploadInitiateResponse {
+    pub upload_id: String,
+    pub provider: Option<String>,
+}
+
 #[instrument(skip(app))]
 pub async fn upload_multipart_initiate(
     app: &AppHandle,
     video_id: &str,
-) -> Result<String, AuthedApiError> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct Response {
-        upload_id: String,
-    }
-
+) -> Result<MultipartUploadInitiateResponse, AuthedApiError> {
     let resp = app
         .authed_api_request("/api/upload/multipart/initiate", |c, url| {
             c.post(url)
@@ -41,10 +42,9 @@ pub async fn upload_multipart_initiate(
         return Err(format!("api/upload_multipart_initiate/{status}: {error_body}").into());
     }
 
-    resp.json::<Response>()
+    resp.json::<MultipartUploadInitiateResponse>()
         .await
         .map_err(|err| format!("api/upload_multipart_initiate/response: {err}").into())
-        .map(|data| data.upload_id)
 }
 
 #[instrument(skip(app, upload_id))]

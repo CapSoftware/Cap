@@ -120,6 +120,34 @@
 			"when": 1772641549840,
 			"tag": "0016_bouncy_hellcat",
 			"breakpoints": true
+		},
+		{
+			"idx": 17,
+			"version": "5",
+			"when": 1778099532336,
+			"tag": "0017_productive_betty_brant",
+			"breakpoints": true
+		},
+		{
+			"idx": 18,
+			"version": "5",
+			"when": 1778153157657,
+			"tag": "0018_loud_mongu",
+			"breakpoints": true
+		},
+		{
+			"idx": 19,
+			"version": "5",
+			"when": 1778154209547,
+			"tag": "0019_solid_paibok",
+			"breakpoints": true
+		},
+		{
+			"idx": 20,
+			"version": "5",
+			"when": 1778157016497,
+			"tag": "0020_orange_talkback",
+			"breakpoints": true
 		}
 	]
 }

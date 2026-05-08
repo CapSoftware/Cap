@@ -2,6 +2,7 @@ import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { decrypt } from "@cap/database/crypto";
 import type { S3Bucket, User } from "@cap/web-domain";
+import type { RequestPresigningArguments } from "@smithy/types";
 import { Config, Effect, Layer, Option } from "effect";
 
 import { AwsCredentials } from "../Aws.ts";
@@ -96,9 +97,13 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		const cloudfrontBucketAccess = cloudfrontEnvs.pipe(
 			Option.map((cloudfrontEnvs) =>
 				Effect.flatMap(createS3BucketAccess, (s3) => {
-					const getCloudFrontSignedUrl = (key: string) => {
+					const getCloudFrontSignedUrl = (
+						key: string,
+						signingArgs?: RequestPresigningArguments,
+					) => {
 						const url = `${cloudfrontEnvs.bucketUrl}/${key}`;
-						const expires = Math.floor((Date.now() + 3600 * 1000) / 1000);
+						const expiresIn = signingArgs?.expiresIn ?? 3600;
+						const expires = Math.floor((Date.now() + expiresIn * 1000) / 1000);
 
 						const policy = {
 							Statement: [

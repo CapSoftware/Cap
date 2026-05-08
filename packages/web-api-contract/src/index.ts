@@ -4,6 +4,7 @@ import { c } from "./util";
 
 export {
 	DesktopOrganization,
+	DesktopStorageIntegrations,
 	OrganizationBrandColors,
 	OrganizationBrandingPatchBody,
 	OrganizationHexColor,

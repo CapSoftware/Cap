@@ -61,6 +61,9 @@ const jobs = new Map<string, Job>();
 const JOB_TTL_MS = 60 * 60 * 1000;
 const STALE_JOB_MS = 15 * 60 * 1000;
 const MAX_JOB_LIFETIME_MS = 45 * 60 * 1000;
+const WEBHOOK_MAX_ATTEMPTS = 3;
+const WEBHOOK_RETRY_BASE_MS = 500;
+const WEBHOOK_TIMEOUT_MS = 5000;
 
 // Dynamic concurrency control for video processing.
 //
@@ -244,8 +247,8 @@ export function deleteJob(jobId: string): boolean {
 	return jobs.delete(jobId);
 }
 
-export function abortAllJobs(): number {
-	let aborted = 0;
+export async function abortAllJobs(): Promise<number> {
+	const abortedJobs: Job[] = [];
 
 	for (const job of jobs.values()) {
 		if (
@@ -257,11 +260,13 @@ export function abortAllJobs(): number {
 			job.phase = "cancelled";
 			job.message = "Server shutting down";
 			job.updatedAt = Date.now();
-			aborted++;
+			abortedJobs.push(job);
 		}
 	}
 
-	return aborted;
+	await Promise.allSettled(abortedJobs.map((job) => sendWebhook(job)));
+
+	return abortedJobs.length;
 }
 
 export function getAllJobs(): Job[] {
@@ -282,6 +287,11 @@ export function cleanupExpiredJobs(): number {
 					`[job-manager] Cleaning up expired job ${jobId} (phase=${job.phase}, age=${Math.round(age / 60000)}m)`,
 				);
 				job.abortController?.abort();
+				job.phase = "error";
+				job.error = `Job expired: no progress update for ${Math.round(staleness / 60000)} minutes`;
+				job.message = "Processing failed (expired)";
+				job.updatedAt = now;
+				void sendWebhook(job);
 			}
 			deleteJob(jobId);
 			cleaned++;
@@ -297,6 +307,7 @@ export function cleanupExpiredJobs(): number {
 			job.error = `Job stale: no progress update for ${Math.round(staleness / 60000)} minutes`;
 			job.message = "Processing failed (stale)";
 			job.updatedAt = now;
+			void sendWebhook(job);
 			cleaned++;
 			continue;
 		}
@@ -310,6 +321,7 @@ export function cleanupExpiredJobs(): number {
 			job.error = `Job exceeded maximum lifetime of ${Math.round(MAX_JOB_LIFETIME_MS / 60000)} minutes`;
 			job.message = "Processing failed (timeout)";
 			job.updatedAt = now;
+			void sendWebhook(job);
 			cleaned++;
 		}
 	}
@@ -341,24 +353,39 @@ export async function sendWebhook(job: Job): Promise<void> {
 		headers["x-media-server-secret"] = job.webhookSecret;
 	}
 
-	try {
-		const resp = await fetch(job.webhookUrl, {
-			method: "POST",
-			headers,
-			body: JSON.stringify(payload),
-			signal: AbortSignal.timeout(15_000),
-		});
-		if (!resp.ok) {
-			console.error(
-				`[job-manager] Webhook returned ${resp.status} for job ${job.jobId}`,
+	let lastError: unknown;
+
+	for (let attempt = 0; attempt < WEBHOOK_MAX_ATTEMPTS; attempt++) {
+		try {
+			const resp = await fetch(job.webhookUrl, {
+				method: "POST",
+				headers,
+				body: JSON.stringify(payload),
+				signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+			});
+
+			if (resp.ok) {
+				return;
+			}
+
+			lastError = new Error(
+				`Webhook returned ${resp.status} for job ${job.jobId}`,
+			);
+		} catch (err) {
+			lastError = err;
+		}
+
+		if (attempt < WEBHOOK_MAX_ATTEMPTS - 1) {
+			await new Promise((resolve) =>
+				setTimeout(resolve, WEBHOOK_RETRY_BASE_MS * 2 ** attempt),
 			);
 		}
-	} catch (err) {
-		console.error(
-			`[job-manager] Failed to send webhook for job ${job.jobId}:`,
-			err,
-		);
 	}
+
+	console.error(
+		`[job-manager] Failed to send webhook for job ${job.jobId}:`,
+		lastError,
+	);
 }
 
 export function forceCleanupActiveJobs(): number {
@@ -375,6 +402,7 @@ export function forceCleanupActiveJobs(): number {
 			job.error = "Force-cleaned by admin";
 			job.message = "Processing failed (force-cleaned)";
 			job.updatedAt = now;
+			void sendWebhook(job);
 			cleaned++;
 		}
 	}

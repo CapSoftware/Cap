@@ -810,6 +810,8 @@ video.get("/process/:jobId/status", async (c) => {
 			{
 				error: "Job not found",
 				code: "NOT_FOUND",
+				instanceId: getInstanceId(),
+				pid: process.pid,
 			},
 			404,
 		);
@@ -890,6 +892,8 @@ video.post("/process/:jobId/cancel", async (c) => {
 			{
 				error: "Job not found",
 				code: "NOT_FOUND",
+				instanceId: getInstanceId(),
+				pid: process.pid,
 			},
 			404,
 		);
@@ -1316,12 +1320,7 @@ async function muxSegmentsAsync(
 		let metadata: VideoMetadata | undefined;
 		try {
 			const probeResult = await probeVideoFile(resultPath);
-			metadata = {
-				width: probeResult.width,
-				height: probeResult.height,
-				duration: probeResult.duration,
-				fps: probeResult.fps,
-			};
+			metadata = probeResult;
 		} catch {}
 
 		if (thumbnailPresignedUrl) {

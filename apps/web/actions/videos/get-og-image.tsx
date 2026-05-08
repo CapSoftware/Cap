@@ -1,11 +1,12 @@
 import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
+import { videos } from "@cap/database/schema";
+import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 import { ImageResponse } from "next/og";
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 
 export async function generateVideoOgImage(videoId: Video.VideoId) {
 	const videoData = await getData(videoId);
@@ -65,8 +66,8 @@ export async function generateVideoOgImage(videoId: Video.VideoId) {
 
 	try {
 		await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(
-				Option.fromNullable(videoData.bucket?.id),
+			const [bucket] = yield* Storage.getAccessForVideo(
+				decodeStorageVideo(video),
 			);
 
 			screenshotUrl = yield* bucket.getSignedObjectUrl(screenshotKey);
@@ -127,20 +128,22 @@ export async function generateVideoOgImage(videoId: Video.VideoId) {
 						strokeLinecap="round"
 						strokeLinejoin="round"
 					>
+						<title>Play</title>
 						<polygon points="6 3 20 12 6 21 6 3"></polygon>
 					</svg>
 				</div>
 				{screenshotUrl && (
-					<img
+					<div
 						style={{
 							width: "100%",
 							height: "100%",
 							position: "absolute",
-							objectFit: "cover",
+							backgroundImage: `url(${screenshotUrl})`,
+							backgroundPosition: "center",
+							backgroundSize: "cover",
 							opacity: 0.4,
 							zIndex: 1,
 						}}
-						src={screenshotUrl}
 					/>
 				)}
 			</div>
@@ -154,12 +157,8 @@ export async function generateVideoOgImage(videoId: Video.VideoId) {
 
 async function getData(videoId: Video.VideoId) {
 	const query = await db()
-		.select({
-			video: videos,
-			bucket: s3Buckets,
-		})
+		.select({ video: videos })
 		.from(videos)
-		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
 		.where(eq(videos.id, videoId));
 
 	const result = query[0];
@@ -168,6 +167,5 @@ async function getData(videoId: Video.VideoId) {
 
 	return {
 		video: result.video,
-		bucket: result.bucket,
 	};
 }

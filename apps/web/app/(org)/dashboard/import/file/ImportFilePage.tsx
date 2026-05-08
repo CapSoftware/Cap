@@ -18,6 +18,7 @@ import {
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { uploadWithTarget } from "@/utils/upload-target";
 
 export const ImportFilePage = () => {
 	const { user, activeOrganization } = useDashboardContext();
@@ -243,14 +244,6 @@ async function uploadVideoForServerProcessing(
 			thumbnailUrl: undefined,
 		});
 
-		const formData = new FormData();
-		Object.entries(videoData.presignedPostData.fields).forEach(
-			([key, value]) => {
-				formData.append(key, value as string);
-			},
-		);
-		formData.append("file", file);
-
 		const createProgressTracker = () => {
 			const uploadState = {
 				videoId: uploadId,
@@ -301,42 +294,25 @@ async function uploadVideoForServerProcessing(
 		const progressTracker = createProgressTracker();
 
 		try {
-			await new Promise<void>((resolve, reject) => {
-				const xhr = new XMLHttpRequest();
-				xhr.open("POST", videoData.presignedPostData.url);
+			await uploadWithTarget({
+				target: videoData.uploadTarget,
+				body: file,
+				fileName: file.name,
+				onProgress: ({ loaded, total }) => {
+					const percent = (loaded / total) * 100;
+					setUploadStatus({
+						status: "uploadingVideo",
+						capId: uploadId,
+						progress: percent,
+						thumbnailUrl: undefined,
+					});
 
-				xhr.upload.onprogress = (event) => {
-					if (event.lengthComputable) {
-						const percent = (event.loaded / event.total) * 100;
-						setUploadStatus({
-							status: "uploadingVideo",
-							capId: uploadId,
-							progress: percent,
-							thumbnailUrl: undefined,
-						});
-
-						progressTracker.scheduleProgressUpdate(event.loaded, event.total);
-					}
-				};
-
-				xhr.onload = () => {
-					if (xhr.status >= 200 && xhr.status < 300) {
-						progressTracker.cleanup();
-						const total = progressTracker.getTotal() || 1;
-						sendProgressUpdate(uploadId, total, total);
-						resolve();
-					} else {
-						progressTracker.cleanup();
-						reject(new Error(`Upload failed with status ${xhr.status}`));
-					}
-				};
-				xhr.onerror = () => {
-					progressTracker.cleanup();
-					reject(new Error("Upload failed"));
-				};
-
-				xhr.send(formData);
+					progressTracker.scheduleProgressUpdate(loaded, total);
+				},
 			});
+			progressTracker.cleanup();
+			const total = progressTracker.getTotal() || 1;
+			sendProgressUpdate(uploadId, total, total);
 		} catch (uploadError) {
 			progressTracker.cleanup();
 			throw uploadError;

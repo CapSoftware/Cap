@@ -6,22 +6,28 @@ import {
 	importedVideos,
 	organizationMembers,
 	organizations,
-	s3Buckets,
 	users,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
-import { S3Buckets } from "@cap/web-backend";
+import { Storage } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, lte, or } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { runPromise } from "@/lib/server";
-import { isFromDesktopSemver, UPLOAD_PROGRESS_VERSION } from "@/utils/desktop";
+import { decodeStorageVideo } from "@/lib/video-storage";
+import {
+	GOOGLE_DRIVE_UPLOAD_FEATURE,
+	hasDesktopFeature,
+	isFromDesktopSemver,
+	UPLOAD_PROGRESS_VERSION,
+} from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 
@@ -84,11 +90,6 @@ app.get(
 				width,
 				fps,
 			});
-
-			const [customBucket] = await db()
-				.select()
-				.from(s3Buckets)
-				.where(eq(s3Buckets.ownerId, user.id));
 
 			const date = new Date();
 			const formattedDate = `${date.getDate()} ${date.toLocaleString(
@@ -169,6 +170,14 @@ app.get(
 			const videoName =
 				name ??
 				`Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`;
+			const clientSupportsGoogleDriveUpload = hasDesktopFeature(
+				c.req,
+				GOOGLE_DRIVE_UPLOAD_FEATURE,
+			);
+			const writable = await (clientSupportsGoogleDriveUpload
+				? Storage.getWritableAccessForUser(user.id)
+				: Storage.getS3WritableAccessForUser(user.id)
+			).pipe(runPromise);
 
 			await db()
 				.insert(videos)
@@ -186,7 +195,8 @@ app.get(
 									? { type: "desktopSegments" as const }
 									: undefined,
 					isScreenshot,
-					bucket: customBucket?.id,
+					bucket: Option.getOrNull(writable.bucketId),
+					storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
 					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
 					duration: durationInSecs,
 					width,
@@ -273,9 +283,8 @@ app.delete(
 
 		try {
 			const [result] = await db()
-				.select({ video: videos, bucket: s3Buckets })
+				.select({ video: videos })
 				.from(videos)
-				.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
 				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 
 			if (!result)
@@ -292,9 +301,8 @@ app.delete(
 				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 
 			await Effect.gen(function* () {
-				const [bucket] = yield* S3Buckets.getBucketAccess(
-					Option.fromNullable(result.bucket?.id),
-				);
+				const video = decodeStorageVideo(result.video);
+				const [bucket] = yield* Storage.getAccessForVideo(video);
 
 				const listedObjects = yield* bucket.listObjects({
 					prefix: `${user.id}/${videoId}/`,
@@ -302,11 +310,14 @@ app.delete(
 
 				if (listedObjects.Contents)
 					yield* bucket.deleteObjects(
-						listedObjects.Contents.map((content: any) => ({
+						listedObjects.Contents.map((content) => ({
 							Key: content.Key,
 						})),
 					);
 			}).pipe(runPromise);
+			await invalidateGoogleDriveStorageQuotaCache(
+				result.video.storageIntegrationId,
+			);
 
 			return c.json(true);
 		} catch (error) {
@@ -344,7 +355,11 @@ app.post(
 
 		try {
 			const [video] = await db()
-				.select({ id: videos.id, upload: videoUploads })
+				.select({
+					id: videos.id,
+					storageIntegrationId: videos.storageIntegrationId,
+					upload: videoUploads,
+				})
 				.from(videos)
 				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)))
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId));
@@ -381,6 +396,11 @@ app.post(
 					total,
 					updatedAt,
 				});
+			}
+			if (uploaded === total) {
+				await invalidateGoogleDriveStorageQuotaCache(
+					video.storageIntegrationId,
+				);
 			}
 
 			return c.json(true);
