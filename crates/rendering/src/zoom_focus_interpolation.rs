@@ -11,6 +11,77 @@ struct ZoomFocusPrecomputeSim {
     last_integrated_ms: f64,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_project::{CursorMoveEvent, ZoomMode};
+
+    fn move_event(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: Vec::new(),
+            cursor_id: "default".to_string(),
+            time_ms,
+            x,
+            y,
+        }
+    }
+
+    fn zoom_segment() -> ZoomSegment {
+        ZoomSegment {
+            start: 0.0,
+            end: 4.0,
+            amount: 2.0,
+            mode: ZoomMode::Auto,
+            glide_direction: Default::default(),
+            glide_speed: 0.5,
+            instant_animation: false,
+            edge_snap_ratio: 0.25,
+        }
+    }
+
+    #[test]
+    fn lazy_precompute_matches_full_precompute() {
+        let cursor_events = CursorEvents {
+            clicks: Vec::new(),
+            moves: vec![
+                move_event(0.0, 0.1, 0.2),
+                move_event(180.0, 0.2, 0.3),
+                move_event(460.0, 0.7, 0.4),
+                move_event(1200.0, 0.8, 0.8),
+                move_event(2400.0, 0.35, 0.65),
+                move_event(3800.0, 0.6, 0.2),
+            ],
+        };
+        let zoom_segments = vec![zoom_segment()];
+        let mut fully_precomputed = ZoomFocusInterpolator::new(
+            &cursor_events,
+            None,
+            ClickSpringConfig::default(),
+            ScreenMovementSpring::default(),
+            5.0,
+            &zoom_segments,
+        );
+        fully_precomputed.precompute();
+
+        let mut lazy = ZoomFocusInterpolator::new(
+            &cursor_events,
+            None,
+            ClickSpringConfig::default(),
+            ScreenMovementSpring::default(),
+            5.0,
+            &zoom_segments,
+        );
+
+        for time_secs in [0.0_f32, 0.016, 0.25, 0.5, 1.0, 2.5, 4.0, 5.0] {
+            lazy.ensure_precomputed_until(time_secs);
+            let expected = fully_precomputed.interpolate(time_secs);
+            let actual = lazy.interpolate(time_secs);
+            assert!((expected.coord.x - actual.coord.x).abs() < 1e-9);
+            assert!((expected.coord.y - actual.coord.y).abs() < 1e-9);
+        }
+    }
+}
+
 const SAMPLE_INTERVAL_MS: f64 = 8.0;
 const CLUSTER_WIDTH_RATIO: f64 = 0.5;
 const CLUSTER_HEIGHT_RATIO: f64 = 0.7;
