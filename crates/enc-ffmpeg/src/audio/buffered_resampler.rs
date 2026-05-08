@@ -9,7 +9,8 @@ use ffmpeg::software::resampling;
 /// for if the requested frame size is larger than the latest buffered frame,
 /// ensuring that the resulting frame's PTS is always accurate.
 pub struct BufferedResampler {
-    resampler: ffmpeg::software::resampling::Context,
+    resampler: Option<ffmpeg::software::resampling::Context>,
+    output: AudioInfo,
     buffer: VecDeque<(ffmpeg::frame::Audio, i64)>,
     sample_index: usize,
     // used to account for cases where pts is rounded down instead of up
@@ -18,13 +19,21 @@ pub struct BufferedResampler {
 
 impl BufferedResampler {
     pub fn new(from: AudioInfo, to: AudioInfo) -> Result<Self, ffmpeg::Error> {
-        let resampler = ffmpeg::software::resampler(
-            (from.sample_format, from.channel_layout(), from.sample_rate),
-            (to.sample_format, to.channel_layout(), to.sample_rate),
-        )?;
+        let needs_resampler = from.sample_format != to.sample_format
+            || from.sample_rate != to.sample_rate
+            || from.channel_layout() != to.channel_layout();
+        let resampler = if needs_resampler {
+            Some(ffmpeg::software::resampler(
+                (from.sample_format, from.channel_layout(), from.sample_rate),
+                (to.sample_format, to.channel_layout(), to.sample_rate),
+            )?)
+        } else {
+            None
+        };
 
         Ok(Self {
             resampler,
+            output: to,
             buffer: VecDeque::new(),
             sample_index: 0,
             min_next_pts: None,
@@ -52,7 +61,14 @@ impl BufferedResampler {
     }
 
     pub fn output(&self) -> resampling::context::Definition {
-        *self.resampler.output()
+        match &self.resampler {
+            Some(resampler) => *resampler.output(),
+            None => resampling::context::Definition {
+                format: self.output.sample_format,
+                channel_layout: self.output.channel_layout(),
+                rate: self.output.sample_rate,
+            },
+        }
     }
 
     pub fn add_frame(&mut self, mut frame: ffmpeg::frame::Audio) {
@@ -64,9 +80,16 @@ impl BufferedResampler {
 
         let pts = frame.pts().unwrap();
 
+        let Some(resampler) = self.resampler.as_mut() else {
+            let next_pts = pts + frame.samples() as i64;
+            self.buffer.push_back((frame, pts));
+            self.min_next_pts = Some(next_pts);
+            return;
+        };
+
         let mut resampled_frame = ffmpeg::frame::Audio::empty();
 
-        self.resampler.run(&frame, &mut resampled_frame).unwrap();
+        resampler.run(&frame, &mut resampled_frame).unwrap();
 
         let resampled_pts =
             (pts as f64 * (resampled_frame.rate() as f64 / frame.rate() as f64)) as i64;
@@ -75,13 +98,13 @@ impl BufferedResampler {
 
         self.buffer.push_back((resampled_frame, resampled_pts));
 
-        while self.resampler.delay().is_some() {
+        while resampler.delay().is_some() {
             let mut resampled_frame = ffmpeg::frame::Audio::new(
-                self.resampler.output().format,
+                resampler.output().format,
                 0,
-                self.resampler.output().channel_layout,
+                resampler.output().channel_layout,
             );
-            self.resampler.flush(&mut resampled_frame).unwrap();
+            resampler.flush(&mut resampled_frame).unwrap();
             let samples = resampled_frame.samples();
             if samples == 0 {
                 break;
