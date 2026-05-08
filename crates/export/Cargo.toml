@@ -31,6 +31,7 @@ rgb = "0.8"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+cap-audio = { path = "../audio" }
 clap = { version = "4.5.41", features = ["derive"] }
 chrono = "0.4"
 directories = "6.0.0"
