@@ -11,6 +11,7 @@ use cap_rendering::{
     SegmentVideoPaths, SharedWgpuDevice, Video, ZoomFocusInterpolator, get_duration,
     spring_mass_damper::SpringMassDamperSimulationConfig,
 };
+use futures::future::try_join_all;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -627,6 +628,26 @@ pub struct SegmentMedia {
     pub decoders: RecordingSegmentDecoders,
 }
 
+async fn load_audio_segment(
+    path: Option<PathBuf>,
+    label: String,
+) -> Result<Option<Arc<AudioData>>, String> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+
+    let join_label = label.clone();
+    let audio = tokio::task::spawn_blocking(move || {
+        AudioData::from_file(path)
+            .map(Arc::new)
+            .map_err(|e| format!("{label} / {e}"))
+    })
+    .await
+    .map_err(|e| format!("{join_label} / {e}"))??;
+
+    Ok(Some(audio))
+}
+
 pub async fn create_segments(
     recording_meta: &RecordingMeta,
     meta: &StudioRecordingMeta,
@@ -634,16 +655,6 @@ pub async fn create_segments(
 ) -> Result<Vec<SegmentMedia>, String> {
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
-            let audio = s
-                .audio
-                .as_ref()
-                .map(|audio_meta| {
-                    AudioData::from_file(recording_meta.path(&audio_meta.path))
-                        .map_err(|e| format!("SingleSegment Audio / {e}"))
-                })
-                .transpose()?
-                .map(Arc::new);
-
             let cursor = Arc::new(
                 s.cursor
                     .as_ref()
@@ -664,18 +675,27 @@ pub async fn create_segments(
                     .unwrap_or_default(),
             );
 
-            let decoders = RecordingSegmentDecoders::new(
-                recording_meta,
-                meta,
-                SegmentVideoPaths {
-                    display: recording_meta.path(&s.display.path),
-                    camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
-                },
-                0,
-                force_ffmpeg,
-            )
-            .await
-            .map_err(|e| format!("SingleSegment / {e}"))?;
+            let audio_path = s
+                .audio
+                .as_ref()
+                .map(|audio_meta| recording_meta.path(&audio_meta.path));
+            let audio_task = load_audio_segment(audio_path, "SingleSegment Audio".to_string());
+            let decoders_task = async {
+                RecordingSegmentDecoders::new(
+                    recording_meta,
+                    meta,
+                    SegmentVideoPaths {
+                        display: recording_meta.path(&s.display.path),
+                        camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
+                    },
+                    0,
+                    force_ffmpeg,
+                )
+                .await
+                .map_err(|e| format!("SingleSegment / {e}"))
+            };
+
+            let (audio, decoders) = tokio::try_join!(audio_task, decoders_task)?;
 
             Ok(vec![SegmentMedia {
                 audio,
@@ -686,56 +706,48 @@ pub async fn create_segments(
             }])
         }
         cap_project::StudioRecordingMeta::MultipleSegments { inner, .. } => {
-            let mut segments = vec![];
-
-            for (i, s) in inner.segments.iter().enumerate() {
-                let audio = s
-                    .mic
-                    .as_ref()
-                    .map(|audio| {
-                        AudioData::from_file(recording_meta.path(&audio.path))
-                            .map_err(|e| format!("MultipleSegments {i} Audio / {e}"))
-                    })
-                    .transpose()?
-                    .map(Arc::new);
-
-                let system_audio = s
+            try_join_all(inner.segments.iter().enumerate().map(|(i, s)| async move {
+                let audio_path = s.mic.as_ref().map(|audio| recording_meta.path(&audio.path));
+                let system_audio_path = s
                     .system_audio
                     .as_ref()
-                    .map(|audio| {
-                        AudioData::from_file(recording_meta.path(&audio.path))
-                            .map_err(|e| format!("MultipleSegments {i} System Audio / {e}"))
-                    })
-                    .transpose()?
-                    .map(Arc::new);
+                    .map(|audio| recording_meta.path(&audio.path));
+
+                let audio_task =
+                    load_audio_segment(audio_path, format!("MultipleSegments {i} Audio"));
+                let system_audio_task = load_audio_segment(
+                    system_audio_path,
+                    format!("MultipleSegments {i} System Audio"),
+                );
+                let decoders_task = async move {
+                    RecordingSegmentDecoders::new(
+                        recording_meta,
+                        meta,
+                        SegmentVideoPaths {
+                            display: recording_meta.path(&s.display.path),
+                            camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
+                        },
+                        i,
+                        force_ffmpeg,
+                    )
+                    .await
+                    .map_err(|e| format!("MultipleSegments {i} / {e}"))
+                };
 
                 let cursor = Arc::new(s.cursor_events(recording_meta));
-
-                let decoders = RecordingSegmentDecoders::new(
-                    recording_meta,
-                    meta,
-                    SegmentVideoPaths {
-                        display: recording_meta.path(&s.display.path),
-                        camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
-                    },
-                    i,
-                    force_ffmpeg,
-                )
-                .await
-                .map_err(|e| format!("MultipleSegments {i} / {e}"))?;
-
                 let keyboard = Arc::new(s.keyboard_events(recording_meta));
+                let (audio, system_audio, decoders) =
+                    tokio::try_join!(audio_task, system_audio_task, decoders_task)?;
 
-                segments.push(SegmentMedia {
+                Ok(SegmentMedia {
                     audio,
                     system_audio,
                     cursor,
                     keyboard,
                     decoders,
-                });
-            }
-
-            Ok(segments)
+                })
+            }))
+            .await
         }
     }
 }
