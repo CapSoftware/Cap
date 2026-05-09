@@ -540,6 +540,16 @@ app.post(
 							},
 							{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 						);
+						const previewGifKey = `${user.id}/${videoId}/preview/animated-preview.gif`;
+						const previewGifPresignedUrl =
+							yield* bucket.getInternalPresignedPutUrl(
+								previewGifKey,
+								{
+									ContentType: "image/gif",
+									CacheControl: "public, max-age=31536000, immutable",
+								},
+								{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+							);
 
 						yield* Effect.tryPromise({
 							try: async () => {
@@ -558,6 +568,7 @@ app.post(
 											userId: user.id,
 											videoUrl: inputUrl,
 											outputPresignedUrl,
+											previewGifPresignedUrl,
 											remuxOnly: true,
 										}),
 									},

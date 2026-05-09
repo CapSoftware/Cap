@@ -313,6 +313,7 @@ async function startMediaServerProcessJob(
 		videoUrl: string;
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
+		previewGifPresignedUrl: string;
 		webhookUrl: string;
 		webhookSecret?: string;
 		inputExtension?: string;
@@ -378,50 +379,69 @@ async function processVideoOnMediaServer(
 	const webhookBaseUrl =
 		serverEnv().MEDIA_SERVER_WEBHOOK_URL || serverEnv().WEB_URL;
 
-	const { rawVideoUrl, outputPresignedUrl, thumbnailPresignedUrl } =
-		await Effect.gen(function* () {
-			const [video] = yield* Effect.promise(() =>
-				db()
-					.select()
-					.from(videos)
-					.where(eq(videos.id, Video.VideoId.make(videoId))),
-			);
-			if (!video) {
-				return yield* Effect.fail(new FatalError("Video does not exist"));
-			}
-			const videoDomain = Video.Video.decodeSync({
-				...video,
-				bucketId: video.bucket,
-				storageIntegrationId: video.storageIntegrationId,
-				createdAt: video.createdAt.toISOString(),
-				updatedAt: video.updatedAt.toISOString(),
-				metadata: video.metadata,
-			});
-			const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
+	const {
+		rawVideoUrl,
+		outputPresignedUrl,
+		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
+	} = await Effect.gen(function* () {
+		const [video] = yield* Effect.promise(() =>
+			db()
+				.select()
+				.from(videos)
+				.where(eq(videos.id, Video.VideoId.make(videoId))),
+		);
+		if (!video) {
+			return yield* Effect.fail(new FatalError("Video does not exist"));
+		}
+		const videoDomain = Video.Video.decodeSync({
+			...video,
+			bucketId: video.bucket,
+			storageIntegrationId: video.storageIntegrationId,
+			createdAt: video.createdAt.toISOString(),
+			updatedAt: video.updatedAt.toISOString(),
+			metadata: video.metadata,
+		});
+		const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
 
-			const outputKey = `${userId}/${videoId}/result.mp4`;
-			const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
+		const outputKey = `${userId}/${videoId}/result.mp4`;
+		const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
+		const previewGifKey = `${userId}/${videoId}/preview/animated-preview.gif`;
 
-			const rawVideoUrl = yield* bucket.getInternalSignedObjectUrl(rawFileKey, {
-				expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
-			});
+		const rawVideoUrl = yield* bucket.getInternalSignedObjectUrl(rawFileKey, {
+			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+		});
 
-			const outputPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
-				outputKey,
-				{ ContentType: "video/mp4" },
-				{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
-			);
+		const outputPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
+			outputKey,
+			{ ContentType: "video/mp4" },
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		);
 
-			const thumbnailPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
-				thumbnailKey,
-				{
-					ContentType: "image/jpeg",
-				},
-				{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
-			);
+		const thumbnailPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
+			thumbnailKey,
+			{
+				ContentType: "image/jpeg",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		);
 
-			return { rawVideoUrl, outputPresignedUrl, thumbnailPresignedUrl };
-		}).pipe(runPromise);
+		const previewGifPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
+			previewGifKey,
+			{
+				ContentType: "image/gif",
+				CacheControl: "public, max-age=31536000, immutable",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		);
+
+		return {
+			rawVideoUrl,
+			outputPresignedUrl,
+			thumbnailPresignedUrl,
+			previewGifPresignedUrl,
+		};
+	}).pipe(runPromise);
 
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
@@ -433,6 +453,7 @@ async function processVideoOnMediaServer(
 		videoUrl: sourceVideoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
 		webhookUrl,
 		webhookSecret: webhookSecret || undefined,
 		inputExtension: processingInput.inputExtension,

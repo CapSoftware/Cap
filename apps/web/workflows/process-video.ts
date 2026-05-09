@@ -143,6 +143,7 @@ async function startMediaServerProcessJob(
 		videoUrl: string;
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
+		previewGifPresignedUrl: string;
 		webhookUrl: string;
 		webhookSecret?: string;
 		inputExtension: string;
@@ -253,6 +254,7 @@ async function processVideoOnMediaServer(
 
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
+	const previewGifKey = `${userId}/${videoId}/preview/animated-preview.gif`;
 
 	const outputPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -274,6 +276,17 @@ async function processVideoOnMediaServer(
 		)
 		.pipe(runPromise);
 
+	const previewGifPresignedUrl = await bucket
+		.getInternalPresignedPutUrl(
+			previewGifKey,
+			{
+				ContentType: "image/gif",
+				CacheControl: "public, max-age=31536000, immutable",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		)
+		.pipe(runPromise);
+
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 
@@ -283,6 +296,7 @@ async function processVideoOnMediaServer(
 		videoUrl: rawVideoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
 		webhookUrl,
 		webhookSecret: webhookSecret || undefined,
 		inputExtension: getInputExtension(rawFileKey),

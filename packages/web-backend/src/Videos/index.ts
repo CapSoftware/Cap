@@ -377,7 +377,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					if (user.activeOrganizationId !== input.orgId)
 						return yield* Effect.fail(new Policy.PolicyDeniedError());
 
-					const writable = yield* storage.getWritableAccessForUser(user.id);
+					const writable = yield* storage.getWritableAccessForUser(
+						user.id,
+						input.orgId,
+					);
 					const bucketId: RepoCreateVideoInput["bucketId"] = writable.bucketId;
 					const storageIntegrationId: RepoCreateVideoInput["storageIntegrationId"] =
 						writable.storageIntegrationId;

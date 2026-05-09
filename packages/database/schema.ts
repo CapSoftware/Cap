@@ -564,17 +564,36 @@ export const messengerMessages = mysqlTable(
 	}),
 );
 
-export const s3Buckets = mysqlTable("s3_buckets", {
-	id: nanoId("id").notNull().primaryKey().$type<S3Bucket.S3BucketId>(),
-	ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
-	// Use encryptedText for sensitive fields
-	region: encryptedText("region").notNull(),
-	endpoint: encryptedTextNullable("endpoint"),
-	bucketName: encryptedText("bucketName").notNull(),
-	accessKeyId: encryptedText("accessKeyId").notNull(),
-	secretAccessKey: encryptedText("secretAccessKey").notNull(),
-	provider: text("provider").notNull().default("aws"),
-});
+export const s3Buckets = mysqlTable(
+	"s3_buckets",
+	{
+		id: nanoId("id").notNull().primaryKey().$type<S3Bucket.S3BucketId>(),
+		ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
+		organizationId:
+			nanoIdNullable("organizationId").$type<Organisation.OrganisationId>(),
+		region: encryptedText("region").notNull(),
+		endpoint: encryptedTextNullable("endpoint"),
+		bucketName: encryptedText("bucketName").notNull(),
+		accessKeyId: encryptedText("accessKeyId").notNull(),
+		secretAccessKey: encryptedText("secretAccessKey").notNull(),
+		provider: text("provider").notNull().default("aws"),
+		active: boolean("active").notNull().default(true),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		ownerOrganizationIndex: index("owner_organization_idx").on(
+			table.ownerId,
+			table.organizationId,
+		),
+		organizationIdIndex: index("organization_id_idx").on(table.organizationId),
+		organizationActiveIndex: index("organization_active_idx").on(
+			table.organizationId,
+			table.active,
+			table.updatedAt,
+		),
+	}),
+);
 
 export const storageIntegrations = mysqlTable(
 	"storage_integrations",
@@ -584,6 +603,8 @@ export const storageIntegrations = mysqlTable(
 			.primaryKey()
 			.$type<Storage.StorageIntegrationId>(),
 		ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
+		organizationId:
+			nanoIdNullable("organizationId").$type<Organisation.OrganisationId>(),
 		provider: varchar("provider", { length: 64 })
 			.notNull()
 			.$type<Storage.StorageProvider>(),
@@ -616,6 +637,15 @@ export const storageIntegrations = mysqlTable(
 			table.provider,
 		),
 		ownerActiveIndex: index("owner_active_idx").on(table.ownerId, table.active),
+		organizationProviderIndex: index("organization_provider_idx").on(
+			table.organizationId,
+			table.provider,
+		),
+		organizationActiveIndex: index("organization_active_idx").on(
+			table.organizationId,
+			table.active,
+			table.status,
+		),
 	}),
 );
 
@@ -741,6 +771,10 @@ export const s3BucketsRelations = relations(s3Buckets, ({ one }) => ({
 		fields: [s3Buckets.ownerId],
 		references: [users.id],
 	}),
+	organization: one(organizations, {
+		fields: [s3Buckets.organizationId],
+		references: [organizations.id],
+	}),
 }));
 
 export const storageIntegrationsRelations = relations(
@@ -749,6 +783,10 @@ export const storageIntegrationsRelations = relations(
 		owner: one(users, {
 			fields: [storageIntegrations.ownerId],
 			references: [users.id],
+		}),
+		organization: one(organizations, {
+			fields: [storageIntegrations.organizationId],
+			references: [organizations.id],
 		}),
 		objects: many(storageObjects),
 	}),
@@ -776,6 +814,8 @@ export const organizationsRelations = relations(
 		sharedVideos: many(sharedVideos),
 		organizationInvites: many(organizationInvites),
 		spaces: many(spaces),
+		s3Buckets: many(s3Buckets),
+		storageIntegrations: many(storageIntegrations),
 	}),
 );
 

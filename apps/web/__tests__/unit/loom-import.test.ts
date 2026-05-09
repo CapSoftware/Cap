@@ -95,6 +95,10 @@ vi.mock("@/lib/server", async () => {
 	return { runPromise: Effect.runPromise };
 });
 
+vi.mock("@/actions/organization/authorization", () => ({
+	requireOrganizationAccess: vi.fn(),
+}));
+
 vi.mock("workflow/api", () => ({
 	start: startMock,
 }));

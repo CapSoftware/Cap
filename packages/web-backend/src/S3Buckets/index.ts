@@ -1,7 +1,7 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { decrypt } from "@cap/database/crypto";
-import type { S3Bucket, User } from "@cap/web-domain";
+import type { Organisation, S3Bucket, User } from "@cap/web-domain";
 import type { RequestPresigningArguments } from "@smithy/types";
 import { Config, Effect, Layer, Option } from "effect";
 
@@ -200,6 +200,17 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 						);
 				},
 			),
+			getBucketAccessForOrganization: Effect.fn(
+				"S3Buckets.getBucketAccessForOrganization",
+			)(function* (organizationId: Organisation.OrganisationId) {
+				const customBucket = yield* repo.getForOrganization(organizationId);
+
+				return yield* Option.match(customBucket, {
+					onNone: () => Effect.succeed(Option.none()),
+					onSome: (bucket) =>
+						getBucketAccess(Option.some(bucket)).pipe(Effect.map(Option.some)),
+				});
+			}),
 		};
 	}),
 	dependencies: [
@@ -214,4 +225,10 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		);
 	static getBucketAccessForUser = (userId: User.UserId) =>
 		Effect.flatMap(S3Buckets, (b) => b.getBucketAccessForUser(userId));
+	static getBucketAccessForOrganization = (
+		organizationId: Organisation.OrganisationId,
+	) =>
+		Effect.flatMap(S3Buckets, (b) =>
+			b.getBucketAccessForOrganization(organizationId),
+		);
 }

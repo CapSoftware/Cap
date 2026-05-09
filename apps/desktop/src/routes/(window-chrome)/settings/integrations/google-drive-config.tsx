@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { useMutation } from "@tanstack/solid-query";
 import { createResource, createSignal, Show, Suspense } from "solid-js";
+import { createSelectedOrganization } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 import { IntegrationConfigHeader } from "./config-header";
@@ -42,9 +43,18 @@ const wait = (ms: number) =>
 		setTimeout(resolve, ms);
 	});
 
-const fetchStorageIntegrations = async (refreshStorageQuota = false) => {
+const fetchStorageIntegrations = async (
+	orgId: string | null,
+	refreshStorageQuota = false,
+) => {
 	const response = await apiClient.desktop.getStorageIntegrations({
-		query: refreshStorageQuota ? { refreshStorageQuota: true } : undefined,
+		query:
+			refreshStorageQuota || orgId
+				? {
+						...(refreshStorageQuota ? { refreshStorageQuota: true } : {}),
+						...(orgId ? { orgId } : {}),
+					}
+				: undefined,
 		headers: await protectedHeaders(),
 	});
 
@@ -54,44 +64,60 @@ const fetchStorageIntegrations = async (refreshStorageQuota = false) => {
 	return response.body;
 };
 
-const fetchS3Config = async () => {
+const fetchS3Config = async (orgId: string | null) => {
 	const response = await apiClient.desktop.getS3Config({
+		query: orgId ? { orgId } : undefined,
 		headers: await protectedHeaders(),
 	});
 
 	if (response.status !== 200) throw new Error("Failed to fetch S3 config");
 
-	return response.body.config;
+	return response.body;
 };
 
 export default function GoogleDriveConfigPage() {
+	const organizationSelection = createSelectedOrganization();
 	const [isWaitingForConnection, setIsWaitingForConnection] =
 		createSignal(false);
 	const [isRefreshing, setIsRefreshing] = createSignal(false);
-	const [storage, { mutate: setStorage }] = createResource(() =>
-		fetchStorageIntegrations(),
+	const [storage, { mutate: setStorage }] = createResource(
+		() => organizationSelection.selectedOrganizationId(),
+		(orgId) => fetchStorageIntegrations(orgId),
 	);
 
 	const googleDrive = () => storage()?.googleDrive;
 	const storageQuota = () => googleDrive()?.storageQuota ?? null;
 	const isConnected = () => googleDrive()?.connected === true;
 	const isActive = () => storage()?.activeProvider === "googleDrive";
+	const managedByOrganization = () => storage()?.managedByOrganization ?? null;
 
-	const [s3Config, { mutate: setS3Config }] = createResource(fetchS3Config);
+	const [s3Config, { mutate: setS3Config }] = createResource(
+		() => organizationSelection.selectedOrganizationId(),
+		(orgId) => fetchS3Config(orgId),
+	);
 
 	const hasS3Config = () => {
-		const config = s3Config();
-		return !!config?.accessKeyId && !!config.bucketName;
+		const result = s3Config();
+		return (
+			result?.source === "user" &&
+			!!result.config.accessKeyId &&
+			!!result.config.bucketName
+		);
 	};
 
 	const updateStorage = async (refreshStorageQuota = false) => {
-		const nextStorage = await fetchStorageIntegrations(refreshStorageQuota);
+		const nextStorage = await fetchStorageIntegrations(
+			organizationSelection.selectedOrganizationId(),
+			refreshStorageQuota,
+		);
 		setStorage(nextStorage);
 		return nextStorage;
 	};
 
 	const updateS3Config = async () => {
-		const nextConfig = await fetchS3Config();
+		const nextConfig = await fetchS3Config(
+			organizationSelection.selectedOrganizationId(),
+		);
 		setS3Config(nextConfig);
 		return nextConfig;
 	};
@@ -238,6 +264,7 @@ export default function GoogleDriveConfigPage() {
 	const busy = () =>
 		storage.loading ||
 		s3Config.loading ||
+		!!managedByOrganization() ||
 		isRefreshing() ||
 		connect.isPending ||
 		isWaitingForConnection() ||
@@ -264,6 +291,13 @@ export default function GoogleDriveConfigPage() {
 									your Drive. Existing Cap-hosted and S3 videos keep using their
 									current storage.
 								</p>
+								<Show when={managedByOrganization()}>
+									{(organization) => (
+										<p class="mt-3 text-sm font-medium text-gray-12">
+											Managed by your organization: {organization().name}
+										</p>
+									)}
+								</Show>
 							</div>
 
 							<div class="space-y-3">

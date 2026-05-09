@@ -8,15 +8,16 @@ export interface AudioExtractionOptions {
 	timeoutMs?: number;
 }
 
+const CHECK_TIMEOUT_MS = 30_000;
+const EXTRACT_TIMEOUT_MS = 120_000;
+const MAX_AUDIO_SIZE_BYTES = 100 * 1024 * 1024;
+
 const DEFAULT_OPTIONS: Required<AudioExtractionOptions> = {
 	format: "mp3",
 	codec: "libmp3lame",
 	bitrate: "128k",
+	timeoutMs: EXTRACT_TIMEOUT_MS,
 };
-
-const CHECK_TIMEOUT_MS = 30_000;
-const EXTRACT_TIMEOUT_MS = 120_000;
-const MAX_AUDIO_SIZE_BYTES = 100 * 1024 * 1024;
 
 let activeProcesses = 0;
 const MAX_CONCURRENT_PROCESSES = 6;
@@ -265,7 +266,7 @@ export async function extractAudio(
 
 				return output;
 			})(),
-			EXTRACT_TIMEOUT_MS,
+			opts.timeoutMs,
 			() => terminateProcess(proc),
 		);
 
@@ -292,7 +293,7 @@ export function extractAudioStream(
 	activeProcesses++;
 
 	const opts = { ...DEFAULT_OPTIONS, ...options };
-	const timeout = options.timeoutMs ?? EXTRACT_TIMEOUT_MS;
+	const timeout = opts.timeoutMs;
 
 	let proc: Subprocess;
 	try {

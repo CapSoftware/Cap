@@ -97,7 +97,9 @@ describe("audio routes memory management", () => {
 
 			expect(response.status).toBe(200);
 
-			const reader = response.body?.getReader();
+			const body = response.body;
+			if (!body) throw new Error("Response body missing");
+			const reader = body.getReader();
 			while (true) {
 				const { done } = await reader.read();
 				if (done) break;
@@ -118,7 +120,9 @@ describe("audio routes memory management", () => {
 
 			expect(response.status).toBe(200);
 
-			const reader = response.body?.getReader();
+			const body = response.body;
+			if (!body) throw new Error("Response body missing");
+			const reader = body.getReader();
 			await reader.read();
 			await reader.cancel();
 
@@ -156,7 +160,9 @@ describe("audio routes memory management", () => {
 
 			for (const response of responses) {
 				expect(response.status).toBe(200);
-				const reader = response.body?.getReader();
+				const body = response.body;
+				if (!body) throw new Error("Response body missing");
+				const reader = body.getReader();
 				while (true) {
 					const { done } = await reader.read();
 					if (done) break;

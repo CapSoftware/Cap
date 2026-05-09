@@ -174,9 +174,24 @@ app.get(
 				c.req,
 				GOOGLE_DRIVE_UPLOAD_FEATURE,
 			);
+			const organizationWritable =
+				await Storage.getOrganizationWritableAccess(videoOrgId).pipe(
+					runPromise,
+				);
+			if (
+				!clientSupportsGoogleDriveUpload &&
+				Option.isSome(organizationWritable) &&
+				organizationWritable.value.access.provider === "googleDrive"
+			) {
+				return c.json(
+					{ error: "google_drive_upload_unsupported" },
+					{ status: 426 },
+				);
+			}
+
 			const writable = await (clientSupportsGoogleDriveUpload
-				? Storage.getWritableAccessForUser(user.id)
-				: Storage.getS3WritableAccessForUser(user.id)
+				? Storage.getWritableAccessForUser(user.id, videoOrgId)
+				: Storage.getS3WritableAccessForUser(user.id, videoOrgId)
 			).pipe(runPromise);
 
 			await db()

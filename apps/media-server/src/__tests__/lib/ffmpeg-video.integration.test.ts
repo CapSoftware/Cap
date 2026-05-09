@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	generatePreviewGif,
 	generateThumbnail,
 	materializeMpdManifest,
 	normalizeVideoInputExtension,
@@ -90,6 +91,46 @@ describe("generateThumbnail integration tests", () => {
 	});
 });
 
+describe("generatePreviewGif integration tests", () => {
+	test("generates small GIF preview from video", async () => {
+		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+		const preview = await generatePreviewGif(
+			TEST_VIDEO_WITH_AUDIO,
+			metadata.duration,
+			{ maxBytes: 100_000 },
+		);
+
+		try {
+			const previewData = readFileSync(preview.path);
+
+			expect(previewData.length).toBeGreaterThan(0);
+			expect(previewData.length).toBeLessThanOrEqual(100_000);
+			expect(previewData.subarray(0, 3).toString()).toBe("GIF");
+		} finally {
+			await preview.cleanup();
+		}
+	});
+
+	test("rejects GIF previews over the size budget", async () => {
+		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+
+		await expect(
+			generatePreviewGif(TEST_VIDEO_WITH_AUDIO, metadata.duration, {
+				maxBytes: 1,
+			}),
+		).rejects.toThrow("Preview GIF exceeds size budget");
+	});
+
+	test("rejects before spawning when already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+
+		await expect(
+			generatePreviewGif(TEST_VIDEO_WITH_AUDIO, 10, {}, controller.signal),
+		).rejects.toThrow("Preview GIF generation aborted");
+	});
+});
+
 describe("processVideo integration tests", () => {
 	test("retries transient S3 upload failures", async () => {
 		const originalFetch = globalThis.fetch;
@@ -109,7 +150,7 @@ describe("processVideo integration tests", () => {
 				status: 200,
 				statusText: "OK",
 			});
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 
 		try {
 			await uploadToS3(
@@ -133,7 +174,7 @@ describe("processVideo integration tests", () => {
 				status: 403,
 				statusText: "Forbidden",
 			});
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 
 		try {
 			await expect(
@@ -157,7 +198,7 @@ describe("processVideo integration tests", () => {
 			new Response(
 				'<MPD><Period><AdaptationSet><Representation><SegmentTemplate initialization="init.mp4" media="chunk-$Number$.m4s"/></Representation></AdaptationSet></Period></MPD>',
 				{ status: 200, statusText: "OK" },
-			)) as typeof fetch;
+			)) as unknown as typeof fetch;
 
 		try {
 			const path = await materializeMpdManifest(

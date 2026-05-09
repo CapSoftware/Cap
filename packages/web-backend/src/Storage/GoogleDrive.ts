@@ -40,6 +40,13 @@ type GoogleDriveTokenResponse = {
 	refresh_token?: string;
 };
 
+export type GoogleDriveFolderLocation = {
+	id: string;
+	name: string;
+	driveId?: string | null;
+	driveName?: string | null;
+};
+
 export type GoogleDriveTokenStore = {
 	cacheKey: string;
 	getInitialAccessTokenCache: () => Effect.Effect<
@@ -74,6 +81,31 @@ export type CreateGoogleDriveUploadInput = {
 
 const normalizeContentType = (contentType?: string | null) =>
 	contentType?.trim() ? contentType : "application/octet-stream";
+
+const appendDriveQuery = (
+	url: string,
+	params: Record<string, string | undefined>,
+) => {
+	const nextUrl = new URL(url);
+	for (const [key, value] of Object.entries(params)) {
+		if (value !== undefined) nextUrl.searchParams.set(key, value);
+	}
+	return nextUrl.toString();
+};
+
+const appendSharedDriveCreateParams = (url: string) =>
+	appendDriveQuery(url, { supportsAllDrives: "true" });
+
+const appendSharedDriveListParams = (
+	url: string,
+	config: GoogleDriveIntegrationConfig,
+) =>
+	appendDriveQuery(url, {
+		supportsAllDrives: "true",
+		includeItemsFromAllDrives: "true",
+		corpora: config.driveId ? "drive" : undefined,
+		driveId: config.driveId ?? undefined,
+	});
 
 const parseDriveJson = async <T>(response: Response) => {
 	const text = await response.text();
@@ -362,6 +394,11 @@ const getCachedGoogleDriveAccessToken = (
 		Effect.map((token) => token.accessToken),
 	);
 
+export const getGoogleDriveAccessToken = (
+	config: GoogleDriveIntegrationConfig,
+	tokenStore?: GoogleDriveTokenStore,
+) => getCachedGoogleDriveAccessToken(config, tokenStore);
+
 const clearCachedGoogleDriveAccessToken = (
 	config: GoogleDriveIntegrationConfig,
 	tokenStore?: GoogleDriveTokenStore,
@@ -421,9 +458,18 @@ const getDriveFileName = (key: string) => {
 	return parts.at(-1) ?? "file";
 };
 
-const getDriveFolderParts = (key: string) => {
+const getDriveFolderParts = (
+	key: string,
+	config: GoogleDriveIntegrationConfig,
+) => {
 	const parts = key.split("/").filter(Boolean);
 	if (parts.length < 2) return [];
+	if (config.folderLayout === "userVideo") {
+		if (parts[2] === "segments")
+			return [parts[0] as string, parts[1] as string, "segments"];
+		return [parts[0] as string, parts[1] as string];
+	}
+
 	return parts[2] === "segments"
 		? [parts[1] as string, "segments"]
 		: [parts[1] as string];
@@ -494,7 +540,10 @@ export const ensureGoogleDriveFolder = (
 			"trashed=false",
 			...(parentId ? [`'${escapeDriveQueryValue(parentId)}' in parents`] : []),
 		].join(" and ");
-		const listUrl = `${DRIVE_API_BASE}/files?q=${encodeURIComponent(query)}&fields=files(id,name)&spaces=drive`;
+		const listUrl = appendSharedDriveListParams(
+			`${DRIVE_API_BASE}/files?q=${encodeURIComponent(query)}&fields=files(id,name)&spaces=drive`,
+			config,
+		);
 		const listResponse = yield* driveFetch(
 			config,
 			listUrl,
@@ -510,7 +559,7 @@ export const ensureGoogleDriveFolder = (
 
 		const createResponse = yield* driveFetch(
 			config,
-			`${DRIVE_API_BASE}/files`,
+			appendSharedDriveCreateParams(`${DRIVE_API_BASE}/files`),
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -537,6 +586,54 @@ export const ensureGoogleDriveFolder = (
 		return created.id;
 	});
 
+export const getGoogleDriveFolderLocation = (
+	config: GoogleDriveIntegrationConfig,
+	folderId: string,
+	tokenStore?: GoogleDriveTokenStore,
+) =>
+	driveFetch(
+		config,
+		appendSharedDriveCreateParams(
+			`${DRIVE_API_BASE}/files/${encodeURIComponent(folderId)}?fields=id,name,mimeType,driveId,capabilities(canAddChildren)`,
+		),
+		undefined,
+		tokenStore,
+	).pipe(
+		Effect.flatMap((response) =>
+			Effect.tryPromise({
+				try: () =>
+					parseDriveJson<{
+						id?: string;
+						name?: string;
+						mimeType?: string;
+						driveId?: string;
+						capabilities?: { canAddChildren?: boolean };
+					}>(response),
+				catch: (cause) => new Storage.StorageError({ cause }),
+			}),
+		),
+		Effect.flatMap((folder) => {
+			if (
+				folder.id &&
+				folder.name &&
+				folder.mimeType === GOOGLE_DRIVE_FOLDER_MIME_TYPE &&
+				folder.capabilities?.canAddChildren !== false
+			) {
+				return Effect.succeed<GoogleDriveFolderLocation>({
+					id: folder.id,
+					name: folder.name,
+					driveId: folder.driveId ?? null,
+				});
+			}
+
+			return Effect.fail(
+				new Storage.StorageError({
+					cause: new Error("Selected Google Drive location is not writable"),
+				}),
+			);
+		}),
+	);
+
 const createGoogleDriveFolderWithId = (
 	config: GoogleDriveIntegrationConfig,
 	id: string,
@@ -546,7 +643,7 @@ const createGoogleDriveFolderWithId = (
 ) =>
 	driveFetch(
 		config,
-		`${DRIVE_API_BASE}/files?fields=id,name`,
+		appendSharedDriveCreateParams(`${DRIVE_API_BASE}/files?fields=id,name`),
 		{
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -597,7 +694,9 @@ const createGoogleDriveTextFileWithId = ({
 
 	return driveFetch(
 		config,
-		`${DRIVE_UPLOAD_BASE}/files?uploadType=multipart&fields=id,name,mimeType,size`,
+		appendSharedDriveCreateParams(
+			`${DRIVE_UPLOAD_BASE}/files?uploadType=multipart&fields=id,name,mimeType,size`,
+		),
 		{
 			method: "POST",
 			headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
@@ -793,7 +892,7 @@ const getGoogleDriveUploadParentId = (
 	tokenStore?: GoogleDriveTokenStore,
 ) =>
 	Effect.gen(function* () {
-		const folderParts = getDriveFolderParts(input.key);
+		const folderParts = getDriveFolderParts(input.key, config);
 		let parentId = config.folderId;
 		const pathParts: string[] = [];
 		let videoFolderId: string | null = null;
@@ -875,7 +974,9 @@ export const createGoogleDriveResumableUpload = (
 
 		const response = yield* driveFetch(
 			config,
-			`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,name,mimeType,size`,
+			appendSharedDriveCreateParams(
+				`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,name,mimeType,size`,
+			),
 			{
 				method: "POST",
 				headers,
@@ -927,7 +1028,9 @@ export const getGoogleDriveFileMetadata = (
 ) =>
 	driveFetch(
 		config,
-		`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size`,
+		appendSharedDriveCreateParams(
+			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size`,
+		),
 		undefined,
 		tokenStore,
 	).pipe(
@@ -958,7 +1061,10 @@ export const findGoogleDriveFileByObjectKey = (
 
 	return driveFetch(
 		config,
-		`${DRIVE_API_BASE}/files?${params.toString()}`,
+		appendSharedDriveListParams(
+			`${DRIVE_API_BASE}/files?${params.toString()}`,
+			config,
+		),
 		undefined,
 		tokenStore,
 	).pipe(
@@ -984,7 +1090,9 @@ export const getGoogleDriveObjectText = (
 ) =>
 	driveFetch(
 		config,
-		`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`,
+		appendSharedDriveCreateParams(
+			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`,
+		),
 		undefined,
 		tokenStore,
 	).pipe(
@@ -1007,7 +1115,9 @@ export const getGoogleDriveObjectResponse = (
 		if (range) headers.Range = range;
 		const response = yield* driveFetch(
 			config,
-			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`,
+			appendSharedDriveCreateParams(
+				`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`,
+			),
 			{ headers },
 			tokenStore,
 		);
@@ -1021,7 +1131,9 @@ export const deleteGoogleDriveFile = (
 ) =>
 	driveFetch(
 		config,
-		`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`,
+		appendSharedDriveCreateParams(
+			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`,
+		),
 		{
 			method: "DELETE",
 		},
@@ -1050,7 +1162,9 @@ export const copyGoogleDriveFile = ({
 		);
 		const response = yield* driveFetch(
 			config,
-			`${DRIVE_API_BASE}/files/${encodeURIComponent(sourceFileId)}/copy?fields=id,name,mimeType,size`,
+			appendSharedDriveCreateParams(
+				`${DRIVE_API_BASE}/files/${encodeURIComponent(sourceFileId)}/copy?fields=id,name,mimeType,size`,
+			),
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },

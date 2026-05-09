@@ -74,6 +74,14 @@ pub type NativeFormat = arc::R<av::capture::device::Format>;
 
 pub type NativeCaptureHandle = AVFoundationRecordingHandle;
 
+static AVFOUNDATION_SESSION_LIFECYCLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn avfoundation_session_lifecycle_guard() -> std::sync::MutexGuard<'static, ()> {
+    AVFOUNDATION_SESSION_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+}
+
 fn find_device(info: &CameraInfo) -> Option<arc::R<av::CaptureDevice>> {
     let devices = list_video_devices();
     devices
@@ -152,6 +160,7 @@ pub(super) fn start_capturing_impl(
     // otherwise start_running can overwrite the active format on macOS
     // https://stackoverflow.com/questions/36689578/avfoundation-capturing-video-with-custom-resolution
     {
+        let _session_lifecycle_guard = avfoundation_session_lifecycle_guard();
         let mut _lock = device.config_lock().map_err(AVFoundationError::Retained)?;
 
         _lock.set_active_format(format.native());
@@ -165,6 +174,7 @@ pub(super) fn start_capturing_impl(
         output,
         input,
         _device: device,
+        is_torn_down: false,
     })
 }
 
@@ -174,6 +184,7 @@ pub struct AVFoundationRecordingHandle {
     output: arc::R<av::CaptureVideoDataOutput>,
     input: arc::R<av::CaptureDeviceInput>,
     _device: arc::R<av::CaptureDevice>,
+    is_torn_down: bool,
 }
 
 impl AVFoundationRecordingHandle {
@@ -183,6 +194,13 @@ impl AVFoundationRecordingHandle {
     }
 
     fn teardown(&mut self) {
+        if self.is_torn_down {
+            return;
+        }
+
+        self.is_torn_down = true;
+        let _session_lifecycle_guard = avfoundation_session_lifecycle_guard();
+
         self.session.stop_running();
         self.output
             .set_sample_buf_delegate::<CallbackOutputDelegate>(None, None);
