@@ -135,13 +135,10 @@ export function Header() {
 
 	return (
 		<div
-			data-tauri-drag-region
+			data-tauri-drag-region="deep"
 			class="flex relative flex-row items-center w-full h-[52px]"
 		>
-			<div
-				data-tauri-drag-region
-				class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}
-			>
+			<div class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}>
 				{ostype() === "macos" && <div class="h-full w-[4rem]" />}
 				<EditorButton
 					onClick={async () => {
@@ -170,7 +167,7 @@ export function Header() {
 					<NameEditor name={meta().prettyName} />
 					<span class="text-sm text-gray-11">.cap</span>
 				</div>
-				<div data-tauri-drag-region class="flex-1 h-full" />
+				<div class="flex-1 h-full" />
 				<EditorButton
 					onClick={() => {
 						if (clearTimelineSelection()) return;
@@ -189,16 +186,12 @@ export function Header() {
 				/>
 			</div>
 
-			<div
-				data-tauri-drag-region
-				class="flex flex-row items-center justify-center gap-2 px-4 border-x border-black-transparent-10"
-			>
+			<div class="flex flex-row items-center justify-center gap-2 px-4 border-x border-black-transparent-10">
 				<PresetsDropdown />
 				<OrganizationDropdown />
 			</div>
 
 			<div
-				data-tauri-drag-region
 				class={cx(
 					"flex-1 h-full flex flex-row items-center gap-2 pl-2",
 					ostype() !== "windows" && "pr-2",
@@ -228,7 +221,7 @@ export function Header() {
 					tooltipText="Redo"
 					leftIcon={<IconCapRedo class="w-5" />}
 				/>
-				<div data-tauri-drag-region class="flex-1 h-full" />
+				<div class="flex-1 h-full" />
 				<Show when={customDomain.data}>
 					<ShareButton />
 				</Show>
@@ -366,8 +359,8 @@ const UploadIcon = (props: ComponentProps<"svg">) => {
 				stroke-linejoin="round"
 				class={cx(
 					exportState.type !== "idle" &&
-					exportState.type !== "done" &&
-					"bounce",
+						exportState.type !== "done" &&
+						"bounce",
 				)}
 			/>
 		</svg>
@@ -399,7 +392,7 @@ function NameEditor(props: { name: string }) {
 						"absolute inset-0 px-px m-0 opacity-0 overflow-hidden focus:opacity-100 bg-transparent border-b border-transparent focus:border-gray-7 focus:outline-none peer whitespace-pre",
 						truncated() && "truncate",
 						(prettyName().length < 5 || prettyName().length > 100) &&
-						"focus:border-red-500",
+							"focus:border-red-500",
 					)}
 					value={prettyName()}
 					onInput={(e) => setPrettyName(e.currentTarget.value)}

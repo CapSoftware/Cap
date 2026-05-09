@@ -21,7 +21,7 @@ function SkeletonButton(props: { class?: string; width?: string }) {
 function HeaderSkeleton() {
 	return (
 		<div
-			data-tauri-drag-region
+			data-tauri-drag-region="deep"
 			class="flex relative flex-row items-center w-full h-[52px] px-4 border-b border-gray-3 bg-gray-1 dark:bg-gray-2 shrink-0 z-20 gap-4 justify-between"
 		>
 			<div class="flex items-center gap-4">

@@ -14,6 +14,9 @@ async setMicInput(label: string | null) : Promise<null> {
 async setCameraInput(id: DeviceOrModelID | null, skipCameraWindow: boolean | null) : Promise<null> {
     return await TAURI_INVOKE("set_camera_input", { id, skipCameraWindow });
 },
+async setNativeCameraPreviewEnabled(enabled: boolean) : Promise<null> {
+    return await TAURI_INVOKE("set_native_camera_preview_enabled", { enabled });
+},
 async setRecordingMode(mode: RecordingMode) : Promise<null> {
     return await TAURI_INVOKE("set_recording_mode", { mode });
 },

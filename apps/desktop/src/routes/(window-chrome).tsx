@@ -85,7 +85,7 @@ function Header() {
 				"flex items-center min-w-0 w-full h-9 select-none shrink-0 bg-gray-2",
 				isWindows ? "flex-row" : "flex-row-reverse",
 			)}
-			data-tauri-drag-region
+			data-tauri-drag-region="deep"
 		>
 			{ctx.state()?.items}
 			{isWindows && <CaptionControlsWindows11 class="!ml-auto" />}
@@ -100,10 +100,7 @@ function Inner(props: ParentProps) {
 	// });
 
 	return (
-		<div
-			data-tauri-drag-region="none"
-			class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in"
-		>
+		<div class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in">
 			{props.children}
 		</div>
 	);

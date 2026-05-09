@@ -428,11 +428,9 @@ export default function OnboardingPage() {
 						"flex items-center w-full mx-2",
 						ostype() === "macos" && "flex-row-reverse",
 					)}
-					data-tauri-drag-region
+					data-tauri-drag-region="deep"
 				>
-					{ostype() === "macos" && (
-						<div class="flex-1" data-tauri-drag-region />
-					)}
+					{ostype() === "macos" && <div class="flex-1" />}
 				</div>
 			</WindowChromeHeader>
 			<Show when={ready()}>
@@ -484,10 +482,7 @@ export default function OnboardingPage() {
 					}
 				`}
 				</style>
-				<div
-					data-tauri-drag-region="none"
-					class="flex flex-col flex-1 min-h-0 overflow-hidden relative"
-				>
+				<div class="flex flex-col flex-1 min-h-0 overflow-hidden relative">
 					<OnboardingAmbientBackdrop />
 					<div class="relative flex-1 min-h-0 z-10">
 						<Show when={isMacOS()}>
@@ -570,15 +565,11 @@ function StepNavigation(props: {
 	onSkip?: () => void;
 }) {
 	return (
-		<div
-			data-tauri-drag-region="none"
-			class="flex flex-col items-center gap-2 px-8 pb-5 pt-2 shrink-0 relative z-40"
-		>
+		<div class="flex flex-col items-center gap-2 px-8 pb-5 pt-2 shrink-0 relative z-40">
 			<div class="flex items-center justify-between w-full">
 				<div class="flex-1">
 					<Show when={props.showBack}>
 						<button
-							data-tauri-drag-region="none"
 							type="button"
 							onClick={props.onBack}
 							class="flex items-center gap-1.5 text-[13px] text-gray-10 hover:text-gray-12 transition-colors duration-200"
@@ -607,7 +598,6 @@ function StepNavigation(props: {
 				<div class="flex-1 flex justify-end">
 					<div class="flex flex-col items-center gap-1.5">
 						<Button
-							data-tauri-drag-region="none"
 							onClick={props.onNext}
 							variant="primary"
 							size="md"
@@ -624,7 +614,6 @@ function StepNavigation(props: {
 						</Button>
 						<Show when={props.showSkipOnboarding}>
 							<button
-								data-tauri-drag-region="none"
 								type="button"
 								onClick={() => props.onSkip?.()}
 								class="text-[11px] text-gray-9 hover:text-gray-11 transition-colors duration-200 py-0.5"
@@ -2053,10 +2042,7 @@ function PermissionsStep(props: {
 	};
 
 	return (
-		<div
-			data-tauri-drag-region="none"
-			class="flex flex-col items-center justify-center min-h-full px-12 gap-6"
-		>
+		<div class="flex flex-col items-center justify-center min-h-full px-12 gap-6">
 			<div
 				class={cx(
 					"flex flex-col items-center gap-3 text-center max-w-[440px] transition-all duration-500",
@@ -2120,7 +2106,6 @@ function PermissionsStep(props: {
 										}
 									>
 										<Button
-											data-tauri-drag-region="none"
 											size="sm"
 											variant="gray"
 											class="shrink-0"

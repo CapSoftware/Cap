@@ -4506,7 +4506,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "system-configuration 0.6.1",
  "tokio",
  "tower-service",
@@ -6991,7 +6991,6 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
 dependencies = [
- "phf_macros 0.11.3",
  "phf_shared 0.11.3",
 ]
 
@@ -7088,19 +7087,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "phf_macros"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
-dependencies = [
- "phf_generator 0.11.3",
- "phf_shared 0.11.3",
- "proc-macro2",
- "quote",
- "syn 2.0.106",
 ]
 
 [[package]]
@@ -7557,7 +7543,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls 0.23.31",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.16",
  "tokio",
  "tracing",
@@ -7594,7 +7580,7 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -9903,9 +9889,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-build"
-version = "2.6.0"
+version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be9aa8c59a894f76c29a002501c589de5eb4987a5913d62a6e0a47f320901988"
+checksum = "3a318b234cc2dea65f575467bafcfb76286bce228ebc3778e337d61d03213007"
 dependencies = [
  "anyhow",
  "cargo_toml",
@@ -10406,9 +10392,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-utils"
-version = "2.9.0"
+version = "2.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55f61d2bf7188fbcf2b0ed095b67a6bc498f713c939314bb19eb700118a573b7"
+checksum = "d57200389a2f82b4b0a40ae29ca19b6978116e8f4d4e974c3234ce40c0ffbdec"
 dependencies = [
  "anyhow",
  "brotli",
@@ -10424,7 +10410,7 @@ dependencies = [
  "kuchikiki",
  "log",
  "memchr",
- "phf 0.11.3",
+ "phf 0.13.1",
  "plist",
  "proc-macro2",
  "quote",
