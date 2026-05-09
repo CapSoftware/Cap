@@ -13,7 +13,7 @@ name = "cap_desktop_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.1.0", features = [] }
+tauri-build = { version = "2.6.1", features = [] }
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
 swift-rs = { version = "1.0.6", features = ["build"] }
