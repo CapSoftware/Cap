@@ -214,7 +214,45 @@ fn destroy_camera_window_handle(
     destroy_rx
 }
 
-async fn ensure_camera_input_active(app_state: &mut App) {
+async fn init_native_camera_preview(
+    app_state: &mut App,
+    window: WebviewWindow,
+) -> Result<(), String> {
+    let camera_feed = app_state.camera_feed.clone();
+    let init_result = app_state
+        .camera_preview
+        .init_window(window, camera_feed.clone())
+        .await;
+
+    match init_result {
+        Ok(()) => {
+            #[allow(deprecated)]
+            let camera_ws_sender = app_state.camera_ws_sender.clone();
+            #[allow(deprecated)]
+            if let Err(err) = camera_feed
+                .ask(feeds::camera::RemoveSender(camera_ws_sender))
+                .await
+            {
+                warn!(error = %err, "Failed to remove legacy camera preview sender");
+            }
+            Ok(())
+        }
+        Err(err) => {
+            #[allow(deprecated)]
+            let camera_ws_sender = app_state.camera_ws_sender.clone();
+            #[allow(deprecated)]
+            if let Err(add_err) = camera_feed
+                .ask(feeds::camera::AddSender(camera_ws_sender))
+                .await
+            {
+                warn!(error = %add_err, "Failed to restore legacy camera preview sender");
+            }
+            Err(err.to_string())
+        }
+    }
+}
+
+pub(crate) async fn ensure_camera_input_active(app_state: &mut App) {
     if let Some(id) = app_state.selected_camera_id.clone()
         && !app_state.camera_in_use
     {
@@ -1037,11 +1075,8 @@ impl ShowCapWindow {
                         ensure_camera_input_active(&mut app_state).await;
 
                         if enable_native_camera_preview {
-                            let camera_feed = app_state.camera_feed.clone();
-                            if let Err(err) = app_state
-                                .camera_preview
-                                .init_window(window.clone(), camera_feed)
-                                .await
+                            if let Err(err) =
+                                init_native_camera_preview(&mut app_state, window.clone()).await
                             {
                                 error!(
                                     "Error reinitializing camera preview for existing window: {err}"
@@ -1122,11 +1157,8 @@ impl ShowCapWindow {
                     ensure_camera_input_active(&mut app_state).await;
 
                     if enable_native_camera_preview {
-                        let camera_feed = app_state.camera_feed.clone();
-                        if let Err(err) = app_state
-                            .camera_preview
-                            .init_window(window.clone(), camera_feed)
-                            .await
+                        if let Err(err) =
+                            init_native_camera_preview(&mut app_state, window.clone()).await
                         {
                             error!(
                                 "Error reinitializing camera preview for existing window: {err}"
@@ -1912,8 +1944,9 @@ impl ShowCapWindow {
 			                window.__CAP__ = window.__CAP__ ?? {{}};
 			                window.__CAP__.cameraWsPort = {};
 			                window.__CAP__.cameraOnlyMode = {};
+			                window.__CAP__.enableNativeCameraPreview = {};
 		                ",
-                            state.camera_ws_port, centered
+                            state.camera_ws_port, centered, enable_native_camera_preview
                         ))
                         .content_protected(should_protect)
                         .transparent(true)
@@ -2090,16 +2123,8 @@ impl ShowCapWindow {
                     }
 
                     if enable_native_camera_preview {
-                        let camera_feed = state.camera_feed.clone();
-                        #[allow(deprecated)]
-                        let camera_ws_sender = state.camera_ws_sender.clone();
-                        let _ = camera_feed
-                            .ask(feeds::camera::RemoveSender(camera_ws_sender))
-                            .await;
-                        if let Err(err) = state
-                            .camera_preview
-                            .init_window(window.clone(), camera_feed)
-                            .await
+                        if let Err(err) =
+                            init_native_camera_preview(&mut state, window.clone()).await
                         {
                             error!(
                                 "Error initializing camera preview, falling back to WebSocket preview: {err}"

@@ -60,7 +60,7 @@ export interface Job {
 const jobs = new Map<string, Job>();
 const JOB_TTL_MS = 60 * 60 * 1000;
 const STALE_JOB_MS = 15 * 60 * 1000;
-const MAX_JOB_LIFETIME_MS = 45 * 60 * 1000;
+const MAX_JOB_LIFETIME_MS = 60 * 60 * 1000;
 const WEBHOOK_MAX_ATTEMPTS = 3;
 const WEBHOOK_RETRY_BASE_MS = 500;
 const WEBHOOK_TIMEOUT_MS = 5000;
@@ -229,6 +229,14 @@ export function updateJob(
 	if (!job) return undefined;
 
 	Object.assign(job, updates, { updatedAt: Date.now() });
+	return job;
+}
+
+export function touchJob(jobId: string): Job | undefined {
+	const job = jobs.get(jobId);
+	if (!job) return undefined;
+
+	job.updatedAt = Date.now();
 	return job;
 }
 

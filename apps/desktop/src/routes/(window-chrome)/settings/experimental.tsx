@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { type } from "@tauri-apps/plugin-os";
 import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -7,7 +8,6 @@ import {
 	deriveGeneralSettings,
 	type GeneralSettingsStore,
 } from "~/utils/general-settings";
-import { commands } from "~/utils/tauri";
 import { ToggleSettingItem } from "./Setting";
 
 export default function ExperimentalSettings() {
@@ -35,15 +35,18 @@ function Inner(props: {
 	) => {
 		console.log(`Handling settings change for ${key}: ${value}`);
 
+		const previousValue = settings[key];
 		setSettings(key as keyof GeneralSettingsStore, value);
-		generalSettingsStore.set({ [key]: value });
-		if (key === "enableNativeCameraPreview") {
-			await commands.setCameraInput(null, true);
-			try {
-				await commands.destroyCameraWindow();
-			} catch (error) {
-				console.error("Failed to destroy camera window", error);
+		try {
+			if (key === "enableNativeCameraPreview") {
+				await invoke("set_native_camera_preview_enabled", { enabled: value });
+				await generalSettingsStore.set({ [key]: value });
+			} else {
+				await generalSettingsStore.set({ [key]: value });
 			}
+		} catch (error) {
+			setSettings(key as keyof GeneralSettingsStore, previousValue);
+			console.error(`Failed to update ${key}`, error);
 		}
 	};
 

@@ -25,7 +25,25 @@ struct WsReadback {
 
 const WS_PREVIEW_MAX_WIDTH: u32 = 640;
 const WS_PREVIEW_MAX_HEIGHT: u32 = 360;
-const WS_PREVIEW_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+const WS_PREVIEW_TARGET_FRAME_INTERVAL: Duration = Duration::from_micros(33_333);
+const WS_PREVIEW_FRAME_INTERVAL_SLACK: Duration = Duration::from_millis(3);
+const WS_BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(150);
+
+fn preview_frame_due(last_preview_at: Option<Instant>, now: Instant) -> bool {
+    last_preview_at.is_none_or(|last| {
+        now.saturating_duration_since(last) + WS_PREVIEW_FRAME_INTERVAL_SLACK
+            >= WS_PREVIEW_TARGET_FRAME_INTERVAL
+    })
+}
+
+fn scaled_preview_dimensions(width: u32, height: u32) -> (u32, u32) {
+    let width_scale = WS_PREVIEW_MAX_WIDTH as f64 / width.max(1) as f64;
+    let height_scale = WS_PREVIEW_MAX_HEIGHT as f64 / height.max(1) as f64;
+    let scale = width_scale.min(height_scale).min(1.0);
+    let target_width = ((width as f64 * scale).round() as u32).max(1);
+    let target_height = ((height as f64 * scale).round() as u32).max(1);
+    (target_width, target_height)
+}
 
 pub async fn create_camera_preview_ws(
     blur_rx: watch::Receiver<cap_project::BackgroundBlurMode>,
@@ -41,7 +59,7 @@ pub async fn create_camera_preview_ws(
         let mut blur_rx = blur_rx;
 
         let mut blur_state = WsBlurState::new();
-        let mut next_preview_at = Instant::now();
+        let mut last_preview_at = None;
 
         while let Ok(raw_frame) = camera_rx.recv() {
             let mut frame = raw_frame.inner;
@@ -51,10 +69,10 @@ pub async fn create_camera_preview_ws(
             }
 
             let now = Instant::now();
-            if now < next_preview_at {
+            if !preview_frame_due(last_preview_at, now) {
                 continue;
             }
-            next_preview_at = now + WS_PREVIEW_FRAME_INTERVAL;
+            last_preview_at = Some(now);
 
             let blur_mode = *blur_rx.borrow_and_update();
             let blur_enabled = blur_mode != cap_project::BackgroundBlurMode::Off;
@@ -65,15 +83,13 @@ pub async fn create_camera_preview_ws(
                 cap_project::BackgroundBlurMode::Heavy => cap_camera_effects::BlurMode::Heavy,
             };
 
+            let (target_width, target_height) =
+                scaled_preview_dimensions(frame.width(), frame.height());
             let needs_convert = frame.format() != Pixel::RGBA
-                || frame.width() > WS_PREVIEW_MAX_WIDTH
-                || frame.height() > WS_PREVIEW_MAX_HEIGHT;
+                || frame.width() != target_width
+                || frame.height() != target_height;
 
             if needs_convert {
-                let target_width = WS_PREVIEW_MAX_WIDTH.min(frame.width());
-                let target_height =
-                    (target_width as f64 / (frame.width() as f64 / frame.height() as f64)) as u32;
-
                 let ctx = match &mut converter {
                     Some((format, ctx))
                         if *format == frame.format()
@@ -445,8 +461,9 @@ fn init_headless_blur() -> Option<WsBlurResources> {
     }))
     .ok()?;
 
-    let processor =
+    let mut processor =
         cap_camera_effects::BlurProcessor::new(&device, wgpu::TextureFormat::Rgba8Unorm).ok()?;
+    processor.set_inference_interval(WS_BLUR_INFERENCE_INTERVAL);
 
     tracing::info!("WebSocket camera blur processor initialized (headless)");
 

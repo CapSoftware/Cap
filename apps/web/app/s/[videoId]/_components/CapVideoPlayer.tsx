@@ -31,6 +31,7 @@ import {
 	resolvePlaybackSource,
 	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
+import { VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -645,6 +646,16 @@ export function CapVideoPlayer({
 					</TooltipContent>
 				</Tooltip>
 			)}
+			<VideoPreviewGif
+				videoId={videoId}
+				visible={
+					videoLoaded &&
+					!hasPlayedOnce &&
+					!showUploadFailureOverlay &&
+					!showPlaybackResolutionError &&
+					Boolean(resolvedSrc.data)
+				}
+			/>
 			{resolvedSrc.data && (
 				<MediaPlayerVideo
 					src={iosLevelPatchedUrl ?? resolvedSrc.data.url}

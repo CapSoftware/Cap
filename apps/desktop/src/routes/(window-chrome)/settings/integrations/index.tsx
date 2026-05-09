@@ -1,11 +1,13 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
-import { For, onMount } from "solid-js";
+import { createResource, For, onMount } from "solid-js";
 import IconLucideDatabase from "~icons/lucide/database";
 
 import "@total-typescript/ts-reset/filter-boolean";
 import { authStore } from "~/store";
+import { createSelectedOrganization } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
+import { apiClient, protectedHeaders } from "~/utils/web-api";
 
 const GoogleDriveIcon = (props: { class?: string }) => (
 	<svg
@@ -44,8 +46,23 @@ const GoogleDriveIcon = (props: { class?: string }) => (
 export default function AppsTab() {
 	const navigate = useNavigate();
 	const auth = authStore.createQuery();
+	const organizationSelection = createSelectedOrganization();
+	const [storage] = createResource(
+		() => organizationSelection.selectedOrganizationId(),
+		async (orgId) => {
+			if (!orgId) return null;
+			const response = await apiClient.desktop.getStorageIntegrations({
+				query: { orgId },
+				headers: await protectedHeaders(),
+			});
+
+			if (response.status !== 200) return null;
+			return response.body;
+		},
+	);
 
 	const isPro = () => auth.data?.plan?.upgraded;
+	const managedByOrganization = () => storage()?.managedByOrganization ?? null;
 
 	onMount(() => {
 		void commands.checkUpgradedAndUpdate();
@@ -72,6 +89,7 @@ export default function AppsTab() {
 
 	const handleAppClick = async (app: (typeof apps)[number]) => {
 		try {
+			if (managedByOrganization()) return;
 			if (app.pro && !isPro()) {
 				await commands.showWindow("Upgrade");
 				return;
@@ -102,9 +120,14 @@ export default function AppsTab() {
 							<Button
 								size="sm"
 								variant="primary"
+								disabled={!!managedByOrganization()}
 								onClick={() => handleAppClick(app)}
 							>
-								{app.pro && !isPro() ? "Upgrade to Pro" : "Configure"}
+								{managedByOrganization()
+									? "Managed by your organization"
+									: app.pro && !isPro()
+										? "Upgrade to Pro"
+										: "Configure"}
 							</Button>
 						</div>
 						<p class="text-[13px] text-gray-11">{app.description}</p>

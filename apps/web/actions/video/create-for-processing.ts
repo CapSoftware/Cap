@@ -15,6 +15,7 @@ import {
 } from "@cap/web-domain";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { requireOrganizationAccess } from "@/actions/organization/authorization";
 import { runPromise } from "@/lib/server";
 
 export interface CreateForProcessingResult {
@@ -48,6 +49,8 @@ export async function createVideoForServerProcessing({
 		throw new Error("upgrade_required");
 	}
 
+	await requireOrganizationAccess(user.id, orgId);
+
 	const videoId = Video.VideoId.make(nanoId());
 
 	const date = new Date();
@@ -68,6 +71,7 @@ export async function createVideoForServerProcessing({
 				"x-amz-meta-resolution": resolution ?? "",
 			},
 		},
+		orgId,
 	).pipe(runPromise);
 
 	await db()

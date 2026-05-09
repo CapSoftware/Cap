@@ -47,8 +47,17 @@ export type OrganizationBrandingPatchBody = z.infer<
 	typeof OrganizationBrandingPatchBody
 >;
 
+export const ManagedOrganizationStorage = z
+	.object({
+		id: z.string(),
+		name: z.string(),
+		activeProvider: z.enum(["s3", "googleDrive"]),
+	})
+	.nullable();
+
 export const DesktopStorageIntegrations = z.object({
 	activeProvider: z.enum(["s3", "googleDrive"]),
+	managedByOrganization: ManagedOrganizationStorage,
 	googleDrive: z.object({
 		id: z.string().nullable(),
 		connected: z.boolean(),
@@ -137,6 +146,11 @@ const protectedContract = c.router(
 		getS3Config: {
 			method: "GET",
 			path: "/desktop/s3/config/get",
+			query: z
+				.object({
+					orgId: z.string().optional(),
+				})
+				.optional(),
 			responses: {
 				200: z.object({
 					config: z.custom<{
@@ -147,6 +161,8 @@ const protectedContract = c.router(
 						bucketName: string;
 						region: string;
 					}>(),
+					source: z.enum(["default", "user", "organization"]),
+					managedByOrganization: ManagedOrganizationStorage,
 				}),
 			},
 		},
@@ -189,6 +205,7 @@ const protectedContract = c.router(
 			query: z
 				.object({
 					refreshStorageQuota: z.boolean().optional(),
+					orgId: z.string().optional(),
 				})
 				.optional(),
 			responses: {
@@ -198,7 +215,11 @@ const protectedContract = c.router(
 		connectGoogleDriveStorage: {
 			method: "POST",
 			path: "/desktop/storage/google-drive/connect",
-			body: z.object({}).optional(),
+			body: z
+				.object({
+					orgId: z.string().optional(),
+				})
+				.optional(),
 			responses: {
 				200: z.object({ url: z.string() }),
 				403: z.object({ error: z.literal("upgrade_required") }),

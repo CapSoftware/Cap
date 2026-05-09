@@ -148,6 +148,20 @@
 			"when": 1778157016497,
 			"tag": "0020_orange_talkback",
 			"breakpoints": true
+		},
+		{
+			"idx": 21,
+			"version": "5",
+			"when": 1778249922872,
+			"tag": "0021_glorious_khan",
+			"breakpoints": true
+		},
+		{
+			"idx": 22,
+			"version": "5",
+			"when": 1778252207674,
+			"tag": "0022_dazzling_namor",
+			"breakpoints": true
 		}
 	]
 }

@@ -1619,6 +1619,12 @@ function Page() {
 	const [enableCaptureLists, setEnableCaptureLists] = createSignal(false);
 
 	createEffect(() => {
+		if (rawOptions.cameraID || rawOptions.micName) {
+			setEnableDeviceQueries(true);
+		}
+	});
+
+	createEffect(() => {
 		if (cameraMenuOpen() || microphoneMenuOpen()) {
 			setEnableDeviceQueries(true);
 		}

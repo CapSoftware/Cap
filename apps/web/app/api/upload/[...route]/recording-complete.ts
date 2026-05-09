@@ -154,6 +154,7 @@ export const app = new Hono().post(
 
 				const outputKey = `${user.id}/${videoIdRaw}/result.mp4`;
 				const thumbnailKey = `${user.id}/${videoIdRaw}/screenshot/screen-capture.jpg`;
+				const previewGifKey = `${user.id}/${videoIdRaw}/preview/animated-preview.gif`;
 
 				const outputPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
 					outputKey,
@@ -169,10 +170,19 @@ export const app = new Hono().post(
 					},
 					{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 				);
+				const previewGifPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
+					previewGifKey,
+					{
+						ContentType: "image/gif",
+						CacheControl: "public, max-age=31536000, immutable",
+					},
+					{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+				);
 
 				return {
 					outputPresignedUrl,
 					thumbnailPresignedUrl,
+					previewGifPresignedUrl,
 					videoInitUrl,
 					videoSegmentUrls,
 					audioInitUrl,
@@ -231,6 +241,7 @@ export const app = new Hono().post(
 				userId: user.id,
 				outputPresignedUrl: muxPayload.outputPresignedUrl,
 				thumbnailPresignedUrl: muxPayload.thumbnailPresignedUrl,
+				previewGifPresignedUrl: muxPayload.previewGifPresignedUrl,
 				videoInitUrl: muxPayload.videoInitUrl,
 				videoSegmentUrls: muxPayload.videoSegmentUrls,
 				audioInitUrl: muxPayload.audioInitUrl,

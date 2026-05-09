@@ -59,6 +59,10 @@ const getCameraOnlyMode = () => {
 	return window.__CAP__?.cameraOnlyMode === true;
 };
 
+const getNativeCameraPreviewInitialState = () => {
+	return window.__CAP__?.enableNativeCameraPreview === true;
+};
+
 const getCameraOnlyInitialState = (): CameraWindowState => ({
 	size: CAMERA_PRESET_LARGE,
 	shape: "full",
@@ -146,9 +150,14 @@ export default function () {
 	document.documentElement.classList.toggle("dark", true);
 
 	const generalSettings = generalSettingsStore.createQuery();
-	const isNativePreviewEnabled =
-		(type() !== "windows" && generalSettings.data?.enableNativeCameraPreview) ||
-		false;
+	const isNativePreviewEnabled = () => {
+		if (type() === "windows") return false;
+		if (generalSettings.isPending) return getNativeCameraPreviewInitialState();
+		return (
+			generalSettings.data?.enableNativeCameraPreview ??
+			getNativeCameraPreviewInitialState()
+		);
+	};
 
 	const [cameraIssue, setCameraIssue] = createSignal<CameraPreviewIssue | null>(
 		null,
@@ -231,7 +240,7 @@ export default function () {
 	return (
 		<RecordingOptionsProvider>
 			<Show
-				when={isNativePreviewEnabled}
+				when={isNativePreviewEnabled()}
 				fallback={<LegacyCameraPreviewPage issue={cameraIssue} />}
 			>
 				<NativeCameraPreviewPage issue={cameraIssue} />

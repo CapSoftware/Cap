@@ -178,8 +178,23 @@ export function createOptionsQuery() {
 
 	recordingSettingsStore.get().then((data) => {
 		batch(() => {
+			if (data?.target) {
+				_setState("captureTarget", data.target);
+			}
+			if (data?.micName !== undefined) {
+				_setState("micName", data.micName);
+			}
+			if (data?.cameraId !== undefined) {
+				_setState("cameraID", data.cameraId);
+			}
 			if (data?.mode && data.mode !== _state.mode) {
 				_setState("mode", data.mode);
+			}
+			if (data?.systemAudio !== undefined) {
+				_setState("captureSystemAudio", data.systemAudio);
+			}
+			if (data?.organizationId !== undefined) {
+				_setState("organizationId", data.organizationId);
 			}
 			initialized = true;
 		});

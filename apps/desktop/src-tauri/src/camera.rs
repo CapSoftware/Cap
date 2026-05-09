@@ -33,6 +33,9 @@ use wgpu::{CompositeAlphaMode, SurfaceTexture};
 static TOOLBAR_HEIGHT: f32 = 56.0;
 
 static GPU_SURFACE_SCALE: u32 = 2;
+const CAMERA_PREVIEW_TARGET_FRAME_INTERVAL: Duration = Duration::from_micros(33_333);
+const CAMERA_PREVIEW_FRAME_INTERVAL_SLACK: Duration = Duration::from_millis(3);
+const CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(150);
 
 pub const MIN_CAMERA_SIZE: f32 = 150.0;
 pub const MAX_CAMERA_SIZE: f32 = 600.0;
@@ -84,6 +87,13 @@ fn preferred_alpha_mode(alpha_modes: &[CompositeAlphaMode]) -> CompositeAlphaMod
     .find(|mode| alpha_modes.contains(mode))
     .or_else(|| alpha_modes.first().copied())
     .unwrap_or(CompositeAlphaMode::Opaque)
+}
+
+fn camera_preview_frame_due(last_render_at: Option<Instant>, now: Instant) -> bool {
+    last_render_at.is_none_or(|last| {
+        now.saturating_duration_since(last) + CAMERA_PREVIEW_FRAME_INTERVAL_SLACK
+            >= CAMERA_PREVIEW_TARGET_FRAME_INTERVAL
+    })
 }
 
 pub struct CameraPreviewManager {
@@ -553,20 +563,6 @@ impl InitializedCameraPreview {
             ..Default::default()
         });
 
-        let blur_processor = match cap_camera_effects::BlurProcessor::new(
-            &device,
-            wgpu::TextureFormat::Rgba8Unorm,
-        ) {
-            Ok(bp) => {
-                info!("Camera background blur processor initialized");
-                Some(bp)
-            }
-            Err(e) => {
-                warn!("Failed to initialize camera background blur: {e}");
-                None
-            }
-        };
-
         let mut renderer = Renderer {
             surface: Some(surface),
             surface_config,
@@ -581,7 +577,8 @@ impl InitializedCameraPreview {
             uniform_bind_group,
             texture: Cached::default(),
             aspect_ratio: Cached::default(),
-            blur_processor,
+            blur_processor: None,
+            blur_processor_init_attempted: false,
             blur_source_texture: None,
         };
 
@@ -632,6 +629,7 @@ struct Renderer {
     texture: Cached<(u32, u32), PreparedTexture>,
     aspect_ratio: Cached<f32>,
     blur_processor: Option<cap_camera_effects::BlurProcessor>,
+    blur_processor_init_attempted: bool,
     blur_source_texture: Option<wgpu::Texture>,
 }
 
@@ -656,6 +654,8 @@ impl Renderer {
         .map_err(|err| error!("Error initializing ffmpeg scaler: {err:?}")) else {
             return;
         };
+        let mut source_dimensions = Cached::default();
+        let mut last_render_at = None;
 
         let start_time = Instant::now();
         let startup_timeout = Duration::from_secs(5);
@@ -723,6 +723,8 @@ impl Renderer {
             if needs_full_reconfigure {
                 needs_full_reconfigure = false;
                 self.update_state_uniforms(&state);
+                source_dimensions = Cached::default();
+                last_render_at = None;
                 let aspect_ratio = self.aspect_ratio.get_latest_key().copied().unwrap_or(
                     if state.shape == CameraPreviewShape::Full {
                         16.0 / 9.0
@@ -792,36 +794,56 @@ impl Renderer {
                     }
 
                     received_first_frame = true;
-                    let aspect_ratio = frame.inner.width() as f32 / frame.inner.height() as f32;
-                    self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio)
+                    let now = Instant::now();
+                    if !camera_preview_frame_due(last_render_at, now) {
+                        continue 'main_loop;
+                    }
+                    last_render_at = Some(now);
+
+                    let source_width = frame.inner.width();
+                    let source_height = frame.inner.height();
+                    let aspect_ratio = source_width as f32 / source_height as f32;
+                    if source_dimensions.update_key_and_should_init((source_width, source_height)) {
+                        self.sync_ratio_uniform_and_resize_window_to_it(
+                            &window,
+                            &state,
+                            aspect_ratio,
+                        )
                         .await;
+                    }
 
                     let surface_result = self.acquire_surface_texture();
                     if let Some(surface) = surface_result {
                         let window_px = (clamp_size(state.size) as u32) * GPU_SURFACE_SCALE;
-                        let output_width = window_px.max(320).min(frame.inner.width());
+                        let output_width = window_px.max(320).min(source_width);
                         let output_height = (output_width as f32 / aspect_ratio) as u32;
 
-                        let resampler_frame = resampler_frame
-                            .get_or_init((output_width, output_height), frame::Video::empty);
+                        let already_preview_rgba = frame.inner.format() == Pixel::RGBA
+                            && output_width == source_width
+                            && output_height == source_height;
+                        let (frame_data, frame_stride) = if already_preview_rgba {
+                            (frame.inner.data(0), frame.inner.stride(0) as u32)
+                        } else {
+                            let resampler_frame = resampler_frame
+                                .get_or_init((output_width, output_height), frame::Video::empty);
 
-                        scaler.cached(
-                            frame.inner.format(),
-                            frame.inner.width(),
-                            frame.inner.height(),
-                            format::Pixel::RGBA,
-                            output_width,
-                            output_height,
-                            ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
-                        );
+                            scaler.cached(
+                                frame.inner.format(),
+                                source_width,
+                                source_height,
+                                format::Pixel::RGBA,
+                                output_width,
+                                output_height,
+                                ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
+                            );
 
-                        if let Err(err) = scaler.run(&frame.inner, resampler_frame) {
-                            error!("Error rescaling frame with ffmpeg: {err:?}");
-                            continue 'main_loop;
-                        }
+                            if let Err(err) = scaler.run(&frame.inner, resampler_frame) {
+                                error!("Error rescaling frame with ffmpeg: {err:?}");
+                                continue 'main_loop;
+                            }
 
-                        let frame_data = resampler_frame.data(0);
-                        let frame_stride = resampler_frame.stride(0) as u32;
+                            (resampler_frame.data(0), resampler_frame.stride(0) as u32)
+                        };
 
                         let blur_mode = blur_mode_from_project(state.background_blur);
                         let blurred = if let Some(mode) = blur_mode {
@@ -967,6 +989,10 @@ impl Renderer {
         height: u32,
         mode: cap_camera_effects::BlurMode,
     ) -> bool {
+        if !self.ensure_blur_processor() {
+            return false;
+        }
+
         self.ensure_blur_source_texture(width, height);
 
         let (Some(src_tex), Some(processor)) = (
@@ -998,6 +1024,32 @@ impl Renderer {
 
         processor.process(&self.device, &self.queue, src_tex, mode);
         true
+    }
+
+    fn ensure_blur_processor(&mut self) -> bool {
+        if self.blur_processor.is_some() {
+            return true;
+        }
+
+        if self.blur_processor_init_attempted {
+            return false;
+        }
+
+        self.blur_processor_init_attempted = true;
+        match cap_camera_effects::BlurProcessor::new(&self.device, wgpu::TextureFormat::Rgba8Unorm)
+        {
+            Ok(processor) => {
+                let mut processor = processor;
+                processor.set_inference_interval(CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL);
+                info!("Camera background blur processor initialized");
+                self.blur_processor = Some(processor);
+                true
+            }
+            Err(err) => {
+                warn!("Failed to initialize camera background blur: {err}");
+                false
+            }
+        }
     }
 
     fn ensure_blur_source_texture(&mut self, width: u32, height: u32) -> &wgpu::Texture {
