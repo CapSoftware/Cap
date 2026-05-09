@@ -1,6 +1,5 @@
-import { MenuBarExtra, open, showHUD } from "@raycast/api";
+import { MenuBarExtra, open } from "@raycast/api";
 import { useCachedState } from "@raycast/utils";
-import { useEffect } from "react";
 
 export default function Command() {
   const [status, setStatus] = useCachedState<"idle" | "recording" | "paused">("recording-status", "idle");
