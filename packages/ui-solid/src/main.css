@@ -137,6 +137,7 @@
 
 	--animate-collapsible-down: collapsible-down 0.2s ease-out;
 	--animate-collapsible-up: collapsible-up 0.2s ease-out;
+	--animate-shimmer: shimmer 2s ease-in-out infinite;
 
 	@keyframes collapsible-down {
 		from {
@@ -156,6 +157,14 @@
 		to {
 			height: 0;
 			filter: blur(5px);
+		}
+	}
+	@keyframes shimmer {
+		0% {
+			transform: translateX(-100%);
+		}
+		100% {
+			transform: translateX(100%);
 		}
 	}
 }
