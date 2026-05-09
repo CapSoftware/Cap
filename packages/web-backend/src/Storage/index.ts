@@ -2,6 +2,8 @@ import type * as S3 from "@aws-sdk/client-s3";
 import type * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import {
+	type Organisation,
+	type S3Bucket,
 	Storage as StorageDomain,
 	type User,
 	type Video,
@@ -692,6 +694,14 @@ const makeGoogleDriveAccess = ({
 	};
 };
 
+type WritableStorageAccess = {
+	access:
+		| ReturnType<typeof makeS3Access>
+		| ReturnType<typeof makeGoogleDriveAccess>;
+	bucketId: Option.Option<S3Bucket.S3BucketId>;
+	storageIntegrationId: Option.Option<StorageDomain.StorageIntegrationId>;
+};
+
 export class Storage extends Effect.Service<Storage>()("Storage", {
 	effect: Effect.gen(function* () {
 		const repo = yield* StorageRepo;
@@ -699,7 +709,25 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 
 		const getS3WritableAccessForUser = Effect.fn(
 			"Storage.getS3WritableAccessForUser",
-		)(function* (userId: User.UserId) {
+		)(function* (
+			userId: User.UserId,
+			organizationId?: Organisation.OrganisationId,
+		) {
+			if (organizationId) {
+				const organizationBucket = yield* mapStorageError(
+					s3Buckets.getBucketAccessForOrganization(organizationId),
+				);
+
+				if (Option.isSome(organizationBucket)) {
+					const [s3, customBucket] = organizationBucket.value;
+					return {
+						access: makeS3Access(s3),
+						bucketId: Option.map(customBucket, (bucket) => bucket.id),
+						storageIntegrationId: Option.none(),
+					};
+				}
+			}
+
 			const [s3, customBucket] = yield* mapStorageError(
 				s3Buckets.getBucketAccessForUser(userId),
 			);
@@ -734,9 +762,51 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 			return makeGoogleDriveAccess({ repo, integration, config });
 		});
 
+		const getOrganizationWritableAccess = Effect.fn(
+			"Storage.getOrganizationWritableAccess",
+		)(function* (organizationId: Organisation.OrganisationId) {
+			const activeIntegration = yield* mapStorageError(
+				repo.getActiveIntegrationForOrganization(organizationId),
+			);
+			if (Option.isSome(activeIntegration)) {
+				const access = yield* getDriveAccess(activeIntegration.value.id);
+				return Option.some<WritableStorageAccess>({
+					access,
+					bucketId: Option.none(),
+					storageIntegrationId: Option.some(activeIntegration.value.id),
+				});
+			}
+
+			const organizationBucket = yield* mapStorageError(
+				s3Buckets.getBucketAccessForOrganization(organizationId),
+			);
+			if (Option.isSome(organizationBucket)) {
+				const [s3, customBucket] = organizationBucket.value;
+				return Option.some<WritableStorageAccess>({
+					access: makeS3Access(s3),
+					bucketId: Option.map(customBucket, (bucket) => bucket.id),
+					storageIntegrationId: Option.none(),
+				});
+			}
+
+			return Option.none<WritableStorageAccess>();
+		});
+
 		const getWritableAccessForUser = Effect.fn(
 			"Storage.getWritableAccessForUser",
-		)(function* (userId: User.UserId) {
+		)(function* (
+			userId: User.UserId,
+			organizationId?: Organisation.OrganisationId,
+		) {
+			if (organizationId) {
+				const organizationAccess =
+					yield* getOrganizationWritableAccess(organizationId);
+
+				if (Option.isSome(organizationAccess)) {
+					return organizationAccess.value;
+				}
+			}
+
 			const activeIntegration = yield* mapStorageError(
 				repo.getActiveIntegrationForUser(userId),
 			);
@@ -768,8 +838,13 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 
 		const createUploadTargetForUser = Effect.fn(
 			"Storage.createUploadTargetForUser",
-		)(function* (userId: User.UserId, key: string, input: UploadTargetInput) {
-			const writable = yield* getWritableAccessForUser(userId);
+		)(function* (
+			userId: User.UserId,
+			key: string,
+			input: UploadTargetInput,
+			organizationId?: Organisation.OrganisationId,
+		) {
+			const writable = yield* getWritableAccessForUser(userId, organizationId);
 			const upload = yield* writable.access.createUploadTarget(key, input);
 			return { ...writable, upload };
 		});
@@ -783,6 +858,7 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 
 		return {
 			getS3WritableAccessForUser,
+			getOrganizationWritableAccess,
 			getWritableAccessForUser,
 			getAccessForVideo,
 			createUploadTargetForUser,
@@ -791,13 +867,25 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 	}),
 	dependencies: [StorageRepo.Default, S3Buckets.Default],
 }) {
-	static getWritableAccessForUser = (userId: User.UserId) =>
+	static getWritableAccessForUser = (
+		userId: User.UserId,
+		organizationId?: Organisation.OrganisationId,
+	) =>
 		Effect.flatMap(Storage, (storage) =>
-			storage.getWritableAccessForUser(userId),
+			storage.getWritableAccessForUser(userId, organizationId),
 		);
-	static getS3WritableAccessForUser = (userId: User.UserId) =>
+	static getS3WritableAccessForUser = (
+		userId: User.UserId,
+		organizationId?: Organisation.OrganisationId,
+	) =>
 		Effect.flatMap(Storage, (storage) =>
-			storage.getS3WritableAccessForUser(userId),
+			storage.getS3WritableAccessForUser(userId, organizationId),
+		);
+	static getOrganizationWritableAccess = (
+		organizationId: Organisation.OrganisationId,
+	) =>
+		Effect.flatMap(Storage, (storage) =>
+			storage.getOrganizationWritableAccess(organizationId),
 		);
 	static getAccessForVideo = (video: Video.Video) =>
 		Effect.flatMap(Storage, (storage) => storage.getAccessForVideo(video));
@@ -805,9 +893,10 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 		userId: User.UserId,
 		key: string,
 		input: UploadTargetInput,
+		organizationId?: Organisation.OrganisationId,
 	) =>
 		Effect.flatMap(Storage, (storage) =>
-			storage.createUploadTargetForUser(userId, key, input),
+			storage.createUploadTargetForUser(userId, key, input, organizationId),
 		);
 	static createUploadTargetForVideo = (
 		video: Video.Video,

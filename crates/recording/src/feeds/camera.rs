@@ -26,12 +26,24 @@ use crate::output_pipeline::NativeCameraFrame;
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
+#[cfg(target_os = "macos")]
+static CAMERA_CAPTURE_LIFECYCLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(target_os = "macos")]
+fn camera_capture_lifecycle_guard() -> std::sync::MutexGuard<'static, ()> {
+    CAMERA_CAPTURE_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+}
+
 #[derive(Actor)]
 pub struct CameraFeed {
     lock_generation: u64,
+    setup_generation: u64,
     state: State,
     senders: Vec<flume::Sender<FFmpegVideoFrame>>,
     native_senders: Vec<flume::Sender<NativeCameraFrame>>,
+    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     on_ready: Vec<oneshot::Sender<()>>,
     on_disconnect: Vec<Box<dyn Fn() + Send>>,
     previous_thread: Option<std::thread::JoinHandle<()>>,
@@ -77,11 +89,14 @@ struct OpenState {
 }
 
 impl OpenState {
-    fn handle_input_connected(&mut self, data: InputConnected, id: DeviceOrModelID) -> bool {
+    fn handle_input_connected(&mut self, data: InputConnected) -> bool {
         if let Some(connecting) = &self.connecting
-            && id == connecting.id
+            && data.id == connecting.id
+            && data.generation == connecting.generation
         {
             trace!("Attaching new camera");
+
+            let id = data.id.clone();
 
             if let Some(attached) = &mut self.attached {
                 attached.stage_pending_release();
@@ -100,6 +115,7 @@ impl OpenState {
 
 struct ConnectingState {
     id: DeviceOrModelID,
+    generation: u64,
     ready: BoxFuture<'static, Result<InputConnected, SetInputError>>,
     done_tx: SyncSender<()>,
 }
@@ -119,6 +135,7 @@ impl AttachedState {
             done_tx,
             camera_info,
             video_info,
+            ..
         } = data;
 
         Self {
@@ -135,6 +152,7 @@ impl AttachedState {
             done_tx,
             camera_info,
             video_info,
+            ..
         } = data;
 
         self.id = id;
@@ -162,16 +180,25 @@ impl Default for CameraFeed {
     fn default() -> Self {
         Self {
             lock_generation: 0,
+            setup_generation: 0,
             state: State::Open(OpenState {
                 connecting: None,
                 attached: None,
             }),
             senders: Vec::new(),
             native_senders: Vec::new(),
+            native_sender_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             on_ready: Vec::new(),
             on_disconnect: Vec::new(),
             previous_thread: None,
         }
+    }
+}
+
+impl CameraFeed {
+    fn next_setup_generation(&mut self) -> u64 {
+        self.setup_generation = self.setup_generation.wrapping_add(1);
+        self.setup_generation
     }
 }
 
@@ -261,6 +288,8 @@ pub struct Lock;
 
 #[derive(Clone)]
 struct InputConnected {
+    generation: u64,
+    id: DeviceOrModelID,
     done_tx: SyncSender<()>,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
@@ -276,6 +305,7 @@ enum CameraSetupFlow {
 
 struct InputConnectFailed {
     id: DeviceOrModelID,
+    generation: u64,
 }
 
 struct LockedCameraInputReconnected {
@@ -299,10 +329,12 @@ struct FinalizePendingRelease {
 
 fn spawn_camera_setup(
     id: DeviceOrModelID,
+    generation: u64,
     settings: Option<CameraDeviceSettings>,
     actor_ref: ActorRef<CameraFeed>,
     new_frame_recipient: Recipient<NewFrame>,
     native_frame_recipient: Recipient<NewNativeFrame>,
+    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     flow: CameraSetupFlow,
 ) -> (ReadyFuture, SyncSender<()>, std::thread::JoinHandle<()>) {
     let (ready_tx, ready_rx) = oneshot::channel::<Result<InputConnected, SetInputError>>();
@@ -327,8 +359,32 @@ fn spawn_camera_setup(
             .expect("Failed to build camera tokio runtime");
 
         LocalSet::new().block_on(&runtime, async move {
-            let setup_result =
-                setup_camera(&id, settings, new_frame_recipient, native_frame_recipient).await;
+            #[cfg(target_os = "macos")]
+            let _capture_lifecycle_guard = camera_capture_lifecycle_guard();
+
+            if done_rx_thread.try_recv().is_ok() {
+                let _ = ready_tx_thread.send(Err(SetInputError::BuildStreamCrashed));
+
+                if matches!(flow, CameraSetupFlow::Open) {
+                    let _ = actor_ref
+                        .tell(InputConnectFailed {
+                            id: id.clone(),
+                            generation,
+                        })
+                        .await;
+                }
+
+                return;
+            }
+
+            let setup_result = setup_camera(
+                &id,
+                settings,
+                new_frame_recipient,
+                native_frame_recipient,
+                native_sender_count,
+            )
+            .await;
 
             let handle = match setup_result {
                 Ok(result) => {
@@ -339,6 +395,8 @@ fn spawn_camera_setup(
                     } = result;
 
                     let ready_payload = InputConnected {
+                        generation,
+                        id: id.clone(),
                         camera_info: camera_info.clone(),
                         video_info,
                         done_tx: done_tx_thread.clone(),
@@ -396,7 +454,12 @@ fn spawn_camera_setup(
                     let _ = ready_tx_thread.send(Err(e.clone()));
 
                     if matches!(flow, CameraSetupFlow::Open) {
-                        let _ = actor_ref.tell(InputConnectFailed { id: id.clone() }).await;
+                        let _ = actor_ref
+                            .tell(InputConnectFailed {
+                                id: id.clone(),
+                                generation,
+                            })
+                            .await;
                     }
 
                     return;
@@ -441,6 +504,7 @@ fn camera_ready_future(
     ready: ReadyFuture,
     actor_ref: ActorRef<CameraFeed>,
     id: DeviceOrModelID,
+    generation: u64,
     flow: CameraSetupFlow,
 ) -> BoxFuture<'static, Result<(CameraInfo, VideoInfo), SetInputError>> {
     async move {
@@ -448,7 +512,7 @@ fn camera_ready_future(
             Ok(result) => result.map(|v| (v.camera_info, v.video_info)),
             Err(err) => {
                 if matches!(flow, CameraSetupFlow::Open) {
-                    let _ = actor_ref.tell(InputConnectFailed { id }).await;
+                    let _ = actor_ref.tell(InputConnectFailed { id, generation }).await;
                 }
                 Err(SetInputError::Timeout(err.to_string()))
             }
@@ -666,6 +730,7 @@ async fn setup_camera(
     settings: Option<CameraDeviceSettings>,
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
+    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
     let format = select_camera_format(&camera, settings)?;
@@ -683,12 +748,14 @@ async fn setup_camera(
                 cidre::cm::Clock::convert_host_time_to_sys_units(frame.native().sample_buf().pts()),
             ));
 
-            let _ = native_recipient
-                .tell(NewNativeFrame(NativeCameraFrame {
-                    sample_buf: frame.native().sample_buf().clone(),
-                    timestamp,
-                }))
-                .try_send();
+            if native_sender_count.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+                let _ = native_recipient
+                    .tell(NewNativeFrame(NativeCameraFrame {
+                        sample_buf: frame.native().sample_buf().clone(),
+                        timestamp,
+                    }))
+                    .try_send();
+            }
 
             let Ok(mut ff_frame) = frame.as_ffmpeg() else {
                 return;
@@ -741,6 +808,7 @@ async fn setup_camera(
     settings: Option<CameraDeviceSettings>,
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
+    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
     let format = select_camera_format(&camera, settings)?;
@@ -758,7 +826,9 @@ async fn setup_camera(
                 cap_timestamp::PerformanceCounterTimestamp::new(frame.native().perf_counter),
             );
 
-            if let Ok(bytes) = frame.native().bytes() {
+            if native_sender_count.load(std::sync::atomic::Ordering::Relaxed) > 0
+                && let Ok(bytes) = frame.native().bytes()
+            {
                 use cap_mediafoundation_utils::IMFMediaBufferExt;
                 use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
 
@@ -867,6 +937,8 @@ impl Message<SetInput> for CameraFeed {
             release_camera_thread(handle);
         }
 
+        let generation = self.next_setup_generation();
+
         match &mut self.state {
             State::Open(state) => {
                 let actor_ref = ctx.actor_ref();
@@ -876,10 +948,12 @@ impl Message<SetInput> for CameraFeed {
 
                 let (ready, done_tx, join_handle) = spawn_camera_setup(
                     id.clone(),
+                    generation,
                     msg.settings,
                     actor_ref,
                     new_frame_recipient,
                     native_frame_recipient,
+                    self.native_sender_count.clone(),
                     CameraSetupFlow::Open,
                 );
 
@@ -887,6 +961,7 @@ impl Message<SetInput> for CameraFeed {
 
                 state.connecting = Some(ConnectingState {
                     id: id.clone(),
+                    generation,
                     ready: ready.clone().boxed(),
                     done_tx,
                 });
@@ -895,6 +970,7 @@ impl Message<SetInput> for CameraFeed {
                     ready,
                     ctx.actor_ref(),
                     id,
+                    generation,
                     CameraSetupFlow::Open,
                 ))
             }
@@ -909,10 +985,12 @@ impl Message<SetInput> for CameraFeed {
 
                 let (ready, _done_tx, join_handle) = spawn_camera_setup(
                     msg.id.clone(),
+                    generation,
                     msg.settings,
                     actor_ref,
                     new_frame_recipient,
                     native_frame_recipient,
+                    self.native_sender_count.clone(),
                     CameraSetupFlow::Locked,
                 );
 
@@ -922,6 +1000,7 @@ impl Message<SetInput> for CameraFeed {
                     ready,
                     ctx.actor_ref(),
                     msg.id,
+                    generation,
                     CameraSetupFlow::Locked,
                 ))
             }
@@ -948,6 +1027,8 @@ impl Message<RemoveInput> for CameraFeed {
 
         self.senders.clear();
         self.native_senders.clear();
+        self.native_sender_count
+            .store(0, std::sync::atomic::Ordering::Release);
 
         if let Some(handle) = self.previous_thread.take() {
             release_camera_thread(handle);
@@ -996,6 +1077,10 @@ impl Message<AddNativeSender> for CameraFeed {
 
         debug!("CameraFeed: Adding new native sender");
         self.native_senders.push(msg.0);
+        self.native_sender_count.store(
+            self.native_senders.len(),
+            std::sync::atomic::Ordering::Release,
+        );
     }
 }
 
@@ -1021,6 +1106,10 @@ impl Message<RemoveNativeSender> for CameraFeed {
     ) -> Self::Reply {
         self.native_senders
             .retain(|sender| !sender.same_channel(&msg.0));
+        self.native_sender_count.store(
+            self.native_senders.len(),
+            std::sync::atomic::Ordering::Release,
+        );
     }
 }
 
@@ -1060,51 +1149,93 @@ impl Message<OnFeedDisconnect> for CameraFeed {
 
 static CAMERA_FRAME_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+fn send_frame_to_camera_senders<T: Clone>(
+    senders: &mut Vec<flume::Sender<T>>,
+    frame: T,
+    frame_num: u64,
+    sender_label: &str,
+) -> bool {
+    let mut last_ready_sender = None;
+
+    for (i, sender) in senders.iter().enumerate() {
+        if sender.is_full() {
+            if frame_num.is_multiple_of(30) {
+                warn!(
+                    "{} sender {} channel full at frame {}, dropping frame",
+                    sender_label, i, frame_num
+                );
+            }
+        } else {
+            last_ready_sender = Some(i);
+        }
+    }
+
+    let Some(last_ready_sender) = last_ready_sender else {
+        return false;
+    };
+
+    let mut frame = Some(frame);
+    let mut to_remove = vec![];
+
+    for (i, sender) in senders.iter().enumerate().take(last_ready_sender + 1) {
+        if sender.is_full() {
+            continue;
+        }
+
+        let send_result = if i == last_ready_sender {
+            let Some(frame) = frame.take() else {
+                break;
+            };
+            sender.try_send(frame)
+        } else {
+            let Some(frame) = frame.as_ref() else {
+                break;
+            };
+            sender.try_send((*frame).clone())
+        };
+
+        match send_result {
+            Ok(()) => {}
+            Err(flume::TrySendError::Full(_)) => {
+                if frame_num.is_multiple_of(30) {
+                    warn!(
+                        "{} sender {} channel full at frame {}, dropping frame",
+                        sender_label, i, frame_num
+                    );
+                }
+            }
+            Err(flume::TrySendError::Disconnected(_)) => {
+                warn!(
+                    "{} sender {} disconnected at frame {}, will be removed",
+                    sender_label, i, frame_num
+                );
+                to_remove.push(i);
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return false;
+    }
+
+    debug!(
+        "Removing {} disconnected {} senders",
+        to_remove.len(),
+        sender_label
+    );
+    for i in to_remove.into_iter().rev() {
+        senders.swap_remove(i);
+    }
+    true
+}
+
 impl Message<NewFrame> for CameraFeed {
     type Reply = ();
 
     async fn handle(&mut self, msg: NewFrame, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let frame_num = CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let mut to_remove = vec![];
-
-        for (i, sender) in self.senders.iter().enumerate() {
-            if sender.is_full() {
-                if frame_num.is_multiple_of(30) {
-                    warn!(
-                        "Camera sender {} channel full at frame {}, dropping frame",
-                        i, frame_num
-                    );
-                }
-                continue;
-            }
-
-            match sender.try_send(msg.0.clone()) {
-                Ok(()) => {}
-                Err(flume::TrySendError::Full(_)) => {
-                    if frame_num.is_multiple_of(30) {
-                        warn!(
-                            "Camera sender {} channel full at frame {}, dropping frame",
-                            i, frame_num
-                        );
-                    }
-                }
-                Err(flume::TrySendError::Disconnected(_)) => {
-                    warn!(
-                        "Camera sender {} disconnected at frame {}, will be removed",
-                        i, frame_num
-                    );
-                    to_remove.push(i);
-                }
-            }
-        }
-
-        if !to_remove.is_empty() {
-            debug!("Removing {} disconnected camera senders", to_remove.len());
-            for i in to_remove.into_iter().rev() {
-                self.senders.swap_remove(i);
-            }
-        }
+        send_frame_to_camera_senders(&mut self.senders, msg.0, frame_num, "Camera");
     }
 }
 
@@ -1122,47 +1253,12 @@ impl Message<NewNativeFrame> for CameraFeed {
         let frame_num =
             NATIVE_CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let mut to_remove = vec![];
-
-        for (i, sender) in self.native_senders.iter().enumerate() {
-            if sender.is_full() {
-                if frame_num.is_multiple_of(30) {
-                    warn!(
-                        "Native camera sender {} channel full at frame {}, dropping frame",
-                        i, frame_num
-                    );
-                }
-                continue;
-            }
-
-            match sender.try_send(msg.0.clone()) {
-                Ok(()) => {}
-                Err(flume::TrySendError::Full(_)) => {
-                    if frame_num.is_multiple_of(30) {
-                        warn!(
-                            "Native camera sender {} channel full at frame {}, dropping frame",
-                            i, frame_num
-                        );
-                    }
-                }
-                Err(flume::TrySendError::Disconnected(_)) => {
-                    warn!(
-                        "Native camera sender {} disconnected at frame {}, will be removed",
-                        i, frame_num
-                    );
-                    to_remove.push(i);
-                }
-            }
-        }
-
-        if !to_remove.is_empty() {
-            debug!(
-                "Removing {} disconnected native camera senders",
-                to_remove.len()
+        if send_frame_to_camera_senders(&mut self.native_senders, msg.0, frame_num, "Native camera")
+        {
+            self.native_sender_count.store(
+                self.native_senders.len(),
+                std::sync::atomic::Ordering::Release,
             );
-            for i in to_remove.into_iter().rev() {
-                self.native_senders.swap_remove(i);
-            }
         }
     }
 }
@@ -1186,7 +1282,6 @@ impl Message<Lock> for CameraFeed {
         let state = self.state.try_as_open()?;
 
         if let Some(connecting) = &mut state.connecting {
-            let id = connecting.id.clone();
             let ready = &mut connecting.ready;
             let data = tokio::time::timeout(CAMERA_INIT_TIMEOUT, ready)
                 .await
@@ -1194,7 +1289,7 @@ impl Message<Lock> for CameraFeed {
                     LockFeedError::InitializeFailed(SetInputError::Timeout(err.to_string()))
                 })??;
 
-            if state.handle_input_connected(data, id)
+            if state.handle_input_connected(data)
                 && let Some(attached) = &mut state.attached
             {
                 attached.finalize_pending_release();
@@ -1241,28 +1336,21 @@ impl Message<InputConnected> for CameraFeed {
 
     async fn handle(
         &mut self,
-        _: InputConnected,
+        msg: InputConnected,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         trace!("CameraFeed.InputConnected");
 
         let state = self.state.try_as_open()?;
 
-        if let Some(connecting) = &mut state.connecting {
-            let id = connecting.id.clone();
-            let ready = &mut connecting.ready;
-            let res = ready.await;
-
-            if let Ok(data) = res
-                && state.handle_input_connected(data, id)
-                && let Some(attached) = &mut state.attached
-            {
+        if state.handle_input_connected(msg) {
+            if let Some(attached) = &mut state.attached {
                 attached.finalize_pending_release();
             }
-        }
 
-        for tx in &mut self.on_ready.drain(..) {
-            tx.send(()).ok();
+            for tx in &mut self.on_ready.drain(..) {
+                tx.send(()).ok();
+            }
         }
 
         Ok(())
@@ -1281,10 +1369,9 @@ impl Message<InputConnectFailed> for CameraFeed {
 
         let state = self.state.try_as_open()?;
 
-        let should_clear = state
-            .connecting
-            .as_ref()
-            .is_some_and(|connecting| connecting.id == msg.id);
+        let should_clear = state.connecting.as_ref().is_some_and(|connecting| {
+            connecting.id == msg.id && connecting.generation == msg.generation
+        });
 
         if should_clear {
             if let Some(connecting) = state.connecting.take() {
@@ -1311,10 +1398,13 @@ impl Message<LockedCameraInputReconnected> for CameraFeed {
         if let State::Locked { inner, .. } = &mut self.state
             && inner.id == msg.id
         {
+            let id = msg.id;
             inner.stage_pending_release();
             inner.overwrite(
-                msg.id,
+                id.clone(),
                 InputConnected {
+                    generation: 0,
+                    id,
                     done_tx: msg.done_tx,
                     camera_info: msg.camera_info,
                     video_info: msg.video_info,

@@ -16,6 +16,7 @@ import {
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { requireOrganizationAccess } from "@/actions/organization/authorization";
 import { runPromise } from "@/lib/server";
 
 const MAX_S3_DELETE_ATTEMPTS = 3;
@@ -29,6 +30,7 @@ async function getVideoUploadPresignedUrl({
 	audioCodec,
 	video,
 	userId,
+	organizationId,
 }: {
 	fileKey: string;
 	duration?: string;
@@ -37,6 +39,7 @@ async function getVideoUploadPresignedUrl({
 	audioCodec?: string;
 	video?: Video.Video;
 	userId: User.UserId;
+	organizationId?: Organisation.OrganisationId;
 }) {
 	try {
 		const contentType = fileKey.endsWith(".aac")
@@ -76,10 +79,15 @@ async function getVideoUploadPresignedUrl({
 				};
 			}
 
-			return yield* StorageService.createUploadTargetForUser(userId, fileKey, {
-				contentType,
-				fields: Fields,
-			});
+			return yield* StorageService.createUploadTargetForUser(
+				userId,
+				fileKey,
+				{
+					contentType,
+					fields: Fields,
+				},
+				organizationId,
+			);
 		}).pipe(runPromise);
 
 		return {
@@ -128,6 +136,8 @@ export async function createVideoAndGetUploadUrl({
 	try {
 		if (!userIsPro(user) && duration && duration > 300)
 			throw new Error("upgrade_required");
+
+		await requireOrganizationAccess(user.id, orgId);
 
 		const date = new Date();
 		const formattedDate = `${date.getDate()} ${date.toLocaleString("default", {
@@ -185,6 +195,7 @@ export async function createVideoAndGetUploadUrl({
 				videoCodec,
 				audioCodec,
 				userId: user.id,
+				organizationId: orgId,
 			});
 
 		const videoData = {

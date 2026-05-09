@@ -685,6 +685,10 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
     let (mic_feed, studio_handle, previous_label, app_handle) = {
         let mut app = state.write().await;
         if desired_label == app.selected_mic_label {
+            if desired_label.is_some() && !matches!(app.recording_state, RecordingState::Active(_))
+            {
+                app.ensure_selected_mic_ready().await?;
+            }
             return Ok(());
         }
 
@@ -859,7 +863,13 @@ async fn set_camera_input(
                 let app = &mut *state.write().await;
                 app.camera_in_use = false;
                 app.selected_camera_id = None;
-                app.camera_preview.begin_shutdown()
+                app.camera_cleanup_done = true;
+                if skip_camera_window {
+                    app.camera_preview.begin_shutdown()
+                } else {
+                    app.camera_preview.pause();
+                    None
+                }
             };
 
             camera_feed
@@ -871,8 +881,8 @@ async fn set_camera_input(
                 let _ = tokio::time::timeout(Duration::from_millis(500), rx).await;
             }
 
-            if !skip_camera_window {
-                windows::cleanup_camera_window(&app_handle, None, true, true).await;
+            if !skip_camera_window && let Some(window) = CapWindowId::Camera.get(&app_handle) {
+                let _ = window.hide();
             }
         }
         Some(id) => {
@@ -1016,6 +1026,98 @@ async fn set_camera_input(
                 input: RecordingInputKind::Camera,
             }
             .emit(&app.handle);
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app_handle, state))]
+async fn set_native_camera_preview_enabled(
+    app_handle: AppHandle,
+    state: MutableState<'_, App>,
+    enabled: bool,
+) -> Result<(), String> {
+    let operation_lock = app_handle.state::<CameraWindowOperationLock>();
+    let _operation_guard = operation_lock.lock().await;
+
+    GeneralSettingsStore::update(&app_handle, |settings| {
+        settings.enable_native_camera_preview = enabled;
+    })?;
+
+    let window = CapWindowId::Camera.get(&app_handle);
+
+    if enabled {
+        let Some(window) = window else {
+            return Ok(());
+        };
+        let is_visible = window.is_visible().unwrap_or(false);
+        if !is_visible {
+            return Ok(());
+        }
+
+        let init_result = {
+            let mut app = state.write().await;
+            windows::ensure_camera_input_active(&mut app).await;
+            if app.selected_camera_id.is_none() || !app.camera_in_use {
+                None
+            } else {
+                let camera_feed = app.camera_feed.clone();
+                Some(app.camera_preview.init_window(window, camera_feed).await)
+            }
+        };
+
+        let Some(init_result) = init_result else {
+            return Ok(());
+        };
+
+        if let Err(err) = init_result {
+            GeneralSettingsStore::update(&app_handle, |settings| {
+                settings.enable_native_camera_preview = false;
+            })?;
+            return Err(format!("Failed to enable native camera preview: {err}"));
+        }
+
+        let (camera_feed, camera_ws_sender) = {
+            let app = state.read().await;
+            #[allow(deprecated)]
+            (app.camera_feed.clone(), app.camera_ws_sender.clone())
+        };
+        #[allow(deprecated)]
+        let result = camera_feed
+            .ask(feeds::camera::RemoveSender(camera_ws_sender))
+            .await;
+        if let Err(err) = result {
+            warn!(error = %err, "Failed to remove camera WebSocket sender");
+        }
+
+        return Ok(());
+    }
+
+    let (shutdown_rx, camera_feed, camera_ws_sender, should_restore_ws_sender) = {
+        let mut app = state.write().await;
+        #[allow(deprecated)]
+        (
+            app.camera_preview.begin_shutdown(),
+            app.camera_feed.clone(),
+            app.camera_ws_sender.clone(),
+            app.selected_camera_id.is_some() && app.camera_in_use,
+        )
+    };
+
+    if let Some(rx) = shutdown_rx {
+        let _ = tokio::time::timeout(Duration::from_secs(2), rx).await;
+    }
+
+    if should_restore_ws_sender {
+        #[allow(deprecated)]
+        let result = camera_feed
+            .ask(feeds::camera::AddSender(camera_ws_sender))
+            .await;
+        if let Err(err) = result {
+            warn!(error = %err, "Failed to restore camera WebSocket sender");
         }
     }
 
@@ -3789,6 +3891,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             log,
             set_mic_input,
             set_camera_input,
+            set_native_camera_preview_enabled,
             recording_settings::set_recording_mode,
             upload_logs,
             get_system_diagnostics,
@@ -4675,10 +4778,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         })
         .build(tauri_context)
         .expect("error while running tauri application")
-        .run(move |_handle, event| {
-            let handle = _handle.clone();
+        .run(move |handle, event| {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                handle_run_event(&handle, event);
+                handle_run_event(handle, event);
             }));
 
             if let Err(panic) = result {

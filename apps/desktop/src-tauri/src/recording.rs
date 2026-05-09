@@ -1015,11 +1015,16 @@ pub async fn start_recording(
             let mut mic_restart_attempts = 0;
 
             let (done_fut, health_rx) = loop {
-                let mic_feed = match state.mic_feed.ask(microphone::Lock).await {
-                    Ok(lock) => Some(Arc::new(lock)),
-                    Err(SendError::HandlerError(microphone::LockFeedError::NoInput)) => None,
-                    Err(e) => return Err(anyhow!(e.to_string())),
-                };
+                let selected_mic_label = state.selected_mic_label.clone();
+                let selected_mic_settings = selected_mic_label
+                    .as_ref()
+                    .and_then(|label| state.microphone_settings_for_label(label));
+                let mic_feed = lock_selected_microphone(
+                    &state.mic_feed,
+                    selected_mic_label,
+                    selected_mic_settings,
+                )
+                .await?;
 
                 let actor_result: Result<InProgressRecording, anyhow::Error> = async {
                     match inputs.mode {
@@ -1596,6 +1601,45 @@ fn panic_message(panic: Box<dyn Any + Send>) -> String {
     }
 }
 
+async fn lock_selected_microphone(
+    mic_feed: &kameo::actor::ActorRef<microphone::MicrophoneFeed>,
+    selected_label: Option<String>,
+    selected_settings: Option<microphone::MicrophoneDeviceSettings>,
+) -> anyhow::Result<Option<Arc<microphone::MicrophoneFeedLock>>> {
+    let Some(label) = selected_label else {
+        return Ok(None);
+    };
+
+    match mic_feed.ask(microphone::Lock).await {
+        Ok(lock) => return Ok(Some(Arc::new(lock))),
+        Err(kameo::error::SendError::HandlerError(microphone::LockFeedError::NoInput)) => {}
+        Err(err) => return Err(anyhow!(err.to_string())),
+    }
+
+    let ready = mic_feed
+        .ask(microphone::SetInput {
+            label: label.clone(),
+            settings: selected_settings,
+        })
+        .await
+        .map_err(|err| anyhow!(err.to_string()))?;
+
+    ready.await.map_err(|err| match err {
+        microphone::SetInputError::DeviceNotFound => {
+            anyhow!("Selected microphone '{label}' is no longer available")
+        }
+        err => anyhow!("Failed to initialize selected microphone '{label}': {err}"),
+    })?;
+
+    match mic_feed.ask(microphone::Lock).await {
+        Ok(lock) => Ok(Some(Arc::new(lock))),
+        Err(kameo::error::SendError::HandlerError(microphone::LockFeedError::NoInput)) => Err(
+            anyhow!("Selected microphone '{label}' did not become ready after initialization"),
+        ),
+        Err(err) => Err(anyhow!(err.to_string())),
+    }
+}
+
 fn mic_actor_not_running(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         if let Some(source) = cause.downcast_ref::<MicrophoneSourceError>() {
@@ -2078,8 +2122,17 @@ async fn handle_recording_end(
     let _ = app.mic_feed.ask(microphone::RemoveInput).await;
     let _ = app.camera_feed.ask(camera::RemoveInput).await;
 
-    if let Some(window) = CapWindowId::Main.get(&handle) {
+    let main_window = CapWindowId::Main.get(&handle);
+    let should_restore_mic_preview = main_window
+        .as_ref()
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+
+    if let Some(window) = main_window {
         window.unminimize().ok();
+        if should_restore_mic_preview && let Err(err) = app.ensure_selected_mic_ready().await {
+            warn!("Failed to restore microphone preview after recording: {err}");
+        }
     } else {
         app.selected_mic_label = None;
         app.selected_camera_id = None;

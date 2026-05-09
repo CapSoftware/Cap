@@ -9,9 +9,10 @@ These rules are enforced by CI (`cargo clippy -D warnings`, Biome). Fixing them 
 - **Never edit generated files**: `**/tauri.ts`, `**/queries.ts`, `apps/desktop/src-tauri/gen/**`, `packages/ui-solid/src/auto-imports.d.ts`, Drizzle migration SQL under `packages/database/migrations/`.
 - **Never start additional dev servers** (`pnpm dev`, `pnpm dev:web`, `pnpm dev:desktop`, Docker services). Assume they are already running.
 
-### Post-edit gates (run before you say "done")
-- Touched any Rust file → `cargo fmt --all` **and** `cargo clippy -p <crate> --all-targets -- -D warnings` (use `--workspace` if multiple crates changed). `cargo check` alone is not sufficient; it will not catch the lints below.
-- Touched any TS / JS / JSON / CSS / MD file → `pnpm format` **and** `pnpm lint`. For type changes, also `pnpm typecheck`.
+### Post-edit checks (run before you say "done")
+- Prefer scoped, fast checks over full workspace gates. Do not run long full-repo checks by default.
+- Touched any Rust file → `cargo fmt --all` and `cargo check -p <crate>`. Add `--all-targets`, `--workspace`, or clippy only when explicitly requested, when preparing CI/PR final validation, or when the change needs broader coverage.
+- Touched any TS / JS / JSON / CSS / MD file → run the narrowest applicable formatter/linter on touched files first, such as `pnpm exec biome check --write <files>`. Use full `pnpm format`, `pnpm lint`, and `pnpm typecheck` only when explicitly requested or when the change spans shared types/packages.
 - Touched DB schema → `pnpm db:generate` before relying on it.
 
 ### Rust — write the clippy-clean form the FIRST time
@@ -94,9 +95,9 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - On the server, run effects through `EffectRuntime.runPromise` from `@/lib/server`, typically after `provideOptionalAuth`, so cookies and per-request context are attached automatically.
 - On the client, use `useEffectQuery`/`useEffectMutation` from `@/lib/EffectRuntime`; they already bind the managed runtime and tracing so you shouldn't call `EffectRuntime.run*` directly in components.
 
-## Code Formatting & Lint Gates
-Before declaring any task complete, the agent MUST run the appropriate gate for every file type it touched. These are not optional — they are the same gates CI runs.
+## Code Formatting & Lint Checks
+Before declaring any task complete, the agent should run the fastest useful check for every file type it touched and report anything skipped.
 
-- **Rust**: `cargo fmt --all` **and** `cargo clippy -p <crate> --all-targets -- -D warnings` (swap `-p <crate>` for `--workspace` if multiple crates were touched). `cargo check` is NOT a substitute — it does not run clippy's denied lints.
-- **TS / JS / JSON / CSS / MD**: `pnpm format` **and** `pnpm lint`. If types changed, also `pnpm typecheck`.
-- If a gate fails, fix the violation in the source (do NOT suppress with `#[allow(...)]`, `// biome-ignore`, or `any` unless explicitly approved). The Pre-Generation Invariants show the correct form for every denied lint.
+- **Rust**: `cargo fmt --all` and `cargo check -p <crate>` for the touched crate. Add `--all-targets`, `--workspace`, or `cargo clippy -p <crate> --all-targets -- -D warnings` only for explicit requests, CI/PR final validation, or changes that need broader coverage.
+- **TS / JS / JSON / CSS / MD**: prefer scoped checks such as `pnpm exec biome check --write <files>`. Use full `pnpm format`, `pnpm lint`, and `pnpm typecheck` only when explicitly requested or when the change is broad enough to justify it.
+- If a scoped check fails, fix the violation in the source (do NOT suppress with `#[allow(...)]`, `// biome-ignore`, or `any` unless explicitly approved). The Pre-Generation Invariants show the correct form for every denied lint.

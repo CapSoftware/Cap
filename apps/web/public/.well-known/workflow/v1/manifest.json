@@ -1,6 +1,22 @@
 {
 	"version": "1.0.0",
 	"steps": {
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
+			"__builtin_response_array_buffer": {
+				"stepId": "__builtin_response_array_buffer"
+			},
+			"__builtin_response_json": {
+				"stepId": "__builtin_response_json"
+			},
+			"__builtin_response_text": {
+				"stepId": "__builtin_response_text"
+			}
+		},
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
+			"fetch": {
+				"stepId": "step//workflow@4.2.0-beta.73//fetch"
+			}
+		},
 		"workflows/process-video.ts": {
 			"cleanupRawUpload": {
 				"stepId": "step//./workflows/process-video//cleanupRawUpload"
@@ -16,25 +32,6 @@
 			},
 			"validateProcessingRequest": {
 				"stepId": "step//./workflows/process-video//validateProcessingRequest"
-			}
-		},
-		"workflows/import-loom-video.ts": {
-			"downloadLoomToS3": {
-				"stepId": "step//./workflows/import-loom-video//downloadLoomToS3"
-			},
-			"processVideoOnMediaServer": {
-				"stepId": "step//./workflows/import-loom-video//processVideoOnMediaServer"
-			},
-			"saveMetadataAndComplete": {
-				"stepId": "step//./workflows/import-loom-video//saveMetadataAndComplete"
-			},
-			"setProcessingError": {
-				"stepId": "step//./workflows/import-loom-video//setProcessingError"
-			}
-		},
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
-			"fetch": {
-				"stepId": "step//workflow@4.2.0-beta.73//fetch"
 			}
 		},
 		"workflows/transcribe.ts": {
@@ -69,15 +66,18 @@
 				"stepId": "step//./workflows/transcribe//validateVideo"
 			}
 		},
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
-			"__builtin_response_array_buffer": {
-				"stepId": "__builtin_response_array_buffer"
+		"workflows/import-loom-video.ts": {
+			"downloadLoomToS3": {
+				"stepId": "step//./workflows/import-loom-video//downloadLoomToS3"
 			},
-			"__builtin_response_json": {
-				"stepId": "__builtin_response_json"
+			"processVideoOnMediaServer": {
+				"stepId": "step//./workflows/import-loom-video//processVideoOnMediaServer"
 			},
-			"__builtin_response_text": {
-				"stepId": "__builtin_response_text"
+			"saveMetadataAndComplete": {
+				"stepId": "step//./workflows/import-loom-video//saveMetadataAndComplete"
+			},
+			"setProcessingError": {
+				"stepId": "step//./workflows/import-loom-video//setProcessingError"
 			}
 		},
 		"workflows/generate-ai.ts": {
@@ -132,16 +132,16 @@
 				}
 			}
 		},
-		"workflows/import-loom-video.ts": {
-			"importLoomVideoWorkflow": {
-				"workflowId": "workflow//./workflows/import-loom-video//importLoomVideoWorkflow",
+		"workflows/transcribe.ts": {
+			"transcribeVideoWorkflow": {
+				"workflowId": "workflow//./workflows/transcribe//transcribeVideoWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: importLoomVideoWorkflow",
+								"label": "Start: transcribeVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},
@@ -165,16 +165,16 @@
 				}
 			}
 		},
-		"workflows/transcribe.ts": {
-			"transcribeVideoWorkflow": {
-				"workflowId": "workflow//./workflows/transcribe//transcribeVideoWorkflow",
+		"workflows/import-loom-video.ts": {
+			"importLoomVideoWorkflow": {
+				"workflowId": "workflow//./workflows/import-loom-video//importLoomVideoWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: transcribeVideoWorkflow",
+								"label": "Start: importLoomVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},

@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { decrypt, encrypt } from "@cap/database/crypto";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { Storage, type User, type Video } from "@cap/web-domain";
+import {
+	type Organisation,
+	Storage,
+	type User,
+	type Video,
+} from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 
@@ -17,6 +22,10 @@ const escapeLikePattern = (value: string) =>
 export type GoogleDriveIntegrationConfig = {
 	refreshToken: string;
 	folderId: string;
+	folderName?: string;
+	driveId?: string | null;
+	driveName?: string | null;
+	folderLayout?: "video" | "userVideo";
 	email?: string;
 	scope?: string;
 };
@@ -102,6 +111,28 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 						.where(
 							Dz.and(
 								Dz.eq(Db.storageIntegrations.ownerId, userId),
+								Dz.isNull(Db.storageIntegrations.organizationId),
+								Dz.eq(Db.storageIntegrations.active, true),
+								Dz.eq(Db.storageIntegrations.status, "active"),
+							),
+						),
+				);
+
+				return Option.fromNullable(integration);
+			}),
+		);
+
+		const getActiveIntegrationForOrganization = Effect.fn(
+			"StorageRepo.getActiveIntegrationForOrganization",
+		)((organizationId: Organisation.OrganisationId) =>
+			Effect.gen(function* () {
+				const [integration] = yield* db.use((db) =>
+					db
+						.select()
+						.from(Db.storageIntegrations)
+						.where(
+							Dz.and(
+								Dz.eq(Db.storageIntegrations.organizationId, organizationId),
 								Dz.eq(Db.storageIntegrations.active, true),
 								Dz.eq(Db.storageIntegrations.status, "active"),
 							),
@@ -449,6 +480,7 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 
 		return {
 			getActiveIntegrationForUser,
+			getActiveIntegrationForOrganization,
 			getIntegrationById,
 			getGoogleDriveConfig,
 			getGoogleDriveAccessTokenCache,

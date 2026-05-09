@@ -14,6 +14,7 @@ import { and, eq } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
+import { requireOrganizationAccess } from "@/actions/organization/authorization";
 import { runPromise } from "@/lib/server";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
@@ -233,6 +234,8 @@ export async function importFromLoom({
 		};
 	}
 
+	await requireOrganizationAccess(user.id, orgId);
+
 	const loomVideoId = extractLoomVideoId(loomUrl.trim());
 	if (!loomVideoId) {
 		return {
@@ -295,7 +298,7 @@ export async function importFromLoom({
 		fetchLoomOEmbed(loomVideoId),
 	]);
 
-	const writable = await Storage.getWritableAccessForUser(user.id).pipe(
+	const writable = await Storage.getWritableAccessForUser(user.id, orgId).pipe(
 		runPromise,
 	);
 

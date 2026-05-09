@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { file, spawn } from "bun";
+import { type BunFile, file, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 import {
@@ -15,6 +15,7 @@ const PROCESS_TIMEOUT_MS = 45 * 60 * 1000;
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
+const PREVIEW_GIF_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_UPLOAD_RETRIES = 4;
@@ -56,6 +57,66 @@ const DEFAULT_THUMBNAIL_OPTIONS: Required<ThumbnailOptions> = {
 	height: 720,
 	quality: 85,
 };
+
+export interface PreviewGifOptions {
+	startTime?: number;
+	duration?: number;
+	fps?: number;
+	maxDimension?: number;
+	colors?: number;
+	maxBytes?: number;
+	timeoutMs?: number;
+}
+
+const DEFAULT_PREVIEW_GIF_OPTIONS: Required<PreviewGifOptions> = {
+	startTime: 1,
+	duration: 4,
+	fps: 8,
+	maxDimension: 480,
+	colors: 48,
+	maxBytes: 1_500_000,
+	timeoutMs: PREVIEW_GIF_TIMEOUT_MS,
+};
+
+interface PreviewGifAttempt {
+	startTime: number;
+	duration: number;
+	fps: number;
+	maxDimension: number;
+	colors: number;
+	timeoutMs: number;
+}
+
+function getPreviewGifOptions(
+	options: PreviewGifOptions,
+): Required<PreviewGifOptions> {
+	const definedOptions = Object.fromEntries(
+		Object.entries(options).filter(([, value]) => value !== undefined),
+	) as PreviewGifOptions;
+	const opts = { ...DEFAULT_PREVIEW_GIF_OPTIONS, ...definedOptions };
+
+	return {
+		startTime: Math.max(0, opts.startTime),
+		duration: Math.min(
+			DEFAULT_PREVIEW_GIF_OPTIONS.duration,
+			Math.max(0.5, opts.duration),
+		),
+		fps: Math.round(
+			Math.min(DEFAULT_PREVIEW_GIF_OPTIONS.fps, Math.max(1, opts.fps)),
+		),
+		maxDimension: Math.round(
+			Math.min(
+				DEFAULT_PREVIEW_GIF_OPTIONS.maxDimension,
+				Math.max(120, opts.maxDimension),
+			),
+		),
+		colors: Math.round(
+			Math.min(DEFAULT_PREVIEW_GIF_OPTIONS.colors, Math.max(2, opts.colors)),
+		),
+		maxBytes: Math.round(Math.max(1, opts.maxBytes)),
+		timeoutMs: Math.round(Math.max(5_000, opts.timeoutMs)),
+	};
+}
 
 export function normalizeVideoInputExtension(
 	inputExtension: string | undefined,
@@ -1030,6 +1091,224 @@ export async function generateThumbnail(
 	} finally {
 		await terminateProcess(proc);
 	}
+}
+
+function getPreviewGifStartTime(
+	videoDuration: number,
+	requestedStartTime: number,
+	previewDuration: number,
+): number {
+	if (!Number.isFinite(videoDuration) || videoDuration <= 0) {
+		return Math.max(0, requestedStartTime);
+	}
+
+	return Math.min(
+		Math.max(0, requestedStartTime),
+		Math.max(0, videoDuration - previewDuration),
+	);
+}
+
+function getPreviewGifDuration(
+	videoDuration: number,
+	startTime: number,
+	requestedDuration: number,
+): number {
+	if (!Number.isFinite(videoDuration) || videoDuration <= 0) {
+		return requestedDuration;
+	}
+
+	return Math.max(0.5, Math.min(requestedDuration, videoDuration - startTime));
+}
+
+function getPreviewGifAttempts(
+	duration: number,
+	opts: Required<PreviewGifOptions>,
+): PreviewGifAttempt[] {
+	const startTime = getPreviewGifStartTime(
+		duration,
+		opts.startTime,
+		opts.duration,
+	);
+	const previewDuration = getPreviewGifDuration(
+		duration,
+		startTime,
+		opts.duration,
+	);
+
+	return [
+		{
+			startTime,
+			duration: previewDuration,
+			fps: opts.fps,
+			maxDimension: opts.maxDimension,
+			colors: opts.colors,
+			timeoutMs: opts.timeoutMs,
+		},
+		{
+			startTime,
+			duration: Math.min(3, previewDuration),
+			fps: Math.min(6, opts.fps),
+			maxDimension: Math.min(360, opts.maxDimension),
+			colors: Math.min(32, opts.colors),
+			timeoutMs: opts.timeoutMs,
+		},
+		{
+			startTime,
+			duration: Math.min(2, previewDuration),
+			fps: Math.min(5, opts.fps),
+			maxDimension: Math.min(320, opts.maxDimension),
+			colors: Math.min(24, opts.colors),
+			timeoutMs: opts.timeoutMs,
+		},
+		{
+			startTime,
+			duration: Math.min(1.5, previewDuration),
+			fps: Math.min(4, opts.fps),
+			maxDimension: Math.min(240, opts.maxDimension),
+			colors: Math.min(16, opts.colors),
+			timeoutMs: opts.timeoutMs,
+		},
+	];
+}
+
+function getPreviewGifFilter(attempt: PreviewGifAttempt): string {
+	return `fps=${attempt.fps},scale='min(${attempt.maxDimension},iw)':'min(${attempt.maxDimension},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,split[s0][s1];[s0]palettegen=stats_mode=diff:max_colors=${attempt.colors}[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`;
+}
+
+async function runPreviewGifAttempt(
+	inputPath: string,
+	outputPath: string,
+	attempt: PreviewGifAttempt,
+	abortSignal?: AbortSignal,
+): Promise<void> {
+	if (abortSignal?.aborted) {
+		throw new Error("Preview GIF generation aborted");
+	}
+
+	const ffmpegArgs = [
+		"ffmpeg",
+		"-threads",
+		"1",
+		"-ss",
+		attempt.startTime.toString(),
+		"-t",
+		attempt.duration.toString(),
+		"-i",
+		inputPath,
+		"-an",
+		"-filter_complex",
+		getPreviewGifFilter(attempt),
+		"-loop",
+		"0",
+		"-f",
+		"gif",
+		"-y",
+		outputPath,
+	];
+
+	console.log(`[generatePreviewGif] Running FFmpeg: ${ffmpegArgs.join(" ")}`);
+
+	const proc = registerSubprocess(
+		spawn({
+			cmd: ffmpegArgs,
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
+
+	let abortCleanup: (() => void) | undefined;
+	if (abortSignal) {
+		abortCleanup = () => {
+			void terminateProcess(proc);
+		};
+		abortSignal.addEventListener("abort", abortCleanup, { once: true });
+	}
+
+	try {
+		await withTimeout(
+			(async () => {
+				drainStream(proc.stdout as ReadableStream<Uint8Array>);
+
+				const stderrText = await readStreamWithLimit(
+					proc.stderr as ReadableStream<Uint8Array>,
+					MAX_STDERR_BYTES,
+				);
+
+				const exitCode = await proc.exited;
+
+				if (exitCode !== 0) {
+					console.error(
+						`[generatePreviewGif] FFmpeg stderr:\n${redactUrlQueries(stderrText)}`,
+					);
+					throw new Error(`FFmpeg preview GIF exited with code ${exitCode}`);
+				}
+			})(),
+			attempt.timeoutMs,
+			() => terminateProcess(proc),
+		);
+	} finally {
+		if (abortCleanup) {
+			abortSignal?.removeEventListener("abort", abortCleanup);
+		}
+		await terminateProcess(proc);
+	}
+}
+
+export async function generatePreviewGif(
+	inputPath: string,
+	duration: number,
+	options: PreviewGifOptions = {},
+	abortSignal?: AbortSignal,
+): Promise<TempFileHandle> {
+	const opts = getPreviewGifOptions(options);
+	const attempts = getPreviewGifAttempts(duration, opts);
+	let lastError: unknown;
+
+	for (const [index, attempt] of attempts.entries()) {
+		if (abortSignal?.aborted) {
+			throw new Error("Preview GIF generation aborted");
+		}
+
+		const outputTempFile = await createTempFile(".gif");
+
+		try {
+			await runPreviewGifAttempt(
+				inputPath,
+				outputTempFile.path,
+				attempt,
+				abortSignal,
+			);
+
+			const outputFile = file(outputTempFile.path);
+			const outputSize = await outputFile.size;
+			if (outputSize === 0) {
+				throw new Error("FFmpeg produced empty preview GIF");
+			}
+
+			if (outputSize <= opts.maxBytes) {
+				return outputTempFile;
+			}
+
+			throw new Error(
+				`Preview GIF exceeds size budget: ${outputSize} bytes > ${opts.maxBytes} bytes`,
+			);
+		} catch (err) {
+			await outputTempFile.cleanup();
+			if (abortSignal?.aborted) {
+				throw err instanceof Error
+					? err
+					: new Error("Preview GIF generation aborted");
+			}
+			lastError = err;
+			if (index === attempts.length - 1) {
+				throw err;
+			}
+		}
+	}
+
+	throw lastError instanceof Error
+		? lastError
+		: new Error("Preview GIF generation failed");
 }
 
 export async function uploadToS3(

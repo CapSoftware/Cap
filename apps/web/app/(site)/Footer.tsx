@@ -128,12 +128,15 @@ export const Footer = () => {
 						<p className="pt-4 text-sm text-gray-9">
 							© Cap Software, Inc. {new Date().getFullYear()}.
 						</p>
-						<div className="flex justify-center pt-6 space-x-10">
+						<div className="flex flex-wrap justify-center gap-x-10 gap-y-3 pt-6">
 							<a className="text-sm text-gray-8" href="/terms">
 								Terms of Service
 							</a>
 							<a className="text-sm text-gray-8" href="/privacy">
 								Privacy Policy
+							</a>
+							<a className="text-sm text-gray-8" href="/dpa">
+								Data Processing Agreement
 							</a>
 						</div>
 					</div>

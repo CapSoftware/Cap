@@ -1,8 +1,9 @@
 import { Button } from "@cap/ui-solid";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { useMutation } from "@tanstack/solid-query";
-import { createResource, Suspense } from "solid-js";
+import { createResource, Show, Suspense } from "solid-js";
 import { Input } from "~/routes/editor/ui";
+import { createSelectedOrganization } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 import { IntegrationConfigHeader } from "./config-header";
@@ -26,17 +27,25 @@ const DEFAULT_CONFIG = {
 };
 
 export default function S3ConfigPage() {
-	const [_s3Config, { refetch }] = createResource(async () => {
-		const response = await apiClient.desktop.getS3Config({
-			headers: await protectedHeaders(),
-		});
+	const organizationSelection = createSelectedOrganization();
+	const [_s3Config, { refetch }] = createResource(
+		() => organizationSelection.selectedOrganizationId(),
+		async (orgId) => {
+			const response = await apiClient.desktop.getS3Config({
+				query: orgId ? { orgId } : undefined,
+				headers: await protectedHeaders(),
+			});
 
-		if (response.status !== 200) throw new Error("Failed to fetch S3 config");
+			if (response.status !== 200) throw new Error("Failed to fetch S3 config");
 
-		return response.body.config;
-	});
+			return response.body;
+		},
+	);
 
-	const hasConfig = () => !!_s3Config()?.accessKeyId;
+	const managedByOrganization = () =>
+		_s3Config()?.managedByOrganization ?? null;
+	const hasConfig = () =>
+		_s3Config()?.source === "user" && !!_s3Config()?.config.accessKeyId;
 
 	const saveConfig = useMutation(() => ({
 		mutationFn: async (config: S3Config) => {
@@ -113,7 +122,7 @@ export default function S3ConfigPage() {
 	}));
 
 	const [s3Config, setS3Config] = createWritableMemo(
-		() => _s3Config.latest ?? DEFAULT_CONFIG,
+		() => _s3Config.latest?.config ?? DEFAULT_CONFIG,
 	);
 
 	const renderInput = (
@@ -128,6 +137,7 @@ export default function S3ConfigPage() {
 				class="!bg-gray-3"
 				type={type}
 				value={s3Config()[key] ?? ""}
+				disabled={!!managedByOrganization()}
 				onInput={(e: InputEvent & { currentTarget: HTMLInputElement }) =>
 					setS3Config({
 						...s3Config(),
@@ -170,6 +180,13 @@ export default function S3ConfigPage() {
 									</a>{" "}
 									to get started.
 								</p>
+								<Show when={managedByOrganization()}>
+									{(organization) => (
+										<p class="mt-3 text-sm font-medium text-gray-12">
+											Managed by your organization: {organization().name}
+										</p>
+									)}
+								</Show>
 							</div>
 
 							<div class="space-y-2">
@@ -177,6 +194,7 @@ export default function S3ConfigPage() {
 								<div class="relative">
 									<select
 										value={s3Config().provider}
+										disabled={!!managedByOrganization()}
 										onChange={(e) =>
 											setS3Config((c) => ({
 												...c,
@@ -234,7 +252,8 @@ export default function S3ConfigPage() {
 						_s3Config.loading ||
 						saveConfig.isPending ||
 						deleteConfig.isPending ||
-						testConfig.isPending
+						testConfig.isPending ||
+						!!managedByOrganization()
 					}
 				>
 					<div class="flex gap-2">

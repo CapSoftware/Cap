@@ -3,7 +3,7 @@ mod segmentation;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use blur_pipeline::{BlurPassInputs, BlurPipeline, CompositePipeline};
 use segmentation::SegmentationModel;
@@ -24,7 +24,7 @@ pub enum BlurMode {
 }
 
 const SEGMENTATION_SIZE: u32 = 256;
-const INFERENCE_INTERVAL_MS: u64 = 66;
+const DEFAULT_INFERENCE_INTERVAL: Duration = Duration::from_millis(66);
 const MASK_GROWTH_ALPHA: f32 = 0.25;
 const MASK_SHRINK_ALPHA: f32 = 0.12;
 const MASK_STABILITY_EPSILON: f32 = 0.025;
@@ -46,6 +46,7 @@ pub struct BlurProcessor {
     readback_buffer: wgpu::Buffer,
     readback_bytes_per_row: u32,
     readback_state: ReadbackState,
+    inference_interval: Duration,
     mask_dirty: bool,
     output_generation: u64,
 }
@@ -196,9 +197,14 @@ impl BlurProcessor {
             readback_buffer,
             readback_bytes_per_row,
             readback_state: ReadbackState::Idle,
+            inference_interval: DEFAULT_INFERENCE_INTERVAL,
             mask_dirty: true,
             output_generation: 0,
         })
+    }
+
+    pub fn set_inference_interval(&mut self, interval: Duration) {
+        self.inference_interval = interval;
     }
 
     pub fn output_generation(&self) -> u64 {
@@ -245,7 +251,7 @@ impl BlurProcessor {
         self.ensure_textures(device, width, height);
         let input_view = input_texture.create_view(&Default::default());
 
-        if self.last_inference.elapsed().as_millis() >= INFERENCE_INTERVAL_MS as u128 {
+        if self.last_inference.elapsed() >= self.inference_interval {
             let mask_updated = self.run_segmentation(device, queue, input_texture);
             self.last_inference = Instant::now();
             if mask_updated {
