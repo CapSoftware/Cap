@@ -8,7 +8,7 @@ import {
 	faLock,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Check, Clock, Copy, Globe2 } from "lucide-react";
+import { Check, Clock, Copy, Globe2, Pencil } from "lucide-react";
 import moment from "moment";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -277,17 +277,16 @@ export const ShareHeader = ({
 										onKeyDown={handleKeyDown}
 										className="w-full text-xl sm:text-2xl"
 									/>
-								) : (
-									<h1
-										className="text-xl sm:text-2xl"
-										onClick={() => {
-											if (isOwner) {
-												setIsEditing(true);
-											}
-										}}
+								) : isOwner ? (
+									<button
+										type="button"
+										className="w-fit text-left text-xl sm:text-2xl"
+										onClick={() => setIsEditing(true)}
 									>
 										{title}
-									</h1>
+									</button>
+								) : (
+									<h1 className="text-xl sm:text-2xl">{title}</h1>
 								)}
 							</div>
 							<div className="flex gap-7 items-center">
@@ -366,24 +365,36 @@ export const ShareHeader = ({
 							{user !== null && (
 								<div className="hidden md:flex gap-2">
 									{isOwner && (
-										<Tooltip
-											content="View analytics"
-											className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
-											delayDuration={100}
-										>
+										<>
 											<Button
-												variant="gray"
-												className="rounded-full flex items-center justify-center"
-												onClick={() => {
-													push(`/dashboard/analytics?capId=${data.id}`);
-												}}
+												variant="blue"
+												className="flex items-center justify-center gap-2 rounded-full"
+												onClick={() =>
+													push(`/dashboard/caps/${data.id}/studio`)
+												}
 											>
-												<FontAwesomeIcon
-													className="size-4 text-gray-12"
-													icon={faChartSimple}
-												/>
+												<Pencil className="size-4" />
+												Edit
 											</Button>
-										</Tooltip>
+											<Tooltip
+												content="View analytics"
+												className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+												delayDuration={100}
+											>
+												<Button
+													variant="gray"
+													className="rounded-full flex items-center justify-center"
+													onClick={() => {
+														push(`/dashboard/analytics?capId=${data.id}`);
+													}}
+												>
+													<FontAwesomeIcon
+														className="size-4 text-gray-12"
+														icon={faChartSimple}
+													/>
+												</Button>
+											</Tooltip>
+										</>
 									)}
 									<Button
 										onClick={() => {
