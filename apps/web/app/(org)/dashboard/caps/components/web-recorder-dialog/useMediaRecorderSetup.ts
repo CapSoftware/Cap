@@ -135,11 +135,22 @@ export const useMediaRecorderSetup = () => {
 				stopPromiseRejectRef.current = reject;
 			});
 
-			recorder.stop();
-			cleanupStreams();
 			clearTimer();
+			try {
+				recorder.requestData();
+			} catch {}
 
-			return stopPromise;
+			try {
+				recorder.stop();
+			} catch (error) {
+				cleanupStreams();
+				stopPromiseResolverRef.current = null;
+				stopPromiseRejectRef.current = null;
+				isStoppingRef.current = false;
+				throw error;
+			}
+
+			return stopPromise.finally(cleanupStreams);
 		},
 		[],
 	);

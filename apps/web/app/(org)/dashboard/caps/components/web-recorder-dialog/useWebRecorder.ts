@@ -68,6 +68,7 @@ import {
 	canRequestSystemAudioForMode,
 	detectCapabilities,
 	getBrowserRecorderEnvironment,
+	isSafariBrowser,
 	isUserCancellationError,
 	openShareUrlInNewTab,
 	type RecorderCapabilities,
@@ -650,6 +651,10 @@ export const useWebRecorder = ({
 			systemAudioTracks: MediaStreamTrack[];
 			micStream: MediaStream | null;
 		}) => {
+			if (isSafariBrowser(getBrowserRecorderEnvironment())) {
+				return;
+			}
+
 			const startAssetRecorder = async ({
 				kind,
 				label,
