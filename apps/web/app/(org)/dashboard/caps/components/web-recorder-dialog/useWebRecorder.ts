@@ -65,7 +65,9 @@ import type {
 	VideoId,
 } from "./web-recorder-types";
 import {
+	canRequestSystemAudioForMode,
 	detectCapabilities,
+	getBrowserRecorderEnvironment,
 	isUserCancellationError,
 	openShareUrlInNewTab,
 	type RecorderCapabilities,
@@ -1184,6 +1186,12 @@ export const useWebRecorder = ({
 		setIsSettingUp(true);
 
 		try {
+			const shouldRequestSystemAudio =
+				systemAudioEnabled &&
+				canRequestSystemAudioForMode(
+					getBrowserRecorderEnvironment(),
+					recordingMode,
+				);
 			let videoStream: MediaStream | null = null;
 			let firstTrack: MediaStreamTrack | null = null;
 
@@ -1214,7 +1222,7 @@ export const useWebRecorder = ({
 				};
 
 				const displayAudioConfig: boolean | MediaTrackConstraints =
-					systemAudioEnabled
+					shouldRequestSystemAudio
 						? {
 								echoCancellation: false,
 								autoGainControl: false,
@@ -1226,7 +1234,7 @@ export const useWebRecorder = ({
 					video: videoConstraints,
 					audio: displayAudioConfig,
 					preferCurrentTab: recordingMode === "tab",
-					...(systemAudioEnabled ? { systemAudio: "include" } : {}),
+					...(shouldRequestSystemAudio ? { systemAudio: "include" } : {}),
 				};
 
 				const noAudioDisplayRequest: ExtendedDisplayMediaStreamOptions = {
@@ -1243,7 +1251,7 @@ export const useWebRecorder = ({
 						...preferredOptions,
 						video: videoConstraints,
 						audio: displayAudioConfig,
-						...(systemAudioEnabled ? { systemAudio: "include" } : {}),
+						...(shouldRequestSystemAudio ? { systemAudio: "include" } : {}),
 					};
 
 					try {
@@ -1265,7 +1273,7 @@ export const useWebRecorder = ({
 								);
 							} catch (audioRetryError) {
 								if (
-									systemAudioEnabled &&
+									shouldRequestSystemAudio &&
 									shouldRetryDisplayMediaWithoutPreferences(audioRetryError)
 								) {
 									console.warn(
@@ -1282,7 +1290,7 @@ export const useWebRecorder = ({
 									throw audioRetryError;
 								}
 							}
-						} else if (systemAudioEnabled) {
+						} else if (shouldRequestSystemAudio) {
 							console.warn(
 								"Display media with audio failed, retrying without system audio",
 								displayError,
@@ -1316,7 +1324,7 @@ export const useWebRecorder = ({
 						);
 					} catch (fallbackError) {
 						if (
-							systemAudioEnabled &&
+							shouldRequestSystemAudio &&
 							shouldRetryDisplayMediaWithoutPreferences(fallbackError)
 						) {
 							console.warn(
@@ -1354,12 +1362,12 @@ export const useWebRecorder = ({
 			};
 
 			const systemAudioTracks =
-				recordingMode !== "camera" && systemAudioEnabled
+				recordingMode !== "camera" && shouldRequestSystemAudio
 					? (videoStream?.getAudioTracks() ?? [])
 					: [];
 
 			if (
-				systemAudioEnabled &&
+				shouldRequestSystemAudio &&
 				recordingMode !== "camera" &&
 				systemAudioTracks.length === 0
 			) {

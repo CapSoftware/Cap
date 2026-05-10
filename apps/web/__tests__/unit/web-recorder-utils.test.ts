@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	canRequestSystemAudioForMode,
+	isSafariBrowser,
 	openShareUrlInNewTab,
 	selectRecordingPipelineFromSupport,
 	shouldPreferStreamingUpload,
@@ -97,6 +99,53 @@ describe("selectRecordingPipelineFromSupport", () => {
 
 	it("returns null when no supported recorder mime type is available", () => {
 		expect(selectRecordingPipelineFromSupport(true, () => false)).toBeNull();
+	});
+});
+
+describe("isSafariBrowser", () => {
+	it("detects safari without matching chromium browsers that include safari in the user agent", () => {
+		expect(
+			isSafariBrowser({
+				userAgent:
+					"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+			}),
+		).toBe(true);
+		expect(
+			isSafariBrowser({
+				userAgent:
+					"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+			}),
+		).toBe(false);
+		expect(
+			isSafariBrowser({
+				userAgent:
+					"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:141.0) Gecko/20100101 Firefox/141.0",
+			}),
+		).toBe(false);
+	});
+});
+
+describe("canRequestSystemAudioForMode", () => {
+	it("blocks system audio for safari display recording modes", () => {
+		const safari = {
+			userAgent:
+				"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+		};
+
+		expect(canRequestSystemAudioForMode(safari, "fullscreen")).toBe(false);
+		expect(canRequestSystemAudioForMode(safari, "tab")).toBe(false);
+		expect(canRequestSystemAudioForMode(safari, "camera")).toBe(false);
+	});
+
+	it("allows system audio for chromium display recording modes", () => {
+		const chrome = {
+			userAgent:
+				"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+		};
+
+		expect(canRequestSystemAudioForMode(chrome, "fullscreen")).toBe(true);
+		expect(canRequestSystemAudioForMode(chrome, "tab")).toBe(true);
+		expect(canRequestSystemAudioForMode(chrome, "camera")).toBe(false);
 	});
 });
 

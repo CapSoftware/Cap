@@ -14,10 +14,40 @@ export type RecorderCapabilities = {
 	hasDisplayMedia: boolean;
 };
 
-type RecorderEnvironment = {
+export type RecorderEnvironment = {
 	userAgent?: string;
 	brands?: Array<{ brand: string }>;
 };
+
+export const getBrowserRecorderEnvironment = (): RecorderEnvironment => {
+	if (typeof navigator === "undefined") {
+		return {};
+	}
+
+	const navigatorWithUserAgentData = navigator as Navigator & {
+		userAgentData?: { brands?: Array<{ brand: string }> };
+	};
+
+	return {
+		userAgent: navigator.userAgent,
+		brands: navigatorWithUserAgentData.userAgentData?.brands,
+	};
+};
+
+export const isSafariBrowser = (environment: RecorderEnvironment = {}) => {
+	const userAgent = environment.userAgent ?? "";
+	const brandMatch =
+		environment.brands?.some(({ brand }) => /safari/i.test(brand)) ?? false;
+	return (
+		(brandMatch || /safari/i.test(userAgent)) &&
+		!/(chrome|chromium|crios|edg|opr|opera|firefox|fxios)/i.test(userAgent)
+	);
+};
+
+export const canRequestSystemAudioForMode = (
+	environment: RecorderEnvironment = {},
+	mode: string,
+) => mode !== "camera" && !isSafariBrowser(environment);
 
 export type RecordingPipeline =
 	| {
@@ -119,10 +149,7 @@ export const shouldPreferStreamingUpload = (
 		return false;
 	}
 
-	if (
-		/safari/i.test(userAgent) &&
-		!/(chrome|chromium|edg|opr|opera)/i.test(userAgent)
-	) {
+	if (isSafariBrowser(environment)) {
 		return false;
 	}
 

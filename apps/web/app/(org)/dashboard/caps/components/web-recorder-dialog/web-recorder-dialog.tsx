@@ -9,7 +9,7 @@ import {
 } from "@cap/ui";
 import { AnimatePresence, motion } from "framer-motion";
 import { MonitorIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../../Contexts";
 import { CameraPreviewWindow } from "./CameraPreviewWindow";
@@ -36,6 +36,10 @@ import {
 	FREE_PLAN_MAX_RECORDING_MS,
 } from "./web-recorder-constants";
 import { WebRecorderDialogHeader } from "./web-recorder-dialog-header";
+import {
+	canRequestSystemAudioForMode,
+	getBrowserRecorderEnvironment,
+} from "./web-recorder-utils";
 
 const recoveredRecordingTimeFormatter = new Intl.DateTimeFormat(undefined, {
 	dateStyle: "medium",
@@ -117,6 +121,25 @@ export const WebRecorderDialog = () => {
 	});
 
 	const micEnabled = selectedMicId !== null;
+	const recorderEnvironment = useMemo(getBrowserRecorderEnvironment, []);
+	const systemAudioAvailable = canRequestSystemAudioForMode(
+		recorderEnvironment,
+		recordingMode,
+	);
+	const systemAudioUnavailableReason =
+		recordingMode !== "camera" && !systemAudioAvailable
+			? "Safari cannot capture system audio in browser recordings. Use Chrome for system audio, or keep microphone on."
+			: null;
+
+	useEffect(() => {
+		if (systemAudioUnavailableReason && systemAudioEnabled) {
+			handleSystemAudioChange(false);
+		}
+	}, [
+		systemAudioUnavailableReason,
+		systemAudioEnabled,
+		handleSystemAudioChange,
+	]);
 
 	useEffect(() => {
 		if (
@@ -157,7 +180,7 @@ export const WebRecorderDialog = () => {
 		organisationId,
 		selectedMicId,
 		micEnabled,
-		systemAudioEnabled,
+		systemAudioEnabled: systemAudioEnabled && systemAudioAvailable,
 		recordingMode,
 		selectedCameraId,
 		isProUser: user.isPro,
@@ -327,8 +350,9 @@ export const WebRecorderDialog = () => {
 								{recordingMode !== "camera" && (
 									<SystemAudioToggle
 										enabled={systemAudioEnabled}
-										disabled={isBusy}
+										disabled={isBusy || !systemAudioAvailable}
 										recordingMode={recordingMode}
+										unavailableReason={systemAudioUnavailableReason}
 										onToggle={handleSystemAudioChange}
 									/>
 								)}
