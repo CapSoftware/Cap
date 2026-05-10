@@ -20,6 +20,7 @@
 			"name": "EMAIL",
 			"allowed_sender_addresses": [
 				"auth@shashanksn.xyz",
+				"human@shashanksn.xyz",
 				"updates@shashanksn.xyz"
 			]
 		}
