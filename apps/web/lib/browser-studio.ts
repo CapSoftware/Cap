@@ -59,7 +59,7 @@ export type BrowserStudioManifestProject = {
 
 export type BrowserStudioCanvasAspectRatio = "source" | "16:9" | "1:1" | "9:16";
 
-export type BrowserStudioBackgroundMode = "solid" | "blur";
+export type BrowserStudioBackgroundMode = "solid" | "blur" | "gradient";
 
 export type BrowserStudioCameraPosition =
 	| "top-left"
@@ -97,6 +97,11 @@ export type BrowserStudioEditSettings = {
 		aspectRatio: BrowserStudioCanvasAspectRatio;
 		backgroundMode: BrowserStudioBackgroundMode;
 		background: string;
+		backgroundGradient: {
+			from: string;
+			to: string;
+			angle: number;
+		};
 		padding: number;
 		scale: number;
 		cameraPosition: BrowserStudioCameraPosition;
@@ -170,6 +175,11 @@ export const createDefaultBrowserStudioEdit = (
 		aspectRatio: "source",
 		backgroundMode: "solid",
 		background: "#111111",
+		backgroundGradient: {
+			from: "#4785ff",
+			to: "#ff4766",
+			angle: 135,
+		},
 		padding: 8,
 		scale: 1,
 		cameraPosition: "bottom-right",

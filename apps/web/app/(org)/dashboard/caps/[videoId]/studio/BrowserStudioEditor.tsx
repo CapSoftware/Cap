@@ -52,6 +52,24 @@ const backgroundOptions = [
 	"#701a75",
 ];
 
+const backgroundModeOptions = [
+	{ value: "solid", label: "Solid" },
+	{ value: "blur", label: "Blur" },
+	{ value: "gradient", label: "Gradient" },
+] satisfies Array<{
+	value: BrowserStudioEditSettings["canvas"]["backgroundMode"];
+	label: string;
+}>;
+
+const gradientPresets = [
+	{ from: "#0f3443", to: "#34e89e" },
+	{ from: "#22c1c3", to: "#fdbb2d" },
+	{ from: "#4568dc", to: "#b06ab3" },
+	{ from: "#fc5c7d", to: "#6a82fb" },
+	{ from: "#ff5e00", to: "#ff2a68" },
+	{ from: "#2c3e50", to: "#3498db" },
+];
+
 const clamp = (value: number, min: number, max: number) =>
 	Math.min(Math.max(value, min), max);
 
@@ -684,7 +702,9 @@ export function BrowserStudioEditor({
 							background:
 								edit.canvas.backgroundMode === "solid"
 									? edit.canvas.background
-									: "#111111",
+									: edit.canvas.backgroundMode === "gradient"
+										? `linear-gradient(${edit.canvas.backgroundGradient.angle}deg, ${edit.canvas.backgroundGradient.from}, ${edit.canvas.backgroundGradient.to})`
+										: "#111111",
 							padding: `${edit.canvas.padding}%`,
 							cursor: zoomToolArmed ? "crosshair" : "default",
 						}}
@@ -1013,46 +1033,29 @@ export function BrowserStudioEditor({
 							<div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium text-gray-11">
 								Background
 								<div className="rounded-full bg-gray-4 p-1">
-									<button
-										type="button"
-										onClick={() =>
-											updateEdit((current) => ({
-												...current,
-												canvas: {
-													...current.canvas,
-													backgroundMode: "solid",
-												},
-											}))
-										}
-										className={clsx(
-											"rounded-full px-2.5 py-1 text-xs font-semibold",
-											edit.canvas.backgroundMode === "solid"
-												? "bg-white text-gray-12 shadow-sm"
-												: "text-gray-10",
-										)}
-									>
-										Solid
-									</button>
-									<button
-										type="button"
-										onClick={() =>
-											updateEdit((current) => ({
-												...current,
-												canvas: {
-													...current.canvas,
-													backgroundMode: "blur",
-												},
-											}))
-										}
-										className={clsx(
-											"rounded-full px-2.5 py-1 text-xs font-semibold",
-											edit.canvas.backgroundMode === "blur"
-												? "bg-white text-gray-12 shadow-sm"
-												: "text-gray-10",
-										)}
-									>
-										Blur
-									</button>
+									{backgroundModeOptions.map((option) => (
+										<button
+											key={option.value}
+											type="button"
+											onClick={() =>
+												updateEdit((current) => ({
+													...current,
+													canvas: {
+														...current.canvas,
+														backgroundMode: option.value,
+													},
+												}))
+											}
+											className={clsx(
+												"rounded-full px-2.5 py-1 text-xs font-semibold",
+												edit.canvas.backgroundMode === option.value
+													? "bg-white text-gray-12 shadow-sm"
+													: "text-gray-10",
+											)}
+										>
+											{option.label}
+										</button>
+									))}
 								</div>
 							</div>
 							<div className="flex flex-wrap gap-2">
@@ -1080,6 +1083,104 @@ export function BrowserStudioEditor({
 									/>
 								))}
 							</div>
+							{edit.canvas.backgroundMode === "gradient" && (
+								<div className="mt-4 grid gap-4 rounded-xl border border-gray-4 bg-gray-1 p-3">
+									<div className="flex flex-wrap gap-2">
+										{gradientPresets.map((preset) => (
+											<button
+												key={`${preset.from}-${preset.to}`}
+												type="button"
+												onClick={() =>
+													updateEdit((current) => ({
+														...current,
+														canvas: {
+															...current.canvas,
+															backgroundGradient: {
+																...current.canvas.backgroundGradient,
+																from: preset.from,
+																to: preset.to,
+															},
+														},
+													}))
+												}
+												className="h-8 w-12 rounded-full border border-gray-5"
+												style={{
+													background: `linear-gradient(135deg, ${preset.from}, ${preset.to})`,
+												}}
+												aria-label={`Set gradient ${preset.from} to ${preset.to}`}
+											/>
+										))}
+									</div>
+									<div className="grid grid-cols-2 gap-3">
+										<label className="grid gap-2 text-sm font-medium text-gray-11">
+											From
+											<input
+												type="color"
+												value={edit.canvas.backgroundGradient.from}
+												onChange={(event) =>
+													updateEdit((current) => ({
+														...current,
+														canvas: {
+															...current.canvas,
+															backgroundGradient: {
+																...current.canvas.backgroundGradient,
+																from: event.currentTarget.value,
+															},
+														},
+													}))
+												}
+												className="h-10 w-full rounded-lg border border-gray-4 bg-white p-1"
+											/>
+										</label>
+										<label className="grid gap-2 text-sm font-medium text-gray-11">
+											To
+											<input
+												type="color"
+												value={edit.canvas.backgroundGradient.to}
+												onChange={(event) =>
+													updateEdit((current) => ({
+														...current,
+														canvas: {
+															...current.canvas,
+															backgroundGradient: {
+																...current.canvas.backgroundGradient,
+																to: event.currentTarget.value,
+															},
+														},
+													}))
+												}
+												className="h-10 w-full rounded-lg border border-gray-4 bg-white p-1"
+											/>
+										</label>
+									</div>
+									<label className="grid gap-2 text-sm font-medium text-gray-11">
+										Angle
+										<input
+											type="range"
+											min={0}
+											max={360}
+											step={1}
+											value={edit.canvas.backgroundGradient.angle}
+											onChange={(event) =>
+												updateEdit((current) => ({
+													...current,
+													canvas: {
+														...current.canvas,
+														backgroundGradient: {
+															...current.canvas.backgroundGradient,
+															angle: Number(event.currentTarget.value),
+														},
+													},
+												}))
+											}
+											className="w-full"
+										/>
+										<span className="text-xs text-gray-9">
+											{Math.round(edit.canvas.backgroundGradient.angle)}°
+										</span>
+									</label>
+								</div>
+							)}
 						</div>
 					</section>
 

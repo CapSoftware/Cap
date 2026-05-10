@@ -51,6 +51,10 @@ export type BrowserStudioTextOverlayInput = {
 	overlay: BrowserStudioTextOverlay;
 };
 
+export type BrowserStudioGradientBackgroundInput = {
+	path: string;
+};
+
 const DEFAULT_WIDTH = 1920;
 const DEFAULT_HEIGHT = 1080;
 const MIN_DURATION_MS = 500;
@@ -87,6 +91,9 @@ const rgbaColor = (value: string) => {
 
 	return /^#[0-9a-f]{6}$/i.test(value) ? value : "#000000";
 };
+
+const svgColor = (value: string, fallback: string) =>
+	/^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
 
 const getActiveZoomExpression = (
 	edit: BrowserStudioEditSettings,
@@ -360,6 +367,84 @@ async function createTextOverlayImages(
 	);
 }
 
+async function createGradientBackgroundImage(
+	plan: BrowserStudioRenderPlan,
+	dirPath: string,
+): Promise<BrowserStudioGradientBackgroundInput | null> {
+	if (plan.edit.canvas.backgroundMode !== "gradient") {
+		return null;
+	}
+
+	const gradient = plan.edit.canvas.backgroundGradient;
+	const angle = clamp(gradient.angle, 0, 360);
+	const radians = ((angle - 90) * Math.PI) / 180;
+	const half = 50;
+	const x = Math.cos(radians) * half;
+	const y = Math.sin(radians) * half;
+	const x1 = 50 - x;
+	const y1 = 50 - y;
+	const x2 = 50 + x;
+	const y2 = 50 + y;
+	const from = svgColor(gradient.from, "#4785ff");
+	const to = svgColor(gradient.to, "#ff4766");
+	const path = join(dirPath, "gradient-background.png");
+	const svg = `<svg width="${plan.outputWidth}" height="${plan.outputHeight}" viewBox="0 0 ${plan.outputWidth} ${plan.outputHeight}" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="bg" x1="${x1}%" y1="${y1}%" x2="${x2}%" y2="${y2}%"><stop offset="0%" stop-color="${from}"/><stop offset="100%" stop-color="${to}"/></linearGradient></defs><rect width="${plan.outputWidth}" height="${plan.outputHeight}" fill="url(#bg)"/></svg>`;
+
+	await sharp(Buffer.from(svg)).png().toFile(path);
+
+	return { path };
+}
+
+export function appendGradientBackgroundInputToArgs(
+	args: string[],
+	input: BrowserStudioGradientBackgroundInput | null,
+	outputWidth: number,
+	outputHeight: number,
+) {
+	if (!input) {
+		return args;
+	}
+
+	const filterIndex = args.indexOf("-filter_complex");
+
+	if (filterIndex === -1 || filterIndex + 1 >= args.length) {
+		return args;
+	}
+
+	const inputCount = args
+		.slice(0, filterIndex)
+		.filter((arg) => arg === "-i").length;
+	const nextArgs = [
+		...args.slice(0, filterIndex),
+		"-loop",
+		"1",
+		"-i",
+		input.path,
+		...args.slice(filterIndex),
+	];
+	const nextFilterIndex = filterIndex + 4;
+	const filterGraph = nextArgs[nextFilterIndex + 1];
+
+	if (!filterGraph) {
+		return nextArgs;
+	}
+
+	const filters = filterGraph.split(";");
+	const backgroundFilterIndex = filters.findIndex((filter) =>
+		filter.endsWith("[bg]"),
+	);
+
+	if (backgroundFilterIndex === -1) {
+		return nextArgs;
+	}
+
+	filters[backgroundFilterIndex] =
+		`[${inputCount}:v]scale=${outputWidth}:${outputHeight},setsar=1[bg]`;
+	nextArgs[nextFilterIndex + 1] = filters.join(";");
+
+	return nextArgs;
+}
+
 export function appendTextOverlayInputsToArgs(
 	args: string[],
 	textInputs: BrowserStudioTextOverlayInput[],
@@ -582,16 +667,29 @@ export async function renderBrowserStudioMp4(
 	const ffmpeg = getFfmpegPath();
 
 	try {
+		const gradientInput = await createGradientBackgroundImage(plan, dirPath);
 		const textInputs = await createTextOverlayImages(plan, dirPath);
-		const args = appendTextOverlayInputsToArgs(
+		const argsWithGradient = appendGradientBackgroundInputToArgs(
 			plan.args,
+			gradientInput,
+			plan.outputWidth,
+			plan.outputHeight,
+		);
+		const argsWithoutAudioWithGradient = appendGradientBackgroundInputToArgs(
+			plan.argsWithoutAudio,
+			gradientInput,
+			plan.outputWidth,
+			plan.outputHeight,
+		);
+		const args = appendTextOverlayInputsToArgs(
+			argsWithGradient,
 			textInputs,
 			plan.trimStartSeconds,
 			plan.outputWidth,
 			plan.outputHeight,
 		);
 		const argsWithoutAudio = appendTextOverlayInputsToArgs(
-			plan.argsWithoutAudio,
+			argsWithoutAudioWithGradient,
 			textInputs,
 			plan.trimStartSeconds,
 			plan.outputWidth,

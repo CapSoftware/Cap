@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BrowserStudioCloudManifest } from "@/lib/browser-studio";
 import {
+	appendGradientBackgroundInputToArgs,
 	appendTextOverlayInputsToArgs,
 	buildBrowserStudioRenderPlan,
 	getBrowserStudioRenderLayout,
@@ -98,6 +99,11 @@ const manifest = {
 			aspectRatio: "1:1",
 			backgroundMode: "solid",
 			background: "#183d3d",
+			backgroundGradient: {
+				from: "#4785ff",
+				to: "#ff4766",
+				angle: 135,
+			},
 			padding: 10,
 			scale: 1.1,
 			cameraPosition: "bottom-right",
@@ -292,5 +298,32 @@ describe("browser studio render", () => {
 		expect(args).toContain("[2:v]overlay");
 		expect(args).toContain("enable='between(t,1,3.5)'");
 		expect(args).toContain("-map [vtext0]");
+	});
+
+	it("renders gradient backgrounds through a generated image input", () => {
+		const plan = buildBrowserStudioRenderPlan(
+			{
+				...manifest,
+				edit: {
+					...manifest.edit,
+					canvas: {
+						...manifest.edit.canvas,
+						backgroundMode: "gradient",
+					},
+				},
+			},
+			sources,
+		);
+
+		const args = appendGradientBackgroundInputToArgs(
+			plan.args,
+			{ path: "/tmp/gradient-background.png" },
+			plan.outputWidth,
+			plan.outputHeight,
+		).join(" ");
+
+		expect(args).toContain("-loop 1 -i /tmp/gradient-background.png");
+		expect(args).toContain("[2:v]scale=1920:1920,setsar=1[bg]");
+		expect(args).toContain("[bg][v0]overlay");
 	});
 });
