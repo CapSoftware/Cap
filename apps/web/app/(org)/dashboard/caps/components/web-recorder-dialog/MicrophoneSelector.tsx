@@ -41,9 +41,7 @@ export const MicrophoneSelector = ({
 		dialogOpen,
 	);
 
-	const permissionSupported = permissionState !== "unsupported";
-	const shouldRequestPermission =
-		permissionSupported && permissionState !== "granted";
+	const shouldRequestPermission = permissionState !== "granted";
 
 	const statusPillDisabled =
 		disabled || (!shouldRequestPermission && !micEnabled);

@@ -41,9 +41,7 @@ export const CameraSelector = ({
 		dialogOpen,
 	);
 
-	const permissionSupported = permissionState !== "unsupported";
-	const shouldRequestPermission =
-		permissionSupported && permissionState !== "granted";
+	const shouldRequestPermission = permissionState !== "granted";
 
 	const statusPillDisabled = !shouldRequestPermission && !cameraEnabled;
 
