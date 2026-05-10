@@ -57,8 +57,6 @@ const Top = () => {
 	const params = useParams();
 
 	const titles: Record<string, string> = {
-		"/dashboard/caps": "Videos",
-		"/dashboard/folder": "Videos",
 		"/dashboard/shared-caps": "Shared Videos",
 		"/dashboard/caps/record": "Record Video",
 		"/dashboard/settings/organization": "Organization Settings",
@@ -69,7 +67,6 @@ const Top = () => {
 		"/dashboard/spaces": "Spaces",
 		"/dashboard/spaces/browse": "Browse Spaces",
 		"/dashboard/analytics": "Analytics",
-		[`/dashboard/folder/${params.id}`]: "Videos",
 		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
 		"/dashboard/developers": "Developers",
 		"/dashboard/developers/apps": "Developer Apps",
@@ -117,9 +114,11 @@ const Top = () => {
 							className="relative flex-shrink-0 size-5"
 						/>
 					)}
-					<p className="relative text-lg truncate text-gray-12 lg:text-2xl">
-						{title}
-					</p>
+					{title && (
+						<p className="relative text-lg truncate text-gray-12 lg:text-2xl">
+							{title}
+						</p>
+					)}
 				</div>
 			</div>
 			<div className="flex gap-4 items-center">
