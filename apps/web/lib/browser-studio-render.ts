@@ -224,14 +224,17 @@ function getCameraOverlay({
 	outputWidth,
 	outputHeight,
 	position,
+	size,
 }: {
 	outputWidth: number;
 	outputHeight: number;
 	position: BrowserStudioEditSettings["canvas"]["cameraPosition"];
+	size: number;
 }) {
 	const margin = even(Math.min(outputWidth, outputHeight) * 0.04);
-	const width = even(outputWidth * 0.22);
-	const height = even(outputHeight * 0.22);
+	const safeSize = clamp(size, 10, 40) / 100;
+	const width = even(outputWidth * safeSize);
+	const height = even(outputHeight * safeSize);
 	const x =
 		position === "top-left" || position === "bottom-left"
 			? margin
@@ -310,6 +313,7 @@ export function buildBrowserStudioRenderPlan(
 			outputWidth: layout.outputWidth,
 			outputHeight: layout.outputHeight,
 			position: edit.canvas.cameraPosition,
+			size: edit.canvas.cameraSize,
 		});
 		filters.push(
 			`[1:v]scale=${camera.width}:${camera.height}:force_original_aspect_ratio=decrease,setsar=1[cam]`,

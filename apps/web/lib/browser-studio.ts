@@ -88,6 +88,7 @@ export type BrowserStudioEditSettings = {
 		padding: number;
 		scale: number;
 		cameraPosition: BrowserStudioCameraPosition;
+		cameraSize: number;
 	};
 	audio: {
 		volume: number;
@@ -159,6 +160,7 @@ export const createDefaultBrowserStudioEdit = (
 		padding: 8,
 		scale: 1,
 		cameraPosition: "bottom-right",
+		cameraSize: 22,
 	},
 	audio: {
 		volume: 1,

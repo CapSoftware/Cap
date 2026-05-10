@@ -80,6 +80,7 @@ export function BrowserStudioEditor({
 }: BrowserStudioEditorProps) {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const backgroundVideoRef = useRef<HTMLVideoElement | null>(null);
+	const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
 	const previewRef = useRef<HTMLButtonElement | null>(null);
 	const [manifest, setManifest] = useState<BrowserStudioCloudManifest | null>(
 		null,
@@ -154,6 +155,42 @@ export function BrowserStudioEditor({
 			sources.find((source) => source.subpath === subpath) ?? sources[0] ?? null
 		);
 	}, [manifest, sources, activeAsset]);
+	const primaryAsset = useMemo(
+		() =>
+			manifest?.assets.find(
+				(asset) => asset.kind === "screen" || asset.kind === "mixed",
+			) ??
+			manifest?.assets[0] ??
+			null,
+		[manifest],
+	);
+	const primarySource = useMemo(
+		() =>
+			sources.find(
+				(source) => source.subpath === primaryAsset?.sourceSubpath,
+			) ?? activeSource,
+		[sources, primaryAsset, activeSource],
+	);
+	const cameraAsset = useMemo(
+		() => manifest?.assets.find((asset) => asset.kind === "camera") ?? null,
+		[manifest],
+	);
+	const cameraTrack = useMemo(
+		() =>
+			manifest?.project.timeline.tracks.find(
+				(track) => track.assetId === cameraAsset?.assetId,
+			) ?? null,
+		[manifest, cameraAsset],
+	);
+	const cameraSource = useMemo(
+		() =>
+			cameraTrack?.muted
+				? null
+				: (sources.find(
+						(source) => source.subpath === cameraAsset?.sourceSubpath,
+					) ?? null),
+		[sources, cameraAsset, cameraTrack],
+	);
 	const durationMs =
 		manifest?.project.timeline.durationMs ?? mediaDurationMs ?? 0;
 	const trimStartMs = edit?.trim.startMs ?? 0;
@@ -398,15 +435,20 @@ export function BrowserStudioEditor({
 				if (backgroundVideoRef.current) {
 					backgroundVideoRef.current.currentTime = trimStartMs / 1000;
 				}
+				if (cameraVideoRef.current) {
+					cameraVideoRef.current.currentTime = trimStartMs / 1000;
+				}
 			}
 			await video.play();
 			await backgroundVideoRef.current?.play().catch(() => undefined);
+			await cameraVideoRef.current?.play().catch(() => undefined);
 			setPlaying(true);
 			return;
 		}
 
 		video.pause();
 		backgroundVideoRef.current?.pause();
+		cameraVideoRef.current?.pause();
 		setPlaying(false);
 	};
 
@@ -424,12 +466,23 @@ export function BrowserStudioEditor({
 			) {
 				backgroundVideo.currentTime = video.currentTime;
 			}
+			const cameraVideo = cameraVideoRef.current;
+			if (
+				cameraVideo &&
+				Math.abs(cameraVideo.currentTime - video.currentTime) > 0.25
+			) {
+				cameraVideo.currentTime = video.currentTime;
+			}
 			if (currentMs >= (edit.trim.endMs ?? durationMs)) {
 				video.pause();
 				backgroundVideo?.pause();
+				cameraVideo?.pause();
 				video.currentTime = edit.trim.startMs / 1000;
 				if (backgroundVideo) {
 					backgroundVideo.currentTime = edit.trim.startMs / 1000;
+				}
+				if (cameraVideo) {
+					cameraVideo.currentTime = edit.trim.startMs / 1000;
 				}
 				setCurrentMs(edit.trim.startMs);
 				setPlaying(false);
@@ -438,6 +491,7 @@ export function BrowserStudioEditor({
 		const handlePlay = () => setPlaying(true);
 		const handlePause = () => {
 			backgroundVideoRef.current?.pause();
+			cameraVideoRef.current?.pause();
 			setPlaying(false);
 		};
 
@@ -470,7 +524,7 @@ export function BrowserStudioEditor({
 		);
 	}
 
-	if (error || !manifest || !edit || !activeSource) {
+	if (error || !manifest || !edit || !activeSource || !primarySource) {
 		return (
 			<div className="flex min-h-screen items-center justify-center bg-gray-1 p-6">
 				<div className="w-full max-w-md rounded-xl border border-gray-4 bg-gray-2 p-6">
@@ -558,9 +612,9 @@ export function BrowserStudioEditor({
 					>
 						{edit.canvas.backgroundMode === "blur" && (
 							<video
-								key={`background-${activeSource.url}`}
+								key={`background-${primarySource.url}`}
 								ref={backgroundVideoRef}
-								src={activeSource.url}
+								src={primarySource.url}
 								className="pointer-events-none absolute inset-0 size-full scale-110 object-cover opacity-80 blur-2xl"
 								muted
 								playsInline
@@ -571,9 +625,9 @@ export function BrowserStudioEditor({
 							</video>
 						)}
 						<video
-							key={activeSource.url}
+							key={primarySource.url}
 							ref={videoRef}
-							src={activeSource.url}
+							src={primarySource.url}
 							className="relative z-10 max-h-full max-w-full rounded-lg bg-black object-contain shadow-lg"
 							style={{
 								transform: `scale(${previewScale})`,
@@ -588,10 +642,44 @@ export function BrowserStudioEditor({
 									backgroundVideoRef.current.currentTime =
 										event.currentTarget.currentTime;
 								}
+								if (cameraVideoRef.current) {
+									cameraVideoRef.current.currentTime =
+										event.currentTarget.currentTime;
+								}
 							}}
 						>
 							<track kind="captions" />
 						</video>
+						{cameraSource && (
+							<video
+								key={`camera-${cameraSource.url}`}
+								ref={cameraVideoRef}
+								src={cameraSource.url}
+								className="pointer-events-none absolute z-20 rounded-2xl object-cover shadow-2xl ring-2 ring-white/70"
+								muted
+								playsInline
+								tabIndex={-1}
+								aria-hidden="true"
+								style={{
+									width: `${edit.canvas.cameraSize}%`,
+									aspectRatio: "1 / 1",
+									...(edit.canvas.cameraPosition === "top-left"
+										? { left: "4%", top: "4%" }
+										: {}),
+									...(edit.canvas.cameraPosition === "top-right"
+										? { right: "4%", top: "4%" }
+										: {}),
+									...(edit.canvas.cameraPosition === "bottom-left"
+										? { bottom: "4%", left: "4%" }
+										: {}),
+									...(edit.canvas.cameraPosition === "bottom-right"
+										? { bottom: "4%", right: "4%" }
+										: {}),
+								}}
+							>
+								<track kind="captions" />
+							</video>
+						)}
 					</button>
 
 					<div className="mt-4 rounded-xl border border-gray-3 bg-gray-2 p-4">
@@ -896,6 +984,88 @@ export function BrowserStudioEditor({
 								))}
 							</div>
 						</div>
+					</section>
+
+					<section className="rounded-xl border border-gray-3 bg-gray-2 p-4">
+						<h2 className="text-sm font-semibold uppercase tracking-wide text-gray-9">
+							Camera
+						</h2>
+						{cameraAsset ? (
+							<div className="mt-4 grid gap-4">
+								<div className="grid grid-cols-2 gap-2">
+									{[
+										{ value: "top-left", label: "Top left" },
+										{ value: "top-right", label: "Top right" },
+										{ value: "bottom-left", label: "Bottom left" },
+										{ value: "bottom-right", label: "Bottom right" },
+									].map((option) => (
+										<button
+											key={option.value}
+											type="button"
+											onClick={() =>
+												updateEdit((current) => ({
+													...current,
+													canvas: {
+														...current.canvas,
+														cameraPosition:
+															option.value as BrowserStudioEditSettings["canvas"]["cameraPosition"],
+													},
+												}))
+											}
+											className={clsx(
+												"rounded-lg border px-3 py-2 text-sm font-medium",
+												edit.canvas.cameraPosition === option.value
+													? "border-blue-10 bg-blue-10 text-white"
+													: "border-gray-4 bg-gray-1 text-gray-11 hover:bg-gray-3",
+											)}
+										>
+											{option.label}
+										</button>
+									))}
+								</div>
+								<label className="grid gap-2 text-sm font-medium text-gray-11">
+									Size
+									<input
+										type="range"
+										min={10}
+										max={40}
+										step={1}
+										value={edit.canvas.cameraSize}
+										onChange={(event) =>
+											updateEdit((current) => ({
+												...current,
+												canvas: {
+													...current.canvas,
+													cameraSize: Number(event.currentTarget.value),
+												},
+											}))
+										}
+										className="w-full"
+									/>
+									<span className="text-xs text-gray-9">
+										{edit.canvas.cameraSize}%
+									</span>
+								</label>
+								{cameraTrack && (
+									<button
+										type="button"
+										onClick={() => toggleTrackMuted(cameraTrack.trackId)}
+										className={clsx(
+											"rounded-full px-3 py-2 text-sm font-semibold",
+											cameraTrack.muted
+												? "bg-red-4 text-red-11"
+												: "bg-gray-4 text-gray-11",
+										)}
+									>
+										{cameraTrack.muted ? "Camera hidden" : "Camera visible"}
+									</button>
+								)}
+							</div>
+						) : (
+							<p className="mt-3 text-sm text-gray-9">
+								This recording does not include a separate camera track.
+							</p>
+						)}
 					</section>
 
 					<section className="rounded-xl border border-gray-3 bg-gray-2 p-4">

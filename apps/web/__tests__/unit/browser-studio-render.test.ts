@@ -100,6 +100,7 @@ const manifest = {
 			padding: 10,
 			scale: 1.1,
 			cameraPosition: "bottom-right",
+			cameraSize: 22,
 		},
 		audio: {
 			volume: 0.7,
@@ -169,6 +170,24 @@ describe("browser studio render", () => {
 		expect(plan.args.join(" ")).toContain("overlay=W-w-76:H-h-76");
 		expect(plan.args.join(" ")).toContain("volume=0.7");
 		expect(plan.args).toContain("libx264");
+	});
+
+	it("uses camera size in overlay render dimensions", () => {
+		const plan = buildBrowserStudioRenderPlan(
+			{
+				...manifest,
+				edit: {
+					...manifest.edit,
+					canvas: {
+						...manifest.edit.canvas,
+						cameraSize: 30,
+					},
+				},
+			},
+			sources,
+		);
+
+		expect(plan.args.join(" ")).toContain("[1:v]scale=576:576");
 	});
 
 	it("renders zoom segments as time-bounded scale and focal point expressions", () => {
