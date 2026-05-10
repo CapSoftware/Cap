@@ -4,9 +4,14 @@
 	"description": "Control Cap recordings from Raycast",
 	"icon": "icon.png",
 	"author": "cap",
-	"license": "GPL-3.0-only",
-	"categories": ["Productivity", "Developer Tools"],
-	"platforms": ["macOS"],
+	"license": "MIT",
+	"categories": [
+		"Productivity",
+		"Developer Tools"
+	],
+	"platforms": [
+		"macOS"
+	],
 	"scripts": {
 		"dev": "ray develop",
 		"build": "ray build",
@@ -17,7 +22,10 @@
 	},
 	"devDependencies": {
 		"@raycast/eslint-config": "^2.0.4",
+		"@typescript-eslint/parser": "^8.57.2",
 		"@types/node": "22.19.17",
+		"eslint": "^8.57.1",
+		"prettier": "^3.0.0",
 		"typescript": "^5.8.3"
 	},
 	"commands": [
