@@ -11,8 +11,6 @@ const addHttps = (s?: string) => {
 };
 
 const mainOrigins = [
-	"https://cap.so",
-	"https://cap.link",
 	"http://localhost",
 	serverEnv().WEB_URL,
 	addHttps(serverEnv().VERCEL_URL_HOST),
@@ -29,7 +27,7 @@ export async function proxy(request: NextRequest) {
 		response.headers.set("X-Frame-Options", "SAMEORIGIN");
 		response.headers.set(
 			"Content-Security-Policy",
-			"frame-ancestors https://cap.so",
+			`frame-ancestors ${serverEnv().WEB_URL}`,
 		);
 		return response;
 	}
