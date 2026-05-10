@@ -879,10 +879,12 @@ export const useWebRecorder = ({
 			videoId,
 			sourceSubpath,
 			assetSourceSubpaths,
+			useServerProxy,
 		}: {
 			videoId: string;
 			sourceSubpath: string;
 			assetSourceSubpaths?: Record<string, string>;
+			useServerProxy?: boolean;
 		}) => {
 			const vault = browserStudioVaultRef.current;
 			if (!vault) return true;
@@ -893,6 +895,7 @@ export const useWebRecorder = ({
 					session: vault.getSession(),
 					sourceSubpath,
 					assetSourceSubpaths,
+					useServerProxy,
 				});
 				return true;
 			} catch (error) {
@@ -910,9 +913,11 @@ export const useWebRecorder = ({
 		async ({
 			videoId,
 			sourceSubpath,
+			useServerProxy,
 		}: {
 			videoId: string;
 			sourceSubpath: string;
+			useServerProxy?: boolean;
 		}) => {
 			const vault = browserStudioVaultRef.current;
 			if (!vault) return null;
@@ -944,6 +949,7 @@ export const useWebRecorder = ({
 				await uploadBrowserStudioSourceAssets({
 					videoId,
 					assets: uploads,
+					useServerProxy,
 				});
 
 				return assetSourceSubpaths;
@@ -1909,6 +1915,7 @@ export const useWebRecorder = ({
 				? await uploadBrowserStudioAssetSourcesFromVault({
 						videoId: creationResult.id,
 						sourceSubpath: browserStudioSourceSubpath,
+						useServerProxy: isSafariBrowser(getBrowserRecorderEnvironment()),
 					})
 				: null;
 			const browserStudioManifestUploaded =
@@ -1917,6 +1924,7 @@ export const useWebRecorder = ({
 							videoId: creationResult.id,
 							sourceSubpath: browserStudioSourceSubpath,
 							assetSourceSubpaths: browserStudioAssetSourceSubpaths,
+							useServerProxy: isSafariBrowser(getBrowserRecorderEnvironment()),
 						})
 					: !browserStudioVaultRef.current;
 			await updateBrowserStudioVaultStatus({

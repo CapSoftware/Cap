@@ -6,6 +6,7 @@ import {
 	type BrowserStudioManifestAsset,
 	createDefaultBrowserStudioEdit,
 } from "@/lib/browser-studio";
+import { contentTypeForSubpath } from "@/lib/upload-content-type";
 import { uploadWithTarget } from "@/utils/upload-target";
 import type {
 	BrowserStudioVaultAsset,
@@ -27,6 +28,36 @@ export type BrowserStudioSourceAssetUpload = {
 
 type SignedUploadBatchResponse = {
 	uploads: Record<string, UploadTargetInput>;
+};
+
+const uploadBlobThroughServer = async ({
+	videoId,
+	subpath,
+	blob,
+	contentType,
+}: {
+	videoId: string;
+	subpath: string;
+	blob: Blob;
+	contentType: string;
+}) => {
+	const response = await fetch(
+		`/api/upload/signed/proxy?videoId=${encodeURIComponent(
+			videoId,
+		)}&subpath=${encodeURIComponent(subpath)}`,
+		{
+			method: "POST",
+			headers: {
+				"Content-Type": contentType,
+			},
+			credentials: "same-origin",
+			body: blob,
+		},
+	);
+
+	if (!response.ok) {
+		throw new Error(`Studio proxy upload failed with ${response.status}`);
+	}
 };
 
 export const getBrowserStudioManifestSubpath = () =>
@@ -88,12 +119,28 @@ export const uploadBrowserStudioSourceAssets = async ({
 	videoId,
 	assets,
 	upload = uploadWithTarget,
+	useServerProxy,
 }: {
 	videoId: string;
 	assets: BrowserStudioSourceAssetUpload[];
 	upload?: typeof uploadWithTarget;
+	useServerProxy?: boolean;
 }) => {
 	if (assets.length === 0) return;
+
+	if (useServerProxy) {
+		await Promise.all(
+			assets.map((asset) =>
+				uploadBlobThroughServer({
+					videoId,
+					subpath: asset.subpath,
+					blob: asset.blob,
+					contentType: asset.blob.type || contentTypeForSubpath(asset.subpath),
+				}),
+			),
+		);
+		return;
+	}
 
 	const uploads = await requestSignedUploads(
 		videoId,
@@ -124,12 +171,14 @@ export const uploadBrowserStudioManifest = async ({
 	sourceSubpath,
 	assetSourceSubpaths,
 	upload = uploadWithTarget,
+	useServerProxy,
 }: {
 	videoId: string;
 	session: BrowserStudioVaultSession;
 	sourceSubpath: string;
 	assetSourceSubpaths?: Record<string, string>;
 	upload?: typeof uploadWithTarget;
+	useServerProxy?: boolean;
 }) => {
 	const manifest = buildBrowserStudioCloudManifest({
 		videoId,
@@ -137,6 +186,20 @@ export const uploadBrowserStudioManifest = async ({
 		sourceSubpath,
 		assetSourceSubpaths,
 	});
+	const blob = new Blob([JSON.stringify(manifest)], {
+		type: "application/json",
+	});
+
+	if (useServerProxy) {
+		await uploadBlobThroughServer({
+			videoId,
+			subpath: BROWSER_STUDIO_MANIFEST_SUBPATH,
+			blob,
+			contentType: "application/json",
+		});
+		return manifest;
+	}
+
 	const uploads = await requestSignedUploads(videoId, [
 		BROWSER_STUDIO_MANIFEST_SUBPATH,
 	]);
@@ -147,9 +210,7 @@ export const uploadBrowserStudioManifest = async ({
 
 	await upload({
 		target,
-		body: new Blob([JSON.stringify(manifest)], {
-			type: "application/json",
-		}),
+		body: blob,
 		fileName: "manifest.json",
 	});
 

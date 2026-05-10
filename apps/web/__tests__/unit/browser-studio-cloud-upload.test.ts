@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildBrowserStudioCloudManifest,
 	getBrowserStudioManifestSubpath,
+	uploadBrowserStudioManifest,
+	uploadBrowserStudioSourceAssets,
 } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/browser-studio-cloud-upload";
 import type { BrowserStudioVaultSession } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/browser-studio-vault";
 
@@ -77,6 +79,10 @@ const session = {
 } satisfies BrowserStudioVaultSession;
 
 describe("browser studio cloud upload", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
 	it("uses a stable manifest subpath", () => {
 		expect(getBrowserStudioManifestSubpath()).toBe("studio/manifest.json");
 	});
@@ -107,5 +113,69 @@ describe("browser studio cloud upload", () => {
 			0, 1,
 		]);
 		expect(manifest.project.timeline.tracks[0]?.assetId).toBe("asset-screen");
+	});
+
+	it("uploads the manifest through the server proxy when requested", async () => {
+		const fetchMock = vi.fn(
+			async (_input: RequestInfo | URL, _init?: RequestInit) =>
+				new Response(JSON.stringify({ success: true }), { status: 200 }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const upload = vi.fn();
+
+		const manifest = await uploadBrowserStudioManifest({
+			videoId: "video-123",
+			session,
+			sourceSubpath: "result.mp4",
+			upload,
+			useServerProxy: true,
+		});
+
+		expect(manifest.videoId).toBe("video-123");
+		expect(upload).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(fetchMock.mock.calls[0]?.[0]?.toString()).toBe(
+			"/api/upload/signed/proxy?videoId=video-123&subpath=studio%2Fmanifest.json",
+		);
+		expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+			method: "POST",
+			credentials: "same-origin",
+			headers: { "Content-Type": "application/json" },
+		});
+	});
+
+	it("uploads source assets through the server proxy when requested", async () => {
+		const fetchMock = vi.fn(
+			async (_input: RequestInfo | URL, _init?: RequestInit) =>
+				new Response(JSON.stringify({ success: true }), { status: 200 }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const upload = vi.fn();
+		const blob = new Blob(["asset"], { type: "video/mp4" });
+
+		await uploadBrowserStudioSourceAssets({
+			videoId: "video-123",
+			assets: [
+				{
+					subpath: "studio/assets/asset-screen.mp4",
+					blob,
+					fileName: "asset-screen.mp4",
+				},
+			],
+			upload,
+			useServerProxy: true,
+		});
+
+		expect(upload).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(fetchMock.mock.calls[0]?.[0]?.toString()).toBe(
+			"/api/upload/signed/proxy?videoId=video-123&subpath=studio%2Fassets%2Fasset-screen.mp4",
+		);
+		expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+			method: "POST",
+			credentials: "same-origin",
+			headers: { "Content-Type": "video/mp4" },
+			body: blob,
+		});
 	});
 });
