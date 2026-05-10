@@ -282,6 +282,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_set_camera_action() {
+        assert!(matches!(
+            parse_action(
+                "%7B%22set_camera%22%3A%7B%22camera%22%3A%7B%22DeviceID%22%3A%22camera-device-id%22%7D%7D%7D"
+            )
+            .unwrap(),
+            DeepLinkAction::SetCamera {
+                camera: Some(cap_recording::feeds::camera::DeviceOrModelID::DeviceID(_))
+            }
+        ));
+    }
+
+    #[test]
     fn parses_open_recording_picker_action() {
         assert!(matches!(
             parse_action(

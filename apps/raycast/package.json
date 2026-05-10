@@ -66,6 +66,48 @@
 			"mode": "no-view"
 		},
 		{
+			"name": "set-microphone",
+			"title": "Set Microphone",
+			"description": "Switch Cap to a microphone by label",
+			"mode": "no-view",
+			"arguments": [
+				{
+					"name": "micLabel",
+					"title": "Microphone Label",
+					"placeholder": "MacBook Pro Microphone",
+					"type": "text",
+					"required": true
+				}
+			]
+		},
+		{
+			"name": "clear-microphone",
+			"title": "Clear Microphone",
+			"description": "Clear the selected Cap microphone",
+			"mode": "no-view"
+		},
+		{
+			"name": "set-camera",
+			"title": "Set Camera",
+			"description": "Switch Cap to a camera by device ID",
+			"mode": "no-view",
+			"arguments": [
+				{
+					"name": "deviceId",
+					"title": "Device ID",
+					"placeholder": "camera-device-id",
+					"type": "text",
+					"required": true
+				}
+			]
+		},
+		{
+			"name": "clear-camera",
+			"title": "Clear Camera",
+			"description": "Clear the selected Cap camera",
+			"mode": "no-view"
+		},
+		{
 			"name": "open-settings",
 			"title": "Open Settings",
 			"description": "Open Cap settings",

@@ -15,6 +15,16 @@ type CapAction =
 			};
 	  }
 	| {
+			set_microphone: {
+				mic_label: string | null;
+			};
+	  }
+	| {
+			set_camera: {
+				camera: { DeviceID: string } | null;
+			};
+	  }
+	| {
 			open_settings: {
 				page: string | null;
 			};

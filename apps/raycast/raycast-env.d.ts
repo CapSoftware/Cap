@@ -25,6 +25,14 @@ declare namespace Preferences {
   export type TogglePauseRecording = ExtensionPreferences & {}
   /** Preferences accessible in the `open-recording-picker` command */
   export type OpenRecordingPicker = ExtensionPreferences & {}
+  /** Preferences accessible in the `set-microphone` command */
+  export type SetMicrophone = ExtensionPreferences & {}
+  /** Preferences accessible in the `clear-microphone` command */
+  export type ClearMicrophone = ExtensionPreferences & {}
+  /** Preferences accessible in the `set-camera` command */
+  export type SetCamera = ExtensionPreferences & {}
+  /** Preferences accessible in the `clear-camera` command */
+  export type ClearCamera = ExtensionPreferences & {}
   /** Preferences accessible in the `open-settings` command */
   export type OpenSettings = ExtensionPreferences & {}
 }
@@ -42,6 +50,20 @@ declare namespace Arguments {
   export type TogglePauseRecording = {}
   /** Arguments passed to the `open-recording-picker` command */
   export type OpenRecordingPicker = {}
+  /** Arguments passed to the `set-microphone` command */
+  export type SetMicrophone = {
+  /** MacBook Pro Microphone */
+  "micLabel": string
+}
+  /** Arguments passed to the `clear-microphone` command */
+  export type ClearMicrophone = {}
+  /** Arguments passed to the `set-camera` command */
+  export type SetCamera = {
+  /** camera-device-id */
+  "deviceId": string
+}
+  /** Arguments passed to the `clear-camera` command */
+  export type ClearCamera = {}
   /** Arguments passed to the `open-settings` command */
   export type OpenSettings = {}
 }
