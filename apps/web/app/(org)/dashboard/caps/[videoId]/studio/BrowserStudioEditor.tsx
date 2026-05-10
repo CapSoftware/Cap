@@ -96,6 +96,7 @@ export function BrowserStudioEditor({
 	const [currentMs, setCurrentMs] = useState(0);
 	const [zoomToolArmed, setZoomToolArmed] = useState(false);
 	const [selectedZoomId, setSelectedZoomId] = useState<string | null>(null);
+	const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -223,6 +224,23 @@ export function BrowserStudioEditor({
 	const previewScale = edit ? edit.canvas.scale * (activeZoom?.scale ?? 1) : 1;
 	const previewOriginX = activeZoom?.originX ?? 0.5;
 	const previewOriginY = activeZoom?.originY ?? 0.5;
+	const sortedTextOverlays = useMemo(
+		() => [...(edit?.textOverlays ?? [])].sort((a, b) => a.startMs - b.startMs),
+		[edit],
+	);
+	const selectedTextOverlay = useMemo(
+		() =>
+			sortedTextOverlays.find((overlay) => overlay.id === selectedTextId) ??
+			null,
+		[sortedTextOverlays, selectedTextId],
+	);
+	const activeTextOverlays = useMemo(
+		() =>
+			sortedTextOverlays.filter(
+				(overlay) => currentMs >= overlay.startMs && currentMs <= overlay.endMs,
+			),
+		[sortedTextOverlays, currentMs],
+	);
 
 	const updateEdit = useCallback(
 		(
@@ -284,6 +302,67 @@ export function BrowserStudioEditor({
 			zooms: current.zooms.filter((zoom) => zoom.id !== zoomId),
 		}));
 		setSelectedZoomId((current) => (current === zoomId ? null : current));
+	};
+
+	const updateTextOverlay = (
+		overlayId: string,
+		updater: (
+			overlay: BrowserStudioEditSettings["textOverlays"][number],
+		) => BrowserStudioEditSettings["textOverlays"][number],
+	) => {
+		updateEdit((current) => ({
+			...current,
+			textOverlays: current.textOverlays.map((overlay) =>
+				overlay.id === overlayId ? updater(overlay) : overlay,
+			),
+		}));
+	};
+
+	const addTextOverlay = () => {
+		const playheadMs = clamp(
+			Math.round(
+				videoRef.current?.currentTime
+					? videoRef.current.currentTime * 1000
+					: currentMs,
+			),
+			trimStartMs,
+			trimEndMs,
+		);
+		const startMs = clamp(playheadMs, trimStartMs, trimEndMs - 500);
+		const endMs = clamp(startMs + 3000, startMs + 500, trimEndMs);
+		const id =
+			typeof crypto !== "undefined" && "randomUUID" in crypto
+				? crypto.randomUUID()
+				: `text-${Date.now()}`;
+
+		updateEdit((current) => ({
+			...current,
+			textOverlays: [
+				...current.textOverlays,
+				{
+					id,
+					startMs,
+					endMs,
+					text: "Add context",
+					x: 0.5,
+					y: 0.12,
+					size: 42,
+					color: "#ffffff",
+					background: "#00000099",
+				},
+			],
+		}));
+		setSelectedTextId(id);
+	};
+
+	const removeTextOverlay = (overlayId: string) => {
+		updateEdit((current) => ({
+			...current,
+			textOverlays: current.textOverlays.filter(
+				(overlay) => overlay.id !== overlayId,
+			),
+		}));
+		setSelectedTextId((current) => (current === overlayId ? null : current));
 	};
 
 	const createZoomAtPoint = (originX: number, originY: number) => {
@@ -680,6 +759,24 @@ export function BrowserStudioEditor({
 								<track kind="captions" />
 							</video>
 						)}
+						<div className="pointer-events-none absolute inset-0 z-30">
+							{activeTextOverlays.map((overlay) => (
+								<div
+									key={overlay.id}
+									className="absolute max-w-[70%] rounded-xl px-5 py-3 text-center font-semibold leading-tight shadow-xl"
+									style={{
+										left: `${overlay.x * 100}%`,
+										top: `${overlay.y * 100}%`,
+										transform: "translate(-50%, -50%)",
+										fontSize: `${overlay.size}px`,
+										color: overlay.color,
+										background: overlay.background,
+									}}
+								>
+									{overlay.text}
+								</div>
+							))}
+						</div>
 					</button>
 
 					<div className="mt-4 rounded-xl border border-gray-3 bg-gray-2 p-4">
@@ -1065,6 +1162,233 @@ export function BrowserStudioEditor({
 							<p className="mt-3 text-sm text-gray-9">
 								This recording does not include a separate camera track.
 							</p>
+						)}
+					</section>
+
+					<section className="rounded-xl border border-gray-3 bg-gray-2 p-4">
+						<div className="flex items-center justify-between gap-3">
+							<h2 className="text-sm font-semibold uppercase tracking-wide text-gray-9">
+								Text
+							</h2>
+							<button
+								type="button"
+								onClick={addTextOverlay}
+								className="rounded-full bg-gray-12 px-3 py-1.5 text-xs font-semibold text-gray-1"
+							>
+								Add
+							</button>
+						</div>
+						{sortedTextOverlays.length === 0 ? (
+							<p className="mt-3 text-sm text-gray-9">
+								Add timed labels or callouts to explain what viewers should
+								notice.
+							</p>
+						) : (
+							<div className="mt-4 space-y-3">
+								{sortedTextOverlays.map((overlay, index) => (
+									<button
+										key={overlay.id}
+										type="button"
+										onClick={() => setSelectedTextId(overlay.id)}
+										className={clsx(
+											"w-full rounded-lg border px-3 py-2 text-left",
+											selectedTextId === overlay.id
+												? "border-blue-10 bg-blue-3"
+												: "border-gray-4 bg-gray-1 hover:bg-gray-3",
+										)}
+									>
+										<div className="flex items-center justify-between gap-3 text-sm font-medium text-gray-12">
+											<span>Text {index + 1}</span>
+											<span className="max-w-[160px] truncate">
+												{overlay.text}
+											</span>
+										</div>
+										<div className="mt-1 text-xs text-gray-9">
+											{formatTime(overlay.startMs)} to{" "}
+											{formatTime(overlay.endMs)}
+										</div>
+									</button>
+								))}
+							</div>
+						)}
+						{selectedTextOverlay && (
+							<div className="mt-5 grid gap-4 border-t border-gray-4 pt-4">
+								<label className="grid gap-2 text-sm font-medium text-gray-11">
+									Text
+									<input
+										type="text"
+										value={selectedTextOverlay.text}
+										onChange={(event) =>
+											updateTextOverlay(selectedTextOverlay.id, (overlay) => ({
+												...overlay,
+												text: event.currentTarget.value.slice(0, 160),
+											}))
+										}
+										className="rounded-lg border border-gray-4 bg-white px-3 py-2 text-gray-12"
+									/>
+								</label>
+								<label className="grid gap-2 text-sm font-medium text-gray-11">
+									Size
+									<input
+										type="range"
+										min={20}
+										max={96}
+										step={1}
+										value={selectedTextOverlay.size}
+										onChange={(event) =>
+											updateTextOverlay(selectedTextOverlay.id, (overlay) => ({
+												...overlay,
+												size: Number(event.currentTarget.value),
+											}))
+										}
+										className="w-full"
+									/>
+								</label>
+								<div className="grid grid-cols-2 gap-3">
+									<label className="grid gap-2 text-sm font-medium text-gray-11">
+										X
+										<input
+											type="range"
+											min={0.05}
+											max={0.95}
+											step={0.01}
+											value={selectedTextOverlay.x}
+											onChange={(event) =>
+												updateTextOverlay(
+													selectedTextOverlay.id,
+													(overlay) => ({
+														...overlay,
+														x: Number(event.currentTarget.value),
+													}),
+												)
+											}
+											className="w-full"
+										/>
+									</label>
+									<label className="grid gap-2 text-sm font-medium text-gray-11">
+										Y
+										<input
+											type="range"
+											min={0.05}
+											max={0.95}
+											step={0.01}
+											value={selectedTextOverlay.y}
+											onChange={(event) =>
+												updateTextOverlay(
+													selectedTextOverlay.id,
+													(overlay) => ({
+														...overlay,
+														y: Number(event.currentTarget.value),
+													}),
+												)
+											}
+											className="w-full"
+										/>
+									</label>
+								</div>
+								<div className="grid grid-cols-2 gap-3">
+									<label className="grid gap-2 text-sm font-medium text-gray-11">
+										Color
+										<input
+											type="color"
+											value={selectedTextOverlay.color}
+											onChange={(event) =>
+												updateTextOverlay(
+													selectedTextOverlay.id,
+													(overlay) => ({
+														...overlay,
+														color: event.currentTarget.value,
+													}),
+												)
+											}
+											className="h-10 w-full"
+										/>
+									</label>
+									<label className="grid gap-2 text-sm font-medium text-gray-11">
+										Background
+										<input
+											type="color"
+											value={selectedTextOverlay.background.slice(0, 7)}
+											onChange={(event) =>
+												updateTextOverlay(
+													selectedTextOverlay.id,
+													(overlay) => ({
+														...overlay,
+														background: `${event.currentTarget.value}99`,
+													}),
+												)
+											}
+											className="h-10 w-full"
+										/>
+									</label>
+								</div>
+								<div className="grid grid-cols-2 gap-3">
+									<label className="grid gap-2 text-sm font-medium text-gray-11">
+										Start
+										<input
+											type="range"
+											min={trimStartMs}
+											max={Math.max(
+												trimStartMs,
+												selectedTextOverlay.endMs - 500,
+											)}
+											step={100}
+											value={selectedTextOverlay.startMs}
+											onChange={(event) =>
+												updateTextOverlay(
+													selectedTextOverlay.id,
+													(overlay) => ({
+														...overlay,
+														startMs: clamp(
+															Number(event.currentTarget.value),
+															trimStartMs,
+															overlay.endMs - 500,
+														),
+													}),
+												)
+											}
+											className="w-full"
+										/>
+										<span className="text-xs text-gray-9">
+											{formatTime(selectedTextOverlay.startMs)}
+										</span>
+									</label>
+									<label className="grid gap-2 text-sm font-medium text-gray-11">
+										End
+										<input
+											type="range"
+											min={selectedTextOverlay.startMs + 500}
+											max={trimEndMs}
+											step={100}
+											value={selectedTextOverlay.endMs}
+											onChange={(event) =>
+												updateTextOverlay(
+													selectedTextOverlay.id,
+													(overlay) => ({
+														...overlay,
+														endMs: clamp(
+															Number(event.currentTarget.value),
+															overlay.startMs + 500,
+															trimEndMs,
+														),
+													}),
+												)
+											}
+											className="w-full"
+										/>
+										<span className="text-xs text-gray-9">
+											{formatTime(selectedTextOverlay.endMs)}
+										</span>
+									</label>
+								</div>
+								<button
+									type="button"
+									onClick={() => removeTextOverlay(selectedTextOverlay.id)}
+									className="rounded-full bg-red-4 px-3 py-2 text-sm font-semibold text-red-11"
+								>
+									Remove text
+								</button>
+							</div>
 						)}
 					</section>
 

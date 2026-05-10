@@ -3,12 +3,14 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import sharp from "sharp";
 import { getFfmpegPath } from "@/lib/audio-extract";
 import type {
 	BrowserStudioCloudManifest,
 	BrowserStudioEditSettings,
 	BrowserStudioManifestAsset,
 	BrowserStudioManifestTrack,
+	BrowserStudioTextOverlay,
 } from "@/lib/browser-studio";
 import { getBrowserStudioEditSettings } from "@/lib/browser-studio";
 
@@ -44,6 +46,11 @@ type LayoutInput = {
 	padding: number;
 };
 
+export type BrowserStudioTextOverlayInput = {
+	path: string;
+	overlay: BrowserStudioTextOverlay;
+};
+
 const DEFAULT_WIDTH = 1920;
 const DEFAULT_HEIGHT = 1080;
 const MIN_DURATION_MS = 500;
@@ -59,6 +66,27 @@ const colorToFfmpeg = (value: string) =>
 const seconds = (ms: number) => Number((ms / 1000).toFixed(3));
 
 const expressionNumber = (value: number) => Number(value.toFixed(4));
+
+const escapeXml = (value: string) =>
+	value
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.replaceAll('"', "&quot;")
+		.replaceAll("'", "&apos;");
+
+const rgbaColor = (value: string) => {
+	if (/^#[0-9a-f]{8}$/i.test(value)) {
+		const red = Number.parseInt(value.slice(1, 3), 16);
+		const green = Number.parseInt(value.slice(3, 5), 16);
+		const blue = Number.parseInt(value.slice(5, 7), 16);
+		const alpha = Number.parseInt(value.slice(7), 16) / 255;
+
+		return `rgba(${red}, ${green}, ${blue}, ${Number(alpha.toFixed(3))})`;
+	}
+
+	return /^#[0-9a-f]{6}$/i.test(value) ? value : "#000000";
+};
 
 const getActiveZoomExpression = (
 	edit: BrowserStudioEditSettings,
@@ -247,6 +275,158 @@ function getCameraOverlay({
 	return { width, height, x, y };
 }
 
+const getValidTextOverlays = (edit: BrowserStudioEditSettings) =>
+	edit.textOverlays
+		.filter((overlay) => overlay.text.trim() && overlay.endMs > overlay.startMs)
+		.slice(0, 12);
+
+const wrapTextOverlay = (text: string, maxCharacters: number) => {
+	const source = text.trim().replace(/\s+/g, " ").slice(0, 180);
+	const words = source.split(" ");
+	const lines: string[] = [];
+	let current = "";
+
+	for (const word of words) {
+		const next = current ? `${current} ${word}` : word;
+
+		if (next.length > maxCharacters && current) {
+			lines.push(current);
+			current = word;
+		} else {
+			current = next;
+		}
+	}
+
+	if (current) {
+		lines.push(current);
+	}
+
+	return lines.slice(0, 4);
+};
+
+async function createTextOverlayImage(
+	overlay: BrowserStudioTextOverlay,
+	outputWidth: number,
+	dirPath: string,
+	index: number,
+) {
+	const safeSize = Math.round(clamp(overlay.size, 20, 96));
+	const maxCharacters = Math.max(10, Math.floor(900 / safeSize));
+	const lines = wrapTextOverlay(overlay.text, maxCharacters);
+	const horizontalPadding = Math.round(safeSize * 0.55);
+	const verticalPadding = Math.round(safeSize * 0.36);
+	const lineHeight = Math.round(safeSize * 1.22);
+	const maxLineLength = Math.max(...lines.map((line) => line.length), 1);
+	const width = even(
+		Math.min(
+			Math.max(160, maxLineLength * safeSize * 0.58 + horizontalPadding * 2),
+			outputWidth * 0.82,
+		),
+	);
+	const height = even(
+		Math.max(
+			safeSize + verticalPadding * 2,
+			lines.length * lineHeight + verticalPadding * 2,
+		),
+	);
+	const textNodes = lines
+		.map(
+			(line, lineIndex) =>
+				`<text x="${horizontalPadding}" y="${verticalPadding + safeSize + lineIndex * lineHeight}" fill="${escapeXml(overlay.color)}" font-family="Inter, Arial, sans-serif" font-size="${safeSize}" font-weight="700">${escapeXml(line)}</text>`,
+		)
+		.join("");
+	const radius = Math.round(safeSize * 0.35);
+	const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg"><rect width="${width}" height="${height}" rx="${radius}" fill="${rgbaColor(overlay.background)}"/>${textNodes}</svg>`;
+	const path = join(dirPath, `text-overlay-${index}.png`);
+
+	await sharp(Buffer.from(svg)).png().toFile(path);
+
+	return {
+		path,
+		overlay,
+	};
+}
+
+async function createTextOverlayImages(
+	plan: BrowserStudioRenderPlan,
+	dirPath: string,
+) {
+	const overlays = getValidTextOverlays(plan.edit);
+
+	return Promise.all(
+		overlays.map((overlay, index) =>
+			createTextOverlayImage(overlay, plan.outputWidth, dirPath, index),
+		),
+	);
+}
+
+export function appendTextOverlayInputsToArgs(
+	args: string[],
+	textInputs: BrowserStudioTextOverlayInput[],
+	trimStartSeconds: number,
+	outputWidth: number,
+	outputHeight: number,
+) {
+	if (textInputs.length === 0) {
+		return args;
+	}
+
+	const filterIndex = args.indexOf("-filter_complex");
+	const firstMapIndex = args.indexOf("-map");
+
+	if (
+		filterIndex === -1 ||
+		firstMapIndex === -1 ||
+		filterIndex + 1 >= args.length
+	) {
+		return args;
+	}
+
+	const mappedVideoLabel = args[firstMapIndex + 1];
+
+	if (!mappedVideoLabel?.startsWith("[") || !mappedVideoLabel.endsWith("]")) {
+		return args;
+	}
+
+	const inputCount = args
+		.slice(0, filterIndex)
+		.filter((arg) => arg === "-i").length;
+	const imageInputArgs = textInputs.flatMap((input) => [
+		"-loop",
+		"1",
+		"-i",
+		input.path,
+	]);
+	const nextArgs = [
+		...args.slice(0, filterIndex),
+		...imageInputArgs,
+		...args.slice(filterIndex),
+	];
+	const nextFilterIndex = filterIndex + imageInputArgs.length;
+	const nextFirstMapIndex = firstMapIndex + imageInputArgs.length;
+	let videoLabel = mappedVideoLabel;
+	const overlayFilters = textInputs.map((input, index) => {
+		const inputIndex = inputCount + index;
+		const outputLabel = `[vtext${index}]`;
+		const overlay = input.overlay;
+		const start = Math.max(0, seconds(overlay.startMs) - trimStartSeconds);
+		const end = Math.max(start, seconds(overlay.endMs) - trimStartSeconds);
+		const x = expressionNumber(clamp(overlay.x, 0, 1));
+		const y = expressionNumber(clamp(overlay.y, 0, 1));
+		const filter = `${videoLabel}[${inputIndex}:v]overlay=x='(${outputWidth}-w)*${x}':y='(${outputHeight}-h)*${y}':enable='between(t,${Number(start.toFixed(3))},${Number(end.toFixed(3))})'${outputLabel}`;
+
+		videoLabel = outputLabel;
+
+		return filter;
+	});
+
+	nextArgs[nextFilterIndex + 1] =
+		`${nextArgs[nextFilterIndex + 1]};${overlayFilters.join(";")}`;
+	nextArgs[nextFirstMapIndex + 1] = videoLabel;
+
+	return nextArgs;
+}
+
 export function buildBrowserStudioRenderPlan(
 	manifest: BrowserStudioCloudManifest,
 	sources: SourceInput[],
@@ -402,14 +582,30 @@ export async function renderBrowserStudioMp4(
 	const ffmpeg = getFfmpegPath();
 
 	try {
+		const textInputs = await createTextOverlayImages(plan, dirPath);
+		const args = appendTextOverlayInputsToArgs(
+			plan.args,
+			textInputs,
+			plan.trimStartSeconds,
+			plan.outputWidth,
+			plan.outputHeight,
+		);
+		const argsWithoutAudio = appendTextOverlayInputsToArgs(
+			plan.argsWithoutAudio,
+			textInputs,
+			plan.trimStartSeconds,
+			plan.outputWidth,
+			plan.outputHeight,
+		);
+
 		try {
-			await runFfmpeg(ffmpeg, [...plan.args, filePath]);
+			await runFfmpeg(ffmpeg, [...args, filePath]);
 		} catch (error) {
 			if (!plan.audioEnabled) {
 				throw error;
 			}
 
-			await runFfmpeg(ffmpeg, [...plan.argsWithoutAudio, filePath]);
+			await runFfmpeg(ffmpeg, [...argsWithoutAudio, filePath]);
 		}
 		await runFfmpeg(ffmpeg, [
 			"-y",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BrowserStudioCloudManifest } from "@/lib/browser-studio";
 import {
+	appendTextOverlayInputsToArgs,
 	buildBrowserStudioRenderPlan,
 	getBrowserStudioRenderLayout,
 	getBrowserStudioTrimRange,
@@ -106,6 +107,7 @@ const manifest = {
 			volume: 0.7,
 		},
 		zooms: [],
+		textOverlays: [],
 	},
 } satisfies BrowserStudioCloudManifest;
 
@@ -239,5 +241,56 @@ describe("browser studio render", () => {
 		expect(args).toContain("[0:v]split=2[bgsrc][fgsrc]");
 		expect(args).toContain("boxblur=24:1");
 		expect(args).toContain("[fgsrc]scale=");
+	});
+
+	it("renders timed text overlays after video composition", () => {
+		const plan = buildBrowserStudioRenderPlan(
+			{
+				...manifest,
+				edit: {
+					...manifest.edit,
+					textOverlays: [
+						{
+							id: "text-1",
+							startMs: 2000,
+							endMs: 4500,
+							text: "Look here: 100%",
+							x: 0.5,
+							y: 0.2,
+							size: 48,
+							color: "#ffffff",
+							background: "#00000099",
+						},
+					],
+				},
+			},
+			sources,
+		);
+
+		const overlay = plan.edit.textOverlays.at(0);
+
+		expect(overlay).toBeDefined();
+
+		if (!overlay) {
+			throw new Error("Expected text overlay");
+		}
+
+		const args = appendTextOverlayInputsToArgs(
+			plan.args,
+			[
+				{
+					path: "/tmp/text-overlay.png",
+					overlay,
+				},
+			],
+			plan.trimStartSeconds,
+			plan.outputWidth,
+			plan.outputHeight,
+		).join(" ");
+
+		expect(args).toContain("-loop 1 -i /tmp/text-overlay.png");
+		expect(args).toContain("[2:v]overlay");
+		expect(args).toContain("enable='between(t,1,3.5)'");
+		expect(args).toContain("-map [vtext0]");
 	});
 });

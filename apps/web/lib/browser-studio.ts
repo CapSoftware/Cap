@@ -76,6 +76,18 @@ export type BrowserStudioZoomSegment = {
 	originY: number;
 };
 
+export type BrowserStudioTextOverlay = {
+	id: string;
+	startMs: number;
+	endMs: number;
+	text: string;
+	x: number;
+	y: number;
+	size: number;
+	color: string;
+	background: string;
+};
+
 export type BrowserStudioEditSettings = {
 	trim: {
 		startMs: number;
@@ -94,6 +106,7 @@ export type BrowserStudioEditSettings = {
 		volume: number;
 	};
 	zooms: BrowserStudioZoomSegment[];
+	textOverlays: BrowserStudioTextOverlay[];
 };
 
 export type BrowserStudioCloudManifest = {
@@ -166,6 +179,7 @@ export const createDefaultBrowserStudioEdit = (
 		volume: 1,
 	},
 	zooms: [],
+	textOverlays: [],
 });
 
 export const getBrowserStudioEditSettings = (
@@ -194,6 +208,9 @@ export const getBrowserStudioEditSettings = (
 					...manifest.edit.audio,
 				},
 				zooms: Array.isArray(manifest.edit.zooms) ? manifest.edit.zooms : [],
+				textOverlays: Array.isArray(manifest.edit.textOverlays)
+					? manifest.edit.textOverlays
+					: [],
 			}
 		: createDefaultBrowserStudioEdit(manifest.project.timeline.durationMs);
 

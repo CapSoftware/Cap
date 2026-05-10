@@ -133,6 +133,7 @@
 		"replicate": "^1.4.0",
 		"resend": "4.6.0",
 		"server-only": "^0.0.1",
+		"sharp": "^0.34.5",
 		"shiki": "3",
 		"sonner": "^2.0.3",
 		"subtitles-parser-vtt": "^0.1.0",
