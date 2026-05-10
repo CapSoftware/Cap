@@ -15,6 +15,15 @@
 	"observability": {
 		"enabled": true
 	},
+	"send_email": [
+		{
+			"name": "EMAIL",
+			"allowed_sender_addresses": [
+				"auth@shashanksn.xyz",
+				"updates@shashanksn.xyz"
+			]
+		}
+	],
 	"containers": [
 		{
 			"class_name": "CapWebContainer",

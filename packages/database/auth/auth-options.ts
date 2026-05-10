@@ -8,7 +8,7 @@ import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers/index";
 import WorkOSProvider from "next-auth/providers/workos";
-import { sendEmail } from "../emails/config.ts";
+import { emailTransportConfigured, sendEmail } from "../emails/config.ts";
 import { db } from "../index.ts";
 import { users } from "../schema.ts";
 import { isEmailAllowedForSignup } from "./domain-utils.ts";
@@ -41,8 +41,8 @@ export const authOptions = (): NextAuthOptions => {
 			if (_providers) return _providers;
 			_providers = [
 				GoogleProvider({
-					clientId: serverEnv().GOOGLE_CLIENT_ID!,
-					clientSecret: serverEnv().GOOGLE_CLIENT_SECRET!,
+					clientId: serverEnv().GOOGLE_CLIENT_ID as string,
+					clientSecret: serverEnv().GOOGLE_CLIENT_SECRET as string,
 					authorization: {
 						params: {
 							scope: [
@@ -72,7 +72,7 @@ export const authOptions = (): NextAuthOptions => {
 						return crypto.randomInt(100000, 1000000).toString();
 					},
 					async sendVerificationRequest({ identifier, token }) {
-						if (!serverEnv().RESEND_API_KEY) {
+						if (!emailTransportConfigured()) {
 							if (!isProduction) {
 								console.log("\n");
 								console.log(
