@@ -8,15 +8,9 @@ export function classNames(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
 }
 
-// Base allowed origins
-export const allowedOrigins = [
-	buildEnv.NEXT_PUBLIC_WEB_URL,
-	"https://cap.link",
-	"cap.link",
-];
+export const allowedOrigins = [buildEnv.NEXT_PUBLIC_WEB_URL];
 
 export function getHeaders(origin: string | null) {
-	// Allow "*" for custom domains or allowedOrigins for main domains
 	return {
 		"Access-Control-Allow-Origin": origin || "*",
 		"Access-Control-Allow-Credentials": "true",

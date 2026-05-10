@@ -4,8 +4,8 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videos, videoUploads } from "@cap/database/schema";
-import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import { userIsPro } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
 import {
 	type Folder,
@@ -90,18 +90,6 @@ export async function createVideoForServerProcessing({
 		phase: "uploading",
 		processingProgress: 0,
 	});
-
-	if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
-		await dub()
-			.links.create({
-				url: `${serverEnv().WEB_URL}/s/${videoId}`,
-				domain: "cap.link",
-				key: videoId,
-			})
-			.catch((err) => {
-				console.error("Dub link create failed", err);
-			});
-	}
 
 	revalidatePath("/dashboard/caps");
 	revalidatePath("/dashboard/folder");

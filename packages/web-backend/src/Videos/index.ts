@@ -1,6 +1,5 @@
 import * as Db from "@cap/database/schema";
-import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub } from "@cap/utils";
+import { serverEnv } from "@cap/env";
 import { CurrentUser, type Folder, Policy, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Exit, Option } from "effect";
@@ -482,7 +481,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					const createData: RepoCreateVideoInput = {
 						ownerId: user.id,
 						orgId: input.orgId,
-						name: `Cap Recording - ${formattedDate}`,
+						name: `Recording - ${formattedDate}`,
 						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
 						source: { type: "webMP4" },
 						bucketId,
@@ -520,19 +519,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					});
 
 					const shareUrl = `${serverEnv().WEB_URL}/s/${videoId}`;
-
-					if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
-						yield* Effect.tryPromise(() =>
-							dub().links.create({
-								url: shareUrl,
-								domain: "cap.link",
-								key: videoId,
-							}),
-						).pipe(
-							Effect.catchAll((error) =>
-								Effect.logWarning(`Dub link create failed: ${String(error)}`),
-							),
-						);
 
 					return {
 						id: videoId,

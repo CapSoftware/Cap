@@ -52,18 +52,11 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 		});
 
 		return (
-			<div
+			<button
+				type="button"
 				onClick={onToggle}
-				role="button"
-				tabIndex={0}
-				onKeyDown={(e) => {
-					if (e.key === "Enter" || e.key === " ") {
-						e.preventDefault();
-						onToggle();
-					}
-				}}
 				className={clsx(
-					"flex relative flex-col p-3 w-full h-full rounded-xl border transition-all duration-200 group",
+					"flex relative flex-col p-3 w-full h-full text-left rounded-xl border transition-all duration-200 group",
 					className,
 					isAlreadyInEntity && isSelected && "border-red-500",
 					isAlreadyInEntity && !isSelected && "border-blue-500",
@@ -92,7 +85,6 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 						!isSelected && isAlreadyInEntity && "bg-blue-500",
 					)}
 				>
-					{/* Use AnimatePresence to properly handle icon transitions */}
 					<AnimatePresence mode="wait" initial={false}>
 						{isSelected && isAlreadyInEntity ? (
 							<motion.div
@@ -187,12 +179,12 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 									icon={faRecordVinyl}
 									className="size-3 text-gray-10"
 								/>
-								<p className="font-medium truncate text-gray-11">Caps</p>
+								<p className="font-medium truncate text-gray-11">Videos</p>
 							</>
 						)}
 					</div>
 				</div>
-			</div>
+			</button>
 		);
 	},
 );

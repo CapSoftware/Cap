@@ -286,10 +286,6 @@ const CustomDomainDialog = ({
 		],
 	);
 
-	if (!currentStep) {
-		return null;
-	}
-
 	const handleDomainSubmit = async () => {
 		if (!domain.trim()) {
 			dispatch({
@@ -305,10 +301,6 @@ const CustomDomainDialog = ({
 
 		const cleanDomain = (input: string) => {
 			if (!input) return "";
-
-			if (input === "cap.so" || input === "cap.link") {
-				return "";
-			}
 
 			const withoutProtocol = input.replace(/^(https?:\/\/)?(www\.)?/i, "");
 			const parts = withoutProtocol.split("/");
@@ -344,7 +336,6 @@ const CustomDomainDialog = ({
 	};
 
 	useEffect(() => {
-		//if current step is success, close dialog in 8 seconds
 		if (stepState.currentIndex === 2) {
 			setTimeout(() => {
 				handleClose();
@@ -353,6 +344,10 @@ const CustomDomainDialog = ({
 			handleNext();
 		}
 	}, [isVerified, stepState.currentIndex, handleClose, handleNext]);
+
+	if (!currentStep) {
+		return null;
+	}
 
 	return (
 		<>

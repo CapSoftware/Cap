@@ -4,7 +4,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRive } from "@rive-app/react-canvas";
 import { useTheme } from "../../../Contexts";
 
-interface EmptySharedCapStateProps {
+interface EmptySharedVideoStateProps {
 	organizationName: string;
 	type?: "space" | "organization";
 	spaceData?: {
@@ -17,7 +17,7 @@ interface EmptySharedCapStateProps {
 	onAddVideos?: () => void;
 }
 
-export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
+export const EmptySharedVideoState: React.FC<EmptySharedVideoStateProps> = ({
 	organizationName,
 	type = "organization",
 	spaceData,
@@ -25,7 +25,7 @@ export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
 	onAddVideos,
 }) => {
 	const { theme } = useTheme();
-	const { RiveComponent: EmptyCap } = useRive({
+	const { RiveComponent: EmptyVideo } = useRive({
 		src: "/rive/main.riv",
 		artboard: theme === "light" ? "emptyshared" : "darkemptyshared",
 		autoplay: true,
@@ -39,7 +39,7 @@ export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
 	return (
 		<div className="flex flex-col flex-1 justify-center items-center w-full h-full">
 			<div className="mx-auto mb-20 w-full max-w-md">
-				<EmptyCap
+				<EmptyVideo
 					key={`${theme}empty-shared-cap`}
 					className="max-w-[300px] w-full mx-auto md:max-w-[600px] h-[250px]"
 				/>
@@ -48,12 +48,12 @@ export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
 				<p className="mb-3 text-xl font-semibold text-gray-12">
 					{type === "space"
 						? "Start sharing videos to this Space"
-						: "No shared Caps yet!"}
+						: "No shared videos yet!"}
 				</p>
 				<p className="mb-6 max-w-md text-md text-gray-10">
 					{type === "space"
 						? "Add videos directly here in this Space, or add videos from the Videos page."
-						: `There are no Caps shared with ${organizationName} yet. Ask your team members to share their Caps with this ${type}.`}
+						: `There are no videos shared with ${organizationName} yet. Ask your team members to share their videos with this ${type}.`}
 				</p>
 				{showAddButton && (
 					<Button

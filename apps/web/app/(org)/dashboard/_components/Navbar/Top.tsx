@@ -35,10 +35,8 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import {
 	ArrowUpIcon,
-	DownloadIcon,
 	HomeIcon,
 	LogoutIcon,
-	MessageCircleMoreIcon,
 	ReferIcon,
 	SettingsGearIcon,
 } from "../AnimatedIcons";
@@ -67,7 +65,7 @@ const Top = () => {
 		"/dashboard/spaces": "Spaces",
 		"/dashboard/spaces/browse": "Browse Spaces",
 		"/dashboard/analytics": "Analytics",
-		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
+		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Video title",
 		"/dashboard/developers": "Developers",
 		"/dashboard/developers/apps": "Developer Apps",
 		"/dashboard/developers/usage": "Developer Usage",
@@ -229,20 +227,6 @@ const User = () => {
 				onClick: () => setMenuOpen(false),
 				iconClassName: "text-gray-11 group-hover:text-gray-12",
 				showCondition: true,
-			},
-			{
-				name: "Chat Support",
-				icon: <MessageCircleMoreIcon />,
-				onClick: () => window.open("https://cap.link/discord", "_blank"),
-				iconClassName: "text-gray-11 group-hover:text-gray-12",
-				showCondition: buildEnv.NEXT_PUBLIC_IS_CAP,
-			},
-			{
-				name: "Download App",
-				icon: <DownloadIcon />,
-				onClick: () => window.open("https://cap.so/download", "_blank"),
-				iconClassName: "text-gray-11 group-hover:text-gray-12",
-				showCondition: buildEnv.NEXT_PUBLIC_IS_CAP,
 			},
 			{
 				name: "Sign Out",

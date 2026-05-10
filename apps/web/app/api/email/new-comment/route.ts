@@ -2,7 +2,7 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { NewComment } from "@cap/database/emails/new-comment";
 import { comments, users, videos } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { and, eq, gt, ne } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
@@ -196,10 +196,7 @@ export async function POST(request: NextRequest) {
 			);
 		}
 
-		// Generate the video URL
-		const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
-			? `https://cap.link/${video.id}`
-			: `${serverEnv().WEB_URL}/s/${video.id}`;
+		const videoUrl = `${serverEnv().WEB_URL}/s/${video.id}`;
 		console.log(`Generated video URL: ${videoUrl}`);
 
 		console.log(
@@ -209,7 +206,7 @@ export async function POST(request: NextRequest) {
 		try {
 			const emailResult = await sendEmail({
 				email: owner.email,
-				subject: `New comment on your Cap: ${video.name}`,
+				subject: `New comment on your video: ${video.name}`,
 				react: NewComment({
 					email: owner.email,
 					url: videoUrl,

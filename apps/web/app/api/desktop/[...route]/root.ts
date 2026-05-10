@@ -334,7 +334,7 @@ app.post(
 
 		try {
 			await sendEmail({
-				email: "hello@cap.so",
+				email: "human@shashanksn.xyz",
 				subject: `New Feedback from ${userEmail}`,
 				react: Feedback({
 					userEmail,
@@ -344,7 +344,7 @@ app.post(
 				}),
 				cc: userEmail,
 				replyTo: userEmail,
-				fromOverride: "Richie from Cap <richie@send.cap.so>",
+				fromOverride: "Shashank <human@shashanksn.xyz>",
 			});
 
 			return c.json({

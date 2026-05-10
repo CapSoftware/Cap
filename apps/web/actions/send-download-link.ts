@@ -33,10 +33,13 @@ export async function sendDownloadLink(email: string) {
 	}
 
 	const headersList = await headers();
-	const request = new Request("https://cap.so/api/send-download-link", {
-		method: "POST",
-		headers: headersList,
-	});
+	const request = new Request(
+		"https://video.shashanksn.xyz/api/send-download-link",
+		{
+			method: "POST",
+			headers: headersList,
+		},
+	);
 
 	const { rateLimited } = await checkRateLimit("rl_send_download_link", {
 		request,
@@ -52,7 +55,7 @@ export async function sendDownloadLink(email: string) {
 	try {
 		await sendEmail({
 			email: sanitized,
-			subject: "Your Cap download links",
+			subject: "Your download links",
 			react: DownloadLink({ email: sanitized }),
 			marketing: true,
 		});

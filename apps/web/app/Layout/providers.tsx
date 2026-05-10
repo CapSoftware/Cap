@@ -211,9 +211,9 @@ export function Devtools() {
 			config={devtoolsConfig}
 			plugins={[
 				{
-					id: "cap",
-					name: "Cap",
-					render: <CapDevtools />,
+					id: "app",
+					name: "App",
+					render: <AppDevtools />,
 				},
 				{
 					id: "tanstack-query",
@@ -225,12 +225,12 @@ export function Devtools() {
 	);
 }
 
-function CapDevtools() {
+function AppDevtools() {
 	return (
 		<div className="flex flex-col p-4 space-y-4">
-			<h1 className="text-2xl font-semibold">Cap Devtools</h1>
+			<h1 className="text-2xl font-semibold">Devtools</h1>
 			<div className="space-y-2">
-				<h1 className="text-lg font-semibold">Cap Pro</h1>
+				<h1 className="text-lg font-semibold">Pro</h1>
 				<p className="text-xs text-muted-foreground">
 					Toggle the current user's Pro status (dev only)
 				</p>

@@ -1,4 +1,4 @@
-import { CAP_LOGO_URL } from "@cap/utils";
+import { BRAND_AVATAR_URL } from "@cap/utils";
 import {
 	Body,
 	Container,
@@ -24,10 +24,10 @@ export function DownloadLink({ email = "" }: { email: string }) {
 					<Container className="mx-auto my-10 max-w-[500px] rounded border border-solid border-gray-200 px-10 py-5">
 						<Section className="mt-8">
 							<Img
-								src={CAP_LOGO_URL}
+								src={BRAND_AVATAR_URL}
 								width="40"
 								height="40"
-								alt="Logo"
+								alt="Shashank"
 								className="mx-auto my-0"
 							/>
 						</Section>
@@ -44,9 +44,9 @@ export function DownloadLink({ email = "" }: { email: string }) {
 									<td style={{ paddingBottom: "12px" }}>
 										<Link
 											className="block w-full rounded-lg bg-black px-6 py-3 text-center text-[13px] font-semibold text-white no-underline"
-											href="https://cap.so/download/apple-silicon"
+											href="https://video.shashanksn.xyz/dashboard/caps/record"
 										>
-											Download for Mac (Apple Silicon)
+											Open recorder
 										</Link>
 									</td>
 								</tr>
@@ -54,9 +54,9 @@ export function DownloadLink({ email = "" }: { email: string }) {
 									<td style={{ paddingBottom: "12px" }}>
 										<Link
 											className="block w-full rounded-lg border border-solid border-gray-300 bg-white px-6 py-3 text-center text-[13px] font-semibold text-black no-underline"
-											href="https://cap.so/download/apple-intel"
+											href="https://video.shashanksn.xyz/dashboard"
 										>
-											Download for Mac (Intel)
+											Open dashboard
 										</Link>
 									</td>
 								</tr>
@@ -64,9 +64,9 @@ export function DownloadLink({ email = "" }: { email: string }) {
 									<td>
 										<Link
 											className="block w-full rounded-lg border border-solid border-gray-300 bg-white px-6 py-3 text-center text-[13px] font-semibold text-black no-underline"
-											href="https://cap.so/download/windows"
+											href="https://video.shashanksn.xyz/login"
 										>
-											Download for Windows
+											Sign in
 										</Link>
 									</td>
 								</tr>

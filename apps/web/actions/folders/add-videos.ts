@@ -51,7 +51,6 @@ export async function addVideosToFolder(
 
 		const isAllSpacesEntry = spaceId === user.activeOrganizationId;
 
-		//if we're adding videos to a folder from Caps page, then insert the videos into the folder
 		if (isAllSpacesEntry && folder.spaceId) {
 			await db()
 				.insert(sharedVideos)

@@ -5,8 +5,8 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { importedVideos, videos, videoUploads } from "@cap/database/schema";
-import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import { userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
 import type { Organisation } from "@cap/web-domain";
 import { Video } from "@cap/web-domain";
@@ -229,7 +229,7 @@ export async function importFromLoom({
 	if (!userIsPro(user)) {
 		return {
 			success: false,
-			error: "Importing from Loom requires a Cap Pro subscription.",
+			error: "Importing from Loom requires a Pro subscription.",
 		};
 	}
 
@@ -335,16 +335,6 @@ export async function importFromLoom({
 	});
 
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.mp4`;
-
-	if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
-		await dub()
-			.links.create({
-				url: `${serverEnv().WEB_URL}/s/${videoId}`,
-				domain: "cap.link",
-				key: videoId,
-			})
-			.catch(() => {});
-	}
 
 	await start(importLoomVideoWorkflow, [
 		{

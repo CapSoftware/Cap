@@ -14,7 +14,7 @@ import Folder, { type FolderDataType } from "../../caps/components/Folder";
 import { NewFolderDialog } from "../../caps/components/NewFolderDialog";
 import { AddVideosDialog } from "./components/AddVideosDialog";
 import { AddVideosToOrganizationDialog } from "./components/AddVideosToOrganizationDialog";
-import { EmptySharedCapState } from "./components/EmptySharedCapState";
+import { EmptySharedVideoState } from "./components/EmptySharedCapState";
 import { MembersIndicator } from "./components/MembersIndicator";
 import {
 	OrganizationIndicator,
@@ -127,7 +127,7 @@ export const SharedCaps = ({
 						onAddVideos={() => setIsAddOrganizationVideosDialogOpen(true)}
 					/>
 				)}
-				<EmptySharedCapState
+				<EmptySharedVideoState
 					organizationName={activeOrganization?.organization.name || ""}
 					type={spaceData ? "space" : "organization"}
 					spaceData={spaceData}

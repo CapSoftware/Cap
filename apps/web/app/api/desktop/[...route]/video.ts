@@ -10,8 +10,8 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import { userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
@@ -76,9 +76,9 @@ app.get(
 			} = c.req.valid("query");
 			const user = c.get("user");
 
-			const isCapPro = userIsPro(user);
+			const isProUser = userIsPro(user);
 
-			if (!isCapPro && durationInSecs && durationInSecs > /* 5 min */ 5 * 60)
+			if (!isProUser && durationInSecs && durationInSecs > 5 * 60)
 				return c.json({ error: "upgrade_required" }, { status: 403 });
 
 			console.log("Video create request:", {
@@ -219,13 +219,6 @@ app.get(
 					mode: "singlepart",
 				});
 
-			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
-				await dub().links.create({
-					url: `${serverEnv().WEB_URL}/s/${idToUse}`,
-					domain: "cap.link",
-					key: idToUse,
-				});
-
 			try {
 				const videoCount = await db()
 					.select({ count: count() })
@@ -237,13 +230,11 @@ app.get(
 						"[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay",
 					);
 
-					const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
-						? `https://cap.link/${idToUse}`
-						: `${serverEnv().WEB_URL}/s/${idToUse}`;
+					const videoUrl = `${serverEnv().WEB_URL}/s/${idToUse}`;
 
 					await sendEmail({
 						email: user.email,
-						subject: "You created your first Cap! 🥳",
+						subject: "You created your first video!",
 						react: FirstShareableLink({
 							email: user.email,
 							url: videoUrl,

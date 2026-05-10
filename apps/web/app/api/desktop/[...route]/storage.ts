@@ -278,7 +278,7 @@ app.get("/google-drive/callback", async (c) => {
 			return c.html(
 				htmlResponse(
 					"Google Drive was not connected",
-					"You can close this window and try again from Cap settings.",
+					"You can close this window and try again from storage settings.",
 				),
 				400,
 			);
@@ -305,9 +305,10 @@ app.get("/google-drive/callback", async (c) => {
 			folderId: "",
 			scope: tokens.scope,
 		};
-		const folderId = await ensureGoogleDriveFolder(initialConfig, "Cap").pipe(
-			runPromise,
-		);
+		const folderId = await ensureGoogleDriveFolder(
+			initialConfig,
+			"Recordings",
+		).pipe(runPromise);
 		const config: GoogleDriveIntegrationConfig = {
 			...initialConfig,
 			folderId,
@@ -395,7 +396,7 @@ app.get("/google-drive/callback", async (c) => {
 		return c.html(
 			htmlResponse(
 				"Google Drive connected",
-				"Return to Cap settings to manage your storage provider.",
+				"Return to storage settings to manage your storage provider.",
 			),
 		);
 	} catch (error) {
@@ -403,7 +404,7 @@ app.get("/google-drive/callback", async (c) => {
 		return c.html(
 			htmlResponse(
 				"Google Drive was not connected",
-				"You can close this window and try again from Cap settings.",
+				"You can close this window and try again from storage settings.",
 			),
 			500,
 		);
