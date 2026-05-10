@@ -1,0 +1,34 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "cap-media-server-cloudflare",
+	"main": "apps/cloudflare-web/src/media.ts",
+	"compatibility_date": "2026-05-10",
+	"compatibility_flags": ["nodejs_compat"],
+	"account_id": "b06965c14ebe19aea1eab07c60bdebba",
+	"observability": {
+		"enabled": true
+	},
+	"containers": [
+		{
+			"class_name": "CapMediaContainer",
+			"image": "./apps/media-server/Dockerfile",
+			"image_build_context": ".",
+			"instance_type": "lite",
+			"max_instances": 1
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "CAP_MEDIA",
+				"class_name": "CapMediaContainer"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["CapMediaContainer"]
+		}
+	]
+}

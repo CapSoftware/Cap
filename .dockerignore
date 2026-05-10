@@ -2,3 +2,5 @@ target
 crates
 **/node_modules
 **/.next
+!apps/web/.next
+!apps/web/.next/**

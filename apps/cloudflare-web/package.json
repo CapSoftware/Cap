@@ -1,0 +1,17 @@
+{
+	"name": "@cap/cloudflare-web",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"deploy:web": "wrangler deploy -c ../../wrangler.cap-web.jsonc",
+		"deploy:media": "wrangler deploy -c ../../wrangler.cap-media.jsonc",
+		"containers:list": "wrangler containers list -c ../../wrangler.cap-web.jsonc",
+		"containers:images": "wrangler containers images list -c ../../wrangler.cap-web.jsonc"
+	},
+	"dependencies": {
+		"@cloudflare/containers": "^0.3.3"
+	},
+	"devDependencies": {
+		"wrangler": "^4.90.0"
+	}
+}

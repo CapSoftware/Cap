@@ -1,0 +1,41 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "cap-web-cloudflare",
+	"main": "apps/cloudflare-web/src/web.ts",
+	"compatibility_date": "2026-05-10",
+	"compatibility_flags": ["nodejs_compat"],
+	"account_id": "b06965c14ebe19aea1eab07c60bdebba",
+	"workers_dev": true,
+	"routes": [
+		{
+			"pattern": "video.shashanksn.xyz/*",
+			"zone_name": "shashanksn.xyz"
+		}
+	],
+	"observability": {
+		"enabled": true
+	},
+	"containers": [
+		{
+			"class_name": "CapWebContainer",
+			"image": "./apps/cloudflare-web/Dockerfile",
+			"image_build_context": ".",
+			"instance_type": "standard-2",
+			"max_instances": 1
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "CAP_WEB",
+				"class_name": "CapWebContainer"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["CapWebContainer"]
+		}
+	]
+}
