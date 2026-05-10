@@ -22,6 +22,54 @@ const decodeVideo = (video: typeof Db.videos.$inferSelect) =>
 export const app = new Hono().use(withAuth);
 
 app.post(
+	"/proxy",
+	zValidator(
+		"query",
+		z.object({
+			videoId: z.string(),
+			subpath: z
+				.string()
+				.refine((s) => !s.includes("..") && !s.startsWith("/")),
+		}),
+	),
+	async (c) => {
+		const user = c.get("user");
+		const { videoId, subpath } = c.req.valid("query");
+
+		try {
+			const [video] = await db()
+				.select()
+				.from(Db.videos)
+				.where(eq(Db.videos.id, Video.VideoId.make(videoId)));
+
+			if (!video) return c.json({ error: "Video not found" }, 404);
+			if (video.ownerId !== user.id) return c.json({ error: "Forbidden" }, 403);
+
+			const body = await c.req.arrayBuffer();
+			if (body.byteLength === 0) return c.json({ error: "Empty upload" }, 400);
+
+			const videoDomain = decodeVideo(video);
+			const fileKey = `${user.id}/${videoId}/${subpath}`;
+			const contentType =
+				c.req.header("content-type") ?? contentTypeForSubpath(subpath);
+
+			await Effect.gen(function* () {
+				const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
+				yield* bucket.putObject(fileKey, body, {
+					contentType,
+					contentLength: body.byteLength,
+				});
+			}).pipe(runPromise);
+
+			return c.json({ success: true });
+		} catch (error) {
+			console.error("Proxy upload failed:", error);
+			return c.json({ error: "Internal server error" }, 500);
+		}
+	},
+);
+
+app.post(
 	"/batch",
 	zValidator(
 		"json",

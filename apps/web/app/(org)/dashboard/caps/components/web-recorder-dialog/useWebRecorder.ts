@@ -1846,6 +1846,9 @@ export const useWebRecorder = ({
 						creationResult.id,
 						thumbnailPreviewUrl,
 						setUploadStatus,
+						{
+							useServerProxy: isSafariBrowser(getBrowserRecorderEnvironment()),
+						},
 					);
 
 					if (thumbnailBlob) {
