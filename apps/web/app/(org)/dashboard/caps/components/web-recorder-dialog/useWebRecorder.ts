@@ -9,7 +9,6 @@ import { toast } from "sonner";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
-import { uploadWithTarget } from "@/utils/upload-target";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
 import {
@@ -38,7 +37,7 @@ import {
 	RecordingSpool,
 } from "./recording-spool";
 import { moveRecordingSpoolToInMemoryBackup } from "./recording-spool-fallback";
-import { uploadRecording } from "./recording-upload";
+import { uploadRecording, uploadThumbnail } from "./recording-upload";
 import {
 	loadRecoveredRecordingSpools,
 	removeRecoveredRecordingSpoolFromCache,
@@ -1882,24 +1881,14 @@ export const useWebRecorder = ({
 								orgId: Organisation.OrganisationId.make(orgId),
 							});
 
-							setUploadStatus({
-								status: "uploadingThumbnail",
-								capId: creationResult.id,
-								progress: 90,
-							});
-
-							await uploadWithTarget({
+							await uploadThumbnail({
+								blob: thumbnailBlob,
 								target: screenshotData.uploadTarget,
-								body: thumbnailBlob,
-								fileName: "screen-capture.jpg",
-								onProgress: ({ loaded, total }) => {
-									const percent = 90 + (loaded / total) * 10;
-									setUploadStatus({
-										status: "uploadingThumbnail",
-										capId: creationResult.id,
-										progress: percent,
-									});
-								},
+								currentVideoId: creationResult.id,
+								setUploadStatus,
+								useServerProxy: isSafariBrowser(
+									getBrowserRecorderEnvironment(),
+								),
 							});
 
 							queryClient.refetchQueries({

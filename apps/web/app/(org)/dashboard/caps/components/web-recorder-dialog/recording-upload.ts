@@ -3,6 +3,36 @@ import type { UploadStatus } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
 import type { UploadTarget, VideoId } from "./web-recorder-types";
 
+const uploadBlobThroughServer = async ({
+	blob,
+	currentVideoId,
+	subpath,
+	contentType,
+}: {
+	blob: Blob;
+	currentVideoId: VideoId;
+	subpath: string;
+	contentType: string;
+}) => {
+	const response = await fetch(
+		`/api/upload/signed/proxy?videoId=${encodeURIComponent(
+			currentVideoId,
+		)}&subpath=${encodeURIComponent(subpath)}`,
+		{
+			method: "POST",
+			headers: {
+				"Content-Type": contentType,
+			},
+			credentials: "same-origin",
+			body: blob,
+		},
+	);
+
+	if (!response.ok) {
+		throw new Error(`Proxy upload failed with status ${response.status}`);
+	}
+};
+
 const uploadRecordingThroughServer = async (
 	blob: Blob,
 	currentVideoId: VideoId,
@@ -15,23 +45,12 @@ const uploadRecordingThroughServer = async (
 		thumbnailUrl: undefined,
 	});
 
-	const response = await fetch(
-		`/api/upload/signed/proxy?videoId=${encodeURIComponent(
-			currentVideoId,
-		)}&subpath=${encodeURIComponent("result.mp4")}`,
-		{
-			method: "POST",
-			headers: {
-				"Content-Type": "video/mp4",
-			},
-			credentials: "same-origin",
-			body: blob,
-		},
-	);
-
-	if (!response.ok) {
-		throw new Error(`Proxy upload failed with status ${response.status}`);
-	}
+	await uploadBlobThroughServer({
+		blob,
+		currentVideoId,
+		subpath: "result.mp4",
+		contentType: "video/mp4",
+	});
 
 	setUploadStatus({
 		status: "uploadingVideo",
@@ -40,6 +59,55 @@ const uploadRecordingThroughServer = async (
 		thumbnailUrl: undefined,
 	});
 	await sendProgressUpdate(currentVideoId, blob.size, blob.size);
+};
+
+export const uploadThumbnail = async ({
+	blob,
+	target,
+	currentVideoId,
+	setUploadStatus,
+	useServerProxy,
+}: {
+	blob: Blob;
+	target: UploadTarget;
+	currentVideoId: VideoId;
+	setUploadStatus: (status: UploadStatus | undefined) => void;
+	useServerProxy?: boolean;
+}) => {
+	setUploadStatus({
+		status: "uploadingThumbnail",
+		capId: currentVideoId,
+		progress: 90,
+	});
+
+	if (useServerProxy) {
+		await uploadBlobThroughServer({
+			blob,
+			currentVideoId,
+			subpath: "screenshot/screen-capture.jpg",
+			contentType: "image/jpeg",
+		});
+		setUploadStatus({
+			status: "uploadingThumbnail",
+			capId: currentVideoId,
+			progress: 100,
+		});
+		return;
+	}
+
+	await uploadWithTarget({
+		target,
+		body: blob,
+		fileName: "screen-capture.jpg",
+		onProgress: ({ loaded, total }) => {
+			const percent = 90 + (loaded / total) * 10;
+			setUploadStatus({
+				status: "uploadingThumbnail",
+				capId: currentVideoId,
+				progress: percent,
+			});
+		},
+	});
 };
 
 export const uploadRecording = (
