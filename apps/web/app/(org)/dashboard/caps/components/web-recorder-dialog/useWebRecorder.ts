@@ -89,6 +89,8 @@ interface UseWebRecorderOptions {
 	onRecordingSurfaceDetected?: (mode: RecordingMode) => void;
 	onRecordingStart?: () => void;
 	onRecordingStop?: () => void;
+	onRecordingCountdownChange?: (seconds: number | null) => void;
+	recordingDelayMs?: number;
 }
 
 const INSTANT_UPLOAD_REQUEST_INTERVAL_MS = 1000;
@@ -197,6 +199,8 @@ export const useWebRecorder = ({
 	onRecordingSurfaceDetected,
 	onRecordingStart,
 	onRecordingStop,
+	onRecordingCountdownChange,
+	recordingDelayMs = 0,
 }: UseWebRecorderOptions) => {
 	const [phase, setPhase] = useState<RecorderPhase>("idle");
 	const [videoId, setVideoId] = useState<VideoId | null>(null);
@@ -1165,6 +1169,23 @@ export const useWebRecorder = ({
 		return stopRecordingInternal(cleanupStreams, clearTimer);
 	}, [stopRecordingInternal, cleanupStreams, clearTimer]);
 
+	const runRecordingDelay = useCallback(async () => {
+		const safeDelayMs = Math.max(0, recordingDelayMs);
+		if (safeDelayMs <= 0) {
+			onRecordingCountdownChange?.(null);
+			return;
+		}
+
+		const totalSeconds = Math.ceil(safeDelayMs / 1000);
+
+		for (let remaining = totalSeconds; remaining > 0; remaining--) {
+			onRecordingCountdownChange?.(remaining);
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+		}
+
+		onRecordingCountdownChange?.(null);
+	}, [onRecordingCountdownChange, recordingDelayMs]);
+
 	const startRecording = async () => {
 		if (!organisationId) {
 			toast.error("Select an organization before recording.");
@@ -1496,6 +1517,7 @@ export const useWebRecorder = ({
 			}
 			instantUploaderRef.current = null;
 			recordingPipelineRef.current = pipeline;
+			await runRecordingDelay();
 			const browserStudioVault = await createBrowserStudioVault(
 				pipeline,
 				hasAudio,
@@ -1623,6 +1645,7 @@ export const useWebRecorder = ({
 
 			console.error("Failed to start recording", err);
 			toast.error("Could not start recording.");
+			onRecordingCountdownChange?.(null);
 			await resetState();
 		} finally {
 			setIsSettingUp(false);

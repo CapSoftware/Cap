@@ -46,12 +46,23 @@ const recoveredRecordingTimeFormatter = new Intl.DateTimeFormat(undefined, {
 	timeStyle: "short",
 });
 
+const recordingDelayOptions = [
+	{ label: "No delay", value: 0 },
+	{ label: "3s", value: 3000 },
+	{ label: "5s", value: 5000 },
+	{ label: "10s", value: 10000 },
+];
+
 export const WebRecorderDialog = () => {
 	const [open, setOpen] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [howItWorksOpen, setHowItWorksOpen] = useState(false);
 	const [recordingMode, setRecordingMode] =
 		useState<RecordingMode>("fullscreen");
+	const [recordingDelayMs, setRecordingDelayMs] = useState(0);
+	const [recordingCountdownSeconds, setRecordingCountdownSeconds] = useState<
+		number | null
+	>(null);
 	const [cameraSelectOpen, setCameraSelectOpen] = useState(false);
 	const [micSelectOpen, setMicSelectOpen] = useState(false);
 	const dialogContentRef = useRef<HTMLDivElement>(null);
@@ -189,6 +200,8 @@ export const WebRecorderDialog = () => {
 		},
 		onRecordingStart: handleRecordingStartSound,
 		onRecordingStop: handleRecordingStopSound,
+		onRecordingCountdownChange: setRecordingCountdownSeconds,
+		recordingDelayMs,
 	});
 
 	useEffect(() => {
@@ -230,6 +243,7 @@ export const WebRecorderDialog = () => {
 			void resetState();
 			setSelectedCameraId(null);
 			setRecordingMode("fullscreen");
+			setRecordingCountdownSeconds(null);
 			setSettingsOpen(false);
 			setHowItWorksOpen(false);
 		}
@@ -257,6 +271,9 @@ export const WebRecorderDialog = () => {
 		setHowItWorksOpen(true);
 		setSettingsOpen(false);
 	};
+
+	const isCountingDown =
+		recordingCountdownSeconds !== null && recordingCountdownSeconds > 0;
 
 	const showInProgressBar = isRecording || isBusy || phase === "error";
 	const recordingTimerDisplayMs = user.isPro
@@ -356,9 +373,37 @@ export const WebRecorderDialog = () => {
 										onToggle={handleSystemAudioChange}
 									/>
 								)}
+								<div className="rounded-md border border-gray-4 bg-gray-1 p-2">
+									<div className="mb-2 text-xs font-medium text-gray-11">
+										Recording delay
+									</div>
+									<div className="grid grid-cols-4 gap-1.5">
+										{recordingDelayOptions.map((option) => (
+											<button
+												key={option.value}
+												type="button"
+												disabled={isBusy}
+												onClick={() => setRecordingDelayMs(option.value)}
+												className={`rounded-md px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+													recordingDelayMs === option.value
+														? "bg-blue-10 text-white"
+														: "bg-gray-3 text-gray-11 hover:bg-gray-4"
+												}`}
+											>
+												{option.label}
+											</button>
+										))}
+									</div>
+									{isCountingDown && (
+										<div className="mt-2 rounded-md bg-blue-3 px-2 py-1.5 text-center text-xs font-semibold text-blue-12">
+											Recording starts in {recordingCountdownSeconds}
+										</div>
+									)}
+								</div>
 								<RecordingButton
 									isRecording={isRecording}
 									disabled={!canStartRecording || (isBusy && !isRecording)}
+									countdownSeconds={recordingCountdownSeconds}
 									onStart={startRecording}
 									onStop={handleStopClick}
 								/>

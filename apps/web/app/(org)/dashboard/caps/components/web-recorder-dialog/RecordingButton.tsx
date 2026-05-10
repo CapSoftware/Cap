@@ -6,6 +6,7 @@ import type { SVGProps } from "react";
 interface RecordingButtonProps {
 	isRecording: boolean;
 	disabled?: boolean;
+	countdownSeconds?: number | null;
 	onStart: () => void;
 	onStop: () => void;
 }
@@ -18,6 +19,8 @@ const InstantIcon = ({ className, ...props }: SVGProps<SVGSVGElement>) => (
 		fill="none"
 		xmlns="http://www.w3.org/2000/svg"
 		className={className}
+		aria-hidden="true"
+		focusable="false"
 		{...props}
 	>
 		<path
@@ -30,9 +33,12 @@ const InstantIcon = ({ className, ...props }: SVGProps<SVGSVGElement>) => (
 export const RecordingButton = ({
 	isRecording,
 	disabled = false,
+	countdownSeconds = null,
 	onStart,
 	onStop,
 }: RecordingButtonProps) => {
+	const isCountingDown = countdownSeconds !== null && countdownSeconds > 0;
+
 	return (
 		<div className="flex items-center space-x-1 w-full">
 			<Button
@@ -44,6 +50,8 @@ export const RecordingButton = ({
 			>
 				{isRecording ? (
 					"Stop Recording"
+				) : isCountingDown ? (
+					`Starting in ${countdownSeconds}`
 				) : (
 					<>
 						<InstantIcon className="size-[0.8rem] mr-1.5" />
