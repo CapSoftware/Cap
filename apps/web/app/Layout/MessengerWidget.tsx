@@ -161,7 +161,7 @@ function PanelHeader({
 				className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full"
 				style={{ backgroundColor: "var(--msngr-accent-subtle)" }}
 			>
-				<Image src="/favicon.ico" alt="Cap Logo" width={32} height={32} />
+				<Image src="/favicon.ico" alt="Shashank" width={32} height={32} />
 			</div>
 			<span
 				className="flex-1 text-[14px] font-semibold"

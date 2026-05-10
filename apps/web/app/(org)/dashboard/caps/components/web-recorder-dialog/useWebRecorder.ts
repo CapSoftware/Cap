@@ -13,6 +13,18 @@ import { uploadWithTarget } from "@/utils/upload-target";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
 import {
+	type BrowserStudioSourceAssetUpload,
+	getBrowserStudioAssetSourceSubpath,
+	uploadBrowserStudioManifest,
+	uploadBrowserStudioSourceAssets,
+} from "./browser-studio-cloud-upload";
+import {
+	type BrowserStudioAssetKind,
+	BrowserStudioVault,
+	type BrowserStudioVaultStatus,
+	canUseBrowserStudioVault,
+} from "./browser-studio-vault";
+import {
 	InstantRecordingUploader,
 	initiateMultipartUpload,
 	MultipartCompletionUncertainError,
@@ -85,6 +97,11 @@ type InstantVideoCreation = {
 	upload: UploadTarget;
 };
 
+type BrowserStudioSourceRecorder = {
+	assetId: string;
+	recorder: MediaRecorder;
+};
+
 const unwrapExitOrThrow = <T, E>(exit: Exit.Exit<T, E>) => {
 	if (Exit.isFailure(exit)) {
 		throw Cause.squash(exit.cause);
@@ -102,6 +119,46 @@ const getFileExtensionFromMime = (mime?: string | null) => {
 	const [subtype = ""] = subtypeWithSuffix.split("+");
 	const normalized = subtype.trim().toLowerCase();
 	return normalized || "mp4";
+};
+
+const getBrowserStudioFileExtension = (mimeType: string, hasVideo: boolean) => {
+	if (!hasVideo && mimeType.includes("mp4")) return "m4a";
+	return getFileExtensionFromMime(mimeType);
+};
+
+const selectBrowserStudioRecorderFormat = (
+	stream: MediaStream,
+	fallbackMimeType: string,
+) => {
+	const hasVideo = stream.getVideoTracks().length > 0;
+	const candidates = hasVideo
+		? [
+				fallbackMimeType,
+				"video/mp4;codecs=h264,aac",
+				"video/webm;codecs=vp9,opus",
+				"video/webm;codecs=vp8,opus",
+				"video/webm",
+			]
+		: [
+				"audio/mp4;codecs=mp4a.40.2",
+				"audio/webm;codecs=opus",
+				"audio/mp4",
+				"audio/webm",
+			];
+	const mimeType =
+		typeof MediaRecorder !== "undefined"
+			? (candidates.find((candidate) =>
+					MediaRecorder.isTypeSupported(candidate),
+				) ?? "")
+			: "";
+
+	return {
+		mimeType,
+		fileExtension: getBrowserStudioFileExtension(
+			mimeType || (hasVideo ? fallbackMimeType : "audio/webm"),
+			hasVideo,
+		),
+	};
 };
 
 const createRecordingDownloadName = (
@@ -251,6 +308,12 @@ export const useWebRecorder = ({
 	const recordingSpoolRef = useRef<RecordingSpool | null>(null);
 	const recordingSpoolDegradingRef = useRef(false);
 	const recordingSpoolWarningShownRef = useRef(false);
+	const browserStudioVaultRef = useRef<BrowserStudioVault | null>(null);
+	const browserStudioAssetIdRef = useRef<string | null>(null);
+	const browserStudioSourceRecordersRef = useRef<BrowserStudioSourceRecorder[]>(
+		[],
+	);
+	const browserStudioVaultWarningShownRef = useRef(false);
 	const recoveredDownloadUrlsRef = useRef(new Map<string, string>());
 
 	const isStreamingPipelineActive = useCallback(
@@ -401,6 +464,52 @@ export const useWebRecorder = ({
 		}
 	}, []);
 
+	const stopBrowserStudioSourceRecorders = useCallback(async () => {
+		const recorders = browserStudioSourceRecordersRef.current;
+		browserStudioSourceRecordersRef.current = [];
+		if (recorders.length === 0) return;
+
+		await Promise.all(
+			recorders.map(
+				({ recorder }) =>
+					new Promise<void>((resolve) => {
+						if (recorder.state === "inactive") {
+							resolve();
+							return;
+						}
+
+						const finish = () => resolve();
+						recorder.addEventListener("stop", finish, { once: true });
+						try {
+							recorder.requestData();
+							recorder.stop();
+						} catch {
+							recorder.removeEventListener("stop", finish);
+							resolve();
+						}
+					}),
+			),
+		);
+	}, []);
+
+	const releaseBrowserStudioVault = useCallback(
+		async ({ deleteSession }: { deleteSession: boolean }) => {
+			await stopBrowserStudioSourceRecorders();
+			const vault = browserStudioVaultRef.current;
+			browserStudioVaultRef.current = null;
+			browserStudioAssetIdRef.current = null;
+			browserStudioVaultWarningShownRef.current = false;
+			if (!vault || !deleteSession) return;
+
+			try {
+				await vault.dispose();
+			} catch (error) {
+				console.error("Failed to dispose Browser Studio vault", error);
+			}
+		},
+		[stopBrowserStudioSourceRecorders],
+	);
+
 	const createRecordingSpool = useCallback(async (mimeType: string) => {
 		if (!canUseRecordingSpool()) {
 			return null;
@@ -417,6 +526,39 @@ export const useWebRecorder = ({
 			return null;
 		}
 	}, []);
+
+	const createBrowserStudioVault = useCallback(
+		async (pipeline: RecordingPipeline, hasAudio: boolean) => {
+			if (!canUseBrowserStudioVault()) {
+				return null;
+			}
+
+			try {
+				await releaseBrowserStudioVault({ deleteSession: true });
+				const vault = await BrowserStudioVault.create({
+					title: "Browser recording",
+				});
+				const asset = await vault.createAsset({
+					kind: "mixed",
+					label: "Share recording",
+					mimeType: pipeline.mimeType,
+					fileExtension: pipeline.fileExtension,
+					width: dimensionsRef.current.width ?? null,
+					height: dimensionsRef.current.height ?? null,
+					frameRate: dimensionsRef.current.fps ?? null,
+					channelCount: hasAudio ? 2 : null,
+				});
+				browserStudioVaultRef.current = vault;
+				browserStudioAssetIdRef.current = asset.assetId;
+				browserStudioVaultWarningShownRef.current = false;
+				return vault;
+			} catch (error) {
+				console.error("Failed to initialize Browser Studio vault", error);
+				return null;
+			}
+		},
+		[releaseBrowserStudioVault],
+	);
 
 	const persistChunkToRecordingSpool = useCallback(
 		(chunk: Blob) => {
@@ -461,6 +603,331 @@ export const useWebRecorder = ({
 			});
 		},
 		[recordedChunksRef, replaceLocalRecording, setLocalRecordingStrategy],
+	);
+
+	const persistChunkToBrowserStudioVault = useCallback((chunk: Blob) => {
+		const vault = browserStudioVaultRef.current;
+		const assetId = browserStudioAssetIdRef.current;
+		if (!vault || !assetId || chunk.size === 0) return;
+
+		void vault.appendChunk(assetId, chunk).catch((error) => {
+			console.error("Failed to persist Browser Studio chunk locally", error);
+			if (browserStudioVaultRef.current !== vault) return;
+			browserStudioVaultRef.current = null;
+			browserStudioAssetIdRef.current = null;
+			if (browserStudioVaultWarningShownRef.current) return;
+			browserStudioVaultWarningShownRef.current = true;
+			toast.warning(
+				"Browser Studio local project backup stopped. Recording upload will continue.",
+			);
+		});
+	}, []);
+
+	const startBrowserStudioSourceRecorders = useCallback(
+		async ({
+			vault,
+			pipeline,
+			videoStream,
+			cameraStream,
+			systemAudioTracks,
+			micStream,
+		}: {
+			vault: BrowserStudioVault;
+			pipeline: RecordingPipeline;
+			videoStream: MediaStream;
+			cameraStream: MediaStream | null;
+			systemAudioTracks: MediaStreamTrack[];
+			micStream: MediaStream | null;
+		}) => {
+			const startAssetRecorder = async ({
+				kind,
+				label,
+				stream,
+				width,
+				height,
+				frameRate,
+				sampleRate,
+				channelCount,
+			}: {
+				kind: BrowserStudioAssetKind;
+				label: string;
+				stream: MediaStream;
+				width?: number | null;
+				height?: number | null;
+				frameRate?: number | null;
+				sampleRate?: number | null;
+				channelCount?: number | null;
+			}) => {
+				if (stream.getTracks().length === 0) return;
+
+				const hasVideo = stream.getVideoTracks().length > 0;
+				const format = selectBrowserStudioRecorderFormat(
+					stream,
+					pipeline.mimeType,
+				);
+				const recorder = format.mimeType
+					? new MediaRecorder(stream, { mimeType: format.mimeType })
+					: new MediaRecorder(stream);
+				const mimeType =
+					recorder.mimeType ||
+					format.mimeType ||
+					(hasVideo ? pipeline.mimeType : "audio/webm");
+				const asset = await vault.createAsset({
+					kind,
+					label,
+					mimeType,
+					fileExtension: getBrowserStudioFileExtension(mimeType, hasVideo),
+					width: width ?? null,
+					height: height ?? null,
+					frameRate: frameRate ?? null,
+					sampleRate: sampleRate ?? null,
+					channelCount: channelCount ?? null,
+				});
+
+				recorder.ondataavailable = (event) => {
+					if (!event.data || event.data.size === 0) return;
+					void vault.appendChunk(asset.assetId, event.data).catch((error) => {
+						console.error(
+							"Failed to persist Browser Studio source asset",
+							error,
+						);
+						if (browserStudioVaultRef.current !== vault) return;
+						browserStudioVaultRef.current = null;
+						browserStudioAssetIdRef.current = null;
+						if (browserStudioVaultWarningShownRef.current) return;
+						browserStudioVaultWarningShownRef.current = true;
+						toast.warning(
+							"Browser Studio source track backup stopped. Recording upload will continue.",
+						);
+					});
+				};
+				recorder.onerror = (event) => {
+					console.error("Browser Studio source recorder failed", event);
+				};
+				recorder.start(1000);
+				browserStudioSourceRecordersRef.current = [
+					...browserStudioSourceRecordersRef.current,
+					{ assetId: asset.assetId, recorder },
+				];
+			};
+
+			const videoTrack = videoStream.getVideoTracks()[0] ?? null;
+			const videoSettings = videoTrack?.getSettings();
+			const cameraTrack = cameraStream?.getVideoTracks()[0] ?? null;
+			const cameraSettings = cameraTrack?.getSettings();
+			const audioSettings = (tracks: MediaStreamTrack[]) =>
+				tracks[0]?.getSettings() as
+					| (MediaTrackSettings & {
+							sampleRate?: number;
+							channelCount?: number;
+					  })
+					| undefined;
+			const systemSettings = audioSettings(systemAudioTracks);
+			const micTracks = micStream?.getAudioTracks() ?? [];
+			const micSettings = audioSettings(micTracks);
+			const sourceRecorders: Array<Parameters<typeof startAssetRecorder>[0]> = [
+				{
+					kind: recordingMode === "camera" ? "camera" : "screen",
+					label: recordingMode === "camera" ? "Camera source" : "Screen source",
+					stream: new MediaStream(videoStream.getVideoTracks()),
+					width: videoSettings?.width ?? null,
+					height: videoSettings?.height ?? null,
+					frameRate:
+						typeof videoSettings?.frameRate === "number"
+							? Math.round(videoSettings.frameRate)
+							: null,
+					sampleRate: null,
+					channelCount: null,
+				},
+				...(cameraStream && recordingMode !== "camera"
+					? [
+							{
+								kind: "camera" as const,
+								label: "Camera source",
+								stream: new MediaStream(cameraStream.getVideoTracks()),
+								width: cameraSettings?.width ?? null,
+								height: cameraSettings?.height ?? null,
+								frameRate:
+									typeof cameraSettings?.frameRate === "number"
+										? Math.round(cameraSettings.frameRate)
+										: null,
+								sampleRate: null,
+								channelCount: null,
+							},
+						]
+					: []),
+				...(systemAudioTracks.length > 0
+					? [
+							{
+								kind: "system-audio" as const,
+								label: "System audio",
+								stream: new MediaStream(systemAudioTracks),
+								width: null,
+								height: null,
+								frameRate: null,
+								sampleRate:
+									typeof systemSettings?.sampleRate === "number"
+										? systemSettings.sampleRate
+										: null,
+								channelCount:
+									typeof systemSettings?.channelCount === "number"
+										? systemSettings.channelCount
+										: null,
+							},
+						]
+					: []),
+				...(micStream
+					? [
+							{
+								kind: "microphone" as const,
+								label: "Microphone",
+								stream: new MediaStream(micTracks),
+								width: null,
+								height: null,
+								frameRate: null,
+								sampleRate:
+									typeof micSettings?.sampleRate === "number"
+										? micSettings.sampleRate
+										: null,
+								channelCount:
+									typeof micSettings?.channelCount === "number"
+										? micSettings.channelCount
+										: null,
+							},
+						]
+					: []),
+			];
+
+			for (const sourceRecorder of sourceRecorders) {
+				try {
+					await startAssetRecorder(sourceRecorder);
+				} catch (error) {
+					console.warn("Browser Studio source recorder unavailable", error);
+				}
+			}
+		},
+		[recordingMode],
+	);
+
+	const updateBrowserStudioVaultStatus = useCallback(
+		async ({
+			status,
+			videoId,
+			durationMs,
+			release,
+		}: {
+			status: BrowserStudioVaultStatus;
+			videoId?: string;
+			durationMs?: number;
+			release?: boolean;
+		}) => {
+			const vault = browserStudioVaultRef.current;
+			if (!vault) return;
+
+			try {
+				if (videoId) {
+					await vault.attachVideo(videoId);
+				}
+				if (durationMs !== undefined) {
+					await vault.finalize({ durationMs });
+				}
+				await vault.updateStatus(status);
+			} catch (error) {
+				console.error("Failed to update Browser Studio vault", error);
+			} finally {
+				if (release) {
+					await stopBrowserStudioSourceRecorders();
+					browserStudioVaultRef.current = null;
+					browserStudioAssetIdRef.current = null;
+					browserStudioVaultWarningShownRef.current = false;
+				}
+			}
+		},
+		[stopBrowserStudioSourceRecorders],
+	);
+
+	const uploadBrowserStudioManifestFromVault = useCallback(
+		async ({
+			videoId,
+			sourceSubpath,
+			assetSourceSubpaths,
+		}: {
+			videoId: string;
+			sourceSubpath: string;
+			assetSourceSubpaths?: Record<string, string>;
+		}) => {
+			const vault = browserStudioVaultRef.current;
+			if (!vault) return true;
+
+			try {
+				await uploadBrowserStudioManifest({
+					videoId,
+					session: vault.getSession(),
+					sourceSubpath,
+					assetSourceSubpaths,
+				});
+				return true;
+			} catch (error) {
+				console.error("Failed to upload Browser Studio manifest", error);
+				toast.warning(
+					"Browser Studio project backup failed to upload. The video upload still completed.",
+				);
+				return false;
+			}
+		},
+		[],
+	);
+
+	const uploadBrowserStudioAssetSourcesFromVault = useCallback(
+		async ({
+			videoId,
+			sourceSubpath,
+		}: {
+			videoId: string;
+			sourceSubpath: string;
+		}) => {
+			const vault = browserStudioVaultRef.current;
+			if (!vault) return null;
+
+			try {
+				const session = vault.getSession();
+				const mixedAssetId = browserStudioAssetIdRef.current;
+				const assetSourceSubpaths: Record<string, string> = {};
+				const uploads: BrowserStudioSourceAssetUpload[] = [];
+
+				for (const asset of session.assets) {
+					if (asset.assetId === mixedAssetId) {
+						assetSourceSubpaths[asset.assetId] = sourceSubpath;
+						continue;
+					}
+
+					const blob = await vault.recoverAssetBlob(asset.assetId);
+					if (!blob || blob.size === 0) continue;
+
+					const assetSourceSubpath = getBrowserStudioAssetSourceSubpath(asset);
+					assetSourceSubpaths[asset.assetId] = assetSourceSubpath;
+					uploads.push({
+						subpath: assetSourceSubpath,
+						blob,
+						fileName: `${asset.assetId}.${asset.fileExtension}`,
+					});
+				}
+
+				await uploadBrowserStudioSourceAssets({
+					videoId,
+					assets: uploads,
+				});
+
+				return assetSourceSubpaths;
+			} catch (error) {
+				console.error("Failed to upload Browser Studio source assets", error);
+				toast.warning(
+					"Browser Studio source tracks failed to upload. The video upload still completed.",
+				);
+				return null;
+			}
+		},
+		[],
 	);
 
 	const resolveFailureBlob = useCallback(async (blob: Blob | null) => {
@@ -575,6 +1042,7 @@ export const useWebRecorder = ({
 		lastInstantChunkAtRef.current = null;
 		recordingPipelineRef.current = null;
 		await disposeRecordingSpool();
+		await releaseBrowserStudioVault({ deleteSession: true });
 		const instantUploader = instantUploaderRef.current;
 		instantUploaderRef.current = null;
 		if (instantUploader) {
@@ -609,6 +1077,7 @@ export const useWebRecorder = ({
 		stopInstantChunkInterval,
 		clearInstantChunkGuard,
 		disposeRecordingSpool,
+		releaseBrowserStudioVault,
 		deletePendingVideoSafely,
 		setUploadStatus,
 		replaceErrorDownload,
@@ -646,6 +1115,7 @@ export const useWebRecorder = ({
 					}
 				}
 				persistChunkToRecordingSpool(chunk);
+				persistChunkToBrowserStudioVault(chunk);
 				try {
 					instantUploaderRef.current?.handleChunk(chunk, totalBytes);
 				} catch (error) {
@@ -662,6 +1132,7 @@ export const useWebRecorder = ({
 			clearInstantChunkGuard,
 			isStreamingPipelineActive,
 			persistChunkToRecordingSpool,
+			persistChunkToBrowserStudioVault,
 		],
 	);
 
@@ -881,6 +1352,27 @@ export const useWebRecorder = ({
 				);
 			}
 
+			let studioCameraStream: MediaStream | null = null;
+			if (recordingMode !== "camera" && selectedCameraId) {
+				try {
+					studioCameraStream = await navigator.mediaDevices.getUserMedia({
+						video: {
+							deviceId: { exact: selectedCameraId },
+							frameRate: { ideal: 30 },
+							width: { ideal: 1920 },
+							height: { ideal: 1080 },
+						},
+					});
+					cameraStreamRef.current = studioCameraStream;
+				} catch (cameraError) {
+					console.warn(
+						"Camera source track unavailable for Browser Studio",
+						cameraError,
+					);
+					studioCameraStream = null;
+				}
+			}
+
 			let micStream: MediaStream | null = null;
 			if (micEnabled && selectedMicId) {
 				try {
@@ -973,6 +1465,24 @@ export const useWebRecorder = ({
 			}
 			instantUploaderRef.current = null;
 			recordingPipelineRef.current = pipeline;
+			const browserStudioVault = await createBrowserStudioVault(
+				pipeline,
+				hasAudio,
+			);
+			if (!browserStudioVault) {
+				toast.warning(
+					"Browser Studio local project backup is unavailable. Recording upload will continue.",
+				);
+			} else {
+				await startBrowserStudioSourceRecorders({
+					vault: browserStudioVault,
+					pipeline,
+					videoStream,
+					cameraStream: studioCameraStream,
+					systemAudioTracks,
+					micStream,
+				});
+			}
 
 			if (pipeline.mode === "streaming-webm") {
 				const width = dimensionsRef.current.width;
@@ -1143,6 +1653,7 @@ export const useWebRecorder = ({
 		stopInFlightRef.current = true;
 		let createdVideoId: VideoId | null = videoCreationRef.current?.id ?? null;
 		let rawRecordingBlob: Blob | null = null;
+		let browserStudioSourceSubpath: string | null = null;
 
 		try {
 			const orgId = organisationId;
@@ -1166,6 +1677,7 @@ export const useWebRecorder = ({
 			onRecordingStop?.();
 			updatePhase("creating");
 
+			await stopBrowserStudioSourceRecorders();
 			rawRecordingBlob = await stopRecordingInternalWrapper();
 			if (pipeline.mode === "buffered-raw" && !rawRecordingBlob) {
 				throw new Error("No recording available");
@@ -1208,6 +1720,11 @@ export const useWebRecorder = ({
 			}
 
 			createdVideoId = creationResult.id;
+			await updateBrowserStudioVaultStatus({
+				status: "uploading",
+				videoId: creationResult.id,
+				durationMs: recordedDurationMs,
+			});
 
 			updatePhase("uploading");
 			setUploadStatus({
@@ -1220,6 +1737,7 @@ export const useWebRecorder = ({
 			if (pipeline.mode === "streaming-webm") {
 				let uploader = instantUploader;
 				const rawSubpath = `raw-upload.${pipeline.fileExtension}`;
+				browserStudioSourceSubpath = rawSubpath;
 
 				if (!uploader) {
 					const uploadSession = await initiateMultipartUpload({
@@ -1259,6 +1777,7 @@ export const useWebRecorder = ({
 					);
 				}
 			} else {
+				browserStudioSourceSubpath = "result.mp4";
 				const processedRecordingBlob =
 					pipeline.fileExtension === "mp4"
 						? rawRecordingBlob
@@ -1343,6 +1862,24 @@ export const useWebRecorder = ({
 				}
 			}
 
+			const browserStudioAssetSourceSubpaths = browserStudioSourceSubpath
+				? await uploadBrowserStudioAssetSourcesFromVault({
+						videoId: creationResult.id,
+						sourceSubpath: browserStudioSourceSubpath,
+					})
+				: null;
+			const browserStudioManifestUploaded =
+				browserStudioSourceSubpath && browserStudioAssetSourceSubpaths
+					? await uploadBrowserStudioManifestFromVault({
+							videoId: creationResult.id,
+							sourceSubpath: browserStudioSourceSubpath,
+							assetSourceSubpaths: browserStudioAssetSourceSubpaths,
+						})
+					: !browserStudioVaultRef.current;
+			await updateBrowserStudioVaultStatus({
+				status: browserStudioManifestUploaded ? "uploaded" : "failed",
+				release: true,
+			});
 			instantUploaderRef.current = null;
 			recordingPipelineRef.current = null;
 			pendingInstantVideoIdRef.current = null;
@@ -1367,6 +1904,10 @@ export const useWebRecorder = ({
 				recordingPipelineRef.current = null;
 				pendingInstantVideoIdRef.current = null;
 				replaceErrorDownload(failureBlob);
+				await updateBrowserStudioVaultStatus({
+					status: "failed",
+					release: true,
+				});
 				await disposeRecordingSpool();
 				updatePhase("error");
 				toast.error(
@@ -1383,6 +1924,10 @@ export const useWebRecorder = ({
 				await instantUploaderRef.current.cancel();
 				instantUploaderRef.current = null;
 			}
+			await updateBrowserStudioVaultStatus({
+				status: "failed",
+				release: true,
+			});
 			await disposeRecordingSpool();
 
 			const idToDelete = createdVideoId ?? videoId;
@@ -1415,6 +1960,10 @@ export const useWebRecorder = ({
 		replaceErrorDownload,
 		resolveFailureBlob,
 		disposeRecordingSpool,
+		stopBrowserStudioSourceRecorders,
+		updateBrowserStudioVaultStatus,
+		uploadBrowserStudioAssetSourcesFromVault,
+		uploadBrowserStudioManifestFromVault,
 		clearInstantChunkGuard,
 	]);
 

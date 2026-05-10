@@ -385,8 +385,7 @@ export const CapCard = ({
 				expiresAt={cap.expiresAt}
 				onExpiryUpdated={() => router.refresh()}
 			/>
-			<div
-				onClick={handleCardClick}
+			<article
 				draggable={isOwner && !anyCapSelected}
 				onDragStart={handleDragStart}
 				onDragEnd={handleDragEnd}
@@ -402,7 +401,12 @@ export const CapCard = ({
 				)}
 			>
 				{anyCapSelected && !sharedCapCard && (
-					<div className="absolute inset-0 z-10" onClick={handleCardClick} />
+					<button
+						type="button"
+						className="absolute inset-0 z-10"
+						onClick={handleCardClick}
+						aria-label="Toggle video selection"
+					/>
 				)}
 
 				<div
@@ -442,6 +446,8 @@ export const CapCard = ({
 									strokeLinecap="round"
 									strokeLinejoin="round"
 									className="text-gray-12 size-5 svgpathanimation"
+									aria-hidden="true"
+									focusable="false"
 								>
 									<path d="M20 6 9 17l-5-5" />
 								</svg>
@@ -486,6 +492,16 @@ export const CapCard = ({
 									>
 										<FontAwesomeIcon className="size-3" icon={faGear} />
 										<p className="text-sm text-gray-12">Settings</p>
+									</DropdownMenuItem>
+									<DropdownMenuItem
+										onClick={(e) => {
+											e.stopPropagation();
+											router.push(`/dashboard/caps/${cap.id}/studio`);
+										}}
+										className="flex gap-2 items-center rounded-lg"
+									>
+										<FontAwesomeIcon className="size-3" icon={faVideo} />
+										<p className="text-sm text-gray-12">Open Studio</p>
 									</DropdownMenuItem>
 									<DropdownMenuItem
 										onClick={(e) => {
@@ -592,7 +608,8 @@ export const CapCard = ({
 				</div>
 
 				{!sharedCapCard && onSelectToggle && (
-					<div
+					<button
+						type="button"
 						className={clsx(
 							"absolute top-2 left-2 z-[49] duration-200",
 							isSelected || anyCapSelected || isDropdownOpen
@@ -603,6 +620,7 @@ export const CapCard = ({
 							e.stopPropagation();
 							handleSelectClick(e);
 						}}
+						aria-label="Toggle video selection"
 					>
 						<div
 							className={clsx(
@@ -616,7 +634,7 @@ export const CapCard = ({
 								<FontAwesomeIcon icon={faCheck} className="text-white size-3" />
 							)}
 						</div>
-					</div>
+					</button>
 				)}
 
 				<div className="relative aspect-video w-full">
@@ -662,6 +680,8 @@ export const CapCard = ({
 												<svg
 													className="w-4 h-4 animate-spin"
 													viewBox="0 0 20 20"
+													aria-hidden="true"
+													focusable="false"
 												>
 													<circle
 														cx="10"
@@ -688,6 +708,8 @@ export const CapCard = ({
 												<svg
 													className="w-4 h-4 transform -rotate-90"
 													viewBox="0 0 20 20"
+													aria-hidden="true"
+													focusable="false"
 												>
 													<circle
 														cx="10"
@@ -772,7 +794,7 @@ export const CapCard = ({
 						totalReactions={cap.totalReactions}
 					/>
 				</div>
-			</div>
+			</article>
 		</>
 	);
 };
