@@ -1,0 +1,171 @@
+import { describe, expect, it } from "vitest";
+import type { BrowserStudioCloudManifest } from "@/lib/browser-studio";
+import {
+	buildBrowserStudioRenderPlan,
+	getBrowserStudioRenderLayout,
+	getBrowserStudioTrimRange,
+	selectBrowserStudioRenderSources,
+} from "@/lib/browser-studio-render";
+
+const manifest = {
+	schemaVersion: 1,
+	videoId: "video-123",
+	sessionId: "studio-session",
+	source: "browser-studio-vault",
+	createdAt: 100,
+	updatedAt: 200,
+	browser: {
+		userAgent: "Safari",
+		platform: "MacIntel",
+	},
+	project: {
+		schemaVersion: 1,
+		source: "browser-recorder",
+		title: "Browser recording",
+		timeline: {
+			durationMs: 8000,
+			tracks: [
+				{
+					trackId: "track-screen",
+					assetId: "asset-screen",
+					kind: "screen",
+					label: "Screen",
+					startMs: 0,
+					durationMs: 8000,
+					muted: false,
+				},
+				{
+					trackId: "track-camera",
+					assetId: "asset-camera",
+					kind: "camera",
+					label: "Camera",
+					startMs: 0,
+					durationMs: 8000,
+					muted: false,
+				},
+			],
+		},
+		exportSettings: {
+			format: "mp4",
+			quality: "source",
+		},
+	},
+	assets: [
+		{
+			assetId: "asset-screen",
+			trackId: "track-screen",
+			kind: "screen",
+			label: "Screen",
+			mimeType: "video/mp4",
+			fileExtension: "mp4",
+			width: 1920,
+			height: 1080,
+			frameRate: 30,
+			sampleRate: null,
+			channelCount: 2,
+			totalBytes: 1,
+			chunkCount: 1,
+			chunks: [],
+			sourceSubpath: "studio/assets/screen.mp4",
+		},
+		{
+			assetId: "asset-camera",
+			trackId: "track-camera",
+			kind: "camera",
+			label: "Camera",
+			mimeType: "video/mp4",
+			fileExtension: "mp4",
+			width: 1280,
+			height: 720,
+			frameRate: 30,
+			sampleRate: null,
+			channelCount: 2,
+			totalBytes: 1,
+			chunkCount: 1,
+			chunks: [],
+			sourceSubpath: "studio/assets/camera.mp4",
+		},
+	],
+	totalBytes: 2,
+	chunkCount: 2,
+	edit: {
+		trim: {
+			startMs: 1000,
+			endMs: 6000,
+		},
+		canvas: {
+			aspectRatio: "1:1",
+			background: "#183d3d",
+			padding: 10,
+			scale: 1.1,
+			cameraPosition: "bottom-right",
+		},
+		audio: {
+			volume: 0.7,
+		},
+	},
+} satisfies BrowserStudioCloudManifest;
+
+const sources = [
+	{
+		subpath: "studio/assets/screen.mp4",
+		url: "https://example.com/screen.mp4",
+	},
+	{
+		subpath: "studio/assets/camera.mp4",
+		url: "https://example.com/camera.mp4",
+	},
+];
+
+describe("browser studio render", () => {
+	it("selects screen as primary and camera as overlay", () => {
+		const selected = selectBrowserStudioRenderSources(manifest, sources);
+
+		expect(selected.primary.asset.assetId).toBe("asset-screen");
+		expect(selected.primary.url).toBe("https://example.com/screen.mp4");
+		expect(selected.camera?.asset.assetId).toBe("asset-camera");
+	});
+
+	it("calculates even canvas dimensions for square exports", () => {
+		const layout = getBrowserStudioRenderLayout({
+			sourceWidth: 1920,
+			sourceHeight: 1080,
+			aspectRatio: "1:1",
+			padding: 10,
+		});
+
+		expect(layout.outputWidth).toBe(1920);
+		expect(layout.outputHeight).toBe(1920);
+		expect(layout.contentWidth).toBe(1536);
+		expect(layout.contentHeight).toBe(1536);
+	});
+
+	it("clamps trim ranges inside media duration", () => {
+		const range = getBrowserStudioTrimRange(
+			{
+				...manifest.edit,
+				trim: {
+					startMs: 7900,
+					endMs: 12000,
+				},
+			},
+			8000,
+		);
+
+		expect(range.startMs).toBe(7900);
+		expect(range.endMs).toBe(8000);
+		expect(range.durationMs).toBe(100);
+	});
+
+	it("builds an ffmpeg plan that renders mp4 with overlay and audio volume", () => {
+		const plan = buildBrowserStudioRenderPlan(manifest, sources);
+
+		expect(plan.durationMs).toBe(5000);
+		expect(plan.outputWidth).toBe(1920);
+		expect(plan.outputHeight).toBe(1920);
+		expect(plan.args).toContain("-filter_complex");
+		expect(plan.args.join(" ")).toContain("overlay=W-w-76:H-h-76");
+		expect(plan.args.join(" ")).toContain("volume=0.7");
+		expect(plan.args).toContain("libx264");
+	});
+});

@@ -1,5 +1,6 @@
 FROM node:24-alpine AS base
 RUN corepack enable
+RUN apk add --no-cache ffmpeg
 
 FROM base AS builder
 WORKDIR /app

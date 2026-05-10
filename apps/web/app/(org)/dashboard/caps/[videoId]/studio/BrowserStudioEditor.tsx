@@ -5,6 +5,7 @@ import {
 	faCheck,
 	faPause,
 	faPlay,
+	faUpload,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -83,6 +84,7 @@ export function BrowserStudioEditor({
 	const [sources, setSources] = useState<BrowserStudioSource[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
+	const [exporting, setExporting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [mediaDurationMs, setMediaDurationMs] = useState<number | null>(null);
 	const [playing, setPlaying] = useState(false);
@@ -222,7 +224,7 @@ export function BrowserStudioEditor({
 	};
 
 	const saveProject = async () => {
-		if (!manifest || saving) return;
+		if (!manifest || saving || exporting) return;
 
 		setSaving(true);
 
@@ -252,6 +254,40 @@ export function BrowserStudioEditor({
 			toast.error("Could not save Studio project");
 		} finally {
 			setSaving(false);
+		}
+	};
+
+	const exportProject = async () => {
+		if (!manifest || saving || exporting) return;
+
+		setExporting(true);
+
+		try {
+			const response = await fetch("/api/video/studio/render", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				credentials: "same-origin",
+				body: JSON.stringify({ videoId, manifest }),
+			});
+
+			if (!response.ok) {
+				throw new Error("Studio project could not be exported");
+			}
+
+			const payload = (await response.json()) as {
+				manifest: BrowserStudioCloudManifest;
+			};
+			const nextManifest = normalizeBrowserStudioManifest(payload.manifest);
+			setManifest(nextManifest);
+			setActiveAssetId(
+				(current) => current ?? nextManifest.assets[0]?.assetId ?? null,
+			);
+			toast.success("Share video updated");
+		} catch (exportError) {
+			console.error("Failed to export Browser Studio project", exportError);
+			toast.error("Could not update share video");
+		} finally {
+			setExporting(false);
 		}
 	};
 
@@ -362,11 +398,20 @@ export function BrowserStudioEditor({
 					<button
 						type="button"
 						onClick={saveProject}
-						disabled={saving}
+						disabled={saving || exporting}
 						className="inline-flex items-center gap-2 rounded-full bg-gray-12 px-4 py-2 text-sm font-medium text-gray-1 disabled:opacity-50"
 					>
 						<FontAwesomeIcon className="size-3" icon={faCheck} />
 						{saving ? "Saving" : "Save project"}
+					</button>
+					<button
+						type="button"
+						onClick={exportProject}
+						disabled={saving || exporting}
+						className="inline-flex items-center gap-2 rounded-full bg-blue-10 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+					>
+						<FontAwesomeIcon className="size-3" icon={faUpload} />
+						{exporting ? "Exporting" : "Export to share"}
 					</button>
 				</div>
 			</header>
