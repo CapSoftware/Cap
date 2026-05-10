@@ -128,7 +128,7 @@ export const WebRecorderDialog = () => {
 	);
 	const systemAudioUnavailableReason =
 		recordingMode !== "camera" && !systemAudioAvailable
-			? "Safari cannot capture system audio in browser recordings. Use Chrome for system audio, or keep microphone on."
+			? "Safari records screen, camera, and microphone only. Safari does not expose system audio to browser apps."
 			: null;
 
 	useEffect(() => {
