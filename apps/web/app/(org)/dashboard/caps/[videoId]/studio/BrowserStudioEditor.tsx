@@ -3,6 +3,7 @@
 import {
 	faArrowLeft,
 	faCheck,
+	faMagnifyingGlassPlus,
 	faPause,
 	faPlay,
 	faUpload,
@@ -78,6 +79,7 @@ export function BrowserStudioEditor({
 	shareUrl,
 }: BrowserStudioEditorProps) {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
+	const previewRef = useRef<HTMLButtonElement | null>(null);
 	const [manifest, setManifest] = useState<BrowserStudioCloudManifest | null>(
 		null,
 	);
@@ -89,6 +91,9 @@ export function BrowserStudioEditor({
 	const [mediaDurationMs, setMediaDurationMs] = useState<number | null>(null);
 	const [playing, setPlaying] = useState(false);
 	const [activeAssetId, setActiveAssetId] = useState<string | null>(null);
+	const [currentMs, setCurrentMs] = useState(0);
+	const [zoomToolArmed, setZoomToolArmed] = useState(false);
+	const [selectedZoomId, setSelectedZoomId] = useState<string | null>(null);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -160,6 +165,26 @@ export function BrowserStudioEditor({
 		edit?.canvas.aspectRatio ?? "source",
 		sourceRatio,
 	);
+	const sortedZooms = useMemo(
+		() => [...(edit?.zooms ?? [])].sort((a, b) => a.startMs - b.startMs),
+		[edit],
+	);
+	const selectedZoom = useMemo(
+		() => sortedZooms.find((zoom) => zoom.id === selectedZoomId) ?? null,
+		[sortedZooms, selectedZoomId],
+	);
+	const activeZoom = useMemo(() => {
+		for (let index = sortedZooms.length - 1; index >= 0; index -= 1) {
+			const zoom = sortedZooms[index];
+			if (zoom && currentMs >= zoom.startMs && currentMs <= zoom.endMs) {
+				return zoom;
+			}
+		}
+		return null;
+	}, [sortedZooms, currentMs]);
+	const previewScale = edit ? edit.canvas.scale * (activeZoom?.scale ?? 1) : 1;
+	const previewOriginX = activeZoom?.originX ?? 0.5;
+	const previewOriginY = activeZoom?.originY ?? 0.5;
 
 	const updateEdit = useCallback(
 		(
@@ -199,6 +224,76 @@ export function BrowserStudioEditor({
 				endMs: clamp(value, current.trim.startMs + 500, durationMs),
 			},
 		}));
+	};
+
+	const updateZoom = (
+		zoomId: string,
+		updater: (
+			zoom: BrowserStudioEditSettings["zooms"][number],
+		) => BrowserStudioEditSettings["zooms"][number],
+	) => {
+		updateEdit((current) => ({
+			...current,
+			zooms: current.zooms.map((zoom) =>
+				zoom.id === zoomId ? updater(zoom) : zoom,
+			),
+		}));
+	};
+
+	const removeZoom = (zoomId: string) => {
+		updateEdit((current) => ({
+			...current,
+			zooms: current.zooms.filter((zoom) => zoom.id !== zoomId),
+		}));
+		setSelectedZoomId((current) => (current === zoomId ? null : current));
+	};
+
+	const createZoomAtPoint = (originX: number, originY: number) => {
+		if (!edit) return;
+
+		const playheadMs = clamp(
+			Math.round(
+				videoRef.current?.currentTime
+					? videoRef.current.currentTime * 1000
+					: currentMs,
+			),
+			trimStartMs,
+			trimEndMs,
+		);
+		const startMs = clamp(playheadMs - 500, trimStartMs, trimEndMs - 500);
+		const endMs = clamp(startMs + 2500, startMs + 500, trimEndMs);
+		const id =
+			typeof crypto !== "undefined" && "randomUUID" in crypto
+				? crypto.randomUUID()
+				: `zoom-${Date.now()}`;
+
+		updateEdit((current) => ({
+			...current,
+			zooms: [
+				...current.zooms,
+				{
+					id,
+					startMs,
+					endMs,
+					scale: 1.8,
+					originX: clamp(originX, 0.05, 0.95),
+					originY: clamp(originY, 0.05, 0.95),
+				},
+			],
+		}));
+		setSelectedZoomId(id);
+		setZoomToolArmed(false);
+		toast.success("Zoom segment added");
+	};
+
+	const handlePreviewClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+		if (!zoomToolArmed || !previewRef.current) return;
+
+		const rect = previewRef.current.getBoundingClientRect();
+		createZoomAtPoint(
+			(event.clientX - rect.left) / rect.width,
+			(event.clientY - rect.top) / rect.height,
+		);
 	};
 
 	const toggleTrackMuted = (trackId: string) => {
@@ -315,9 +410,11 @@ export function BrowserStudioEditor({
 
 		const handleTimeUpdate = () => {
 			const currentMs = video.currentTime * 1000;
+			setCurrentMs(currentMs);
 			if (currentMs >= (edit.trim.endMs ?? durationMs)) {
 				video.pause();
 				video.currentTime = edit.trim.startMs / 1000;
+				setCurrentMs(edit.trim.startMs);
 				setPlaying(false);
 			}
 		};
@@ -418,12 +515,22 @@ export function BrowserStudioEditor({
 
 			<main className="grid gap-5 p-5 xl:grid-cols-[1fr_380px]">
 				<section className="min-w-0">
-					<div
+					<button
+						type="button"
+						ref={previewRef}
+						onClick={handlePreviewClick}
+						onKeyDown={(event) => {
+							if (!zoomToolArmed) return;
+							if (event.key !== "Enter" && event.key !== " ") return;
+							event.preventDefault();
+							createZoomAtPoint(0.5, 0.5);
+						}}
 						className="mx-auto flex w-full max-w-6xl items-center justify-center overflow-hidden rounded-xl shadow-sm"
 						style={{
 							aspectRatio: canvasRatio,
 							background: edit.canvas.background,
 							padding: `${edit.canvas.padding}%`,
+							cursor: zoomToolArmed ? "crosshair" : "default",
 						}}
 					>
 						<video
@@ -432,18 +539,19 @@ export function BrowserStudioEditor({
 							src={activeSource.url}
 							className="max-h-full max-w-full rounded-lg bg-black object-contain shadow-lg"
 							style={{
-								transform: `scale(${edit.canvas.scale})`,
-								transformOrigin: "center",
+								transform: `scale(${previewScale})`,
+								transformOrigin: `${previewOriginX * 100}% ${previewOriginY * 100}%`,
 								width: "100%",
 							}}
 							playsInline
 							onLoadedMetadata={(event) => {
 								setMediaDurationMs(event.currentTarget.duration * 1000);
+								setCurrentMs(event.currentTarget.currentTime * 1000);
 							}}
 						>
 							<track kind="captions" />
 						</video>
-					</div>
+					</button>
 
 					<div className="mt-4 rounded-xl border border-gray-3 bg-gray-2 p-4">
 						<div className="flex flex-wrap items-center gap-3">
@@ -461,6 +569,22 @@ export function BrowserStudioEditor({
 							<div className="text-sm font-medium text-gray-10">
 								{formatTime(trimStartMs)} to {formatTime(trimEndMs)}
 							</div>
+							<button
+								type="button"
+								onClick={() => setZoomToolArmed((current) => !current)}
+								className={clsx(
+									"inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm font-medium",
+									zoomToolArmed
+										? "bg-blue-10 text-white"
+										: "bg-gray-4 text-gray-12",
+								)}
+							>
+								<FontAwesomeIcon
+									className="size-3"
+									icon={faMagnifyingGlassPlus}
+								/>
+								{zoomToolArmed ? "Click preview" : "Add zoom"}
+							</button>
 						</div>
 
 						<div className="mt-5 space-y-3">
@@ -689,6 +813,131 @@ export function BrowserStudioEditor({
 								))}
 							</div>
 						</div>
+					</section>
+
+					<section className="rounded-xl border border-gray-3 bg-gray-2 p-4">
+						<div className="flex items-center justify-between gap-3">
+							<h2 className="text-sm font-semibold uppercase tracking-wide text-gray-9">
+								Zooms
+							</h2>
+							<button
+								type="button"
+								onClick={() => setZoomToolArmed((current) => !current)}
+								className={clsx(
+									"rounded-full px-3 py-1.5 text-xs font-semibold",
+									zoomToolArmed
+										? "bg-blue-10 text-white"
+										: "bg-gray-4 text-gray-11",
+								)}
+							>
+								{zoomToolArmed ? "Pick point" : "Add"}
+							</button>
+						</div>
+						{sortedZooms.length === 0 ? (
+							<p className="mt-3 text-sm text-gray-9">
+								Add a zoom, then click the preview where attention should go.
+							</p>
+						) : (
+							<div className="mt-4 space-y-3">
+								{sortedZooms.map((zoom, index) => (
+									<button
+										key={zoom.id}
+										type="button"
+										onClick={() => setSelectedZoomId(zoom.id)}
+										className={clsx(
+											"w-full rounded-lg border px-3 py-2 text-left",
+											selectedZoomId === zoom.id
+												? "border-blue-10 bg-blue-3"
+												: "border-gray-4 bg-gray-1 hover:bg-gray-3",
+										)}
+									>
+										<div className="flex items-center justify-between gap-3 text-sm font-medium text-gray-12">
+											<span>Zoom {index + 1}</span>
+											<span>{zoom.scale.toFixed(1)}x</span>
+										</div>
+										<div className="mt-1 text-xs text-gray-9">
+											{formatTime(zoom.startMs)} to {formatTime(zoom.endMs)}
+										</div>
+									</button>
+								))}
+							</div>
+						)}
+						{selectedZoom && (
+							<div className="mt-5 grid gap-4 border-t border-gray-4 pt-4">
+								<label className="grid gap-2 text-sm font-medium text-gray-11">
+									Scale
+									<input
+										type="range"
+										min={1.1}
+										max={4}
+										step={0.1}
+										value={selectedZoom.scale}
+										onChange={(event) =>
+											updateZoom(selectedZoom.id, (zoom) => ({
+												...zoom,
+												scale: Number(event.currentTarget.value),
+											}))
+										}
+										className="w-full"
+									/>
+								</label>
+								<label className="grid gap-2 text-sm font-medium text-gray-11">
+									Start
+									<input
+										type="range"
+										min={trimStartMs}
+										max={Math.max(trimStartMs, selectedZoom.endMs - 500)}
+										step={100}
+										value={selectedZoom.startMs}
+										onChange={(event) =>
+											updateZoom(selectedZoom.id, (zoom) => ({
+												...zoom,
+												startMs: clamp(
+													Number(event.currentTarget.value),
+													trimStartMs,
+													zoom.endMs - 500,
+												),
+											}))
+										}
+										className="w-full"
+									/>
+									<span className="text-xs text-gray-9">
+										{formatTime(selectedZoom.startMs)}
+									</span>
+								</label>
+								<label className="grid gap-2 text-sm font-medium text-gray-11">
+									End
+									<input
+										type="range"
+										min={selectedZoom.startMs + 500}
+										max={trimEndMs}
+										step={100}
+										value={selectedZoom.endMs}
+										onChange={(event) =>
+											updateZoom(selectedZoom.id, (zoom) => ({
+												...zoom,
+												endMs: clamp(
+													Number(event.currentTarget.value),
+													zoom.startMs + 500,
+													trimEndMs,
+												),
+											}))
+										}
+										className="w-full"
+									/>
+									<span className="text-xs text-gray-9">
+										{formatTime(selectedZoom.endMs)}
+									</span>
+								</label>
+								<button
+									type="button"
+									onClick={() => removeZoom(selectedZoom.id)}
+									className="rounded-full bg-red-4 px-3 py-2 text-sm font-semibold text-red-11"
+								>
+									Remove zoom
+								</button>
+							</div>
+						)}
 					</section>
 
 					<section className="rounded-xl border border-gray-3 bg-gray-2 p-4">

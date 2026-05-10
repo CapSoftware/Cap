@@ -15,9 +15,13 @@ const ffmpegTracingIncludes = [
 	"./node_modules/ffmpeg-static/ffmpeg",
 	"./node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/ffmpeg",
 ];
+const repoRoot = path.resolve("../..");
 
 const nextConfig = {
 	reactStrictMode: true,
+	turbopack: {
+		root: repoRoot,
+	},
 	serverExternalPackages: ["ffmpeg-static", "prettier"],
 	outputFileTracingIncludes: {
 		"/.well-known/workflow/v1/step": ffmpegTracingIncludes,

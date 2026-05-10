@@ -58,6 +58,49 @@ const colorToFfmpeg = (value: string) =>
 
 const seconds = (ms: number) => Number((ms / 1000).toFixed(3));
 
+const expressionNumber = (value: number) => Number(value.toFixed(4));
+
+const getActiveZoomExpression = (
+	edit: BrowserStudioEditSettings,
+	trimStartMs: number,
+) => {
+	const validSegments = edit.zooms
+		.filter((zoom) => zoom.endMs > zoom.startMs && zoom.scale > 1)
+		.slice(0, 20);
+
+	if (validSegments.length === 0) {
+		return {
+			scale: expressionNumber(edit.canvas.scale).toString(),
+			originX: "0.5",
+			originY: "0.5",
+		};
+	}
+
+	return validSegments.reduce(
+		(expressions, zoom) => {
+			const start = seconds(Math.max(0, zoom.startMs - trimStartMs));
+			const end = seconds(Math.max(0, zoom.endMs - trimStartMs));
+			const scale = expressionNumber(
+				edit.canvas.scale * clamp(zoom.scale, 1, 4),
+			);
+			const originX = expressionNumber(clamp(zoom.originX, 0.05, 0.95));
+			const originY = expressionNumber(clamp(zoom.originY, 0.05, 0.95));
+			const active = `between(t,${start},${end})`;
+
+			return {
+				scale: `if(${active},${scale},${expressions.scale})`,
+				originX: `if(${active},${originX},${expressions.originX})`,
+				originY: `if(${active},${originY},${expressions.originY})`,
+			};
+		},
+		{
+			scale: expressionNumber(edit.canvas.scale).toString(),
+			originX: "0.5",
+			originY: "0.5",
+		},
+	);
+};
+
 export function getBrowserStudioCanvasRatio(
 	aspectRatio: BrowserStudioEditSettings["canvas"]["aspectRatio"],
 	sourceWidth: number,
@@ -238,12 +281,17 @@ export function buildBrowserStudioRenderPlan(
 		);
 	}
 
-	const scaledWidthExpression = `trunc(iw*${edit.canvas.scale}/2)*2`;
-	const scaledHeightExpression = `trunc(ih*${edit.canvas.scale}/2)*2`;
+	const zoomExpression = getActiveZoomExpression(edit, trim.startMs);
+	const scaledWidthExpression = `trunc(iw*${zoomExpression.scale}/2)*2`;
+	const scaledHeightExpression = `trunc(ih*${zoomExpression.scale}/2)*2`;
+	const desiredXExpression = `W/2-w*${zoomExpression.originX}`;
+	const desiredYExpression = `H/2-h*${zoomExpression.originY}`;
+	const overlayXExpression = `if(gte(W,w),min(W-w,max(0,${desiredXExpression})),min(0,max(W-w,${desiredXExpression})))`;
+	const overlayYExpression = `if(gte(H,h),min(H-h,max(0,${desiredYExpression})),min(0,max(H-h,${desiredYExpression})))`;
 	const filters = [
 		`color=c=${colorToFfmpeg(edit.canvas.background)}:s=${layout.outputWidth}x${layout.outputHeight}:d=${trimDurationSeconds}[bg]`,
-		`[0:v]scale=${layout.contentWidth}:${layout.contentHeight}:force_original_aspect_ratio=decrease,scale=${scaledWidthExpression}:${scaledHeightExpression},setsar=1[v0]`,
-		"[bg][v0]overlay=(W-w)/2:(H-h)/2:shortest=1[vbase]",
+		`[0:v]scale=${layout.contentWidth}:${layout.contentHeight}:force_original_aspect_ratio=decrease,scale=w='${scaledWidthExpression}':h='${scaledHeightExpression}':eval=frame,setsar=1[v0]`,
+		`[bg][v0]overlay=x='${overlayXExpression}':y='${overlayYExpression}':eval=frame:shortest=1[vbase]`,
 	];
 	let videoLabel = "[vbase]";
 

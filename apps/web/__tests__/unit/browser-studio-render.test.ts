@@ -103,6 +103,7 @@ const manifest = {
 		audio: {
 			volume: 0.7,
 		},
+		zooms: [],
 	},
 } satisfies BrowserStudioCloudManifest;
 
@@ -167,5 +168,34 @@ describe("browser studio render", () => {
 		expect(plan.args.join(" ")).toContain("overlay=W-w-76:H-h-76");
 		expect(plan.args.join(" ")).toContain("volume=0.7");
 		expect(plan.args).toContain("libx264");
+	});
+
+	it("renders zoom segments as time-bounded scale and focal point expressions", () => {
+		const plan = buildBrowserStudioRenderPlan(
+			{
+				...manifest,
+				edit: {
+					...manifest.edit,
+					zooms: [
+						{
+							id: "zoom-1",
+							startMs: 2000,
+							endMs: 4000,
+							scale: 2,
+							originX: 0.25,
+							originY: 0.75,
+						},
+					],
+				},
+			},
+			sources,
+		);
+
+		const args = plan.args.join(" ");
+
+		expect(args).toContain("between(t,1,3)");
+		expect(args).toContain("if(between(t,1,3),2.2,1.1)");
+		expect(args).toContain("w*if(between(t,1,3),0.25,0.5)");
+		expect(args).toContain("h*if(between(t,1,3),0.75,0.5)");
 	});
 });

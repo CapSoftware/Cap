@@ -65,6 +65,15 @@ export type BrowserStudioCameraPosition =
 	| "bottom-left"
 	| "bottom-right";
 
+export type BrowserStudioZoomSegment = {
+	id: string;
+	startMs: number;
+	endMs: number;
+	scale: number;
+	originX: number;
+	originY: number;
+};
+
 export type BrowserStudioEditSettings = {
 	trim: {
 		startMs: number;
@@ -80,6 +89,7 @@ export type BrowserStudioEditSettings = {
 	audio: {
 		volume: number;
 	};
+	zooms: BrowserStudioZoomSegment[];
 };
 
 export type BrowserStudioCloudManifest = {
@@ -149,13 +159,37 @@ export const createDefaultBrowserStudioEdit = (
 	audio: {
 		volume: 1,
 	},
+	zooms: [],
 });
 
 export const getBrowserStudioEditSettings = (
 	manifest: BrowserStudioCloudManifest,
 ) =>
-	manifest.edit ??
-	createDefaultBrowserStudioEdit(manifest.project.timeline.durationMs);
+	manifest.edit
+		? {
+				...createDefaultBrowserStudioEdit(manifest.project.timeline.durationMs),
+				...manifest.edit,
+				trim: {
+					...createDefaultBrowserStudioEdit(
+						manifest.project.timeline.durationMs,
+					).trim,
+					...manifest.edit.trim,
+				},
+				canvas: {
+					...createDefaultBrowserStudioEdit(
+						manifest.project.timeline.durationMs,
+					).canvas,
+					...manifest.edit.canvas,
+				},
+				audio: {
+					...createDefaultBrowserStudioEdit(
+						manifest.project.timeline.durationMs,
+					).audio,
+					...manifest.edit.audio,
+				},
+				zooms: Array.isArray(manifest.edit.zooms) ? manifest.edit.zooms : [],
+			}
+		: createDefaultBrowserStudioEdit(manifest.project.timeline.durationMs);
 
 export const normalizeBrowserStudioManifest = (
 	manifest: BrowserStudioCloudManifest,
