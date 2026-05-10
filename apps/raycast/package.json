@@ -1,0 +1,67 @@
+{
+	"name": "cap-raycast",
+	"title": "Cap",
+	"description": "Control Cap recordings from Raycast",
+	"icon": "icon.png",
+	"author": "cap",
+	"license": "GPL-3.0-only",
+	"categories": ["Productivity", "Developer Tools"],
+	"platforms": ["macOS"],
+	"scripts": {
+		"dev": "ray develop",
+		"build": "ray build",
+		"lint": "ray lint"
+	},
+	"dependencies": {
+		"@raycast/api": "^1.102.7"
+	},
+	"devDependencies": {
+		"@raycast/eslint-config": "^2.0.4",
+		"@types/node": "22.19.17",
+		"typescript": "^5.8.3"
+	},
+	"commands": [
+		{
+			"name": "start-studio-recording",
+			"title": "Start Studio Recording",
+			"description": "Start a Cap Studio recording with saved settings",
+			"mode": "no-view"
+		},
+		{
+			"name": "start-instant-recording",
+			"title": "Start Instant Recording",
+			"description": "Start a Cap Instant recording with saved settings",
+			"mode": "no-view"
+		},
+		{
+			"name": "stop-recording",
+			"title": "Stop Recording",
+			"description": "Stop the current Cap recording",
+			"mode": "no-view"
+		},
+		{
+			"name": "restart-recording",
+			"title": "Restart Recording",
+			"description": "Restart the current Cap recording",
+			"mode": "no-view"
+		},
+		{
+			"name": "toggle-pause-recording",
+			"title": "Pause or Resume Recording",
+			"description": "Pause or resume the current Cap recording",
+			"mode": "no-view"
+		},
+		{
+			"name": "open-recording-picker",
+			"title": "Open Recording Picker",
+			"description": "Open the Cap recording picker",
+			"mode": "no-view"
+		},
+		{
+			"name": "open-settings",
+			"title": "Open Settings",
+			"description": "Open Cap settings",
+			"mode": "no-view"
+		}
+	]
+}

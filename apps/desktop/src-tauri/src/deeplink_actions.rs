@@ -30,6 +30,9 @@ pub enum DeepLinkAction {
         capture_system_audio: bool,
         mode: RecordingMode,
     },
+    StartRecordingFromSettings {
+        mode: RecordingMode,
+    },
     StopRecording,
     RestartRecording,
     TogglePauseRecording,
@@ -164,6 +167,32 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::StartRecordingFromSettings { mode } => {
+                let state = app.state::<ArcLock<App>>();
+                let settings = crate::recording_settings::RecordingSettingsStore::get(app)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+
+                crate::set_mic_input(state.clone(), settings.mic_name).await?;
+                crate::set_camera_input(app.clone(), state.clone(), settings.camera_id, None)
+                    .await?;
+
+                let inputs = StartRecordingInputs {
+                    mode,
+                    capture_target: settings.target.unwrap_or_else(|| {
+                        ScreenCaptureTarget::Display {
+                            id: scap_targets::Display::primary().id(),
+                        }
+                    }),
+                    capture_system_audio: settings.system_audio,
+                    organization_id: settings.organization_id,
+                };
+
+                crate::recording::start_recording(app.clone(), state, inputs)
+                    .await
+                    .map(|_| ())
+            }
             DeepLinkAction::RestartRecording => crate::recording::restart_recording(
                 app.clone(),
                 app.state(),
@@ -220,6 +249,19 @@ mod tests {
         assert!(matches!(
             parse_action("%22restart_recording%22").unwrap(),
             DeepLinkAction::RestartRecording
+        ));
+    }
+
+    #[test]
+    fn parses_start_recording_from_settings_action() {
+        assert!(matches!(
+            parse_action(
+                "%7B%22start_recording_from_settings%22%3A%7B%22mode%22%3A%22studio%22%7D%7D"
+            )
+            .unwrap(),
+            DeepLinkAction::StartRecordingFromSettings {
+                mode: cap_recording::RecordingMode::Studio
+            }
         ));
     }
 
