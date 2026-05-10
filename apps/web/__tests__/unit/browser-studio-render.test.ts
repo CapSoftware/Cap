@@ -95,6 +95,7 @@ const manifest = {
 		},
 		canvas: {
 			aspectRatio: "1:1",
+			backgroundMode: "solid",
 			background: "#183d3d",
 			padding: 10,
 			scale: 1.1,
@@ -197,5 +198,27 @@ describe("browser studio render", () => {
 		expect(args).toContain("if(between(t,1,3),2.2,1.1)");
 		expect(args).toContain("w*if(between(t,1,3),0.25,0.5)");
 		expect(args).toContain("h*if(between(t,1,3),0.75,0.5)");
+	});
+
+	it("renders blurred source backgrounds from the primary video", () => {
+		const plan = buildBrowserStudioRenderPlan(
+			{
+				...manifest,
+				edit: {
+					...manifest.edit,
+					canvas: {
+						...manifest.edit.canvas,
+						backgroundMode: "blur",
+					},
+				},
+			},
+			sources,
+		);
+
+		const args = plan.args.join(" ");
+
+		expect(args).toContain("[0:v]split=2[bgsrc][fgsrc]");
+		expect(args).toContain("boxblur=24:1");
+		expect(args).toContain("[fgsrc]scale=");
 	});
 });

@@ -79,6 +79,7 @@ export function BrowserStudioEditor({
 	shareUrl,
 }: BrowserStudioEditorProps) {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
+	const backgroundVideoRef = useRef<HTMLVideoElement | null>(null);
 	const previewRef = useRef<HTMLButtonElement | null>(null);
 	const [manifest, setManifest] = useState<BrowserStudioCloudManifest | null>(
 		null,
@@ -394,13 +395,18 @@ export function BrowserStudioEditor({
 			const currentMs = video.currentTime * 1000;
 			if (currentMs < trimStartMs || currentMs >= trimEndMs) {
 				video.currentTime = trimStartMs / 1000;
+				if (backgroundVideoRef.current) {
+					backgroundVideoRef.current.currentTime = trimStartMs / 1000;
+				}
 			}
 			await video.play();
+			await backgroundVideoRef.current?.play().catch(() => undefined);
 			setPlaying(true);
 			return;
 		}
 
 		video.pause();
+		backgroundVideoRef.current?.pause();
 		setPlaying(false);
 	};
 
@@ -411,15 +417,29 @@ export function BrowserStudioEditor({
 		const handleTimeUpdate = () => {
 			const currentMs = video.currentTime * 1000;
 			setCurrentMs(currentMs);
+			const backgroundVideo = backgroundVideoRef.current;
+			if (
+				backgroundVideo &&
+				Math.abs(backgroundVideo.currentTime - video.currentTime) > 0.25
+			) {
+				backgroundVideo.currentTime = video.currentTime;
+			}
 			if (currentMs >= (edit.trim.endMs ?? durationMs)) {
 				video.pause();
+				backgroundVideo?.pause();
 				video.currentTime = edit.trim.startMs / 1000;
+				if (backgroundVideo) {
+					backgroundVideo.currentTime = edit.trim.startMs / 1000;
+				}
 				setCurrentMs(edit.trim.startMs);
 				setPlaying(false);
 			}
 		};
 		const handlePlay = () => setPlaying(true);
-		const handlePause = () => setPlaying(false);
+		const handlePause = () => {
+			backgroundVideoRef.current?.pause();
+			setPlaying(false);
+		};
 
 		video.addEventListener("timeupdate", handleTimeUpdate);
 		video.addEventListener("play", handlePlay);
@@ -525,19 +545,36 @@ export function BrowserStudioEditor({
 							event.preventDefault();
 							createZoomAtPoint(0.5, 0.5);
 						}}
-						className="mx-auto flex w-full max-w-6xl items-center justify-center overflow-hidden rounded-xl shadow-sm"
+						className="relative mx-auto flex w-full max-w-6xl items-center justify-center overflow-hidden rounded-xl shadow-sm"
 						style={{
 							aspectRatio: canvasRatio,
-							background: edit.canvas.background,
+							background:
+								edit.canvas.backgroundMode === "solid"
+									? edit.canvas.background
+									: "#111111",
 							padding: `${edit.canvas.padding}%`,
 							cursor: zoomToolArmed ? "crosshair" : "default",
 						}}
 					>
+						{edit.canvas.backgroundMode === "blur" && (
+							<video
+								key={`background-${activeSource.url}`}
+								ref={backgroundVideoRef}
+								src={activeSource.url}
+								className="pointer-events-none absolute inset-0 size-full scale-110 object-cover opacity-80 blur-2xl"
+								muted
+								playsInline
+								tabIndex={-1}
+								aria-hidden="true"
+							>
+								<track kind="captions" />
+							</video>
+						)}
 						<video
 							key={activeSource.url}
 							ref={videoRef}
 							src={activeSource.url}
-							className="max-h-full max-w-full rounded-lg bg-black object-contain shadow-lg"
+							className="relative z-10 max-h-full max-w-full rounded-lg bg-black object-contain shadow-lg"
 							style={{
 								transform: `scale(${previewScale})`,
 								transformOrigin: `${previewOriginX * 100}% ${previewOriginY * 100}%`,
@@ -547,6 +584,10 @@ export function BrowserStudioEditor({
 							onLoadedMetadata={(event) => {
 								setMediaDurationMs(event.currentTarget.duration * 1000);
 								setCurrentMs(event.currentTarget.currentTime * 1000);
+								if (backgroundVideoRef.current) {
+									backgroundVideoRef.current.currentTime =
+										event.currentTarget.currentTime;
+								}
 							}}
 						>
 							<track kind="captions" />
@@ -784,8 +825,50 @@ export function BrowserStudioEditor({
 						</div>
 
 						<div className="mt-5">
-							<div className="mb-2 text-sm font-medium text-gray-11">
+							<div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium text-gray-11">
 								Background
+								<div className="rounded-full bg-gray-4 p-1">
+									<button
+										type="button"
+										onClick={() =>
+											updateEdit((current) => ({
+												...current,
+												canvas: {
+													...current.canvas,
+													backgroundMode: "solid",
+												},
+											}))
+										}
+										className={clsx(
+											"rounded-full px-2.5 py-1 text-xs font-semibold",
+											edit.canvas.backgroundMode === "solid"
+												? "bg-white text-gray-12 shadow-sm"
+												: "text-gray-10",
+										)}
+									>
+										Solid
+									</button>
+									<button
+										type="button"
+										onClick={() =>
+											updateEdit((current) => ({
+												...current,
+												canvas: {
+													...current.canvas,
+													backgroundMode: "blur",
+												},
+											}))
+										}
+										className={clsx(
+											"rounded-full px-2.5 py-1 text-xs font-semibold",
+											edit.canvas.backgroundMode === "blur"
+												? "bg-white text-gray-12 shadow-sm"
+												: "text-gray-10",
+										)}
+									>
+										Blur
+									</button>
+								</div>
 							</div>
 							<div className="flex flex-wrap gap-2">
 								{backgroundOptions.map((color) => (

@@ -288,11 +288,21 @@ export function buildBrowserStudioRenderPlan(
 	const desiredYExpression = `H/2-h*${zoomExpression.originY}`;
 	const overlayXExpression = `if(gte(W,w),min(W-w,max(0,${desiredXExpression})),min(0,max(W-w,${desiredXExpression})))`;
 	const overlayYExpression = `if(gte(H,h),min(H-h,max(0,${desiredYExpression})),min(0,max(H-h,${desiredYExpression})))`;
-	const filters = [
-		`color=c=${colorToFfmpeg(edit.canvas.background)}:s=${layout.outputWidth}x${layout.outputHeight}:d=${trimDurationSeconds}[bg]`,
-		`[0:v]scale=${layout.contentWidth}:${layout.contentHeight}:force_original_aspect_ratio=decrease,scale=w='${scaledWidthExpression}':h='${scaledHeightExpression}':eval=frame,setsar=1[v0]`,
-		`[bg][v0]overlay=x='${overlayXExpression}':y='${overlayYExpression}':eval=frame:shortest=1[vbase]`,
-	];
+	const contentSourceLabel =
+		edit.canvas.backgroundMode === "blur" ? "[fgsrc]" : "[0:v]";
+	const filters =
+		edit.canvas.backgroundMode === "blur"
+			? [
+					"[0:v]split=2[bgsrc][fgsrc]",
+					`[bgsrc]scale=${layout.outputWidth}:${layout.outputHeight}:force_original_aspect_ratio=increase,crop=${layout.outputWidth}:${layout.outputHeight},boxblur=24:1,setsar=1[bg]`,
+					`${contentSourceLabel}scale=${layout.contentWidth}:${layout.contentHeight}:force_original_aspect_ratio=decrease,scale=w='${scaledWidthExpression}':h='${scaledHeightExpression}':eval=frame,setsar=1[v0]`,
+					`[bg][v0]overlay=x='${overlayXExpression}':y='${overlayYExpression}':eval=frame:shortest=1[vbase]`,
+				]
+			: [
+					`color=c=${colorToFfmpeg(edit.canvas.background)}:s=${layout.outputWidth}x${layout.outputHeight}:d=${trimDurationSeconds}[bg]`,
+					`${contentSourceLabel}scale=${layout.contentWidth}:${layout.contentHeight}:force_original_aspect_ratio=decrease,scale=w='${scaledWidthExpression}':h='${scaledHeightExpression}':eval=frame,setsar=1[v0]`,
+					`[bg][v0]overlay=x='${overlayXExpression}':y='${overlayYExpression}':eval=frame:shortest=1[vbase]`,
+				];
 	let videoLabel = "[vbase]";
 
 	if (selected.camera) {
