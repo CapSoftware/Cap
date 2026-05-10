@@ -108,6 +108,8 @@ const manifest = {
 			scale: 1.1,
 			cameraPosition: "bottom-right",
 			cameraSize: 22,
+			cameraShape: "square",
+			cameraMirror: false,
 		},
 		audio: {
 			volume: 0.7,
@@ -196,6 +198,31 @@ describe("browser studio render", () => {
 		);
 
 		expect(plan.args.join(" ")).toContain("[1:v]scale=576:576");
+	});
+
+	it("renders mirrored source-shaped camera overlays", () => {
+		const plan = buildBrowserStudioRenderPlan(
+			{
+				...manifest,
+				edit: {
+					...manifest.edit,
+					canvas: {
+						...manifest.edit.canvas,
+						cameraSize: 30,
+						cameraShape: "source",
+						cameraMirror: true,
+					},
+				},
+			},
+			sources,
+		);
+
+		const args = plan.args.join(" ");
+
+		expect(args).toContain("[1:v]hflip[camflip]");
+		expect(args).toContain(
+			"[camflip]scale=576:324:force_original_aspect_ratio=decrease",
+		);
 	});
 
 	it("renders zoom segments as time-bounded scale and focal point expressions", () => {

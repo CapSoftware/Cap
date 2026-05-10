@@ -67,6 +67,8 @@ export type BrowserStudioCameraPosition =
 	| "bottom-left"
 	| "bottom-right";
 
+export type BrowserStudioCameraShape = "square" | "source";
+
 export type BrowserStudioZoomSegment = {
 	id: string;
 	startMs: number;
@@ -106,6 +108,8 @@ export type BrowserStudioEditSettings = {
 		scale: number;
 		cameraPosition: BrowserStudioCameraPosition;
 		cameraSize: number;
+		cameraShape: BrowserStudioCameraShape;
+		cameraMirror: boolean;
 	};
 	audio: {
 		volume: number;
@@ -184,6 +188,8 @@ export const createDefaultBrowserStudioEdit = (
 		scale: 1,
 		cameraPosition: "bottom-right",
 		cameraSize: 22,
+		cameraShape: "square",
+		cameraMirror: false,
 	},
 	audio: {
 		volume: 1,

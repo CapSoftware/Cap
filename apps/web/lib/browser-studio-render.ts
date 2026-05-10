@@ -258,18 +258,31 @@ export function selectBrowserStudioRenderSources(
 function getCameraOverlay({
 	outputWidth,
 	outputHeight,
+	sourceWidth,
+	sourceHeight,
 	position,
 	size,
+	shape,
 }: {
 	outputWidth: number;
 	outputHeight: number;
+	sourceWidth: number | null;
+	sourceHeight: number | null;
 	position: BrowserStudioEditSettings["canvas"]["cameraPosition"];
 	size: number;
+	shape: BrowserStudioEditSettings["canvas"]["cameraShape"];
 }) {
 	const margin = even(Math.min(outputWidth, outputHeight) * 0.04);
 	const safeSize = clamp(size, 10, 40) / 100;
 	const width = even(outputWidth * safeSize);
-	const height = even(outputHeight * safeSize);
+	const sourceRatio =
+		sourceWidth && sourceHeight && sourceWidth > 0 && sourceHeight > 0
+			? sourceHeight / sourceWidth
+			: outputHeight / outputWidth;
+	const height =
+		shape === "source"
+			? even(width * sourceRatio)
+			: even(outputHeight * safeSize);
 	const x =
 		position === "top-left" || position === "bottom-left"
 			? margin
@@ -577,11 +590,18 @@ export function buildBrowserStudioRenderPlan(
 		const camera = getCameraOverlay({
 			outputWidth: layout.outputWidth,
 			outputHeight: layout.outputHeight,
+			sourceWidth: selected.camera.asset.width,
+			sourceHeight: selected.camera.asset.height,
 			position: edit.canvas.cameraPosition,
 			size: edit.canvas.cameraSize,
+			shape: edit.canvas.cameraShape,
 		});
+		const cameraSourceLabel = edit.canvas.cameraMirror ? "[camflip]" : "[1:v]";
+		if (edit.canvas.cameraMirror) {
+			filters.push("[1:v]hflip[camflip]");
+		}
 		filters.push(
-			`[1:v]scale=${camera.width}:${camera.height}:force_original_aspect_ratio=decrease,setsar=1[cam]`,
+			`${cameraSourceLabel}scale=${camera.width}:${camera.height}:force_original_aspect_ratio=decrease,setsar=1[cam]`,
 			`[vbase][cam]overlay=${camera.x}:${camera.y}:shortest=1[vout]`,
 		);
 		videoLabel = "[vout]";

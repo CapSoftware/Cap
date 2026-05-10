@@ -210,6 +210,10 @@ export function BrowserStudioEditor({
 					) ?? null),
 		[sources, cameraAsset, cameraTrack],
 	);
+	const cameraSourceRatio =
+		cameraAsset?.width && cameraAsset.height && cameraAsset.width > 0
+			? `${cameraAsset.width} / ${cameraAsset.height}`
+			: "1 / 1";
 	const durationMs =
 		manifest?.project.timeline.durationMs ?? mediaDurationMs ?? 0;
 	const trimStartMs = edit?.trim.startMs ?? 0;
@@ -761,7 +765,11 @@ export function BrowserStudioEditor({
 								aria-hidden="true"
 								style={{
 									width: `${edit.canvas.cameraSize}%`,
-									aspectRatio: "1 / 1",
+									aspectRatio:
+										edit.canvas.cameraShape === "source"
+											? cameraSourceRatio
+											: "1 / 1",
+									transform: edit.canvas.cameraMirror ? "scaleX(-1)" : "none",
 									...(edit.canvas.cameraPosition === "top-left"
 										? { left: "4%", top: "4%" }
 										: {}),
@@ -1244,6 +1252,57 @@ export function BrowserStudioEditor({
 										{edit.canvas.cameraSize}%
 									</span>
 								</label>
+								<div className="grid grid-cols-2 gap-2">
+									{[
+										{ value: "square", label: "Square" },
+										{ value: "source", label: "Source" },
+									].map((option) => (
+										<button
+											key={option.value}
+											type="button"
+											onClick={() =>
+												updateEdit((current) => ({
+													...current,
+													canvas: {
+														...current.canvas,
+														cameraShape:
+															option.value as BrowserStudioEditSettings["canvas"]["cameraShape"],
+													},
+												}))
+											}
+											className={clsx(
+												"rounded-lg border px-3 py-2 text-sm font-medium",
+												edit.canvas.cameraShape === option.value
+													? "border-blue-10 bg-blue-10 text-white"
+													: "border-gray-4 bg-gray-1 text-gray-11 hover:bg-gray-3",
+											)}
+										>
+											{option.label}
+										</button>
+									))}
+								</div>
+								<button
+									type="button"
+									onClick={() =>
+										updateEdit((current) => ({
+											...current,
+											canvas: {
+												...current.canvas,
+												cameraMirror: !current.canvas.cameraMirror,
+											},
+										}))
+									}
+									className={clsx(
+										"rounded-full px-3 py-2 text-sm font-semibold",
+										edit.canvas.cameraMirror
+											? "bg-blue-4 text-blue-11"
+											: "bg-gray-4 text-gray-11",
+									)}
+								>
+									{edit.canvas.cameraMirror
+										? "Camera mirrored"
+										: "Mirror camera"}
+								</button>
 								{cameraTrack && (
 									<button
 										type="button"
