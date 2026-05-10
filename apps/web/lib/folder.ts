@@ -11,7 +11,11 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { Database, ImageUploads } from "@cap/web-backend";
+import {
+	Database,
+	ImageUploads,
+	resolveEffectiveVideoRules,
+} from "@cap/web-backend";
 import type { ImageUpload, Organisation, Space, Video } from "@cap/web-domain";
 import { CurrentUser, Folder } from "@cap/web-domain";
 import { and, desc, eq, isNull } from "drizzle-orm";
@@ -76,7 +80,9 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 				id: spaces.id,
 				name: spaces.name,
 				organizationId: spaces.organizationId,
-				iconUrl: organizations.iconUrl,
+				iconUrl: spaces.iconUrl,
+				settings: spaces.settings,
+				hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
 			})
 			.from(spaceVideos)
 			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
@@ -119,8 +125,10 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 			id: string;
 			name: string;
 			organizationId: string;
-			iconUrl: string;
+			iconUrl: ImageUpload.ImageUrlOrKey | null;
 			isOrg: boolean;
+			settings?: (typeof spaces.$inferSelect)["settings"];
+			hasPassword: boolean;
 		}>
 	> = {};
 
@@ -132,8 +140,10 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 			id: space.id,
 			name: space.name,
 			organizationId: space.organizationId,
-			iconUrl: space.iconUrl || "",
+			iconUrl: space.iconUrl,
 			isOrg: false,
+			settings: space.settings,
+			hasPassword: space.hasPassword,
 		});
 	});
 
@@ -146,8 +156,10 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 			id: org.id,
 			name: org.name,
 			organizationId: org.organizationId,
-			iconUrl: org.iconUrl || "",
+			iconUrl: org.iconUrl,
 			isOrg: true,
+			settings: null,
+			hasPassword: false,
 		});
 	});
 
@@ -175,6 +187,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 				public: videos.public,
 				metadata: videos.metadata,
 				duration: videos.duration,
+				settings: videos.settings,
 				totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 				totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 				sharedOrganizations: sql<
@@ -233,6 +246,9 @@ export const getVideosByFolderId = Effect.fn(function* (
 				videos.createdAt,
 				videos.public,
 				videos.metadata,
+				videos.duration,
+				videos.settings,
+				videos.password,
 				users.name,
 			)
 			.orderBy(desc(videos.effectiveCreatedAt)),
@@ -246,6 +262,25 @@ export const getVideosByFolderId = Effect.fn(function* (
 	const processedVideoData = yield* Effect.all(
 		videoData.map(
 			Effect.fn(function* (video) {
+				const sharedSpaces = sharedSpacesMap[video.id] ?? [];
+				const rules = resolveEffectiveVideoRules({
+					videoSettings: video.settings,
+					organizationSettings: null,
+					spaces: sharedSpaces.filter((space) => !space.isOrg),
+				});
+				const resolvedSharedSpaces = yield* Effect.all(
+					sharedSpaces.map(
+						Effect.fn(function* (space) {
+							return {
+								...space,
+								iconUrl: space.iconUrl
+									? yield* imageUploads.resolveImageUrl(space.iconUrl)
+									: null,
+							};
+						}),
+					),
+				);
+
 				return {
 					id: video.id as Video.VideoId, // Cast to Video.VideoId branded type
 					ownerId: video.ownerId,
@@ -268,9 +303,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 								}),
 							),
 					),
-					sharedSpaces: Array.isArray(sharedSpacesMap[video.id])
-						? sharedSpacesMap[video.id]
-						: [],
+					sharedSpaces: resolvedSharedSpaces,
 					ownerName: video.ownerName ?? "",
 					metadata: video.metadata as
 						| {
@@ -279,6 +312,10 @@ export const getVideosByFolderId = Effect.fn(function* (
 						  }
 						| undefined,
 					hasPassword: video.hasPassword,
+					hasInheritedPassword: rules.hasInheritedPassword,
+					inheritedPasswordSources: rules.inheritedPasswordSources,
+					inheritedSpaceSettings: rules.inheritedSettings,
+					settings: video.settings,
 					hasActiveUpload: video.hasActiveUpload,
 					foldersData: [], // Empty array since videos in a folder don't need folder data
 				};
