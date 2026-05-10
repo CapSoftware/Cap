@@ -1884,9 +1884,6 @@ export const useWebRecorder = ({
 							});
 						} catch (thumbnailError) {
 							console.error("Failed to upload thumbnail", thumbnailError);
-							toast.warning(
-								"Recording uploaded, but thumbnail failed to upload.",
-							);
 						}
 					}
 				} finally {
