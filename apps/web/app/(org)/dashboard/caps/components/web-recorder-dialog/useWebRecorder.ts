@@ -23,6 +23,7 @@ import {
 	BrowserStudioVault,
 	type BrowserStudioVaultStatus,
 	canUseBrowserStudioVault,
+	deleteUploadedBrowserStudioVaultSessions,
 } from "./browser-studio-vault";
 import {
 	InstantRecordingUploader,
@@ -450,6 +451,14 @@ export const useWebRecorder = ({
 		};
 	}, [dismissRecoveredDownload]);
 
+	useEffect(() => {
+		if (!canUseBrowserStudioVault()) return;
+
+		void deleteUploadedBrowserStudioVaultSessions().catch((error) => {
+			console.error("Failed to clean uploaded Browser Studio sessions", error);
+		});
+	}, []);
+
 	const disposeRecordingSpool = useCallback(async () => {
 		const spool = recordingSpoolRef.current;
 		recordingSpoolRef.current = null;
@@ -815,11 +824,13 @@ export const useWebRecorder = ({
 			videoId,
 			durationMs,
 			release,
+			deleteLocalSessionOnRelease,
 		}: {
 			status: BrowserStudioVaultStatus;
 			videoId?: string;
 			durationMs?: number;
 			release?: boolean;
+			deleteLocalSessionOnRelease?: boolean;
 		}) => {
 			const vault = browserStudioVaultRef.current;
 			if (!vault) return;
@@ -840,6 +851,13 @@ export const useWebRecorder = ({
 					browserStudioVaultRef.current = null;
 					browserStudioAssetIdRef.current = null;
 					browserStudioVaultWarningShownRef.current = false;
+					if (deleteLocalSessionOnRelease) {
+						try {
+							await vault.dispose();
+						} catch (error) {
+							console.error("Failed to dispose Browser Studio vault", error);
+						}
+					}
 				}
 			}
 		},
@@ -1879,6 +1897,7 @@ export const useWebRecorder = ({
 			await updateBrowserStudioVaultStatus({
 				status: browserStudioManifestUploaded ? "uploaded" : "failed",
 				release: true,
+				deleteLocalSessionOnRelease: browserStudioManifestUploaded,
 			});
 			instantUploaderRef.current = null;
 			recordingPipelineRef.current = null;

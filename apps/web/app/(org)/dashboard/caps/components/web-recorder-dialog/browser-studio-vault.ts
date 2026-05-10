@@ -840,3 +840,17 @@ export const deleteBrowserStudioVaultSession = async (
 	await backend.initialize();
 	await backend.deleteSession(sessionId);
 };
+
+export const deleteUploadedBrowserStudioVaultSessions = async (
+	backend: BrowserStudioVaultBackend = createBrowserStudioVaultBackend(),
+) => {
+	await backend.initialize();
+	const sessions = await backend.listSessions();
+	const uploadedSessions = sessions.filter(
+		(session) => session.status === "uploaded" && session.videoId,
+	);
+	await Promise.all(
+		uploadedSessions.map((session) => backend.deleteSession(session.sessionId)),
+	);
+	return uploadedSessions.length;
+};

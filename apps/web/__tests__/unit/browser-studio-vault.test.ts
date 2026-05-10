@@ -6,6 +6,7 @@ import {
 	type BrowserStudioVaultChunk,
 	type BrowserStudioVaultSession,
 	deleteBrowserStudioVaultSession,
+	deleteUploadedBrowserStudioVaultSessions,
 	recoverBrowserStudioVaultSessions,
 } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/browser-studio-vault";
 
@@ -247,6 +248,48 @@ describe("BrowserStudioVault", () => {
 		expect(backend.getChunkCount("newer-studio-session", "newer-screen")).toBe(
 			1,
 		);
+	});
+
+	it("deletes uploaded cloud sessions while preserving failed local backups", async () => {
+		const backend = new MemoryBrowserStudioVaultBackend();
+		const uploaded = await BrowserStudioVault.create(
+			{ sessionId: "uploaded-studio-session" },
+			backend,
+		);
+		const uploadedAsset = await uploaded.createAsset({
+			assetId: "uploaded-screen",
+			kind: "screen",
+			mimeType: "video/mp4",
+			fileExtension: "mp4",
+		});
+		await uploaded.appendChunk(uploadedAsset.assetId, new Blob(["uploaded"]));
+		await uploaded.attachVideo("video-uploaded");
+		await uploaded.updateStatus("uploaded");
+
+		const failed = await BrowserStudioVault.create(
+			{ sessionId: "failed-studio-session" },
+			backend,
+		);
+		const failedAsset = await failed.createAsset({
+			assetId: "failed-screen",
+			kind: "screen",
+			mimeType: "video/mp4",
+			fileExtension: "mp4",
+		});
+		await failed.appendChunk(failedAsset.assetId, new Blob(["failed"]));
+		await failed.attachVideo("video-failed");
+		await failed.updateStatus("failed");
+
+		const deleted = await deleteUploadedBrowserStudioVaultSessions(backend);
+
+		expect(deleted).toBe(1);
+		expect(backend.getSessionCount()).toBe(1);
+		expect(
+			backend.getChunkCount("uploaded-studio-session", "uploaded-screen"),
+		).toBe(0);
+		expect(
+			backend.getChunkCount("failed-studio-session", "failed-screen"),
+		).toBe(1);
 	});
 
 	it("keeps pending chunks recoverable after a storage failure", async () => {
