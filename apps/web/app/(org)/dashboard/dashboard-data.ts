@@ -37,11 +37,12 @@ export type OrganizationSettings = NonNullable<
 
 export type Spaces = Omit<
 	typeof spaces.$inferSelect,
-	"createdAt" | "updatedAt" | "iconUrl"
+	"createdAt" | "updatedAt" | "iconUrl" | "password"
 > & {
 	memberCount: number;
 	videoCount: number;
 	iconUrl: ImageUpload.ImageUrl | null;
+	hasPassword: boolean;
 };
 
 export type UserPreferences = (typeof users.$inferSelect)["preferences"];
@@ -130,6 +131,10 @@ export async function getDashboardData(user: typeof userSelectProps) {
 								organizationId: spaces.organizationId,
 								createdById: spaces.createdById,
 								iconUrl: spaces.iconUrl,
+								settings: spaces.settings,
+								hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(
+									Boolean,
+								),
 								memberCount: sql<number>`(
           SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
         )`,
@@ -224,6 +229,8 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						memberCount: orgMemberCount,
 						createdById: activeOrgInfo.ownerId,
 						videoCount: orgVideoCount,
+						settings: null,
+						hasPassword: false,
 					} as const;
 				}).pipe(runPromise);
 
@@ -320,12 +327,15 @@ export async function getDashboardData(user: typeof userSelectProps) {
 							allMembers.map(
 								Effect.fn(function* (m) {
 									const imageUploads = yield* ImageUploads;
+									if (!m.user) {
+										throw new Error("Organization member user not found");
+									}
 									return {
 										...m.member,
 										user: {
-											...m.user!,
-											image: m.user?.image
-												? yield* imageUploads.resolveImageUrl(m.user?.image)
+											...m.user,
+											image: m.user.image
+												? yield* imageUploads.resolveImageUrl(m.user.image)
 												: null,
 										},
 									};
