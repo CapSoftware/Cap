@@ -1,21 +1,14 @@
 import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
-import fs from "node:fs";
-import path from "node:path";
+import { fileURLToPath } from "node:url";
 import workflowNext from "workflow/next";
+import packageJson from "./package.json" with { type: "json" };
 
 const { withWorkflow } = workflowNext;
 
-const packageJson = JSON.parse(
-	fs.readFileSync(path.resolve("./package.json"), "utf8"),
-);
 const { version } = packageJson;
 
-const ffmpegTracingIncludes = [
-	"./node_modules/ffmpeg-static/ffmpeg",
-	"./node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/ffmpeg",
-];
-const repoRoot = path.resolve("../..");
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 const nextConfig = {
 	reactStrictMode: true,
@@ -23,10 +16,6 @@ const nextConfig = {
 		root: repoRoot,
 	},
 	serverExternalPackages: ["ffmpeg-static", "prettier"],
-	outputFileTracingIncludes: {
-		"/.well-known/workflow/v1/step": ffmpegTracingIncludes,
-		"/api/tools/loom-download": ffmpegTracingIncludes,
-	},
 	transpilePackages: [
 		"@cap/ui",
 		"@cap/utils",
@@ -131,6 +120,10 @@ const nextConfig = {
 	},
 	env: {
 		appVersion: version,
+	},
+	outputFileTracingExcludes: {
+		"/.well-known/workflow/v1/step": ["./next.config.mjs"],
+		"/api/tools/loom-download": ["./next.config.mjs"],
 	},
 	output:
 		process.env.NEXT_PUBLIC_DOCKER_BUILD === "true" ? "standalone" : undefined,

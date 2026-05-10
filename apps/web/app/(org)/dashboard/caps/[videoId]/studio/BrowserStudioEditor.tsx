@@ -21,6 +21,7 @@ import {
 	getBrowserStudioEditSettings,
 	normalizeBrowserStudioManifest,
 } from "@/lib/browser-studio";
+import { deleteUploadedBrowserStudioVaultSessions } from "../../components/web-recorder-dialog/browser-studio-vault";
 
 type BrowserStudioEditorProps = {
 	videoId: string;
@@ -69,6 +70,8 @@ const gradientPresets = [
 	{ from: "#ff5e00", to: "#ff2a68" },
 	{ from: "#2c3e50", to: "#3498db" },
 ];
+
+const playbackSpeedOptions = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 const clamp = (value: number, min: number, max: number) =>
 	Math.min(Math.max(value, min), max);
@@ -435,6 +438,24 @@ export function BrowserStudioEditor({
 		);
 	};
 
+	const seekToMs = useCallback(
+		(value: number) => {
+			const nextMs = clamp(value, trimStartMs, trimEndMs || durationMs);
+			const nextSeconds = nextMs / 1000;
+			if (videoRef.current) {
+				videoRef.current.currentTime = nextSeconds;
+			}
+			if (backgroundVideoRef.current) {
+				backgroundVideoRef.current.currentTime = nextSeconds;
+			}
+			if (cameraVideoRef.current) {
+				cameraVideoRef.current.currentTime = nextSeconds;
+			}
+			setCurrentMs(nextMs);
+		},
+		[durationMs, trimEndMs, trimStartMs],
+	);
+
 	const toggleTrackMuted = (trackId: string) => {
 		setManifest((current) =>
 			current
@@ -482,6 +503,12 @@ export function BrowserStudioEditor({
 			setActiveAssetId(
 				(current) => current ?? nextManifest.assets[0]?.assetId ?? null,
 			);
+			await deleteUploadedBrowserStudioVaultSessions().catch((cleanupError) => {
+				console.error(
+					"Failed to clean uploaded Browser Studio sessions",
+					cleanupError,
+				);
+			});
 			toast.success("Studio project saved");
 		} catch (saveError) {
 			console.error("Failed to save Browser Studio project", saveError);
@@ -516,6 +543,12 @@ export function BrowserStudioEditor({
 			setActiveAssetId(
 				(current) => current ?? nextManifest.assets[0]?.assetId ?? null,
 			);
+			await deleteUploadedBrowserStudioVaultSessions().catch((cleanupError) => {
+				console.error(
+					"Failed to clean uploaded Browser Studio sessions",
+					cleanupError,
+				);
+			});
 			toast.success("Share video updated");
 		} catch (exportError) {
 			console.error("Failed to export Browser Studio project", exportError);
@@ -611,6 +644,20 @@ export function BrowserStudioEditor({
 		const video = videoRef.current;
 		if (!video || !edit) return;
 		video.volume = edit.audio.volume;
+	}, [edit]);
+
+	useEffect(() => {
+		if (!edit) return;
+		const speed = clamp(edit.playback.speed, 0.5, 2);
+		if (videoRef.current) {
+			videoRef.current.playbackRate = speed;
+		}
+		if (backgroundVideoRef.current) {
+			backgroundVideoRef.current.playbackRate = speed;
+		}
+		if (cameraVideoRef.current) {
+			cameraVideoRef.current.playbackRate = speed;
+		}
 	}, [edit]);
 
 	if (loading) {
@@ -821,8 +868,20 @@ export function BrowserStudioEditor({
 								/>
 							</button>
 							<div className="text-sm font-medium text-gray-10">
-								{formatTime(trimStartMs)} to {formatTime(trimEndMs)}
+								{formatTime(currentMs)} / {formatTime(trimEndMs)}
 							</div>
+							<input
+								type="range"
+								min={trimStartMs}
+								max={trimEndMs}
+								step={100}
+								value={clamp(currentMs, trimStartMs, trimEndMs)}
+								onChange={(event) =>
+									seekToMs(Number(event.currentTarget.value))
+								}
+								className="min-w-48 flex-1"
+								aria-label="Scrub timeline"
+							/>
 							<button
 								type="button"
 								onClick={() => setZoomToolArmed((current) => !current)}
@@ -839,6 +898,34 @@ export function BrowserStudioEditor({
 								/>
 								{zoomToolArmed ? "Click preview" : "Add zoom"}
 							</button>
+						</div>
+						<div className="mt-4 flex flex-wrap items-center gap-2">
+							<span className="text-xs font-semibold uppercase tracking-wide text-gray-9">
+								Speed
+							</span>
+							{playbackSpeedOptions.map((speed) => (
+								<button
+									key={speed}
+									type="button"
+									onClick={() =>
+										updateEdit((current) => ({
+											...current,
+											playback: {
+												...current.playback,
+												speed,
+											},
+										}))
+									}
+									className={clsx(
+										"rounded-full px-3 py-1.5 text-xs font-semibold",
+										edit.playback.speed === speed
+											? "bg-blue-10 text-white"
+											: "bg-gray-4 text-gray-11",
+									)}
+								>
+									{speed}x
+								</button>
+							))}
 						</div>
 
 						<div className="mt-5 space-y-3">

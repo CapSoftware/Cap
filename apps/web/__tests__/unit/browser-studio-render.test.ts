@@ -95,6 +95,9 @@ const manifest = {
 			startMs: 1000,
 			endMs: 6000,
 		},
+		playback: {
+			speed: 1,
+		},
 		canvas: {
 			aspectRatio: "1:1",
 			backgroundMode: "solid",
@@ -327,6 +330,55 @@ describe("browser studio render", () => {
 		expect(args).toContain("-map [vtext0]");
 	});
 
+	it("keeps text overlay timing aligned after playback speed changes", () => {
+		const plan = buildBrowserStudioRenderPlan(
+			{
+				...manifest,
+				edit: {
+					...manifest.edit,
+					playback: {
+						speed: 2,
+					},
+					textOverlays: [
+						{
+							id: "text-1",
+							startMs: 2000,
+							endMs: 4000,
+							text: "Fast section",
+							x: 0.5,
+							y: 0.2,
+							size: 48,
+							color: "#ffffff",
+							background: "#00000099",
+						},
+					],
+				},
+			},
+			sources,
+		);
+		const overlay = plan.edit.textOverlays.at(0);
+
+		if (!overlay) {
+			throw new Error("Expected text overlay");
+		}
+
+		const args = appendTextOverlayInputsToArgs(
+			plan.args,
+			[
+				{
+					path: "/tmp/text-overlay.png",
+					overlay,
+				},
+			],
+			plan.trimStartSeconds,
+			plan.outputWidth,
+			plan.outputHeight,
+			plan.edit.playback.speed,
+		).join(" ");
+
+		expect(args).toContain("enable='between(t,0.5,1.5)'");
+	});
+
 	it("renders gradient backgrounds through a generated image input", () => {
 		const plan = buildBrowserStudioRenderPlan(
 			{
@@ -352,5 +404,27 @@ describe("browser studio render", () => {
 		expect(args).toContain("-loop 1 -i /tmp/gradient-background.png");
 		expect(args).toContain("[2:v]scale=1920:1920,setsar=1[bg]");
 		expect(args).toContain("[bg][v0]overlay");
+	});
+
+	it("renders playback speed into video timing, audio tempo, and duration", () => {
+		const plan = buildBrowserStudioRenderPlan(
+			{
+				...manifest,
+				edit: {
+					...manifest.edit,
+					playback: {
+						speed: 2,
+					},
+				},
+			},
+			sources,
+		);
+
+		const args = plan.args.join(" ");
+
+		expect(plan.durationMs).toBe(2500);
+		expect(args).toContain("setpts=0.5*PTS");
+		expect(args).toContain("atempo=2,volume=0.7");
+		expect(plan.argsWithoutAudio.join(" ")).toContain("setpts=0.5*PTS");
 	});
 });

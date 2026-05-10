@@ -4,7 +4,6 @@ import {
 	fetchConvertedVideoViaMediaServer,
 	isMediaServerConfigured,
 } from "@/lib/media-client";
-import { convertRemoteVideoToMp4Buffer } from "@/lib/video-convert";
 
 function isHlsUrl(url: string): boolean {
 	return (url.split("?")[0] ?? "").toLowerCase().endsWith(".m3u8");
@@ -294,6 +293,9 @@ export async function GET(request: NextRequest) {
 	}
 
 	try {
+		const { convertRemoteVideoToMp4Buffer } = await import(
+			"@/lib/video-convert"
+		);
 		const mp4Buffer = await convertRemoteVideoToMp4Buffer(cdnUrl);
 
 		return new NextResponse(mp4Buffer, {

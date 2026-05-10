@@ -551,7 +551,7 @@ export const useWebRecorder = ({
 			try {
 				await releaseBrowserStudioVault({ deleteSession: true });
 				const vault = await BrowserStudioVault.create({
-					title: "Browser recording",
+					title: "Recording",
 				});
 				const asset = await vault.createAsset({
 					kind: "mixed",

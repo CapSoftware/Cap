@@ -95,6 +95,9 @@ export type BrowserStudioEditSettings = {
 		startMs: number;
 		endMs: number | null;
 	};
+	playback: {
+		speed: number;
+	};
 	canvas: {
 		aspectRatio: BrowserStudioCanvasAspectRatio;
 		backgroundMode: BrowserStudioBackgroundMode;
@@ -175,6 +178,9 @@ export const createDefaultBrowserStudioEdit = (
 		startMs: 0,
 		endMs: durationMs,
 	},
+	playback: {
+		speed: 1,
+	},
 	canvas: {
 		aspectRatio: "source",
 		backgroundMode: "solid",
@@ -210,6 +216,12 @@ export const getBrowserStudioEditSettings = (
 						manifest.project.timeline.durationMs,
 					).trim,
 					...manifest.edit.trim,
+				},
+				playback: {
+					...createDefaultBrowserStudioEdit(
+						manifest.project.timeline.durationMs,
+					).playback,
+					...manifest.edit.playback,
 				},
 				canvas: {
 					...createDefaultBrowserStudioEdit(

@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFfmpegPath } from "@/lib/audio-extract";
 
 export interface VideoConversionResult {
 	filePath: string;
@@ -12,7 +11,7 @@ export interface VideoConversionResult {
 }
 
 function runFfmpeg(args: string[]): Promise<void> {
-	const ffmpeg = getFfmpegPath();
+	const ffmpeg = process.env.FFMPEG_PATH ?? "ffmpeg";
 
 	return new Promise((resolve, reject) => {
 		const proc = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"] });

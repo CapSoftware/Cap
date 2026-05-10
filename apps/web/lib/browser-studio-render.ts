@@ -71,6 +71,15 @@ const seconds = (ms: number) => Number((ms / 1000).toFixed(3));
 
 const expressionNumber = (value: number) => Number(value.toFixed(4));
 
+const getPlaybackSpeed = (edit: BrowserStudioEditSettings) =>
+	clamp(edit.playback.speed, 0.5, 2);
+
+const getPlaybackSetpts = (speed: number) =>
+	Number((1 / speed).toFixed(4)).toString();
+
+const getAudioTempoFilters = (speed: number) =>
+	speed === 1 ? [] : [`atempo=${Number(speed.toFixed(3))}`];
+
 const escapeXml = (value: string) =>
 	value
 		.replaceAll("&", "&amp;")
@@ -464,6 +473,7 @@ export function appendTextOverlayInputsToArgs(
 	trimStartSeconds: number,
 	outputWidth: number,
 	outputHeight: number,
+	playbackSpeed = 1,
 ) {
 	if (textInputs.length === 0) {
 		return args;
@@ -507,8 +517,14 @@ export function appendTextOverlayInputsToArgs(
 		const inputIndex = inputCount + index;
 		const outputLabel = `[vtext${index}]`;
 		const overlay = input.overlay;
-		const start = Math.max(0, seconds(overlay.startMs) - trimStartSeconds);
-		const end = Math.max(start, seconds(overlay.endMs) - trimStartSeconds);
+		const safePlaybackSpeed = clamp(playbackSpeed, 0.5, 2);
+		const rawStart = Math.max(0, seconds(overlay.startMs) - trimStartSeconds);
+		const rawEnd = Math.max(
+			rawStart,
+			seconds(overlay.endMs) - trimStartSeconds,
+		);
+		const start = rawStart / safePlaybackSpeed;
+		const end = rawEnd / safePlaybackSpeed;
 		const x = expressionNumber(clamp(overlay.x, 0, 1));
 		const y = expressionNumber(clamp(overlay.y, 0, 1));
 		const filter = `${videoLabel}[${inputIndex}:v]overlay=x='(${outputWidth}-w)*${x}':y='(${outputHeight}-h)*${y}':enable='between(t,${Number(start.toFixed(3))},${Number(end.toFixed(3))})'${outputLabel}`;
@@ -535,6 +551,8 @@ export function buildBrowserStudioRenderPlan(
 	const trackDurationMs = selected.primary.track?.durationMs ?? null;
 	const assetDurationMs = trackDurationMs ?? timelineDurationMs;
 	const trim = getBrowserStudioTrimRange(edit, assetDurationMs);
+	const playbackSpeed = getPlaybackSpeed(edit);
+	const playbackSetpts = getPlaybackSetpts(playbackSpeed);
 	const layout = getBrowserStudioRenderLayout({
 		sourceWidth: selected.primary.asset.width,
 		sourceHeight: selected.primary.asset.height,
@@ -607,6 +625,11 @@ export function buildBrowserStudioRenderPlan(
 		videoLabel = "[vout]";
 	}
 
+	if (playbackSpeed !== 1) {
+		filters.push(`${videoLabel}setpts=${playbackSetpts}*PTS[vplay]`);
+		videoLabel = "[vplay]";
+	}
+
 	const audioEnabled =
 		selected.primary.track?.muted !== true && edit.audio.volume > 0;
 	const args = [
@@ -619,7 +642,15 @@ export function buildBrowserStudioRenderPlan(
 	];
 
 	if (audioEnabled) {
-		args.push("-map", "0:a?", "-af", `volume=${edit.audio.volume}`);
+		args.push(
+			"-map",
+			"0:a?",
+			"-af",
+			[
+				...getAudioTempoFilters(playbackSpeed),
+				`volume=${edit.audio.volume}`,
+			].join(","),
+		);
 	} else {
 		args.push("-an");
 	}
@@ -663,7 +694,7 @@ export function buildBrowserStudioRenderPlan(
 	return {
 		...selected,
 		edit,
-		durationMs: trim.durationMs,
+		durationMs: Math.max(1, Math.round(trim.durationMs / playbackSpeed)),
 		outputWidth: layout.outputWidth,
 		outputHeight: layout.outputHeight,
 		trimStartSeconds,
@@ -707,6 +738,7 @@ export async function renderBrowserStudioMp4(
 			plan.trimStartSeconds,
 			plan.outputWidth,
 			plan.outputHeight,
+			getPlaybackSpeed(plan.edit),
 		);
 		const argsWithoutAudio = appendTextOverlayInputsToArgs(
 			argsWithoutAudioWithGradient,
@@ -714,6 +746,7 @@ export async function renderBrowserStudioMp4(
 			plan.trimStartSeconds,
 			plan.outputWidth,
 			plan.outputHeight,
+			getPlaybackSpeed(plan.edit),
 		);
 
 		try {
