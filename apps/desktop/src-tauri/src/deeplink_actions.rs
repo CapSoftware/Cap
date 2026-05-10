@@ -6,7 +6,12 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
 use tracing::trace;
 
-use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
+use crate::{
+    App, ArcLock,
+    recording::StartRecordingInputs,
+    recording_settings::RecordingTargetMode,
+    windows::ShowCapWindow,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +31,17 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    RestartRecording,
+    TogglePauseRecording,
+    SetMicrophone {
+        mic_label: Option<String>,
+    },
+    SetCamera {
+        camera: Option<DeviceOrModelID>,
+    },
+    OpenRecordingPicker {
+        target_mode: Option<RecordingTargetMode>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -70,6 +86,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     });
 }
 
+#[derive(Debug)]
 pub enum ActionParseFromUrlError {
     ParseFailed(String),
     Invalid,
@@ -147,6 +164,35 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::RestartRecording => crate::recording::restart_recording(
+                app.clone(),
+                app.state(),
+            )
+            .await
+            .map(|_| ()),
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SetMicrophone { mic_label } => {
+                crate::set_mic_input(app.state(), mic_label).await
+            }
+            DeepLinkAction::SetCamera { camera } => {
+                crate::set_camera_input(app.clone(), app.state(), camera, None).await
+            }
+            DeepLinkAction::OpenRecordingPicker { target_mode } => {
+                match target_mode {
+                    Some(target_mode) => crate::open_target_picker(app, target_mode).await,
+                    None => {
+                        ShowCapWindow::Main {
+                            init_target_mode: None,
+                        }
+                        .show(app)
+                        .await?;
+                    }
+                }
+
+                Ok(())
+            }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
@@ -154,5 +200,55 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ActionParseFromUrlError, DeepLinkAction};
+    use crate::recording_settings::RecordingTargetMode;
+    use tauri::Url;
+
+    fn parse_action(encoded_value: &str) -> Result<DeepLinkAction, ActionParseFromUrlError> {
+        let url = Url::parse(&format!("cap-desktop://action?value={encoded_value}")).unwrap();
+
+        DeepLinkAction::try_from(&url)
+    }
+
+    #[test]
+    fn parses_restart_recording_action() {
+        assert!(matches!(
+            parse_action("%22restart_recording%22").unwrap(),
+            DeepLinkAction::RestartRecording
+        ));
+    }
+
+    #[test]
+    fn parses_toggle_pause_recording_action() {
+        assert!(matches!(
+            parse_action("%22toggle_pause_recording%22").unwrap(),
+            DeepLinkAction::TogglePauseRecording
+        ));
+    }
+
+    #[test]
+    fn parses_set_microphone_action() {
+        assert!(matches!(
+            parse_action("%7B%22set_microphone%22%3A%7B%22mic_label%22%3Anull%7D%7D").unwrap(),
+            DeepLinkAction::SetMicrophone { mic_label: None }
+        ));
+    }
+
+    #[test]
+    fn parses_open_recording_picker_action() {
+        assert!(matches!(
+            parse_action(
+                "%7B%22open_recording_picker%22%3A%7B%22target_mode%22%3A%22display%22%7D%7D"
+            )
+            .unwrap(),
+            DeepLinkAction::OpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Display)
+            }
+        ));
     }
 }
