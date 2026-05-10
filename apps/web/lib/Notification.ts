@@ -3,7 +3,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { FirstView } from "@cap/database/emails/first-view";
 import { nanoId } from "@cap/database/helpers";
 import { comments, notifications, users, videos } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
 import { type Comment, User, Video } from "@cap/web-domain";
 import { and, eq, gte, isNull, sql } from "drizzle-orm";
@@ -373,15 +373,13 @@ export async function sendFirstViewEmail(
 			viewerName = viewer?.name || viewer?.email || "Someone";
 		}
 
-		const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
-			? `https://cap.link/${params.videoId}`
-			: `${serverEnv().WEB_URL}/s/${params.videoId}`;
+		const videoUrl = `${serverEnv().WEB_URL}/s/${params.videoId}`;
 
 		const displayName = videoWithOwner.videoName || "Untitled Video";
 
 		await sendEmail({
 			email: videoWithOwner.ownerEmail,
-			subject: `Your Cap "${displayName}" just got its first view!`,
+			subject: `Your video "${displayName}" just got its first view!`,
 			react: FirstView({
 				email: videoWithOwner.ownerEmail,
 				url: videoUrl,

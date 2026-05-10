@@ -5,6 +5,7 @@ import { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
+import { removeCapFromVideoTitle } from "@/lib/video-title";
 import { BrowserStudioEditor } from "./BrowserStudioEditor";
 
 export const metadata: Metadata = {
@@ -41,7 +42,7 @@ export default async function BrowserStudioPage({
 	return (
 		<BrowserStudioEditor
 			videoId={video.id}
-			title={video.name}
+			title={removeCapFromVideoTitle(video.name)}
 			shareUrl={`/s/${video.id}`}
 		/>
 	);

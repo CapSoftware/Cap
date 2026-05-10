@@ -28,7 +28,7 @@ export function FirstView({
 	return (
 		<Html>
 			<Head />
-			<Preview>Your Cap "{videoName}" just got its first view!</Preview>
+			<Preview>Your video "{videoName}" just got its first view!</Preview>
 			<Tailwind>
 				<Body className="mx-auto my-auto bg-gray-1 font-sans">
 					<Container className="mx-auto my-10 max-w-[500px] rounded border border-solid border-gray-200 px-10 py-5">
@@ -37,26 +37,26 @@ export function FirstView({
 								src={CAP_LOGO_URL}
 								width="40"
 								height="40"
-								alt="Cap"
+								alt="Logo"
 								className="mx-auto my-0"
 							/>
 						</Section>
 						<Heading className="mx-0 my-7 p-0 text-center text-xl font-semibold text-black">
-							Your Cap just got its first view!
+							Your video just got its first view!
 						</Heading>
 						<Text className="text-sm leading-6 text-black">
 							Your video "{videoName}" was just viewed by{" "}
 							<span className="font-medium">{viewerName}</span>.
 						</Text>
 						<Text className="text-sm leading-6 text-black">
-							Click the button below to see your Cap.
+							Click the button below to see your video.
 						</Text>
 						<Section className="my-8 text-center">
 							<Link
 								className="rounded-full bg-black px-6 py-3 text-center text-[12px] font-semibold text-white no-underline"
 								href={url}
 							>
-								View Your Cap
+								View Your Video
 							</Link>
 						</Section>
 						<Text className="text-sm leading-6 text-black">

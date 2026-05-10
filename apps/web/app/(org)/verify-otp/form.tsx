@@ -225,7 +225,7 @@ export function VerifyOTPForm({
 
 			<p className="mt-6 text-xs text-center text-gray-9">
 				By entering your email, you acknowledge that you have both read and
-				agree to Cap's{" "}
+				agree to the{" "}
 				<Link
 					href="/terms"
 					target="_blank"

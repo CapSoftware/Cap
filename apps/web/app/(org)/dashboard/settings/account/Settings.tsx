@@ -182,7 +182,7 @@ export const Settings = () => {
 						<CardTitle>Your name</CardTitle>
 						<CardDescription>
 							Changing your name below will update how your name appears when
-							sharing a Cap, and in your profile.
+							sharing a video, and in your profile.
 						</CardDescription>
 					</div>
 					<div className="flex flex-col flex-wrap gap-3 w-full">
@@ -212,7 +212,7 @@ export const Settings = () => {
 					<div className="space-y-1">
 						<CardTitle>Contact email address</CardTitle>
 						<CardDescription>
-							This is the email address you used to sign up to Cap with.
+							This is the email address you used to sign up with.
 						</CardDescription>
 					</div>
 					<Input

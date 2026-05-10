@@ -36,11 +36,7 @@ export function WelcomePage() {
 	};
 
 	return (
-		<Base
-			title="Welcome to Cap"
-			description="Let's get you started"
-			hideBackButton
-		>
+		<Base title="Welcome" description="Let's get you started" hideBackButton>
 			<form className="space-y-7" onSubmit={handleSubmit}>
 				<div className="space-y-3">
 					<Input

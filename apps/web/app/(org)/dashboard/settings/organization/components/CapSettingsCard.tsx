@@ -148,10 +148,10 @@ const CapSettingsCard = () => {
 	return (
 		<Card className="flex relative flex-col flex-1 gap-6 w-full min-h-fit">
 			<CardHeader>
-				<CardTitle>Cap Settings</CardTitle>
+				<CardTitle>Organization Settings</CardTitle>
 				<CardDescription>
 					Enable or disable specific settings for your organization. These
-					settings will be applied as defaults for new caps.
+					settings will be applied as defaults for new videos.
 				</CardDescription>
 			</CardHeader>
 

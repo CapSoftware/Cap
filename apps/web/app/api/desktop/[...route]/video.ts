@@ -22,6 +22,7 @@ import { z } from "zod";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { getDefaultVideoTitle } from "@/lib/video-title";
 import {
 	GOOGLE_DRIVE_UPLOAD_FEATURE,
 	hasDesktopFeature,
@@ -169,7 +170,10 @@ app.get(
 
 			const videoName =
 				name ??
-				`Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`;
+				getDefaultVideoTitle(
+					isScreenshot ? "screenshot" : "recording",
+					formattedDate,
+				);
 			const clientSupportsGoogleDriveUpload = hasDesktopFeature(
 				c.req,
 				GOOGLE_DRIVE_UPLOAD_FEATURE,

@@ -19,6 +19,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import * as EffectRuntime from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
+import { removeCapFromVideoTitle } from "@/lib/video-title";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { EmbedVideo } from "./_components/EmbedVideo";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
@@ -35,7 +36,7 @@ export async function generateMetadata(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
-					title: video.name,
+					title: removeCapFromVideoTitle(video.name),
 					description: "Watch this video",
 					openGraph: {
 						images: [
@@ -62,7 +63,7 @@ export async function generateMetadata(
 					},
 					twitter: {
 						card: "player",
-						title: video.name,
+						title: removeCapFromVideoTitle(video.name),
 						description: "Watch this video",
 						images: [
 							new URL(
@@ -107,6 +108,27 @@ export async function generateMetadata(
 		EffectRuntime.runPromise,
 	);
 }
+
+const renderEmbedPolicyDenied = (reason?: string) =>
+	reason === "expired"
+		? Effect.sync(() => notFound())
+		: Effect.succeed(
+				<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
+					<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
+					<p className="text-gray-400">
+						If you own this video, please <Link href="/login">sign in</Link> to
+						manage sharing.
+					</p>
+				</div>,
+			);
+
+const renderEmbedNoSuchElement = () => Effect.sync(() => notFound());
+
+const getEmbedPageCatchers = () => ({
+	PolicyDenied: (error: Policy.PolicyDeniedError) =>
+		renderEmbedPolicyDenied(error.reason),
+	NoSuchElementException: renderEmbedNoSuchElement,
+});
 
 export default async function EmbedVideoPage(
 	props: PageProps<"/embed/[videoId]">,
@@ -176,30 +198,14 @@ export default async function EmbedVideoPage(
 			Effect.succeed({ needsPassword: true } as const),
 		),
 		Effect.map((data) => (
-			<div className="min-h-screen bg-black">
+			<div key={videoId} className="min-h-screen bg-black">
 				<PasswordOverlay isOpen={data.needsPassword} videoId={videoId} />
 				{!data.needsPassword && (
 					<EmbedContent video={data.video} autoplay={autoplay} />
 				)}
 			</div>
 		)),
-		Effect.catchTags({
-			PolicyDenied: (error) =>
-				error.reason === "expired"
-					? Effect.sync(() => notFound())
-					: Effect.succeed(
-							<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
-								<h1 className="mb-4 text-2xl font-bold">
-									This video is private
-								</h1>
-								<p className="text-gray-400">
-									If you own this video, please{" "}
-									<Link href="/login">sign in</Link> to manage sharing.
-								</p>
-							</div>,
-						),
-			NoSuchElementException: () => Effect.sync(() => notFound()),
-		}),
+		Effect.catchTags(getEmbedPageCatchers()),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
 	);
@@ -297,7 +303,7 @@ async function EmbedContent({
 
 	return (
 		<EmbedVideo
-			data={video}
+			data={{ ...video, name: removeCapFromVideoTitle(video.name) }}
 			user={user}
 			comments={commentsQuery}
 			chapters={initialAiData?.chapters || []}

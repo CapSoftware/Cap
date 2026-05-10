@@ -346,9 +346,7 @@ export const CapCard = ({
 				? `${webUrl}/s/${cap.id}`
 				: buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified
 					? `https://${customDomain}/s/${cap.id}`
-					: buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified
-						? `https://cap.link/${cap.id}`
-						: `${webUrl}/s/${cap.id}`,
+					: `${webUrl}/s/${cap.id}`,
 		);
 	};
 

@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
 import { Tooltip } from "@/components/Tooltip";
+import { removeCapFromVideoTitle } from "@/lib/video-title";
 import type { CapCardProps } from "./CapCard";
 
 interface CapContentProps {
@@ -37,7 +38,8 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	);
 	const [isDateEditing, setIsDateEditing] = useState(false);
 	const [showFullDate, setShowFullDate] = useState(false);
-	const [title, setTitle] = useState(cap.name);
+	const displayName = removeCapFromVideoTitle(cap.name);
+	const [title, setTitle] = useState(displayName);
 	const [isEditing, setIsEditing] = useState(false);
 
 	const handleTitleBlur = async (capName: string) => {
@@ -73,6 +75,20 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
 		if (e.key === "Enter") {
 			e.preventDefault();
+		}
+	};
+
+	const handleSharedStatusKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+		if (e.key === "Enter" || e.key === " ") {
+			e.preventDefault();
+			setIsSharingDialogOpen(true);
+		}
+	};
+
+	const handleTitleDisplayKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+		if ((e.key === "Enter" || e.key === " ") && !sharedCapCard) {
+			e.preventDefault();
+			if (userId === cap.ownerId) setIsEditing(true);
 		}
 	};
 
@@ -129,6 +145,13 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 		}
 	};
 
+	const handleDateDisplayKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+		if (e.key === "Enter" || e.key === " ") {
+			e.preventDefault();
+			handleDateClick();
+		}
+	};
+
 	const renderSharedStatus = () => {
 		const baseClassName = clsx(
 			"text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
@@ -143,23 +166,33 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
 			if (!hasSpaceSharing && !isPublic) {
 				return (
-					<p
-						className={baseClassName}
+					<button
+						type="button"
+						className={clsx(
+							baseClassName,
+							"border-0 bg-transparent p-0 text-left",
+						)}
 						onClick={() => setIsSharingDialogOpen(true)}
+						onKeyDown={handleSharedStatusKeyDown}
 					>
 						Not shared{" "}
 						<FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
-					</p>
+					</button>
 				);
 			} else {
 				return (
-					<p
-						className={baseClassName}
+					<button
+						type="button"
+						className={clsx(
+							baseClassName,
+							"border-0 bg-transparent p-0 text-left",
+						)}
 						onClick={() => setIsSharingDialogOpen(true)}
+						onKeyDown={handleSharedStatusKeyDown}
 					>
 						Shared{" "}
 						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
-					</p>
+					</button>
 				);
 			}
 		} else {
@@ -170,14 +203,12 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	return (
 		<div>
 			<div className="h-[1.25rem] mb-1">
-				{" "}
-				{/* Fixed height container */}
 				{isEditing && !sharedCapCard ? (
 					<textarea
 						rows={1}
 						value={title}
 						onChange={(e) => setTitle(e.target.value)}
-						onBlur={() => handleTitleBlur(cap.name)}
+						onBlur={() => handleTitleBlur(displayName)}
 						onKeyDown={(e) => handleTitleKeyDown(e)}
 						className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
 					/>
@@ -191,6 +222,11 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 								}
 							}
 						}}
+						onKeyDown={handleTitleDisplayKeyDown}
+						role={
+							!sharedCapCard && userId === cap.ownerId ? "button" : undefined
+						}
+						tabIndex={!sharedCapCard && userId === cap.ownerId ? 0 : undefined}
 					>
 						{title}
 					</p>
@@ -199,7 +235,6 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
 			{renderSharedStatus()}
 			<div className="mb-1 h-[1.5rem]">
-				{" "}
 				{isDateEditing && !sharedCapCard ? (
 					<div className="flex items-center h-full">
 						<input
@@ -214,14 +249,16 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 					</div>
 				) : (
 					<Tooltip content={`Video created at ${effectiveDate}`}>
-						<p
-							className="text-sm truncate text-gray-10 cursor-pointer flex items-center h-full leading-[1.5rem]"
+						<button
+							type="button"
+							className="text-sm truncate text-gray-10 cursor-pointer flex items-center h-full leading-[1.5rem] border-0 bg-transparent p-0 text-left"
 							onClick={handleDateClick}
+							onKeyDown={handleDateDisplayKeyDown}
 						>
 							{showFullDate
 								? moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
 								: moment(effectiveDate).fromNow()}
-						</p>
+						</button>
 					</Tooltip>
 				)}
 			</div>

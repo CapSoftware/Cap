@@ -657,7 +657,7 @@ export function BrowserStudioEditor({
 					</Link>
 					<div className="min-w-0">
 						<h1 className="truncate text-xl font-semibold">{title}</h1>
-						<p className="text-sm text-gray-9">Browser Studio</p>
+						<p className="text-sm text-gray-9">Studio</p>
 					</div>
 				</div>
 				<div className="flex items-center gap-2">

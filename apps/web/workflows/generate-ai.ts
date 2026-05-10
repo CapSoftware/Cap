@@ -10,6 +10,7 @@ import { FatalError } from "workflow";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { isDefaultVideoTitle } from "@/lib/video-title";
 
 interface GenerateAiWorkflowPayload {
 	videoId: string;
@@ -232,14 +233,7 @@ async function saveResults(
 		.set({ metadata: updatedMetadata })
 		.where(eq(videos.id, videoId as Video.VideoId));
 
-	const hasDatePattern = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(
-		video.name || "",
-	);
-
-	if (
-		(video.name?.startsWith("Cap Recording -") || hasDatePattern) &&
-		result.title
-	) {
+	if (isDefaultVideoTitle(video.name) && result.title) {
 		await db()
 			.update(videos)
 			.set({ name: result.title })

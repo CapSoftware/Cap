@@ -35,9 +35,10 @@ export const sendEmail = async ({
 	let from: string;
 
 	if (fromOverride) from = fromOverride;
-	else if (marketing) from = "Richie from Cap <richie@send.cap.so>";
+	else if (marketing)
+		from = `Updates <updates@${serverEnv().RESEND_FROM_DOMAIN}>`;
 	else if (buildEnv.NEXT_PUBLIC_IS_CAP)
-		from = "Cap Auth <no-reply@auth.cap.so>";
+		from = `Auth <auth@${serverEnv().RESEND_FROM_DOMAIN}>`;
 	else from = `auth@${serverEnv().RESEND_FROM_DOMAIN}`;
 
 	return r.emails.send({

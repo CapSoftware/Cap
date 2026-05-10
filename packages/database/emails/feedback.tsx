@@ -35,7 +35,7 @@ export function Feedback({
 								src={CAP_LOGO_URL}
 								width="40"
 								height="40"
-								alt="Cap"
+								alt="Logo"
 								className="mx-auto my-0"
 							/>
 						</Section>

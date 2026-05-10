@@ -17,6 +17,7 @@ import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
+import { getDefaultVideoTitle } from "@/lib/video-title";
 
 const MAX_S3_DELETE_ATTEMPTS = 3;
 const S3_DELETE_RETRY_BACKOFF_MS = 250;
@@ -190,9 +191,10 @@ export async function createVideoAndGetUploadUrl({
 
 		const videoData = {
 			id: idToUse,
-			name: `${
-				isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
-			} - ${formattedDate}`,
+			name: getDefaultVideoTitle(
+				isScreenshot ? "screenshot" : isUpload ? "upload" : "recording",
+				formattedDate,
+			),
 			ownerId: user.id,
 			orgId,
 			source: { type: "webMP4" as const },

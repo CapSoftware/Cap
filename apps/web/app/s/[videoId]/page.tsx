@@ -42,6 +42,7 @@ import { createNotification } from "@/lib/Notification";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
+import { removeCapFromVideoTitle } from "@/lib/video-title";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
@@ -182,7 +183,7 @@ export async function generateMetadata(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
-					title: video.name,
+					title: removeCapFromVideoTitle(video.name),
 					description: "Watch this video",
 					openGraph: {
 						images: [
@@ -209,7 +210,7 @@ export async function generateMetadata(
 					},
 					twitter: {
 						card: "player",
-						title: video.name,
+						title: removeCapFromVideoTitle(video.name),
 						description: "Watch this video",
 						images: [
 							new URL(
@@ -663,39 +664,40 @@ async function AuthorizedContent({
 		};
 	}).pipe(runPromise);
 
-	return (
-		<>
-			<div className="container flex-1 px-4 mx-auto">
-				<ShareHeader
-					data={{
-						...videoWithOrganizationInfo,
-						createdAt: video.metadata?.customCreatedAt
-							? new Date(video.metadata.customCreatedAt)
-							: video.createdAt,
-					}}
-					customDomain={customDomain}
-					domainVerified={domainVerified}
-					sharedOrganizations={
-						videoWithOrganizationInfo.sharedOrganizations || []
-					}
-					sharedSpaces={sharedSpaces}
-					userOrganizations={userOrganizations}
-					spacesData={spacesData}
-				/>
+	const displayVideo = {
+		...videoWithOrganizationInfo,
+		name: removeCapFromVideoTitle(videoWithOrganizationInfo.name),
+	};
 
-				<Share
-					data={videoWithOrganizationInfo}
-					videoSettings={videoWithOrganizationInfo.settings}
-					comments={commentsPromise}
-					views={viewsPromise}
-					customDomain={customDomain}
-					domainVerified={domainVerified}
-					userOrganizations={userOrganizations}
-					viewerId={user?.id ?? null}
-					initialAiData={initialAiData}
-					aiGenerationEnabled={aiGenerationEnabled}
-				/>
-			</div>
-		</>
+	return (
+		<div className="container flex-1 px-4 mx-auto">
+			<ShareHeader
+				data={{
+					...displayVideo,
+					createdAt: video.metadata?.customCreatedAt
+						? new Date(video.metadata.customCreatedAt)
+						: video.createdAt,
+				}}
+				customDomain={customDomain}
+				domainVerified={domainVerified}
+				sharedOrganizations={displayVideo.sharedOrganizations || []}
+				sharedSpaces={sharedSpaces}
+				userOrganizations={userOrganizations}
+				spacesData={spacesData}
+			/>
+
+			<Share
+				data={displayVideo}
+				videoSettings={displayVideo.settings}
+				comments={commentsPromise}
+				views={viewsPromise}
+				customDomain={customDomain}
+				domainVerified={domainVerified}
+				userOrganizations={userOrganizations}
+				viewerId={user?.id ?? null}
+				initialAiData={initialAiData}
+				aiGenerationEnabled={aiGenerationEnabled}
+			/>
+		</div>
 	);
 }

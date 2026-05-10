@@ -23,7 +23,7 @@ export function OTPEmail({
 	return (
 		<Html>
 			<Head />
-			<Preview>Your Cap Verification Code: {code}</Preview>
+			<Preview>Your Verification Code: {code}</Preview>
 			<Tailwind>
 				<Body className="mx-auto my-auto bg-gray-1 font-sans">
 					<Container className="mx-auto my-10 max-w-[500px] rounded border border-solid border-gray-200 px-10 py-5">
@@ -32,16 +32,14 @@ export function OTPEmail({
 								src={CAP_LOGO_URL}
 								width="40"
 								height="40"
-								alt="Cap"
+								alt="Logo"
 								className="mx-auto my-0"
 							/>
 						</Section>
 						<Heading className="mx-0 my-7 p-0 text-center text-xl font-semibold text-black">
 							Your Verification Code
 						</Heading>
-						<Text className="text-sm leading-6 text-black">
-							Welcome to Cap!
-						</Text>
+						<Text className="text-sm leading-6 text-black">Welcome!</Text>
 						<Text className="text-sm leading-6 text-black">
 							Please use the following verification code to sign in to your
 							account:

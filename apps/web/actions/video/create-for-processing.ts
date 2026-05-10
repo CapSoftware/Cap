@@ -16,6 +16,7 @@ import {
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
+import { getDefaultVideoTitle } from "@/lib/video-title";
 
 export interface CreateForProcessingResult {
 	id: Video.VideoId;
@@ -74,7 +75,7 @@ export async function createVideoForServerProcessing({
 		.insert(videos)
 		.values({
 			id: videoId,
-			name: `Cap Upload - ${formattedDate}`,
+			name: getDefaultVideoTitle("upload", formattedDate),
 			ownerId: user.id,
 			orgId,
 			source: { type: "webMP4" as const },

@@ -89,7 +89,7 @@ const UpgradeModalImpl = ({
 		{
 			icon: <Globe className={iconStyling} />,
 			title: "Custom domain",
-			description: "Connect your own domain to Cap",
+			description: "Connect your own domain",
 		},
 		{
 			icon: <Share2 className={iconStyling} />,
@@ -98,7 +98,7 @@ const UpgradeModalImpl = ({
 		},
 		{
 			icon: <Sparkles className={iconStyling} />,
-			title: "Cap AI",
+			title: "AI",
 			description: "Automatic video chapters, summaries & more",
 		},
 		{
@@ -119,7 +119,7 @@ const UpgradeModalImpl = ({
 		{
 			icon: <Video className={iconStyling} />,
 			title: "Upload videos",
-			description: "Upload custom videos directly to Cap",
+			description: "Upload custom videos directly",
 		},
 		{
 			icon: <Infinity className={iconStyling} />,
@@ -163,12 +163,12 @@ const UpgradeModalImpl = ({
 			}
 
 			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
+				toast.success("You are already on the Pro plan");
 				onOpenChange(false);
 			}
 
 			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
+				toast.success("You are already on the Pro plan");
 				onOpenChange(false);
 			}
 
@@ -202,7 +202,7 @@ const UpgradeModalImpl = ({
 								<div className="flex relative flex-col flex-1 justify-center items-center py-6 w-full">
 									<div className="flex flex-col items-center">
 										<h1 className="text-3xl font-medium text-gray-12">
-											Upgrade to Cap Pro
+											Upgrade to Pro
 										</h1>
 									</div>
 									<p className="mt-1 text-lg text-center text-gray-11">
@@ -285,7 +285,7 @@ const UpgradeModalImpl = ({
 									>
 										{proCheckoutMutation.isPending
 											? "Loading..."
-											: "Upgrade to Cap Pro"}
+											: "Upgrade to Pro"}
 									</Button>
 									<button
 										type="button"

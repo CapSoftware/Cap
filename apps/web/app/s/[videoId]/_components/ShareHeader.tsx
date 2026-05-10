@@ -118,12 +118,6 @@ export const ShareHeader = ({
 			return `${webUrl}/s/${data.id}`;
 		} else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
 			return `https://${customDomain}/s/${data.id}`;
-		} else if (
-			buildEnv.NEXT_PUBLIC_IS_CAP &&
-			!customDomain &&
-			!domainVerified
-		) {
-			return `https://cap.link/${data.id}`;
 		} else {
 			return `${webUrl}/s/${data.id}`;
 		}
@@ -136,12 +130,6 @@ export const ShareHeader = ({
 			return `${webUrl}/s/${data.id}`;
 		} else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
 			return `${customDomain}/s/${data.id}`;
-		} else if (
-			buildEnv.NEXT_PUBLIC_IS_CAP &&
-			!customDomain &&
-			!domainVerified
-		) {
-			return `cap.link/${data.id}`;
 		} else {
 			return `${webUrl}/s/${data.id}`;
 		}

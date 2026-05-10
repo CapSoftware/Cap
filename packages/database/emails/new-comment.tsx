@@ -30,7 +30,7 @@ export function NewComment({
 	return (
 		<Html>
 			<Head />
-			<Preview>New comment on your Cap: {videoName}</Preview>
+			<Preview>New comment on your video: {videoName}</Preview>
 			<Tailwind>
 				<Body className="mx-auto my-auto bg-gray-1 font-sans">
 					<Container className="mx-auto my-10 max-w-[500px] rounded border border-solid border-gray-200 px-10 py-5">
@@ -39,15 +39,15 @@ export function NewComment({
 								src={CAP_LOGO_URL}
 								width="40"
 								height="40"
-								alt="Cap"
+								alt="Logo"
 								className="mx-auto my-0"
 							/>
 						</Section>
 						<Heading className="mx-0 my-7 p-0 text-center text-xl font-semibold text-black">
-							New comment on your Cap
+							New comment on your video
 						</Heading>
 						<Text className="text-sm leading-6 text-black">
-							{commenterName} left a comment on your Cap "{videoName}":
+							{commenterName} left a comment on your video "{videoName}":
 						</Text>
 						<Section className="my-4 p-4 bg-gray-50 rounded-lg">
 							<Text className="text-sm leading-6 text-gray-700 italic">
