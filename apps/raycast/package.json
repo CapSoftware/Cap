@@ -54,6 +54,18 @@
 			"mode": "no-view"
 		},
 		{
+			"name": "pause-recording",
+			"title": "Pause Recording",
+			"description": "Pause the current Cap recording",
+			"mode": "no-view"
+		},
+		{
+			"name": "resume-recording",
+			"title": "Resume Recording",
+			"description": "Resume the current Cap recording",
+			"mode": "no-view"
+		},
+		{
 			"name": "toggle-pause-recording",
 			"title": "Pause or Resume Recording",
 			"description": "Pause or resume the current Cap recording",

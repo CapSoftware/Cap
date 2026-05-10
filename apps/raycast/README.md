@@ -8,6 +8,8 @@ Control Cap desktop recordings from Raycast.
 - Start Instant Recording
 - Stop Recording
 - Restart Recording
+- Pause Recording
+- Resume Recording
 - Pause or Resume Recording
 - Open Recording Picker
 - Set Microphone
@@ -23,6 +25,8 @@ The extension opens Cap desktop deeplinks using the `cap-desktop://action` schem
 Examples:
 
 - `cap-desktop://action?value=%22stop_recording%22`
+- `cap-desktop://action?value=%22pause_recording%22`
+- `cap-desktop://action?value=%22resume_recording%22`
 - `cap-desktop://action?value=%22toggle_pause_recording%22`
 - `cap-desktop://action?value=%7B%22start_recording_from_settings%22%3A%7B%22mode%22%3A%22studio%22%7D%7D`
 - `cap-desktop://action?value=%7B%22set_microphone%22%3A%7B%22mic_label%22%3A%22MacBook%20Pro%20Microphone%22%7D%7D`

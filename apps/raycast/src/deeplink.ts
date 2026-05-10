@@ -3,6 +3,8 @@ import { closeMainWindow, open, showToast, Toast } from "@raycast/api";
 type CapAction =
 	| "stop_recording"
 	| "restart_recording"
+	| "pause_recording"
+	| "resume_recording"
 	| "toggle_pause_recording"
 	| {
 			start_recording_from_settings: {

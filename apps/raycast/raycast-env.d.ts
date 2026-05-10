@@ -21,6 +21,10 @@ declare namespace Preferences {
   export type StopRecording = ExtensionPreferences & {}
   /** Preferences accessible in the `restart-recording` command */
   export type RestartRecording = ExtensionPreferences & {}
+  /** Preferences accessible in the `pause-recording` command */
+  export type PauseRecording = ExtensionPreferences & {}
+  /** Preferences accessible in the `resume-recording` command */
+  export type ResumeRecording = ExtensionPreferences & {}
   /** Preferences accessible in the `toggle-pause-recording` command */
   export type TogglePauseRecording = ExtensionPreferences & {}
   /** Preferences accessible in the `open-recording-picker` command */
@@ -46,6 +50,10 @@ declare namespace Arguments {
   export type StopRecording = {}
   /** Arguments passed to the `restart-recording` command */
   export type RestartRecording = {}
+  /** Arguments passed to the `pause-recording` command */
+  export type PauseRecording = {}
+  /** Arguments passed to the `resume-recording` command */
+  export type ResumeRecording = {}
   /** Arguments passed to the `toggle-pause-recording` command */
   export type TogglePauseRecording = {}
   /** Arguments passed to the `open-recording-picker` command */
@@ -67,4 +75,3 @@ declare namespace Arguments {
   /** Arguments passed to the `open-settings` command */
   export type OpenSettings = {}
 }
-

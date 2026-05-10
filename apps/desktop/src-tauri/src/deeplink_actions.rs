@@ -35,6 +35,8 @@ pub enum DeepLinkAction {
     },
     StopRecording,
     RestartRecording,
+    PauseRecording,
+    ResumeRecording,
     TogglePauseRecording,
     SetMicrophone {
         mic_label: Option<String>,
@@ -199,6 +201,12 @@ impl DeepLinkAction {
             )
             .await
             .map(|_| ()),
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
             DeepLinkAction::TogglePauseRecording => {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
@@ -262,6 +270,22 @@ mod tests {
             DeepLinkAction::StartRecordingFromSettings {
                 mode: cap_recording::RecordingMode::Studio
             }
+        ));
+    }
+
+    #[test]
+    fn parses_pause_recording_action() {
+        assert!(matches!(
+            parse_action("%22pause_recording%22").unwrap(),
+            DeepLinkAction::PauseRecording
+        ));
+    }
+
+    #[test]
+    fn parses_resume_recording_action() {
+        assert!(matches!(
+            parse_action("%22resume_recording%22").unwrap(),
+            DeepLinkAction::ResumeRecording
         ));
     }
 
