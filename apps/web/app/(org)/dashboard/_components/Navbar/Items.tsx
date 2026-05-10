@@ -18,11 +18,7 @@ import {
 	PopoverTrigger,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import {
-	faBuilding,
-	faCircleInfo,
-	faLink,
-} from "@fortawesome/free-solid-svg-icons";
+import { faBuilding, faLink } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
@@ -33,7 +29,6 @@ import { cloneElement, type RefObject, useRef, useState } from "react";
 import { NewOrganization } from "@/components/forms/NewOrganization";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
-import { UsageButton } from "@/components/UsageButton";
 import { useDashboardContext } from "../../Contexts";
 import {
 	ChartLineIcon,
@@ -44,7 +39,6 @@ import {
 } from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
 import { MemberAvatars } from "./MemberAvatars";
-import SpacesList from "./SpacesList";
 import { updateActiveOrganization } from "./server";
 
 interface Props {
@@ -160,6 +154,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								)}
 								role="combobox"
 								aria-expanded={open}
+								tabIndex={0}
 							>
 								<div
 									className={clsx(
@@ -184,7 +179,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 											)}
 										/>
 									</div>
-									<div className="flex flex-col flex-1 items-center h-10">
+									<div
+										className={clsx(
+											"flex flex-col flex-1 items-center",
+											!sidebarCollapsed && isDomainSetupVerified ? "h-10" : "",
+										)}
+									>
 										<div className="flex justify-between items-center w-full">
 											{!sidebarCollapsed && (
 												<p className="text-sm truncate leading-0 text-gray-12">
@@ -199,29 +199,19 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 												/>
 											)}
 										</div>
-										{!sidebarCollapsed && (
+										{!sidebarCollapsed && isDomainSetupVerified && (
 											<Link
-												href={
-													isDomainSetupVerified
-														? `https://${activeOrg.organization.customDomain}`
-														: "/dashboard/settings/organization"
-												}
-												rel={
-													isDomainSetupVerified
-														? "noopener noreferrer"
-														: undefined
-												}
-												target={isDomainSetupVerified ? "_blank" : "_self"}
+												href={`https://${activeOrg.organization.customDomain}`}
+												rel="noopener noreferrer"
+												target="_blank"
 												className="flex truncate w-full overflow-hidden flex-1 gap-1.5 items-center self-start"
 											>
 												<FontAwesomeIcon
-													icon={isDomainSetupVerified ? faLink : faCircleInfo}
+													icon={faLink}
 													className="duration-200 size-3 text-gray-10"
 												/>
 												<p className="w-full text-[11px] flex-1 duration-200 truncate leading-0 text-gray-11">
-													{isDomainSetupVerified
-														? activeOrg?.organization.customDomain
-														: "No custom domain set"}
+													{activeOrg.organization.customDomain}
 												</p>
 											</Link>
 										)}
@@ -302,10 +292,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				</Tooltip>
 			</Popover>
 			<MemberAvatars />
-			<nav
-				className="flex flex-col justify-between w-full h-full"
-				aria-label="Sidebar"
-			>
+			<nav className="flex flex-col w-full h-full" aria-label="Sidebar">
 				<div
 					className={clsx(
 						"mt-5",
@@ -335,7 +322,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 											},
 										}}
 										layoutId="navlinks"
-										id="navlinks"
 										className="absolute h-[36px] w-full rounded-xl pointer-events-none bg-gray-3"
 									/>
 								)}
@@ -352,24 +338,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								/>
 							</div>
 						))}
-
-					<SpacesList toggleMobileNav={() => toggleMobileNav?.()} />
-				</div>
-				<div className="pb-4 mt-auto w-full">
-					<UsageButton
-						toggleMobileNav={() => toggleMobileNav?.()}
-						subscribed={user.isPro}
-					/>
-					{buildEnv.NEXT_PUBLIC_IS_CAP && (
-						<div className="flex justify-center items-center mt-2">
-							<Link
-								href="/dashboard/refer"
-								className="text-sm underline text-gray-10 hover:text-gray-12"
-							>
-								Earn 40% Referral
-							</Link>
-						</div>
-					)}
 				</div>
 			</nav>
 			<DialogContent className="p-0 w-full max-w-md rounded-xl bg-gray-2">

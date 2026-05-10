@@ -15,7 +15,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
 import { AnimatePresence } from "framer-motion";
-import { MoreVertical } from "lucide-react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
@@ -50,7 +49,7 @@ const Top = () => {
 	const { activeSpace, anyNewNotifications, isDeveloperSection } =
 		useDashboardContext();
 	const [toggleNotifications, setToggleNotifications] = useState(false);
-	const bellRef = useRef<HTMLDivElement>(null);
+	const bellRef = useRef<HTMLButtonElement>(null);
 	const { theme, setThemeHandler } = useTheme();
 	const queryClient = useQueryClient();
 
@@ -125,7 +124,8 @@ const Top = () => {
 			</div>
 			<div className="flex gap-4 items-center">
 				{buildEnv.NEXT_PUBLIC_IS_CAP && <ReferButton />}
-				<div
+				<button
+					type="button"
 					data-state={toggleNotifications ? "open" : "closed"}
 					ref={bellRef}
 					onClick={() => {
@@ -143,8 +143,6 @@ const Top = () => {
 							setToggleNotifications(!toggleNotifications);
 						}
 					}}
-					tabIndex={0}
-					role="button"
 					aria-label={`Notifications${
 						anyNewNotifications ? " (new notifications available)" : ""
 					}`}
@@ -167,9 +165,11 @@ const Top = () => {
 					<AnimatePresence>
 						{toggleNotifications && <Notifications ref={notificationsRef} />}
 					</AnimatePresence>
-				</div>
+				</button>
 				{!isDeveloperSection && (
-					<div
+					<button
+						type="button"
+						aria-label="Toggle theme"
 						onClick={() => {
 							if (document.startViewTransition) {
 								document.startViewTransition(() => {
@@ -182,7 +182,7 @@ const Top = () => {
 						className="hidden justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 lg:flex hover:bg-gray-5 size-9"
 					>
 						<ThemeToggleIcon />
-					</div>
+					</button>
 				)}
 				<User />
 			</div>
@@ -266,7 +266,7 @@ const User = () => {
 				<PopoverTrigger asChild>
 					<div
 						data-state={menuOpen ? "open" : "closed"}
-						className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-3 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-3"
+						className="flex items-center p-2 rounded-xl border data-[state=open]:border-gray-3 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group hover:border-gray-3"
 					>
 						<div className="flex items-center">
 							<SignedImageUrl
@@ -279,10 +279,6 @@ const User = () => {
 								{user.name ?? "User"}
 							</span>
 						</div>
-						<MoreVertical
-							data-state={menuOpen ? "open" : "closed"}
-							className="w-5 h-5 data-[state=open]:text-gray-12 transition-colors text-gray-10 group-hover:text-gray-12"
-						/>
 					</div>
 				</PopoverTrigger>
 				<PopoverContent className="p-1 w-48">
@@ -359,7 +355,20 @@ const ReferButton = () => {
 		useDashboardContext();
 
 	return (
-		<Link href="/dashboard/refer" className="hidden relative lg:block">
+		<Link
+			href="/dashboard/refer"
+			aria-label="Earn 40% Referral"
+			className="hidden relative justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 lg:flex hover:bg-gray-5 size-9"
+			onClick={() => {
+				setReferClickedStateHandler(true);
+			}}
+			onMouseEnter={() => {
+				iconRef.current?.startAnimation();
+			}}
+			onMouseLeave={() => {
+				iconRef.current?.stopAnimation();
+			}}
+		>
 			{!referClickedState && (
 				<div className="absolute right-0 top-1 z-10">
 					<div className="relative">
@@ -369,23 +378,10 @@ const ReferButton = () => {
 				</div>
 			)}
 
-			<div
-				onClick={() => {
-					setReferClickedStateHandler(true);
-				}}
-				onMouseEnter={() => {
-					iconRef.current?.startAnimation();
-				}}
-				onMouseLeave={() => {
-					iconRef.current?.stopAnimation();
-				}}
-				className="flex justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 hover:bg-gray-5 size-9"
-			>
-				{cloneElement(<ReferIcon />, {
-					ref: iconRef,
-					className: "text-gray-12 size-3.5",
-				})}
-			</div>
+			{cloneElement(<ReferIcon />, {
+				ref: iconRef,
+				className: "text-gray-12 size-3.5",
+			})}
 		</Link>
 	);
 };
