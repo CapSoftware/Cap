@@ -54,7 +54,7 @@ export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 
 		const { videoId, customBucketId } = yield* Activity.make({
 			name: "CreateVideoRecord",
-			error: DatabaseError,
+			error: Schema.Union(DatabaseError, Video.ShareableLinkUsageLimitError),
 			success: Schema.Struct({
 				videoId: Video.VideoId,
 				customBucketId: Schema.Option(S3Bucket.S3BucketId),
