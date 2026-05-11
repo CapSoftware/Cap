@@ -5,6 +5,7 @@ import {
 	assertShareableLinkDurationAllowed,
 	getShareableLinkLimitResponse,
 	isShareableLinkUsageLimitError,
+	markShareableLinkUploadRejected,
 	Storage,
 } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
@@ -108,20 +109,13 @@ export async function POST(request: NextRequest) {
 						});
 					} catch (error) {
 						if (isShareableLinkUsageLimitError(error)) {
-							await db()
-								.update(videoUploads)
-								.set({
-									phase: "error",
-									processingError: "Video exceeds free plan duration limit",
-									processingMessage: "Upgrade required",
-									updatedAt: new Date(),
-								})
-								.where(
-									eq(videoUploads.videoId, payload.videoId as Video.VideoId),
-								);
+							await markShareableLinkUploadRejected(
+								db(),
+								payload.videoId as Video.VideoId,
+							);
 
 							return NextResponse.json(getShareableLinkLimitResponse(error), {
-								status: 403,
+								status: 200,
 							});
 						}
 
