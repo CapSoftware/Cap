@@ -4,19 +4,12 @@
 use std::sync::Arc;
 
 use cap_desktop_lib::DynLoggingLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
     #[cfg(debug_assertions)]
     unsafe {
         std::env::set_var("RUST_LOG", "trace");
-    }
-
-    #[cfg(not(debug_assertions))]
-    if std::env::var_os("RUST_BACKTRACE").is_none() {
-        unsafe {
-            std::env::set_var("RUST_BACKTRACE", "full");
-        }
     }
 
     // We have to hold onto the ClientInitGuard until the very end
@@ -78,7 +71,11 @@ fn main() {
         eprintln!("Failed to create logs directory: {e}");
     });
 
-    let file_appender = tracing_appender::rolling::daily(&logs_dir, "cap-desktop.log");
+    let info_file_appender = tracing_appender::rolling::daily(&logs_dir, "cap-desktop.log");
+    let (info_file_writer, _info_logger_guard) = tracing_appender::non_blocking(info_file_appender);
+
+    let errors_file_appender =
+        tracing_appender::rolling::daily(&logs_dir, "cap-desktop-errors.log");
 
     let (otel_layer, _tracer) = if cfg!(debug_assertions) {
         use opentelemetry::trace::TracerProvider;
@@ -131,7 +128,14 @@ fn main() {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_target(true)
-                .with_writer(file_appender),
+                .with_writer(info_file_writer),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_target(true)
+                .with_writer(errors_file_appender)
+                .with_filter(tracing_subscriber::filter::LevelFilter::WARN),
         )
         .init();
 

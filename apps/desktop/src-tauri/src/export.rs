@@ -49,9 +49,11 @@ async fn run_protected_export(
                 panic = %panic_msg,
                 "export task panicked"
             );
-            let message = format!("Export task panicked: {panic_msg}");
-            sentry::capture_message(&message, sentry::Level::Error);
-            Err(message)
+            sentry::capture_message(
+                &format!("Export task panicked: {panic_msg}"),
+                sentry::Level::Error,
+            );
+            Err("Export failed unexpectedly".to_string())
         }
     }
 }
@@ -407,9 +409,11 @@ pub async fn generate_export_preview(
                 panic = %panic_msg,
                 "generate_export_preview panicked"
             );
-            let message = format!("Export preview panicked: {panic_msg}");
-            sentry::capture_message(&message, sentry::Level::Error);
-            Err(message)
+            sentry::capture_message(
+                &format!("Export preview panicked: {panic_msg}"),
+                sentry::Level::Error,
+            );
+            Err("Export preview failed unexpectedly".to_string())
         }
     }
 }
@@ -676,9 +680,11 @@ pub async fn generate_export_preview_fast(
                 panic = %panic_msg,
                 "generate_export_preview_fast panicked"
             );
-            let message = format!("Export preview panicked: {panic_msg}");
-            sentry::capture_message(&message, sentry::Level::Error);
-            Err(message)
+            sentry::capture_message(
+                &format!("Export preview panicked: {panic_msg}"),
+                sentry::Level::Error,
+            );
+            Err("Export preview failed unexpectedly".to_string())
         }
     }
 }

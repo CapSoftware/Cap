@@ -306,7 +306,7 @@ export default function OnboardingPage() {
 	const isMacOS = createMemo(() => ostype() === "macos");
 	const minStep = createMemo(() => (isMacOS() ? 0 : 1));
 
-	const [step, setStep] = createSignal(ostype() === "macos" ? 0 : 1);
+	const [step, setStep] = createSignal(minStep());
 	const [showStartupOverlay, setShowStartupOverlay] = createSignal(true);
 	const [isExiting, setIsExiting] = createSignal(false);
 	const [permissionsNeeded, setPermissionsNeeded] = createSignal(false);
