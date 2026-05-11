@@ -3,6 +3,7 @@ import {
 	FREE_SHAREABLE_LINK_MAX_DURATION_SECONDS,
 	getShareableLinkPeriod,
 	getShareableLinkUsageLimitError,
+	isShareableLinkUsageLimitError,
 	toShareableLinkUsageSnapshot,
 } from "@cap/web-backend";
 import { describe, expect, it } from "vitest";
@@ -59,5 +60,16 @@ describe("shareable link usage", () => {
 
 		expect(error?._tag).toBe("ShareableLinkUsageLimitError");
 		expect(error?.reason).toBe("duration_limit");
+	});
+
+	it("detects shareable link limit errors wrapped as causes", () => {
+		const error = getShareableLinkUsageLimitError({
+			used: FREE_SHAREABLE_LINK_LIMIT,
+			resetAt: "2026-06-01T00:00:00.000Z",
+		});
+
+		const wrapped = new Error("upgrade_required", { cause: error });
+
+		expect(isShareableLinkUsageLimitError(wrapped)).toBe(true);
 	});
 });
