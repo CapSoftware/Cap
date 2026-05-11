@@ -1,22 +1,16 @@
-import { getPreferenceValues } from "@raycast/api";
-
-interface Preferences {
-  captureMode: string;
-  recordingMode: string;
-  captureSystemAudio: boolean;
-}
-
-export function getPreferences(): Preferences {
-  return getPreferenceValues<Preferences>();
-}
+import { open } from "@raycast/api";
 
 export function buildDeeplink(action: string, value: unknown): string {
-  const json = JSON.stringify(value);
+  let json: string;
+  if (value === null || value === undefined) {
+    json = JSON.stringify(action);
+  } else {
+    json = JSON.stringify({ [action]: value });
+  }
   return `cap-desktop://action?value=${encodeURIComponent(json)}`;
 }
 
 export async function openDeeplink(action: string, value: unknown): Promise<void> {
   const url = buildDeeplink(action, value);
-  const { execSync } = await import("node:child_process");
-  execSync(`open "${url}"`);
+  await open(url);
 }
