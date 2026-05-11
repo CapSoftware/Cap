@@ -128,6 +128,9 @@ const protectedContract = c.router(
 				feedback: z.string(),
 				os: z.union([z.literal("macos"), z.literal("windows")]),
 				version: z.string(),
+				reportId: z.string().optional(),
+				kind: z.enum(["feedback", "debugReport"]).optional(),
+				debugReport: z.string().optional(),
 			}),
 			responses: {
 				200: z.object({ success: z.boolean() }),
