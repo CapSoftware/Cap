@@ -173,6 +173,8 @@ export function AnnotationLayer(props: {
 			return;
 		}
 
+		if (tool === "ocr") return;
+
 		// Snapshot for drawing
 		drawSnapshot = {
 			project: structuredClone(unwrap(project)),

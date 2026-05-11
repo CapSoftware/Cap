@@ -82,6 +82,7 @@ function convertNv12ToRgba(
 
 export type ScreenshotProject = ProjectConfiguration;
 export type { Annotation, AnnotationType };
+export type ScreenshotEditorTool = AnnotationType | "select" | "ocr";
 
 export type CurrentDialog =
 	| { type: "createPreset" }
@@ -169,9 +170,8 @@ function createScreenshotEditorContext() {
 	const [selectedAnnotationId, setSelectedAnnotationId] = createSignal<
 		string | null
 	>(null);
-	const [activeTool, setActiveTool] = createSignal<AnnotationType | "select">(
-		"select",
-	);
+	const [activeTool, setActiveTool] =
+		createSignal<ScreenshotEditorTool>("select");
 
 	const [layersPanelOpen, setLayersPanelOpen] = makePersisted(
 		createSignal(false),

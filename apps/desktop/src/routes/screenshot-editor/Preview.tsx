@@ -13,6 +13,7 @@ import { EditorButton, Slider } from "../editor/ui";
 import { AnnotationLayer } from "./AnnotationLayer";
 import { useScreenshotEditorContext } from "./context";
 import { getImageRect } from "./layout";
+import { OcrSelectionOverlay } from "./OcrSelectionOverlay";
 
 // CSS for checkerboard grid
 const gridStyle = {
@@ -619,6 +620,14 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 											imageRect={imageRect()}
 											isPanning={isDragging()}
 											onBackgroundMouseDown={handleMouseDown}
+										/>
+										<OcrSelectionOverlay
+											bounds={bounds()}
+											cssWidth={scaledWidth()}
+											cssHeight={scaledHeight()}
+											imageRect={imageRect()}
+											originalImageSize={originalImageSize()}
+											crop={project.background.crop}
 										/>
 									</div>
 								</div>
