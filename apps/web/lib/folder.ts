@@ -18,7 +18,7 @@ import {
 } from "@cap/web-backend";
 import type { ImageUpload, Organisation, Space, Video } from "@cap/web-domain";
 import { CurrentUser, Folder } from "@cap/web-domain";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
 import { Effect } from "effect";
 
@@ -188,6 +188,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 				metadata: videos.metadata,
 				duration: videos.duration,
 				settings: videos.settings,
+				orgId: videos.orgId,
 				totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 				totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 				sharedOrganizations: sql<
@@ -248,6 +249,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 				videos.metadata,
 				videos.duration,
 				videos.settings,
+				videos.orgId,
 				videos.password,
 				users.name,
 			)
@@ -257,6 +259,25 @@ export const getVideosByFolderId = Effect.fn(function* (
 	// Fetch shared spaces data for all videos
 	const videoIds = videoData.map((video) => video.id);
 	const sharedSpacesMap = yield* getSharedSpacesForVideos(videoIds);
+	const orgIds = Array.from(new Set(videoData.map((video) => video.orgId)));
+	const organizationSettingsRows =
+		orgIds.length > 0
+			? yield* db.use((db) =>
+					db
+						.select({
+							id: organizations.id,
+							settings: organizations.settings,
+						})
+						.from(organizations)
+						.where(inArray(organizations.id, orgIds)),
+				)
+			: [];
+	const organizationSettingsById = Object.fromEntries(
+		organizationSettingsRows.map((organization) => [
+			organization.id,
+			organization.settings,
+		]),
+	);
 
 	// Process the video data to match the expected format
 	const processedVideoData = yield* Effect.all(
@@ -265,7 +286,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 				const sharedSpaces = sharedSpacesMap[video.id] ?? [];
 				const rules = resolveEffectiveVideoRules({
 					videoSettings: video.settings,
-					organizationSettings: null,
+					organizationSettings: organizationSettingsById[video.orgId] ?? null,
 					spaces: sharedSpaces.filter((space) => !space.isOrg),
 				});
 				const resolvedSharedSpaces = yield* Effect.all(

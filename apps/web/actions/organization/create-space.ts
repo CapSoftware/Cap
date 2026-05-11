@@ -15,31 +15,11 @@ import {
 } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import {
+	getSpaceSettingsFromFormData,
+	hasProSpaceSettingsEnabled,
+} from "./space-settings";
 import { uploadSpaceIcon } from "./upload-space-icon";
-
-const settingKeys = [
-	"disableSummary",
-	"disableCaptions",
-	"disableChapters",
-	"disableReactions",
-	"disableTranscript",
-	"disableComments",
-] as const;
-
-const getSettingsFromFormData = (formData: FormData) =>
-	Object.fromEntries(
-		settingKeys.map((key) => [key, formData.get(key) === "true"]),
-	);
-
-const proSettingKeys = [
-	"disableSummary",
-	"disableChapters",
-	"disableTranscript",
-] as const;
-
-const hasProSettingsEnabled = (
-	settings: ReturnType<typeof getSettingsFromFormData>,
-) => proSettingKeys.some((key) => settings[key]);
 
 interface CreateSpaceResponse {
 	success: boolean;
@@ -65,7 +45,7 @@ export async function createSpace(
 		const name = formData.get("name") as string;
 		const passwordEnabled = formData.get("passwordEnabled") === "true";
 		const password = formData.get("password") as string | null;
-		const settings = getSettingsFromFormData(formData);
+		const settings = getSpaceSettingsFromFormData(formData);
 		const canUseProFeatures = userIsPro(user);
 
 		if (!name) {
@@ -89,7 +69,7 @@ export async function createSpace(
 			};
 		}
 
-		if (!canUseProFeatures && hasProSettingsEnabled(settings)) {
+		if (!canUseProFeatures && hasProSpaceSettingsEnabled(settings)) {
 			return {
 				success: false,
 				error: "Upgrade required to change these viewer rules",

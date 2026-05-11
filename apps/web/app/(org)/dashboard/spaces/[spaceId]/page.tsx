@@ -307,13 +307,19 @@ export default async function SharedCapsPage(props: {
 		const sharedSpacesMap = await fetchSharedSpacesForVideos(
 			spaceVideoData.map((video) => Video.VideoId.make(video.id)),
 		);
+		const [organizationSettingsRow] = await db()
+			.select({ settings: organizations.settings })
+			.from(organizations)
+			.where(eq(organizations.id, space.organizationId))
+			.limit(1);
+		const organizationSettings = organizationSettingsRow?.settings ?? null;
 		const processedVideoData = spaceVideoData.map((video) => {
 			const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =
 				video;
 			const sharedSpaces = sharedSpacesMap[video.id] ?? [];
 			const rules = resolveEffectiveVideoRules({
 				videoSettings: video.settings,
-				organizationSettings: null,
+				organizationSettings,
 				spaces: sharedSpaces,
 			});
 			return {
@@ -432,13 +438,19 @@ export default async function SharedCapsPage(props: {
 		const sharedSpacesMap = await fetchSharedSpacesForVideos(
 			orgVideoData.map((video) => Video.VideoId.make(video.id)),
 		);
+		const [organizationSettingsRow] = await db()
+			.select({ settings: organizations.settings })
+			.from(organizations)
+			.where(eq(organizations.id, organization.id))
+			.limit(1);
+		const organizationSettings = organizationSettingsRow?.settings ?? null;
 		const processedVideoData = orgVideoData.map((video) => {
 			const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =
 				video;
 			const sharedSpaces = sharedSpacesMap[video.id] ?? [];
 			const rules = resolveEffectiveVideoRules({
 				videoSettings: video.settings,
-				organizationSettings: null,
+				organizationSettings,
 				spaces: sharedSpaces,
 			});
 			return {

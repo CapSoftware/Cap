@@ -241,6 +241,14 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	const videoIds = videoData.map((video) => video.id);
 	const sharedSpacesMap =
 		await getSharedSpacesForVideos(videoIds).pipe(runPromise);
+	const [organizationSettingsRow] = user.activeOrganizationId
+		? await db()
+				.select({ settings: organizations.settings })
+				.from(organizations)
+				.where(eq(organizations.id, user.activeOrganizationId))
+				.limit(1)
+		: [];
+	const organizationSettings = organizationSettingsRow?.settings ?? null;
 
 	const processedVideoData = await Effect.all(
 		videoData.map(
@@ -252,7 +260,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 				const sharedSpaces = sharedSpacesMap[video.id] ?? [];
 				const rules = resolveEffectiveVideoRules({
 					videoSettings: video.settings,
-					organizationSettings: null,
+					organizationSettings,
 					spaces: sharedSpaces.filter((space) => !space.isOrg),
 				});
 

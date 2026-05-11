@@ -17,37 +17,11 @@ import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
+import {
+	getSpaceSettingsFromFormData,
+	preserveProSpaceSettings,
+} from "./space-settings";
 import { uploadSpaceIcon } from "./upload-space-icon";
-
-const settingKeys = [
-	"disableSummary",
-	"disableCaptions",
-	"disableChapters",
-	"disableReactions",
-	"disableTranscript",
-	"disableComments",
-] as const;
-
-const getSettingsFromFormData = (formData: FormData) =>
-	Object.fromEntries(
-		settingKeys.map((key) => [key, formData.get(key) === "true"]),
-	);
-
-const proSettingKeys = [
-	"disableSummary",
-	"disableChapters",
-	"disableTranscript",
-] as const;
-
-const preserveProSettings = (
-	submittedSettings: ReturnType<typeof getSettingsFromFormData>,
-	existingSettings: (typeof spaces.$inferSelect)["settings"],
-) => ({
-	...submittedSettings,
-	...Object.fromEntries(
-		proSettingKeys.map((key) => [key, existingSettings?.[key] ?? false]),
-	),
-});
 
 export async function updateSpace(formData: FormData) {
 	const user = await getCurrentUser();
@@ -89,14 +63,14 @@ export async function updateSpace(formData: FormData) {
 		return { success: false, error: "Unauthorized" };
 	}
 
-	const submittedSettings = getSettingsFromFormData(formData);
+	const submittedSettings = getSpaceSettingsFromFormData(formData);
 	const canUseProFeatures = userIsPro(user);
 	const settings = canUseProFeatures
 		? submittedSettings
-		: preserveProSettings(submittedSettings, space.settings);
+		: preserveProSpaceSettings(submittedSettings, space.settings);
 	const spaceUpdate: {
 		name: string;
-		settings: ReturnType<typeof getSettingsFromFormData>;
+		settings: ReturnType<typeof getSpaceSettingsFromFormData>;
 		password?: string | null;
 	} = { name, settings };
 
