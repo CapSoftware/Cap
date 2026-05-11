@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui";
 import { useRive } from "@rive-app/react-canvas";
 
-const UpgradeToPro = ({ text = "Upgrade To Cap Pro" }: { text?: string }) => {
+const UpgradeToPro = ({ text = "Upgrade to Cap Pro" }: { text?: string }) => {
 	const { rive, RiveComponent: ProRive } = useRive({
 		src: "/rive/pricing.riv",
 		artboard: "pro",
