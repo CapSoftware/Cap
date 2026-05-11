@@ -3395,6 +3395,11 @@ fn open_upgrade_page(app: tauri::AppHandle) -> Result<(), String> {
                 .unwrap_or("https://cap.so")
                 .to_string()
         });
+    let server_url = reqwest::Url::parse(&server_url)
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https"))
+        .map(|url| url.to_string())
+        .unwrap_or_else(|| "https://cap.so".to_string());
     let url = format!(
         "{}/pricing?utm_source=desktop&utm_campaign=upgrade",
         server_url.trim_end_matches('/')
