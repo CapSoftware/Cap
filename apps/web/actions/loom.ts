@@ -17,7 +17,11 @@ import {
 } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
-import { Storage } from "@cap/web-backend";
+import {
+	createVideoWithShareableLinkQuota,
+	isShareableLinkUsageLimitError,
+	Storage,
+} from "@cap/web-backend";
 import {
 	type Organisation,
 	Space,
@@ -339,35 +343,50 @@ async function importLoomVideoForOwner({
 		videoName ||
 		`Loom Import - ${new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}`;
 
-	await db()
-		.insert(videos)
-		.values({
-			id: videoId,
-			name,
+	try {
+		await createVideoWithShareableLinkQuota({
+			client: db(),
 			ownerId,
-			orgId,
-			source: { type: "webMP4" as const },
-			bucket: Option.getOrNull(writable.bucketId),
-			storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-			...(oembedMeta?.duration ? { duration: oembedMeta.duration } : {}),
-			...(oembedMeta?.width ? { width: oembedMeta.width } : {}),
-			...(oembedMeta?.height ? { height: oembedMeta.height } : {}),
+			durationSeconds: oembedMeta?.duration,
+			create: async (tx) => {
+				await tx.insert(videos).values({
+					id: videoId,
+					name,
+					ownerId,
+					orgId,
+					source: { type: "webMP4" as const },
+					bucket: Option.getOrNull(writable.bucketId),
+					storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
+					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+					...(oembedMeta?.duration ? { duration: oembedMeta.duration } : {}),
+					...(oembedMeta?.width ? { width: oembedMeta.width } : {}),
+					...(oembedMeta?.height ? { height: oembedMeta.height } : {}),
+				});
+
+				await tx.insert(videoUploads).values({
+					videoId,
+					phase: "uploading",
+					processingProgress: 0,
+					processingMessage: "Importing from Loom...",
+				});
+
+				await tx.insert(importedVideos).values({
+					id: videoId,
+					orgId,
+					source: "loom",
+					sourceId: loomVideoId,
+				});
+			},
 		});
-
-	await db().insert(videoUploads).values({
-		videoId,
-		phase: "uploading",
-		processingProgress: 0,
-		processingMessage: "Importing from Loom...",
-	});
-
-	await db().insert(importedVideos).values({
-		id: videoId,
-		orgId,
-		source: "loom",
-		sourceId: loomVideoId,
-	});
+	} catch (error) {
+		if (isShareableLinkUsageLimitError(error)) {
+			return {
+				success: false,
+				error: "Shareable link limit reached. Please upgrade to Pro.",
+			};
+		}
+		throw error;
+	}
 
 	const rawFileKey = `${ownerId}/${videoId}/raw-upload.mp4`;
 
@@ -393,6 +412,7 @@ async function importLoomVideoForOwner({
 	]);
 
 	revalidatePath("/dashboard/caps");
+	revalidatePath("/dashboard");
 
 	return { success: true, videoId };
 }
