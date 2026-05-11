@@ -34,6 +34,19 @@ pub struct Plan {
     pub upgraded: bool,
     pub manual: bool,
     pub last_checked: i32,
+    #[serde(default, rename = "shareableLinkUsage")]
+    pub shareable_link_usage: Option<ShareableLinkUsage>,
+}
+
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+pub struct ShareableLinkUsage {
+    pub used: i32,
+    pub limit: i32,
+    pub remaining: i32,
+    #[serde(rename = "resetAt")]
+    pub reset_at: String,
+    #[serde(rename = "maxDurationSeconds")]
+    pub max_duration_seconds: i32,
 }
 
 impl AuthStore {
@@ -91,6 +104,8 @@ impl AuthStore {
         #[derive(Deserialize)]
         struct Response {
             upgraded: bool,
+            #[serde(rename = "shareableLinkUsage")]
+            shareable_link_usage: Option<ShareableLinkUsage>,
         }
 
         let plan_response: Response = response.json().await.map_err(|e| e.to_string())?;
@@ -99,6 +114,7 @@ impl AuthStore {
             upgraded: plan_response.upgraded,
             last_checked: chrono::Utc::now().timestamp() as i32,
             manual: auth.plan.as_ref().is_some_and(|p| p.manual),
+            shareable_link_usage: plan_response.shareable_link_usage,
         });
         auth.organizations = api::fetch_organizations(app)
             .await

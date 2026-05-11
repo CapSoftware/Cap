@@ -783,6 +783,7 @@ pub async fn start_recording(
                             return Ok(RecordingAction::InvalidAuthentication);
                         }
                         Err(AuthedApiError::UpgradeRequired) => {
+                            AuthStore::update_auth_plan(&app).await.ok();
                             return Ok(RecordingAction::UpgradeRequired);
                         }
                         Err(err) => {
@@ -790,6 +791,8 @@ pub async fn start_recording(
                             return Err(err.to_string());
                         }
                     };
+
+                    AuthStore::update_auth_plan(&app).await.ok();
 
                     let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
                     info!("Pre-created shareable link: {}", link);
