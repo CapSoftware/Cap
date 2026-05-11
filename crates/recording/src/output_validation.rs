@@ -81,8 +81,7 @@ pub fn validate_instant_recording(
             issues.push(issue);
         } else if ratio < 0.9 {
             let issue = format!(
-                "Output duration ({:.1}s) is shorter than expected ({:.1}s)",
-                actual_secs, expected_secs,
+                "Output duration ({actual_secs:.1}s) is shorter than expected ({expected_secs:.1}s)"
             );
             info!("{issue}");
             issues.push(issue);

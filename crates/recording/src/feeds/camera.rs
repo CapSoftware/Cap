@@ -327,7 +327,7 @@ struct FinalizePendingRelease {
     id: DeviceOrModelID,
 }
 
-fn spawn_camera_setup(
+struct SpawnCameraSetupArgs {
     id: DeviceOrModelID,
     generation: u64,
     settings: Option<CameraDeviceSettings>,
@@ -336,7 +336,21 @@ fn spawn_camera_setup(
     native_frame_recipient: Recipient<NewNativeFrame>,
     native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     flow: CameraSetupFlow,
+}
+
+fn spawn_camera_setup(
+    args: SpawnCameraSetupArgs,
 ) -> (ReadyFuture, SyncSender<()>, std::thread::JoinHandle<()>) {
+    let SpawnCameraSetupArgs {
+        id,
+        generation,
+        settings,
+        actor_ref,
+        new_frame_recipient,
+        native_frame_recipient,
+        native_sender_count,
+        flow,
+    } = args;
     let (ready_tx, ready_rx) = oneshot::channel::<Result<InputConnected, SetInputError>>();
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
 
@@ -946,16 +960,16 @@ impl Message<SetInput> for CameraFeed {
                 let native_frame_recipient = actor_ref.clone().recipient();
                 let id = msg.id.clone();
 
-                let (ready, done_tx, join_handle) = spawn_camera_setup(
-                    id.clone(),
+                let (ready, done_tx, join_handle) = spawn_camera_setup(SpawnCameraSetupArgs {
+                    id: id.clone(),
                     generation,
-                    msg.settings,
+                    settings: msg.settings,
                     actor_ref,
                     new_frame_recipient,
                     native_frame_recipient,
-                    self.native_sender_count.clone(),
-                    CameraSetupFlow::Open,
-                );
+                    native_sender_count: self.native_sender_count.clone(),
+                    flow: CameraSetupFlow::Open,
+                });
 
                 self.previous_thread = Some(join_handle);
 
@@ -983,16 +997,16 @@ impl Message<SetInput> for CameraFeed {
                 let new_frame_recipient = actor_ref.clone().recipient();
                 let native_frame_recipient = actor_ref.clone().recipient();
 
-                let (ready, _done_tx, join_handle) = spawn_camera_setup(
-                    msg.id.clone(),
+                let (ready, _done_tx, join_handle) = spawn_camera_setup(SpawnCameraSetupArgs {
+                    id: msg.id.clone(),
                     generation,
-                    msg.settings,
+                    settings: msg.settings,
                     actor_ref,
                     new_frame_recipient,
                     native_frame_recipient,
-                    self.native_sender_count.clone(),
-                    CameraSetupFlow::Locked,
-                );
+                    native_sender_count: self.native_sender_count.clone(),
+                    flow: CameraSetupFlow::Locked,
+                });
 
                 self.previous_thread = Some(join_handle);
 
