@@ -134,6 +134,9 @@ export class ApiContract extends HttpApi.make("cap-web-api")
 							feedback: Schema.String,
 							os: OSType,
 							version: Schema.String,
+							reportId: Schema.optional(Schema.String),
+							kind: Schema.optional(Schema.Literal("feedback", "debugReport")),
+							debugReport: Schema.optional(Schema.String),
 						}),
 					)
 					.addSuccess(Schema.Struct({ success: Schema.Boolean })),
