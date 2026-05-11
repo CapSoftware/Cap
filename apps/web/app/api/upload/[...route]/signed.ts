@@ -4,6 +4,7 @@ import {
 	assertShareableLinkDurationAllowed,
 	getShareableLinkLimitResponse,
 	isShareableLinkUsageLimitError,
+	markShareableLinkUploadRejected,
 	Storage,
 } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
@@ -148,8 +149,13 @@ app.post(
 					durationSeconds: durationInSecs,
 				});
 			} catch (error) {
-				if (isShareableLinkUsageLimitError(error))
+				if (isShareableLinkUsageLimitError(error)) {
+					await markShareableLinkUploadRejected(
+						db(),
+						Video.VideoId.make(videoIdToUse),
+					);
 					return c.json(getShareableLinkLimitResponse(error), 403);
+				}
 				throw error;
 			}
 
