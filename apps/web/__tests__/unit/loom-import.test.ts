@@ -100,6 +100,11 @@ vi.mock("@cap/utils", () => ({
 }));
 
 vi.mock("@cap/web-backend", () => ({
+	createVideoWithShareableLinkQuota: vi.fn(
+		({ create }: { create: (tx: typeof mockDb) => Promise<unknown> }) =>
+			create(mockDb),
+	),
+	isShareableLinkUsageLimitError: vi.fn(() => false),
 	Storage: {
 		getWritableAccessForUser: storageGetWritableAccessForUserMock,
 	},
