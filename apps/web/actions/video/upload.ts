@@ -5,8 +5,13 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
-import { Storage as StorageService } from "@cap/web-backend";
+import { dub } from "@cap/utils";
+import {
+	assertShareableLinkDurationAllowed,
+	createVideoWithShareableLinkQuota,
+	isShareableLinkUsageLimitError,
+	Storage as StorageService,
+} from "@cap/web-backend";
 import {
 	type Folder,
 	type Organisation,
@@ -134,9 +139,6 @@ export async function createVideoAndGetUploadUrl({
 	if (!user) throw new Error("Unauthorized");
 
 	try {
-		if (!userIsPro(user) && duration && duration > 300)
-			throw new Error("upgrade_required");
-
 		await requireOrganizationAccess(user.id, orgId);
 
 		const date = new Date();
@@ -152,6 +154,13 @@ export async function createVideoAndGetUploadUrl({
 
 			if (existingVideo) {
 				if (existingVideo.ownerId !== user.id) throw new Error("Forbidden");
+
+				await assertShareableLinkDurationAllowed({
+					client: db(),
+					ownerId: user.id,
+					isScreenshot: existingVideo.isScreenshot,
+					durationSeconds: duration,
+				});
 
 				const existingVideoDomain = Video.Video.decodeSync({
 					...existingVideo,
@@ -210,15 +219,24 @@ export async function createVideoAndGetUploadUrl({
 			bucket: Option.getOrNull(bucketId),
 			storageIntegrationId: Option.getOrNull(storageIntegrationId),
 			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			...(duration !== undefined ? { duration } : {}),
 			...(folderId ? { folderId } : {}),
 		};
 
-		await db().insert(videos).values(videoData);
+		await createVideoWithShareableLinkQuota({
+			client: db(),
+			ownerId: user.id,
+			isScreenshot,
+			durationSeconds: duration,
+			create: async (tx) => {
+				await tx.insert(videos).values(videoData);
 
-		if (supportsUploadProgress)
-			await db().insert(videoUploads).values({
-				videoId: idToUse,
-			});
+				if (supportsUploadProgress)
+					await tx.insert(videoUploads).values({
+						videoId: idToUse,
+					});
+			},
+		});
 
 		if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
 			await dub()
@@ -235,6 +253,7 @@ export async function createVideoAndGetUploadUrl({
 		revalidatePath("/dashboard/caps");
 		revalidatePath("/dashboard/folder");
 		revalidatePath("/dashboard/spaces");
+		revalidatePath("/dashboard");
 
 		return {
 			id: idToUse,
@@ -242,6 +261,9 @@ export async function createVideoAndGetUploadUrl({
 			uploadTarget: upload,
 		};
 	} catch (error) {
+		if (isShareableLinkUsageLimitError(error))
+			throw new Error("upgrade_required", { cause: error });
+
 		console.error("Error creating video and getting upload URL:", error);
 		throw new Error(
 			error instanceof Error ? error.message : "Failed to create video",
