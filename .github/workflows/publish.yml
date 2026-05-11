@@ -20,9 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.read_version.outputs.value }}
-      needs_release: ${{ steps.create_tag.outputs.tag_existed != 'true' }}
+      tag_name: ${{ steps.create_tag.outputs.tag_name }}
+      needs_release: ${{ steps.create_tag.outputs.release_published != 'true' }}
       cn_release_stdout: ${{ steps.create_cn_release.outputs.stdout }}
-      gh_release_url: ${{ steps.create_gh_release.outputs.url }}
+      gh_release_url: ${{ steps.create_gh_release.outputs.url || steps.create_tag.outputs.release_url }}
     permissions:
       contents: write
       id-token: write
@@ -36,9 +37,8 @@ jobs:
           file: ${{ env.APP_CARGO_TOML }}
           field: "package.version"
 
-      - name: Create tag
+      - name: Prepare release
         id: create_tag
-        if: ${{ steps.create_tag.outputs.tag_existed != 'true' }}
         uses: actions/github-script@v7
         with:
           script: |
@@ -47,11 +47,15 @@ jobs:
 
             const TAG_EXISTED = "tag_existed";
             const TAG_NAME = "tag_name";
+            const RELEASE_PUBLISHED = "release_published";
+            const RELEASE_URL = "release_url";
 
             core.setOutput(TAG_NAME, tag);
 
             async function main() {
               let tagExisted = true;
+              let releasePublished = false;
+              let releaseUrl = "";
 
               try {
                 await github.rest.git.getRef({
@@ -61,13 +65,11 @@ jobs:
                 });
 
                 tagExisted = true;
-                core.notice(`Release skipped as tag '${tag}' already exists. Update the version in '${{ env.APP_CARGO_TOML }}' before starting another release.`);
+                core.notice(`Tag '${tag}' already exists. Reusing it for this release run.`);
               } catch (error) {
                 if ("status" in error && error.status === 404) tagExisted = false;
                 else throw error;
               }
-
-             	core.setOutput(TAG_EXISTED, tagExisted);
 
               if (!tagExisted)
                 await github.rest.git.createRef({
@@ -76,12 +78,35 @@ jobs:
                   repo: context.repo.repo,
                   sha: context.sha,
                 });
+
+              const releases = await github.paginate(github.rest.repos.listReleases, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              });
+
+              const release = releases.find((release) => release.tag_name === tag);
+
+              if (release) {
+                releaseUrl = release.html_url;
+                releasePublished = !release.draft;
+
+                if (releasePublished)
+                  core.notice(`Release skipped because '${tag}' is already published: ${releaseUrl}`);
+                else
+                  core.notice(`Draft release '${tag}' already exists. Continuing build and upload.`);
+              }
+
+              core.setOutput(TAG_EXISTED, tagExisted);
+              core.setOutput(RELEASE_PUBLISHED, releasePublished);
+              core.setOutput(RELEASE_URL, releaseUrl);
             }
 
-            main();
+            await main();
 
       - name: Create draft CN release
         id: create_cn_release
+        if: ${{ steps.create_tag.outputs.release_published != 'true' }}
         uses: crabnebula-dev/cloud-release@v0
         with:
           command: release draft ${{ env.CN_APPLICATION }} ${{ steps.read_version.outputs.value }} --framework tauri
@@ -89,6 +114,7 @@ jobs:
 
       - name: Create draft GH release
         id: create_gh_release
+        if: ${{ steps.create_tag.outputs.release_published != 'true' }}
         # TODO: Change to stable version when available
         uses: softprops/action-gh-release@v2
         with:
@@ -98,7 +124,7 @@ jobs:
           generate_release_notes: true
 
       - name: Update Discord interaction
-        if: ${{ inputs.interactionId != '' }}
+        if: ${{ inputs.interactionId != '' && steps.create_tag.outputs.release_published != 'true' }}
         uses: actions/github-script@v7
         with:
           script: |
@@ -151,6 +177,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.draft.outputs.tag_name }}
 
       - name: Create API Key File
         run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
