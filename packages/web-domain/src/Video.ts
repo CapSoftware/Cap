@@ -92,6 +92,24 @@ export class UploadProgress extends Schema.Class<UploadProgress>(
 	hasRawFallback: Schema.Boolean,
 }) {}
 
+export const ShareableLinkUsage = Schema.Struct({
+	used: Schema.Number,
+	limit: Schema.Number,
+	remaining: Schema.Number,
+	resetAt: Schema.String,
+	maxDurationSeconds: Schema.Number,
+});
+export type ShareableLinkUsage = typeof ShareableLinkUsage.Type;
+
+export class ShareableLinkUsageLimitError extends Schema.TaggedError<ShareableLinkUsageLimitError>()(
+	"ShareableLinkUsageLimitError",
+	{
+		reason: Schema.Literal("shareable_link_limit", "duration_limit"),
+		usage: ShareableLinkUsage,
+	},
+	HttpApiSchema.annotations({ status: 403 }),
+) {}
+
 export const UploadProgressUpdateInput = Schema.Struct({
 	videoId: VideoId,
 	uploaded: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
@@ -265,7 +283,12 @@ export class VideoRpcs extends RpcGroup.make(
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("VideoDuplicate", {
 		payload: VideoId,
-		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
+		error: Schema.Union(
+			NotFoundError,
+			InternalError,
+			PolicyDeniedError,
+			ShareableLinkUsageLimitError,
+		),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("GetUploadProgress", {
 		payload: VideoId,
@@ -280,7 +303,11 @@ export class VideoRpcs extends RpcGroup.make(
 	Rpc.make("VideoInstantCreate", {
 		payload: InstantRecordingCreateInput,
 		success: InstantRecordingCreateSuccess,
-		error: Schema.Union(InternalError, PolicyDeniedError),
+		error: Schema.Union(
+			InternalError,
+			PolicyDeniedError,
+			ShareableLinkUsageLimitError,
+		),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("VideoUploadProgressUpdate", {
 		payload: UploadProgressUpdateInput,
