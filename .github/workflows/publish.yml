@@ -54,17 +54,19 @@ jobs:
 
             async function main() {
               let tagExisted = true;
+              let tagSha = "";
               let releasePublished = false;
               let releaseUrl = "";
 
               try {
-                await github.rest.git.getRef({
+                const tagRefResponse = await github.rest.git.getRef({
                   ref: tagRef,
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                 });
 
                 tagExisted = true;
+                tagSha = tagRefResponse.data.object.sha;
                 core.notice(`Tag '${tag}' already exists. Reusing it for this release run.`);
               } catch (error) {
                 if ("status" in error && error.status === 404) tagExisted = false;
@@ -95,6 +97,18 @@ jobs:
                   core.notice(`Release skipped because '${tag}' is already published: ${releaseUrl}`);
                 else
                   core.notice(`Draft release '${tag}' already exists. Continuing build and upload.`);
+              }
+
+              if (tagExisted && !releasePublished && tagSha !== context.sha) {
+                await github.rest.git.updateRef({
+                  ref: tagRef,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  sha: context.sha,
+                  force: true,
+                });
+
+                core.notice(`Updated unpublished tag '${tag}' to ${context.sha}.`);
               }
 
               core.setOutput(TAG_EXISTED, tagExisted);
