@@ -1,7 +1,12 @@
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import {
+	assertShareableLinkDurationAllowed,
+	getShareableLinkLimitResponse,
+	isShareableLinkUsageLimitError,
+	Storage,
+} from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
@@ -86,8 +91,44 @@ export async function POST(request: NextRequest) {
 		const dbPhase = mapPhaseToDbPhase(payload.phase);
 
 		if (dbPhase === "complete") {
+			const [currentVideo] = await db()
+				.select()
+				.from(videos)
+				.where(eq(videos.id, payload.videoId as Video.VideoId));
+
 			if (payload.metadata) {
 				const duration = getValidDuration(payload.metadata.duration);
+				if (currentVideo && duration !== undefined) {
+					try {
+						await assertShareableLinkDurationAllowed({
+							client: db(),
+							ownerId: currentVideo.ownerId,
+							isScreenshot: currentVideo.isScreenshot,
+							durationSeconds: duration,
+						});
+					} catch (error) {
+						if (isShareableLinkUsageLimitError(error)) {
+							await db()
+								.update(videoUploads)
+								.set({
+									phase: "error",
+									processingError: "Video exceeds free plan duration limit",
+									processingMessage: "Upgrade required",
+									updatedAt: new Date(),
+								})
+								.where(
+									eq(videoUploads.videoId, payload.videoId as Video.VideoId),
+								);
+
+							return NextResponse.json(getShareableLinkLimitResponse(error), {
+								status: 403,
+							});
+						}
+
+						throw error;
+					}
+				}
+
 				await db()
 					.update(videos)
 					.set({
@@ -98,11 +139,6 @@ export async function POST(request: NextRequest) {
 					})
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
 			}
-
-			const [currentVideo] = await db()
-				.select()
-				.from(videos)
-				.where(eq(videos.id, payload.videoId as Video.VideoId));
 
 			if (currentVideo?.source?.type === "desktopSegments") {
 				await db()
