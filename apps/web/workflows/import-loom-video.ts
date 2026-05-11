@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import {
+	assertShareableLinkDurationAllowed,
+	isShareableLinkUsageLimitError,
+	Storage,
+} from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
@@ -564,15 +568,51 @@ async function saveMetadataAndComplete(
 ): Promise<void> {
 	"use step";
 
+	const duration = getValidDuration(metadata.duration);
+
+	if (duration !== undefined) {
+		const [video] = await db()
+			.select({
+				ownerId: videos.ownerId,
+				isScreenshot: videos.isScreenshot,
+			})
+			.from(videos)
+			.where(eq(videos.id, videoId as Video.VideoId));
+
+		if (video) {
+			try {
+				await assertShareableLinkDurationAllowed({
+					client: db(),
+					ownerId: video.ownerId,
+					isScreenshot: video.isScreenshot,
+					durationSeconds: duration,
+				});
+			} catch (error) {
+				if (isShareableLinkUsageLimitError(error)) {
+					await db()
+						.update(videoUploads)
+						.set({
+							phase: "error",
+							processingError: "Video exceeds free plan duration limit",
+							processingMessage: "Upgrade required",
+							updatedAt: new Date(),
+						})
+						.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+					throw new Error("upgrade_required");
+				}
+
+				throw error;
+			}
+		}
+	}
+
 	await db()
 		.update(videos)
 		.set({
 			width: metadata.width,
 			height: metadata.height,
 			fps: metadata.fps,
-			...(getValidDuration(metadata.duration) === undefined
-				? {}
-				: { duration: metadata.duration }),
+			...(duration === undefined ? {} : { duration }),
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 
