@@ -4,6 +4,7 @@ import { serverEnv } from "@cap/env";
 import {
 	assertShareableLinkDurationAllowed,
 	isShareableLinkUsageLimitError,
+	markShareableLinkUploadRejected,
 	Storage,
 } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
@@ -432,16 +433,8 @@ async function saveMetadataAndComplete(
 				});
 			} catch (error) {
 				if (isShareableLinkUsageLimitError(error)) {
-					await db()
-						.update(videoUploads)
-						.set({
-							phase: "error",
-							processingError: "Video exceeds free plan duration limit",
-							processingMessage: "Upgrade required",
-							updatedAt: new Date(),
-						})
-						.where(eq(videoUploads.videoId, videoId as Video.VideoId));
-					throw new Error("upgrade_required");
+					await markShareableLinkUploadRejected(db(), videoId as Video.VideoId);
+					throw new Error("upgrade_required", { cause: error });
 				}
 
 				throw error;
