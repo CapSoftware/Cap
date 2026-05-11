@@ -336,6 +336,7 @@ app.post(
 					assertShareableLinkDurationAllowed({
 						client: getDb(),
 						ownerId: user.id,
+						isScreenshot: video.isScreenshot,
 						durationSeconds: body.durationInSecs,
 					}),
 				catch: (cause) => cause,
