@@ -31,9 +31,18 @@ pub enum DeepLinkAction {
     },
     OpenSettings {
         page: Option<String>,
+
     },
+
+
+        PauseRecording,
+    ResumeRecording,
+    SwitchCamera,
+    SwitchMicrophone,
+    CaptureScreenshot}
 }
 
+    
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     trace!("Handling deep actions for: {:?}", &urls);
 
@@ -49,6 +58,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
                     ActionParseFromUrlError::Invalid => {
                         eprintln!("Invalid deep link format \"{}\"", &url)
                     }
+        
                     // Likely login action, not handled here.
                     ActionParseFromUrlError::NotAction => {}
                 })
@@ -149,10 +159,28 @@ impl DeepLinkAction {
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
+          DeepLinkAction::PauseRecording => {
+            crate::recording::pause_recording(app.clone(), app.state()).await.map(|_| ())
+        }
+        DeepLinkAction::ResumeRecording => {
+            crate::recording::resume_recording(app.clone(), app.state()).await.map(|_| ())
+        }
+        DeepLinkAction::SwitchCamera => {
+            Ok(())
+        }
+        DeepLinkAction::SwitchMicrophone => {
+            Ok(())
+        }
+        DeepLinkAction::CaptureScreenshot => {
+            Ok(())
+        
+                DeepLinkAction::OpenSettings { page } => {
+            crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
+        }
+}
+
             }
-            DeepLinkAction::OpenSettings { page } => {
-                crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
-            }
+  
         }
     }
 }
