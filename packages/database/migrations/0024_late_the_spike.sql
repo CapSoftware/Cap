@@ -1,0 +1,1 @@
+CREATE INDEX `owner_screenshot_created_idx` ON `videos` (`ownerId`,`isScreenshot`,`createdAt`);

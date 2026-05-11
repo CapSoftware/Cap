@@ -363,6 +363,11 @@ export const videos = mysqlTable(
 	},
 	(table) => [
 		index("owner_id_idx").on(table.ownerId),
+		index("owner_screenshot_created_idx").on(
+			table.ownerId,
+			table.isScreenshot,
+			table.createdAt,
+		),
 		index("is_public_idx").on(table.public),
 		index("folder_id_idx").on(table.folderId),
 		index("storage_integration_id_idx").on(table.storageIntegrationId),
