@@ -9,7 +9,12 @@ import {
 import { buildEnv, serverEnv } from "@cap/env";
 import { stripe, userIsPro } from "@cap/utils";
 import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
-import { ImageUploads } from "@cap/web-backend";
+import {
+	getShareableLinkPeriod,
+	getShareableLinkUsage,
+	ImageUploads,
+	toShareableLinkUsageSnapshot,
+} from "@cap/web-backend";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq, isNull, or } from "drizzle-orm";
@@ -417,9 +422,14 @@ app.get("/plan", withAuth, async (c) => {
 		}
 	}
 
+	const shareableLinkUsage = isSubscribed
+		? toShareableLinkUsageSnapshot(0, getShareableLinkPeriod().resetAt)
+		: await getShareableLinkUsage(db(), user.id);
+
 	return c.json({
 		upgraded: isSubscribed,
 		stripeSubscriptionStatus: user.stripeSubscriptionStatus,
+		shareableLinkUsage,
 	});
 });
 

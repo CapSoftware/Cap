@@ -11,8 +11,14 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
-import { Storage } from "@cap/web-backend";
+import { dub } from "@cap/utils";
+import {
+	assertShareableLinkDurationAllowed,
+	createVideoWithShareableLinkQuota,
+	getShareableLinkLimitResponse,
+	isShareableLinkUsageLimitError,
+	Storage,
+} from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, lte, or } from "drizzle-orm";
@@ -75,11 +81,6 @@ app.get(
 			} = c.req.valid("query");
 			const user = c.get("user");
 
-			const isCapPro = userIsPro(user);
-
-			if (!isCapPro && durationInSecs && durationInSecs > /* 5 min */ 5 * 60)
-				return c.json({ error: "upgrade_required" }, { status: 403 });
-
 			console.log("Video create request:", {
 				recordingMode,
 				isScreenshot,
@@ -103,7 +104,17 @@ app.get(
 					.from(videos)
 					.where(eq(videos.id, Video.VideoId.make(videoId)));
 
-				if (video)
+				if (video) {
+					if (video.ownerId !== user.id)
+						return c.json({ error: "Forbidden" }, { status: 403 });
+
+					await assertShareableLinkDurationAllowed({
+						client: db(),
+						ownerId: user.id,
+						isScreenshot: video.isScreenshot,
+						durationSeconds: durationInSecs,
+					});
+
 					return c.json({
 						id: video.id,
 						// All deprecated
@@ -111,6 +122,7 @@ app.get(
 						aws_region: "n/a",
 						aws_bucket: "n/a",
 					});
+				}
 			}
 
 			const userOrganizations = await db()
@@ -194,41 +206,49 @@ app.get(
 				: Storage.getS3WritableAccessForUser(user.id, videoOrgId)
 			).pipe(runPromise);
 
-			await db()
-				.insert(videos)
-				.values({
-					id: idToUse,
-					name: videoName,
-					ownerId: user.id,
-					orgId: videoOrgId,
-					source:
-						recordingMode === "hls"
-							? { type: "local" as const }
-							: recordingMode === "desktopMP4"
-								? { type: "desktopMP4" as const }
-								: recordingMode === "desktopSegments"
-									? { type: "desktopSegments" as const }
-									: undefined,
-					isScreenshot,
-					bucket: Option.getOrNull(writable.bucketId),
-					storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-					duration: durationInSecs,
-					width,
-					height,
-					fps,
-				});
-
 			const clientSupportsUploadProgress = isFromDesktopSemver(
 				c.req,
 				UPLOAD_PROGRESS_VERSION,
 			);
 
-			if (clientSupportsUploadProgress)
-				await db().insert(videoUploads).values({
-					videoId: idToUse,
-					mode: "singlepart",
-				});
+			await createVideoWithShareableLinkQuota({
+				client: db(),
+				ownerId: user.id,
+				isScreenshot,
+				durationSeconds: durationInSecs,
+				create: async (tx) => {
+					await tx.insert(videos).values({
+						id: idToUse,
+						name: videoName,
+						ownerId: user.id,
+						orgId: videoOrgId,
+						source:
+							recordingMode === "hls"
+								? { type: "local" as const }
+								: recordingMode === "desktopMP4"
+									? { type: "desktopMP4" as const }
+									: recordingMode === "desktopSegments"
+										? { type: "desktopSegments" as const }
+										: undefined,
+						isScreenshot,
+						bucket: Option.getOrNull(writable.bucketId),
+						storageIntegrationId: Option.getOrNull(
+							writable.storageIntegrationId,
+						),
+						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+						duration: durationInSecs,
+						width,
+						height,
+						fps,
+					});
+
+					if (clientSupportsUploadProgress)
+						await tx.insert(videoUploads).values({
+							videoId: idToUse,
+							mode: "singlepart",
+						});
+				},
+			});
 
 			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
 				await dub().links.create({
@@ -283,6 +303,8 @@ app.get(
 				aws_bucket: "n/a",
 			});
 		} catch (error) {
+			if (isShareableLinkUsageLimitError(error))
+				return c.json(getShareableLinkLimitResponse(error), { status: 403 });
 			console.error("Error in video create endpoint:", error);
 			return c.json({ error: "Internal server error" }, { status: 500 });
 		}
