@@ -17,6 +17,7 @@ import {
 	createVideoWithShareableLinkQuota,
 	getShareableLinkLimitResponse,
 	isShareableLinkUsageLimitError,
+	markShareableLinkUploadRejected,
 	Storage,
 } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
@@ -108,12 +109,19 @@ app.get(
 					if (video.ownerId !== user.id)
 						return c.json({ error: "Forbidden" }, { status: 403 });
 
-					await assertShareableLinkDurationAllowed({
-						client: db(),
-						ownerId: user.id,
-						isScreenshot: video.isScreenshot,
-						durationSeconds: durationInSecs,
-					});
+					try {
+						await assertShareableLinkDurationAllowed({
+							client: db(),
+							ownerId: user.id,
+							isScreenshot: video.isScreenshot,
+							durationSeconds: durationInSecs,
+						});
+					} catch (error) {
+						if (isShareableLinkUsageLimitError(error)) {
+							await markShareableLinkUploadRejected(db(), video.id);
+						}
+						throw error;
+					}
 
 					return c.json({
 						id: video.id,

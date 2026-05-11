@@ -10,6 +10,7 @@ import {
 	assertShareableLinkDurationAllowed,
 	createVideoWithShareableLinkQuota,
 	isShareableLinkUsageLimitError,
+	markShareableLinkUploadRejected,
 	Storage as StorageService,
 } from "@cap/web-backend";
 import {
@@ -155,12 +156,19 @@ export async function createVideoAndGetUploadUrl({
 			if (existingVideo) {
 				if (existingVideo.ownerId !== user.id) throw new Error("Forbidden");
 
-				await assertShareableLinkDurationAllowed({
-					client: db(),
-					ownerId: user.id,
-					isScreenshot: existingVideo.isScreenshot,
-					durationSeconds: duration,
-				});
+				try {
+					await assertShareableLinkDurationAllowed({
+						client: db(),
+						ownerId: user.id,
+						isScreenshot: existingVideo.isScreenshot,
+						durationSeconds: duration,
+					});
+				} catch (error) {
+					if (isShareableLinkUsageLimitError(error)) {
+						await markShareableLinkUploadRejected(db(), existingVideo.id);
+					}
+					throw error;
+				}
 
 				const existingVideoDomain = Video.Video.decodeSync({
 					...existingVideo,
