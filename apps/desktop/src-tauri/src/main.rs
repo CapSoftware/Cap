@@ -12,6 +12,13 @@ fn main() {
         std::env::set_var("RUST_LOG", "trace");
     }
 
+    #[cfg(not(debug_assertions))]
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        unsafe {
+            std::env::set_var("RUST_BACKTRACE", "full");
+        }
+    }
+
     // We have to hold onto the ClientInitGuard until the very end
     let _sentry_guard = std::option_env!("CAP_DESKTOP_SENTRY_URL").map(|url| {
         let sentry_client = sentry::init((
@@ -72,7 +79,6 @@ fn main() {
     });
 
     let file_appender = tracing_appender::rolling::daily(&logs_dir, "cap-desktop.log");
-    let (non_blocking, _logger_guard) = tracing_appender::non_blocking(file_appender);
 
     let (otel_layer, _tracer) = if cfg!(debug_assertions) {
         use opentelemetry::trace::TracerProvider;
@@ -125,9 +131,11 @@ fn main() {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_target(true)
-                .with_writer(non_blocking),
+                .with_writer(file_appender),
         )
         .init();
+
+    install_panic_hook(logs_dir.clone());
 
     #[cfg(debug_assertions)]
     sentry::configure_scope(|scope| {
@@ -142,4 +150,73 @@ fn main() {
         .build()
         .expect("Failed to build multi threaded tokio runtime")
         .block_on(cap_desktop_lib::run(handle, logs_dir));
+}
+
+fn install_panic_hook(logs_dir: std::path::PathBuf) {
+    let prev = std::panic::take_hook();
+    let panics_log = logs_dir.join("panics.log");
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<no message>".to_string());
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("<unnamed>").to_string();
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let pid = std::process::id();
+
+        write_panic_record(
+            &panics_log,
+            &timestamp,
+            pid,
+            &thread_name,
+            &location,
+            &message,
+            &backtrace,
+        );
+
+        tracing::error!(
+            target: "cap_desktop_panic",
+            location = %location,
+            thread = %thread_name,
+            message = %message,
+            backtrace = %backtrace,
+            "panic"
+        );
+        eprintln!(
+            "[cap-desktop panic] thread '{thread_name}' at {location}: {message}\nbacktrace:\n{backtrace}"
+        );
+        prev(info);
+    }));
+}
+
+fn write_panic_record(
+    path: &std::path::Path,
+    timestamp: &str,
+    pid: u32,
+    thread_name: &str,
+    location: &str,
+    message: &str,
+    backtrace: &std::backtrace::Backtrace,
+) {
+    use std::io::Write;
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    let _ = writeln!(
+        file,
+        "[{timestamp}] pid={pid} thread='{thread_name}' at {location}: {message}\n{backtrace}\n----"
+    );
+    let _ = file.flush();
 }

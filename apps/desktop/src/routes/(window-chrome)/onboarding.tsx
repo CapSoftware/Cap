@@ -303,7 +303,10 @@ function OnboardingAmbientBackdrop() {
 }
 
 export default function OnboardingPage() {
-	const [step, setStep] = createSignal(0);
+	const isMacOS = createMemo(() => ostype() === "macos");
+	const minStep = createMemo(() => (isMacOS() ? 0 : 1));
+
+	const [step, setStep] = createSignal(ostype() === "macos" ? 0 : 1);
 	const [showStartupOverlay, setShowStartupOverlay] = createSignal(true);
 	const [isExiting, setIsExiting] = createSignal(false);
 	const [permissionsNeeded, setPermissionsNeeded] = createSignal(false);
@@ -322,7 +325,6 @@ export default function OnboardingPage() {
 		}
 	});
 
-	const isMacOS = createMemo(() => ostype() === "macos");
 	const permissionsOnly = createMemo(
 		() => isMacOS() && isRevisit() && permissionsNeeded(),
 	);
@@ -332,6 +334,12 @@ export default function OnboardingPage() {
 		if (!isMacOS()) {
 			setPermsGranted(true);
 			setCorePermsGranted(true);
+		}
+	});
+
+	createEffect(() => {
+		if (step() < minStep()) {
+			setStep(minStep());
 		}
 	});
 
@@ -356,7 +364,7 @@ export default function OnboardingPage() {
 	});
 
 	const goToStep = (target: number) => {
-		if (target < 0 || target >= totalSteps()) return;
+		if (target < minStep() || target >= totalSteps()) return;
 		setStep(target);
 	};
 
@@ -372,9 +380,6 @@ export default function OnboardingPage() {
 		setIsExiting(true);
 		await generalSettingsStore.set({ hasCompletedStartup: true });
 		setTimeout(() => {
-			if (!isMacOS()) {
-				goToStep(1);
-			}
 			setShowStartupOverlay(false);
 			setIsExiting(false);
 		}, 600);
@@ -397,7 +402,7 @@ export default function OnboardingPage() {
 				if (!nextDisabled() && step() < totalSteps() - 1) goToStep(step() + 1);
 			} else if (e.key === "ArrowLeft") {
 				e.preventDefault();
-				if (step() > 0) goToStep(step() - 1);
+				if (step() > minStep()) goToStep(step() - 1);
 			} else if (e.key === "Enter") {
 				e.preventDefault();
 				if (!nextDisabled()) handleNext();
@@ -485,7 +490,7 @@ export default function OnboardingPage() {
 				`}
 				</style>
 				<div
-					data-tauri-drag-region="none"
+					data-tauri-drag-region="false"
 					class="flex flex-col flex-1 min-h-0 overflow-hidden relative"
 				>
 					<OnboardingAmbientBackdrop />
@@ -531,12 +536,12 @@ export default function OnboardingPage() {
 					</div>
 					<Show when={!showStartupOverlay() || isExiting()}>
 						<StepNavigation
-							current={step()}
-							total={totalSteps()}
+							current={step() - minStep()}
+							total={totalSteps() - minStep()}
 							onBack={() => goToStep(step() - 1)}
 							onNext={handleNext}
 							nextLabel={nextLabel()}
-							showBack={step() > 0}
+							showBack={step() > minStep()}
 							nextDisabled={nextDisabled()}
 							showSkipOnboarding={
 								corePermsGranted() &&
@@ -571,14 +576,14 @@ function StepNavigation(props: {
 }) {
 	return (
 		<div
-			data-tauri-drag-region="none"
+			data-tauri-drag-region="false"
 			class="flex flex-col items-center gap-2 px-8 pb-5 pt-2 shrink-0 relative z-40"
 		>
 			<div class="flex items-center justify-between w-full">
 				<div class="flex-1">
 					<Show when={props.showBack}>
 						<button
-							data-tauri-drag-region="none"
+							data-tauri-drag-region="false"
 							type="button"
 							onClick={props.onBack}
 							class="flex items-center gap-1.5 text-[13px] text-gray-10 hover:text-gray-12 transition-colors duration-200"
@@ -607,7 +612,7 @@ function StepNavigation(props: {
 				<div class="flex-1 flex justify-end">
 					<div class="flex flex-col items-center gap-1.5">
 						<Button
-							data-tauri-drag-region="none"
+							data-tauri-drag-region="false"
 							onClick={props.onNext}
 							variant="primary"
 							size="md"
@@ -624,7 +629,7 @@ function StepNavigation(props: {
 						</Button>
 						<Show when={props.showSkipOnboarding}>
 							<button
-								data-tauri-drag-region="none"
+								data-tauri-drag-region="false"
 								type="button"
 								onClick={() => props.onSkip?.()}
 								class="text-[11px] text-gray-9 hover:text-gray-11 transition-colors duration-200 py-0.5"
@@ -2054,7 +2059,7 @@ function PermissionsStep(props: {
 
 	return (
 		<div
-			data-tauri-drag-region="none"
+			data-tauri-drag-region="false"
 			class="flex flex-col items-center justify-center min-h-full px-12 gap-6"
 		>
 			<div
@@ -2120,7 +2125,7 @@ function PermissionsStep(props: {
 										}
 									>
 										<Button
-											data-tauri-drag-region="none"
+											data-tauri-drag-region="false"
 											size="sm"
 											variant="gray"
 											class="shrink-0"
