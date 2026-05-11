@@ -98,7 +98,7 @@ function buildEnv(env: Env): Record<string, string> {
 
 export class CapWebContainer extends Container<Env> {
 	defaultPort = 8080;
-	sleepAfter = "24h";
+	sleepAfter = "2m";
 	enableInternet = true;
 
 	constructor(ctx: DurableObjectState, env: Env) {

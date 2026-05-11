@@ -7,7 +7,7 @@ interface Env {
 
 export class CapMediaContainer extends Container<Env> {
 	defaultPort = 3456;
-	sleepAfter = "6h";
+	sleepAfter = "2m";
 	enableInternet = true;
 
 	constructor(ctx: DurableObjectState, env: Env) {
