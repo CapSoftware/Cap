@@ -25,6 +25,15 @@ export {
 } from "./Storage/StorageRepo.ts";
 export { Tinybird } from "./Tinybird/index.ts";
 export { Users } from "./Users/index.ts";
+export {
+	collectPasswordHashes,
+	type EffectiveVideoRules,
+	resolveEffectiveVideoRules,
+	type SpaceRuleInput,
+	type SpaceRuleSource,
+	type ViewerSettingKey,
+	type ViewerSettings,
+} from "./Videos/EffectiveVideoRules.ts";
 export { Videos } from "./Videos/index.ts";
 export {
 	buildCanView,
