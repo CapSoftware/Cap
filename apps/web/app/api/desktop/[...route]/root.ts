@@ -92,70 +92,224 @@ async function applyOrganizationLogoUpdate(
 	}).pipe(runPromise);
 }
 
-const diagnosticsSchema = z.object({
-	system: z
-		.object({
-			windowsVersion: z
-				.object({
-					displayName: z.string(),
-					meetsRequirements: z.boolean().optional(),
-					isWindows11: z.boolean().optional(),
-				})
-				.optional(),
-			macosVersion: z.object({ displayName: z.string() }).optional(),
-			gpuInfo: z
-				.object({
-					vendor: z.string(),
-					description: z.string(),
-					dedicatedVideoMemoryMb: z.number().optional(),
-					isSoftwareAdapter: z.boolean().optional(),
-					isBasicRenderDriver: z.boolean().optional(),
-					supportsHardwareEncoding: z.boolean().optional(),
-				})
-				.optional(),
-			allGpus: z
-				.object({
-					gpus: z.array(
-						z.object({
-							vendor: z.string(),
-							description: z.string(),
-							dedicatedVideoMemoryMb: z.number().optional(),
-						}),
-					),
-					isMultiGpuSystem: z.boolean().optional(),
-					hasDiscreteGpu: z.boolean().optional(),
-				})
-				.optional(),
-			renderingStatus: z
-				.object({
-					isUsingSoftwareRendering: z.boolean().optional(),
-					isUsingBasicRenderDriver: z.boolean().optional(),
-					hardwareEncodingAvailable: z.boolean().optional(),
-					warningMessage: z.string().optional(),
-				})
-				.optional(),
-			availableEncoders: z.array(z.string()).optional(),
-			graphicsCaptureSupported: z.boolean().optional(),
-			screenCaptureSupported: z.boolean().optional(),
-			d3D11VideoProcessorAvailable: z.boolean().optional(),
-		})
-		.optional(),
-	cameras: z.array(z.string()).optional(),
-	microphones: z.array(z.string()).optional(),
-	permissions: z
-		.object({
-			screenRecording: z.string().optional(),
-			camera: z.string().optional(),
-			microphone: z.string().optional(),
-		})
-		.optional(),
-});
+const hardwareSchema = z
+	.object({
+		cpuBrand: z.string().optional(),
+		cpuCores: z.number().optional(),
+		totalMemoryMb: z.number().optional(),
+		availableMemoryMb: z.number().optional(),
+		architecture: z.string().optional(),
+	})
+	.passthrough();
+
+const displayDiagnosticsSchema = z
+	.object({
+		id: z.string().optional(),
+		name: z.string().optional(),
+		width: z.number().optional(),
+		height: z.number().optional(),
+		refreshRate: z.number().optional(),
+		scaleFactor: z.number().optional(),
+		isPrimary: z.boolean().optional(),
+	})
+	.passthrough();
+
+const cameraDiagnosticsSchema = z
+	.object({
+		deviceId: z.string().optional(),
+		displayName: z.string().optional(),
+		modelId: z.string().nullable().optional(),
+		formats: z
+			.array(
+				z
+					.object({
+						width: z.number().optional(),
+						height: z.number().optional(),
+						frameRate: z.number().optional(),
+					})
+					.passthrough(),
+			)
+			.optional(),
+	})
+	.passthrough();
+
+const microphoneDiagnosticsSchema = z
+	.object({
+		name: z.string().optional(),
+		sampleRate: z.number().optional(),
+		channels: z.number().optional(),
+		sampleFormat: z.string().optional(),
+	})
+	.passthrough();
+
+const diagnosticsSchema = z
+	.object({
+		hardware: hardwareSchema.optional(),
+		system: z
+			.object({
+				windowsVersion: z
+					.object({
+						displayName: z.string(),
+						meetsRequirements: z.boolean().optional(),
+						isWindows11: z.boolean().optional(),
+					})
+					.passthrough()
+					.optional(),
+				macosVersion: z
+					.object({ displayName: z.string() })
+					.passthrough()
+					.optional(),
+				gpuInfo: z
+					.object({
+						vendor: z.string(),
+						description: z.string(),
+						dedicatedVideoMemoryMb: z.number().optional(),
+						isSoftwareAdapter: z.boolean().optional(),
+						isBasicRenderDriver: z.boolean().optional(),
+						supportsHardwareEncoding: z.boolean().optional(),
+					})
+					.passthrough()
+					.optional(),
+				allGpus: z
+					.object({
+						gpus: z.array(
+							z
+								.object({
+									vendor: z.string(),
+									description: z.string(),
+									dedicatedVideoMemoryMb: z.number().optional(),
+								})
+								.passthrough(),
+						),
+						isMultiGpuSystem: z.boolean().optional(),
+						hasDiscreteGpu: z.boolean().optional(),
+					})
+					.passthrough()
+					.optional(),
+				renderingStatus: z
+					.object({
+						isUsingSoftwareRendering: z.boolean().optional(),
+						isUsingBasicRenderDriver: z.boolean().optional(),
+						hardwareEncodingAvailable: z.boolean().optional(),
+						warningMessage: z.string().optional(),
+					})
+					.passthrough()
+					.optional(),
+				availableEncoders: z.array(z.string()).optional(),
+				graphicsCaptureSupported: z.boolean().optional(),
+				screenCaptureSupported: z.boolean().optional(),
+				d3D11VideoProcessorAvailable: z.boolean().optional(),
+				metalSupported: z.boolean().optional(),
+				gpuName: z.string().nullable().optional(),
+			})
+			.passthrough()
+			.optional(),
+		displays: z.array(displayDiagnosticsSchema).optional(),
+		cameras: z.array(z.union([z.string(), cameraDiagnosticsSchema])).optional(),
+		microphones: z
+			.array(z.union([z.string(), microphoneDiagnosticsSchema]))
+			.optional(),
+		storage: z
+			.object({
+				recordingsPath: z.string().optional(),
+				availableSpaceMb: z.number().optional(),
+				totalSpaceMb: z.number().optional(),
+			})
+			.passthrough()
+			.nullable()
+			.optional(),
+		permissions: z
+			.object({
+				screenRecording: z.string().optional(),
+				camera: z.string().optional(),
+				microphone: z.string().optional(),
+			})
+			.passthrough()
+			.optional(),
+		appState: z
+			.object({
+				isRecording: z.boolean().optional(),
+				recordingsDir: z.string().optional(),
+				appDataDir: z.string().optional(),
+			})
+			.passthrough()
+			.optional(),
+	})
+	.passthrough();
+
+const clientContextSchema = z
+	.object({
+		reportId: z.string().optional(),
+		submittedAt: z.string().optional(),
+		app: z
+			.object({
+				version: z.string().optional(),
+				os: z.string().optional(),
+				route: z.string().optional(),
+			})
+			.passthrough()
+			.optional(),
+		runtime: z
+			.object({
+				userAgent: z.string().optional(),
+				locale: z.string().optional(),
+				timezone: z.string().optional(),
+			})
+			.passthrough()
+			.optional(),
+	})
+	.passthrough();
+
+function truncateForDiscord(value: string, maxLength: number) {
+	const trimmed = value.trim();
+	if (trimmed.length <= maxLength) return trimmed;
+	return `${trimmed.slice(0, maxLength - 14)}...[truncated]`;
+}
+
+function formatCamera(
+	camera: string | z.infer<typeof cameraDiagnosticsSchema>,
+): string {
+	if (typeof camera === "string") return camera;
+
+	const name = camera.displayName ?? camera.deviceId ?? "Unknown camera";
+	const bestFormat = camera.formats?.[0];
+	if (!bestFormat?.width || !bestFormat.height) return name;
+
+	const fps = bestFormat.frameRate ? ` ${bestFormat.frameRate}fps` : "";
+	return `${name} (${bestFormat.width}x${bestFormat.height}${fps})`;
+}
+
+function formatMicrophone(
+	microphone: string | z.infer<typeof microphoneDiagnosticsSchema>,
+): string {
+	if (typeof microphone === "string") return microphone;
+
+	const name = microphone.name ?? "Unknown microphone";
+	const details = [
+		microphone.sampleRate ? `${microphone.sampleRate}Hz` : null,
+		microphone.channels ? `${microphone.channels}ch` : null,
+		microphone.sampleFormat ?? null,
+	].filter((value): value is string => value !== null);
+
+	return details.length > 0 ? `${name} (${details.join(", ")})` : name;
+}
 
 function formatDiagnosticsForDiscord(
 	diagnostics: z.infer<typeof diagnosticsSchema>,
 ): string {
 	const lines: string[] = [];
 	const sys = diagnostics.system;
+	const hardware = diagnostics.hardware;
+
+	if (hardware?.cpuBrand) {
+		const memory =
+			hardware.totalMemoryMb !== undefined
+				? `, ${Math.round(hardware.totalMemoryMb / 1024)}GB RAM`
+				: "";
+		const cores =
+			hardware.cpuCores !== undefined ? `, ${hardware.cpuCores} cores` : "";
+		lines.push(`**Hardware:** ${hardware.cpuBrand}${cores}${memory}`);
+	}
 
 	if (sys?.windowsVersion?.displayName) {
 		lines.push(`**OS:** ${sys.windowsVersion.displayName}`);
@@ -198,6 +352,14 @@ function formatDiagnosticsForDiscord(
 		);
 	}
 
+	if (sys?.gpuName) {
+		lines.push(`**GPU:** ${sys.gpuName}`);
+	}
+
+	if (sys?.metalSupported !== undefined) {
+		lines.push(`**Metal:** ${sys.metalSupported ? "✅" : "❌"}`);
+	}
+
 	if (sys?.d3D11VideoProcessorAvailable !== undefined) {
 		lines.push(
 			`**D3D11 Video Processor:** ${sys.d3D11VideoProcessorAvailable ? "✅" : "❌"}`,
@@ -220,9 +382,48 @@ function formatDiagnosticsForDiscord(
 		if (permList) lines.push(`**Permissions:** ${permList}`);
 	}
 
+	if (diagnostics.appState) {
+		const appState = diagnostics.appState;
+		lines.push(
+			`**Recording State:** ${appState.isRecording ? "Recording" : "Idle"}`,
+		);
+		if (appState.recordingsDir)
+			lines.push(`**Recordings Dir:** ${appState.recordingsDir}`);
+	}
+
+	if (diagnostics.storage) {
+		const storage = diagnostics.storage;
+		if (
+			storage.availableSpaceMb !== undefined &&
+			storage.totalSpaceMb !== undefined
+		) {
+			lines.push(
+				`**Storage:** ${Math.round(storage.availableSpaceMb / 1024)}GB free of ${Math.round(storage.totalSpaceMb / 1024)}GB`,
+			);
+		}
+	}
+
+	if (diagnostics.displays && diagnostics.displays.length > 0) {
+		const displays = diagnostics.displays
+			.map((display) => {
+				const size =
+					display.width && display.height
+						? `${display.width}x${display.height}`
+						: "unknown";
+				const refreshRate = display.refreshRate
+					? ` ${display.refreshRate}Hz`
+					: "";
+				const scale = display.scaleFactor ? ` @${display.scaleFactor}x` : "";
+				const primary = display.isPrimary ? " primary" : "";
+				return `${display.name ?? display.id ?? "Display"} ${size}${refreshRate}${scale}${primary}`;
+			})
+			.join("; ");
+		lines.push(`**Displays (${diagnostics.displays.length}):** ${displays}`);
+	}
+
 	if (diagnostics.cameras && diagnostics.cameras.length > 0) {
 		lines.push(
-			`**Cameras (${diagnostics.cameras.length}):** ${diagnostics.cameras.join(", ")}`,
+			`**Cameras (${diagnostics.cameras.length}):** ${diagnostics.cameras.map(formatCamera).join(", ")}`,
 		);
 	} else {
 		lines.push("**Cameras:** None detected");
@@ -230,10 +431,29 @@ function formatDiagnosticsForDiscord(
 
 	if (diagnostics.microphones && diagnostics.microphones.length > 0) {
 		lines.push(
-			`**Mics (${diagnostics.microphones.length}):** ${diagnostics.microphones.join(", ")}`,
+			`**Mics (${diagnostics.microphones.length}):** ${diagnostics.microphones.map(formatMicrophone).join(", ")}`,
 		);
 	} else {
 		lines.push("**Mics:** None detected");
+	}
+
+	return lines.join("\n");
+}
+
+function formatClientContextForDiscord(
+	context: z.infer<typeof clientContextSchema>,
+): string {
+	const lines: string[] = [];
+
+	if (context.submittedAt) lines.push(`**Submitted:** ${context.submittedAt}`);
+	if (context.app?.route) lines.push(`**Route:** ${context.app.route}`);
+	if (context.runtime?.locale || context.runtime?.timezone) {
+		lines.push(
+			`**Locale:** ${[context.runtime.locale, context.runtime.timezone].filter(Boolean).join(", ")}`,
+		);
+	}
+	if (context.runtime?.userAgent) {
+		lines.push(`**WebView:** ${context.runtime.userAgent}`);
 	}
 
 	return lines.join("\n");
@@ -248,6 +468,9 @@ app.post(
 			os: z.string().optional(),
 			version: z.string().optional(),
 			diagnostics: z.string().optional(),
+			reportId: z.string().optional(),
+			feedback: z.string().optional(),
+			clientContext: z.string().optional(),
 		}),
 	),
 	withOptionalAuth,
@@ -257,6 +480,9 @@ app.post(
 			os,
 			version,
 			diagnostics: diagnosticsJson,
+			reportId,
+			feedback,
+			clientContext,
 		} = c.req.valid("form");
 		const user = c.get("user");
 
@@ -267,7 +493,8 @@ app.post(
 
 			const formData = new FormData();
 			const logBlob = new Blob([log], { type: "text/plain" });
-			const fileName = `cap-desktop-${os || "unknown"}-${version || "unknown"}-${Date.now()}.log`;
+			const fileBase = `cap-desktop-${os || "unknown"}-${version || "unknown"}-${reportId || Date.now()}`;
+			const fileName = `${fileBase}.log`;
 			formData.append("file", logBlob, fileName);
 
 			let diagnosticsContent = "";
@@ -283,19 +510,58 @@ app.post(
 				}
 			}
 
+			let clientContextContent = "";
+			if (clientContext) {
+				try {
+					const parsed = JSON.parse(clientContext);
+					const validated = clientContextSchema.safeParse(parsed);
+					if (validated.success) {
+						clientContextContent = formatClientContextForDiscord(
+							validated.data,
+						);
+					}
+				} catch {
+					clientContextContent = "";
+				}
+
+				const contextBlob = new Blob([clientContext], {
+					type: "application/json",
+				});
+				formData.append("files[1]", contextBlob, `${fileBase}-context.json`);
+			}
+
+			if (diagnosticsJson && reportId) {
+				const diagnosticsBlob = new Blob([diagnosticsJson], {
+					type: "application/json",
+				});
+				formData.append(
+					"files[2]",
+					diagnosticsBlob,
+					`${fileBase}-native-diagnostics.json`,
+				);
+			}
+
 			const content = [
-				"📋 **New Log File Uploaded**",
+				reportId
+					? "🧪 **New Desktop Debug Report**"
+					: "📋 **New Log File Uploaded**",
 				"",
 				user ? `**User:** ${user.email} (${user.id})` : null,
+				reportId ? `**Report ID:** ${reportId}` : null,
 				os ? `**Platform:** ${os}` : null,
 				version ? `**App Version:** ${version}` : null,
+				feedback ? `**Issue:**\n${truncateForDiscord(feedback, 700)}` : null,
+				clientContextContent ? "" : null,
+				clientContextContent
+					? truncateForDiscord(clientContextContent, 500)
+					: null,
 				diagnosticsContent ? "" : null,
-				diagnosticsContent || null,
+				diagnosticsContent ? truncateForDiscord(diagnosticsContent, 900) : null,
 			]
 				.filter((line): line is string => line !== null)
 				.join("\n");
 
-			formData.append("content", content);
+			formData.append("content", truncateForDiscord(content, 1900));
 
 			const response = await fetch(discordWebhookUrl, {
 				method: "POST",
@@ -326,21 +592,31 @@ app.post(
 			feedback: z.string(),
 			os: z.union([z.literal("macos"), z.literal("windows")]).optional(),
 			version: z.string().optional(),
+			reportId: z.string().optional(),
+			kind: z.enum(["feedback", "debugReport"]).optional(),
+			debugReport: z.string().optional(),
 		}),
 	),
 	async (c) => {
-		const { feedback, os, version } = c.req.valid("form");
+		const { feedback, os, version, reportId, kind, debugReport } =
+			c.req.valid("form");
 		const userEmail = c.get("user").email;
 
 		try {
 			await sendEmail({
 				email: "hello@cap.so",
-				subject: `New Feedback from ${userEmail}`,
+				subject:
+					kind === "debugReport"
+						? `New Debug Report from ${userEmail}`
+						: `New Feedback from ${userEmail}`,
 				react: Feedback({
 					userEmail,
 					feedback,
 					os,
 					version,
+					reportId,
+					kind,
+					debugReport,
 				}),
 				cc: userEmail,
 				replyTo: userEmail,
