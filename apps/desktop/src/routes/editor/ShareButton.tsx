@@ -9,6 +9,7 @@ import { createProgressBar } from "~/routes/editor/utils";
 import { authStore } from "~/store";
 import { exportVideo } from "~/utils/export";
 import { commands, type UploadProgress } from "~/utils/tauri";
+import { openUpgradePage } from "~/utils/upgrade";
 import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import {
@@ -46,7 +47,7 @@ function ShareButton() {
 
 			if (!canShare.allowed) {
 				if (canShare.reason === "upgrade_required") {
-					await commands.showWindow("Upgrade");
+					await openUpgradePage();
 					throw new Error(
 						"Upgrade required to share recordings longer than 5 minutes",
 					);

@@ -71,6 +71,7 @@ import {
 	type ScreenCaptureTarget,
 	type UploadProgress,
 } from "~/utils/tauri";
+import { openUpgradePage } from "~/utils/upgrade";
 import IconCapLogoFull from "~icons/cap/logo-full";
 import IconCapLogoFullDark from "~icons/cap/logo-full-dark";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
@@ -79,6 +80,7 @@ import IconLucideBug from "~icons/lucide/bug";
 import IconLucideCircleHelp from "~icons/lucide/circle-help";
 import IconLucideImage from "~icons/lucide/image";
 import IconLucideImport from "~icons/lucide/import";
+import IconLucideLink from "~icons/lucide/link";
 import IconLucideSearch from "~icons/lucide/search";
 import IconLucideSettings from "~icons/lucide/settings";
 import IconLucideSquarePlay from "~icons/lucide/square-play";
@@ -131,6 +133,21 @@ type MicrophoneDeviceSettings = {
 type RecordingDeviceSettingsStore = {
 	cameraDeviceSettings?: Record<string, CameraDeviceSettings>;
 	microphoneDeviceSettings?: Record<string, MicrophoneDeviceSettings>;
+};
+
+type ShareableLinkUsage = {
+	used: number;
+	limit: number;
+	remaining: number;
+	resetAt: string;
+	maxDurationSeconds: number;
+};
+
+type PlanWithShareableLinkUsage = {
+	upgraded?: boolean;
+	manual?: boolean;
+	shareableLinkUsage?: ShareableLinkUsage | null;
+	shareable_link_usage?: ShareableLinkUsage | null;
 };
 
 const recordingDeviceSettingsStore = recordingSettingsStore as unknown as {
@@ -1505,6 +1522,66 @@ function MainWindowHelpButton() {
 	);
 }
 
+function getPlanShareableLinkUsage(plan: unknown) {
+	const typed = plan as PlanWithShareableLinkUsage | null | undefined;
+	return typed?.shareableLinkUsage ?? typed?.shareable_link_usage ?? null;
+}
+
+const ordinalSuffix = (day: number) => {
+	const remainder = day % 100;
+	if (remainder >= 11 && remainder <= 13) return "th";
+	if (day % 10 === 1) return "st";
+	if (day % 10 === 2) return "nd";
+	if (day % 10 === 3) return "rd";
+	return "th";
+};
+
+const formatResetDate = (dateString: string) => {
+	const date = new Date(dateString);
+	const month = date.toLocaleDateString("en-US", {
+		month: "long",
+		timeZone: "UTC",
+	});
+	const day = date.getUTCDate();
+	return `${month} ${day}${ordinalSuffix(day)}`;
+};
+
+function ShareableLinkUsagePill(props: { usage: ShareableLinkUsage }) {
+	const percent = () =>
+		`${Math.min(100, (props.usage.used / props.usage.limit) * 100)}%`;
+	const resetDate = () => formatResetDate(props.usage.resetAt);
+
+	return (
+		<Tooltip
+			content={
+				<span>
+					{props.usage.used}/{props.usage.limit} share links used.{" "}
+					{props.usage.remaining} left, resets {resetDate()}.
+				</span>
+			}
+		>
+			<button
+				type="button"
+				onClick={() => {
+					void openUpgradePage();
+				}}
+				class="flex shrink-0 items-center gap-1 rounded-full border border-gray-5 bg-gray-3 px-1.5 py-0.5 text-[10px] leading-none text-gray-12 hover:bg-gray-4 focus:outline-none"
+			>
+				<IconLucideLink class="size-3 text-gray-11" />
+				<span>
+					{props.usage.used}/{props.usage.limit}
+				</span>
+				<span class="h-1 w-8 overflow-hidden rounded-full bg-gray-6">
+					<span
+						class="block h-full rounded-full bg-blue-9"
+						style={{ width: percent() }}
+					/>
+				</span>
+			</button>
+		</Tooltip>
+	);
+}
+
 function Page() {
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
@@ -1512,6 +1589,14 @@ function Page() {
 	const isActivelyRecording = () =>
 		currentRecording.data?.status === "recording";
 	const auth = authStore.createQuery();
+	const shareableLinkUsage = createMemo(() => {
+		const plan = auth.data?.plan as
+			| PlanWithShareableLinkUsage
+			| null
+			| undefined;
+		if (!plan || plan.upgraded || plan.manual) return null;
+		return getPlanShareableLinkUsage(plan);
+	});
 	const recordingSettingsQuery = recordingDeviceSettingsStore.createQuery();
 	const generalSettings = generalSettingsStore.createQuery();
 	const deviceSettings = createMemo(
@@ -2423,6 +2508,9 @@ function Page() {
 					data-tauri-drag-region
 				>
 					<MainWindowHelpButton />
+					<Show when={shareableLinkUsage()}>
+						{(usage) => <ShareableLinkUsagePill usage={usage()} />}
+					</Show>
 					<div class="flex-1 min-h-9 min-w-0" data-tauri-drag-region />
 					<div class="flex gap-1 items-center shrink-0" data-tauri-drag-region>
 						<Tooltip content={<span>Settings</span>}>
@@ -2510,7 +2598,7 @@ function Page() {
 								<span
 									onClick={async () => {
 										if (license.data?.type !== "pro") {
-											await commands.showWindow("Upgrade");
+											await openUpgradePage();
 										}
 									}}
 									class={cx(

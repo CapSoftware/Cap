@@ -2,6 +2,7 @@ import { emit } from "@tauri-apps/api/event";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import type { createOptionsQuery } from "./queries";
 import { commands, type RecordingAction } from "./tauri";
+import { openUpgradePage } from "./upgrade";
 
 export function handleRecordingResult(
 	result: Promise<RecordingAction>,
@@ -36,7 +37,7 @@ export function handleRecordingResult(
 					setOptions({ mode: "studio" });
 					commands.setRecordingMode("studio");
 				}
-			} else if (result === "UpgradeRequired") commands.showWindow("Upgrade");
+			} else if (result === "UpgradeRequired") await openUpgradePage();
 			else
 				await dialog.message(`Error: ${result}`, {
 					title: "Error starting recording",

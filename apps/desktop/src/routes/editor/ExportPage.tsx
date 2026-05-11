@@ -37,6 +37,7 @@ import {
 	type FramesRendered,
 	type UploadProgress,
 } from "~/utils/tauri";
+import { openUpgradePage } from "~/utils/upgrade";
 import { type RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog, Field } from "./ui";
@@ -641,7 +642,7 @@ export function ExportPage() {
 
 			if (!canShare.allowed) {
 				if (canShare.reason === "upgrade_required") {
-					await commands.showWindow("Upgrade");
+					await openUpgradePage();
 					await new Promise((resolve) => setTimeout(resolve, 1000));
 					throw new SilentError();
 				}

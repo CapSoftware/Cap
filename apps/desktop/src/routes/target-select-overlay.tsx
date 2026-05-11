@@ -59,6 +59,7 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
+import { openUpgradePage } from "~/utils/upgrade";
 import { CameraSelectBase } from "./(window-chrome)/new-main/CameraSelect";
 import InfoPill from "./(window-chrome)/new-main/InfoPill";
 import { MicrophoneSelectBase } from "./(window-chrome)/new-main/MicrophoneSelect";
@@ -1879,7 +1880,9 @@ function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
 					Instant Mode recordings are limited to 5 mins,{" "}
 					<button
 						class="underline font-bold text-gray-3"
-						onClick={() => commands.showWindow("Upgrade")}
+						onClick={() => {
+							void openUpgradePage();
+						}}
 					>
 						Upgrade to Pro
 					</button>

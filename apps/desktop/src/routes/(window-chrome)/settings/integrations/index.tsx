@@ -7,6 +7,7 @@ import "@total-typescript/ts-reset/filter-boolean";
 import { authStore } from "~/store";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
+import { openUpgradePage } from "~/utils/upgrade";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 
 const GoogleDriveIcon = (props: { class?: string }) => (
@@ -91,7 +92,7 @@ export default function AppsTab() {
 		try {
 			if (managedByOrganization()) return;
 			if (app.pro && !isPro()) {
-				await commands.showWindow("Upgrade");
+				await openUpgradePage();
 				return;
 			}
 			navigate(app.url);
