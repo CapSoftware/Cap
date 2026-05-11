@@ -74,12 +74,20 @@ export function getShareableLinkUsageLimitError({
 export function isShareableLinkUsageLimitError(
 	error: unknown,
 ): error is Video.ShareableLinkUsageLimitError {
-	return (
+	if (
 		typeof error === "object" &&
 		error !== null &&
 		"_tag" in error &&
 		error._tag === "ShareableLinkUsageLimitError"
-	);
+	) {
+		return true;
+	}
+
+	if (error instanceof Error) {
+		return isShareableLinkUsageLimitError((error as { cause?: unknown }).cause);
+	}
+
+	return false;
 }
 
 export function getShareableLinkLimitResponse(
