@@ -25,7 +25,7 @@
 		"docker:up": "turbo run docker:up",
 		"format": "pnpm exec biome check --write",
 		"lint": "pnpm exec biome lint",
-		"tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
+		"tauri:build": "node scripts/build-cap-muxer.mjs && dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
 		"typecheck": "pnpm tsc -b",
 		"test": "turbo run test",
 		"test:web": "pnpm --filter=@cap/web test",
