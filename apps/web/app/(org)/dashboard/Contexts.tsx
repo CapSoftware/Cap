@@ -1,6 +1,7 @@
 "use client";
 
 import { buildEnv } from "@cap/env";
+import type { ShareableLinkUsageSnapshot } from "@cap/web-backend";
 import Cookies from "js-cookie";
 import { redirect, usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useState } from "react";
@@ -25,6 +26,7 @@ type SharedContext = {
 	activeSpace: Spaces | null;
 	user: CurrentUser;
 	userCapsCount: number | null;
+	shareableLinkUsage: ShareableLinkUsageSnapshot;
 	toggleSidebarCollapsed: () => void;
 	anyNewNotifications: boolean;
 	userPreferences: UserPreferences;
@@ -64,6 +66,7 @@ export function DashboardContexts({
 	userCapsCount,
 	organizationSettings,
 	userPreferences,
+	shareableLinkUsage,
 	anyNewNotifications,
 	initialTheme,
 	initialSidebarCollapsed,
@@ -74,6 +77,7 @@ export function DashboardContexts({
 	activeOrganization: SharedContext["activeOrganization"];
 	spacesData: SharedContext["spacesData"];
 	userCapsCount: SharedContext["userCapsCount"];
+	shareableLinkUsage: SharedContext["shareableLinkUsage"];
 	organizationSettings: SharedContext["organizationSettings"];
 	userPreferences: SharedContext["userPreferences"];
 	anyNewNotifications: boolean;
@@ -175,6 +179,7 @@ export function DashboardContexts({
 					activeOrganization,
 					spacesData,
 					userCapsCount,
+					shareableLinkUsage,
 					anyNewNotifications,
 					userPreferences,
 					organizationSettings,
