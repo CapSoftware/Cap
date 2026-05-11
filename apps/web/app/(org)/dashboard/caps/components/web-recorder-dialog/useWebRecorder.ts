@@ -85,6 +85,12 @@ type InstantVideoCreation = {
 	upload: UploadTarget;
 };
 
+const isShareableLinkUsageLimitError = (error: unknown) =>
+	typeof error === "object" &&
+	error !== null &&
+	"_tag" in error &&
+	error._tag === "ShareableLinkUsageLimitError";
+
 const unwrapExitOrThrow = <T, E>(exit: Exit.Exit<T, E>) => {
 	if (Exit.isFailure(exit)) {
 		throw Cause.squash(exit.cause);
@@ -1081,7 +1087,11 @@ export const useWebRecorder = ({
 			}
 
 			console.error("Failed to start recording", err);
-			toast.error("Could not start recording.");
+			if (isShareableLinkUsageLimitError(err)) {
+				toast.error("Shareable link limit reached. Please upgrade to Pro.");
+			} else {
+				toast.error("Could not start recording.");
+			}
 			await resetState();
 		} finally {
 			setIsSettingUp(false);
