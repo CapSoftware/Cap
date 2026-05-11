@@ -1,42 +1,35 @@
-import {
-	Action,
-	ActionPanel,
-	List,
-	showToast,
-	Toast,
-} from "@raycast/api";
+import { Action, ActionPanel, List, showToast, Toast } from "@raycast/api";
 import { useState, useEffect } from "react";
 import { openDeeplink } from "./utils";
-import { execSync } from "node:child_process";
+import { promisify } from "node:util";
+import { exec } from "node:child_process";
+
+const execAsync = promisify(exec);
 
 interface CameraDevice {
 	name: string;
 	modelId: string;
 }
 
-function listCameras(): CameraDevice[] {
-	try {
-		const output = execSync(
-			"system_profiler SPCameraDataType -json",
-			{ encoding: "utf-8" },
-		);
-		const data = JSON.parse(output);
-		const cameras: CameraDevice[] = [];
+async function listCameras(): Promise<CameraDevice[]> {
+	const { stdout } = await execAsync(
+		"system_profiler SPCameraDataType -json",
+		{ encoding: "utf-8" },
+	);
+	const data = JSON.parse(stdout);
+	const cameras: CameraDevice[] = [];
 
-		for (const item of data.SPCameraDataType || []) {
-			const items = item._items || [];
-			for (const device of items) {
-				const name = device._name || "";
-				const modelId = device.spcamera_model_id || device._name || "";
-				if (name) {
-					cameras.push({ name, modelId });
-				}
+	for (const item of data.SPCameraDataType || []) {
+		const items = item._items || [];
+		for (const device of items) {
+			const name = device._name || "";
+			const modelId = device.spcamera_model_id || device._name || "";
+			if (name) {
+				cameras.push({ name, modelId });
 			}
 		}
-		return cameras;
-	} catch {
-		return [];
 	}
+	return cameras;
 }
 
 export default function Command() {
@@ -44,8 +37,10 @@ export default function Command() {
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
-		setCameras(listCameras());
-		setLoading(false);
+		listCameras()
+			.then(setCameras)
+			.catch(() => setCameras([]))
+			.finally(() => setLoading(false));
 	}, []);
 
 	async function handleSelect(camera: CameraDevice) {
@@ -55,7 +50,7 @@ export default function Command() {
 		});
 
 		await openDeeplink("switch_camera", {
-			camera_id: { DeviceID: camera.name },
+			camera_id: { ModelID: camera.modelId },
 		});
 
 		toast.style = Toast.Style.Success;

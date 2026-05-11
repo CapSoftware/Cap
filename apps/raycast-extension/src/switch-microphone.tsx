@@ -1,44 +1,37 @@
-import {
-	Action,
-	ActionPanel,
-	List,
-	showToast,
-	Toast,
-} from "@raycast/api";
+import { Action, ActionPanel, List, showToast, Toast } from "@raycast/api";
 import { useState, useEffect } from "react";
 import { openDeeplink } from "./utils";
-import { execSync } from "node:child_process";
+import { promisify } from "node:util";
+import { exec } from "node:child_process";
+
+const execAsync = promisify(exec);
 
 interface MicDevice {
 	name: string;
 	uid: string;
 }
 
-function listMicrophones(): MicDevice[] {
-	try {
-		const output = execSync(
-			"system_profiler SPAudioDataType -json",
-			{ encoding: "utf-8" },
-		);
-		const data = JSON.parse(output);
-		const mics: MicDevice[] = [];
+async function listMicrophones(): Promise<MicDevice[]> {
+	const { stdout } = await execAsync(
+		"system_profiler SPAudioDataType -json",
+		{ encoding: "utf-8" },
+	);
+	const data = JSON.parse(stdout);
+	const mics: MicDevice[] = [];
 
-		for (const item of data.SPAudioDataType || []) {
-			const items = item._items || [];
-			for (const device of items) {
-				const name = device._name || device.coreaudio_device_name || "";
-				const isInput =
-					(device.coreaudio_input_source || "").length > 0 ||
-					(device.coreaudio_device_input || 0) > 0;
-				if (isInput && name) {
-					mics.push({ name, uid: device.coreaudio_device_uid || name });
-				}
+	for (const item of data.SPAudioDataType || []) {
+		const items = item._items || [];
+		for (const device of items) {
+			const name = device._name || device.coreaudio_device_name || "";
+			const isInput =
+				(device.coreaudio_input_source || "").length > 0 ||
+				(device.coreaudio_device_input || 0) > 0;
+			if (isInput && name) {
+				mics.push({ name, uid: device.coreaudio_device_uid || name });
 			}
 		}
-		return mics;
-	} catch {
-		return [];
 	}
+	return mics;
 }
 
 export default function Command() {
@@ -46,8 +39,10 @@ export default function Command() {
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
-		setMics(listMicrophones());
-		setLoading(false);
+		listMicrophones()
+			.then(setMics)
+			.catch(() => setMics([]))
+			.finally(() => setLoading(false));
 	}, []);
 
 	async function handleSelect(mic: MicDevice) {

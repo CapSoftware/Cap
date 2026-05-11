@@ -10,31 +10,41 @@ import { openDeeplink } from "./utils";
 
 export default function Command() {
 	async function handleSubmit(values: {
-		screen: string;
+		captureType: string;
+		screenOrWindow: string;
 		mode: string;
 		mic: string;
 		systemAudio: boolean;
 	}) {
-		const toast = await showToast({
-			style: Toast.Style.Animated,
-			title: "Starting recording...",
-		});
+		try {
+			const toast = await showToast({
+				style: Toast.Style.Animated,
+				title: "Starting recording...",
+			});
 
-		const captureMode =
-			values.screen === "window"
-				? { window: values.screen }
-				: { screen: values.screen };
+			let captureMode;
+			if (values.captureType === "window") {
+				captureMode = { window: values.screenOrWindow };
+			} else {
+				captureMode = { screen: values.screenOrWindow };
+			}
 
-		await openDeeplink("start_recording", {
-			capture_mode: captureMode,
-			camera: null,
-			mic_label: values.mic || null,
-			capture_system_audio: values.systemAudio,
-			mode: values.mode,
-		});
+			await openDeeplink("start_recording", {
+				capture_mode: captureMode,
+				camera: null,
+				mic_label: values.mic || null,
+				capture_system_audio: values.systemAudio,
+				mode: values.mode,
+			});
 
-		toast.style = Toast.Style.Success;
-		toast.title = "Recording started";
+			toast.style = Toast.Style.Success;
+			toast.title = "Recording started";
+		} catch {
+			await showToast({
+				style: Toast.Style.Failure,
+				title: "Failed to start recording",
+			});
+		}
 	}
 
 	return (
@@ -49,13 +59,21 @@ export default function Command() {
 				</ActionPanel>
 			}
 		>
-			<Form.Dropdown id="mode" title="Recording Mode" defaultValue="Studio">
-				<Form.Dropdown.Item value="Studio" title="Studio" />
-				<Form.Dropdown.Item value="Instant" title="Instant" />
+			<Form.Dropdown id="mode" title="Recording Mode" defaultValue="studio">
+				<Form.Dropdown.Item value="studio" title="Studio" />
+				<Form.Dropdown.Item value="instant" title="Instant" />
+			</Form.Dropdown>
+			<Form.Dropdown
+				id="captureType"
+				title="Capture Type"
+				defaultValue="screen"
+			>
+				<Form.Dropdown.Item value="screen" title="Screen" />
+				<Form.Dropdown.Item value="window" title="Window" />
 			</Form.Dropdown>
 			<Form.TextField
-				id="screen"
-				title="Screen / Window"
+				id="screenOrWindow"
+				title="Display / Window Name"
 				placeholder="Enter display or window name"
 			/>
 			<Form.TextField
