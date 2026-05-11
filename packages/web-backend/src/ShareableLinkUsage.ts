@@ -1,7 +1,7 @@
 import * as Db from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { type User, Video } from "@cap/web-domain";
-import { and, count, eq, gte, lt } from "drizzle-orm";
+import { and, count, eq, gte, isNull, lt, ne, or } from "drizzle-orm";
 import type { DbClient } from "./Database.ts";
 
 export const FREE_SHAREABLE_LINK_LIMIT = 30;
@@ -109,10 +109,12 @@ async function countCurrentPeriodShareableLinks(
 	const [row] = await client
 		.select({ value: count() })
 		.from(Db.videos)
+		.leftJoin(Db.videoUploads, eq(Db.videoUploads.videoId, Db.videos.id))
 		.where(
 			and(
 				eq(Db.videos.ownerId, userId),
 				eq(Db.videos.isScreenshot, false),
+				or(isNull(Db.videoUploads.videoId), ne(Db.videoUploads.phase, "error")),
 				gte(Db.videos.createdAt, periodStart),
 				lt(Db.videos.createdAt, periodEnd),
 			),
