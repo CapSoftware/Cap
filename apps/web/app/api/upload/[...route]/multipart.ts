@@ -7,6 +7,7 @@ import {
 	getShareableLinkLimitResponse,
 	isShareableLinkUsageLimitError,
 	makeCurrentUserLayer,
+	markShareableLinkUploadRejected,
 	provideOptionalAuth,
 	Storage,
 	VideosPolicy,
@@ -340,7 +341,19 @@ app.post(
 						durationSeconds: body.durationInSecs,
 					}),
 				catch: (cause) => cause,
-			});
+			}).pipe(
+				Effect.catchAll((error) =>
+					Effect.gen(function* () {
+						if (isShareableLinkUsageLimitError(error)) {
+							yield* Effect.promise(() =>
+								markShareableLinkUploadRejected(getDb(), videoId),
+							);
+						}
+
+						return yield* Effect.fail(error);
+					}),
+				),
+			);
 
 			return yield* Effect.gen(function* () {
 				const [bucket] = yield* Storage.getAccessForVideo(video);
