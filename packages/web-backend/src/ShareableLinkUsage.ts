@@ -236,3 +236,18 @@ export async function assertShareableLinkDurationAllowed({
 		usage,
 	});
 }
+
+export async function markShareableLinkUploadRejected(
+	client: QueryClient,
+	videoId: Video.VideoId,
+) {
+	await client
+		.update(Db.videoUploads)
+		.set({
+			phase: "error",
+			processingError: "Video exceeds free plan duration limit",
+			processingMessage: "Upgrade required",
+			updatedAt: new Date(),
+		})
+		.where(eq(Db.videoUploads.videoId, videoId));
+}
