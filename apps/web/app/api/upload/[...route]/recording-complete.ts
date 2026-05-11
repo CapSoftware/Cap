@@ -5,6 +5,7 @@ import {
 	assertShareableLinkDurationAllowed,
 	getShareableLinkLimitResponse,
 	isShareableLinkUsageLimitError,
+	markShareableLinkUploadRejected,
 	Storage,
 } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
@@ -312,6 +313,7 @@ export const app = new Hono().post(
 			return c.json({ success: true, jobId: result.jobId });
 		} catch (error) {
 			if (isShareableLinkUsageLimitError(error)) {
+				await markShareableLinkUploadRejected(db(), videoId);
 				return c.json(getShareableLinkLimitResponse(error), 403);
 			}
 
