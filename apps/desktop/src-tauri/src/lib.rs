@@ -799,6 +799,17 @@ async fn upload_logs(app_handle: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
+async fn upload_debug_report(
+    app_handle: AppHandle,
+    report_id: String,
+    user_feedback: String,
+    client_context: String,
+) -> Result<(), String> {
+    logging::upload_debug_report(&app_handle, report_id, user_feedback, client_context).await
+}
+
+#[tauri::command]
+#[specta::specta]
 fn get_system_diagnostics() -> cap_recording::diagnostics::SystemDiagnostics {
     cap_recording::diagnostics::collect_diagnostics()
 }
@@ -3893,6 +3904,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             set_native_camera_preview_enabled,
             recording_settings::set_recording_mode,
             upload_logs,
+            upload_debug_report,
             get_system_diagnostics,
             recording::start_recording,
             recording::stop_recording,

@@ -63,6 +63,12 @@ struct AppStateInfo {
     app_data_dir: String,
 }
 
+struct DebugReportUpload {
+    report_id: String,
+    user_feedback: String,
+    client_context: String,
+}
+
 fn collect_cameras(has_permission: bool) -> Vec<CameraDiagnostics> {
     if !has_permission {
         return vec![];
@@ -171,8 +177,12 @@ fn collect_diagnostics_for_upload(
     }
 }
 
-pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
+async fn upload_log_file_with_context(
+    app: &AppHandle,
+    debug_report: Option<DebugReportUpload>,
+) -> Result<(), String> {
     let log_file = get_latest_log_file(app).await.ok_or("No log file found")?;
+    let requires_auth = debug_report.is_some();
 
     let metadata =
         fs::metadata(&log_file).map_err(|e| format!("Failed to read log file metadata: {e}"))?;
@@ -222,22 +232,57 @@ pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
     let diagnostics = collect_diagnostics_for_upload(&recordings_dir, &app_data_dir, is_recording);
     let diagnostics_json = serde_json::to_string(&diagnostics).unwrap_or_else(|_| "{}".to_string());
 
-    let form = reqwest::multipart::Form::new()
+    let mut form = reqwest::multipart::Form::new()
         .text("log", log_content)
         .text("os", std::env::consts::OS)
         .text("version", env!("CARGO_PKG_VERSION"))
         .text("diagnostics", diagnostics_json);
 
-    let response = app
-        .api_request("/api/desktop/logs", |client, url| {
+    if let Some(debug_report) = debug_report {
+        form = form
+            .text("reportId", debug_report.report_id)
+            .text("feedback", debug_report.user_feedback)
+            .text("clientContext", debug_report.client_context);
+    }
+
+    let response = if requires_auth {
+        app.authed_api_request("/api/desktop/logs", |client, url| {
             client.post(url).multipart(form)
         })
         .await
-        .map_err(|e| format!("Failed to upload logs: {e}"))?;
+        .map_err(|e| format!("Failed to upload logs: {e}"))?
+    } else {
+        app.api_request("/api/desktop/logs", |client, url| {
+            client.post(url).multipart(form)
+        })
+        .await
+        .map_err(|e| format!("Failed to upload logs: {e}"))?
+    };
 
     if !response.status().is_success() {
         return Err(format!("Upload failed with status: {}", response.status()));
     }
 
     Ok(())
+}
+
+pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
+    upload_log_file_with_context(app, None).await
+}
+
+pub async fn upload_debug_report(
+    app: &AppHandle,
+    report_id: String,
+    user_feedback: String,
+    client_context: String,
+) -> Result<(), String> {
+    upload_log_file_with_context(
+        app,
+        Some(DebugReportUpload {
+            report_id,
+            user_feedback,
+            client_context,
+        }),
+    )
+    .await
 }
