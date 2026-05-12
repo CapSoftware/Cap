@@ -7,7 +7,7 @@ This file provides comprehensive guidance to Claude Code when working with code 
 These rules are enforced by CI (`cargo clippy -D warnings`, Biome). Fixing violations after the fact is wasted effort — emit code in the correct shape the FIRST time. Every CI failure tied to a rule below means this section was not respected.
 
 ### Zero-tolerance rules
-- **No code comments anywhere.** Not `//`, `/* */`, `///`, `//!`, `#`, JSDoc, nor doc strings injected into new code. Applies to Rust, TS, JS, Python, shell, SQL, TOML — every language. Code must explain itself through naming and types.
+- **Default to no code comments. Add a comment only after solving a bug or working through a complex issue, and only when it captures non-obvious context that a future investigator or reviewer genuinely needs.** Good cases: why a fix looks the way it does, the upstream/platform bug being worked around, a non-obvious invariant or trade-off chosen after investigation, a link to the PR/issue that explains the decision. Bad cases that remain banned: narrating what the code does, restating types, JSDoc that paraphrases parameter names, "TODO: refactor" or "this should be cleaner" notes, and any comment explaining the change you are currently making. When in doubt, prefer better naming/types over a comment. Applies to every language: Rust, TS, JS, Python, shell, SQL, TOML, etc.
 - **Never edit generated files**: `**/tauri.ts`, `**/queries.ts`, `apps/desktop/src-tauri/gen/**`, `packages/ui-solid/src/auto-imports.d.ts`.
 - **Never start additional dev servers** (`pnpm dev`, `pnpm dev:web`, `pnpm dev:desktop`, Docker). Assume the developer has them running.
 
@@ -412,7 +412,7 @@ Minimize `useEffect` usage: compute during render, handle logic in event handler
 - Components: PascalCase; hooks: camelCase starting with `use`; Rust modules snake_case; crates kebab-case.
 - Biome formats and lints TS/JS/JSON/CSS (tab indent, double quotes, organizeImports). rustfmt + the workspace clippy lints handle Rust.
 
-The zero-comment rule, the denied clippy patterns, and the Biome style invariants all live in **Pre-Generation Invariants** at the top of this file — that section is authoritative.
+The comments policy, the denied clippy patterns, and the Biome style invariants all live in **Pre-Generation Invariants** at the top of this file — that section is authoritative.
 
 ## Rust Clippy Rules (Workspace Lints)
 

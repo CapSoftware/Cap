@@ -8,7 +8,10 @@ import IconLucideLayers from "~icons/lucide/layers";
 import IconLucideMousePointer2 from "~icons/lucide/mouse-pointer-2";
 import IconLucideSquare from "~icons/lucide/square";
 import IconLucideType from "~icons/lucide/type";
-import { type AnnotationType, useScreenshotEditorContext } from "./context";
+import {
+	type ScreenshotEditorTool,
+	useScreenshotEditorContext,
+} from "./context";
 
 export function AnnotationTools() {
 	const { layersPanelOpen, setLayersPanelOpen } = useScreenshotEditorContext();
@@ -66,7 +69,7 @@ export function AnnotationTools() {
 }
 
 function ToolButton(props: {
-	tool: AnnotationType | "select";
+	tool: ScreenshotEditorTool;
 	icon: Component<{ class?: string }>;
 	label: string;
 	shortcut?: string;

@@ -48,6 +48,7 @@ const CAMERA_MAX_SIZE = 600;
 const CAMERA_DEFAULT_SIZE = 230;
 const CAMERA_PRESET_SMALL = 230;
 const CAMERA_PRESET_LARGE = 400;
+const CAMERA_TOOLBAR_HEIGHT = 56;
 const CAMERA_PREVIEW_ERROR_EVENT = "camera-preview-error";
 const CAMERA_PREVIEW_CLEAR_EVENT = "camera-preview-clear";
 const CAMERA_DISCONNECTED_ISSUE: CameraPreviewIssue = {
@@ -259,11 +260,11 @@ function NativeCameraPreviewPage(props: {
 			isCameraOnlyMode()
 				? getCameraOnlyInitialState()
 				: {
-					size: CAMERA_DEFAULT_SIZE,
-					shape: "round",
-					mirrored: false,
-					backgroundBlur: "off" as BackgroundBlurMode,
-				},
+						size: CAMERA_DEFAULT_SIZE,
+						shape: "round",
+						mirrored: false,
+						backgroundBlur: "off" as BackgroundBlurMode,
+					},
 		),
 		{ name: "cameraWindowState" },
 	);
@@ -292,7 +293,7 @@ function NativeCameraPreviewPage(props: {
 		const handleVisibilityChange = () => {
 			if (!document.hidden) {
 				setTimeout(() => {
-					commands.refreshCameraFeed().catch(() => { });
+					commands.refreshCameraFeed().catch(() => {});
 				}, 500);
 			}
 		};
@@ -371,9 +372,17 @@ function NativeCameraPreviewPage(props: {
 			onPointerCancel={chrome.hide}
 		>
 			<Show when={props.issue()}>
-				{(issue) => <CameraIssueOverlay issue={issue()} />}
+				{(issue) => (
+					<CameraIssueOverlay
+						issue={issue()}
+						size={state.size}
+						class="inset-x-0 bottom-0"
+						top={CAMERA_TOOLBAR_HEIGHT}
+						borderRadius={cameraBorderRadius(state)}
+					/>
+				)}
 			</Show>
-			<div class="h-13">
+			<div class="h-14">
 				<div class="flex flex-row justify-center items-center">
 					<div
 						class={toolbarClass()}
@@ -444,7 +453,7 @@ function NativeCameraPreviewPage(props: {
 			<CameraResizeHandles
 				state={state}
 				setState={setState}
-				toolbarHeight={52}
+				toolbarHeight={CAMERA_TOOLBAR_HEIGHT}
 				visible={chrome.visible()}
 			/>
 
@@ -633,11 +642,11 @@ function LegacyCameraPreviewPage(props: {
 			isCameraOnlyMode()
 				? getCameraOnlyInitialState()
 				: {
-					size: CAMERA_DEFAULT_SIZE,
-					shape: "round",
-					mirrored: false,
-					backgroundBlur: "off" as BackgroundBlurMode,
-				},
+						size: CAMERA_DEFAULT_SIZE,
+						shape: "round",
+						mirrored: false,
+						backgroundBlur: "off" as BackgroundBlurMode,
+					},
 		),
 		{ name: "cameraWindowState" },
 	);
@@ -820,7 +829,7 @@ function LegacyCameraPreviewPage(props: {
 			setIsWindowVisible(!document.hidden);
 			if (!document.hidden) {
 				lastFrameTime = Date.now();
-				commands.refreshCameraFeed().catch(() => { });
+				commands.refreshCameraFeed().catch(() => {});
 			}
 		};
 		document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -959,7 +968,7 @@ function LegacyCameraPreviewPage(props: {
 				Date.now() - lastFrameTime > STALL_TIMEOUT_MS
 			) {
 				lastFrameTime = Date.now();
-				commands.refreshCameraFeed().catch(() => { });
+				commands.refreshCameraFeed().catch(() => {});
 				if (ws) ws.close();
 				ws = createSocket();
 			}
@@ -1009,14 +1018,13 @@ function LegacyCameraPreviewPage(props: {
 				frameDimensions()?.height,
 			] as const,
 		async ([size, shape, frameWidth, frameHeight]) => {
-			const BAR_HEIGHT = 56;
 			const base = Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, size));
 			const aspect = frameWidth && frameHeight ? frameWidth / frameHeight : 1;
 			const windowWidth =
 				shape === "full" ? (aspect >= 1 ? base * aspect : base) : base;
 			const windowHeight =
 				shape === "full" ? (aspect >= 1 ? base : base / aspect) : base;
-			const totalHeight = windowHeight + BAR_HEIGHT;
+			const totalHeight = windowHeight + CAMERA_TOOLBAR_HEIGHT;
 
 			const currentWindow = getCurrentWindow();
 			await currentWindow.setSize(new LogicalSize(windowWidth, totalHeight));
@@ -1128,9 +1136,6 @@ function LegacyCameraPreviewPage(props: {
 			onPointerLeave={chrome.hide}
 			onPointerCancel={chrome.hide}
 		>
-			<Show when={props.issue()}>
-				{(issue) => <CameraIssueOverlay issue={issue()} />}
-			</Show>
 			<div class="h-14">
 				<div class="flex flex-row justify-center items-center">
 					<div
@@ -1201,7 +1206,7 @@ function LegacyCameraPreviewPage(props: {
 			<CameraResizeHandles
 				state={state}
 				setState={setState}
-				toolbarHeight={56}
+				toolbarHeight={CAMERA_TOOLBAR_HEIGHT}
 				visible={chrome.visible()}
 			/>
 			<div
@@ -1222,6 +1227,9 @@ function LegacyCameraPreviewPage(props: {
 						/>
 					</Show>
 				</Suspense>
+				<Show when={props.issue()}>
+					{(issue) => <CameraIssueOverlay issue={issue()} size={state.size} />}
+				</Show>
 			</div>
 		</div>
 	);
@@ -1319,15 +1327,67 @@ function cameraBorderRadius(state: CameraWindowState) {
 	return `${radius}rem`;
 }
 
-function CameraIssueOverlay(props: { issue: CameraPreviewIssue }) {
+function cameraOverlayTextMetrics(size: number) {
+	const normalized =
+		(Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, size)) -
+			CAMERA_MIN_SIZE) /
+		(CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
+	const titleSize = 0.75 + normalized * 0.375;
+	const messageSize = 0.625 + normalized * 0.25;
+	const lineHeight = 1.2 + normalized * 0.2;
+	const gap = 0.375 + normalized * 0.25;
+	const maxWidth = Math.max(7.5, Math.min(18, size / 16));
+
+	return {
+		gap: `${gap}rem`,
+		maxWidth: `${maxWidth}rem`,
+		messageLineHeight: `${lineHeight}rem`,
+		messageSize: `${messageSize}rem`,
+		titleSize: `${titleSize}rem`,
+	};
+}
+
+function CameraIssueOverlay(props: {
+	issue: CameraPreviewIssue;
+	size: number;
+	class?: string;
+	top?: number;
+	borderRadius?: string;
+}) {
+	const textMetrics = () => cameraOverlayTextMetrics(props.size);
+	const style = () => {
+		const base = { "border-radius": props.borderRadius ?? "inherit" };
+		if (props.top === undefined) return base;
+		return { ...base, top: `${props.top}px` };
+	};
+
 	return (
 		<div
-			class="absolute inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs px-4 pointer-events-none"
-			style={{ "border-radius": "inherit" }}
+			class={cx(
+				"absolute z-10 flex items-center justify-center overflow-hidden bg-black/75 backdrop-blur-xs px-4 pointer-events-none",
+				props.class ?? "inset-0",
+			)}
+			style={style()}
 		>
-			<div class="flex max-w-[18rem] flex-col items-center gap-2 text-center text-white">
-				<p class="text-sm font-semibold text-white">{props.issue.title}</p>
-				<p class="text-xs leading-5 text-white/75">{props.issue.message}</p>
+			<div
+				class="flex flex-col items-center text-center text-white"
+				style={{ gap: textMetrics().gap, "max-width": textMetrics().maxWidth }}
+			>
+				<p
+					class="font-semibold text-white"
+					style={{ "font-size": textMetrics().titleSize }}
+				>
+					{props.issue.title}
+				</p>
+				<p
+					class="text-white/75"
+					style={{
+						"font-size": textMetrics().messageSize,
+						"line-height": textMetrics().messageLineHeight,
+					}}
+				>
+					{props.issue.message}
+				</p>
 			</div>
 		</div>
 	);
