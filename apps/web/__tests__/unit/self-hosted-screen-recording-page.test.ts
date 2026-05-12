@@ -147,7 +147,7 @@ describe("SelfHostedScreenRecordingPage FAQ schema", () => {
 	it("maps each FAQ to a Question entity with acceptedAnswer", () => {
 		const schema = createFAQSchema(faqs);
 
-		expect(schema.mainEntity[0]!).toEqual({
+		expect(schema.mainEntity[0]).toEqual({
 			"@type": "Question",
 			name: "Can Cap be self-hosted?",
 			acceptedAnswer: {

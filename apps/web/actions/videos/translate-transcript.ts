@@ -1,13 +1,14 @@
 "use server";
 
 import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
+import { videos } from "@cap/database/schema";
+import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 import {
 	type LanguageCode,
 	SUPPORTED_LANGUAGES,
@@ -46,12 +47,8 @@ export async function translateTranscript(
 	}
 
 	const query = await db()
-		.select({
-			video: videos,
-			bucket: s3Buckets,
-		})
+		.select({ video: videos })
 		.from(videos)
-		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
 		.where(eq(videos.id, videoId));
 
 	if (query.length === 0 || !query[0]?.video) {
@@ -64,8 +61,8 @@ export async function translateTranscript(
 
 	try {
 		const existingTranslation = await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(
-				Option.fromNullable(query[0]?.bucket?.id),
+			const [bucket] = yield* Storage.getAccessForVideo(
+				decodeStorageVideo(video),
 			);
 			return yield* bucket.getObject(translatedKey);
 		}).pipe(runPromise);
@@ -82,8 +79,8 @@ export async function translateTranscript(
 	}
 
 	const originalVtt = await Effect.gen(function* () {
-		const [bucket] = yield* S3Buckets.getBucketAccess(
-			Option.fromNullable(query[0]?.bucket?.id),
+		const [bucket] = yield* Storage.getAccessForVideo(
+			decodeStorageVideo(video),
 		);
 		return yield* bucket.getObject(
 			`${video.ownerId}/${videoId}/transcription.vtt`,
@@ -106,8 +103,8 @@ export async function translateTranscript(
 
 	try {
 		await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(
-				Option.fromNullable(query[0]?.bucket?.id),
+			const [bucket] = yield* Storage.getAccessForVideo(
+				decodeStorageVideo(video),
 			);
 			yield* bucket.putObject(translatedKey, translatedVtt, {
 				contentType: "text/vtt",

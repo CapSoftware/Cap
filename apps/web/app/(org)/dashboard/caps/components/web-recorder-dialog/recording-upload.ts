@@ -1,10 +1,11 @@
+import { uploadWithTarget } from "@/utils/upload-target";
 import type { UploadStatus } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
-import type { PresignedPost, VideoId } from "./web-recorder-types";
+import type { UploadTarget, VideoId } from "./web-recorder-types";
 
 export const uploadRecording = (
 	blob: Blob,
-	upload: PresignedPost,
+	upload: UploadTarget,
 	currentVideoId: VideoId,
 	thumbnailPreviewUrl: string | undefined,
 	setUploadStatus: (status: UploadStatus | undefined) => void,
@@ -20,48 +21,25 @@ export const uploadRecording = (
 				? blob
 				: new File([blob], "result.mp4", { type: "video/mp4" });
 
-		const formData = new FormData();
-		Object.entries(upload.fields).forEach(([key, value]) => {
-			formData.append(key, value);
-		});
-		formData.append("file", fileBlob, "result.mp4");
-
-		const xhr = new XMLHttpRequest();
-		xhr.open("POST", upload.url);
-
-		xhr.upload.onprogress = (event) => {
-			if (event.lengthComputable) {
-				const percent = (event.loaded / event.total) * 100;
+		uploadWithTarget({
+			target: upload,
+			body: fileBlob,
+			fileName: "result.mp4",
+			onProgress: ({ loaded, total }) => {
+				const percent = (loaded / total) * 100;
 				setUploadStatus({
 					status: "uploadingVideo",
 					capId: currentVideoId,
 					progress: percent,
 					thumbnailUrl: thumbnailPreviewUrl,
 				});
-				sendProgressUpdate(currentVideoId, event.loaded, event.total);
-			}
-		};
-
-		xhr.onload = async () => {
-			if (xhr.status >= 200 && xhr.status < 300) {
+				void sendProgressUpdate(currentVideoId, loaded, total);
+			},
+		}).then(
+			async () => {
 				await sendProgressUpdate(currentVideoId, blob.size, blob.size);
 				resolve();
-			} else {
-				const errorText = xhr.responseText || xhr.statusText || "Unknown error";
-				console.error("Upload failed:", {
-					status: xhr.status,
-					statusText: xhr.statusText,
-					responseText: errorText,
-				});
-				reject(
-					new Error(`Upload failed with status ${xhr.status}: ${errorText}`),
-				);
-			}
-		};
-
-		xhr.onerror = () => {
-			reject(new Error("Upload failed due to network error"));
-		};
-
-		xhr.send(formData);
+			},
+			(error) => reject(error),
+		);
 	});

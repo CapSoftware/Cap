@@ -28,10 +28,11 @@ async function main() {
 	await fs.mkdir(targetDir, { recursive: true });
 
 	let cargoConfigContents = BASE_CARGO_TOML;
+	let cargoBuildContents = "";
 	const sccachePath = await findExecutable("sccache");
 
 	if (sccachePath) {
-		cargoConfigContents += `\n[build]\nrustc-wrapper = "${sccachePath.replaceAll("\\", "/")}"\n`;
+		cargoBuildContents += `\n[build]\nrustc-wrapper = "${sccachePath.replaceAll("\\", "/")}"\n`;
 		console.log(`Using sccache at ${sccachePath}`);
 	} else console.log("sccache not found, using rustc directly");
 
@@ -106,7 +107,15 @@ async function main() {
 			}
 			console.log("Copied ffmpeg dylibs to target/debug");
 		} else console.log("Using cached macOS native deps setup");
+
+		const onnxRuntimePath = await setupMacOSOnnxRuntime();
+		cargoConfigContents += `ORT_DYLIB_PATH = { relative = true, force = true, value = "${path.relative(
+			__root,
+			onnxRuntimePath,
+		)}" }\n`;
 	} else if (process.platform === "win32") {
+		await ensureMsvcVersion();
+
 		const FFMPEG_VERSION = "7.1";
 		const FFMPEG_ZIP_NAME = `ffmpeg-${FFMPEG_VERSION}-full_build-shared`;
 		const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/${FFMPEG_VERSION}/${FFMPEG_ZIP_NAME}.zip`;
@@ -186,9 +195,9 @@ async function main() {
 	}
 
 	await fs.mkdir(path.join(__root, ".cargo"), { recursive: true });
-	await fs.writeFile(
+	await writeFileIfChanged(
 		path.join(__root, ".cargo/config.toml"),
-		cargoConfigContents,
+		cargoConfigContents + cargoBuildContents,
 	);
 }
 
@@ -238,6 +247,7 @@ async function trimMacOSFramework(frameworkDir) {
 async function signMacOSFrameworkLibs(frameworkDir) {
 	const signId = env.APPLE_SIGNING_IDENTITY || "-";
 	const keychain = env.APPLE_KEYCHAIN ? `--keychain ${env.APPLE_KEYCHAIN}` : "";
+	const timestamp = signId === "-" ? "" : "--timestamp";
 
 	// Sign dylibs (Required for them to work on macOS 13+)
 	await fs
@@ -251,7 +261,7 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 					.filter((entry) => entry.isFile() && entry.name.endsWith(".dylib"))
 					.map((entry) =>
 						exec(
-							`codesign ${keychain} -s "${signId}" -f "${path.join(
+							`codesign ${keychain} ${timestamp} -s "${signId}" -f "${path.join(
 								entry.parentPath,
 								entry.name,
 							)}"`,
@@ -259,6 +269,74 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 					),
 			),
 		);
+}
+
+async function setupMacOSOnnxRuntime() {
+	const asset =
+		arch === "aarch64"
+			? {
+					version: "1.24.2",
+					name: "onnxruntime-osx-arm64-1.24.2.tgz",
+				}
+			: {
+					version: "1.23.2",
+					name: "onnxruntime-osx-x86_64-1.23.2.tgz",
+				};
+	const url = `https://github.com/microsoft/onnxruntime/releases/download/v${asset.version}/${asset.name}`;
+	const archivePath = path.join(targetDir, asset.name);
+	const extractDir = path.join(targetDir, asset.name.replace(/\.tgz$/, ""));
+	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
+	const outputPath = path.join(outputDir, "libonnxruntime.dylib");
+	const markerPath = path.join(outputDir, "asset.txt");
+	const marker = await fs
+		.readFile(markerPath, "utf-8")
+		.then((value) => value.trim())
+		.catch(() => null);
+
+	if (!(await fileExists(archivePath))) {
+		console.log(`Downloading ${asset.name}`);
+		const bytes = await fetch(url)
+			.then((r) => r.blob())
+			.then((b) => b.arrayBuffer());
+		await fs.writeFile(archivePath, Buffer.from(bytes));
+		console.log(`Downloaded ${asset.name}`);
+	} else console.log(`Using cached ${asset.name}`);
+
+	if (!(await fileExists(outputPath)) || marker !== asset.name) {
+		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
+		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
+		await fs.mkdir(outputDir, { recursive: true });
+		await fs.copyFile(
+			path.join(extractDir, "lib", "libonnxruntime.dylib"),
+			outputPath,
+		);
+		await signMacOSDylib(outputPath);
+		await fs.writeFile(markerPath, asset.name);
+		console.log("Prepared ONNX Runtime dylib");
+	} else {
+		console.log("Using cached ONNX Runtime dylib");
+		if (env.APPLE_SIGNING_IDENTITY) await signMacOSDylib(outputPath);
+	}
+
+	return outputPath;
+}
+
+async function writeFileIfChanged(filePath, contents) {
+	const currentContents = await fs
+		.readFile(filePath, "utf-8")
+		.catch(() => undefined);
+
+	if (currentContents !== contents) await fs.writeFile(filePath, contents);
+}
+
+async function signMacOSDylib(filePath) {
+	const signId = env.APPLE_SIGNING_IDENTITY || "-";
+	const keychain = env.APPLE_KEYCHAIN ? `--keychain ${env.APPLE_KEYCHAIN}` : "";
+	const timestamp = signId === "-" ? "" : "--timestamp";
+
+	await exec(
+		`codesign ${keychain} ${timestamp} -s "${signId}" -f "${filePath}"`,
+	);
 }
 
 async function fileExists(path) {
@@ -273,6 +351,68 @@ async function missingFiles(dir, names) {
 
 	const present = new Set(await fs.readdir(dir));
 	return names.filter((name) => !present.has(name));
+}
+
+const MIN_MSVC_VERSION = [17, 12];
+
+async function ensureMsvcVersion() {
+	const programFilesX86 =
+		process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+	const vswherePath = path.join(
+		programFilesX86,
+		"Microsoft Visual Studio",
+		"Installer",
+		"vswhere.exe",
+	);
+
+	if (!(await fileExists(vswherePath))) {
+		throw new Error(
+			`Visual Studio Installer not found at ${vswherePath}. ` +
+				`Install "Visual Studio 2022 Build Tools" ${MIN_MSVC_VERSION[0]}.${MIN_MSVC_VERSION[1]} ` +
+				`or newer with the "MSVC v143 - VS 2022 C++ x64/x86 build tools" component, ` +
+				`then re-run pnpm dev.`,
+		);
+	}
+
+	const { stdout } = await execFile(vswherePath, [
+		"-latest",
+		"-products",
+		"*",
+		"-requires",
+		"Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+		"-property",
+		"installationVersion",
+	]);
+
+	const raw = stdout.trim();
+	if (!raw) {
+		throw new Error(
+			`No Visual Studio 2022 installation with MSVC v143 was found. ` +
+				`Install "Visual Studio 2022 Build Tools" ${MIN_MSVC_VERSION[0]}.${MIN_MSVC_VERSION[1]} ` +
+				`or newer with the "MSVC v143 - VS 2022 C++ x64/x86 build tools" component, ` +
+				`then re-run pnpm dev.`,
+		);
+	}
+
+	const parts = raw.split(".").map((n) => Number.parseInt(n, 10) || 0);
+	const [major, minor] = parts;
+	const isAtLeast =
+		major > MIN_MSVC_VERSION[0] ||
+		(major === MIN_MSVC_VERSION[0] && minor >= MIN_MSVC_VERSION[1]);
+
+	if (!isAtLeast) {
+		throw new Error(
+			`Visual Studio 2022 Build Tools ${major}.${minor} is too old (full: ${raw}).\n` +
+				`Cap requires ${MIN_MSVC_VERSION[0]}.${MIN_MSVC_VERSION[1]} or newer because the prebuilt ONNX Runtime ` +
+				`shipped by the 'ort' crate references vectorized-algorithm symbols ` +
+				`(e.g. __std_find_last_of_trivial_pos_*, __std_remove_8) that only exist in vcruntime140_1.lib from MSVC 14.42+.\n` +
+				`\nUpdate via the Visual Studio Installer, or from an elevated PowerShell:\n` +
+				`  winget upgrade --id Microsoft.VisualStudio.2022.BuildTools\n` +
+				`After updating, run: cargo clean -p cap-desktop && pnpm dev:windows\n`,
+		);
+	}
+
+	console.log(`MSVC toolchain ${major}.${minor} OK (full: ${raw})`);
 }
 
 async function findExecutable(name) {

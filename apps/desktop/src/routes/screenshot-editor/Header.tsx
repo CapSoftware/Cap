@@ -33,13 +33,20 @@ import { useScreenshotExport } from "./useScreenshotExport";
 
 export function Header() {
 	const ctx = useScreenshotEditorContext();
-	const { setDialog, project, originalImageSize, isImageFileReady } = ctx;
+	const {
+		setDialog,
+		project,
+		originalImageSize,
+		isImageFileReady,
+		selectedAnnotationId,
+	} = ctx;
 	const path = () => ctx.editorInstance()?.path ?? "";
 
 	const { exportImage, isExporting } = useScreenshotExport();
 
 	createEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
+			if (e.defaultPrevented) return;
 			const target = e.target as HTMLElement | null;
 			if (
 				target &&
@@ -53,6 +60,13 @@ export function Header() {
 			if (!e.metaKey && !e.ctrlKey) return;
 			const key = e.key.toLowerCase();
 			if (key === "c") {
+				if (selectedAnnotationId()) {
+					return;
+				}
+				const selection = window.getSelection();
+				if (selection && !selection.isCollapsed && selection.toString()) {
+					return;
+				}
 				e.preventDefault();
 				if (!isExporting()) exportImage("clipboard");
 			} else if (key === "s") {

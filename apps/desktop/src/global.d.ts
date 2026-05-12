@@ -1888,6 +1888,7 @@ declare global {
 		__CAP__: {
 			cameraWsPort: number;
 			cameraOnlyMode?: boolean;
+			enableNativeCameraPreview?: boolean;
 		};
 	}
 }

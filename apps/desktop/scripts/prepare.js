@@ -94,12 +94,25 @@ export async function createTauriPlatformConfigs(
 		};
 	}
 
+	if (platform === "darwin") {
+		configFileName = "tauri.macos.conf.json";
+		baseConfig = {
+			...baseConfig,
+			bundle: {
+				resources: {
+					"../../../target/native-deps/onnxruntime/lib/libonnxruntime.dylib":
+						"onnxruntime/lib/libonnxruntime.dylib",
+				},
+			},
+		};
+	}
+
 	if (!configFileName) return;
 
 	const mergedConfig = configOptions
 		? deepMerge(baseConfig, configOptions)
 		: baseConfig;
-	await fs.writeFile(
+	await writeFileIfChanged(
 		`${srcTauri}/${configFileName}`,
 		JSON.stringify(mergedConfig, null, 2),
 	);
@@ -116,3 +129,11 @@ main().catch((err) => {
 	console.error(err);
 	console.error("---");
 });
+
+async function writeFileIfChanged(filePath, contents) {
+	const currentContents = await fs
+		.readFile(filePath, "utf-8")
+		.catch(() => undefined);
+
+	if (currentContents !== contents) await fs.writeFile(filePath, contents);
+}

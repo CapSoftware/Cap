@@ -1,9 +1,17 @@
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use scap_targets::{Display, DisplayId, Window as ScapWindow, bounds::LogicalBounds};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 use tauri::{AppHandle, Manager, WebviewWindow};
 use tokio::{sync::RwLock, time::sleep};
-use tracing::instrument;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, instrument};
 
 use crate::{App, ArcLock, RecordingState};
 
@@ -11,8 +19,62 @@ const RECORDING_CONTROLS_LABEL: &str = "in-progress-recording";
 const RECORDING_CONTROLS_WIDTH: f64 = 320.0;
 const RECORDING_CONTROLS_HEIGHT: f64 = 150.0;
 const RECORDING_CONTROLS_OFFSET_Y: f64 = 120.0;
+const TICK_INTERVAL: Duration = Duration::from_millis(50);
+const DEAD_WINDOW_ERROR_THRESHOLD: u8 = 5;
 
 pub struct FakeWindowBounds(pub Arc<RwLock<HashMap<String, HashMap<String, LogicalBounds>>>>);
+
+struct TokenEntry {
+    id: u64,
+    token: CancellationToken,
+}
+
+#[derive(Default)]
+pub struct FakeWindowListeners {
+    tokens: Mutex<HashMap<String, TokenEntry>>,
+    next_id: AtomicU64,
+}
+
+impl FakeWindowListeners {
+    fn register(&self, label: String) -> (u64, CancellationToken) {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let token = CancellationToken::new();
+        let mut guard = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(previous) = guard.insert(
+            label,
+            TokenEntry {
+                id,
+                token: token.clone(),
+            },
+        ) {
+            previous.token.cancel();
+        }
+        (id, token)
+    }
+
+    fn finish(&self, label: &str, id: u64) {
+        let mut guard = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(current) = guard.get(label)
+            && current.id == id
+        {
+            guard.remove(label);
+        }
+    }
+
+    pub fn cancel(&self, label: &str) {
+        let mut guard = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = guard.remove(label) {
+            entry.token.cancel();
+        }
+    }
+
+    pub fn cancel_all(&self) {
+        let mut guard = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
+        for (_, entry) in guard.drain() {
+            entry.token.cancel();
+        }
+    }
+}
 
 #[tauri::command]
 #[specta::specta]
@@ -107,15 +169,40 @@ pub fn calculate_recording_controls_position_for_target(
 pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
     window.set_ignore_cursor_events(true).ok();
 
-    let is_recording_controls = window.label() == RECORDING_CONTROLS_LABEL;
+    let label = window.label().to_string();
+    let is_recording_controls = label == RECORDING_CONTROLS_LABEL;
+    let listeners = app.state::<FakeWindowListeners>();
+    let (listener_id, token) = listeners.register(label.clone());
 
     tokio::spawn(async move {
+        let listeners = app.state::<FakeWindowListeners>();
         let state = app.state::<FakeWindowBounds>();
         let mut current_display_id: Option<DisplayId> = get_display_id_for_cursor();
         let mut last_target_pos: Option<(f64, f64)> = None;
+        let mut consecutive_errors: u8 = 0;
 
         loop {
-            sleep(Duration::from_millis(1000 / 20)).await;
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => {
+                    debug!(window = %label, "Fake window listener cancelled");
+                    break;
+                }
+                _ = sleep(TICK_INTERVAL) => {}
+            }
+
+            if crate::app_is_exiting(&app) {
+                break;
+            }
+
+            if crate::power_observer::is_system_asleep() {
+                continue;
+            }
+
+            if !app.webview_windows().contains_key(&label) {
+                debug!(window = %label, "Fake window listener stopping: window no longer exists");
+                break;
+            }
 
             if is_recording_controls {
                 let capture_target = app.state::<ArcLock<App>>().try_read().ok().and_then(|s| {
@@ -170,8 +257,19 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
 
             let map = state.0.read().await;
 
-            let Some(windows) = map.get(window.label()) else {
-                window.set_ignore_cursor_events(true).ok();
+            let Some(windows) = map.get(&label) else {
+                if window.set_ignore_cursor_events(true).is_err() {
+                    consecutive_errors = consecutive_errors.saturating_add(1);
+                    if consecutive_errors >= DEAD_WINDOW_ERROR_THRESHOLD {
+                        debug!(
+                            window = %label,
+                            "Fake window listener stopping: window handle is no longer responsive"
+                        );
+                        break;
+                    }
+                } else {
+                    consecutive_errors = 0;
+                }
                 continue;
             };
 
@@ -180,9 +278,19 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                 window.cursor_position(),
                 window.scale_factor(),
             ) else {
+                consecutive_errors = consecutive_errors.saturating_add(1);
+                if consecutive_errors >= DEAD_WINDOW_ERROR_THRESHOLD {
+                    debug!(
+                        window = %label,
+                        "Fake window listener stopping: repeated failures querying window state"
+                    );
+                    break;
+                }
                 let _ = window.set_ignore_cursor_events(true);
                 continue;
             };
+
+            consecutive_errors = 0;
 
             let mut ignore = true;
 
@@ -215,9 +323,29 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                 window.set_ignore_cursor_events(ignore).ok();
             }
         }
+
+        listeners.finish(&label, listener_id);
+
+        {
+            let mut map = state.0.write().await;
+            map.remove(&label);
+        }
     });
+}
+
+pub fn cancel_fake_window_listener(app: &AppHandle, label: &str) {
+    if let Some(listeners) = app.try_state::<FakeWindowListeners>() {
+        listeners.cancel(label);
+    }
+}
+
+pub fn cancel_all_fake_window_listeners(app: &AppHandle) {
+    if let Some(listeners) = app.try_state::<FakeWindowListeners>() {
+        listeners.cancel_all();
+    }
 }
 
 pub fn init(app: &AppHandle) {
     app.manage(FakeWindowBounds(Default::default()));
+    app.manage(FakeWindowListeners::default());
 }
