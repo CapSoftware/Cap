@@ -103,7 +103,6 @@ docker compose logs cap-web
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
 [![Deploy on Sealos](https://sealos.io/Deploy-on-Sealos.svg)](https://sealos.io/products/app-store/cap)
 
-The Sealos template is maintained in the Sealos templates repository at `template/cap/index.yaml`. Before deploying, review the optional `RESEND_API_KEY` and `RESEND_FROM_DOMAIN` inputs, plus the provisioned MySQL and object storage persistence settings. After deployment, open the generated Sealos app URL and complete Cap's first-run or login flow.
 
 For production, configure public URLs and replace the default secrets before exposing the deployment to the internet:
 
