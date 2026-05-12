@@ -2021,10 +2021,10 @@ impl CapWindow {
                 );
 
                 // Hide the main window if the target monitor is the same
-                if let Some(main_window) = CapWindowId::Main.get(app) {
-                    if display.intersects_window(window.as_ref().window())? {
-                        let _ = main_window.minimize();
-                    }
+                if CapWindowId::Main.get(app).is_some()
+                    && display.intersects_window(window.as_ref().window())?
+                {
+                    let _ = main_window.minimize();
                 }
 
                 window
