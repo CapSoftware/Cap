@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import * as shell from "@tauri-apps/plugin-shell";
 import "@total-typescript/ts-reset/filter-boolean";
 import { createResource, For, Show, Suspense } from "solid-js";
+import { ShowWindow } from "~/App";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 
@@ -123,7 +124,10 @@ export default function Settings(props: RouteSectionProps) {
 			</div>
 			<div class="overflow-y-hidden flex-1 animate-in">
 				<CapErrorBoundary>
-					<Suspense>{props.children}</Suspense>
+					<Suspense>
+						{props.children}
+						<ShowWindow />
+					</Suspense>
 				</CapErrorBoundary>
 			</div>
 		</div>

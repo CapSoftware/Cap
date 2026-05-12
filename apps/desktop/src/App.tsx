@@ -1,9 +1,5 @@
-import { Route, Router } from "@solidjs/router";
+import { Route, Router, useCurrentMatches } from "@solidjs/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import {
-	getCurrentWebviewWindow,
-	type WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
 import { message } from "@tauri-apps/plugin-dialog";
 import { createEffect, lazy, onCleanup, onMount, Suspense } from "solid-js";
 import { Toaster } from "solid-toast";
@@ -14,11 +10,14 @@ import "./styles/theme.css";
 
 import { createEventListener } from "@solid-primitives/event-listener";
 import { setTheme } from "@tauri-apps/api/app";
+import {
+	getCurrentWindow,
+	type Window as TauriWindow,
+} from "@tauri-apps/api/window";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
 import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
-import { createTauriEventListener } from "./utils/createEventListener";
-import { type Appearance, commands } from "./utils/tauri";
+import type { Appearance } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
 const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
@@ -111,7 +110,7 @@ export default function App() {
 }
 
 function Inner() {
-	const currentWindow = getCurrentWebviewWindow();
+	const currentWindow = getCurrentWindow();
 	createThemeListener(currentWindow);
 
 	onMount(() => {
@@ -141,12 +140,19 @@ function Inner() {
 			<CapErrorBoundary>
 				<Router
 					root={(props) => (
-						<Suspense fallback={null}>{props.children}</Suspense>
+						<Suspense fallback={null}>
+							{props.children}
+							<AutoShowWindowWhenReady />
+						</Suspense>
 					)}
 				>
 					<Route path="/" component={WindowChromeLayout}>
 						<Route path="/" component={NewMainPage} />
-						<Route path="/settings" component={SettingsLayout}>
+						<Route
+							path="/settings"
+							component={SettingsLayout}
+							info={{ autoShow: false }}
+						>
 							<Route path="/" component={SettingsGeneralPage} />
 							<Route path="/general" component={SettingsGeneralPage} />
 							<Route path="/recordings" component={SettingsRecordingsPage} />
@@ -180,7 +186,7 @@ function Inner() {
 						<Route path="/upgrade" component={UpgradePage} />
 						<Route path="/update" component={UpdatePage} />
 					</Route>
-					<Route path="/camera" component={CameraPage} />
+					<Route path="/camera" component={CameraPage} info={{ autoShow: false }} />
 					<Route path="/capture-area" component={CaptureAreaPage} />
 					<Route path="/debug" component={DebugPage} />
 					<Route path="/editor" component={EditorPage} />
@@ -206,7 +212,7 @@ function Inner() {
 	);
 }
 
-function createThemeListener(currentWindow: WebviewWindow) {
+function createThemeListener(currentWindow: TauriWindow) {
 	const settings = generalSettingsStore.createQuery();
 	const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -227,12 +233,35 @@ function createThemeListener(currentWindow: WebviewWindow) {
 		if (location.pathname === "/camera") return;
 		if (appearance === undefined || appearance === null) return;
 
+		try {
+			if (appearance === "system") localStorage.removeItem("cap-theme");
+			else localStorage.setItem("cap-theme", appearance);
+		} catch { }
+
 		setTheme(appearance === "system" ? null : appearance).then(() =>
 			document.documentElement.classList.toggle(
 				"dark",
 				appearance === "dark" ||
-					(appearance === "system" && prefersDark.matches),
+				(appearance === "system" && prefersDark.matches),
 			),
 		);
 	}
+}
+
+function AutoShowWindowWhenReady() {
+	const matches = useCurrentMatches();
+
+	onMount(() => {
+		const shouldDefer = matches().some(
+			(match) => match.route.info?.autoShow === false,
+		);
+		if (!shouldDefer) getCurrentWindow().show();
+	});
+
+	return null;
+}
+
+export function ShowWindow() {
+	onMount(() => getCurrentWindow().show());
+	return null;
 }

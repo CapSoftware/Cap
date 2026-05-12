@@ -95,10 +95,6 @@ function Header() {
 }
 
 function Inner(props: ParentProps) {
-	// onMount(() => {
-	// if (location.pathname !== "/") getCurrentWindow().show();
-	// });
-
 	return (
 		<div class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in">
 			{props.children}
