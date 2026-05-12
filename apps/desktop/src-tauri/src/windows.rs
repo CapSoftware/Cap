@@ -878,7 +878,7 @@ impl CapWindowId {
 }
 
 #[derive(Debug, Clone, Type, Deserialize)]
-pub enum ShowCapWindow {
+pub enum CapWindow {
     Main {
         init_target_mode: Option<RecordingTargetMode>,
     },
@@ -915,7 +915,7 @@ pub enum ShowCapWindow {
     Onboarding,
 }
 
-impl ShowCapWindow {
+impl CapWindow {
     pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
         if let Self::Editor { project_path } = &self {
             let state = app.state::<EditorWindowIds>();
@@ -2444,32 +2444,32 @@ impl ShowCapWindow {
 
     pub fn id(&self, app: &AppHandle) -> CapWindowId {
         match self {
-            ShowCapWindow::Main { .. } => CapWindowId::Main,
-            ShowCapWindow::Settings { .. } => CapWindowId::Settings,
-            ShowCapWindow::Editor { project_path } => {
+            CapWindow::Main { .. } => CapWindowId::Main,
+            CapWindow::Settings { .. } => CapWindowId::Settings,
+            CapWindow::Editor { project_path } => {
                 let state = app.state::<EditorWindowIds>();
                 let s = state.ids.lock().unwrap();
                 let id = s.iter().find(|(path, _)| path == project_path).unwrap().1;
                 CapWindowId::Editor { id }
             }
-            ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
-            ShowCapWindow::TargetSelectOverlay { display_id, .. } => {
+            CapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
+            CapWindow::TargetSelectOverlay { display_id, .. } => {
                 CapWindowId::TargetSelectOverlay {
                     display_id: display_id.clone(),
                 }
             }
-            ShowCapWindow::WindowCaptureOccluder { screen_id } => {
+            CapWindow::WindowCaptureOccluder { screen_id } => {
                 CapWindowId::WindowCaptureOccluder {
                     screen_id: screen_id.clone(),
                 }
             }
-            ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
-            ShowCapWindow::Camera { .. } => CapWindowId::Camera,
-            ShowCapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
-            ShowCapWindow::Upgrade => CapWindowId::Upgrade,
-            ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
-            ShowCapWindow::Onboarding => CapWindowId::Onboarding,
-            ShowCapWindow::ScreenshotEditor { path } => {
+            CapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
+            CapWindow::Camera { .. } => CapWindowId::Camera,
+            CapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
+            CapWindow::Upgrade => CapWindowId::Upgrade,
+            CapWindow::ModeSelect => CapWindowId::ModeSelect,
+            CapWindow::Onboarding => CapWindowId::Onboarding,
+            CapWindow::ScreenshotEditor { path } => {
                 let state = app.state::<ScreenshotEditorWindowIds>();
                 let s = state.ids.lock().unwrap();
                 let id = s.iter().find(|(p, _)| p == path).unwrap().1;

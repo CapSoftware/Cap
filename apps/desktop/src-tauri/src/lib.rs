@@ -108,7 +108,7 @@ use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
 use windows::{
-    CapWindowId, EditorWindowIds, ScreenshotEditorWindowIds, ShowCapWindow, hide_overlay,
+    CapWindow, CapWindowId, EditorWindowIds, ScreenshotEditorWindowIds, hide_overlay,
     set_window_transparent, show_overlay,
 };
 
@@ -837,7 +837,7 @@ async fn set_camera_input(
         let show_result = if camera_window_is_visible {
             Ok(())
         } else {
-            ShowCapWindow::Camera { centered: false }
+            CapWindow::Camera { centered: false }
                 .show(&app_handle)
                 .await
                 .map(|_| ())
@@ -934,7 +934,7 @@ async fn set_camera_input(
 
                 if !showed_camera_window {
                     showed_camera_window = true;
-                    let show_result = ShowCapWindow::Camera { centered: false }
+                    let show_result = CapWindow::Camera { centered: false }
                         .show(&app_handle)
                         .await;
                     show_result
@@ -3031,7 +3031,7 @@ async fn upload_screenshot(
     };
 
     if !auth.is_upgraded() {
-        ShowCapWindow::Upgrade.show(&app).await.ok();
+        CapWindow::Upgrade.show(&app).await.ok();
         return Ok(UploadResult::UpgradeRequired);
     }
 
@@ -3615,8 +3615,8 @@ async fn editor_delete_project(
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
-async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String> {
-    if matches!(window, ShowCapWindow::Camera { .. }) {
+async fn show_window(app: AppHandle, window: CapWindow) -> Result<(), String> {
+    if matches!(window, CapWindow::Camera { .. }) {
         let operation_lock = app.state::<CameraWindowOperationLock>();
         let _operation_guard = operation_lock.lock().await;
         window.show(&app).await.map_err(|e| e.to_string())?;
@@ -4096,7 +4096,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             else {
                 let app = app.clone();
                 tokio::spawn(async move {
-                    ShowCapWindow::Main {
+                    CapWindow::Main {
                         init_target_mode: None,
                     }
                     .show(&app)
@@ -4346,10 +4346,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 async move {
                     if should_show_onboarding(&app) {
                         println!("Showing onboarding");
-                        let _ = ShowCapWindow::Onboarding.show(&app).await;
+                        let _ = CapWindow::Onboarding.show(&app).await;
                     } else {
                         println!("Showing main window");
-                        let _ = ShowCapWindow::Main {
+                        let _ = CapWindow::Main {
                             init_target_mode: None,
                         }
                         .show(&app)
@@ -4392,7 +4392,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 if let Some(target_mode) = event.target_mode {
                     open_target_picker(&app, target_mode).await;
                 } else {
-                    let _ = ShowCapWindow::Main {
+                    let _ = CapWindow::Main {
                         init_target_mode: None,
                     }
                     .show(&app)
@@ -4401,7 +4401,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             });
 
             RequestOpenSettings::listen_any_spawn(&app, async |payload, app| {
-                let _ = ShowCapWindow::Settings {
+                let _ = CapWindow::Settings {
                     page: Some(payload.page),
                 }
                 .show(&app)
@@ -4869,7 +4869,7 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
             } else {
                 let handle = _handle.clone();
                 spawn_on_runtime(async move {
-                    let _ = ShowCapWindow::Main {
+                    let _ = CapWindow::Main {
                         init_target_mode: None,
                     }
                     .show(&handle)
@@ -4932,7 +4932,7 @@ where
 fn show_camera_window_unlocked(app: &AppHandle) {
     let app = app.clone();
     spawn_on_runtime(async move {
-        let _ = ShowCapWindow::Camera { centered: false }.show(&app).await;
+        let _ = CapWindow::Camera { centered: false }.show(&app).await;
     });
 }
 
@@ -4983,7 +4983,7 @@ fn restore_camera_window(app: &AppHandle) {
                 return;
             };
             let _operation_guard = operation_lock.lock().await;
-            let _ = ShowCapWindow::Camera { centered: false }.show(&app).await;
+            let _ = CapWindow::Camera { centered: false }.show(&app).await;
         });
     }
 }
@@ -5015,7 +5015,7 @@ fn reopen_main_window(app: &AppHandle) {
     } else {
         let handle = app.clone();
         tokio::spawn(async move {
-            let _ = ShowCapWindow::Main {
+            let _ = CapWindow::Main {
                 init_target_mode: None,
             }
             .show(&handle)
@@ -5492,7 +5492,7 @@ fn open_importable_from_path(path: &Path, app: AppHandle) -> Result<(), String> 
         tokio::spawn(async move {
             match import::start_video_import(app.clone(), source_path).await {
                 Ok(project_path) => {
-                    if let Err(err) = (ShowCapWindow::Editor { project_path }).show(&app).await {
+                    if let Err(err) = (CapWindow::Editor { project_path }).show(&app).await {
                         error!("Failed to show imported video editor: {err}");
                         show_import_error_dialog(
                             &app,
@@ -5517,7 +5517,7 @@ fn open_importable_from_path(path: &Path, app: AppHandle) -> Result<(), String> 
         tokio::spawn(async move {
             match import::start_image_import(app.clone(), source_path).await {
                 Ok(path) => {
-                    if let Err(err) = (ShowCapWindow::ScreenshotEditor { path }).show(&app).await {
+                    if let Err(err) = (CapWindow::ScreenshotEditor { path }).show(&app).await {
                         error!("Failed to show imported image editor: {err}");
                         show_import_error_dialog(
                             &app,
@@ -5553,7 +5553,7 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
             }
 
             let project_path = path.to_path_buf();
-            tokio::spawn(async move { ShowCapWindow::Editor { project_path }.show(&app).await });
+            tokio::spawn(async move { CapWindow::Editor { project_path }.show(&app).await });
         }
         RecordingMetaInner::Instant(_) => {
             let mp4_path = path.join("content/output.mp4");

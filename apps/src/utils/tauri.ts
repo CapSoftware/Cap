@@ -287,7 +287,7 @@ export const commands = {
 	async globalMessageDialog(message: string): Promise<void> {
 		await TAURI_INVOKE("global_message_dialog", { message });
 	},
-	async showWindow(window: ShowCapWindow): Promise<null> {
+	async showWindow(window: CapWindow): Promise<null> {
 		return await TAURI_INVOKE("show_window", { window });
 	},
 	async writeClipboardString(text: string): Promise<null> {
@@ -1089,7 +1089,7 @@ export type ShadowConfiguration = {
 	blur: number;
 };
 export type SharingMeta = { id: string; link: string };
-export type ShowCapWindow =
+export type CapWindow =
 	| "Setup"
 	| { Main: { init_target_mode: RecordingTargetMode | null } }
 	| { Settings: { page: string | null } }
