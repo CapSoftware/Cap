@@ -31,6 +31,7 @@ use crate::{
     App, ArcLock, CameraWindowCloseGate, CameraWindowPositionGuard, MainWindowReadyState,
     NewNotification, RequestScreenCapturePrewarm, RequestSetTargetMode,
     camera_preview_error_message,
+    display_utils::{CursorMonitorInfo, MonitorExt},
     editor_window::PendingEditorInstances,
     emit_camera_preview_clear, emit_camera_preview_error, fake_window,
     general_settings::{self, Appearance, GeneralSettingsStore},
@@ -46,48 +47,6 @@ use cap_recording::{feeds, sources::screen_capture::ScreenCaptureTarget};
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_POS: LogicalPosition<f64> = LogicalPosition::new(13.0, 16.0);
-
-const DEFAULT_FALLBACK_DISPLAY_WIDTH: f64 = 1920.0;
-const DEFAULT_FALLBACK_DISPLAY_HEIGHT: f64 = 1080.0;
-
-#[cfg(target_os = "macos")]
-fn is_system_dark_mode() -> bool {
-    use cocoa::base::{id, nil};
-    use cocoa::foundation::NSString;
-    use objc::{class, msg_send, sel, sel_impl};
-
-    unsafe {
-        let app: id = msg_send![class!(NSApplication), sharedApplication];
-        let appearance: id = msg_send![app, effectiveAppearance];
-        if appearance == nil {
-            return false;
-        }
-        let name: id = msg_send![appearance, name];
-        if name == nil {
-            return false;
-        }
-        let dark_appearance = NSString::alloc(nil).init_str("NSAppearanceNameDarkAqua");
-        let vibrant_dark = NSString::alloc(nil).init_str("NSAppearanceNameVibrantDark");
-        let is_dark: bool = msg_send![name, isEqualToString: dark_appearance];
-        let is_vibrant_dark: bool = msg_send![name, isEqualToString: vibrant_dark];
-        is_dark || is_vibrant_dark
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn is_system_dark_mode() -> bool {
-    use winreg::RegKey;
-    use winreg::enums::HKEY_CURRENT_USER;
-
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    if let Ok(key) =
-        hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
-        && let Ok(value) = key.get_value::<u32, _>("AppsUseLightTheme")
-    {
-        return value == 0;
-    }
-    false
-}
 
 pub fn hide_overlay(window: &WebviewWindow) {
     let _ = window.set_ignore_cursor_events(true);
@@ -500,93 +459,6 @@ pub(crate) async fn cleanup_camera_window(
     app.state::<CameraWindowCloseGate>().set_allow_close(false);
 
     !still_exists
-}
-
-struct CursorMonitorInfo {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-}
-
-impl CursorMonitorInfo {
-    fn get() -> Self {
-        let display = Display::get_containing_cursor().unwrap_or_else(Display::primary);
-        let bounds = display.raw_handle().logical_bounds();
-        let (x, y, width, height) = bounds
-            .map(|b| {
-                (
-                    b.position().x(),
-                    b.position().y(),
-                    b.size().width(),
-                    b.size().height(),
-                )
-            })
-            .unwrap_or((
-                0.0,
-                0.0,
-                DEFAULT_FALLBACK_DISPLAY_WIDTH,
-                DEFAULT_FALLBACK_DISPLAY_HEIGHT,
-            ));
-
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    fn center_position(&self, window_width: f64, window_height: f64) -> (f64, f64) {
-        let pos_x = self.x + (self.width - window_width) / 2.0;
-        let pos_y = self.y + (self.height - window_height) / 2.0;
-        (pos_x, pos_y)
-    }
-
-    fn bottom_center_position(
-        &self,
-        window_width: f64,
-        window_height: f64,
-        offset_y: f64,
-    ) -> (f64, f64) {
-        let pos_x = self.x + (self.width - window_width) / 2.0;
-        let pos_y = self.y + self.height - window_height - offset_y;
-        (pos_x, pos_y)
-    }
-
-    fn from_window(window: &tauri::WebviewWindow) -> Self {
-        let window_pos = window
-            .outer_position()
-            .ok()
-            .map(|p| (p.x as f64, p.y as f64))
-            .unwrap_or((0.0, 0.0));
-
-        for display in Display::list() {
-            if let Some(bounds) = display.raw_handle().logical_bounds() {
-                let (x, y, width, height) = (
-                    bounds.position().x(),
-                    bounds.position().y(),
-                    bounds.size().width(),
-                    bounds.size().height(),
-                );
-
-                if window_pos.0 >= x
-                    && window_pos.0 < x + width
-                    && window_pos.1 >= y
-                    && window_pos.1 < y + height
-                {
-                    return Self {
-                        x,
-                        y,
-                        width,
-                        height,
-                    };
-                }
-            }
-        }
-
-        Self::get()
-    }
 }
 
 fn center_camera_window(app: &AppHandle, window: &WebviewWindow) {
@@ -2154,14 +2026,11 @@ impl CapWindow {
                 );
 
                 // Hide the main window if the target monitor is the same
-                if let Some(main_window) = CapWindowId::Main.get(app)
-                    && let (Ok(outer_pos), Ok(outer_size)) =
-                        (main_window.outer_position(), main_window.outer_size())
-                    && let Ok(scale_factor) = main_window.scale_factor()
-                    && display.intersects(outer_pos, outer_size, scale_factor)
-                {
-                    let _ = main_window.minimize();
-                };
+                if let Some(main_window) = CapWindowId::Main.get(app) {
+                    if display.intersects_window(window.as_ref().window())? {
+                        let _ = main_window.minimize();
+                    }
+                }
 
                 window
             }
@@ -2453,16 +2322,12 @@ impl CapWindow {
                 CapWindowId::Editor { id }
             }
             CapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
-            CapWindow::TargetSelectOverlay { display_id, .. } => {
-                CapWindowId::TargetSelectOverlay {
-                    display_id: display_id.clone(),
-                }
-            }
-            CapWindow::WindowCaptureOccluder { screen_id } => {
-                CapWindowId::WindowCaptureOccluder {
-                    screen_id: screen_id.clone(),
-                }
-            }
+            CapWindow::TargetSelectOverlay { display_id, .. } => CapWindowId::TargetSelectOverlay {
+                display_id: display_id.clone(),
+            },
+            CapWindow::WindowCaptureOccluder { screen_id } => CapWindowId::WindowCaptureOccluder {
+                screen_id: screen_id.clone(),
+            },
             CapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
             CapWindow::Camera { .. } => CapWindowId::Camera,
             CapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
@@ -2612,73 +2477,6 @@ pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), Stri
     }
 
     Ok(())
-}
-
-// Credits: tauri-plugin-window-state
-trait MonitorExt {
-    fn intersects(
-        &self,
-        position: PhysicalPosition<i32>,
-        size: PhysicalSize<u32>,
-        scale: f64,
-    ) -> bool;
-}
-
-impl MonitorExt for Display {
-    fn intersects(
-        &self,
-        position: PhysicalPosition<i32>,
-        size: PhysicalSize<u32>,
-        _scale: f64,
-    ) -> bool {
-        #[cfg(target_os = "macos")]
-        {
-            let Some(bounds) = self.raw_handle().logical_bounds() else {
-                return false;
-            };
-
-            let left = (bounds.position().x() * _scale) as i32;
-            let right = left + (bounds.size().width() * _scale) as i32;
-            let top = (bounds.position().y() * _scale) as i32;
-            let bottom = top + (bounds.size().height() * _scale) as i32;
-
-            [
-                (position.x, position.y),
-                (position.x + size.width as i32, position.y),
-                (position.x, position.y + size.height as i32),
-                (
-                    position.x + size.width as i32,
-                    position.y + size.height as i32,
-                ),
-            ]
-            .into_iter()
-            .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
-        }
-
-        #[cfg(windows)]
-        {
-            let Some(bounds) = self.raw_handle().physical_bounds() else {
-                return false;
-            };
-
-            let left = bounds.position().x() as i32;
-            let right = left + bounds.size().width() as i32;
-            let top = bounds.position().y() as i32;
-            let bottom = top + bounds.size().height() as i32;
-
-            [
-                (position.x, position.y),
-                (position.x + size.width as i32, position.y),
-                (position.x, position.y + size.height as i32),
-                (
-                    position.x + size.width as i32,
-                    position.y + size.height as i32,
-                ),
-            ]
-            .into_iter()
-            .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
-        }
-    }
 }
 
 #[specta::specta]
