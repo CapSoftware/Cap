@@ -60,6 +60,12 @@ struct RaycastDeviceCache {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RaycastScreenshotResult {
+    path: PathBuf,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RaycastCamera {
     name: String,
     camera: DeviceOrModelID,
@@ -185,9 +191,8 @@ impl DeepLinkAction {
             }
             DeepLinkAction::TakeScreenshot { capture_mode } => {
                 let capture_target = capture_target_from_mode(capture_mode)?;
-                crate::recording::take_screenshot(app.clone(), capture_target)
-                    .await
-                    .map(|_| ())
+                let path = crate::recording::take_screenshot(app.clone(), capture_target).await?;
+                write_raycast_screenshot_result(app, path).await
             }
             DeepLinkAction::SetMicrophone { mic_label } => {
                 crate::set_mic_input(app.state(), mic_label).await
@@ -222,39 +227,62 @@ fn capture_target_from_mode(capture_mode: CaptureMode) -> Result<ScreenCaptureTa
 }
 
 async fn refresh_raycast_device_cache(app: &AppHandle) -> Result<(), String> {
-    let displays = cap_recording::screen_capture::list_displays()
-        .into_iter()
-        .map(|(display, _)| display.name)
-        .collect();
-    let windows = cap_recording::screen_capture::list_windows()
-        .into_iter()
-        .map(|(window, _)| window.name)
-        .collect();
-    let microphones = MicrophoneFeed::list().keys().cloned().collect();
-    let cameras = cap_camera::list_cameras()
-        .map(|camera| RaycastCamera {
-            name: camera.display_name().to_string(),
-            camera: DeviceOrModelID::from_info(&camera),
-        })
-        .collect();
-    let cache = RaycastDeviceCache {
-        displays,
-        windows,
-        microphones,
-        cameras,
-    };
-    let cache_path = app
+    let cache = tokio::task::spawn_blocking(|| {
+        let displays = cap_recording::screen_capture::list_displays()
+            .into_iter()
+            .map(|(display, _)| display.name)
+            .collect();
+        let windows = cap_recording::screen_capture::list_windows()
+            .into_iter()
+            .map(|(window, _)| window.name)
+            .collect();
+        let microphones = MicrophoneFeed::list().keys().cloned().collect();
+        let cameras = cap_camera::list_cameras()
+            .map(|camera| RaycastCamera {
+                name: camera.display_name().to_string(),
+                camera: DeviceOrModelID::from_info(&camera),
+            })
+            .collect();
+
+        RaycastDeviceCache {
+            displays,
+            windows,
+            microphones,
+            cameras,
+        }
+    })
+    .await
+    .map_err(|err| err.to_string())?;
+
+    write_raycast_json(app, "raycast-device-cache.json", &cache).await
+}
+
+async fn write_raycast_screenshot_result(app: &AppHandle, path: PathBuf) -> Result<(), String> {
+    write_raycast_json(
+        app,
+        "raycast-last-screenshot.json",
+        &RaycastScreenshotResult { path },
+    )
+    .await
+}
+
+async fn write_raycast_json<T: Serialize>(
+    app: &AppHandle,
+    file_name: &str,
+    value: &T,
+) -> Result<(), String> {
+    let path = app
         .path()
         .app_data_dir()
         .map_err(|err| err.to_string())?
-        .join("raycast-device-cache.json");
-    let json = serde_json::to_vec_pretty(&cache).map_err(|err| err.to_string())?;
-    if let Some(parent) = cache_path.parent() {
+        .join(file_name);
+    let json = serde_json::to_vec_pretty(value).map_err(|err| err.to_string())?;
+    if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|err| err.to_string())?;
     }
-    tokio::fs::write(cache_path, json)
+    tokio::fs::write(path, json)
         .await
         .map_err(|err| err.to_string())
 }
