@@ -71,8 +71,8 @@ use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use screenshot_editor::{
     PendingScreenshotEditorInstances, ScreenshotEditorInstances, WindowScreenshotEditorInstance,
-    create_screenshot_editor_instance, render_screenshot_for_export, render_screenshot_png,
-    update_screenshot_config,
+    create_screenshot_editor_instance, recognize_screenshot_text, render_screenshot_for_export,
+    render_screenshot_png, update_screenshot_config,
 };
 
 mod gpu_context;
@@ -3951,6 +3951,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             upload_screenshot,
             create_screenshot_editor_instance,
             update_screenshot_config,
+            recognize_screenshot_text,
             get_recording_meta,
             save_file_dialog,
             list_recordings,

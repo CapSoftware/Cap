@@ -13,6 +13,13 @@ import { EditorButton, Slider } from "../editor/ui";
 import { AnnotationLayer } from "./AnnotationLayer";
 import { useScreenshotEditorContext } from "./context";
 import { getImageRect } from "./layout";
+import { OcrSelectionOverlay } from "./OcrSelectionOverlay";
+
+type WebKitGestureEvent = Event & {
+	scale?: number;
+	clientX?: number;
+	clientY?: number;
+};
 
 // CSS for checkerboard grid
 const gridStyle = {
@@ -65,6 +72,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 			originalImageSize(),
 			project.background.padding,
 			project.background.crop,
+			project.aspectRatio,
 		);
 	});
 
@@ -175,6 +183,8 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		setPan({ x: 0, y: 0 });
 	};
 
+	const clampZoom = (zoom: number) => Math.max(0.1, Math.min(3, zoom));
+
 	createEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			const target = e.target as HTMLElement;
@@ -201,54 +211,74 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
 	});
 
+	const zoomAtPoint = (clientX: number, clientY: number, newZoom: number) => {
+		const rect = viewportRef?.getBoundingClientRect();
+		const currentScale = fitScale() * props.zoom;
+		const nextScale = fitScale() * newZoom;
+		const sizeData = size();
+		const boundsData = bounds();
+
+		if (
+			rect &&
+			currentScale > 0 &&
+			nextScale > 0 &&
+			sizeData.width > 0 &&
+			sizeData.height > 0
+		) {
+			const pointerX = clientX - rect.left;
+			const pointerY = clientY - rect.top;
+			const currentPan = pan();
+			const contentX =
+				boundsData.x +
+				(pointerX -
+					(sizeData.width - sizeData.width * props.zoom) / 2 -
+					currentPan.x) /
+					currentScale;
+			const contentY =
+				boundsData.y +
+				(pointerY -
+					(sizeData.height - sizeData.height * props.zoom) / 2 -
+					currentPan.y) /
+					currentScale;
+
+			setPan({
+				x:
+					pointerX -
+					(sizeData.width - sizeData.width * newZoom) / 2 -
+					(contentX - boundsData.x) * nextScale,
+				y:
+					pointerY -
+					(sizeData.height - sizeData.height * newZoom) / 2 -
+					(contentY - boundsData.y) * nextScale,
+			});
+		}
+
+		props.setZoom(newZoom);
+	};
+
+	const normalizeWheelDeltaY = (e: WheelEvent) => {
+		if (e.deltaMode === 1) return e.deltaY * 16;
+		if (e.deltaMode === 2) return e.deltaY * window.innerHeight;
+		return e.deltaY;
+	};
+
+	let lastGestureScale = 1;
+	let lastGestureAt = 0;
+
 	const handleWheel = (e: WheelEvent) => {
 		e.preventDefault();
 		if (e.ctrlKey) {
-			const delta = -e.deltaY;
+			if (performance.now() - lastGestureAt < 80) return;
+			const normalizedDelta = normalizeWheelDeltaY(e);
+			if (normalizedDelta === 0) return;
+			const delta =
+				-Math.sign(normalizedDelta) * Math.max(Math.abs(normalizedDelta), 8);
 			const zoomStep = 0.005;
-			const newZoom = Math.max(0.1, Math.min(3, props.zoom + delta * zoomStep));
-			const rect = viewportRef?.getBoundingClientRect();
-			const currentScale = fitScale() * props.zoom;
-			const nextScale = fitScale() * newZoom;
-			const sizeData = size();
-			const boundsData = bounds();
-
-			if (
-				rect &&
-				currentScale > 0 &&
-				nextScale > 0 &&
-				sizeData.width > 0 &&
-				sizeData.height > 0
-			) {
-				const pointerX = e.clientX - rect.left;
-				const pointerY = e.clientY - rect.top;
-				const currentPan = pan();
-				const contentX =
-					boundsData.x +
-					(pointerX -
-						(sizeData.width - sizeData.width * props.zoom) / 2 -
-						currentPan.x) /
-						currentScale;
-				const contentY =
-					boundsData.y +
-					(pointerY -
-						(sizeData.height - sizeData.height * props.zoom) / 2 -
-						currentPan.y) /
-						currentScale;
-
-				setPan({
-					x:
-						pointerX -
-						(sizeData.width - sizeData.width * newZoom) / 2 -
-						(contentX - boundsData.x) * nextScale,
-					y:
-						pointerY -
-						(sizeData.height - sizeData.height * newZoom) / 2 -
-						(contentY - boundsData.y) * nextScale,
-				});
-			}
-
-			props.setZoom(newZoom);
+			zoomAtPoint(
+				e.clientX,
+				e.clientY,
+				clampZoom(props.zoom + delta * zoomStep),
+			);
 		} else {
 			setPan((p) => ({
 				x: p.x - e.deltaX,
@@ -256,6 +286,81 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 			}));
 		}
 	};
+
+	const getGesturePoint = (e: WebKitGestureEvent) => {
+		const rect = viewportRef?.getBoundingClientRect();
+		return {
+			clientX: e.clientX ?? (rect ? rect.left + rect.width / 2 : 0),
+			clientY: e.clientY ?? (rect ? rect.top + rect.height / 2 : 0),
+		};
+	};
+
+	const handleGestureStart = (event: Event) => {
+		const e = event as WebKitGestureEvent;
+		e.preventDefault();
+		lastGestureScale = e.scale ?? 1;
+		lastGestureAt = performance.now();
+	};
+
+	const handleGestureChange = (event: Event) => {
+		const e = event as WebKitGestureEvent;
+		e.preventDefault();
+		const scale = e.scale ?? 1;
+		const scaleDelta = scale / Math.max(lastGestureScale, 0.001);
+		lastGestureScale = scale;
+		lastGestureAt = performance.now();
+		const point = getGesturePoint(e);
+		zoomAtPoint(
+			point.clientX,
+			point.clientY,
+			clampZoom(props.zoom * scaleDelta),
+		);
+	};
+
+	const handleGestureEnd = (event: Event) => {
+		event.preventDefault();
+		lastGestureScale = 1;
+		lastGestureAt = performance.now();
+	};
+
+	createEffect(() => {
+		const element = canvasContainerRef();
+		if (!element) return;
+		const listenerOptions = { capture: true, passive: false };
+		const cleanupOptions = { capture: true };
+
+		element.addEventListener("wheel", handleWheel, listenerOptions);
+		element.addEventListener(
+			"gesturestart",
+			handleGestureStart,
+			listenerOptions,
+		);
+		element.addEventListener(
+			"gesturechange",
+			handleGestureChange,
+			listenerOptions,
+		);
+		element.addEventListener("gestureend", handleGestureEnd, listenerOptions);
+
+		onCleanup(() => {
+			element.removeEventListener("wheel", handleWheel, cleanupOptions);
+			element.removeEventListener(
+				"gesturestart",
+				handleGestureStart,
+				cleanupOptions,
+			);
+			element.removeEventListener(
+				"gesturechange",
+				handleGestureChange,
+				cleanupOptions,
+			);
+			element.removeEventListener(
+				"gestureend",
+				handleGestureEnd,
+				cleanupOptions,
+			);
+		});
+	});
 
 	const startPanDrag = (clientX: number, clientY: number) => {
 		setIsDragging(true);
@@ -327,7 +432,6 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 				ref={setCanvasContainerRef}
 				class="flex-1 relative flex items-center justify-center overflow-hidden outline-none"
 				style={gridStyle}
-				onWheel={handleWheel}
 				onMouseDown={handleMiddleMouseDown}
 			>
 				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-sm p-1 border border-gray-4">
@@ -611,6 +715,26 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 												height: `${scaledHeight()}px`,
 												"pointer-events": "none",
 											}}
+										/>
+										<div
+											style={{
+												position: "absolute",
+												left: "0px",
+												top: "0px",
+												width: `${scaledWidth()}px`,
+												height: `${scaledHeight()}px`,
+												"z-index": 12,
+												cursor: isDragging() ? "grabbing" : "grab",
+											}}
+											onMouseDown={handleMouseDown}
+										/>
+										<OcrSelectionOverlay
+											bounds={bounds()}
+											cssWidth={scaledWidth()}
+											cssHeight={scaledHeight()}
+											imageRect={imageRect()}
+											originalImageSize={originalImageSize()}
+											crop={project.background.crop}
 										/>
 										<AnnotationLayer
 											bounds={bounds()}
