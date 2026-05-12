@@ -26,6 +26,15 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    SetMicrophone {
+        mic_label: Option<String>,
+    },
+    SetCamera {
+        camera: Option<DeviceOrModelID>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -147,6 +156,21 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SetMicrophone { mic_label } => {
+                crate::set_mic_input(app.state(), mic_label).await
+            }
+            DeepLinkAction::SetCamera { camera } => {
+                crate::set_camera_input(app.clone(), app.state(), camera, None).await
+            }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
@@ -154,5 +178,50 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn action_url(action: &DeepLinkAction) -> Url {
+        let mut url = Url::parse("cap://action").unwrap();
+        url.query_pairs_mut()
+            .append_pair("value", &serde_json::to_string(action).unwrap());
+        url
+    }
+
+    #[test]
+    fn parses_pause_resume_and_toggle_recording_actions() {
+        let pause = DeepLinkAction::try_from(&action_url(&DeepLinkAction::PauseRecording)).unwrap();
+        let resume =
+            DeepLinkAction::try_from(&action_url(&DeepLinkAction::ResumeRecording)).unwrap();
+        let toggle =
+            DeepLinkAction::try_from(&action_url(&DeepLinkAction::TogglePauseRecording)).unwrap();
+
+        assert!(matches!(pause, DeepLinkAction::PauseRecording));
+        assert!(matches!(resume, DeepLinkAction::ResumeRecording));
+        assert!(matches!(toggle, DeepLinkAction::TogglePauseRecording));
+    }
+
+    #[test]
+    fn parses_input_selection_actions() {
+        let microphone = DeepLinkAction::try_from(&action_url(&DeepLinkAction::SetMicrophone {
+            mic_label: Some("Built-in Microphone".to_string()),
+        }))
+        .unwrap();
+        let camera = DeepLinkAction::try_from(&action_url(&DeepLinkAction::SetCamera {
+            camera: None,
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            microphone,
+            DeepLinkAction::SetMicrophone {
+                mic_label: Some(label)
+            } if label == "Built-in Microphone"
+        ));
+        assert!(matches!(camera, DeepLinkAction::SetCamera { camera: None }));
     }
 }
