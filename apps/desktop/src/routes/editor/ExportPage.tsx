@@ -29,7 +29,7 @@ import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
 import { createExportTask } from "~/utils/export";
-import { createOrganizationsQuery } from "~/utils/queries";
+import { createSelectedOrganization } from "~/utils/organization-branding";
 import {
 	commands,
 	type ExportCompression,
@@ -169,7 +169,8 @@ export function ExportPage() {
 	const projectPath = editorInstance.path;
 
 	const auth = authStore.createQuery();
-	const organisations = createOrganizationsQuery();
+	const organizationSelection = createSelectedOrganization();
+	const organisations = organizationSelection.organizations;
 
 	const hasTransparentBackground = () => {
 		const backgroundSource =
@@ -254,10 +255,18 @@ export function ExportPage() {
 
 		Object.defineProperty(ret, "organizationId", {
 			get() {
-				if (!_settings.organizationId && organisations().length > 0)
-					return organisations()[0].id;
+				const selectedOrganizationId =
+					organizationSelection.selectedOrganizationId();
+				if (!_settings.organizationId) return selectedOrganizationId;
+				if (
+					organisations().some(
+						(organization) => organization.id === _settings.organizationId,
+					)
+				) {
+					return _settings.organizationId;
+				}
 
-				return _settings.organizationId;
+				return selectedOrganizationId;
 			},
 		});
 
@@ -325,14 +334,19 @@ export function ExportPage() {
 		),
 	);
 
-	const fetchPreview = async (
-		frameTime: number,
-		fps: number,
-		resWidth: number,
-		resHeight: number,
-		bpp: number,
-		retryCount = 0,
-	) => {
+	type PreviewRequest = {
+		frameTime: number;
+		fps: number;
+		resWidth: number;
+		resHeight: number;
+		bpp: number;
+	};
+
+	let previewInFlight = false;
+	let pendingPreviewRequest: PreviewRequest | null = null;
+
+	const runPreviewRequest = async (request: PreviewRequest, retryCount = 0) => {
+		const { frameTime, fps, resWidth, resHeight, bpp } = request;
 		const cacheKey = getEstimateCacheKey(
 			fps,
 			resWidth,
@@ -381,16 +395,30 @@ export function ExportPage() {
 				await new Promise((resolve) =>
 					setTimeout(resolve, 200 * (retryCount + 1)),
 				);
-				return fetchPreview(
-					frameTime,
-					fps,
-					resWidth,
-					resHeight,
-					bpp,
-					retryCount + 1,
-				);
+				return runPreviewRequest(request, retryCount + 1);
+			}
+		}
+	};
+
+	const fetchPreview = async (
+		frameTime: number,
+		fps: number,
+		resWidth: number,
+		resHeight: number,
+		bpp: number,
+	) => {
+		pendingPreviewRequest = { frameTime, fps, resWidth, resHeight, bpp };
+		if (previewInFlight) return;
+
+		previewInFlight = true;
+		try {
+			while (pendingPreviewRequest) {
+				const request = pendingPreviewRequest;
+				pendingPreviewRequest = null;
+				await runPreviewRequest(request);
 			}
 		} finally {
+			previewInFlight = false;
 			setPreviewLoading(false);
 		}
 	};
@@ -427,6 +455,7 @@ export function ExportPage() {
 					compressionBpp(),
 				);
 			},
+			{ defer: true },
 		),
 	);
 
@@ -919,6 +948,9 @@ export function ExportPage() {
 															text: org.name,
 															action: () => {
 																setSettings("organizationId", org.id);
+																void organizationSelection
+																	.setSelectedOrganizationId(org.id)
+																	.catch(console.error);
 															},
 															checked: settings.organizationId === org.id,
 														}),

@@ -16,7 +16,7 @@ import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
-import { useUploadProgress } from "./ProgressCircle";
+import { shouldDeferPlaybackSource, useUploadProgress } from "./ProgressCircle";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
@@ -200,7 +200,7 @@ export const ShareVideo = forwardRef<
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&
 			!isActivelyRecording &&
-			segmentUploadProgress !== null;
+			shouldDeferPlaybackSource(segmentUploadProgress);
 
 		const prevProgressRef = useRef<typeof segmentUploadProgress>(
 			segmentUploadProgress,

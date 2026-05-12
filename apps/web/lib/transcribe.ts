@@ -1,10 +1,5 @@
 import { db } from "@cap/database";
-import {
-	organizations,
-	s3Buckets,
-	videos,
-	videoUploads,
-} from "@cap/database/schema";
+import { organizations, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -39,12 +34,10 @@ export async function transcribeVideo(
 	const query = await db()
 		.select({
 			video: videos,
-			bucket: s3Buckets,
 			settings: videos.settings,
 			orgSettings: organizations.settings,
 		})
 		.from(videos)
-		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
 		.leftJoin(organizations, eq(videos.orgId, organizations.id))
 		.where(eq(videos.id, videoId));
 

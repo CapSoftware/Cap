@@ -1,14 +1,15 @@
 import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
+import { videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
-import type { S3Bucket, Video } from "@cap/web-domain";
+import { Storage } from "@cap/web-backend";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 
 interface GenerateAiWorkflowPayload {
 	videoId: string;
@@ -17,7 +18,6 @@ interface GenerateAiWorkflowPayload {
 
 interface VideoData {
 	video: typeof videos.$inferSelect;
-	bucketId: S3Bucket.S3BucketId | null;
 	metadata: VideoMetadata;
 }
 
@@ -46,7 +46,7 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 
 	const videoData = await validateAndSetProcessing(videoId);
 
-	const transcript = await fetchTranscript(videoId, userId, videoData.bucketId);
+	const transcript = await fetchTranscript(videoId, userId, videoData.video);
 
 	if (!transcript) {
 		await markSkipped(videoId, videoData.metadata);
@@ -72,16 +72,15 @@ async function validateAndSetProcessing(videoId: string): Promise<VideoData> {
 	}
 
 	const query = await db()
-		.select({ video: videos, bucket: s3Buckets })
+		.select({ video: videos })
 		.from(videos)
-		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
 		.where(eq(videos.id, videoId as Video.VideoId));
 
 	if (query.length === 0 || !query[0]?.video) {
 		throw new FatalError("Video does not exist");
 	}
 
-	const { video, bucket } = query[0];
+	const { video } = query[0];
 	const metadata = (video.metadata as VideoMetadata) || {};
 
 	if (video.transcriptionStatus !== "COMPLETE") {
@@ -104,7 +103,6 @@ async function validateAndSetProcessing(videoId: string): Promise<VideoData> {
 
 	return {
 		video,
-		bucketId: (bucket?.id ?? null) as S3Bucket.S3BucketId | null,
 		metadata,
 	};
 }
@@ -112,13 +110,13 @@ async function validateAndSetProcessing(videoId: string): Promise<VideoData> {
 async function fetchTranscript(
 	videoId: string,
 	userId: string,
-	bucketId: S3Bucket.S3BucketId | null,
+	video: typeof videos.$inferSelect,
 ): Promise<TranscriptData | null> {
 	"use step";
 
 	const vtt = await Effect.gen(function* () {
-		const [bucket] = yield* S3Buckets.getBucketAccess(
-			Option.fromNullable(bucketId),
+		const [bucket] = yield* Storage.getAccessForVideo(
+			decodeStorageVideo(video),
 		);
 		return yield* bucket.getObject(`${userId}/${videoId}/transcription.vtt`);
 	}).pipe(runPromise);

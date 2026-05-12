@@ -314,7 +314,7 @@ function TextSegmentOverlay(props: {
 				startSize: { ...seg.size },
 			};
 		},
-		(e, { startPos, startSize }, initialMouse) => {
+		(e, { startPos }, initialMouse) => {
 			const dx = (e.clientX - initialMouse.x) / props.size.width;
 			const dy = (e.clientY - initialMouse.y) / props.size.height;
 

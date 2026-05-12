@@ -14,21 +14,21 @@ export const ImportPage = () => {
 				</p>
 			</div>
 
-			<div className="grid grid-cols-1 gap-5 sm:grid-cols-2 max-w-2xl">
+			<div className="grid grid-cols-1 gap-5 max-w-4xl sm:grid-cols-2 lg:grid-cols-3">
 				<Link
 					href="/dashboard/import/file"
-					className="group relative flex overflow-hidden flex-col w-full rounded-xl border border-gray-3 bg-gray-1 transition-all duration-200 hover:border-blue-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
+					className="flex overflow-hidden relative flex-col w-full rounded-xl border transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-blue-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
 				>
-					<div className="flex items-center justify-center w-full h-32 bg-gray-3 transition-colors duration-200 group-hover:bg-gray-4">
-						<div className="flex items-center justify-center size-14 rounded-full bg-gray-1 text-gray-10 transition-all duration-200 group-hover:text-gray-12 group-hover:scale-110">
+					<div className="flex justify-center items-center w-full h-32 transition-colors duration-200 bg-gray-3 group-hover:bg-gray-4">
+						<div className="flex justify-center items-center rounded-full transition-all duration-200 size-14 bg-gray-1 text-gray-10 group-hover:text-gray-12 group-hover:scale-110">
 							<FontAwesomeIcon className="size-5" icon={faUpload} />
 						</div>
 					</div>
 					<div className="flex flex-col gap-1 p-4">
-						<p className="text-sm font-medium text-gray-12 text-left">
+						<p className="text-sm font-medium text-left text-gray-12">
 							Upload File
 						</p>
-						<p className="text-xs text-gray-10 text-left">
+						<p className="text-xs text-left text-gray-10">
 							Upload a video file from your device
 						</p>
 					</div>
@@ -36,10 +36,10 @@ export const ImportPage = () => {
 
 				<Link
 					href="/dashboard/import/loom"
-					className="group relative flex overflow-hidden flex-col w-full rounded-xl border border-gray-3 bg-gray-1 transition-all duration-200 hover:border-blue-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
+					className="flex overflow-hidden relative flex-col w-full rounded-xl border transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-blue-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
 				>
-					<div className="flex items-center justify-center w-full h-32 bg-gray-3 transition-colors duration-200 group-hover:bg-gray-4">
-						<div className="flex items-center justify-center size-14 rounded-full bg-gray-1 transition-all duration-200 group-hover:scale-110">
+					<div className="flex justify-center items-center w-full h-32 transition-colors duration-200 bg-gray-3 group-hover:bg-gray-4">
+						<div className="flex justify-center items-center rounded-full transition-all duration-200 size-14 bg-gray-1 group-hover:scale-110">
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
 								width="22"
@@ -57,9 +57,9 @@ export const ImportPage = () => {
 						</div>
 					</div>
 					<div className="flex flex-col gap-1 p-4">
-						<p className="text-sm font-medium text-gray-12 text-left">Loom</p>
-						<p className="text-xs text-gray-10 text-left">
-							Import a video from a Loom share link
+						<p className="text-sm font-medium text-left text-gray-12">Loom</p>
+						<p className="text-xs text-left text-gray-10">
+							Import a Loom share link or bulk import from CSV
 						</p>
 					</div>
 				</Link>

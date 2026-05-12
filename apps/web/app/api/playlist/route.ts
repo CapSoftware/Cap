@@ -3,7 +3,7 @@ import { serverEnv } from "@cap/env";
 import {
 	Database,
 	provideOptionalAuth,
-	S3Buckets,
+	Storage,
 	Videos,
 } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
@@ -58,7 +58,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			Effect.gen(function* () {
-				const s3Buckets = yield* S3Buckets;
+				const storage = yield* Storage;
 				const videos = yield* Videos;
 
 				return handlers.handle("getVideoSrc", ({ urlParams }) =>
@@ -81,10 +81,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							VerifyVideoPasswordError: () => new HttpApiError.Forbidden(),
 							PolicyDenied: () => new HttpApiError.Unauthorized(),
 							DatabaseError: () => new HttpApiError.InternalServerError(),
-							S3Error: () => new HttpApiError.InternalServerError(),
+							StorageError: () => new HttpApiError.InternalServerError(),
 							UnknownException: () => new HttpApiError.InternalServerError(),
 						}),
-						Effect.provideService(S3Buckets, s3Buckets),
+						Effect.provideService(Storage, storage),
 					),
 				);
 			}),
@@ -95,7 +95,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 const resolveRawPreviewKey = (video: Video.Video) =>
 	Effect.gen(function* () {
 		const db = yield* Database;
-		const [s3] = yield* S3Buckets.getBucketAccess(video.bucketId);
+		const [bucket] = yield* Storage.getAccessForVideo(video);
 		const [uploadRecord] = yield* db.use((db) =>
 			db
 				.select({ rawFileKey: Db.videoUploads.rawFileKey })
@@ -116,7 +116,7 @@ const resolveRawPreviewKey = (video: Video.Video) =>
 			`${video.ownerId}/${video.id}/raw-upload.webm`,
 		];
 		const headResults = yield* Effect.all(
-			candidateKeys.map((key) => s3.headObject(key).pipe(Effect.option)),
+			candidateKeys.map((key) => bucket.headObject(key).pipe(Effect.option)),
 			{ concurrency: "unbounded" },
 		);
 		for (const [index, candidateKey] of candidateKeys.entries()) {
@@ -138,13 +138,13 @@ const getPlaylistResponse = (
 	urlParams: (typeof GetPlaylistParams)["Type"],
 ) =>
 	Effect.gen(function* () {
-		const [s3, customBucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
+		const [bucket, customBucket] = yield* Storage.getAccessForVideo(video);
 		const isMp4Source =
 			video.source.type === "desktopMP4" || video.source.type === "webMP4";
 
 		if (urlParams.videoType === "raw-preview") {
 			const rawFileKey = yield* resolveRawPreviewKey(video);
-			return yield* s3
+			return yield* bucket
 				.getSignedObjectUrl(rawFileKey)
 				.pipe(Effect.map(HttpServerResponse.redirect));
 		}
@@ -160,7 +160,7 @@ const getPlaylistResponse = (
 			});
 
 			const manifestKey = segSource.getManifestKey();
-			const manifestContent = yield* s3.getObject(manifestKey).pipe(
+			const manifestContent = yield* bucket.getObject(manifestKey).pipe(
 				Effect.andThen(
 					Option.match({
 						onNone: () => Effect.fail(new HttpApiError.NotFound()),
@@ -226,13 +226,13 @@ const getPlaylistResponse = (
 				return yield* Effect.fail(new HttpApiError.NotFound());
 			}
 
-			const initUrl = yield* s3.getSignedObjectUrl(initKey);
+			const initUrl = yield* bucket.getSignedObjectUrl(initKey);
 			const segmentUrls = yield* Effect.all(
 				segments.map((seg) => {
 					const key = isVideo
 						? segSource.getVideoSegmentKey(seg.index)
 						: segSource.getAudioSegmentKey(seg.index);
-					return s3.getSignedObjectUrl(key);
+					return bucket.getSignedObjectUrl(key);
 				}),
 				{ concurrency: "unbounded" },
 			);
@@ -265,7 +265,7 @@ const getPlaylistResponse = (
 			});
 		}
 
-		if (Option.isNone(customBucket)) {
+		if (bucket.provider === "s3" && Option.isNone(customBucket)) {
 			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 
 			if (isMp4Source || urlParams.videoType === "mp4")
@@ -274,7 +274,7 @@ const getPlaylistResponse = (
 				redirect = `${video.ownerId}/${video.id}/output/video_recording_000.m3u8`;
 
 			return HttpServerResponse.redirect(
-				yield* s3.getSignedObjectUrl(redirect),
+				yield* bucket.getSignedObjectUrl(redirect),
 			);
 		}
 
@@ -282,7 +282,7 @@ const getPlaylistResponse = (
 			Option.isSome(urlParams.fileType) &&
 			urlParams.fileType.value === "transcription"
 		) {
-			return yield* s3
+			return yield* bucket
 				.getObject(`${video.ownerId}/${video.id}/transcription.vtt`)
 				.pipe(
 					Effect.andThen(
@@ -306,9 +306,9 @@ const getPlaylistResponse = (
 			urlParams.fileType.value === "enhanced-audio"
 		) {
 			const enhancedAudioKey = `${video.ownerId}/${video.id}/enhanced-audio.mp3`;
-			return yield* s3.getSignedObjectUrl(enhancedAudioKey).pipe(
+			return yield* bucket.getSignedObjectUrl(enhancedAudioKey).pipe(
 				Effect.map(HttpServerResponse.redirect),
-				Effect.catchTag("S3Error", () => new HttpApiError.NotFound()),
+				Effect.catchTag("StorageError", () => new HttpApiError.NotFound()),
 				Effect.withSpan("fetchEnhancedAudio"),
 			);
 		}
@@ -321,7 +321,7 @@ const getPlaylistResponse = (
 		return yield* Effect.gen(function* () {
 			if (video.source.type === "local") {
 				const playlistText =
-					(yield* s3.getObject(
+					(yield* bucket.getObject(
 						`${video.ownerId}/${video.id}/combined-source/stream.m3u8`,
 					)).pipe(Option.getOrNull) ?? "";
 
@@ -329,7 +329,7 @@ const getPlaylistResponse = (
 
 				for (const [index, line] of lines.entries()) {
 					if (line.endsWith(".ts")) {
-						const url = yield* s3.getSignedObjectUrl(
+						const url = yield* bucket.getSignedObjectUrl(
 							`${video.ownerId}/${video.id}/combined-source/${line}`,
 						);
 						lines[index] = url;
@@ -348,15 +348,15 @@ const getPlaylistResponse = (
 				yield* Effect.log(
 					`Returning path ${`${video.ownerId}/${video.id}/result.mp4`}`,
 				);
-				return yield* s3
+				return yield* bucket
 					.getSignedObjectUrl(`${video.ownerId}/${video.id}/result.mp4`)
 					.pipe(Effect.map(HttpServerResponse.redirect));
 			}
 
 			if (urlParams.videoType === "master") {
 				const [videoSegment, audioSegment] = yield* Effect.all([
-					s3.listObjects({ prefix: videoPrefix, maxKeys: 1 }),
-					s3.listObjects({ prefix: audioPrefix, maxKeys: 1 }),
+					bucket.listObjects({ prefix: videoPrefix, maxKeys: 1 }),
+					bucket.listObjects({ prefix: audioPrefix, maxKeys: 1 }),
 				]);
 
 				const videoSegmentKey = videoSegment.Contents?.[0]?.Key;
@@ -364,11 +364,11 @@ const getPlaylistResponse = (
 					return yield* Effect.fail(new HttpApiError.NotFound());
 				}
 
-				const videoMetadata = yield* s3.headObject(videoSegmentKey);
+				const videoMetadata = yield* bucket.headObject(videoSegmentKey);
 				const audioMetadata =
 					audioSegment?.KeyCount && audioSegment.KeyCount > 0
 						? audioSegment.Contents?.[0]?.Key
-							? yield* s3.headObject(audioSegment.Contents[0].Key)
+							? yield* bucket.headObject(audioSegment.Contents[0].Key)
 							: undefined
 						: undefined;
 
@@ -400,7 +400,7 @@ const getPlaylistResponse = (
 				return yield* Effect.fail(new HttpApiError.NotFound());
 			}
 
-			const objects = yield* s3.listObjects({
+			const objects = yield* bucket.listObjects({
 				prefix,
 				maxKeys: urlParams.thumbnail ? 1 : undefined,
 			});
@@ -408,8 +408,8 @@ const getPlaylistResponse = (
 			const chunksUrls = yield* Effect.all(
 				(objects.Contents || []).map((object) =>
 					Effect.gen(function* () {
-						const url = yield* s3.getSignedObjectUrl(object.Key ?? "");
-						const metadata = yield* s3.headObject(object.Key ?? "");
+						const url = yield* bucket.getSignedObjectUrl(object.Key ?? "");
+						const metadata = yield* bucket.headObject(object.Key ?? "");
 
 						return {
 							url: url,

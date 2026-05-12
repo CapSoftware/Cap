@@ -6,9 +6,12 @@ use cap_rendering::{
     FrameRenderer, ProjectRecordingsMeta, ProjectUniforms, RenderSegment, RenderVideoConstants,
     RendererLayers, ZoomFocusInterpolator, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
+use futures::FutureExt;
 use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::any::Any;
+use std::panic::AssertUnwindSafe;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -16,7 +19,44 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use tracing::{info, instrument};
+use tracing::{error, info, instrument};
+
+fn panic_message(panic: Box<dyn Any + Send>) -> String {
+    if let Some(msg) = panic.downcast_ref::<&str>() {
+        msg.to_string()
+    } else if let Some(msg) = panic.downcast_ref::<String>() {
+        msg.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+async fn run_protected_export(
+    project_path: &Path,
+    settings: &ExportSettings,
+    progress: &tauri::ipc::Channel<FramesRendered>,
+    force_ffmpeg: bool,
+) -> Result<PathBuf, String> {
+    match AssertUnwindSafe(do_export(project_path, settings, progress, force_ffmpeg))
+        .catch_unwind()
+        .await
+    {
+        Ok(result) => result,
+        Err(panic) => {
+            let panic_msg = panic_message(panic);
+            error!(
+                target: "cap_desktop_export",
+                panic = %panic_msg,
+                "export task panicked"
+            );
+            sentry::capture_message(
+                &format!("Export task panicked: {panic_msg}"),
+                sentry::Level::Error,
+            );
+            Err("Export failed unexpectedly".to_string())
+        }
+    }
+}
 
 struct ExportActiveGuard<'a>(&'a AtomicBool);
 
@@ -24,6 +64,28 @@ impl Drop for ExportActiveGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
         tracing::info!("Resuming editor preview after export");
+    }
+}
+
+struct ExportPreviewActiveGuard<'a>(&'a AtomicBool);
+
+impl<'a> ExportPreviewActiveGuard<'a> {
+    fn try_new(flag: &'a AtomicBool) -> Result<Self, String> {
+        flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| Self(flag))
+            .map_err(|_| "Export preview generation is already in progress".to_string())
+    }
+}
+
+impl Drop for ExportPreviewActiveGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+async fn wait_for_export_preview_idle(flag: &AtomicBool) {
+    while flag.load(Ordering::Acquire) {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 }
 
@@ -167,7 +229,11 @@ pub async fn export_video(
         None
     };
 
-    let result = do_export(&project_path, &settings, &progress, force_ffmpeg).await;
+    if let Some(ref ed) = *editor {
+        wait_for_export_preview_idle(&ed.export_preview_active).await;
+    }
+
+    let result = run_protected_export(&project_path, &settings, &progress, force_ffmpeg).await;
 
     match result {
         Ok(path) => {
@@ -180,7 +246,8 @@ pub async fn export_video(
                 e
             );
 
-            let retry_result = do_export(&project_path, &settings, &progress, true).await;
+            let retry_result =
+                run_protected_export(&project_path, &settings, &progress, true).await;
 
             match retry_result {
                 Ok(path) => {
@@ -322,6 +389,37 @@ fn bpp_to_jpeg_quality(bpp: f32) -> u8 {
 #[specta::specta]
 #[instrument(skip_all)]
 pub async fn generate_export_preview(
+    project_path: PathBuf,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+) -> Result<ExportPreviewResult, String> {
+    match AssertUnwindSafe(generate_export_preview_inner(
+        project_path,
+        frame_time,
+        settings,
+    ))
+    .catch_unwind()
+    .await
+    {
+        Ok(result) => result,
+        Err(panic) => {
+            let panic_msg = panic_message(panic);
+            error!(
+                target: "cap_desktop_export",
+                panic = %panic_msg,
+                "generate_export_preview panicked"
+            );
+            sentry::capture_message(
+                &format!("Export preview panicked: {panic_msg}"),
+                sentry::Level::Error,
+            );
+            Err("Export preview failed unexpectedly".to_string())
+        }
+    }
+}
+
+#[instrument(skip_all)]
+async fn generate_export_preview_inner(
     project_path: PathBuf,
     frame_time: f64,
     settings: ExportPreviewSettings,
@@ -568,12 +666,42 @@ pub async fn generate_export_preview_fast(
     frame_time: f64,
     settings: ExportPreviewSettings,
 ) -> Result<ExportPreviewResult, String> {
+    match AssertUnwindSafe(generate_export_preview_fast_inner(
+        editor, frame_time, settings,
+    ))
+    .catch_unwind()
+    .await
+    {
+        Ok(result) => result,
+        Err(panic) => {
+            let panic_msg = panic_message(panic);
+            error!(
+                target: "cap_desktop_export",
+                panic = %panic_msg,
+                "generate_export_preview_fast panicked"
+            );
+            sentry::capture_message(
+                &format!("Export preview panicked: {panic_msg}"),
+                sentry::Level::Error,
+            );
+            Err("Export preview failed unexpectedly".to_string())
+        }
+    }
+}
+
+#[instrument(skip_all)]
+async fn generate_export_preview_fast_inner(
+    editor: WindowEditorInstance,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+) -> Result<ExportPreviewResult, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use std::time::Instant;
 
     if editor.export_active.load(Ordering::Acquire) {
         return Err("Export is in progress - preview generation skipped".to_string());
     }
+    let _preview_guard = ExportPreviewActiveGuard::try_new(&editor.export_preview_active)?;
 
     let project_config = export_project_config(
         editor.project_config.1.borrow().clone(),
@@ -592,7 +720,6 @@ pub async fn generate_export_preview_fast(
 
     let render_start = Instant::now();
 
-    editor.export_preview_active.store(true, Ordering::Release);
     let segment_frames = segment_media
         .decoders
         .get_frames(
@@ -602,7 +729,6 @@ pub async fn generate_export_preview_fast(
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
         .await;
-    editor.export_preview_active.store(false, Ordering::Release);
     let segment_frames = segment_frames.ok_or_else(|| "Failed to decode frame".to_string())?;
 
     let frame_number = (frame_time * settings.fps as f64).floor() as u32;

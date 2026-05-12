@@ -2,6 +2,7 @@
 
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
+import type { ViewerSettingKey } from "@cap/web-backend";
 import {
 	faChartSimple,
 	faChevronDown,
@@ -42,12 +43,16 @@ export const ShareHeader = ({
 		name: string;
 		iconUrl?: string;
 		organizationId: string;
+		settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
+		hasPassword?: boolean;
 	}[];
 	userSpaces?: {
 		id: string;
 		name: string;
 		iconUrl?: string;
 		organizationId: string;
+		settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
+		hasPassword?: boolean;
 	}[];
 	spacesData?: Spaces[] | null;
 }) => {
@@ -257,6 +262,7 @@ export const ShareHeader = ({
 				isPublic={data.public}
 				spacesData={spacesData}
 				hasPassword={!!data.hasPassword}
+				inheritedPasswordSources={data.inheritedPasswordSources}
 				onPasswordUpdated={() => refresh()}
 				user={user}
 				onUpgradeRequest={setUpgradeModalOpen}
@@ -276,9 +282,20 @@ export const ShareHeader = ({
 									/>
 								) : (
 									<h1
+										role={isOwner ? "button" : undefined}
+										tabIndex={isOwner ? 0 : undefined}
 										className="text-xl sm:text-2xl"
 										onClick={() => {
 											if (isOwner) {
+												setIsEditing(true);
+											}
+										}}
+										onKeyDown={(event) => {
+											if (
+												isOwner &&
+												(event.key === "Enter" || event.key === " ")
+											) {
+												event.preventDefault();
 												setIsEditing(true);
 											}
 										}}
@@ -312,7 +329,7 @@ export const ShareHeader = ({
 						<div className="flex space-x-2">
 							<div>
 								<div className="flex gap-2 items-center">
-									{data.hasPassword && (
+									{(data.hasPassword || data.hasInheritedPassword) && (
 										<FontAwesomeIcon
 											className="text-amber-600 size-4"
 											icon={faLock}

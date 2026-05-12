@@ -1,9 +1,11 @@
 import { file } from "bun";
 import { Hono } from "hono";
 import { z } from "zod";
+import { validateMediaServerSecret } from "../lib/auth";
 import type { ResilientInputFlags } from "../lib/ffmpeg-video";
 import {
 	downloadVideoToTemp,
+	generatePreviewGif,
 	generateThumbnail,
 	processVideo,
 	repairContainer,
@@ -30,25 +32,14 @@ import {
 	getMaxConcurrentVideoProcesses,
 	getSystemResources,
 	sendWebhook,
+	touchJob,
 	updateJob,
 } from "../lib/job-manager";
 import type { TempFileHandle } from "../lib/temp-files";
 import { cleanupStaleTempFiles } from "../lib/temp-files";
 
 const video = new Hono();
-
-function validateMediaServerSecret(c: {
-	req: { header: (name: string) => string | undefined };
-}): boolean {
-	const secret = process.env.MEDIA_SERVER_WEBHOOK_SECRET;
-	if (!secret) {
-		console.warn(
-			"[media-server] MEDIA_SERVER_WEBHOOK_SECRET is not set — rejecting request. Set this env var to enable authenticated access.",
-		);
-		return false;
-	}
-	return c.req.header("x-media-server-secret") === secret;
-}
+const PROCESSING_HEARTBEAT_MS = 60 * 1000;
 
 const probeSchema = z.object({
 	videoUrl: z.string().url(),
@@ -73,6 +64,7 @@ const processSchema = z.object({
 	videoUrl: z.string().url(),
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
+	previewGifPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
 	inputExtension: z.string().optional(),
@@ -154,6 +146,33 @@ async function createVideoDownloadResponse(
 	});
 }
 
+async function withJobHeartbeat<T>(
+	jobId: string,
+	operation: () => Promise<T>,
+): Promise<T> {
+	const interval = setInterval(() => {
+		const job = getJob(jobId);
+		if (
+			!job ||
+			job.phase === "complete" ||
+			job.phase === "error" ||
+			job.phase === "cancelled"
+		) {
+			clearInterval(interval);
+			return;
+		}
+
+		touchJob(jobId);
+	}, PROCESSING_HEARTBEAT_MS);
+	interval.unref?.();
+
+	try {
+		return await operation();
+	} finally {
+		clearInterval(interval);
+	}
+}
+
 video.get("/status", (c) => {
 	const jobs = getAllJobs();
 	const resources = getSystemResources();
@@ -184,6 +203,10 @@ video.get("/status", (c) => {
 });
 
 video.post("/probe", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = probeSchema.safeParse(body);
 
@@ -238,6 +261,10 @@ video.post("/probe", async (c) => {
 });
 
 video.post("/thumbnail", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = thumbnailSchema.safeParse(body);
 
@@ -309,6 +336,10 @@ video.post("/thumbnail", async (c) => {
 });
 
 video.post("/convert", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = convertSchema.safeParse(body);
 
@@ -434,6 +465,7 @@ video.post("/process", async (c) => {
 		videoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
 		webhookUrl,
 		webhookSecret,
 	} = result.data;
@@ -446,6 +478,7 @@ video.post("/process", async (c) => {
 		videoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
 		result.data,
 	).catch((err) => {
 		console.error(
@@ -583,27 +616,7 @@ async function processWithResilientRetry(
 		}
 	};
 
-	try {
-		const outputFile = await processVideo(
-			inputPath,
-			metadata,
-			processOptions,
-			onProgress,
-			abortSignal,
-		);
-		return { outputFile, lastResortRepairFile: null };
-	} catch (firstError) {
-		if (!isWebm) throw firstError;
-
-		console.warn(
-			`[processWithResilientRetry] First transcode attempt failed: ${firstError instanceof Error ? firstError.message : String(firstError)}`,
-		);
-
-		updateJob(jobId, {
-			progress: 10,
-			message: "Retrying with error recovery...",
-		});
-
+	return await withJobHeartbeat(jobId, async () => {
 		try {
 			const outputFile = await processVideo(
 				inputPath,
@@ -611,54 +624,111 @@ async function processWithResilientRetry(
 				processOptions,
 				onProgress,
 				abortSignal,
-				RESILIENT_FLAGS,
 			);
 			return { outputFile, lastResortRepairFile: null };
-		} catch (retryError) {
+		} catch (firstError) {
+			if (!isWebm) throw firstError;
+
 			console.warn(
-				`[processWithResilientRetry] Resilient retry also failed: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
-			);
-		}
-
-		console.log(
-			"[processWithResilientRetry] Attempting last-resort container repair and transcode...",
-		);
-
-		updateJob(jobId, {
-			progress: 10,
-			message: "Attempting full repair...",
-		});
-
-		let lastResortRepairFile: TempFileHandle | null = null;
-		try {
-			lastResortRepairFile = await repairContainer(
-				originalInputPath,
-				abortSignal,
+				`[processWithResilientRetry] First transcode attempt failed: ${firstError instanceof Error ? firstError.message : String(firstError)}`,
 			);
 
-			let repairedMetadata: VideoMetadata;
+			updateJob(jobId, {
+				progress: 10,
+				message: "Retrying with error recovery...",
+			});
+
 			try {
-				repairedMetadata = await probeVideoFile(lastResortRepairFile.path);
-			} catch {
-				repairedMetadata = metadata;
+				const outputFile = await processVideo(
+					inputPath,
+					metadata,
+					processOptions,
+					onProgress,
+					abortSignal,
+					RESILIENT_FLAGS,
+				);
+				return { outputFile, lastResortRepairFile: null };
+			} catch (retryError) {
+				console.warn(
+					`[processWithResilientRetry] Resilient retry also failed: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
+				);
 			}
 
-			const outputFile = await processVideo(
-				lastResortRepairFile.path,
-				repairedMetadata,
-				processOptions,
-				onProgress,
-				abortSignal,
-				RESILIENT_FLAGS,
+			console.log(
+				"[processWithResilientRetry] Attempting last-resort container repair and transcode...",
 			);
-			return { outputFile, lastResortRepairFile };
-		} catch (lastResortError) {
-			console.error(
-				`[processWithResilientRetry] Last-resort repair+transcode failed: ${lastResortError instanceof Error ? lastResortError.message : String(lastResortError)}`,
-			);
-			await lastResortRepairFile?.cleanup();
-			throw lastResortError;
+
+			updateJob(jobId, {
+				progress: 10,
+				message: "Attempting full repair...",
+			});
+
+			let lastResortRepairFile: TempFileHandle | null = null;
+			try {
+				lastResortRepairFile = await repairContainer(
+					originalInputPath,
+					abortSignal,
+				);
+
+				let repairedMetadata: VideoMetadata;
+				try {
+					repairedMetadata = await probeVideoFile(lastResortRepairFile.path);
+				} catch {
+					repairedMetadata = metadata;
+				}
+
+				const outputFile = await processVideo(
+					lastResortRepairFile.path,
+					repairedMetadata,
+					processOptions,
+					onProgress,
+					abortSignal,
+					RESILIENT_FLAGS,
+				);
+				return { outputFile, lastResortRepairFile };
+			} catch (lastResortError) {
+				console.error(
+					`[processWithResilientRetry] Last-resort repair+transcode failed: ${lastResortError instanceof Error ? lastResortError.message : String(lastResortError)}`,
+				);
+				await lastResortRepairFile?.cleanup();
+				throw lastResortError;
+			}
 		}
+	});
+}
+
+async function generateAndUploadPreviewGif(
+	inputPath: string,
+	duration: number,
+	previewGifPresignedUrl: string | undefined,
+	abortSignal: AbortSignal | undefined,
+	logPrefix: string,
+): Promise<void> {
+	if (!previewGifPresignedUrl) return;
+
+	let previewGifFile: TempFileHandle | null = null;
+
+	try {
+		previewGifFile = await generatePreviewGif(
+			inputPath,
+			duration,
+			{},
+			abortSignal,
+		);
+		await uploadFileToS3(
+			previewGifFile.path,
+			previewGifPresignedUrl,
+			"image/gif",
+		);
+	} catch (previewErr) {
+		if (abortSignal?.aborted) {
+			throw previewErr instanceof Error
+				? previewErr
+				: new Error("Preview GIF generation aborted");
+		}
+		console.warn(`[${logPrefix}] Preview GIF generation failed:`, previewErr);
+	} finally {
+		await previewGifFile?.cleanup();
 	}
 }
 
@@ -667,6 +737,7 @@ async function processVideoAsync(
 	videoUrl: string,
 	outputPresignedUrl: string,
 	thumbnailPresignedUrl: string | undefined,
+	previewGifPresignedUrl: string | undefined,
 	options: z.infer<typeof processSchema>,
 ): Promise<void> {
 	const job = getJob(jobId);
@@ -747,20 +818,30 @@ async function processVideoAsync(
 
 		await uploadFileToS3(outputTempFile.path, outputPresignedUrl, "video/mp4");
 
-		if (thumbnailPresignedUrl) {
+		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
 			updateJob(jobId, {
 				phase: "generating_thumbnail",
 				progress: 90,
-				message: "Generating thumbnail...",
+				message: "Generating preview assets...",
 			});
 			await sendWebhook(job);
+		}
 
+		if (thumbnailPresignedUrl) {
 			const thumbnailData = await generateThumbnail(
 				outputTempFile.path,
 				metadata.duration,
 			);
 			await uploadToS3(thumbnailData, thumbnailPresignedUrl, "image/jpeg");
 		}
+
+		await generateAndUploadPreviewGif(
+			outputTempFile.path,
+			metadata.duration,
+			previewGifPresignedUrl,
+			abortController.signal,
+			"video/process",
+		);
 
 		updateJob(jobId, {
 			phase: "complete",
@@ -810,6 +891,8 @@ video.get("/process/:jobId/status", async (c) => {
 			{
 				error: "Job not found",
 				code: "NOT_FOUND",
+				instanceId: getInstanceId(),
+				pid: process.pid,
 			},
 			404,
 		);
@@ -890,6 +973,8 @@ video.post("/process/:jobId/cancel", async (c) => {
 			{
 				error: "Job not found",
 				code: "NOT_FOUND",
+				instanceId: getInstanceId(),
+				pid: process.pid,
 			},
 			404,
 		);
@@ -956,6 +1041,7 @@ const muxSegmentsSchema = z.object({
 	userId: z.string(),
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
+	previewGifPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
 	videoInitUrl: z.string().url(),
@@ -982,6 +1068,7 @@ video.post("/mux-segments", async (c) => {
 		userId,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
 		webhookUrl,
 		webhookSecret,
 	} = body.data;
@@ -1011,6 +1098,7 @@ video.post("/mux-segments", async (c) => {
 		videoId,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
 		videoInitUrl,
 		videoSegUrls,
 		audioInitUrl ?? null,
@@ -1027,7 +1115,7 @@ video.post("/mux-segments", async (c) => {
 				phase: "error",
 				error: err instanceof Error ? err.message : String(err),
 			});
-			sendWebhook(getJob(jobId)!);
+			sendCurrentJobWebhook(jobId);
 		}
 	});
 
@@ -1147,11 +1235,21 @@ async function downloadSegmentsBatchTracked(
 	return failed;
 }
 
+function sendCurrentJobWebhook(jobId: string): void {
+	const job = getJob(jobId);
+	if (!job) {
+		console.warn(`[mux-segments] Job ${jobId} not found for webhook`);
+		return;
+	}
+	sendWebhook(job);
+}
+
 async function muxSegmentsAsync(
 	jobId: string,
 	videoId: string,
 	outputPresignedUrl: string,
 	thumbnailPresignedUrl: string | undefined,
+	previewGifPresignedUrl: string | undefined,
 	videoInitUrl: string,
 	videoSegmentUrls: string[],
 	audioInitUrl: string | null,
@@ -1166,11 +1264,13 @@ async function muxSegmentsAsync(
 		"cap-media-server",
 		`mux-${jobId}`,
 	);
+	const abortController = new AbortController();
+	updateJob(jobId, { abortController });
 
 	try {
 		await ensureTempDir();
 		updateJob(jobId, { phase: "downloading", progress: 0 });
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 
 		await mkdir(workDir, { recursive: true });
 		const videoDir = join(workDir, "video");
@@ -1180,7 +1280,7 @@ async function muxSegmentsAsync(
 
 		await downloadUrlToFile(videoInitUrl, join(videoDir, "init.mp4"));
 		updateJob(jobId, { phase: "downloading", progress: 5 });
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 
 		const videoFailed = await downloadSegmentsBatchTracked(
 			videoSegmentUrls,
@@ -1202,36 +1302,38 @@ async function muxSegmentsAsync(
 			);
 		}
 
-		let hasAudio =
+		let audioInput =
 			audioInitUrl !== null &&
 			audioSegmentUrls !== null &&
-			audioSegmentUrls.length > 0;
-		if (hasAudio) {
-			await downloadUrlToFile(audioInitUrl!, join(audioDir, "init.mp4"));
+			audioSegmentUrls.length > 0
+				? { initUrl: audioInitUrl, segmentUrls: audioSegmentUrls }
+				: null;
+		if (audioInput) {
+			await downloadUrlToFile(audioInput.initUrl, join(audioDir, "init.mp4"));
 			const audioFailed = await downloadSegmentsBatchTracked(
-				audioSegmentUrls!,
+				audioInput.segmentUrls,
 				audioDir,
 				jobId,
 				50,
 				10,
 			);
 			if (audioFailed > 0) {
-				const audioFailRatio = audioFailed / audioSegmentUrls!.length;
+				const audioFailRatio = audioFailed / audioInput.segmentUrls.length;
 				if (audioFailRatio >= 0.5) {
 					console.warn(
-						`[mux-segments] ${audioFailed}/${audioSegmentUrls!.length} audio segments failed for ${videoId} (${Math.round(audioFailRatio * 100)}%), proceeding without audio`,
+						`[mux-segments] ${audioFailed}/${audioInput.segmentUrls.length} audio segments failed for ${videoId} (${Math.round(audioFailRatio * 100)}%), proceeding without audio`,
 					);
-					hasAudio = false;
+					audioInput = null;
 				} else {
 					console.warn(
-						`[mux-segments] ${audioFailed}/${audioSegmentUrls!.length} audio segments failed to download for ${videoId}`,
+						`[mux-segments] ${audioFailed}/${audioInput.segmentUrls.length} audio segments failed to download for ${videoId}`,
 					);
 				}
 			}
 		}
 
 		updateJob(jobId, { phase: "processing", progress: 60 });
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 
 		const combinedVideoPath = join(workDir, "combined_video.mp4");
 		const videoInitPath = join(videoDir, "init.mp4");
@@ -1257,7 +1359,7 @@ async function muxSegmentsAsync(
 
 		let resultPath: string;
 
-		if (hasAudio) {
+		if (audioInput) {
 			const combinedAudioPath = join(workDir, "combined_audio.mp4");
 			const audioInitPath = join(audioDir, "init.mp4");
 			const audioSegmentFiles = (await readdir(audioDir))
@@ -1298,29 +1400,26 @@ async function muxSegmentsAsync(
 		}
 
 		updateJob(jobId, { phase: "uploading", progress: 80 });
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 
 		await uploadFileToS3(resultPath, outputPresignedUrl, "video/mp4");
 
 		let metadata: VideoMetadata | undefined;
 		try {
 			const probeResult = await probeVideoFile(resultPath);
-			metadata = {
-				width: probeResult.width,
-				height: probeResult.height,
-				duration: probeResult.duration,
-				fps: probeResult.fps,
-			};
+			metadata = probeResult;
 		} catch {}
 
-		if (thumbnailPresignedUrl) {
+		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
 			updateJob(jobId, {
 				phase: "generating_thumbnail",
 				progress: 90,
-				message: "Generating thumbnail...",
+				message: "Generating preview assets...",
 			});
-			sendWebhook(getJob(jobId)!);
+			sendCurrentJobWebhook(jobId);
+		}
 
+		if (thumbnailPresignedUrl) {
 			try {
 				const duration = metadata?.duration ?? 0;
 				const thumbnailData = await generateThumbnail(resultPath, duration);
@@ -1333,12 +1432,20 @@ async function muxSegmentsAsync(
 			}
 		}
 
+		await generateAndUploadPreviewGif(
+			resultPath,
+			metadata?.duration ?? 0,
+			previewGifPresignedUrl,
+			abortController.signal,
+			"mux-segments",
+		);
+
 		updateJob(jobId, {
 			phase: "complete",
 			progress: 100,
 			metadata,
 		});
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 
 		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (error: unknown) {
@@ -1347,7 +1454,7 @@ async function muxSegmentsAsync(
 			phase: "error",
 			error: error instanceof Error ? error.message : "Unknown error",
 		});
-		sendWebhook(getJob(jobId)!);
+		sendCurrentJobWebhook(jobId);
 	} finally {
 		const { rm } = await import("node:fs/promises");
 		await rm(workDir, { recursive: true, force: true }).catch(() => {});

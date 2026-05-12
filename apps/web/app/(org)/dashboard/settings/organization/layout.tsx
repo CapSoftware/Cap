@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizationMembers, organizations } from "@cap/database/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { SettingsNav } from "./_components/SettingsNav";
 
@@ -29,6 +29,7 @@ export default async function OrganizationSettingsLayout({
 			and(
 				eq(organizationMembers.userId, user.id),
 				eq(organizations.id, user.activeOrganizationId),
+				isNull(organizations.tombstoneAt),
 			),
 		)
 		.limit(1);

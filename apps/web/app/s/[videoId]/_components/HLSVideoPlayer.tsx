@@ -21,6 +21,7 @@ import {
 	shouldReloadPlaybackAfterUploadCompletes,
 	useUploadProgress,
 } from "./ProgressCircle";
+import { VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -709,6 +710,16 @@ export function HLSVideoPlayer({
 						</motion.div>
 					)}
 			</AnimatePresence>
+			<VideoPreviewGif
+				videoId={videoId}
+				visible={
+					videoLoaded &&
+					!hasPlayedOnce &&
+					!hasFailedOrError &&
+					!hlsInitFailed &&
+					!isLiveSegments
+				}
+			/>
 			<MediaPlayerVideo
 				src={undefined} // HLS source is handled by HLS.js
 				ref={videoRef}

@@ -37,6 +37,21 @@ export interface FeaturesCopy {
 	}[];
 }
 
+export interface BentoCopy {
+	eyebrow: string;
+	title: string;
+	subtitle: string;
+	cards: {
+		key: string;
+		title: string;
+		description: string;
+	}[];
+	cta: {
+		label: string;
+		href: string;
+	};
+}
+
 export interface TestimonialsCopy {
 	title: string;
 	subtitle: string;
@@ -101,6 +116,7 @@ export interface HomePageCopy {
 	textReveal: string;
 	recordingModes: RecordingModesCopy;
 	features: FeaturesCopy;
+	bento: BentoCopy;
 	testimonials: TestimonialsCopy;
 	pricing: PricingCopy;
 	faq: FaqCopy;
@@ -110,14 +126,14 @@ export interface HomePageCopy {
 export const homepageCopy: HomePageCopy = {
 	header: {
 		announcement: {
-			text: "🚨 Early Adopter Pricing Ends Soon - Lock In Your Discount",
+			text: "Early Adopter Pricing Ends Soon — Lock In Your Discount",
 			href: "/pricing",
 		},
 		variants: {
 			default: {
-				title: "Beautiful, shareable screen recordings",
+				title: "Beautiful, Shareable Screen Recordings",
 				description:
-					"Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share securely in seconds with custom S3 bucket support. Connect your own domain.",
+					"Cap is the open-source alternative to Loom — native, fast, and yours to control. Record locally with full editing power, or share instantly while you record. Bring your own S3 bucket, your own domain, your own rules.",
 			},
 		},
 		cta: {
@@ -127,16 +143,16 @@ export const homepageCopy: HomePageCopy = {
 			seeOtherOptionsText: "More download options",
 		},
 	},
-	textReveal: "Record. Edit. Share.",
+	textReveal: "Record. Edit. Share. — On Your Terms.",
 	recordingModes: {
-		title: "Share instantly, or record and edit locally",
+		title: "Three Modes, Zero Compromise",
 		subtitle:
-			"Instant Mode bypasses rendering with real-time uploading whilst you are recording. Studio Mode prioritizes quality with local recording and full editing capabilities.",
+			"Instant Mode uploads as you record, so a shareable link is ready the moment you stop. Studio Mode keeps everything local for pixel-perfect editing. Screenshot, when a single frame is enough.",
 		modes: [
 			{
 				name: "Instant Mode",
 				description:
-					"Hit record, stop, share link. Your video is live in seconds with automatically generated captions, a title, summary, chapters, and more. Perfect for quick feedback, bug reports, or when you just need to show something fast.",
+					"Hit record, stop, share link. Your video is live in seconds with auto-generated captions, a title, summary, chapters, and more. Perfect for quick feedback, bug reports, or when you just need to show something fast.",
 			},
 			{
 				name: "Studio Mode",
@@ -146,63 +162,111 @@ export const homepageCopy: HomePageCopy = {
 		],
 	},
 	features: {
-		title: "Built for how you actually work",
+		title: "Built For How You Actually Work",
 		subtitle:
 			"We obsessed over the details so you don't have to. Every feature is designed to save you time and make you look good.",
 		features: [
 			{
-				title: "Your storage, your rules",
+				title: "Your Storage, Your Rules",
 				description:
-					"Connect your own S3 bucket, use our cloud, or keep everything local. Unlike other tools, you're never locked into our infrastructure. Perfect for teams with compliance requirements or those who value data sovereignty.",
+					"Connect your own S3 bucket, use Cap Cloud, or keep everything local. You're never locked into our infrastructure — perfect for teams with compliance requirements or anyone who values data sovereignty.",
 			},
 			{
-				title: "Privacy by default, sharing by choice",
+				title: "Privacy by Default, Sharing by Choice",
 				description:
-					"Instant sharing when you need it, local recording when you want it. Share publicly or privately. Password protect sensitive recordings or keep them local only.",
+					"Instant sharing when you need it, local recording when you want it. Share publicly or privately, password-protect sensitive recordings, or keep them local only.",
 			},
 			{
-				title: "Async collaboration that actually works",
+				title: "Async Collaboration That Actually Works",
 				description:
 					'Comments, reactions, and transcripts keep conversations moving without another meeting. See who watched, get notified on feedback, and turn recordings into actionable next steps. Replace those "quick sync" calls for good.',
 			},
 			{
-				title: "Cross-platform for your entire team",
+				title: "Cross-Platform For Your Entire Team",
 				description:
-					"Native apps for macOS and Windows that feel at home on each platform. No janky Electron apps or browser extensions. Just fast, reliable recording that works with your existing tools and workflow.",
+					"Native apps for macOS and Windows that feel at home on each platform. No janky Electron apps or browser extensions — just fast, reliable recording that works with your existing tools and workflow.",
 			},
 			{
-				title: "Quality that makes you look professional",
+				title: "Quality That Makes You Look Professional",
 				description:
 					"4K recording, 60fps capture, and intelligent compression that keeps file sizes reasonable.",
 			},
 			{
-				title: "Truly open source",
+				title: "Truly Open Source",
 				description:
 					"See exactly how Cap works, contribute features you need, or self-host for complete control. Join a community of builders who believe great tools should be transparent, extensible, and respect their users.",
 			},
 			{
-				title: "Speed up your workflow with Cap AI",
+				title: "Speed Up Your Workflow With Cap AI",
 				description:
 					"Auto-generated titles, summaries, clickable chapters, and transcriptions for every recording. AI features that actually save time instead of creating more work.",
 			},
 			{
-				title: "Import your Loom videos",
+				title: "Import Your Loom Videos",
 				description:
-					"Switching from Loom? Import your existing Loom recordings directly into Cap with our built-in video importer. Keep all your content in one place without starting from scratch.",
+					"Switching from Loom? Import your existing recordings directly into Cap with our built-in importer. Keep all your content in one place without starting from scratch.",
 			},
 		],
 	},
+	bento: {
+		eyebrow: "Why Cap",
+		title: "Built To Be Yours",
+		subtitle:
+			"Every feature respects how you actually work — your storage, your platform, your workflow. No vendor lock-in, no compromises.",
+		cards: [
+			{
+				key: "storage",
+				title: "Bring Your Own Storage",
+				description:
+					"Plug in your own S3 bucket, route to Cap Cloud, or keep recordings entirely local. Your videos, your bucket, your bill — no vendor lock-in, ever.",
+			},
+			{
+				key: "ai",
+				title: "Cap AI Does The Busywork",
+				description:
+					"Every recording gets an AI-generated title, summary, clickable chapters, and a fully searchable transcript — so the work after the recording is already done.",
+			},
+			{
+				key: "async",
+				title: "Async Conversations That Move",
+				description:
+					"Threaded comments, emoji reactions, and viewer analytics turn one-way videos into two-way conversations. Replace the standing meeting for good.",
+			},
+			{
+				key: "native",
+				title: "Native, Not An Electron Tab",
+				description:
+					"Built on Tauri and Rust for genuinely native performance on macOS and Windows. No bloated browser, no battery hit — just a fast, lightweight recorder.",
+			},
+			{
+				key: "oss",
+				title: "Open Source, End To End",
+				description:
+					"Inspect every line, contribute the feature you've been waiting for, or self-host the entire stack. Fair, transparent, and yours to fork.",
+			},
+			{
+				key: "pixel",
+				title: "Pixel-Perfect Capture",
+				description:
+					"Record up to 4K at 60fps with hardware-accelerated encoding. Crisp text, smooth motion, sane file sizes — the quality your work deserves.",
+			},
+		],
+		cta: {
+			label: "Explore Every Feature",
+			href: "/features",
+		},
+	},
 	testimonials: {
-		title: "Loved by builders, trusted by teams",
+		title: "Loved By Builders, Trusted By Teams",
 		subtitle:
 			"Join thousands who've made Cap their daily driver for visual communication.",
-		cta: "Read more testimonials",
+		cta: "Read More Testimonials",
 	},
 	pricing: {
-		title: "Simple, honest pricing",
+		title: "Simple, Honest Pricing",
 		subtitle:
 			"Start free, upgrade when you need more. Early adopter pricing locked in forever.",
-		lovedBy: "Trusted by 10,000+ users",
+		lovedBy: "Trusted by 30,000+ users",
 		commercial: {
 			title: "Desktop License",
 			description:
@@ -242,7 +306,7 @@ export const homepageCopy: HomePageCopy = {
 				"Custom S3 bucket support",
 				"Priority support & early features",
 			],
-			cta: "Get started",
+			cta: "Get Started",
 			pricing: {
 				annual: 8.16,
 				monthly: 12,
@@ -255,7 +319,7 @@ export const homepageCopy: HomePageCopy = {
 		},
 	},
 	faq: {
-		title: "Questions? We've got answers.",
+		title: "Questions? We've Got Answers.",
 		items: [
 			{
 				question: "What is the difference between Cap Pro and Desktop License?",
@@ -295,7 +359,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "Which platforms do you support?",
 				answer:
-					"Native desktop apps for macOS (Apple Silicon & Intel) and Windows. View your shareable linkes from anywhere.",
+					"Native desktop apps for macOS (Apple Silicon & Intel) and Windows. View your shareable links from anywhere.",
 			},
 			{
 				question: "Can I use Cap for commercial purposes?",
@@ -305,7 +369,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "Is my data secure?",
 				answer:
-					"Security is core to Cap. As an open source project, our code is fully auditable and transparent - you can see exactly how your data is handled. End-to-end encryption for cloud storage, option to use your own infrastructure, and community-driven security reviews keep your content safe.",
+					"Security is core to Cap. As an open source project, our code is fully auditable and transparent — you can see exactly how your data is handled. End-to-end encryption for cloud storage, option to use your own infrastructure, and community-driven security reviews keep your content safe.",
 			},
 			{
 				question: "What about GDPR/HIPAA compliance?",
@@ -315,10 +379,10 @@ export const homepageCopy: HomePageCopy = {
 		],
 	},
 	readyToGetStarted: {
-		title: "Ready to upgrade how you communicate?",
+		title: "Ready To Upgrade How You Communicate?",
 		buttons: {
 			primary: "Upgrade to Cap Pro",
-			secondary: "Download for free",
+			secondary: "Download For Free",
 		},
 	},
 };

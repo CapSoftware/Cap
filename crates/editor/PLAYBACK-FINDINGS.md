@@ -35,7 +35,7 @@
 
 ## Current Status
 
-**Last Updated**: 2026-03-25
+**Last Updated**: 2026-05-07
 
 ### Performance Summary
 
@@ -78,6 +78,7 @@
 - [x] **Run initial baseline** - Established current playback performance metrics (2026-01-28)
 - [x] **Profile decoder init time** - Hardware acceleration confirmed (AVAssetReader) (2026-01-28)
 - [x] **Identify latency hotspots** - No issues found, p95=3.1ms (2026-01-28)
+- [x] **Optimize random-access scrubbing** - Reduced AVAssetReader scrub decode p95 on cap-performance-fixtures from 231.5ms to 47.6ms (2026-05-07)
 
 ---
 
@@ -418,6 +419,49 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - Consider lazy pool decoder creation (defer creating secondary decoders until needed for scrubbing)
 - Shared memory / IPC instead of WebSocket for local frame transport (architectural change)
 - NEON SIMD intrinsics for BGRA→RGBA on Apple Silicon (currently uses unrolled scalar)
+
+---
+
+### Session 2026-05-07 (Reference Fixture Scrub Optimization)
+
+**Goal**: Benchmark current editor playback performance on a repeatable real `.cap` fixture and improve playback responsiveness without compromising FPS, visual quality, or audio sync.
+
+**What was done**:
+1. Cloned `https://github.com/CapSoftware/cap-performance-fixtures` to `/tmp/cap-performance-fixtures`
+2. Used `/tmp/cap-performance-fixtures/reference-recording.cap`, a two-segment Studio recording with 3024x1964 display video, 1920x1080 camera video, mic audio, system audio, cursor data, and zoom configuration
+3. Ran playback validation at 60fps
+4. Ran `cap-editor` decode/render/scrub pipeline benchmarks at 60fps for 300 frames
+5. Tuned the macOS AVAssetReader multi-position decoder pool so scrub requests use a stricter decoder reuse window than linear playback
+
+**Changes Made**:
+- `crates/rendering/src/decoder/multi_position.rs`: Added a custom reuse-threshold entry point for decoder selection while preserving the default playback threshold.
+- `crates/rendering/src/decoder/avassetreader.rs`: During detected scrubbing, reuse an existing decoder only when it is within 0.5s behind the requested frame; otherwise reset the nearest decoder to the target keyframe.
+
+**Baseline Results**:
+- Playback validation: PASS, AVAssetReader hardware decode, camera-display drift 0ms, mic diff 35.3ms/13.8ms, system audio diff 92.7ms/92.8ms.
+- Decode-only: 730.0 fps effective, avg 1.37ms, p95 2.94ms, p99 9.34ms.
+- Full pipeline 1920x1080: 140.8 fps effective, total avg 7.10ms, p95 8.73ms, p99 9.64ms.
+- Scrubbing half resolution: 6.8 fps effective, decode avg 138.98ms, p95 231.49ms, p99 263.25ms, total p95 242.61ms.
+
+**Final Results**:
+- Playback validation: PASS, AVAssetReader hardware decode, camera-display drift 0ms, mic diff 35.3ms/13.8ms, system audio diff 92.7ms/92.8ms.
+- Decode-only: 722.2 fps effective, avg 1.38ms, p95 3.03ms, p99 8.31ms.
+- Full pipeline 1920x1080: 147.6 fps effective, total avg 6.78ms, p95 8.37ms, p99 9.31ms.
+- Scrubbing half resolution: 19.9 fps effective, decode avg 41.86ms, p95 47.57ms, p99 47.95ms, total p95 55.48ms.
+
+**Impact**:
+- Scrub decode average improved 138.98ms → 41.86ms (-69.9%).
+- Scrub decode p95 improved 231.49ms → 47.57ms (-79.4%).
+- Scrub throughput improved 6.8fps → 19.9fps (2.9x).
+- Linear playback, camera sync, mic sync, and system-audio sync remained healthy.
+
+**Validation**:
+- `cargo fmt --all`
+- `cargo run -p cap-recording --example playback-test-runner -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 full`
+- `cargo run -p cap-editor --example playback-pipeline-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300`
+- `cargo clippy -p cap-rendering --all-targets -- -D warnings`
+
+**Stopping point**: Scrubbing is substantially faster and playback validation still passes. Remaining architectural opportunities are renderer readback/transport overhead and longer-duration testing on lower-powered MacBook Air hardware.
 
 ---
 

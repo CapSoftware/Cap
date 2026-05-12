@@ -15,6 +15,10 @@ export function SettingsNav() {
 			href: "/dashboard/settings/organization/preferences",
 		},
 		{
+			label: "Integrations",
+			href: "/dashboard/settings/organization/integrations",
+		},
+		{
 			label: buildEnv.NEXT_PUBLIC_IS_CAP ? "Billing & Members" : "Members",
 			href: "/dashboard/settings/organization/billing",
 		},

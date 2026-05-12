@@ -29,22 +29,23 @@ let mockUploadQueryResult: unknown[] = [];
 vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: () => ({
-			from: (table: unknown) =>
-				table === schemaMocks.videoUploads
-					? {
-							where: vi.fn().mockReturnValue({
-								limit: vi.fn().mockResolvedValue(mockUploadQueryResult),
-							}),
-						}
-					: {
-							leftJoin: () => ({
-								leftJoin: () => ({
-									where: vi
-										.fn()
-										.mockImplementation(() => Promise.resolve(mockQueryResult)),
-								}),
-							}),
-						},
+			from: (table: unknown) => {
+				if (table === schemaMocks.videoUploads) {
+					return {
+						where: vi.fn().mockReturnValue({
+							limit: vi.fn().mockResolvedValue(mockUploadQueryResult),
+						}),
+					};
+				}
+
+				const query = {
+					leftJoin: vi.fn(() => query),
+					where: vi
+						.fn()
+						.mockImplementation(() => Promise.resolve(mockQueryResult)),
+				};
+				return query;
+			},
 		}),
 		update: () => ({
 			set: () => ({

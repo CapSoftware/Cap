@@ -29,6 +29,7 @@ services:
     network_mode: host
     environment:
       PORT: 3456
+      MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:-local-media-server-secret}
 
   # Local S3 Strorage
   minio:

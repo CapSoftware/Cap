@@ -1,4 +1,5 @@
 import type { UploadStatus } from "../../UploadingContext";
+import { installAvcLevelClamp } from "./avc-level-clamp";
 import type { VideoId } from "./web-recorder-types";
 
 const MAX_THUMBNAIL_WIDTH = 1000;
@@ -109,24 +110,31 @@ export const convertToMp4 = async (
 	const file = new File([blob], "recording.webm", { type: blob.type });
 	const { convertMedia } = await import("@remotion/webcodecs");
 
-	const result = await convertMedia({
-		src: file,
-		container: "mp4",
-		videoCodec: "h264",
-		...(hasAudio ? { audioCodec: "aac" as const } : {}),
-		onProgress: ({ overallProgress }) => {
-			if (overallProgress !== null) {
-				const percent = Math.min(100, Math.max(0, overallProgress * 100));
-				setUploadStatus({
-					status: "converting",
-					capId: currentVideoId,
-					progress: percent,
-				});
-			}
-		},
-	});
+	const restoreAvcLevelClamp = installAvcLevelClamp();
 
-	const savedFile = await result.save();
+	let savedFile: Blob;
+	try {
+		const result = await convertMedia({
+			src: file,
+			container: "mp4",
+			videoCodec: "h264",
+			...(hasAudio ? { audioCodec: "aac" as const } : {}),
+			onProgress: ({ overallProgress }) => {
+				if (overallProgress !== null) {
+					const percent = Math.min(100, Math.max(0, overallProgress * 100));
+					setUploadStatus({
+						status: "converting",
+						capId: currentVideoId,
+						progress: percent,
+					});
+				}
+			},
+		});
+
+		savedFile = await result.save();
+	} finally {
+		restoreAvcLevelClamp();
+	}
 	if (savedFile.size === 0) {
 		throw new Error("Conversion produced empty file");
 	}

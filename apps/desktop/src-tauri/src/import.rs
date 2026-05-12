@@ -7,13 +7,15 @@ use cap_enc_ffmpeg::{
 use cap_media_info::{AudioInfo, FFRational, Pixel, VideoInfo, ensure_even};
 use cap_project::{
     AudioMeta, Cursors, InstantRecordingMeta, MultipleSegment, MultipleSegments, Platform,
-    RecordingMeta, RecordingMetaInner, StudioRecordingMeta, StudioRecordingStatus, VideoMeta,
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SingleSegment, StudioRecordingMeta,
+    StudioRecordingStatus, VideoMeta,
 };
 use ffmpeg::{
     ChannelLayout,
     codec::{self as avcodec},
     format::{self as avformat},
 };
+use image::ImageEncoder;
 use relative_path::RelativePathBuf;
 use serde::Serialize;
 use specta::Type;
@@ -23,6 +25,11 @@ use tauri_specta::Event;
 use tracing::{debug, error, info};
 
 use crate::create_screenshot;
+
+const VIDEO_IMPORT_EXTENSIONS: &[&str] = &["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"];
+const IMAGE_IMPORT_EXTENSIONS: &[&str] =
+    &["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"];
+const MAX_IMAGE_DIMENSION: u32 = 16_384;
 
 #[derive(Serialize, Type, Clone, Debug)]
 pub enum ImportStage {
@@ -91,6 +98,18 @@ fn generate_project_name(source_path: &Path) -> String {
     format!("{stem} {date_str}")
 }
 
+fn generate_image_project_name(source_path: &Path) -> String {
+    let stem = source_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Imported Image");
+
+    let now = chrono::Local::now();
+    let date_str = now.format("%Y-%m-%d at %H.%M.%S").to_string();
+
+    format!("{stem} {date_str}")
+}
+
 fn sanitize_filename(name: &str) -> String {
     name.chars()
         .map(|c| match c {
@@ -98,6 +117,24 @@ fn sanitize_filename(name: &str) -> String {
             _ => c,
         })
         .collect()
+}
+
+fn has_supported_extension(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|ext| {
+            extensions
+                .iter()
+                .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+        })
+}
+
+pub fn is_supported_video_import_path(path: &Path) -> bool {
+    path.is_file() && has_supported_extension(path, VIDEO_IMPORT_EXTENSIONS)
+}
+
+pub fn is_supported_image_import_path(path: &Path) -> bool {
+    path.is_file() && has_supported_extension(path, IMAGE_IMPORT_EXTENSIONS)
 }
 
 fn get_video_stream_info(
@@ -671,6 +708,128 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
     });
 
     Ok(return_path)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn start_image_import(app: AppHandle, source_path: PathBuf) -> Result<PathBuf, String> {
+    info!("Starting image import from: {:?}", source_path);
+
+    if !source_path.is_file() {
+        return Err("Image file does not exist".to_string());
+    }
+
+    let source_path_for_decode = source_path.clone();
+    let (image_width, image_height, image_data) =
+        tokio::task::spawn_blocking(move || -> Result<(u32, u32, Vec<u8>), String> {
+            let image = image::ImageReader::open(&source_path_for_decode)
+                .map_err(|e| format!("Failed to open image: {e}"))?
+                .with_guessed_format()
+                .map_err(|e| format!("Failed to detect image format: {e}"))?
+                .decode()
+                .map_err(|e| format!("Failed to decode image: {e}"))?;
+
+            let width = image.width();
+            let height = image.height();
+
+            if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+                return Err(format!("Image dimensions exceed maximum: {width}x{height}"));
+            }
+
+            if width
+                .checked_mul(height)
+                .and_then(|p| p.checked_mul(4))
+                .is_none()
+            {
+                return Err(format!("Image dimensions overflow: {width}x{height}"));
+            }
+
+            let rgba = image.to_rgba8();
+
+            Ok((width, height, rgba.into_raw()))
+        })
+        .await
+        .map_err(|e| format!("Failed to import image: {e}"))??;
+
+    let screenshots_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("screenshots");
+    std::fs::create_dir_all(&screenshots_dir)
+        .map_err(|e| format!("Failed to create screenshots directory: {e}"))?;
+
+    let project_name = generate_image_project_name(&source_path);
+    let filename = project_name.replace(":", ".");
+    let filename = format!("{}.cap", sanitize_filename::sanitize(&filename));
+    let project_path = screenshots_dir.join(cap_utils::ensure_unique_filename(
+        &filename,
+        &screenshots_dir,
+    )?);
+    std::fs::create_dir_all(&project_path)
+        .map_err(|e| format!("Failed to create screenshot project directory: {e}"))?;
+
+    let image_filename = "original.png";
+    let image_path = project_path.join(image_filename);
+    let image_path_for_write = image_path.clone();
+
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let file = std::fs::File::create(&image_path_for_write)
+            .map_err(|e| format!("Failed to create imported image file: {e}"))?;
+        let encoder = image::codecs::png::PngEncoder::new_with_quality(
+            std::io::BufWriter::new(file),
+            image::codecs::png::CompressionType::Default,
+            image::codecs::png::FilterType::Adaptive,
+        );
+
+        ImageEncoder::write_image(
+            encoder,
+            &image_data,
+            image_width,
+            image_height,
+            image::ColorType::Rgba8.into(),
+        )
+        .map_err(|e| format!("Failed to encode imported image: {e}"))
+    })
+    .await
+    .map_err(|e| format!("Failed to write imported image: {e}"))??;
+
+    let video_meta = VideoMeta {
+        path: RelativePathBuf::from(image_filename),
+        fps: 0,
+        start_time: Some(0.0),
+        device_id: None,
+    };
+
+    let segment = SingleSegment {
+        display: video_meta,
+        camera: None,
+        audio: None,
+        cursor: None,
+    };
+
+    let meta = RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: project_path.clone(),
+        pretty_name: project_name,
+        sharing: None,
+        inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::SingleSegment { segment })),
+        upload: None,
+    };
+
+    meta.save_for_project()
+        .map_err(|e| format!("Failed to save screenshot metadata: {e:?}"))?;
+
+    ProjectConfiguration::default()
+        .write(&project_path)
+        .map_err(|e| format!("Failed to save screenshot project config: {e}"))?;
+
+    let _ = crate::NewScreenshotAdded {
+        path: image_path.clone(),
+    }
+    .emit(&app);
+
+    Ok(image_path)
 }
 
 #[tauri::command]
