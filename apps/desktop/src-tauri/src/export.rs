@@ -6,9 +6,12 @@ use cap_rendering::{
     FrameRenderer, ProjectRecordingsMeta, ProjectUniforms, RenderSegment, RenderVideoConstants,
     RendererLayers, ZoomFocusInterpolator, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
+use futures::FutureExt;
 use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::any::Any;
+use std::panic::AssertUnwindSafe;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -16,7 +19,44 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use tracing::{info, instrument};
+use tracing::{error, info, instrument};
+
+fn panic_message(panic: Box<dyn Any + Send>) -> String {
+    if let Some(msg) = panic.downcast_ref::<&str>() {
+        msg.to_string()
+    } else if let Some(msg) = panic.downcast_ref::<String>() {
+        msg.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+async fn run_protected_export(
+    project_path: &Path,
+    settings: &ExportSettings,
+    progress: &tauri::ipc::Channel<FramesRendered>,
+    force_ffmpeg: bool,
+) -> Result<PathBuf, String> {
+    match AssertUnwindSafe(do_export(project_path, settings, progress, force_ffmpeg))
+        .catch_unwind()
+        .await
+    {
+        Ok(result) => result,
+        Err(panic) => {
+            let panic_msg = panic_message(panic);
+            error!(
+                target: "cap_desktop_export",
+                panic = %panic_msg,
+                "export task panicked"
+            );
+            sentry::capture_message(
+                &format!("Export task panicked: {panic_msg}"),
+                sentry::Level::Error,
+            );
+            Err("Export failed unexpectedly".to_string())
+        }
+    }
+}
 
 struct ExportActiveGuard<'a>(&'a AtomicBool);
 
@@ -193,7 +233,7 @@ pub async fn export_video(
         wait_for_export_preview_idle(&ed.export_preview_active).await;
     }
 
-    let result = do_export(&project_path, &settings, &progress, force_ffmpeg).await;
+    let result = run_protected_export(&project_path, &settings, &progress, force_ffmpeg).await;
 
     match result {
         Ok(path) => {
@@ -206,7 +246,8 @@ pub async fn export_video(
                 e
             );
 
-            let retry_result = do_export(&project_path, &settings, &progress, true).await;
+            let retry_result =
+                run_protected_export(&project_path, &settings, &progress, true).await;
 
             match retry_result {
                 Ok(path) => {
@@ -348,6 +389,37 @@ fn bpp_to_jpeg_quality(bpp: f32) -> u8 {
 #[specta::specta]
 #[instrument(skip_all)]
 pub async fn generate_export_preview(
+    project_path: PathBuf,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+) -> Result<ExportPreviewResult, String> {
+    match AssertUnwindSafe(generate_export_preview_inner(
+        project_path,
+        frame_time,
+        settings,
+    ))
+    .catch_unwind()
+    .await
+    {
+        Ok(result) => result,
+        Err(panic) => {
+            let panic_msg = panic_message(panic);
+            error!(
+                target: "cap_desktop_export",
+                panic = %panic_msg,
+                "generate_export_preview panicked"
+            );
+            sentry::capture_message(
+                &format!("Export preview panicked: {panic_msg}"),
+                sentry::Level::Error,
+            );
+            Err("Export preview failed unexpectedly".to_string())
+        }
+    }
+}
+
+#[instrument(skip_all)]
+async fn generate_export_preview_inner(
     project_path: PathBuf,
     frame_time: f64,
     settings: ExportPreviewSettings,
@@ -590,6 +662,35 @@ mod tests {
 #[specta::specta]
 #[instrument(skip_all)]
 pub async fn generate_export_preview_fast(
+    editor: WindowEditorInstance,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+) -> Result<ExportPreviewResult, String> {
+    match AssertUnwindSafe(generate_export_preview_fast_inner(
+        editor, frame_time, settings,
+    ))
+    .catch_unwind()
+    .await
+    {
+        Ok(result) => result,
+        Err(panic) => {
+            let panic_msg = panic_message(panic);
+            error!(
+                target: "cap_desktop_export",
+                panic = %panic_msg,
+                "generate_export_preview_fast panicked"
+            );
+            sentry::capture_message(
+                &format!("Export preview panicked: {panic_msg}"),
+                sentry::Level::Error,
+            );
+            Err("Export preview failed unexpectedly".to_string())
+        }
+    }
+}
+
+#[instrument(skip_all)]
+async fn generate_export_preview_fast_inner(
     editor: WindowEditorInstance,
     frame_time: f64,
     settings: ExportPreviewSettings,

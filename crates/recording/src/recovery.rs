@@ -1103,12 +1103,10 @@ impl RecoveryManager {
         match probe_video_can_decode(path) {
             Ok(true) => Ok(()),
             Ok(false) => Err(RecoveryError::UnplayableVideo(format!(
-                "{} video has no decodable frames: {path:?}",
-                label
+                "{label} video has no decodable frames: {path:?}"
             ))),
             Err(e) => Err(RecoveryError::UnplayableVideo(format!(
-                "{} video validation failed for {path:?}: {e}",
-                label
+                "{label} video validation failed for {path:?}: {e}"
             ))),
         }
     }
@@ -1124,8 +1122,7 @@ impl RecoveryManager {
 
         probe_video_seek_points(path, EXPORT_SEEK_PROBE_SAMPLE_COUNT).map_err(|e| {
             RecoveryError::UnplayableVideo(format!(
-                "{} video seek validation failed for {path:?}: {e}",
-                label
+                "{label} video seek validation failed for {path:?}: {e}"
             ))
         })?;
 
