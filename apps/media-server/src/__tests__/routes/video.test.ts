@@ -4,6 +4,30 @@ import * as ffmpegVideo from "../../lib/ffmpeg-video";
 import * as ffprobe from "../../lib/ffprobe";
 import * as jobManager from "../../lib/job-manager";
 
+const MEDIA_SERVER_SECRET = "test-secret";
+const AUTH_HEADERS = {
+	"Content-Type": "application/json",
+	"x-media-server-secret": MEDIA_SERVER_SECRET,
+};
+
+process.env.MEDIA_SERVER_WEBHOOK_SECRET = MEDIA_SERVER_SECRET;
+
+function videoPostRequest(path: string, body: unknown): Request {
+	return new Request(`http://localhost${path}`, {
+		method: "POST",
+		headers: AUTH_HEADERS,
+		body: JSON.stringify(body),
+	});
+}
+
+function unauthenticatedVideoPostRequest(path: string, body: unknown): Request {
+	return new Request(`http://localhost${path}`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(body),
+	});
+}
+
 describe("GET /video/status", () => {
 	test("returns server status", async () => {
 		const response = await app.fetch(
@@ -29,14 +53,18 @@ describe("POST /video/probe", () => {
 		mock.restore();
 	});
 
-	test("returns 400 for missing videoUrl", async () => {
+	test("returns 401 without media server secret", async () => {
 		const response = await app.fetch(
-			new Request("http://localhost/video/probe", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({}),
+			unauthenticatedVideoPostRequest("/video/probe", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
+
+		expect(response.status).toBe(401);
+	});
+
+	test("returns 400 for missing videoUrl", async () => {
+		const response = await app.fetch(videoPostRequest("/video/probe", {}));
 
 		expect(response.status).toBe(400);
 		const data = await response.json();
@@ -45,11 +73,7 @@ describe("POST /video/probe", () => {
 
 	test("returns 400 for invalid URL format", async () => {
 		const response = await app.fetch(
-			new Request("http://localhost/video/probe", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "not-a-valid-url" }),
-			}),
+			videoPostRequest("/video/probe", { videoUrl: "not-a-valid-url" }),
 		);
 
 		expect(response.status).toBe(400);
@@ -80,10 +104,8 @@ describe("POST /video/probe", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/probe", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "https://example.com/video.mp4" }),
+			videoPostRequest("/video/probe", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
 
@@ -104,10 +126,8 @@ describe("POST /video/probe", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/probe", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "https://example.com/video.mp4" }),
+			videoPostRequest("/video/probe", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
 
@@ -128,10 +148,8 @@ describe("POST /video/probe", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/probe", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "https://example.com/video.mp4" }),
+			videoPostRequest("/video/probe", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
 
@@ -152,10 +170,8 @@ describe("POST /video/probe", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/probe", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "https://example.com/video.mp4" }),
+			videoPostRequest("/video/probe", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
 
@@ -171,14 +187,18 @@ describe("POST /video/thumbnail", () => {
 		mock.restore();
 	});
 
-	test("returns 400 for missing videoUrl", async () => {
+	test("returns 401 without media server secret", async () => {
 		const response = await app.fetch(
-			new Request("http://localhost/video/thumbnail", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({}),
+			unauthenticatedVideoPostRequest("/video/thumbnail", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
+
+		expect(response.status).toBe(401);
+	});
+
+	test("returns 400 for missing videoUrl", async () => {
+		const response = await app.fetch(videoPostRequest("/video/thumbnail", {}));
 
 		expect(response.status).toBe(400);
 		const data = await response.json();
@@ -187,11 +207,7 @@ describe("POST /video/thumbnail", () => {
 
 	test("returns 400 for invalid URL format", async () => {
 		const response = await app.fetch(
-			new Request("http://localhost/video/thumbnail", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "not-a-url" }),
-			}),
+			videoPostRequest("/video/thumbnail", { videoUrl: "not-a-url" }),
 		);
 
 		expect(response.status).toBe(400);
@@ -233,10 +249,8 @@ describe("POST /video/thumbnail", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/thumbnail", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "https://example.com/video.mp4" }),
+			videoPostRequest("/video/thumbnail", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
 
@@ -256,14 +270,18 @@ describe("POST /video/convert", () => {
 		mock.restore();
 	});
 
-	test("returns 400 for missing videoUrl", async () => {
+	test("returns 401 without media server secret", async () => {
 		const response = await app.fetch(
-			new Request("http://localhost/video/convert", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({}),
+			unauthenticatedVideoPostRequest("/video/convert", {
+				videoUrl: "https://example.com/video.m3u8",
 			}),
 		);
+
+		expect(response.status).toBe(401);
+	});
+
+	test("returns 400 for missing videoUrl", async () => {
+		const response = await app.fetch(videoPostRequest("/video/convert", {}));
 
 		expect(response.status).toBe(400);
 		const data = await response.json();
@@ -314,13 +332,9 @@ describe("POST /video/convert", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/convert", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					videoUrl: "https://example.com/video.m3u8",
-					inputExtension: ".m3u8",
-				}),
+			videoPostRequest("/video/convert", {
+				videoUrl: "https://example.com/video.m3u8",
+				inputExtension: ".m3u8",
 			}),
 		);
 
@@ -341,13 +355,7 @@ describe("POST /video/process", () => {
 	});
 
 	test("returns 400 for missing required fields", async () => {
-		const response = await app.fetch(
-			new Request("http://localhost/video/process", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({}),
-			}),
-		);
+		const response = await app.fetch(videoPostRequest("/video/process", {}));
 
 		expect(response.status).toBe(400);
 		const data = await response.json();
@@ -356,14 +364,10 @@ describe("POST /video/process", () => {
 
 	test("returns 400 for missing videoUrl", async () => {
 		const response = await app.fetch(
-			new Request("http://localhost/video/process", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					videoId: "test-id",
-					userId: "user-id",
-					outputPresignedUrl: "https://s3.example.com/output",
-				}),
+			videoPostRequest("/video/process", {
+				videoId: "test-id",
+				userId: "user-id",
+				outputPresignedUrl: "https://s3.example.com/output",
 			}),
 		);
 
@@ -374,15 +378,11 @@ describe("POST /video/process", () => {
 
 	test("returns 400 for invalid outputPresignedUrl", async () => {
 		const response = await app.fetch(
-			new Request("http://localhost/video/process", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					videoId: "test-id",
-					userId: "user-id",
-					videoUrl: "https://example.com/video.mp4",
-					outputPresignedUrl: "not-a-url",
-				}),
+			videoPostRequest("/video/process", {
+				videoId: "test-id",
+				userId: "user-id",
+				videoUrl: "https://example.com/video.mp4",
+				outputPresignedUrl: "not-a-url",
 			}),
 		);
 
@@ -410,15 +410,11 @@ describe("POST /video/process", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/process", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					videoId: "test-id",
-					userId: "user-id",
-					videoUrl: "https://example.com/video.mp4",
-					outputPresignedUrl: "https://s3.example.com/output",
-				}),
+			videoPostRequest("/video/process", {
+				videoId: "test-id",
+				userId: "user-id",
+				videoUrl: "https://example.com/video.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
 			}),
 		);
 
@@ -454,15 +450,11 @@ describe("POST /video/process", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/process", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					videoId: "test-id",
-					userId: "user-id",
-					videoUrl: "https://example.com/video.mp4",
-					outputPresignedUrl: "https://s3.example.com/output",
-				}),
+			videoPostRequest("/video/process", {
+				videoId: "test-id",
+				userId: "user-id",
+				videoUrl: "https://example.com/video.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
 			}),
 		);
 
@@ -562,9 +554,7 @@ describe("POST /video/process/:jobId/cancel", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/process/nonexistent-job/cancel", {
-				method: "POST",
-			}),
+			videoPostRequest("/video/process/nonexistent-job/cancel", {}),
 		);
 
 		expect(response.status).toBe(404);
@@ -599,9 +589,7 @@ describe("POST /video/process/:jobId/cancel", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/process/test-job-id/cancel", {
-				method: "POST",
-			}),
+			videoPostRequest("/video/process/test-job-id/cancel", {}),
 		);
 
 		expect(response.status).toBe(400);
@@ -644,9 +632,7 @@ describe("POST /video/process/:jobId/cancel", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/process/test-job-id/cancel", {
-				method: "POST",
-			}),
+			videoPostRequest("/video/process/test-job-id/cancel", {}),
 		);
 
 		expect(response.status).toBe(200);
@@ -669,9 +655,7 @@ describe("POST /video/cleanup", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/video/cleanup", {
-				method: "POST",
-			}),
+			videoPostRequest("/video/cleanup", {}),
 		);
 
 		expect(response.status).toBe(200);

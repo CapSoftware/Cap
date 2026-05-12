@@ -21,20 +21,26 @@ impl sc::stream::OutputImpl for CapturerCallbacks {
         sample_buf: &mut cm::SampleBuf,
         kind: sc::OutputType,
     ) {
-        if let Some(cb) = &mut self.inner_mut().did_output_sample_buf_cb {
-            let sample_buf = sample_buf.retained();
-            let frame = match kind {
-                sc::OutputType::Screen => {
-                    if sample_buf.image_buf().is_none() {
-                        return;
-                    }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(cb) = &mut self.inner_mut().did_output_sample_buf_cb {
+                let sample_buf = sample_buf.retained();
+                let frame = match kind {
+                    sc::OutputType::Screen => {
+                        if sample_buf.image_buf().is_none() {
+                            return;
+                        }
 
-                    Frame::Screen(VideoFrame { sample_buf })
-                }
-                sc::OutputType::Audio => Frame::Audio(AudioFrame { sample_buf }),
-                sc::OutputType::Mic => Frame::Mic(AudioFrame { sample_buf }),
-            };
-            (cb)(frame);
+                        Frame::Screen(VideoFrame { sample_buf })
+                    }
+                    sc::OutputType::Audio => Frame::Audio(AudioFrame { sample_buf }),
+                    sc::OutputType::Mic => Frame::Mic(AudioFrame { sample_buf }),
+                };
+                (cb)(frame);
+            }
+        }));
+
+        if result.is_err() {
+            tracing::warn!("Suppressed panic in ScreenCaptureKit output callback");
         }
     }
 }
@@ -49,8 +55,14 @@ impl sc::stream::DelegateImpl for CapturerCallbacks {
         stream: &sc::Stream,
         error: &ns::Error,
     ) {
-        if let Some(cb) = &mut self.inner_mut().did_stop_with_err_cb {
-            (cb)(stream, error)
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(cb) = &mut self.inner_mut().did_stop_with_err_cb {
+                (cb)(stream, error)
+            }
+        }));
+
+        if result.is_err() {
+            tracing::warn!("Suppressed panic in ScreenCaptureKit stop callback");
         }
     }
 }

@@ -15,7 +15,10 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						"DatabaseError",
 						() => new InternalError({ type: "database" }),
 					),
-					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
+					Effect.catchTag(
+						"StorageError",
+						() => new InternalError({ type: "unknown" }),
+					),
 				),
 
 			VideoDuplicate: (videoId) =>
@@ -24,7 +27,10 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						"DatabaseError",
 						() => new InternalError({ type: "database" }),
 					),
-					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
+					Effect.catchTag(
+						"StorageError",
+						() => new InternalError({ type: "unknown" }),
+					),
 				),
 
 			GetUploadProgress: (videoId) =>
@@ -46,7 +52,10 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						"DatabaseError",
 						() => new InternalError({ type: "database" }),
 					),
-					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
+					Effect.catchTag(
+						"StorageError",
+						() => new InternalError({ type: "unknown" }),
+					),
 				),
 
 			VideoUploadProgressUpdate: (input) =>
@@ -70,7 +79,10 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						"UnknownException",
 						() => new InternalError({ type: "unknown" }),
 					),
-					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
+					Effect.catchTag(
+						"StorageError",
+						() => new InternalError({ type: "unknown" }),
+					),
 				),
 
 			VideosGetThumbnails: (videoIds) =>
@@ -82,8 +94,8 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 								() => new InternalError({ type: "database" }),
 							),
 							Effect.catchTag(
-								"S3Error",
-								() => new InternalError({ type: "s3" }),
+								"StorageError",
+								() => new InternalError({ type: "unknown" }),
 							),
 							Effect.matchEffect({
 								onSuccess: (v) => Effect.succeed(Exit.succeed(v)),

@@ -4,17 +4,24 @@ import clsx from "clsx";
 import { Effect } from "effect";
 import moment from "moment";
 import Image from "next/image";
-import { memo, useEffect, useRef } from "react";
+import type { CSSProperties } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 
 export type ImageLoadingStatus = "loading" | "success" | "error";
 
+type PreviewState = {
+	videoId: Video.VideoId;
+	hovered: boolean;
+	status: ImageLoadingStatus;
+};
+
 interface VideoThumbnailProps {
 	videoId: Video.VideoId;
 	alt: string;
 	imageClass?: string;
-	objectFit?: string;
+	objectFit?: CSSProperties["objectFit"];
 	containerClass?: string;
 	videoDuration?: number;
 	imageStatus: ImageLoadingStatus;
@@ -49,6 +56,10 @@ function generateRandomGrayScaleColor() {
 	return `rgb(${grayScaleValue}, ${grayScaleValue}, ${grayScaleValue})`;
 }
 
+function getPreviewGifSrc(videoId: Video.VideoId) {
+	return `/api/video/preview?videoId=${encodeURIComponent(videoId)}&fallback=none`;
+}
+
 export const useThumnailQuery = (
 	videoId: Video.VideoId,
 	enabled: boolean = true,
@@ -78,7 +89,15 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		hasActiveUpload = false,
 	}) => {
 		const thumbnailUrl = useThumnailQuery(videoId, !hasActiveUpload);
+		const containerRef = useRef<HTMLDivElement>(null);
 		const imageRef = useRef<HTMLImageElement>(null);
+		const latestVideoId = useRef(videoId);
+		const [previewState, setPreviewState] = useState<PreviewState>(() => ({
+			videoId,
+			hovered: false,
+			status: "loading",
+		}));
+		latestVideoId.current = videoId;
 
 		const randomGradient = `linear-gradient(to right, ${generateRandomGrayScaleColor()}, ${generateRandomGrayScaleColor()})`;
 
@@ -88,13 +107,52 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 			}
 		}, [setImageStatus]);
 
+		useEffect(() => {
+			const element = containerRef.current;
+			if (!element) return;
+
+			const setHovered = (hovered: boolean) => {
+				const currentVideoId = latestVideoId.current;
+				setPreviewState((state) => ({
+					videoId: currentVideoId,
+					hovered,
+					status: state.videoId === currentVideoId ? state.status : "loading",
+				}));
+			};
+
+			const handleMouseEnter = () => setHovered(true);
+			const handleMouseLeave = () => setHovered(false);
+
+			element.addEventListener("mouseenter", handleMouseEnter);
+			element.addEventListener("mouseleave", handleMouseLeave);
+
+			return () => {
+				element.removeEventListener("mouseenter", handleMouseEnter);
+				element.removeEventListener("mouseleave", handleMouseLeave);
+			};
+		}, []);
+
 		const showError =
 			!hasActiveUpload && (thumbnailUrl.isError || imageStatus === "error");
 		const showLoading =
 			hasActiveUpload || thumbnailUrl.isPending || imageStatus === "loading";
+		const previewStatus =
+			previewState.videoId === videoId ? previewState.status : "loading";
+		const isPreviewHovered =
+			previewState.videoId === videoId && previewState.hovered;
+		const showPreview =
+			isPreviewHovered && !hasActiveUpload && previewStatus !== "error";
+		const setCurrentPreviewStatus = (status: ImageLoadingStatus) => {
+			setPreviewState((state) => ({
+				videoId,
+				hovered: state.videoId === videoId ? state.hovered : false,
+				status,
+			}));
+		};
 
 		return (
 			<div
+				ref={containerRef}
 				className={clsx(
 					`overflow-hidden relative mx-auto w-full h-full bg-black rounded-t-xl border-b border-gray-3 aspect-video`,
 					containerClass,
@@ -122,7 +180,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 						sizes="(max-width: 768px) 100vw, 33vw"
 						alt={alt}
 						key={videoId}
-						style={{ objectFit: objectFit as any }}
+						style={{ objectFit }}
 						className={clsx(
 							"w-full h-full rounded-t-xl",
 							imageClass,
@@ -130,6 +188,24 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 						)}
 						onLoad={() => setImageStatus("success")}
 						onError={() => setImageStatus("error")}
+					/>
+				)}
+				{showPreview && (
+					<Image
+						key={`${videoId}-preview`}
+						src={getPreviewGifSrc(videoId)}
+						alt=""
+						aria-hidden="true"
+						unoptimized
+						fill={true}
+						loading="lazy"
+						sizes="(max-width: 768px) 100vw, 33vw"
+						className={clsx(
+							"object-cover absolute inset-0 z-20 w-full h-full rounded-t-xl transition-opacity duration-150",
+							previewStatus === "success" ? "opacity-100" : "opacity-0",
+						)}
+						onLoad={() => setCurrentPreviewStatus("success")}
+						onError={() => setCurrentPreviewStatus("error")}
 					/>
 				)}
 				{videoDuration && (

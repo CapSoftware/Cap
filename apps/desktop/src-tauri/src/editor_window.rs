@@ -148,12 +148,64 @@ impl PendingEditorInstances {
             });
         }
     }
+
+    pub async fn dispose_all(app: &AppHandle) {
+        let Some(pending) = app.try_state::<Self>() else {
+            return;
+        };
+
+        let pending = {
+            let mut instances = pending.0.write().await;
+            std::mem::take(&mut *instances)
+        };
+
+        let count = pending.len();
+        for (_, mut rx) in pending {
+            let result = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+                loop {
+                    let instance_to_dispose = {
+                        let borrowed = rx.borrow_and_update().clone();
+                        match borrowed {
+                            Some(Ok(instance)) => Some(instance),
+                            Some(Err(_)) => break,
+                            None => None,
+                        }
+                    };
+
+                    if let Some(instance) = instance_to_dispose {
+                        instance.dispose().await;
+                        break;
+                    }
+
+                    if rx.changed().await.is_err() {
+                        break;
+                    }
+                }
+            })
+            .await;
+
+            if result.is_err() {
+                tracing::warn!("Timed out disposing pending editor instance during app exit");
+            }
+        }
+
+        if count > 0 {
+            tracing::info!(count, "Disposed pending editor instances during app exit");
+        }
+    }
 }
 
 impl EditorInstance {
     pub async fn dispose(&self) {
         self.inner.dispose().await;
 
+        self.ws_shutdown_token.cancel();
+        self.app_handle.unlisten(self.render_frame_event_id);
+    }
+}
+
+impl Drop for EditorInstance {
+    fn drop(&mut self) {
         self.ws_shutdown_token.cancel();
         self.app_handle.unlisten(self.render_frame_event_id);
     }
@@ -344,6 +396,26 @@ impl EditorInstances {
         let mut instances = instances.0.write().await;
         if let Some(instance) = instances.remove(window.label()) {
             instance.dispose().await;
+        }
+    }
+
+    pub async fn dispose_all(app: &AppHandle) {
+        let Some(instances) = app.try_state::<EditorInstances>() else {
+            return;
+        };
+
+        let instances = {
+            let mut instances = instances.0.write().await;
+            std::mem::take(&mut *instances)
+        };
+
+        let count = instances.len();
+        for (_, instance) in instances {
+            instance.dispose().await;
+        }
+
+        if count > 0 {
+            tracing::info!(count, "Disposed editor instances during app exit");
         }
     }
 }

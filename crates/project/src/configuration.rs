@@ -296,6 +296,35 @@ pub struct CameraPosition {
     pub y: CameraYPosition,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum BackgroundBlurMode {
+    #[default]
+    Off,
+    Light,
+    Heavy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BackgroundBlurConfig {
+    pub mode: BackgroundBlurMode,
+}
+
+impl BackgroundBlurConfig {
+    pub fn is_active(&self) -> bool {
+        self.mode != BackgroundBlurMode::Off
+    }
+}
+
+impl Default for BackgroundBlurConfig {
+    fn default() -> Self {
+        Self {
+            mode: BackgroundBlurMode::Off,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Camera {
@@ -314,6 +343,8 @@ pub struct Camera {
     pub rounding_type: CornerStyle,
     #[serde(default = "Camera::default_scale_during_zoom")]
     pub scale_during_zoom: f32,
+    #[serde(default)]
+    pub background_blur: BackgroundBlurConfig,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Default)]
@@ -356,6 +387,7 @@ impl Default for Camera {
             shape: CameraShape::Square,
             rounding_type: CornerStyle::default(),
             scale_during_zoom: Self::default_scale_during_zoom(),
+            background_blur: BackgroundBlurConfig::default(),
         }
     }
 }

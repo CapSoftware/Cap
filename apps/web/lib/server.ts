@@ -13,6 +13,7 @@ import {
 	S3Buckets,
 	Spaces,
 	SpacesPolicy,
+	Storage,
 	Tinybird,
 	Users,
 	Videos,
@@ -111,6 +112,7 @@ const WorkflowRpcLive = Layer.unwrapScoped(
 
 export const Dependencies = Layer.mergeAll(
 	S3Buckets.Default,
+	Storage.Default,
 	Videos.Default,
 	VideosPolicy.Default,
 	VideosRepo.Default,

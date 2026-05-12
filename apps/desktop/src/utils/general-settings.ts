@@ -3,6 +3,8 @@ import type { GeneralSettingsStore as TauriGeneralSettingsStore } from "~/utils/
 export type GeneralSettingsStore = TauriGeneralSettingsStore & {
 	captureKeyboardEvents?: boolean;
 	transcriptionHints?: string[];
+	enableTelemetry?: boolean;
+	outOfProcessMuxer?: boolean;
 };
 
 export const DEFAULT_TRANSCRIPTION_HINTS = [
@@ -27,6 +29,7 @@ export function createDefaultGeneralSettings(): GeneralSettingsStore {
 		crashRecoveryRecording: true,
 		maxFps: 60,
 		transcriptionHints: [...DEFAULT_TRANSCRIPTION_HINTS],
+		enableTelemetry: true,
 	};
 }
 
