@@ -98,8 +98,9 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
-            _ => Err(ActionParseFromUrlError::Invalid),
+            Some("action") => Ok(()),
+            Some(_) => Err(ActionParseFromUrlError::NotAction),
+            None => Err(ActionParseFromUrlError::Invalid),
         }?;
 
         let params = url
@@ -211,6 +212,11 @@ mod tests {
             mic_label: Some("Built-in Microphone".to_string()),
         }))
         .unwrap();
+        let clear_microphone =
+            DeepLinkAction::try_from(&action_url(&DeepLinkAction::SetMicrophone {
+                mic_label: None,
+            }))
+            .unwrap();
         let camera = DeepLinkAction::try_from(&action_url(&DeepLinkAction::SetCamera {
             camera: None,
         }))
@@ -221,6 +227,10 @@ mod tests {
             DeepLinkAction::SetMicrophone {
                 mic_label: Some(label)
             } if label == "Built-in Microphone"
+        ));
+        assert!(matches!(
+            clear_microphone,
+            DeepLinkAction::SetMicrophone { mic_label: None }
         ));
         assert!(matches!(camera, DeepLinkAction::SetCamera { camera: None }));
     }
