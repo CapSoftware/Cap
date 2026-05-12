@@ -6,7 +6,6 @@ import IconLucideCircle from "~icons/lucide/circle";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
 import IconLucideLayers from "~icons/lucide/layers";
 import IconLucideMousePointer2 from "~icons/lucide/mouse-pointer-2";
-import IconLucideScanText from "~icons/lucide/scan-text";
 import IconLucideSquare from "~icons/lucide/square";
 import IconLucideType from "~icons/lucide/type";
 import {
@@ -65,7 +64,6 @@ export function AnnotationTools() {
 				shortcut="C"
 			/>
 			<ToolButton tool="text" icon={IconLucideType} label="Text" shortcut="T" />
-			<ToolButton tool="ocr" icon={IconLucideScanText} label="Copy Text" />
 		</div>
 	);
 }
