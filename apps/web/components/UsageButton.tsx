@@ -1,12 +1,13 @@
 import { Button } from "@cap/ui";
 import { faCheck } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
+import { Link2 } from "lucide-react";
 import Link from "next/link";
 import { memo } from "react";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { Tooltip } from "@/components/Tooltip";
+import { formatUtcMonthDayOrdinal } from "@/lib/utils";
 
 export const UsageButton = memo(
 	({
@@ -16,7 +17,8 @@ export const UsageButton = memo(
 		subscribed: boolean;
 		toggleMobileNav?: () => void;
 	}) => {
-		const { sidebarCollapsed } = useDashboardContext();
+		const { setUpgradeModalOpen, shareableLinkUsage, sidebarCollapsed } =
+			useDashboardContext();
 		if (subscribed) {
 			return (
 				<Tooltip position="right" content="Cap Pro">
@@ -48,72 +50,72 @@ export const UsageButton = memo(
 			);
 		}
 
-		return (
-			<Tooltip
-				disable={!sidebarCollapsed}
-				position="right"
-				content="Upgrade to Pro"
-			>
-				<ProRiveButton toggleMobileNav={toggleMobileNav} />
-			</Tooltip>
+		const percent = Math.min(
+			100,
+			(shareableLinkUsage.used / shareableLinkUsage.limit) * 100,
 		);
-	},
-);
+		const resetDate = formatUtcMonthDayOrdinal(shareableLinkUsage.resetAt);
+		const openUpgrade = () => {
+			setUpgradeModalOpen(true);
+			toggleMobileNav?.();
+		};
 
-const ProRiveButton = memo(
-	({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
-		const { setUpgradeModalOpen, sidebarCollapsed } = useDashboardContext();
-
-		const { rive, RiveComponent: ProRive } = useRive({
-			src: "/rive/pricing.riv",
-			artboard: "pro",
-			animations: "idle",
-			autoplay: false,
-			layout: new Layout({
-				fit: Fit.Cover,
-			}),
-		});
+		if (sidebarCollapsed) {
+			return (
+				<Tooltip
+					position="right"
+					content={`${shareableLinkUsage.used}/${shareableLinkUsage.limit} share links used`}
+				>
+					<Button
+						type="button"
+						size="lg"
+						variant="white"
+						onClick={openUpgrade}
+						className="p-0 mx-auto w-10 h-10 min-w-[unset] rounded-full"
+					>
+						<span className="flex flex-col items-center leading-none">
+							<Link2 className="size-4 text-gray-12" />
+							<span className="text-[10px] text-gray-11">
+								{shareableLinkUsage.used}/{shareableLinkUsage.limit}
+							</span>
+						</span>
+					</Button>
+				</Tooltip>
+			);
+		}
 
 		return (
-			<Button
-				variant="blue"
-				size="lg"
-				onMouseEnter={() => {
-					if (rive) {
-						rive.stop();
-						rive.play("items-coming-out");
-					}
-				}}
-				onMouseLeave={() => {
-					if (rive) {
-						rive.stop();
-						rive.play("items-coming-in");
-					}
-				}}
-				className={clsx(
-					"flex overflow-visible relative gap-3 justify-evenly items-center cursor-pointer",
-					"mx-auto",
-					sidebarCollapsed ? "py-0 h-10 min-w-[unset]" : "py-3 w-full h-fit",
-				)}
-				onClick={() => {
-					setUpgradeModalOpen(true);
-					toggleMobileNav?.();
-				}}
-			>
-				<ProRive
-					className={clsx(
-						sidebarCollapsed
-							? "bottom-[4px] h-10 absolute w-[68px]"
-							: "absolute w-[90px] h-[66px] bottom-[-3px] left-[-20px]",
-						"scale-[0.8]",
-					)}
-				/>
-				{!sidebarCollapsed ? (
-					<p className="relative left-8 text-center text-white truncate">
-						Upgrade to Pro
+			<div className="mx-auto w-full rounded-lg border border-gray-5 bg-gray-3 p-3">
+				<div className="flex items-center justify-between gap-2">
+					<div className="flex items-center gap-2 min-w-0">
+						<Link2 className="size-4 shrink-0 text-gray-12" />
+						<p className="truncate text-sm font-medium text-gray-12">
+							Share links
+						</p>
+					</div>
+					<p className="shrink-0 text-sm font-medium text-gray-12">
+						{shareableLinkUsage.used}/{shareableLinkUsage.limit}
 					</p>
-				) : null}
-			</Button>
+				</div>
+				<div className="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-6">
+					<div
+						className="h-full rounded-full bg-blue-9"
+						style={{ width: `${percent}%` }}
+					/>
+				</div>
+				<div className="mt-2 flex items-center justify-between gap-2">
+					<p className="truncate text-xs text-gray-10">
+						{shareableLinkUsage.remaining} left - 5 min max - resets {resetDate}
+					</p>
+					<button
+						type="button"
+						onClick={openUpgrade}
+						className="shrink-0 text-xs font-medium text-blue-11 hover:text-blue-12"
+					>
+						Upgrade
+					</button>
+				</div>
+			</div>
 		);
 	},
 );

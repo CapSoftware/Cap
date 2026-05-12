@@ -2,7 +2,10 @@
 
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
-import type { ViewerSettingKey } from "@cap/web-backend";
+import type {
+	ShareableLinkUsageSnapshot,
+	ViewerSettingKey,
+} from "@cap/web-backend";
 import {
 	faChartSimple,
 	faChevronDown,
@@ -22,6 +25,7 @@ import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { formatUtcMonthDayOrdinal } from "@/lib/utils";
 import { usePublicEnv } from "@/utils/public-env";
 import type { VideoData } from "../types";
 
@@ -32,6 +36,7 @@ export const ShareHeader = ({
 	sharedOrganizations = [],
 	sharedSpaces = [],
 	spacesData = null,
+	shareableLinkUsage = null,
 }: {
 	data: VideoData;
 	customDomain?: string | null;
@@ -55,6 +60,7 @@ export const ShareHeader = ({
 		hasPassword?: boolean;
 	}[];
 	spacesData?: Spaces[] | null;
+	shareableLinkUsage?: ShareableLinkUsageSnapshot | null;
 }) => {
 	const user = useCurrentUser();
 	const { push, refresh } = useRouter();
@@ -234,21 +240,45 @@ export const ShareHeader = ({
 	};
 
 	const userIsOwnerAndNotPro = user?.id === data.owner.id && !data.owner.isPro;
+	const shareableLinkUsagePercent = shareableLinkUsage
+		? Math.min(100, (shareableLinkUsage.used / shareableLinkUsage.limit) * 100)
+		: 0;
+	const shareableLinkResetDate = shareableLinkUsage
+		? formatUtcMonthDayOrdinal(shareableLinkUsage.resetAt)
+		: null;
 
 	return (
 		<>
 			{userIsOwnerAndNotPro && (
 				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
-					<p className="text-center text-gray-12">
-						Shareable links are limited to 5 mins on the free plan.
-					</p>
+					<div className="min-w-[220px]">
+						<p className="text-center text-sm font-medium text-gray-12 sm:text-left">
+							{shareableLinkUsage
+								? `${shareableLinkUsage.used}/${shareableLinkUsage.limit} shareable links used this month`
+								: "Shareable links are limited on the free plan"}
+						</p>
+						<p className="text-center text-xs text-gray-10 sm:text-left">
+							5 min max
+							{shareableLinkUsage && shareableLinkResetDate
+								? ` - ${shareableLinkUsage.remaining} left - resets ${shareableLinkResetDate}`
+								: ""}
+						</p>
+						{shareableLinkUsage && (
+							<div className="mt-1 h-1.5 overflow-hidden rounded-full bg-gray-6">
+								<div
+									className="h-full rounded-full bg-blue-9"
+									style={{ width: `${shareableLinkUsagePercent}%` }}
+								/>
+							</div>
+						)}
+					</div>
 					<Button
 						type="button"
 						onClick={() => setUpgradeModalOpen(true)}
 						size="sm"
 						variant="blue"
 					>
-						Upgrade To Cap Pro
+						Upgrade to Cap Pro
 					</Button>
 				</div>
 			)}

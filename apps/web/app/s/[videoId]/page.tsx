@@ -17,6 +17,7 @@ import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
 	Database,
+	getShareableLinkUsage,
 	ImageUploads,
 	provideOptionalAuth,
 	resolveEffectiveVideoRules,
@@ -650,17 +651,23 @@ async function AuthorizedContent({
 	}).pipe(EffectRuntime.runPromise);
 
 	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
+	const shareableLinkUsagePromise =
+		user?.id === video.owner.id && !userIsPro(video.owner)
+			? getShareableLinkUsage(db(), video.owner.id)
+			: Promise.resolve(null);
 
 	const [
 		membersList,
 		userOrganizations,
 		sharedOrganizations,
 		{ customDomain, domainVerified },
+		shareableLinkUsage,
 	] = await Promise.all([
 		membersListPromise,
 		userOrganizationsPromise,
 		sharedOrganizationsPromise,
 		customDomainPromise,
+		shareableLinkUsagePromise,
 	]);
 
 	const videoWithOrganizationInfo = await Effect.gen(function* () {
@@ -709,6 +716,7 @@ async function AuthorizedContent({
 					sharedSpaces={sharedSpaces}
 					userOrganizations={userOrganizations}
 					spacesData={spacesData}
+					shareableLinkUsage={shareableLinkUsage}
 				/>
 
 				<Share

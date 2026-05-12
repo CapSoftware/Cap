@@ -723,7 +723,6 @@ pub enum CapWindowId {
     CaptureArea,
     Camera,
     RecordingControls,
-    Upgrade,
     ModeSelect,
     Debug,
     ScreenshotEditor { id: u32 },
@@ -742,7 +741,6 @@ impl FromStr for CapWindowId {
             // legacy identifier
             "in-progress-recording" => Self::RecordingControls,
             "recordings-overlay" => Self::RecordingsOverlay,
-            "upgrade" => Self::Upgrade,
             "mode-select" => Self::ModeSelect,
             "debug" => Self::Debug,
             "onboarding" => Self::Onboarding,
@@ -790,7 +788,6 @@ impl std::fmt::Display for CapWindowId {
             }
             Self::RecordingControls => write!(f, "in-progress-recording"), // legacy identifier
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
-            Self::Upgrade => write!(f, "upgrade"),
             Self::ModeSelect => write!(f, "mode-select"),
             Self::Editor { id } => write!(f, "editor-{id}"),
             Self::Debug => write!(f, "debug"),
@@ -830,7 +827,6 @@ impl CapWindowId {
                 | Self::Editor { .. }
                 | Self::ScreenshotEditor { .. }
                 | Self::Settings
-                | Self::Upgrade
                 | Self::ModeSelect
                 | Self::Onboarding
         )
@@ -884,7 +880,6 @@ impl CapWindowId {
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
             Self::Settings => (800.0, 580.0),
             Self::Camera => (200.0, 200.0),
-            Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (580.0, 340.0),
             Self::Onboarding => (860.0, 690.0),
             _ => return None,
@@ -922,7 +917,6 @@ pub enum ShowCapWindow {
         #[serde(default)]
         capture_target: Option<ScreenCaptureTarget>,
     },
-    Upgrade,
     ModeSelect,
     ScreenshotEditor {
         path: PathBuf,
@@ -1743,41 +1737,6 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::Upgrade => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
-                }
-
-                let window = self
-                    .window_builder(app, "/upgrade")
-                    .inner_size(950.0, 850.0)
-                    .min_inner_size(950.0, 850.0)
-                    .resizable(false)
-                    .focused(true)
-                    .always_on_top(true)
-                    .maximized(false)
-                    .shadow(true)
-                    .build()?;
-
-                let (pos_x, pos_y) = cursor_monitor.center_position(950.0, 850.0);
-                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
-
-                #[cfg(windows)]
-                {
-                    use tauri::LogicalSize;
-                    if let Err(e) = window.set_size(LogicalSize::new(950.0, 850.0)) {
-                        warn!("Failed to set Upgrade window size on Windows: {}", e);
-                    }
-                    if let Err(e) = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y)) {
-                        warn!("Failed to position Upgrade window on Windows: {}", e);
-                    }
-                }
-
-                window.show().ok();
-                window.set_focus().ok();
-
-                window
-            }
             Self::ModeSelect => {
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.hide();
@@ -2566,7 +2525,6 @@ impl ShowCapWindow {
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
             ShowCapWindow::Camera { .. } => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
-            ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
             ShowCapWindow::Onboarding => CapWindowId::Onboarding,
             ShowCapWindow::ScreenshotEditor { path } => {

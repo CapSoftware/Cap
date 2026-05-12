@@ -1,4 +1,11 @@
+import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { userIsPro } from "@cap/utils";
+import {
+	getShareableLinkPeriod,
+	getShareableLinkUsage,
+	toShareableLinkUsageSnapshot,
+} from "@cap/web-backend";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
@@ -37,15 +44,26 @@ export default async function DashboardLayout({
 	let organizationSettings: OrganizationSettings | null = null;
 	let spacesData: Spaces[] = [];
 	let anyNewNotifications = false;
+	const emptyShareableLinkUsage = toShareableLinkUsageSnapshot(
+		0,
+		getShareableLinkPeriod().resetAt,
+	);
+	let shareableLinkUsage = emptyShareableLinkUsage;
 	let userPreferences: UserPreferences;
 	try {
-		const dashboardData = await getDashboardData(user);
+		const [dashboardData, usage] = await Promise.all([
+			getDashboardData(user),
+			userIsPro(user)
+				? Promise.resolve(emptyShareableLinkUsage)
+				: getShareableLinkUsage(db(), user.id),
+		]);
 		organizationSelect = dashboardData.organizationSelect;
 		userCapsCount = dashboardData.userCapsCount;
 		organizationSettings = dashboardData.organizationSettings;
 		userPreferences = dashboardData.userPreferences?.preferences || null;
 		spacesData = dashboardData.spacesData;
 		anyNewNotifications = dashboardData.anyNewNotifications;
+		shareableLinkUsage = usage;
 	} catch (error) {
 		console.error("Failed to load dashboard data", error);
 		organizationSelect = [];
@@ -53,6 +71,7 @@ export default async function DashboardLayout({
 		organizationSettings = null;
 		spacesData = [];
 		anyNewNotifications = false;
+		shareableLinkUsage = emptyShareableLinkUsage;
 		userPreferences = null;
 	}
 
@@ -82,6 +101,7 @@ export default async function DashboardLayout({
 					initialSidebarCollapsed={sidebar === "true"}
 					anyNewNotifications={anyNewNotifications}
 					userPreferences={userPreferences}
+					shareableLinkUsage={shareableLinkUsage}
 					referClicked={referClicked === "true"}
 				>
 					<div className="bg-gray-2 dashboard-grid">

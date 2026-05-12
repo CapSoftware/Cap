@@ -1,7 +1,12 @@
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import {
+	assertShareableLinkDurationAllowed,
+	isShareableLinkUsageLimitError,
+	markShareableLinkUploadRejected,
+	Storage,
+} from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError } from "workflow";
@@ -408,6 +413,34 @@ async function saveMetadataAndComplete(
 	"use step";
 
 	const duration = getValidDuration(metadata.duration);
+
+	if (duration !== undefined) {
+		const [video] = await db()
+			.select({
+				ownerId: videos.ownerId,
+				isScreenshot: videos.isScreenshot,
+			})
+			.from(videos)
+			.where(eq(videos.id, videoId as Video.VideoId));
+
+		if (video) {
+			try {
+				await assertShareableLinkDurationAllowed({
+					client: db(),
+					ownerId: video.ownerId,
+					isScreenshot: video.isScreenshot,
+					durationSeconds: duration,
+				});
+			} catch (error) {
+				if (isShareableLinkUsageLimitError(error)) {
+					await markShareableLinkUploadRejected(db(), videoId as Video.VideoId);
+					throw new Error("upgrade_required", { cause: error });
+				}
+
+				throw error;
+			}
+		}
+	}
 
 	await db()
 		.update(videos)

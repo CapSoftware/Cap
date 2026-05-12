@@ -58,6 +58,7 @@ export const ImportVideo = Workflow.make({
 	error: Schema.Union(
 		DatabaseError,
 		Video.NotFoundError,
+		Video.ShareableLinkUsageLimitError,
 		S3Error,
 		ExternalLoomError,
 		VideoInvalidError,
@@ -80,6 +81,7 @@ export class LoomHttpApi extends HttpApiGroup.make("loom")
 			.addError(InternalServerError)
 			.addError(PolicyDeniedError)
 			.addError(Video.NotFoundError)
+			.addError(Video.ShareableLinkUsageLimitError)
 			.addError(ExternalLoomError),
 	)
 	.middleware(HttpAuthMiddleware)

@@ -169,6 +169,13 @@
 			"when": 1778434170430,
 			"tag": "0023_misty_luckman",
 			"breakpoints": true
+		},
+		{
+			"idx": 24,
+			"version": "5",
+			"when": 1778523732397,
+			"tag": "0024_late_the_spike",
+			"breakpoints": true
 		}
 	]
 }

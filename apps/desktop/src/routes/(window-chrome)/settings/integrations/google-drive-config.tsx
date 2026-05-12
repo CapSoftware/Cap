@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/solid-query";
 import { createResource, createSignal, Show, Suspense } from "solid-js";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
+import { openUpgradePage } from "~/utils/upgrade";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 import { IntegrationConfigHeader } from "./config-header";
 
@@ -188,7 +189,7 @@ export default function GoogleDriveConfigPage() {
 			});
 
 			if (response.status === 403) {
-				await commands.showWindow("Upgrade");
+				await openUpgradePage();
 				return null;
 			}
 

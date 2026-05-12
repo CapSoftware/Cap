@@ -42,7 +42,7 @@ mod window_position_persistence;
 mod windows;
 
 use audio::AppSounds;
-use auth::{AuthStore, Plan};
+use auth::{AuthStore, Plan, ShareableLinkUsage};
 use camera::{CameraPreviewManager, CameraPreviewState};
 use cap_editor::{EditorInstance, EditorState};
 use cap_project::{
@@ -2951,9 +2951,15 @@ async fn upload_exported_video(
     }
     .await
     {
-        Ok(data) => data,
+        Ok(data) => {
+            AuthStore::update_auth_plan(&app).await.ok();
+            data
+        }
         Err(AuthedApiError::InvalidAuthentication) => return Ok(UploadResult::NotAuthenticated),
-        Err(AuthedApiError::UpgradeRequired) => return Ok(UploadResult::UpgradeRequired),
+        Err(AuthedApiError::UpgradeRequired) => {
+            AuthStore::update_auth_plan(&app).await.ok();
+            return Ok(UploadResult::UpgradeRequired);
+        }
         Err(err) => return Err(err.to_string()),
     };
 
@@ -2999,7 +3005,10 @@ async fn upload_exported_video(
             NotificationType::ShareableLinkCopied.send(&app);
             Ok(UploadResult::Success(uploaded_video.link))
         }
-        Err(AuthedApiError::UpgradeRequired) => Ok(UploadResult::UpgradeRequired),
+        Err(AuthedApiError::UpgradeRequired) => {
+            AuthStore::update_auth_plan(&app).await.ok();
+            Ok(UploadResult::UpgradeRequired)
+        }
         Err(e) => {
             error!("Failed to upload video: {e}");
 
@@ -3031,7 +3040,7 @@ async fn upload_screenshot(
     };
 
     if !auth.is_upgraded() {
-        ShowCapWindow::Upgrade.show(&app).await.ok();
+        open_upgrade_page(app.clone())?;
         return Ok(UploadResult::UpgradeRequired);
     }
 
@@ -3334,6 +3343,10 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
         .get("upgraded")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let shareable_link_usage = plan_data
+        .get("shareableLinkUsage")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ShareableLinkUsage>(value).ok());
     println!("Pro status: {is_pro}");
     let updated_auth = AuthStore {
         secret: auth.secret,
@@ -3342,6 +3355,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
             upgraded: is_pro,
             manual: auth.plan.map(|p| p.manual).unwrap_or(false),
             last_checked: chrono::Utc::now().timestamp() as i32,
+            shareable_link_usage,
         }),
         organizations: auth.organizations,
         organizations_updated_at: auth.organizations_updated_at,
@@ -3362,6 +3376,34 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
         return Ok(());
     }
 
+    app.shell()
+        .open(&url, None)
+        .map_err(|e| format!("Failed to open URL: {e}"))?;
+    if let Some(main) = CapWindowId::Main.get(&app) {
+        let _ = main.hide();
+    }
+    Ok(())
+}
+
+fn open_upgrade_page(app: tauri::AppHandle) -> Result<(), String> {
+    let server_url = GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .map(|settings| settings.server_url)
+        .unwrap_or_else(|| {
+            std::option_env!("VITE_SERVER_URL")
+                .unwrap_or("https://cap.so")
+                .to_string()
+        });
+    let server_url = reqwest::Url::parse(&server_url)
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https"))
+        .map(|url| url.to_string())
+        .unwrap_or_else(|| "https://cap.so".to_string());
+    let url = format!(
+        "{}/pricing?utm_source=desktop&utm_campaign=upgrade",
+        server_url.trim_end_matches('/')
+    );
     app.shell()
         .open(&url, None)
         .map_err(|e| format!("Failed to open URL: {e}"))?;
@@ -4147,7 +4189,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::RecordingControls.label().as_str(),
-                    CapWindowId::Upgrade.label().as_str(),
                     "editor",
                     "screenshot-editor",
                 ])
@@ -4644,7 +4685,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 #[cfg(target_os = "macos")]
                                 return;
                             }
-                            CapWindowId::Upgrade | CapWindowId::ModeSelect => {
+                            CapWindowId::ModeSelect => {
                                 for (label, window) in app.webview_windows() {
                                     if let Ok(id) = CapWindowId::from_str(&label) {
                                         match id {
@@ -4710,16 +4751,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 #[cfg(target_os = "macos")]
                 WindowEvent::Focused(focused) => {
                     let window_id = CapWindowId::from_str(label);
-
-                    if matches!(window_id, Ok(CapWindowId::Upgrade)) {
-                        for (label, window) in app.webview_windows() {
-                            if let Ok(id) = CapWindowId::from_str(&label)
-                                && matches!(id, CapWindowId::TargetSelectOverlay { .. })
-                            {
-                                hide_overlay(&window);
-                            }
-                        }
-                    }
 
                     if *focused
                         && let Ok(window_id) = window_id

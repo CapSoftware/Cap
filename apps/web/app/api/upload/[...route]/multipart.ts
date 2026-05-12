@@ -1,9 +1,13 @@
-import { updateIfDefined } from "@cap/database";
+import { db as getDb, updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import {
+	assertShareableLinkDurationAllowed,
 	Database,
+	getShareableLinkLimitResponse,
+	isShareableLinkUsageLimitError,
 	makeCurrentUserLayer,
+	markShareableLinkUploadRejected,
 	provideOptionalAuth,
 	Storage,
 	VideosPolicy,
@@ -328,6 +332,29 @@ app.post(
 			}
 			const [video] = maybeVideo.value;
 
+			yield* Effect.tryPromise({
+				try: () =>
+					assertShareableLinkDurationAllowed({
+						client: getDb(),
+						ownerId: user.id,
+						isScreenshot: video.isScreenshot,
+						durationSeconds: body.durationInSecs,
+					}),
+				catch: (cause) => cause,
+			}).pipe(
+				Effect.catchAll((error) =>
+					Effect.gen(function* () {
+						if (isShareableLinkUsageLimitError(error)) {
+							yield* Effect.promise(() =>
+								markShareableLinkUploadRejected(getDb(), videoId),
+							);
+						}
+
+						return yield* Effect.fail(error);
+					}),
+				),
+			);
+
 			return yield* Effect.gen(function* () {
 				const [bucket] = yield* Storage.getAccessForVideo(video);
 
@@ -621,6 +648,12 @@ app.post(
 				);
 			}).pipe(
 				Effect.catchAll((error) => {
+					if (isShareableLinkUsageLimitError(error)) {
+						return Effect.succeed(
+							c.json(getShareableLinkLimitResponse(error), 403) as Response,
+						);
+					}
+
 					console.error("Multipart upload failed:", error);
 
 					return Effect.succeed(
@@ -630,7 +663,7 @@ app.post(
 								details: error instanceof Error ? error.message : String(error),
 							},
 							500,
-						),
+						) as Response,
 					);
 				}),
 			);

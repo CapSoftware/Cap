@@ -1,7 +1,13 @@
 import { db } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import {
+	assertShareableLinkDurationAllowed,
+	getShareableLinkLimitResponse,
+	isShareableLinkUsageLimitError,
+	markShareableLinkUploadRejected,
+	Storage,
+} from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq, notInArray } from "drizzle-orm";
@@ -108,6 +114,23 @@ export const app = new Hono().post(
 						new Error("No video segments found in manifest"),
 					);
 				}
+
+				const durationSeconds = manifest.video_segments.reduce<number>(
+					(total, segment) =>
+						total + Video.normalizeSegmentEntry(segment).duration,
+					0,
+				);
+
+				yield* Effect.tryPromise({
+					try: () =>
+						assertShareableLinkDurationAllowed({
+							client: db(),
+							ownerId: user.id,
+							isScreenshot: video.isScreenshot,
+							durationSeconds,
+						}),
+					catch: (cause) => cause,
+				});
 
 				const videoInitUrl = yield* bucket.getSignedObjectUrl(
 					segSource.getVideoInitKey(),
@@ -289,6 +312,11 @@ export const app = new Hono().post(
 
 			return c.json({ success: true, jobId: result.jobId });
 		} catch (error) {
+			if (isShareableLinkUsageLimitError(error)) {
+				await markShareableLinkUploadRejected(db(), videoId);
+				return c.json(getShareableLinkLimitResponse(error), 403);
+			}
+
 			console.error("[recording-complete] Error triggering mux:", error);
 
 			await db()

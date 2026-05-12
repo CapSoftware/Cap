@@ -1,6 +1,12 @@
 import { db, updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
-import { Storage } from "@cap/web-backend";
+import {
+	assertShareableLinkDurationAllowed,
+	getShareableLinkLimitResponse,
+	isShareableLinkUsageLimitError,
+	markShareableLinkUploadRejected,
+	Storage,
+} from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
@@ -134,6 +140,24 @@ app.post(
 			if (!video) return c.json({ error: "Video not found" }, 404);
 			if (video.ownerId !== user.id) return c.json({ error: "Forbidden" }, 403);
 			const videoDomain = decodeVideo(video);
+
+			try {
+				await assertShareableLinkDurationAllowed({
+					client: db(),
+					ownerId: user.id,
+					isScreenshot: video.isScreenshot,
+					durationSeconds: durationInSecs,
+				});
+			} catch (error) {
+				if (isShareableLinkUsageLimitError(error)) {
+					await markShareableLinkUploadRejected(
+						db(),
+						Video.VideoId.make(videoIdToUse),
+					);
+					return c.json(getShareableLinkLimitResponse(error), 403);
+				}
+				throw error;
+			}
 
 			const contentType = fileKey.endsWith(".aac")
 				? "audio/aac"

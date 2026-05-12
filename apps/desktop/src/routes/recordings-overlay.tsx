@@ -33,6 +33,7 @@ import {
 	type UploadProgress,
 	type UploadResult,
 } from "~/utils/tauri";
+import { openUpgradePage } from "~/utils/upgrade";
 import IconCapEditor from "~icons/cap/editor";
 import IconCapUpload from "~icons/cap/upload";
 import IconLucideClock from "~icons/lucide/clock";
@@ -724,7 +725,7 @@ function createRecordingMutations(
 
 			if (!canShare.allowed) {
 				if (canShare.reason === "upgrade_required") {
-					await commands.showWindow("Upgrade");
+					await openUpgradePage();
 					throw new Error(
 						"Upgrade required to share recordings longer than 5 minutes",
 					);

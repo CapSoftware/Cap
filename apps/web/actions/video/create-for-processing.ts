@@ -5,8 +5,12 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
-import { Storage as StorageService } from "@cap/web-backend";
+import { dub } from "@cap/utils";
+import {
+	createVideoWithShareableLinkQuota,
+	isShareableLinkUsageLimitError,
+	Storage as StorageService,
+} from "@cap/web-backend";
 import {
 	type Folder,
 	type Organisation,
@@ -45,10 +49,6 @@ export async function createVideoForServerProcessing({
 
 	if (!user) throw new Error("Unauthorized");
 
-	if (!userIsPro(user) && duration && duration > 300) {
-		throw new Error("upgrade_required");
-	}
-
 	await requireOrganizationAccess(user.id, orgId);
 
 	const videoId = Video.VideoId.make(nanoId());
@@ -74,25 +74,39 @@ export async function createVideoForServerProcessing({
 		orgId,
 	).pipe(runPromise);
 
-	await db()
-		.insert(videos)
-		.values({
-			id: videoId,
-			name: `Cap Upload - ${formattedDate}`,
+	try {
+		await createVideoWithShareableLinkQuota({
+			client: db(),
 			ownerId: user.id,
-			orgId,
-			source: { type: "webMP4" as const },
-			bucket: Option.getOrNull(uploadResult.bucketId),
-			storageIntegrationId: Option.getOrNull(uploadResult.storageIntegrationId),
-			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-			...(folderId ? { folderId } : {}),
-		});
+			durationSeconds: duration,
+			create: async (tx) => {
+				await tx.insert(videos).values({
+					id: videoId,
+					name: `Cap Upload - ${formattedDate}`,
+					ownerId: user.id,
+					orgId,
+					source: { type: "webMP4" as const },
+					bucket: Option.getOrNull(uploadResult.bucketId),
+					storageIntegrationId: Option.getOrNull(
+						uploadResult.storageIntegrationId,
+					),
+					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+					...(duration !== undefined ? { duration } : {}),
+					...(folderId ? { folderId } : {}),
+				});
 
-	await db().insert(videoUploads).values({
-		videoId,
-		phase: "uploading",
-		processingProgress: 0,
-	});
+				await tx.insert(videoUploads).values({
+					videoId,
+					phase: "uploading",
+					processingProgress: 0,
+				});
+			},
+		});
+	} catch (error) {
+		if (isShareableLinkUsageLimitError(error))
+			throw new Error("upgrade_required", { cause: error });
+		throw error;
+	}
 
 	if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
 		await dub()
@@ -109,6 +123,7 @@ export async function createVideoForServerProcessing({
 	revalidatePath("/dashboard/caps");
 	revalidatePath("/dashboard/folder");
 	revalidatePath("/dashboard/spaces");
+	revalidatePath("/dashboard");
 
 	return {
 		id: videoId,
