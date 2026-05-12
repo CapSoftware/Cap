@@ -691,7 +691,6 @@ mod macos {
             OutputTransportKind::Wireless | OutputTransportKind::ContinuityWireless => {
                 latency_secs = latency_secs.max(WIRELESS_MIN_LATENCY_SECS);
             }
-            }
             _ => {}
         }
 
