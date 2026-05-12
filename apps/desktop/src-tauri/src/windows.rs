@@ -1237,7 +1237,6 @@ impl CapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
                     .transparent(true)
-                    .visible(false)
                     .initialization_script(format!(
                         "
                         window.__CAP__ = window.__CAP__ ?? {{}};
@@ -1327,7 +1326,6 @@ impl CapWindow {
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .transparent(true)
-                    .visible(false)
                     .initialization_script(format!(
                         "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.cameraWsPort = {};",
                         camera_ws_port
@@ -1737,8 +1735,7 @@ impl CapWindow {
                             state.camera_ws_port, centered, enable_native_camera_preview
                         ))
                         .content_protected(should_protect)
-                        .transparent(true)
-                        .visible(false);
+                        .transparent(true);
 
                     let window = match window_builder.build() {
                         Ok(w) => w,
@@ -2021,7 +2018,7 @@ impl CapWindow {
                 );
 
                 // Hide the main window if the target monitor is the same
-                if CapWindowId::Main.get(app).is_some()
+                if let Some(main_window) = CapWindowId::Main.get(app)
                     && display.intersects_window(window.as_ref().window())?
                 {
                     let _ = main_window.minimize();
@@ -2055,7 +2052,6 @@ impl CapWindow {
                         .content_protected(should_protect)
                         .inner_size(width, height)
                         .skip_taskbar(true)
-                        .visible(false)
                         .initialization_script(format!(
                             "window.COUNTDOWN = {};",
                             countdown.unwrap_or_default()
