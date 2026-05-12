@@ -162,6 +162,13 @@
 			"when": 1778252207674,
 			"tag": "0022_dazzling_namor",
 			"breakpoints": true
+		},
+		{
+			"idx": 23,
+			"version": "5",
+			"when": 1778434170430,
+			"tag": "0023_misty_luckman",
+			"breakpoints": true
 		}
 	]
 }

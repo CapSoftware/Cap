@@ -13,20 +13,26 @@ import {
 	FormField,
 	Input,
 	Label,
+	Switch,
 } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
-import { faLayerGroup } from "@fortawesome/free-solid-svg-icons";
+import {
+	faGear,
+	faLayerGroup,
+	faLock,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import type React from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
 import { updateSpace } from "@/actions/organization/update-space";
 import { FileInput } from "@/components/FileInput";
 import { useDashboardContext } from "../../Contexts";
+import type { OrganizationSettings } from "../../dashboard-data";
 import { MemberSelect } from "../../spaces/[spaceId]/components/MemberSelect";
 import { createSpace } from "./server";
 
@@ -39,6 +45,8 @@ interface SpaceDialogProps {
 		name: string;
 		members: string[];
 		iconUrl?: ImageUpload.ImageUrl;
+		settings?: OrganizationSettings | null;
+		hasPassword?: boolean;
 	} | null;
 	onSpaceUpdated?: () => void;
 }
@@ -73,7 +81,7 @@ const SpaceDialog = ({
 						{edit ? "Edit Space" : "Create New Space"}
 					</DialogTitle>
 				</DialogHeader>
-				<div className="p-5">
+				<div className="p-5 max-h-[70vh] overflow-y-auto">
 					<NewSpaceForm
 						formRef={formRef}
 						setCreateLoading={setIsSubmitting}
@@ -119,6 +127,8 @@ export interface NewSpaceFormProps {
 		name: string;
 		members: string[];
 		iconUrl?: ImageUpload.ImageUrl;
+		settings?: OrganizationSettings | null;
+		hasPassword?: boolean;
 	} | null;
 }
 
@@ -129,6 +139,56 @@ const formSchema = z.object({
 		.max(25, "Space name must be at most 25 characters"),
 	members: z.array(z.string()).optional(),
 });
+
+const defaultSettings: OrganizationSettings = {
+	disableComments: false,
+	disableSummary: false,
+	disableCaptions: false,
+	disableChapters: false,
+	disableReactions: false,
+	disableTranscript: false,
+};
+
+const settingOptions: {
+	label: string;
+	value: keyof OrganizationSettings;
+	description: string;
+	pro?: boolean;
+}[] = [
+	{
+		label: "Enable comments",
+		value: "disableComments",
+		description: "Allow viewers to comment on caps in this space",
+	},
+	{
+		label: "Enable summary",
+		value: "disableSummary",
+		description: "Show AI-generated summary for caps in this space",
+		pro: true,
+	},
+	{
+		label: "Enable captions",
+		value: "disableCaptions",
+		description: "Allow viewers to use captions for caps in this space",
+	},
+	{
+		label: "Enable chapters",
+		value: "disableChapters",
+		description: "Show AI-generated chapters for caps in this space",
+		pro: true,
+	},
+	{
+		label: "Enable reactions",
+		value: "disableReactions",
+		description: "Allow viewers to react to caps in this space",
+	},
+	{
+		label: "Enable transcript",
+		value: "disableTranscript",
+		description: "Enabling this also allows summary and chapters",
+		pro: true,
+	},
+];
 
 export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 	const { edit = false, space } = props;
@@ -156,7 +216,51 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const [isUploading, setIsUploading] = useState(false);
-	const { activeOrganization } = useDashboardContext();
+	const { activeOrganization, user, setUpgradeModalOpen } =
+		useDashboardContext();
+	const [settings, setSettings] = useState<OrganizationSettings>({
+		...defaultSettings,
+		...space?.settings,
+	});
+	const [passwordEnabled, setPasswordEnabled] = useState(
+		Boolean(space?.hasPassword),
+	);
+	const [passwordValue, setPasswordValue] = useState("");
+	const iconInputId = useId();
+
+	useEffect(() => {
+		setSettings({ ...defaultSettings, ...space?.settings });
+		setPasswordEnabled(Boolean(space?.hasPassword));
+		setPasswordValue("");
+	}, [space]);
+
+	const handleToggleSetting = (key: keyof OrganizationSettings) => {
+		setSettings((prev) => {
+			const nextValue = !prev[key];
+
+			if (key === "disableTranscript" && nextValue) {
+				return {
+					...prev,
+					[key]: nextValue,
+					disableSummary: true,
+					disableChapters: true,
+				};
+			}
+
+			return { ...prev, [key]: nextValue };
+		});
+	};
+
+	const handlePasswordToggle = (checked: boolean) => {
+		if (checked && user && !user.isPro) {
+			setUpgradeModalOpen(true);
+			return;
+		}
+		setPasswordEnabled(checked);
+		if (!checked) {
+			setPasswordValue("");
+		}
+	};
 
 	const handleFileChange = (file: File | null) => {
 		if (file) {
@@ -199,8 +303,33 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 							});
 						}
 
+						for (const option of settingOptions) {
+							formData.append(option.value, String(settings[option.value]));
+						}
+
+						formData.append("passwordEnabled", String(passwordEnabled));
+
+						if (passwordEnabled && passwordValue.trim()) {
+							formData.append("password", passwordValue.trim());
+						}
+
 						if (edit && space?.id) {
+							if (
+								passwordEnabled &&
+								!space.hasPassword &&
+								!passwordValue.trim()
+							) {
+								throw new Error("Space password is required");
+							}
 							formData.append("id", space.id);
+							const passwordAction = !passwordEnabled
+								? space.hasPassword
+									? "remove"
+									: "keep"
+								: passwordValue.trim()
+									? "set"
+									: "keep";
+							formData.append("passwordAction", passwordAction);
 							// If the user removed the icon, send a removeIcon flag
 							if (selectedFile === null && space.iconUrl) {
 								formData.append("removeIcon", "true");
@@ -212,6 +341,9 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 							toast.success("Space updated successfully");
 							router.refresh();
 						} else {
+							if (passwordEnabled && !passwordValue.trim()) {
+								throw new Error("Space password is required");
+							}
 							const result = await createSpace(formData);
 							if (!result.success) {
 								throw new Error(result.error || "Failed to create space");
@@ -297,8 +429,102 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 						}}
 					/>
 
+					<div className="space-y-3 rounded-xl border border-gray-4 bg-gray-1 p-3">
+						<div className="flex items-start justify-between gap-4">
+							<div className="flex gap-3">
+								<div className="flex size-8 items-center justify-center rounded-full bg-gray-3">
+									<FontAwesomeIcon
+										icon={faLock}
+										className="size-3 text-gray-11"
+									/>
+								</div>
+								<div>
+									<p className="text-sm font-medium text-gray-12">
+										Require password
+									</p>
+									<p className="text-xs text-gray-10">
+										All caps in this space require this password
+									</p>
+								</div>
+							</div>
+							<Switch
+								checked={passwordEnabled}
+								onCheckedChange={handlePasswordToggle}
+							/>
+						</div>
+						{passwordEnabled && (
+							<div className="space-y-1">
+								<Input
+									type="password"
+									value={passwordValue}
+									onChange={(e) => setPasswordValue(e.target.value)}
+									placeholder={
+										space?.hasPassword ? "Enter new password" : "Set a password"
+									}
+								/>
+								{space?.hasPassword && !passwordValue && (
+									<p className="text-xs text-gray-9">
+										Leave blank to keep existing password
+									</p>
+								)}
+							</div>
+						)}
+					</div>
+
+					<div className="space-y-3 rounded-xl border border-gray-4 bg-gray-1 p-3">
+						<div className="flex gap-3">
+							<div className="flex size-8 items-center justify-center rounded-full bg-gray-3">
+								<FontAwesomeIcon
+									icon={faGear}
+									className="size-3 text-gray-11"
+								/>
+							</div>
+							<div>
+								<p className="text-sm font-medium text-gray-12">Viewer rules</p>
+								<p className="text-xs text-gray-10">
+									These apply to every cap in this space
+								</p>
+							</div>
+						</div>
+						<div className="grid grid-cols-1 gap-2">
+							{settingOptions.map((option) => {
+								const disabled =
+									(option.pro && !user?.isPro) ||
+									((option.value === "disableSummary" ||
+										option.value === "disableChapters") &&
+										settings.disableTranscript);
+
+								return (
+									<div
+										key={option.value}
+										className="flex items-center justify-between gap-4 rounded-lg border border-gray-3 bg-gray-2 p-3"
+									>
+										<div>
+											<div className="flex items-center gap-1.5">
+												<p className="text-sm text-gray-12">{option.label}</p>
+												{option.pro && (
+													<p className="rounded-full bg-blue-11 px-1.5 py-1 text-[10px] font-medium leading-none text-white">
+														Pro
+													</p>
+												)}
+											</div>
+											<p className="text-xs text-gray-10">
+												{option.description}
+											</p>
+										</div>
+										<Switch
+											disabled={disabled}
+											checked={!settings[option.value]}
+											onCheckedChange={() => handleToggleSetting(option.value)}
+										/>
+									</div>
+								);
+							})}
+						</div>
+					</div>
+
 					<div className="space-y-1">
-						<Label htmlFor="icon">Space Icon</Label>
+						<Label htmlFor={iconInputId}>Space Icon</Label>
 						<CardDescription className="w-full max-w-[400px]">
 							Upload a custom logo or icon for your space (max 1MB).
 						</CardDescription>
@@ -306,7 +532,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 
 					<div className="relative mt-2">
 						<FileInput
-							id="space-icon"
+							id={iconInputId}
 							name="icon"
 							initialPreviewUrl={space?.iconUrl || null}
 							notDraggingClassName="hover:bg-gray-3"

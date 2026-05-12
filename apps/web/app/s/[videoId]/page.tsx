@@ -19,6 +19,7 @@ import {
 	Database,
 	ImageUploads,
 	provideOptionalAuth,
+	resolveEffectiveVideoRules,
 	Videos,
 } from "@cap/web-backend";
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
@@ -61,7 +62,9 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 			id: spaces.id,
 			name: spaces.name,
 			organizationId: spaces.organizationId,
-			iconUrl: organizations.iconUrl,
+			iconUrl: spaces.iconUrl,
+			settings: spaces.settings,
+			hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
 		})
 		.from(spaceVideos)
 		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
@@ -85,6 +88,8 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 		name: string;
 		organizationId: string;
 		iconUrl?: string;
+		settings?: OrganizationSettings | null;
+		hasPassword?: boolean;
 	}> = [];
 
 	// Add space-level sharing
@@ -94,6 +99,8 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 			name: space.name,
 			organizationId: space.organizationId,
 			iconUrl: space.iconUrl || undefined,
+			settings: space.settings,
+			hasPassword: space.hasPassword,
 		});
 	});
 
@@ -104,6 +111,8 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 			name: org.name,
 			organizationId: org.organizationId,
 			iconUrl: org.iconUrl || undefined,
+			settings: null,
+			hasPassword: false,
 		});
 	});
 
@@ -445,6 +454,11 @@ async function AuthorizedContent({
 
 	// Fetch shared spaces data for this video
 	const sharedSpaces = await getSharedSpacesForVideo(videoId);
+	const rules = resolveEffectiveVideoRules({
+		videoSettings: video.videoSettings,
+		organizationSettings: video.orgSettings,
+		spaces: sharedSpaces.filter((space) => space.id !== space.organizationId),
+	});
 
 	let aiGenerationEnabled = false;
 	const videoOwnerQuery = await db()
@@ -463,6 +477,7 @@ async function AuthorizedContent({
 	}
 
 	if (
+		!rules.settings.disableTranscript &&
 		!video.hasActiveUpload &&
 		video.transcriptionStatus !== "COMPLETE" &&
 		video.transcriptionStatus !== "PROCESSING" &&
@@ -669,7 +684,10 @@ async function AuthorizedContent({
 			password: null,
 			folderId: null,
 			orgSettings: video.orgSettings || null,
-			settings: video.videoSettings || null,
+			settings: rules.settings,
+			hasInheritedPassword: rules.hasInheritedPassword,
+			inheritedPasswordSources: rules.inheritedPasswordSources,
+			inheritedSpaceSettings: rules.inheritedSettings,
 		};
 	}).pipe(runPromise);
 

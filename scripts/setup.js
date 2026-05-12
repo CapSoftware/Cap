@@ -114,6 +114,8 @@ async function main() {
 			onnxRuntimePath,
 		)}" }\n`;
 	} else if (process.platform === "win32") {
+		await ensureMsvcVersion();
+
 		const FFMPEG_VERSION = "7.1";
 		const FFMPEG_ZIP_NAME = `ffmpeg-${FFMPEG_VERSION}-full_build-shared`;
 		const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/${FFMPEG_VERSION}/${FFMPEG_ZIP_NAME}.zip`;
@@ -349,6 +351,68 @@ async function missingFiles(dir, names) {
 
 	const present = new Set(await fs.readdir(dir));
 	return names.filter((name) => !present.has(name));
+}
+
+const MIN_MSVC_VERSION = [17, 12];
+
+async function ensureMsvcVersion() {
+	const programFilesX86 =
+		process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+	const vswherePath = path.join(
+		programFilesX86,
+		"Microsoft Visual Studio",
+		"Installer",
+		"vswhere.exe",
+	);
+
+	if (!(await fileExists(vswherePath))) {
+		throw new Error(
+			`Visual Studio Installer not found at ${vswherePath}. ` +
+				`Install "Visual Studio 2022 Build Tools" ${MIN_MSVC_VERSION[0]}.${MIN_MSVC_VERSION[1]} ` +
+				`or newer with the "MSVC v143 - VS 2022 C++ x64/x86 build tools" component, ` +
+				`then re-run pnpm dev.`,
+		);
+	}
+
+	const { stdout } = await execFile(vswherePath, [
+		"-latest",
+		"-products",
+		"*",
+		"-requires",
+		"Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+		"-property",
+		"installationVersion",
+	]);
+
+	const raw = stdout.trim();
+	if (!raw) {
+		throw new Error(
+			`No Visual Studio 2022 installation with MSVC v143 was found. ` +
+				`Install "Visual Studio 2022 Build Tools" ${MIN_MSVC_VERSION[0]}.${MIN_MSVC_VERSION[1]} ` +
+				`or newer with the "MSVC v143 - VS 2022 C++ x64/x86 build tools" component, ` +
+				`then re-run pnpm dev.`,
+		);
+	}
+
+	const parts = raw.split(".").map((n) => Number.parseInt(n, 10) || 0);
+	const [major, minor] = parts;
+	const isAtLeast =
+		major > MIN_MSVC_VERSION[0] ||
+		(major === MIN_MSVC_VERSION[0] && minor >= MIN_MSVC_VERSION[1]);
+
+	if (!isAtLeast) {
+		throw new Error(
+			`Visual Studio 2022 Build Tools ${major}.${minor} is too old (full: ${raw}).\n` +
+				`Cap requires ${MIN_MSVC_VERSION[0]}.${MIN_MSVC_VERSION[1]} or newer because the prebuilt ONNX Runtime ` +
+				`shipped by the 'ort' crate references vectorized-algorithm symbols ` +
+				`(e.g. __std_find_last_of_trivial_pos_*, __std_remove_8) that only exist in vcruntime140_1.lib from MSVC 14.42+.\n` +
+				`\nUpdate via the Visual Studio Installer, or from an elevated PowerShell:\n` +
+				`  winget upgrade --id Microsoft.VisualStudio.2022.BuildTools\n` +
+				`After updating, run: cargo clean -p cap-desktop && pnpm dev:windows\n`,
+		);
+	}
+
+	console.log(`MSVC toolchain ${major}.${minor} OK (full: ${raw})`);
 }
 
 async function findExecutable(name) {

@@ -43,6 +43,7 @@ function makeVideo(
 function makeDeps(config: {
 	video: Video.Video | null;
 	password?: Option.Option<string>;
+	spacePasswords?: string[];
 	orgMembership?: boolean;
 	spaceMembership?: boolean;
 	allowedEmailDomain?: Option.Option<string>;
@@ -50,6 +51,7 @@ function makeDeps(config: {
 	const {
 		video,
 		password = Option.none<string>(),
+		spacePasswords = [],
 		orgMembership = false,
 		spaceMembership = false,
 		allowedEmailDomain = Option.none<string>(),
@@ -74,6 +76,8 @@ function makeDeps(config: {
 						? Option.some({ membershipId: "smem-1" })
 						: Option.none(),
 				),
+			passwordsForVideo: () =>
+				Effect.succeed(spacePasswords.map((password) => ({ password }))),
 		},
 	};
 }
@@ -81,7 +85,8 @@ function makeDeps(config: {
 function runCanView(
 	deps: VideosPolicyDeps,
 	user: Option.Option<CurrentUser["Type"]>,
-): Promise<"allowed" | "denied"> {
+	attachedPassword: Option.Option<string> = Option.none(),
+): Promise<"allowed" | "denied" | "password"> {
 	const policy = buildCanView(deps, TEST_VIDEO_ID);
 
 	const program = Effect.zipRight(
@@ -89,12 +94,23 @@ function runCanView(
 		Effect.succeed("allowed" as const),
 	).pipe(
 		Effect.catchTag("PolicyDenied", () => Effect.succeed("denied" as const)),
+		Effect.catchTag("VerifyVideoPasswordError", () =>
+			Effect.succeed("password" as const),
+		),
 	);
+
+	const withPassword = Option.match(attachedPassword, {
+		onNone: () => program,
+		onSome: (password) =>
+			Effect.provideService(program, Video.VideoPasswordAttachment, {
+				password: Option.some(password),
+			}),
+	});
 
 	const withUser = user.pipe(
 		Option.match({
-			onNone: () => program,
-			onSome: (u) => Effect.provideService(program, CurrentUser, u),
+			onNone: () => withPassword,
+			onSome: (u) => Effect.provideService(withPassword, CurrentUser, u),
 		}),
 	);
 
@@ -131,6 +147,17 @@ describe("VideosPolicy.canView", () => {
 			const deps = makeDeps({
 				video: makeVideo({ public: false }),
 			});
+			const owner = makeUser("owner@anything.com", TEST_OWNER_ID);
+
+			expect(await runCanView(deps, owner)).toBe("allowed");
+		});
+
+		it("does not load inherited passwords for owner bypass", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: false }),
+			});
+			deps.spacesRepo.passwordsForVideo = () =>
+				Effect.die(new Error("password lookup should not run"));
 			const owner = makeUser("owner@anything.com", TEST_OWNER_ID);
 
 			expect(await runCanView(deps, owner)).toBe("allowed");
@@ -204,6 +231,65 @@ describe("VideosPolicy.canView", () => {
 			});
 
 			expect(await runCanView(deps, makeUser("bob@gmail.com"))).toBe("allowed");
+		});
+	});
+
+	describe("inherited space passwords", () => {
+		it("requires a space password for anonymous public-link viewers", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				spacePasswords: ["space-hash"],
+			});
+
+			expect(await runCanView(deps, noUser)).toBe("password");
+		});
+
+		it("requires a space password for space members", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: false }),
+				spaceMembership: true,
+				spacePasswords: ["space-hash"],
+			});
+
+			expect(await runCanView(deps, makeUser("member@company.com"))).toBe(
+				"password",
+			);
+		});
+
+		it("allows the owner without an inherited password attachment", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: false }),
+				spacePasswords: ["space-hash"],
+			});
+			const owner = makeUser("owner@anything.com", TEST_OWNER_ID);
+
+			expect(await runCanView(deps, owner)).toBe("allowed");
+		});
+
+		it("allows access with any inherited space password hash", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				spacePasswords: ["space-one-hash", "space-two-hash"],
+			});
+
+			expect(
+				await runCanView(deps, noUser, Option.some("space-two-hash")),
+			).toBe("allowed");
+		});
+
+		it("allows access with either video or space password hash", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				password: Option.some("video-hash"),
+				spacePasswords: ["space-hash"],
+			});
+
+			expect(await runCanView(deps, noUser, Option.some("video-hash"))).toBe(
+				"allowed",
+			);
+			expect(await runCanView(deps, noUser, Option.some("space-hash"))).toBe(
+				"allowed",
+			);
 		});
 	});
 

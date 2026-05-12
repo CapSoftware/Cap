@@ -4,13 +4,20 @@ import {
 	comments,
 	organizations,
 	sharedVideos,
+	spaces,
+	spaceVideos,
 	users,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
-import { provideOptionalAuth, Videos, VideosPolicy } from "@cap/web-backend";
+import {
+	provideOptionalAuth,
+	resolveEffectiveVideoRules,
+	Videos,
+	VideosPolicy,
+} from "@cap/web-backend";
 import { type Organisation, Policy, type Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -105,6 +112,19 @@ export async function generateMetadata(
 	);
 }
 
+const renderEmbedPolicyDenied = () =>
+	Effect.succeed(
+		<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
+			<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
+			<p className="text-gray-400">
+				If you own this video, please <Link href="/login">sign in</Link> to
+				manage sharing.
+			</p>
+		</div>,
+	);
+
+const renderNoSuchElement = () => Effect.sync(() => notFound());
+
 export default async function EmbedVideoPage(
 	props: PageProps<"/embed/[videoId]">,
 ) {
@@ -152,6 +172,7 @@ export default async function EmbedVideoPage(
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
+					orgSettings: organizations.settings,
 					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 						Boolean,
 					),
@@ -171,7 +192,7 @@ export default async function EmbedVideoPage(
 			Effect.succeed({ needsPassword: true } as const),
 		),
 		Effect.map((data) => (
-			<div className="min-h-screen bg-black">
+			<div key={videoId} className="min-h-screen bg-black">
 				<PasswordOverlay isOpen={data.needsPassword} videoId={videoId} />
 				{!data.needsPassword && (
 					<EmbedContent video={data.video} autoplay={autoplay} />
@@ -179,17 +200,8 @@ export default async function EmbedVideoPage(
 			</div>
 		)),
 		Effect.catchTags({
-			PolicyDenied: () =>
-				Effect.succeed(
-					<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
-						<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
-						<p className="text-gray-400">
-							If you own this video, please <Link href="/login">sign in</Link>{" "}
-							to manage sharing.
-						</p>
-					</div>,
-				),
-			NoSuchElementException: () => Effect.sync(() => notFound()),
+			PolicyDenied: renderEmbedPolicyDenied,
+			NoSuchElementException: renderNoSuchElement,
 		}),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
@@ -203,10 +215,27 @@ async function EmbedContent({
 	video: Omit<typeof videos.$inferSelect, "password"> & {
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasActiveUpload: boolean | undefined;
+		orgSettings?: (typeof organizations.$inferSelect)["settings"] | null;
 	};
 	autoplay: boolean;
 }) {
 	const user = await getCurrentUser();
+	const sharedSpaces = await db()
+		.select({
+			id: spaces.id,
+			name: spaces.name,
+			settings: spaces.settings,
+			hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
+		})
+		.from(spaceVideos)
+		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+		.where(eq(spaceVideos.videoId, video.id));
+
+	const rules = resolveEffectiveVideoRules({
+		videoSettings: video.settings,
+		organizationSettings: video.orgSettings,
+		spaces: sharedSpaces,
+	});
 
 	let aiGenerationEnabled = false;
 	const videoOwnerQuery = await db()
@@ -225,6 +254,7 @@ async function EmbedContent({
 	}
 
 	if (
+		!rules.settings.disableTranscript &&
 		video.transcriptionStatus !== "COMPLETE" &&
 		video.transcriptionStatus !== "PROCESSING" &&
 		video.transcriptionStatus !== "SKIPPED" &&
@@ -286,9 +316,12 @@ async function EmbedContent({
 			data={video}
 			user={user}
 			comments={commentsQuery}
-			chapters={initialAiData?.chapters || []}
+			chapters={
+				rules.settings.disableChapters ? [] : initialAiData?.chapters || []
+			}
 			ownerName={videoOwner[0]?.name || null}
 			autoplay={autoplay}
+			viewerSettings={rules.settings}
 			showPlaybackStatusBadge={user?.id === video.ownerId}
 		/>
 	);
