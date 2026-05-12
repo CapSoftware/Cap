@@ -28,7 +28,6 @@ export function InviteAccept({
 		setIsLoading(true);
 		try {
 			if (!user) {
-				// Redirect to sign in page with a return URL
 				router.push(`/login?next=/invite/${inviteId}`);
 				return;
 			}
@@ -43,7 +42,7 @@ export function InviteAccept({
 
 			if (response.ok) {
 				toast.success("Invite accepted successfully");
-				router.push("/dashboard"); // Redirect to dashboard or appropriate page
+				router.push("/dashboard");
 			} else {
 				const error = await response.text();
 				toast.error(`Failed to accept invite: ${error}`);
@@ -59,6 +58,11 @@ export function InviteAccept({
 	const handleDecline = async () => {
 		setIsLoading(true);
 		try {
+			if (!user) {
+				router.push(`/login?next=/invite/${inviteId}`);
+				return;
+			}
+
 			const response = await fetch("/api/invite/decline", {
 				method: "POST",
 				headers: {
@@ -69,7 +73,7 @@ export function InviteAccept({
 
 			if (response.ok) {
 				toast.success("Invite declined");
-				router.push("/"); // Redirect to homepage
+				router.push("/");
 			} else {
 				const error = await response.text();
 				toast.error(`Failed to decline invite: ${error}`);

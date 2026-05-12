@@ -8,15 +8,89 @@ import {
 } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { stripe, userIsPro } from "@cap/utils";
+import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
+import { ImageUploads } from "@cap/web-backend";
+import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
 import { z } from "zod";
+import { runPromise } from "@/lib/server";
 import { withAuth, withOptionalAuth } from "../../utils";
+import {
+	canEditOrganizationBranding,
+	type DesktopOrganizationRow,
+	decodeOrganizationLogoUpdate,
+	filterAccessibleOrganizationRows,
+	mergeOrganizationBrandingMetadata,
+	normalizeOrganizationBrandingPatchBody,
+	OrganizationBrandingValidationError,
+	toDesktopOrganization,
+} from "./organization-branding";
 
 export const app = new Hono();
+
+async function resolveOrganizationIconUrl(iconUrl: string | null) {
+	if (!iconUrl) return null;
+
+	return Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+		return yield* imageUploads.resolveImageUrl(
+			iconUrl as ImageUpload.ImageUrlOrKey,
+		);
+	}).pipe(runPromise);
+}
+
+async function toDesktopOrganizations(
+	rows: DesktopOrganizationRow[],
+	userId: string,
+) {
+	return Promise.all(
+		filterAccessibleOrganizationRows(rows, userId).map(async (row) =>
+			toDesktopOrganization(
+				row,
+				userId,
+				await resolveOrganizationIconUrl(row.iconUrl),
+			),
+		),
+	);
+}
+
+async function applyOrganizationLogoUpdate(
+	row: DesktopOrganizationRow,
+	logo: ReturnType<typeof decodeOrganizationLogoUpdate>,
+) {
+	if (logo.action === "keep") return;
+
+	await Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+
+		yield* imageUploads.applyUpdate({
+			payload:
+				logo.action === "remove"
+					? Option.none()
+					: Option.some({
+							contentType: logo.contentType,
+							fileName: logo.fileName,
+							data: logo.data,
+						}),
+			existing: Option.fromNullable(
+				row.iconUrl as ImageUpload.ImageUrlOrKey | null,
+			),
+			keyPrefix: `organizations/${row.id}`,
+			update: (db, urlOrKey) =>
+				db
+					.update(organizations)
+					.set({ iconUrl: urlOrKey })
+					.where(
+						eq(organizations.id, Organisation.OrganisationId.make(row.id)),
+					),
+		});
+	}).pipe(runPromise);
+}
 
 const diagnosticsSchema = z.object({
 	system: z
@@ -352,30 +426,136 @@ app.get("/plan", withAuth, async (c) => {
 app.get("/organizations", withAuth, async (c) => {
 	const user = c.get("user");
 
-	const memberOrgIds = db()
-		.select({ id: organizationMembers.organizationId })
-		.from(organizationMembers)
-		.where(eq(organizationMembers.userId, user.id));
-
-	const orgs = await db()
+	const rows = await db()
 		.select({
 			id: organizations.id,
 			name: organizations.name,
 			ownerId: organizations.ownerId,
+			tombstoneAt: organizations.tombstoneAt,
+			iconUrl: organizations.iconUrl,
+			metadata: organizations.metadata,
+			role: organizationMembers.role,
 		})
 		.from(organizations)
+		.leftJoin(
+			organizationMembers,
+			and(
+				eq(organizationMembers.organizationId, organizations.id),
+				eq(organizationMembers.userId, user.id),
+			),
+		)
 		.where(
 			and(
 				isNull(organizations.tombstoneAt),
 				or(
 					eq(organizations.ownerId, user.id),
-					inArray(organizations.id, memberOrgIds),
+					eq(organizationMembers.userId, user.id),
 				),
 			),
 		);
 
-	return c.json(orgs);
+	return c.json(await toDesktopOrganizations(rows, user.id));
 });
+
+app.patch(
+	"/organizations/:organizationId/branding",
+	withAuth,
+	zValidator("json", OrganizationBrandingPatchBody),
+	async (c) => {
+		const user = c.get("user");
+		const organizationId = Organisation.OrganisationId.make(
+			c.req.param("organizationId"),
+		);
+		const body = normalizeOrganizationBrandingPatchBody(c.req.valid("json"));
+		let logoUpdate: ReturnType<typeof decodeOrganizationLogoUpdate>;
+
+		try {
+			logoUpdate = decodeOrganizationLogoUpdate(body.logo);
+		} catch (error) {
+			if (error instanceof OrganizationBrandingValidationError) {
+				return c.json({ error: error.message }, { status: 400 });
+			}
+			throw error;
+		}
+
+		const [row] = await db()
+			.select({
+				id: organizations.id,
+				name: organizations.name,
+				ownerId: organizations.ownerId,
+				tombstoneAt: organizations.tombstoneAt,
+				iconUrl: organizations.iconUrl,
+				metadata: organizations.metadata,
+				role: organizationMembers.role,
+			})
+			.from(organizations)
+			.leftJoin(
+				organizationMembers,
+				and(
+					eq(organizationMembers.organizationId, organizations.id),
+					eq(organizationMembers.userId, user.id),
+				),
+			)
+			.where(eq(organizations.id, organizationId))
+			.limit(1);
+
+		if (!row || row.tombstoneAt !== null) {
+			return c.json({ error: "Organization not found" }, { status: 404 });
+		}
+
+		if (!canEditOrganizationBranding(row, user.id)) {
+			return c.json(
+				{ error: "Only organization owners can edit branding" },
+				{ status: 403 },
+			);
+		}
+
+		await applyOrganizationLogoUpdate(row, logoUpdate);
+
+		await db()
+			.update(organizations)
+			.set({
+				metadata: mergeOrganizationBrandingMetadata(
+					row.metadata,
+					body.brandColors,
+				),
+			})
+			.where(eq(organizations.id, organizationId));
+
+		const [updatedRow] = await db()
+			.select({
+				id: organizations.id,
+				name: organizations.name,
+				ownerId: organizations.ownerId,
+				tombstoneAt: organizations.tombstoneAt,
+				iconUrl: organizations.iconUrl,
+				metadata: organizations.metadata,
+				role: organizationMembers.role,
+			})
+			.from(organizations)
+			.leftJoin(
+				organizationMembers,
+				and(
+					eq(organizationMembers.organizationId, organizations.id),
+					eq(organizationMembers.userId, user.id),
+				),
+			)
+			.where(eq(organizations.id, organizationId))
+			.limit(1);
+
+		if (!updatedRow) {
+			return c.json({ error: "Organization not found" }, { status: 404 });
+		}
+
+		return c.json(
+			toDesktopOrganization(
+				updatedRow,
+				user.id,
+				await resolveOrganizationIconUrl(updatedRow.iconUrl),
+			),
+		);
+	},
+);
 
 app.post(
 	"/subscribe",

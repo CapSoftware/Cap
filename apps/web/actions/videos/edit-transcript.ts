@@ -2,13 +2,14 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { s3Buckets, videos } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
+import { videos } from "@cap/database/schema";
+import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 
 export async function editTranscriptEntry(
 	videoId: Video.VideoId,
@@ -26,12 +27,8 @@ export async function editTranscriptEntry(
 
 	const userId = user.id;
 	const query = await db()
-		.select({
-			video: videos,
-			bucket: s3Buckets,
-		})
+		.select({ video: videos })
 		.from(videos)
-		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
 		.where(eq(videos.id, videoId));
 
 	if (query.length === 0) {
@@ -52,8 +49,8 @@ export async function editTranscriptEntry(
 		};
 	}
 
-	const [bucket] = await S3Buckets.getBucketAccess(
-		Option.fromNullable(result.bucket?.id),
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
 	).pipe(runPromise);
 
 	try {

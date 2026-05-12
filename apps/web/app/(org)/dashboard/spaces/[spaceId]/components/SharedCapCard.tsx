@@ -1,7 +1,8 @@
 "use client";
 
 import type { VideoMetadata } from "@cap/database/types";
-import type { Video } from "@cap/web-domain";
+import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
+import type { ImageUpload, Video } from "@cap/web-domain";
 import { faBuilding, faUser } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
@@ -12,11 +13,28 @@ interface SharedCapCardProps {
 		ownerId: string;
 		name: string;
 		createdAt: Date;
+		public?: boolean;
 		totalComments: number;
 		totalReactions: number;
 		ownerName: string | null;
 		metadata?: VideoMetadata;
+		hasPassword?: boolean;
+		hasInheritedPassword?: boolean;
+		inheritedPasswordSources?: SpaceRuleSource[];
+		inheritedSpaceSettings?: Partial<
+			Record<ViewerSettingKey, SpaceRuleSource[]>
+		>;
+		sharedSpaces?: {
+			id: string;
+			name: string;
+			isOrg: boolean;
+			organizationId: string;
+			iconUrl?: ImageUpload.ImageUrl | null;
+			settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
+			hasPassword?: boolean;
+		}[];
 		hasActiveUpload: boolean | undefined;
+		settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
 	};
 	analytics: number;
 	isLoadingAnalytics: boolean;
@@ -46,7 +64,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 	const isOwner = userId === cap.ownerId;
 
 	return (
-		<div onDragStart={onDragStart} onDragEnd={onDragEnd}>
+		<li className="list-none" onDragStart={onDragStart} onDragEnd={onDragEnd}>
 			<CapCard
 				hideSharedStatus={hideSharedStatus}
 				isLoadingAnalytics={isLoadingAnalytics}
@@ -77,6 +95,6 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 					)}
 				</div>
 			</CapCard>
-		</div>
+		</li>
 	);
 };

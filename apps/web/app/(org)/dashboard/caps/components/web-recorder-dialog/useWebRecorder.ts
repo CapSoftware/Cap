@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
+import { uploadWithTarget } from "@/utils/upload-target";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
 import {
@@ -44,10 +45,10 @@ import {
 } from "./web-recorder-constants";
 import type {
 	ChunkUploadState,
-	PresignedPost,
 	RecorderPhase,
 	RecordingFailureDownload,
 	RecoveredRecordingDownload,
+	UploadTarget,
 	VideoId,
 } from "./web-recorder-types";
 import {
@@ -81,7 +82,7 @@ type InstantChunkingMode = "manual" | "timeslice";
 type InstantVideoCreation = {
 	id: VideoId;
 	shareUrl: string;
-	upload: PresignedPost;
+	upload: UploadTarget;
 };
 
 const unwrapExitOrThrow = <T, E>(exit: Exit.Exit<T, E>) => {
@@ -236,7 +237,7 @@ export const useWebRecorder = ({
 	const videoCreationRef = useRef<{
 		id: VideoId;
 		shareUrl: string;
-		upload: PresignedPost;
+		upload: UploadTarget;
 	} | null>(null);
 	const pendingInstantVideoIdRef = useRef<VideoId | null>(null);
 	const dataRequestIntervalRef = useRef<number | null>(null);
@@ -999,14 +1000,15 @@ export const useWebRecorder = ({
 				pendingInstantVideoIdRef.current = creation.id;
 
 				const rawSubpath = `raw-upload.${pipeline.fileExtension}`;
-				const uploadId = await initiateMultipartUpload({
+				const uploadSession = await initiateMultipartUpload({
 					videoId: creationResult.id,
 					contentType: pipeline.mimeType,
 					subpath: rawSubpath,
 				});
 				instantUploaderRef.current = new InstantRecordingUploader({
 					videoId: creationResult.id,
-					uploadId,
+					uploadId: uploadSession.uploadId,
+					provider: uploadSession.provider,
 					mimeType: pipeline.mimeType,
 					subpath: rawSubpath,
 					setUploadStatus,
@@ -1220,14 +1222,15 @@ export const useWebRecorder = ({
 				const rawSubpath = `raw-upload.${pipeline.fileExtension}`;
 
 				if (!uploader) {
-					const uploadId = await initiateMultipartUpload({
+					const uploadSession = await initiateMultipartUpload({
 						videoId: creationResult.id,
 						contentType: pipeline.mimeType,
 						subpath: rawSubpath,
 					});
 					uploader = new InstantRecordingUploader({
 						videoId: creationResult.id,
-						uploadId,
+						uploadId: uploadSession.uploadId,
+						provider: uploadSession.provider,
 						mimeType: pipeline.mimeType,
 						subpath: rawSubpath,
 						setUploadStatus,
@@ -1303,56 +1306,24 @@ export const useWebRecorder = ({
 								orgId: Organisation.OrganisationId.make(orgId),
 							});
 
-							const screenshotFormData = new FormData();
-							Object.entries(screenshotData.presignedPostData.fields).forEach(
-								([key, value]) => {
-									screenshotFormData.append(key, value as string);
-								},
-							);
-							screenshotFormData.append(
-								"file",
-								thumbnailBlob,
-								"screen-capture.jpg",
-							);
-
 							setUploadStatus({
 								status: "uploadingThumbnail",
 								capId: creationResult.id,
 								progress: 90,
 							});
 
-							await new Promise<void>((resolve, reject) => {
-								const xhr = new XMLHttpRequest();
-								xhr.open("POST", screenshotData.presignedPostData.url);
-
-								xhr.upload.onprogress = (event) => {
-									if (event.lengthComputable) {
-										const percent = 90 + (event.loaded / event.total) * 10;
-										setUploadStatus({
-											status: "uploadingThumbnail",
-											capId: creationResult.id,
-											progress: percent,
-										});
-									}
-								};
-
-								xhr.onload = () => {
-									if (xhr.status >= 200 && xhr.status < 300) {
-										resolve();
-									} else {
-										reject(
-											new Error(
-												`Screenshot upload failed with status ${xhr.status}`,
-											),
-										);
-									}
-								};
-
-								xhr.onerror = () => {
-									reject(new Error("Screenshot upload failed"));
-								};
-
-								xhr.send(screenshotFormData);
+							await uploadWithTarget({
+								target: screenshotData.uploadTarget,
+								body: thumbnailBlob,
+								fileName: "screen-capture.jpg",
+								onProgress: ({ loaded, total }) => {
+									const percent = 90 + (loaded / total) * 10;
+									setUploadStatus({
+										status: "uploadingThumbnail",
+										capId: creationResult.id,
+										progress: percent,
+									});
+								},
 							});
 
 							queryClient.refetchQueries({

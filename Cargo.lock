@@ -1144,6 +1144,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-camera-effects"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "ndarray 0.16.1",
+ "ort",
+ "tracing",
+ "wgpu",
+]
+
+[[package]]
 name = "cap-camera-ffmpeg"
 version = "0.1.0"
 dependencies = [
@@ -1224,7 +1236,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.4.84"
+version = "0.4.85"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1235,6 +1247,7 @@ dependencies = [
  "bytes",
  "cap-audio",
  "cap-camera",
+ "cap-camera-effects",
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-export",
@@ -1270,12 +1283,15 @@ dependencies = [
  "md5",
  "nix 0.29.0",
  "objc",
+ "objc2 0.6.2",
  "objc2-app-kit",
+ "objc2-foundation 0.3.1",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "parakeet-rs",
  "png 0.17.16",
+ "pollster",
  "posthog-rs",
  "rand 0.8.5",
  "regex",
@@ -1546,6 +1562,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-muxer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-muxer-protocol",
+ "ffmpeg-next",
+ "libc",
+ "thiserror 1.0.69",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "cap-muxer-protocol"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "crc32fast",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "cap-project"
 version = "0.1.0"
 dependencies = [
@@ -1584,6 +1622,7 @@ dependencies = [
  "cap-media-info",
  "cap-mediafoundation-ffmpeg",
  "cap-mediafoundation-utils",
+ "cap-muxer-protocol",
  "cap-project",
  "cap-rendering",
  "cap-timestamp",
@@ -1612,6 +1651,7 @@ dependencies = [
  "objc",
  "objc2 0.6.2",
  "objc2-app-kit",
+ "parking_lot",
  "relative-path",
  "replace_with",
  "retry",
@@ -1645,6 +1685,7 @@ dependencies = [
  "bezier_easing",
  "build-time",
  "bytemuck",
+ "cap-camera-effects",
  "cap-cursor-info",
  "cap-flags",
  "cap-project",
@@ -1718,6 +1759,7 @@ dependencies = [
  "flume",
  "indicatif",
  "kameo",
+ "libc",
  "parking_lot",
  "scap-targets",
  "serde",
@@ -1752,6 +1794,7 @@ dependencies = [
  "directories 5.0.1",
  "flume",
  "futures",
+ "libc",
  "nix 0.29.0",
  "serde",
  "serde_json",
@@ -5107,6 +5150,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link 0.2.0",
+]
+
+[[package]]
 name = "libm"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5699,6 +5752,21 @@ name = "natord"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "308d96db8debc727c3fd9744aac51751243420e46edf401010908da7f8d5e57c"
+
+[[package]]
+name = "ndarray"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "882ed72dce9365842bf196bdeedf5055305f11fc8c03dee7bb0194a6cad34841"
+dependencies = [
+ "matrixmultiply",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "portable-atomic",
+ "portable-atomic-util",
+ "rawpointer",
+]
 
 [[package]]
 name = "ndarray"
@@ -6618,7 +6686,8 @@ version = "2.0.0-rc.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7de3af33d24a745ffb8fab904b13478438d1cd52868e6f17735ef6e1f8bf133"
 dependencies = [
- "ndarray",
+ "libloading 0.9.0",
+ "ndarray 0.17.2",
  "ort-sys",
  "smallvec",
  "tracing",
@@ -6705,7 +6774,7 @@ checksum = "ac2c29bb70e3b63ddfa9af7cbb66f87a200550a5f6a5ac82fabf527b270c6615"
 dependencies = [
  "eyre",
  "hound",
- "ndarray",
+ "ndarray 0.17.2",
  "ort",
  "realfft",
  "serde",
@@ -7037,6 +7106,12 @@ dependencies = [
  "rustix 1.1.2",
  "windows-sys 0.61.0",
 ]
+
+[[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
 name = "portable-atomic"

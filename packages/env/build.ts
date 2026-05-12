@@ -28,12 +28,11 @@ const create = () =>
 		},
 	});
 
-// Environment variables that are needed in the build process, and may be incorrect on the client.
-// Some are only provided by `NEXT_PUBLIC`, but others can be provdied at runtime
 export const buildEnv = new Proxy({} as typeof _env, {
 	get(_, key) {
+		if (typeof key !== "string") return undefined;
 		if (!_env) _env = create();
 
-		return (_env as any)[key];
+		return _env[key as keyof typeof _env];
 	},
 });

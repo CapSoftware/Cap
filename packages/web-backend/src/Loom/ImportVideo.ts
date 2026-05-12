@@ -72,6 +72,7 @@ export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 					ownerId: payload.cap.userId,
 					orgId: payload.cap.orgId,
 					bucketId: customBucketId,
+					storageIntegrationId: Option.none(),
 					source: { type: "desktopMP4" as const },
 					name: payload.loom.video.name,
 					duration: Option.fromNullable(loomVideo.durationSecs),

@@ -51,6 +51,7 @@ async fn instant_record_with_real_mic_and_screen() {
 
         let ready_future = mic_actor
             .ask(cap_recording::feeds::microphone::SetInput {
+                settings: None,
                 label: label.clone(),
             })
             .await

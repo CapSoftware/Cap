@@ -275,7 +275,6 @@ impl RecordableLayer for BackgroundLayer {
     fn prepare(&mut self, frame_data: &FrameData) -> Result<(), SkiaRenderingError> {
         let new_background = Background::from(frame_data.uniforms.background.clone());
 
-        // Handle image loading if needed
         match &new_background {
             Background::Image { path } | Background::Wallpaper { path }
                 if self.image_path.as_ref() != Some(path) || self.loaded_image.is_none() =>
