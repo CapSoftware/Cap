@@ -910,6 +910,15 @@ export const spaces = mysqlTable(
 			length: 255,
 		}).$type<ImageUpload.ImageUrlOrKey>(),
 		description: varchar("description", { length: 1000 }),
+		settings: json("settings").$type<{
+			disableSummary?: boolean;
+			disableCaptions?: boolean;
+			disableChapters?: boolean;
+			disableReactions?: boolean;
+			disableTranscript?: boolean;
+			disableComments?: boolean;
+		}>(),
+		password: encryptedTextNullable("password"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		privacy: varchar("privacy", { length: 255, enum: ["Public", "Private"] })

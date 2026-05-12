@@ -19,13 +19,14 @@ import {
 import { Input } from "~/routes/editor/ui";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
+import { importImageFromPicker, showImportError } from "~/utils/importMedia";
 import { commands, events, type RecordingMeta } from "~/utils/tauri";
 
-// Icons
 import IconCapTrash from "~icons/cap/trash";
 import IconLucideCopy from "~icons/lucide/copy";
 import IconLucideEdit from "~icons/lucide/edit";
 import IconLucideFolder from "~icons/lucide/folder";
+import IconLucideImport from "~icons/lucide/import";
 import IconLucideSearch from "~icons/lucide/search";
 
 type Screenshot = RecordingMeta & {
@@ -113,20 +114,42 @@ export default function Screenshots() {
 		commands.copyScreenshotToClipboard(path);
 	};
 
+	const handleImportImage = async () => {
+		try {
+			await importImageFromPicker();
+		} catch (e) {
+			console.error("Failed to import image:", e);
+			await showImportError("image", e);
+		}
+	};
+
 	return (
 		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
-			<div class="flex flex-col">
-				<h2 class="text-lg font-medium text-gray-12">Screenshots</h2>
-				<p class="text-sm text-gray-10">
-					Manage your screenshots and perform actions.
-				</p>
+			<div class="flex items-start justify-between gap-3">
+				<div class="flex flex-col">
+					<h2 class="text-lg font-medium text-gray-12">Screenshots</h2>
+					<p class="text-sm text-gray-10">
+						Manage your screenshots and perform actions.
+					</p>
+				</div>
+				<Button
+					variant="gray"
+					size="sm"
+					class="h-[36px] px-3 shrink-0 flex items-center gap-1.5"
+					onClick={handleImportImage}
+				>
+					<IconLucideImport class="size-3.5" />
+					<span>Import image</span>
+				</Button>
 			</div>
 			<Show
 				when={screenshots.data && screenshots.data.length > 0}
 				fallback={
-					<p class="text-center text-(--text-tertiary) absolute flex items-center justify-center w-full h-full">
-						No screenshots found
-					</p>
+					<div class="flex flex-1 items-center justify-center">
+						<p class="text-center text-(--text-tertiary)">
+							No screenshots found
+						</p>
+					</div>
 				}
 			>
 				<div class="flex flex-col gap-3 pb-4 w-full border-b border-gray-2">
@@ -255,7 +278,6 @@ function ScreenshotItem(props: {
 							!(await ask("Are you sure you want to delete this screenshot?"))
 						)
 							return;
-						// screenshot.path is the png file. Parent is the .cap folder.
 						const parent = props.screenshot.path.replace(/[/\\][^/\\]+$/, "");
 						await remove(parent, { recursive: true });
 

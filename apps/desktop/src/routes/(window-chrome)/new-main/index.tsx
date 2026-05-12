@@ -43,6 +43,11 @@ import {
 	type MicrophoneWithDetails,
 } from "~/utils/devices";
 import {
+	importImageFromPicker,
+	importVideoFromPicker,
+	showImportError,
+} from "~/utils/importMedia";
+import {
 	createCameraMutation,
 	createCurrentRecordingQuery,
 	createLicenseQuery,
@@ -1116,29 +1121,21 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							? "No matching cameras"
 							: "No matching microphones";
 
-	const handleImport = async () => {
-		const result = await dialog.open({
-			filters: [
-				{
-					name: "Video Files",
-					extensions: ["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"],
-				},
-			],
-			multiple: false,
-		});
+	const handleVideoImport = async () => {
+		try {
+			await importVideoFromPicker({ hideCurrentWindow: true });
+		} catch (e) {
+			console.error("Failed to import video:", e);
+			await showImportError("video", e);
+		}
+	};
 
-		if (result) {
-			try {
-				const projectPath = await commands.startVideoImport(result as string);
-				await commands.showWindow({ Editor: { project_path: projectPath } });
-				getCurrentWindow().hide();
-			} catch (e) {
-				console.error("Failed to import video:", e);
-				await dialog.message(
-					`Failed to import video: ${e instanceof Error ? e.message : String(e)}`,
-					{ title: "Import Error", kind: "error" },
-				);
-			}
+	const handleImageImport = async () => {
+		try {
+			await importImageFromPicker({ hideCurrentWindow: true });
+		} catch (e) {
+			console.error("Failed to import image:", e);
+			await showImportError("image", e);
 		}
 	};
 
@@ -1319,15 +1316,25 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							aria-label={placeholder}
 						/>
 					</div>
-					<Show when={props.variant === "recording"}>
+					<Show
+						when={
+							props.variant === "recording" || props.variant === "screenshot"
+						}
+					>
 						<Button
 							variant="gray"
 							size="sm"
 							class="h-[36px] px-3 shrink-0 flex items-center gap-1.5"
-							onClick={handleImport}
+							onClick={
+								props.variant === "screenshot"
+									? handleImageImport
+									: handleVideoImport
+							}
 						>
 							<IconLucideImport class="size-3.5" />
-							<span>Import</span>
+							<span>
+								{props.variant === "screenshot" ? "Import image" : "Import"}
+							</span>
 						</Button>
 					</Show>
 				</div>

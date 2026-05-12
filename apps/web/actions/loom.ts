@@ -4,13 +4,28 @@ import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { importedVideos, videos, videoUploads } from "@cap/database/schema";
+import {
+	importedVideos,
+	organizationMembers,
+	organizations,
+	spaceMembers,
+	spaces,
+	spaceVideos,
+	users,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
-import type { Organisation } from "@cap/web-domain";
-import { Video } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import {
+	type Organisation,
+	Space,
+	SpaceMemberId,
+	type User,
+	Video,
+} from "@cap/web-domain";
+import { and, eq, isNull } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
@@ -31,9 +46,36 @@ interface LoomDownloadResult {
 
 export interface LoomImportResult {
 	success: boolean;
-	videoId?: string;
+	videoId?: Video.VideoId;
 	error?: string;
 }
+
+export interface LoomCsvImportRow {
+	rowNumber: number;
+	loomUrl: string;
+	userEmail: string;
+	spaceName?: string;
+}
+
+export interface LoomCsvImportRowResult {
+	rowNumber: number;
+	userEmail: string;
+	spaceName?: string;
+	success: boolean;
+	videoId?: Video.VideoId;
+	error?: string;
+}
+
+export interface LoomCsvImportResult {
+	success: boolean;
+	importedCount: number;
+	failedCount: number;
+	results: LoomCsvImportRowResult[];
+	error?: string;
+}
+
+const MAX_LOOM_CSV_ROWS = 100;
+const MAX_LOOM_SPACE_NAME_LENGTH = 255;
 
 function extractLoomVideoId(url: string): string | null {
 	try {
@@ -217,25 +259,15 @@ export async function downloadLoomVideo(
 	}
 }
 
-export async function importFromLoom({
+async function importLoomVideoForOwner({
 	loomUrl,
 	orgId,
+	ownerId,
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
+	ownerId: User.UserId;
 }): Promise<LoomImportResult> {
-	const user = await getCurrentUser();
-	if (!user) return { success: false, error: "Unauthorized" };
-
-	if (!userIsPro(user)) {
-		return {
-			success: false,
-			error: "Importing from Loom requires a Cap Pro subscription.",
-		};
-	}
-
-	await requireOrganizationAccess(user.id, orgId);
-
 	const loomVideoId = extractLoomVideoId(loomUrl.trim());
 	if (!loomVideoId) {
 		return {
@@ -298,7 +330,7 @@ export async function importFromLoom({
 		fetchLoomOEmbed(loomVideoId),
 	]);
 
-	const writable = await Storage.getWritableAccessForUser(user.id, orgId).pipe(
+	const writable = await Storage.getWritableAccessForUser(ownerId, orgId).pipe(
 		runPromise,
 	);
 
@@ -312,7 +344,7 @@ export async function importFromLoom({
 		.values({
 			id: videoId,
 			name,
-			ownerId: user.id,
+			ownerId,
 			orgId,
 			source: { type: "webMP4" as const },
 			bucket: Option.getOrNull(writable.bucketId),
@@ -337,7 +369,7 @@ export async function importFromLoom({
 		sourceId: loomVideoId,
 	});
 
-	const rawFileKey = `${user.id}/${videoId}/raw-upload.mp4`;
+	const rawFileKey = `${ownerId}/${videoId}/raw-upload.mp4`;
 
 	if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
 		await dub()
@@ -352,7 +384,7 @@ export async function importFromLoom({
 	await start(importLoomVideoWorkflow, [
 		{
 			videoId,
-			userId: user.id,
+			userId: ownerId,
 			rawFileKey,
 			bucketId: Option.getOrNull(writable.bucketId),
 			loomDownloadUrl: downloadUrl,
@@ -363,4 +395,379 @@ export async function importFromLoom({
 	revalidatePath("/dashboard/caps");
 
 	return { success: true, videoId };
+}
+
+export async function importFromLoom({
+	loomUrl,
+	orgId,
+}: {
+	loomUrl: string;
+	orgId: Organisation.OrganisationId;
+}): Promise<LoomImportResult> {
+	const user = await getCurrentUser();
+	if (!user) return { success: false, error: "Unauthorized" };
+
+	if (!userIsPro(user)) {
+		return {
+			success: false,
+			error: "Importing from Loom requires a Cap Pro subscription.",
+		};
+	}
+
+	await requireOrganizationAccess(user.id, orgId);
+
+	return importLoomVideoForOwner({
+		loomUrl,
+		orgId,
+		ownerId: user.id,
+	});
+}
+
+function normalizeImportEmail(email: string) {
+	return email.trim().toLowerCase();
+}
+
+function normalizeImportSpaceName(spaceName: string) {
+	return spaceName.trim().replace(/\s+/g, " ");
+}
+
+function getSpaceNameCacheKey(spaceName: string) {
+	return normalizeImportSpaceName(spaceName).toLowerCase();
+}
+
+function isValidImportEmail(email: string) {
+	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function isValidImportSpaceName(spaceName: string) {
+	return spaceName.length <= MAX_LOOM_SPACE_NAME_LENGTH;
+}
+
+async function getOrganizationMemberByEmail(
+	orgId: Organisation.OrganisationId,
+	email: string,
+) {
+	const [member] = await db()
+		.select({
+			userId: organizationMembers.userId,
+			email: users.email,
+		})
+		.from(organizationMembers)
+		.innerJoin(users, eq(organizationMembers.userId, users.id))
+		.where(
+			and(
+				eq(organizationMembers.organizationId, orgId),
+				eq(users.email, email),
+			),
+		)
+		.limit(1);
+
+	return member ?? null;
+}
+
+async function isOrganizationOwner(
+	userId: User.UserId,
+	orgId: Organisation.OrganisationId,
+) {
+	const [organization] = await db()
+		.select({
+			ownerId: organizations.ownerId,
+		})
+		.from(organizations)
+		.where(and(eq(organizations.id, orgId), isNull(organizations.tombstoneAt)))
+		.limit(1);
+
+	return organization?.ownerId === userId;
+}
+
+type ImportSpaceCacheValue = {
+	id: Space.SpaceIdOrOrganisationId;
+	name: string;
+};
+
+async function getOrCreateImportSpace({
+	orgId,
+	createdById,
+	name,
+	spaceCache,
+}: {
+	orgId: Organisation.OrganisationId;
+	createdById: User.UserId;
+	name: string;
+	spaceCache: Map<string, ImportSpaceCacheValue>;
+}) {
+	const normalizedName = normalizeImportSpaceName(name);
+	const cacheKey = getSpaceNameCacheKey(normalizedName);
+	const cached = spaceCache.get(cacheKey);
+	if (cached) return cached;
+
+	const [existingSpace] = await db()
+		.select({
+			id: spaces.id,
+			name: spaces.name,
+		})
+		.from(spaces)
+		.where(
+			and(eq(spaces.organizationId, orgId), eq(spaces.name, normalizedName)),
+		)
+		.limit(1);
+
+	if (existingSpace) {
+		const value = {
+			id: existingSpace.id,
+			name: existingSpace.name,
+		};
+		spaceCache.set(cacheKey, value);
+		return value;
+	}
+
+	const spaceId = Space.SpaceId.make(nanoId());
+
+	await db().transaction(async (tx) => {
+		await tx.insert(spaces).values({
+			id: spaceId,
+			name: normalizedName,
+			organizationId: orgId,
+			createdById,
+			iconUrl: null,
+		});
+
+		await tx.insert(spaceMembers).values({
+			id: SpaceMemberId.make(nanoId()),
+			spaceId,
+			userId: createdById,
+			role: "Admin",
+		});
+	});
+
+	const value = {
+		id: spaceId,
+		name: normalizedName,
+	};
+	spaceCache.set(cacheKey, value);
+	return value;
+}
+
+async function addImportedVideoToSpace({
+	videoId,
+	spaceId,
+	addedById,
+}: {
+	videoId: Video.VideoId;
+	spaceId: Space.SpaceIdOrOrganisationId;
+	addedById: User.UserId;
+}) {
+	const [existingSpaceVideo] = await db()
+		.select({ id: spaceVideos.id })
+		.from(spaceVideos)
+		.where(
+			and(eq(spaceVideos.spaceId, spaceId), eq(spaceVideos.videoId, videoId)),
+		)
+		.limit(1);
+
+	if (existingSpaceVideo) return;
+
+	await db().insert(spaceVideos).values({
+		id: nanoId(),
+		spaceId,
+		videoId,
+		addedById,
+	});
+}
+
+export async function importFromLoomCsv({
+	rows,
+	orgId,
+}: {
+	rows: LoomCsvImportRow[];
+	orgId: Organisation.OrganisationId;
+}): Promise<LoomCsvImportResult> {
+	const user = await getCurrentUser();
+	if (!user) {
+		return {
+			success: false,
+			importedCount: 0,
+			failedCount: 0,
+			results: [],
+			error: "Unauthorized",
+		};
+	}
+
+	if (!userIsPro(user)) {
+		return {
+			success: false,
+			importedCount: 0,
+			failedCount: 0,
+			results: [],
+			error: "Importing from Loom requires a Cap Pro subscription.",
+		};
+	}
+
+	if (!(await isOrganizationOwner(user.id, orgId))) {
+		return {
+			success: false,
+			importedCount: 0,
+			failedCount: 0,
+			results: [],
+			error:
+				"Only the organization owner can import Loom videos from a CSV. Ask the owner to do it.",
+		};
+	}
+
+	const inputRows = Array.isArray(rows) ? rows : [];
+	const normalizedRows = inputRows
+		.map((row, index) => ({
+			rowNumber:
+				Number.isInteger(row.rowNumber) && row.rowNumber > 0
+					? row.rowNumber
+					: index + 2,
+			loomUrl: typeof row.loomUrl === "string" ? row.loomUrl.trim() : "",
+			userEmail:
+				typeof row.userEmail === "string"
+					? normalizeImportEmail(row.userEmail)
+					: "",
+			spaceName:
+				typeof row.spaceName === "string"
+					? normalizeImportSpaceName(row.spaceName)
+					: "",
+		}))
+		.filter((row) => row.loomUrl || row.userEmail || row.spaceName);
+
+	if (normalizedRows.length === 0) {
+		return {
+			success: false,
+			importedCount: 0,
+			failedCount: 0,
+			results: [],
+			error: "No rows found to import.",
+		};
+	}
+
+	if (normalizedRows.length > MAX_LOOM_CSV_ROWS) {
+		return {
+			success: false,
+			importedCount: 0,
+			failedCount: normalizedRows.length,
+			results: [],
+			error: `CSV imports are limited to ${MAX_LOOM_CSV_ROWS} rows at a time.`,
+		};
+	}
+
+	const results: LoomCsvImportRowResult[] = [];
+	const spaceCache = new Map<string, ImportSpaceCacheValue>();
+	const touchedSpaceIds = new Set<Space.SpaceIdOrOrganisationId>();
+
+	for (const row of normalizedRows) {
+		if (!row.loomUrl) {
+			results.push({
+				rowNumber: row.rowNumber,
+				userEmail: row.userEmail,
+				spaceName: row.spaceName || undefined,
+				success: false,
+				error: "Missing Loom video URL.",
+			});
+			continue;
+		}
+
+		if (!isValidImportEmail(row.userEmail)) {
+			results.push({
+				rowNumber: row.rowNumber,
+				userEmail: row.userEmail,
+				spaceName: row.spaceName || undefined,
+				success: false,
+				error: "Missing or invalid user email.",
+			});
+			continue;
+		}
+
+		if (!isValidImportSpaceName(row.spaceName)) {
+			results.push({
+				rowNumber: row.rowNumber,
+				userEmail: row.userEmail,
+				spaceName: row.spaceName,
+				success: false,
+				error: `Space name must be ${MAX_LOOM_SPACE_NAME_LENGTH} characters or fewer.`,
+			});
+			continue;
+		}
+
+		const member = await getOrganizationMemberByEmail(orgId, row.userEmail);
+
+		if (!member) {
+			results.push({
+				rowNumber: row.rowNumber,
+				userEmail: row.userEmail,
+				spaceName: row.spaceName || undefined,
+				success: false,
+				error: "This email is not a member of the organization.",
+			});
+			continue;
+		}
+
+		try {
+			const result = await importLoomVideoForOwner({
+				loomUrl: row.loomUrl,
+				orgId,
+				ownerId: member.userId,
+			});
+
+			let spaceName = row.spaceName || undefined;
+			let spaceError: string | undefined;
+			if (result.success && result.videoId && row.spaceName) {
+				try {
+					const space = await getOrCreateImportSpace({
+						orgId,
+						createdById: user.id,
+						name: row.spaceName,
+						spaceCache,
+					});
+					await addImportedVideoToSpace({
+						videoId: result.videoId,
+						spaceId: space.id,
+						addedById: user.id,
+					});
+					touchedSpaceIds.add(space.id);
+					spaceName = space.name;
+				} catch {
+					spaceError = "Import started, but it could not be added to a space.";
+				}
+			}
+
+			results.push({
+				rowNumber: row.rowNumber,
+				userEmail: row.userEmail,
+				spaceName,
+				success: result.success,
+				videoId: result.videoId,
+				error: result.error ?? spaceError,
+			});
+		} catch {
+			results.push({
+				rowNumber: row.rowNumber,
+				userEmail: row.userEmail,
+				spaceName: row.spaceName || undefined,
+				success: false,
+				error: "Failed to start this import.",
+			});
+		}
+	}
+
+	const importedCount = results.filter((result) => result.success).length;
+	const failedCount = results.length - importedCount;
+
+	for (const spaceId of touchedSpaceIds) {
+		revalidatePath(`/dashboard/spaces/${spaceId}`);
+	}
+
+	if (touchedSpaceIds.size > 0) {
+		revalidatePath("/dashboard");
+	}
+
+	return {
+		success: importedCount > 0,
+		importedCount,
+		failedCount,
+		results,
+		error: importedCount > 0 ? undefined : "No Loom videos were imported.",
+	};
 }

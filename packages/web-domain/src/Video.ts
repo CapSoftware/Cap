@@ -217,12 +217,24 @@ export class VerifyVideoPasswordError extends Schema.TaggedError<VerifyVideoPass
 ) {}
 
 export const verifyPassword = (video: Video, password: Option.Option<string>) =>
+	verifyPasswordCandidates(
+		video,
+		Option.match(password, {
+			onNone: () => [],
+			onSome: (value) => [value],
+		}),
+	);
+
+export const verifyPasswordCandidates = (
+	video: Video,
+	passwords: ReadonlyArray<string>,
+) =>
 	Effect.gen(function* () {
 		const passwordAttachment = yield* Effect.serviceOption(
 			VideoPasswordAttachment,
 		);
 
-		if (Option.isNone(password)) return;
+		if (passwords.length === 0) return;
 
 		if (
 			Option.isNone(passwordAttachment) ||
@@ -233,7 +245,7 @@ export const verifyPassword = (video: Video, password: Option.Option<string>) =>
 				cause: "not-provided",
 			});
 
-		if (passwordAttachment.value.password.value !== password.value)
+		if (!passwords.includes(passwordAttachment.value.password.value))
 			return yield* new VerifyVideoPasswordError({
 				id: video.id,
 				cause: "wrong-password",

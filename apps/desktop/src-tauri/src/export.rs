@@ -27,6 +27,28 @@ impl Drop for ExportActiveGuard<'_> {
     }
 }
 
+struct ExportPreviewActiveGuard<'a>(&'a AtomicBool);
+
+impl<'a> ExportPreviewActiveGuard<'a> {
+    fn try_new(flag: &'a AtomicBool) -> Result<Self, String> {
+        flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| Self(flag))
+            .map_err(|_| "Export preview generation is already in progress".to_string())
+    }
+}
+
+impl Drop for ExportPreviewActiveGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+async fn wait_for_export_preview_idle(flag: &AtomicBool) {
+    while flag.load(Ordering::Acquire) {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
 #[serde(tag = "format")]
 pub enum ExportSettings {
@@ -166,6 +188,10 @@ pub async fn export_video(
     } else {
         None
     };
+
+    if let Some(ref ed) = *editor {
+        wait_for_export_preview_idle(&ed.export_preview_active).await;
+    }
 
     let result = do_export(&project_path, &settings, &progress, force_ffmpeg).await;
 
@@ -574,6 +600,7 @@ pub async fn generate_export_preview_fast(
     if editor.export_active.load(Ordering::Acquire) {
         return Err("Export is in progress - preview generation skipped".to_string());
     }
+    let _preview_guard = ExportPreviewActiveGuard::try_new(&editor.export_preview_active)?;
 
     let project_config = export_project_config(
         editor.project_config.1.borrow().clone(),
@@ -592,7 +619,6 @@ pub async fn generate_export_preview_fast(
 
     let render_start = Instant::now();
 
-    editor.export_preview_active.store(true, Ordering::Release);
     let segment_frames = segment_media
         .decoders
         .get_frames(
@@ -602,7 +628,6 @@ pub async fn generate_export_preview_fast(
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
         .await;
-    editor.export_preview_active.store(false, Ordering::Release);
     let segment_frames = segment_frames.ok_or_else(|| "Failed to decode frame".to_string())?;
 
     let frame_number = (frame_time * settings.fps as f64).floor() as u32;

@@ -334,14 +334,19 @@ export function ExportPage() {
 		),
 	);
 
-	const fetchPreview = async (
-		frameTime: number,
-		fps: number,
-		resWidth: number,
-		resHeight: number,
-		bpp: number,
-		retryCount = 0,
-	) => {
+	type PreviewRequest = {
+		frameTime: number;
+		fps: number;
+		resWidth: number;
+		resHeight: number;
+		bpp: number;
+	};
+
+	let previewInFlight = false;
+	let pendingPreviewRequest: PreviewRequest | null = null;
+
+	const runPreviewRequest = async (request: PreviewRequest, retryCount = 0) => {
+		const { frameTime, fps, resWidth, resHeight, bpp } = request;
 		const cacheKey = getEstimateCacheKey(
 			fps,
 			resWidth,
@@ -390,16 +395,30 @@ export function ExportPage() {
 				await new Promise((resolve) =>
 					setTimeout(resolve, 200 * (retryCount + 1)),
 				);
-				return fetchPreview(
-					frameTime,
-					fps,
-					resWidth,
-					resHeight,
-					bpp,
-					retryCount + 1,
-				);
+				return runPreviewRequest(request, retryCount + 1);
+			}
+		}
+	};
+
+	const fetchPreview = async (
+		frameTime: number,
+		fps: number,
+		resWidth: number,
+		resHeight: number,
+		bpp: number,
+	) => {
+		pendingPreviewRequest = { frameTime, fps, resWidth, resHeight, bpp };
+		if (previewInFlight) return;
+
+		previewInFlight = true;
+		try {
+			while (pendingPreviewRequest) {
+				const request = pendingPreviewRequest;
+				pendingPreviewRequest = null;
+				await runPreviewRequest(request);
 			}
 		} finally {
+			previewInFlight = false;
 			setPreviewLoading(false);
 		}
 	};
@@ -436,6 +455,7 @@ export function ExportPage() {
 					compressionBpp(),
 				);
 			},
+			{ defer: true },
 		),
 	);
 
