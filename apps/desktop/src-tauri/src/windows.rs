@@ -931,14 +931,13 @@ impl CapWindow {
 
                         ensure_camera_input_active(&mut app_state).await;
 
-                        if enable_native_camera_preview {
-                            if let Err(err) =
+                        if enable_native_camera_preview
+                            && let Err(err) =
                                 init_native_camera_preview(&mut app_state, window.clone()).await
-                            {
-                                error!(
-                                    "Error reinitializing camera preview for existing window: {err}"
-                                );
-                            }
+                        {
+                            error!(
+                                "Error reinitializing camera preview for existing window: {err}"
+                            );
                         }
 
                         drop(app_state);
@@ -1013,14 +1012,11 @@ impl CapWindow {
 
                     ensure_camera_input_active(&mut app_state).await;
 
-                    if enable_native_camera_preview {
-                        if let Err(err) =
+                    if enable_native_camera_preview
+                        && let Err(err) =
                             init_native_camera_preview(&mut app_state, window.clone()).await
-                        {
-                            error!(
-                                "Error reinitializing camera preview for existing window: {err}"
-                            );
-                        }
+                    {
+                        error!("Error reinitializing camera preview for existing window: {err}");
                     }
 
                     drop(app_state);
@@ -1914,14 +1910,13 @@ impl CapWindow {
                         }
                     }
 
-                    if enable_native_camera_preview {
-                        if let Err(err) =
+                    if enable_native_camera_preview
+                        && let Err(err) =
                             init_native_camera_preview(&mut state, window.clone()).await
-                        {
-                            error!(
-                                "Error initializing camera preview, falling back to WebSocket preview: {err}"
-                            );
-                        }
+                    {
+                        error!(
+                            "Error initializing camera preview, falling back to WebSocket preview: {err}"
+                        );
                     }
 
                     #[cfg(not(target_os = "macos"))]

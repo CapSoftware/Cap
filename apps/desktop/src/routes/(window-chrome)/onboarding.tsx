@@ -303,7 +303,10 @@ function OnboardingAmbientBackdrop() {
 }
 
 export default function OnboardingPage() {
-	const [step, setStep] = createSignal(0);
+	const isMacOS = createMemo(() => ostype() === "macos");
+	const minStep = createMemo(() => (isMacOS() ? 0 : 1));
+
+	const [step, setStep] = createSignal(minStep());
 	const [showStartupOverlay, setShowStartupOverlay] = createSignal(true);
 	const [isExiting, setIsExiting] = createSignal(false);
 	const [permissionsNeeded, setPermissionsNeeded] = createSignal(false);
@@ -322,7 +325,6 @@ export default function OnboardingPage() {
 		}
 	});
 
-	const isMacOS = createMemo(() => ostype() === "macos");
 	const permissionsOnly = createMemo(
 		() => isMacOS() && isRevisit() && permissionsNeeded(),
 	);
@@ -332,6 +334,12 @@ export default function OnboardingPage() {
 		if (!isMacOS()) {
 			setPermsGranted(true);
 			setCorePermsGranted(true);
+		}
+	});
+
+	createEffect(() => {
+		if (step() < minStep()) {
+			setStep(minStep());
 		}
 	});
 
@@ -356,7 +364,7 @@ export default function OnboardingPage() {
 	});
 
 	const goToStep = (target: number) => {
-		if (target < 0 || target >= totalSteps()) return;
+		if (target < minStep() || target >= totalSteps()) return;
 		setStep(target);
 	};
 
@@ -372,9 +380,6 @@ export default function OnboardingPage() {
 		setIsExiting(true);
 		await generalSettingsStore.set({ hasCompletedStartup: true });
 		setTimeout(() => {
-			if (!isMacOS()) {
-				goToStep(1);
-			}
 			setShowStartupOverlay(false);
 			setIsExiting(false);
 		}, 600);
@@ -397,7 +402,7 @@ export default function OnboardingPage() {
 				if (!nextDisabled() && step() < totalSteps() - 1) goToStep(step() + 1);
 			} else if (e.key === "ArrowLeft") {
 				e.preventDefault();
-				if (step() > 0) goToStep(step() - 1);
+				if (step() > minStep()) goToStep(step() - 1);
 			} else if (e.key === "Enter") {
 				e.preventDefault();
 				if (!nextDisabled()) handleNext();
@@ -526,12 +531,12 @@ export default function OnboardingPage() {
 					</div>
 					<Show when={!showStartupOverlay() || isExiting()}>
 						<StepNavigation
-							current={step()}
-							total={totalSteps()}
+							current={step() - minStep()}
+							total={totalSteps() - minStep()}
 							onBack={() => goToStep(step() - 1)}
 							onNext={handleNext}
 							nextLabel={nextLabel()}
-							showBack={step() > 0}
+							showBack={step() > minStep()}
 							nextDisabled={nextDisabled()}
 							showSkipOnboarding={
 								corePermsGranted() &&
@@ -1771,7 +1776,7 @@ function StartupOverlay(props: {
 
 		const tryPlay = () => {
 			if (!audioEl || audioEl.muted) return;
-			void audioEl.play().catch(() => {});
+			void audioEl.play().catch(() => { });
 		};
 
 		tryPlay();
@@ -1793,7 +1798,7 @@ function StartupOverlay(props: {
 		setAudioState("isMuted", next);
 		if (audioEl) {
 			audioEl.muted = next;
-			if (!next) void audioEl.play().catch(() => {});
+			if (!next) void audioEl.play().catch(() => { });
 		}
 	};
 
@@ -2018,7 +2023,7 @@ function PermissionsStep(props: {
 			}
 		} catch (err) {
 			console.error(`Error requesting permission: ${err}`);
-			fetchPermissions().catch(() => {});
+			fetchPermissions().catch(() => { });
 		} finally {
 			setRequestingPermission(false);
 		}
@@ -2112,13 +2117,13 @@ function PermissionsStep(props: {
 											disabled={requestingPermission()}
 											onClick={() =>
 												permission.requiresManualGrant ||
-												permStatus() === "denied"
+													permStatus() === "denied"
 													? openSettings(permission.key)
 													: requestPermission(permission.key)
 											}
 										>
 											{permission.requiresManualGrant ||
-											permStatus() === "denied"
+												permStatus() === "denied"
 												? "Open Settings"
 												: "Grant"}
 										</Button>

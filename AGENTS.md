@@ -5,7 +5,7 @@
 These rules are enforced by CI (`cargo clippy -D warnings`, Biome). Fixing them afterwards is wasted effort — emit code in the correct shape the FIRST time. Every CI failure caused by one of these rules means the agent didn't read this section.
 
 ### Zero-tolerance rules
-- **No code comments anywhere.** Not `//`, `/* */`, `///`, `//!`, `#`, JSDoc, nor doc-strings injected into new code. Code must be self-explanatory via naming and types. This applies to every language: Rust, TS, JS, Python, shell, SQL, TOML, etc.
+- **Default to no code comments. Add a comment only after solving a bug or working through a complex issue, and only when it captures non-obvious context that a future investigator or reviewer genuinely needs** — e.g. why the fix looks the way it does, the upstream/platform bug being worked around, a non-obvious invariant or trade-off chosen after investigation, or a link to the PR/issue that explains the decision. Bad cases that remain banned: narrating what the code does, restating types, JSDoc that paraphrases parameter names, "TODO: refactor" or "this should be cleaner" notes, and any comment that just describes the change you are currently making. When in doubt, prefer better naming/types over a comment. Applies to every language: Rust, TS, JS, Python, shell, SQL, TOML, etc.
 - **Never edit generated files**: `**/tauri.ts`, `**/queries.ts`, `apps/desktop/src-tauri/gen/**`, `packages/ui-solid/src/auto-imports.d.ts`, Drizzle migration SQL under `packages/database/migrations/`.
 - **Never start additional dev servers** (`pnpm dev`, `pnpm dev:web`, `pnpm dev:desktop`, Docker services). Assume they are already running.
 
@@ -69,7 +69,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - Naming: files kebab‑case (`user-menu.tsx`); React/Solid components PascalCase; hooks `useX`; Rust modules snake_case; crates kebab‑case.
 - Runtime: Node 20, pnpm 10.5.2, Rust 1.88+, Docker for MySQL/MinIO.
 
-(See **Pre-Generation Invariants** at the top of this file for the zero-comments rule and the denied clippy/Biome patterns. Those are the source of truth — do not duplicate or weaken them here.)
+(See **Pre-Generation Invariants** at the top of this file for the comments policy and the denied clippy/Biome patterns. Those are the source of truth — do not duplicate or weaken them here.)
 
 ## Testing
 - TS/JS: Vitest where present (e.g., desktop). Name tests `*.test.ts(x)` near sources.
@@ -86,7 +86,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - Database flow: always `db:generate` → `db:push` before relying on new schema.
 - Keep secrets out of VCS; configure via `.env` from `pnpm env-setup`.
 - macOS note: desktop permissions (screen/mic) apply to the terminal running `pnpm dev:desktop`.
-- All other agent-facing rules (no comments, no editing generated files, clippy/Biome shape, post-edit gates) live in **Pre-Generation Invariants** at the top of this file.
+- All other agent-facing rules (comments policy, no editing generated files, clippy/Biome shape, post-edit gates) live in **Pre-Generation Invariants** at the top of this file.
 
 ## Effect Usage
 - Next.js API routes in `apps/web/app/api/*` are built with `@effect/platform`'s `HttpApi` builder; copy the existing class/group/endpoint pattern instead of ad-hoc handlers.

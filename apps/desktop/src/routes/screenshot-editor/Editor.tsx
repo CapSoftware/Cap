@@ -13,6 +13,7 @@ import {
 	Show,
 	Switch,
 } from "solid-js";
+import { unwrap } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import {
 	CROP_ZERO,
@@ -27,7 +28,7 @@ import IconCapCircleX from "~icons/cap/circle-x";
 import IconLucideMaximize from "~icons/lucide/maximize";
 import IconLucideRatio from "~icons/lucide/ratio";
 import { AnnotationConfigBar } from "./AnnotationConfig";
-import { useScreenshotEditorContext } from "./context";
+import { type Annotation, useScreenshotEditorContext } from "./context";
 import { Header } from "./Header";
 import { LayersPanel } from "./LayersPanel";
 import { Preview } from "./Preview";
@@ -40,12 +41,17 @@ export function Editor() {
 		projectHistory,
 		setActiveTool,
 		setSelectedAnnotationId,
+		annotations,
+		setAnnotations,
+		selectedAnnotationId,
 		layersPanelOpen,
 		setLayersPanelOpen,
 		activePopover,
 		setActivePopover,
 		isRenderReady,
 	} = useScreenshotEditorContext();
+	const [copiedAnnotation, setCopiedAnnotation] =
+		createSignal<Annotation | null>(null);
 
 	createEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -61,9 +67,41 @@ export function Editor() {
 
 			const isMod = e.metaKey || e.ctrlKey;
 			const isShift = e.shiftKey;
+			const key = e.key.toLowerCase();
+
+			if (isMod && key === "c") {
+				const id = selectedAnnotationId();
+				const annotation = annotations.find((a) => a.id === id);
+				if (annotation) {
+					e.preventDefault();
+					e.stopImmediatePropagation();
+					setCopiedAnnotation(structuredClone(unwrap(annotation)));
+					return;
+				}
+			}
+
+			if (isMod && key === "v") {
+				const annotation = copiedAnnotation();
+				if (annotation) {
+					e.preventDefault();
+					e.stopImmediatePropagation();
+					projectHistory.push();
+					const duplicate = {
+						...structuredClone(annotation),
+						id: crypto.randomUUID(),
+						x: annotation.x + 16,
+						y: annotation.y + 16,
+					};
+					setAnnotations((prev) => [...prev, duplicate]);
+					setSelectedAnnotationId(duplicate.id);
+					setActiveTool("select");
+					setCopiedAnnotation(duplicate);
+					return;
+				}
+			}
 
 			// Undo / Redo
-			if (isMod && e.key.toLowerCase() === "z") {
+			if (isMod && key === "z") {
 				e.preventDefault();
 				if (isShift) {
 					projectHistory.redo();
@@ -72,7 +110,7 @@ export function Editor() {
 				}
 				return;
 			}
-			if (isMod && e.key.toLowerCase() === "y") {
+			if (isMod && key === "y") {
 				e.preventDefault();
 				projectHistory.redo();
 				return;
@@ -80,7 +118,7 @@ export function Editor() {
 
 			// Tools (No modifiers)
 			if (!isMod && !isShift) {
-				switch (e.key.toLowerCase()) {
+				switch (key) {
 					case "a":
 						setActiveTool("arrow");
 						setSelectedAnnotationId(null);
