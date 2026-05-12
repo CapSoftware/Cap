@@ -80,6 +80,7 @@ export async function createTauriPlatformConfigs(
 		baseConfig = {
 			...baseConfig,
 			bundle: {
+				externalBin: ["binaries/cap-muxer", "binaries/cap-exporter"],
 				resources: {
 					"../../../target/ffmpeg/bin/*.dll": "./",
 				},
@@ -99,6 +100,7 @@ export async function createTauriPlatformConfigs(
 		baseConfig = {
 			...baseConfig,
 			bundle: {
+				externalBin: ["binaries/cap-muxer", "binaries/cap-exporter"],
 				resources: {
 					"../../../target/native-deps/onnxruntime/lib/libonnxruntime.dylib":
 						"onnxruntime/lib/libonnxruntime.dylib",

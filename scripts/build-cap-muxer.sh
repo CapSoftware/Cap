@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build the cap-muxer sidecar binary with the target-triple suffix Tauri's
-# externalBin expects, and copy it into apps/desktop/src-tauri/binaries.
+# Build desktop sidecar binaries with the target-triple suffix Tauri's
+# externalBin expects, and copy them into apps/desktop/src-tauri/binaries.
 #
 # Usage:
 #   scripts/build-cap-muxer.sh                    # uses host triple
@@ -26,18 +26,27 @@ case "$TARGET" in
     *windows*) EXT=".exe" ;;
 esac
 
-echo "Building cap-muxer for $TARGET..."
-cargo build --release -p cap-muxer --target "$TARGET"
-
 mkdir -p "$BINARIES_DIR"
 
-SRC="$REPO_ROOT/target/$TARGET/release/cap-muxer$EXT"
-DEST="$BINARIES_DIR/cap-muxer-$TARGET$EXT"
+build_sidecar() {
+    local package_name="$1"
+    local source_binary="$2"
+    local dest_binary="$3"
 
-if [[ ! -f "$SRC" ]]; then
-    echo "error: built binary not found at $SRC" >&2
-    exit 1
-fi
+    echo "Building $dest_binary for $TARGET..."
+    cargo build --release -p "$package_name" --target "$TARGET"
 
-cp "$SRC" "$DEST"
-echo "Copied $(realpath "$SRC" 2>/dev/null || echo "$SRC") -> $DEST"
+    local src="$REPO_ROOT/target/$TARGET/release/$source_binary$EXT"
+    local dest="$BINARIES_DIR/$dest_binary-$TARGET$EXT"
+
+    if [[ ! -f "$src" ]]; then
+        echo "error: built binary not found at $src" >&2
+        exit 1
+    fi
+
+    cp "$src" "$dest"
+    echo "Copied $(realpath "$src" 2>/dev/null || echo "$src") -> $dest"
+}
+
+build_sidecar "cap-muxer" "cap-muxer" "cap-muxer"
+build_sidecar "cap" "cap" "cap-exporter"

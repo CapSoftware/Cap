@@ -867,11 +867,24 @@ fn get_encoder_priority_with_override(
     preset: H264Preset,
     override_priority: Option<&'static [&'static str]>,
 ) -> &'static [&'static str] {
+    if force_software_encoder() {
+        return &["libx264"];
+    }
+
     if requires_software_encoder(config, preset) {
         return &["libx264"];
     }
 
     override_priority.unwrap_or_else(|| get_default_encoder_priority(config))
+}
+
+fn force_software_encoder() -> bool {
+    std::env::var("CAP_EXPORT_FORCE_SOFTWARE_ENCODER").is_ok_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn export_encoder_priority_override(

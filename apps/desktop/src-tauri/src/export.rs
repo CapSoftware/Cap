@@ -14,11 +14,13 @@ use std::any::Any;
 use std::panic::AssertUnwindSafe;
 use std::{
     path::{Path, PathBuf},
+    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
 };
+use tokio::io::AsyncBufReadExt;
 use tracing::{error, info, instrument};
 
 fn panic_message(panic: Box<dyn Any + Send>) -> String {
@@ -58,6 +60,232 @@ async fn run_protected_export(
     }
 }
 
+const EXPORTER_ENV_BIN_PATH: &str = "CAP_EXPORTER_BIN";
+const EXPORTER_STDERR_TAIL_LIMIT: usize = 80;
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum ExportSidecarMessage {
+    Progress {
+        rendered_count: u32,
+        total_frames: u32,
+    },
+    Completed {
+        path: PathBuf,
+    },
+}
+
+async fn run_out_of_process_export(
+    project_path: &Path,
+    settings: &ExportSettings,
+    progress: &tauri::ipc::Channel<FramesRendered>,
+    force_ffmpeg: bool,
+) -> Result<PathBuf, String> {
+    match run_out_of_process_export_attempt(project_path, settings, progress, force_ffmpeg, false)
+        .await
+    {
+        Ok(path) => Ok(path),
+        Err(e) if e != "Export cancelled" => {
+            error!(
+                error = %e,
+                "Export worker failed, retrying with software rendering and encoding"
+            );
+            run_out_of_process_export_attempt(project_path, settings, progress, force_ffmpeg, true)
+                .await
+        }
+        Err(e) => Err(e),
+    }
+}
+
+async fn run_out_of_process_export_attempt(
+    project_path: &Path,
+    settings: &ExportSettings,
+    progress: &tauri::ipc::Channel<FramesRendered>,
+    force_ffmpeg: bool,
+    safe_mode: bool,
+) -> Result<PathBuf, String> {
+    let bin_path = resolve_exporter_binary()?;
+    let settings_json = serde_json::to_string(settings)
+        .map_err(|e| format!("Failed to serialize settings: {e}"))?;
+
+    info!(
+        path = %bin_path.display(),
+        project_path = %project_path.display(),
+        force_ffmpeg,
+        safe_mode,
+        "Starting export worker process"
+    );
+
+    let mut command = tokio::process::Command::new(&bin_path);
+    command
+        .arg("export")
+        .arg(project_path)
+        .arg("--settings-json")
+        .arg(settings_json)
+        .arg("--progress-json")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if force_ffmpeg {
+        command.arg("--force-ffmpeg-decoder");
+    }
+
+    if safe_mode {
+        command
+            .env("CAP_RENDER_FORCE_SOFTWARE_ADAPTER", "1")
+            .env("CAP_EXPORT_FORCE_SOFTWARE_ENCODER", "1");
+    }
+
+    let mut child = command.spawn().map_err(|e| {
+        format!(
+            "Failed to start export worker '{}': {e}",
+            bin_path.display()
+        )
+    })?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Export worker stdout was not captured".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Export worker stderr was not captured".to_string())?;
+    let stderr_task = tokio::spawn(collect_exporter_stderr_tail(stderr));
+
+    let mut completed_path = None;
+    let mut stdout_lines = tokio::io::BufReader::new(stdout).lines();
+
+    while let Some(line) = stdout_lines
+        .next_line()
+        .await
+        .map_err(|e| format!("Failed reading export worker stdout: {e}"))?
+    {
+        match serde_json::from_str::<ExportSidecarMessage>(&line) {
+            Ok(ExportSidecarMessage::Progress {
+                rendered_count,
+                total_frames,
+            }) => {
+                if progress
+                    .send(FramesRendered {
+                        rendered_count,
+                        total_frames,
+                    })
+                    .is_err()
+                {
+                    let _ = child.kill().await;
+                    return Err("Export cancelled".to_string());
+                }
+            }
+            Ok(ExportSidecarMessage::Completed { path }) => {
+                completed_path = Some(path);
+            }
+            Err(e) => {
+                error!(
+                    line = %line,
+                    error = %e,
+                    "Ignoring invalid export worker stdout line"
+                );
+            }
+        }
+    }
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| format!("Failed waiting for export worker: {e}"))?;
+    let stderr_tail = stderr_task.await.unwrap_or_default();
+
+    if !status.success() {
+        let stderr_tail = stderr_tail.join("\n");
+        return Err(format!(
+            "Export worker exited with status {status}. Stderr tail:\n{stderr_tail}"
+        ));
+    }
+
+    completed_path
+        .ok_or_else(|| "Export worker finished without reporting an output path".to_string())
+}
+
+async fn collect_exporter_stderr_tail(stderr: tokio::process::ChildStderr) -> Vec<String> {
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+    let mut tail = Vec::new();
+
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                info!(line = %line, "Export worker stderr");
+                tail.push(line);
+                if tail.len() > EXPORTER_STDERR_TAIL_LIMIT {
+                    tail.remove(0);
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                tail.push(format!("failed reading stderr: {e}"));
+                break;
+            }
+        }
+    }
+
+    tail
+}
+
+fn resolve_exporter_binary() -> Result<PathBuf, String> {
+    if let Ok(override_path) = std::env::var(EXPORTER_ENV_BIN_PATH) {
+        let path = PathBuf::from(override_path);
+        if path.exists() {
+            return Ok(path);
+        }
+        return Err(format!(
+            "{EXPORTER_ENV_BIN_PATH} points to missing path: {}",
+            path.display()
+        ));
+    }
+
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    if let Some(dir) = exe.parent() {
+        let candidate = dir.join(exporter_bin_name());
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+
+        let candidate = dir.join("..").join("MacOS").join(exporter_bin_name());
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        for candidate in [
+            cwd.join("target").join("debug").join(cli_bin_name()),
+            cwd.join("target").join("release").join(cli_bin_name()),
+        ] {
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    Err(format!(
+        "Export worker binary not found; set {EXPORTER_ENV_BIN_PATH} or place {} next to the app executable",
+        exporter_bin_name()
+    ))
+}
+
+fn exporter_bin_name() -> &'static str {
+    if cfg!(windows) {
+        "cap-exporter.exe"
+    } else {
+        "cap-exporter"
+    }
+}
+
+fn cli_bin_name() -> &'static str {
+    if cfg!(windows) { "cap.exe" } else { "cap" }
+}
+
 struct ExportActiveGuard<'a>(&'a AtomicBool);
 
 impl Drop for ExportActiveGuard<'_> {
@@ -89,7 +317,7 @@ async fn wait_for_export_preview_idle(flag: &AtomicBool) {
     }
 }
 
-#[derive(Deserialize, Clone, Copy, Debug, Type)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Type)]
 #[serde(tag = "format")]
 pub enum ExportSettings {
     Mp4(cap_export::mp4::Mp4ExportSettings),
@@ -206,14 +434,29 @@ fn is_frame_decode_error(error: &str) -> bool {
 }
 
 fn should_force_ffmpeg_export(_project_path: &Path, settings: &ExportSettings) -> bool {
-    settings.force_ffmpeg_decoder() || should_use_windows_release_export_workaround()
+    settings.force_ffmpeg_decoder() || should_use_windows_release_ffmpeg_workaround()
 }
 
 fn should_force_ffmpeg_preview() -> bool {
-    should_use_windows_release_export_workaround()
+    should_use_windows_release_ffmpeg_workaround()
 }
 
-fn should_use_windows_release_export_workaround() -> bool {
+fn should_use_out_of_process_export() -> bool {
+    should_use_release_export_sidecar()
+}
+
+fn should_disable_in_process_export_preview() -> bool {
+    should_use_release_export_sidecar()
+}
+
+fn should_use_release_export_sidecar() -> bool {
+    cfg!(all(
+        any(target_os = "macos", target_os = "windows"),
+        not(debug_assertions)
+    ))
+}
+
+fn should_use_windows_release_ffmpeg_workaround() -> bool {
     cfg!(all(target_os = "windows", not(debug_assertions)))
 }
 
@@ -246,7 +489,11 @@ pub async fn export_video(
         wait_for_export_preview_idle(&ed.export_preview_active).await;
     }
 
-    let result = run_protected_export(&project_path, &settings, &progress, force_ffmpeg).await;
+    let result = if should_use_out_of_process_export() {
+        run_out_of_process_export(&project_path, &settings, &progress, force_ffmpeg).await
+    } else {
+        run_protected_export(&project_path, &settings, &progress, force_ffmpeg).await
+    };
 
     match result {
         Ok(path) => {
@@ -437,6 +684,11 @@ async fn generate_export_preview_inner(
     frame_time: f64,
     settings: ExportPreviewSettings,
 ) -> Result<ExportPreviewResult, String> {
+    if should_disable_in_process_export_preview() {
+        info!("Skipping in-process export preview for production export sidecar build");
+        return Err("Export preview disabled for this build".to_string());
+    }
+
     use base64::{Engine, engine::general_purpose::STANDARD};
     use cap_editor::create_segments;
     use std::time::Instant;
@@ -737,15 +989,14 @@ async fn generate_export_preview_fast_inner(
         return Err("Export is in progress - preview generation skipped".to_string());
     }
 
-    #[cfg(all(target_os = "windows", not(debug_assertions)))]
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), not(debug_assertions)))]
     {
-        let _preview_guard = ExportPreviewActiveGuard::try_new(&editor.export_preview_active)?;
-        info!("Using isolated FFmpeg renderer for Windows export preview");
-        return generate_export_preview_inner(editor.project_path.clone(), frame_time, settings)
-            .await;
+        let _ = (editor, frame_time, settings);
+        info!("Skipping in-process export preview for production export sidecar build");
+        return Err("Export preview disabled for this build".to_string());
     }
 
-    #[cfg(any(not(target_os = "windows"), debug_assertions))]
+    #[cfg(any(not(any(target_os = "macos", target_os = "windows")), debug_assertions))]
     {
         use base64::{Engine, engine::general_purpose::STANDARD};
         use std::time::Instant;
