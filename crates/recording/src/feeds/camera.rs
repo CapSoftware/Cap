@@ -327,7 +327,7 @@ struct FinalizePendingRelease {
     id: DeviceOrModelID,
 }
 
-struct SpawnCameraSetupArgs {
+struct CameraSetupArgs {
     id: DeviceOrModelID,
     generation: u64,
     settings: Option<CameraDeviceSettings>,
@@ -339,9 +339,9 @@ struct SpawnCameraSetupArgs {
 }
 
 fn spawn_camera_setup(
-    args: SpawnCameraSetupArgs,
+    args: CameraSetupArgs,
 ) -> (ReadyFuture, SyncSender<()>, std::thread::JoinHandle<()>) {
-    let SpawnCameraSetupArgs {
+    let CameraSetupArgs {
         id,
         generation,
         settings,
@@ -351,6 +351,7 @@ fn spawn_camera_setup(
         native_sender_count,
         flow,
     } = args;
+
     let (ready_tx, ready_rx) = oneshot::channel::<Result<InputConnected, SetInputError>>();
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
 
@@ -372,100 +373,13 @@ fn spawn_camera_setup(
             .build()
             .expect("Failed to build camera tokio runtime");
 
-        LocalSet::new().block_on(&runtime, async move {
+        {
             #[cfg(target_os = "macos")]
             let _capture_lifecycle_guard = camera_capture_lifecycle_guard();
 
-            if done_rx_thread.try_recv().is_ok() {
-                let _ = ready_tx_thread.send(Err(SetInputError::BuildStreamCrashed));
-
-                if matches!(flow, CameraSetupFlow::Open) {
-                    let _ = actor_ref
-                        .tell(InputConnectFailed {
-                            id: id.clone(),
-                            generation,
-                        })
-                        .await;
-                }
-
-                return;
-            }
-
-            let setup_result = setup_camera(
-                &id,
-                settings,
-                new_frame_recipient,
-                native_frame_recipient,
-                native_sender_count,
-            )
-            .await;
-
-            let handle = match setup_result {
-                Ok(result) => {
-                    let SetupCameraResult {
-                        handle,
-                        camera_info,
-                        video_info,
-                    } = result;
-
-                    let ready_payload = InputConnected {
-                        generation,
-                        id: id.clone(),
-                        camera_info: camera_info.clone(),
-                        video_info,
-                        done_tx: done_tx_thread.clone(),
-                    };
-
-                    match flow {
-                        CameraSetupFlow::Open => {
-                            let _ = ready_tx_thread.send(Ok(ready_payload.clone()));
-                            let _ = actor_ref.ask(ready_payload).await;
-                        }
-                        CameraSetupFlow::Locked => {
-                            let reconnect_result = actor_ref
-                                .ask(LockedCameraInputReconnected {
-                                    id: id.clone(),
-                                    camera_info,
-                                    video_info,
-                                    done_tx: done_tx_thread.clone(),
-                                })
-                                .await;
-
-                            match reconnect_result {
-                                Ok(true) => {
-                                    let _ = ready_tx_thread.send(Ok(ready_payload));
-                                    let _ = actor_ref
-                                        .tell(FinalizePendingRelease { id: id.clone() })
-                                        .await;
-                                }
-                                Ok(false) => {
-                                    warn!(
-                                        "Locked camera state changed before reconnecting {:?}",
-                                        id
-                                    );
-                                    let _ = ready_tx_thread
-                                        .send(Err(SetInputError::BuildStreamCrashed));
-                                    let _ = handle.stop_capturing();
-                                    return;
-                                }
-                                Err(err) => {
-                                    error!(
-                                        ?err,
-                                        "Failed to update locked camera state for {:?}", id
-                                    );
-                                    let _ = ready_tx_thread
-                                        .send(Err(SetInputError::BuildStreamCrashed));
-                                    let _ = handle.stop_capturing();
-                                    return;
-                                }
-                            }
-                        }
-                    }
-
-                    handle
-                }
-                Err(e) => {
-                    let _ = ready_tx_thread.send(Err(e.clone()));
+            LocalSet::new().block_on(&runtime, async move {
+                if done_rx_thread.try_recv().is_ok() {
+                    let _ = ready_tx_thread.send(Err(SetInputError::BuildStreamCrashed));
 
                     if matches!(flow, CameraSetupFlow::Open) {
                         let _ = actor_ref
@@ -478,27 +392,116 @@ fn spawn_camera_setup(
 
                     return;
                 }
-            };
 
-            info!(
-                "Camera capture thread: waiting for done signal for {:?}",
-                &id
-            );
+                let setup_result = setup_camera(
+                    &id,
+                    settings,
+                    new_frame_recipient,
+                    native_frame_recipient,
+                    native_sender_count,
+                )
+                .await;
 
-            drop(done_tx_thread);
-            let recv_result = done_rx_thread.recv();
+                let handle = match setup_result {
+                    Ok(result) => {
+                        let SetupCameraResult {
+                            handle,
+                            camera_info,
+                            video_info,
+                        } = result;
 
-            warn!(
-                "Camera capture thread: done signal received for {:?}, result={:?}",
-                &id, recv_result
-            );
+                        let ready_payload = InputConnected {
+                            generation,
+                            id: id.clone(),
+                            camera_info: camera_info.clone(),
+                            video_info,
+                            done_tx: done_tx_thread.clone(),
+                        };
 
-            let _ = handle.stop_capturing();
+                        match flow {
+                            CameraSetupFlow::Open => {
+                                let _ = ready_tx_thread.send(Ok(ready_payload.clone()));
+                                let _ = actor_ref.ask(ready_payload).await;
+                            }
+                            CameraSetupFlow::Locked => {
+                                let reconnect_result = actor_ref
+                                    .ask(LockedCameraInputReconnected {
+                                        id: id.clone(),
+                                        camera_info,
+                                        video_info,
+                                        done_tx: done_tx_thread.clone(),
+                                    })
+                                    .await;
 
-            std::thread::sleep(Duration::from_millis(50));
+                                match reconnect_result {
+                                    Ok(true) => {
+                                        let _ = ready_tx_thread.send(Ok(ready_payload));
+                                        let _ = actor_ref
+                                            .tell(FinalizePendingRelease { id: id.clone() })
+                                            .await;
+                                    }
+                                    Ok(false) => {
+                                        warn!(
+                                            "Locked camera state changed before reconnecting {:?}",
+                                            id
+                                        );
+                                        let _ = ready_tx_thread
+                                            .send(Err(SetInputError::BuildStreamCrashed));
+                                        let _ = handle.stop_capturing();
+                                        return;
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            ?err,
+                                            "Failed to update locked camera state for {:?}", id
+                                        );
+                                        let _ = ready_tx_thread
+                                            .send(Err(SetInputError::BuildStreamCrashed));
+                                        let _ = handle.stop_capturing();
+                                        return;
+                                    }
+                                }
+                            }
+                        }
 
-            warn!("Camera capture thread: stopped capture of {:?}", &id);
-        });
+                        handle
+                    }
+                    Err(e) => {
+                        let _ = ready_tx_thread.send(Err(e.clone()));
+
+                        if matches!(flow, CameraSetupFlow::Open) {
+                            let _ = actor_ref
+                                .tell(InputConnectFailed {
+                                    id: id.clone(),
+                                    generation,
+                                })
+                                .await;
+                        }
+
+                        return;
+                    }
+                };
+
+                info!(
+                    "Camera capture thread: waiting for done signal for {:?}",
+                    &id
+                );
+
+                drop(done_tx_thread);
+                let recv_result = done_rx_thread.recv();
+
+                warn!(
+                    "Camera capture thread: done signal received for {:?}, result={:?}",
+                    &id, recv_result
+                );
+
+                let _ = handle.stop_capturing();
+
+                std::thread::sleep(Duration::from_millis(50));
+
+                warn!("Camera capture thread: stopped capture of {:?}", &id);
+            });
+        }
 
         drop(runtime);
     });
@@ -960,7 +963,7 @@ impl Message<SetInput> for CameraFeed {
                 let native_frame_recipient = actor_ref.clone().recipient();
                 let id = msg.id.clone();
 
-                let (ready, done_tx, join_handle) = spawn_camera_setup(SpawnCameraSetupArgs {
+                let (ready, done_tx, join_handle) = spawn_camera_setup(CameraSetupArgs {
                     id: id.clone(),
                     generation,
                     settings: msg.settings,
@@ -997,7 +1000,7 @@ impl Message<SetInput> for CameraFeed {
                 let new_frame_recipient = actor_ref.clone().recipient();
                 let native_frame_recipient = actor_ref.clone().recipient();
 
-                let (ready, _done_tx, join_handle) = spawn_camera_setup(SpawnCameraSetupArgs {
+                let (ready, _done_tx, join_handle) = spawn_camera_setup(CameraSetupArgs {
                     id: msg.id.clone(),
                     generation,
                     settings: msg.settings,
