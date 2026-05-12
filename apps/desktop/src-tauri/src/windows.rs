@@ -2335,17 +2335,6 @@ impl CapWindow {
     }
 }
 
-#[tauri::command]
-#[specta::specta]
-#[instrument(skip(window))]
-pub fn set_theme(window: tauri::Window, theme: Appearance) {
-    let _ = window.set_theme(match theme {
-        Appearance::System => None,
-        Appearance::Light => Some(tauri::Theme::Light),
-        Appearance::Dark => Some(tauri::Theme::Dark),
-    });
-}
-
 fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
     let matches = |list: &[WindowExclusion]| {
         list.iter()
