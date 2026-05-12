@@ -26,7 +26,7 @@
 		"format": "pnpm exec biome check --write",
 		"lint": "pnpm exec biome lint",
 		"tauri:build": "node scripts/build-cap-muxer.mjs && dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
-		"typecheck": "pnpm tsc -b",
+		"typecheck": "pnpm --dir apps/web exec next typegen && pnpm tsc -b",
 		"test": "turbo run test",
 		"test:web": "pnpm --filter=@cap/web test",
 		"test:discover": "pnpm with-env cargo run -p cap-test -- discover",

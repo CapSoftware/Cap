@@ -2,12 +2,24 @@
 
 import type { VideoMetadata } from "@cap/database/types";
 import { Button } from "@cap/ui";
-import type { Organisation, Space, User, Video } from "@cap/web-domain";
-import { faFolderPlus, faInfoCircle } from "@fortawesome/free-solid-svg-icons";
+import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
+import type {
+	ImageUpload,
+	Organisation,
+	Space,
+	User,
+	Video,
+} from "@cap/web-domain";
+import {
+	faFolderPlus,
+	faGear,
+	faInfoCircle,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
+import SpaceDialog from "../../_components/Navbar/SpaceDialog";
 import { useDashboardContext } from "../../Contexts";
 import { CapPagination } from "../../caps/components/CapPagination";
 import Folder, { type FolderDataType } from "../../caps/components/Folder";
@@ -28,11 +40,26 @@ type SharedVideoData = {
 	ownerId: string;
 	name: string;
 	createdAt: Date;
+	public?: boolean;
 	totalComments: number;
 	totalReactions: number;
 	ownerName: string | null;
 	metadata?: VideoMetadata;
+	hasPassword?: boolean;
+	hasInheritedPassword?: boolean;
+	inheritedPasswordSources?: SpaceRuleSource[];
+	inheritedSpaceSettings?: Partial<Record<ViewerSettingKey, SpaceRuleSource[]>>;
+	sharedSpaces?: {
+		id: string;
+		name: string;
+		isOrg: boolean;
+		organizationId: string;
+		iconUrl?: ImageUpload.ImageUrl | null;
+		settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
+		hasPassword?: boolean;
+	}[];
 	hasActiveUpload: boolean | undefined;
+	settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
 }[];
 
 type SpaceData = {
@@ -40,6 +67,9 @@ type SpaceData = {
 	name: string;
 	organizationId: Organisation.OrganisationId;
 	createdById: User.UserId;
+	iconUrl?: ImageUpload.ImageUrl | null;
+	settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
+	hasPassword?: boolean;
 };
 
 export const SharedCaps = ({
@@ -82,6 +112,7 @@ export const SharedCaps = ({
 		isDragging: false,
 	});
 	const [isAddVideosDialogOpen, setIsAddVideosDialogOpen] = useState(false);
+	const [isSpaceSettingsOpen, setIsSpaceSettingsOpen] = useState(false);
 	const [
 		isAddOrganizationVideosDialogOpen,
 		setIsAddOrganizationVideosDialogOpen,
@@ -105,18 +136,51 @@ export const SharedCaps = ({
 		router.refresh();
 	};
 
+	const spaceSettingsDialog = spaceData ? (
+		<SpaceDialog
+			edit
+			open={isSpaceSettingsOpen}
+			onClose={() => setIsSpaceSettingsOpen(false)}
+			onSpaceUpdated={() => {
+				router.refresh();
+				setIsSpaceSettingsOpen(false);
+			}}
+			space={{
+				id: spaceData.id,
+				name: spaceData.name,
+				members: spaceMembers?.map((member) => member.userId) ?? [],
+				iconUrl: spaceData.iconUrl ?? undefined,
+				settings: spaceData.settings ?? null,
+				hasPassword: spaceData.hasPassword,
+			}}
+		/>
+	) : null;
+
 	if (data.length === 0 && folders?.length === 0) {
 		return (
 			<div className="flex relative flex-col w-full h-full">
+				{spaceSettingsDialog}
 				{spaceData && spaceMembers && (
-					<MembersIndicator
-						memberCount={spaceMemberCount}
-						members={spaceMembers}
-						organizationMembers={organizationMembers || []}
-						spaceId={spaceData.id}
-						canManageMembers={isSpaceOwner}
-						onAddVideos={() => setIsAddVideosDialogOpen(true)}
-					/>
+					<div className="flex flex-wrap gap-3">
+						<MembersIndicator
+							memberCount={spaceMemberCount}
+							members={spaceMembers}
+							organizationMembers={organizationMembers || []}
+							spaceId={spaceData.id}
+							canManageMembers={isSpaceOwner}
+							onAddVideos={() => setIsAddVideosDialogOpen(true)}
+						/>
+						{isSpaceOwner && (
+							<Button
+								variant="gray"
+								size="sm"
+								onClick={() => setIsSpaceSettingsOpen(true)}
+							>
+								<FontAwesomeIcon className="size-3" icon={faGear} />
+								Space settings
+							</Button>
+						)}
+					</div>
 				)}
 				{organizationData && organizationMembers && !spaceData && (
 					<OrganizationIndicator
@@ -163,6 +227,7 @@ export const SharedCaps = ({
 
 	return (
 		<div className="flex relative flex-col w-full h-full">
+			{spaceSettingsDialog}
 			{isDraggingCap.isDragging && (
 				<div className="fixed inset-0 z-50 pointer-events-none">
 					<div className="flex justify-center items-center w-full h-full">
@@ -187,14 +252,26 @@ export const SharedCaps = ({
 			/>
 			<div className="flex flex-wrap gap-3 mb-10">
 				{spaceData && spaceMembers && (
-					<MembersIndicator
-						memberCount={spaceMemberCount}
-						members={spaceMembers}
-						organizationMembers={organizationMembers || []}
-						spaceId={spaceData.id}
-						canManageMembers={isSpaceOwner}
-						onAddVideos={() => setIsAddVideosDialogOpen(true)}
-					/>
+					<>
+						<MembersIndicator
+							memberCount={spaceMemberCount}
+							members={spaceMembers}
+							organizationMembers={organizationMembers || []}
+							spaceId={spaceData.id}
+							canManageMembers={isSpaceOwner}
+							onAddVideos={() => setIsAddVideosDialogOpen(true)}
+						/>
+						{isSpaceOwner && (
+							<Button
+								variant="gray"
+								size="sm"
+								onClick={() => setIsSpaceSettingsOpen(true)}
+							>
+								<FontAwesomeIcon className="size-3" icon={faGear} />
+								Space settings
+							</Button>
+						)}
+					</>
 				)}
 				{organizationData && organizationMembers && !spaceData && (
 					<OrganizationIndicator

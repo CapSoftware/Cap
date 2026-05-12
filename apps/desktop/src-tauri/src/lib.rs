@@ -3923,6 +3923,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             export::generate_export_preview,
             export::generate_export_preview_fast,
             import::start_video_import,
+            import::start_image_import,
             import::check_import_ready,
             copy_file_to_path,
             copy_video_to_clipboard,
@@ -4725,8 +4726,17 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     }
                 }
                 WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+                    let window_id = CapWindowId::from_str(label).ok();
                     for path in paths {
-                        let _ = open_project_from_path(path, app.clone());
+                        let result = if matches!(window_id, Some(CapWindowId::Main)) {
+                            open_importable_from_path(path, app.clone())
+                        } else {
+                            open_project_from_path(path, app.clone())
+                        };
+
+                        if let Err(err) = result {
+                            warn!(path = %path.display(), error = %err, "Failed to open dropped path");
+                        }
                     }
                 }
                 WindowEvent::Moved(position) => {
@@ -5461,6 +5471,74 @@ trait EventExt: tauri_specta::Event {
 }
 
 impl<T: tauri_specta::Event> EventExt for T {}
+
+fn show_import_error_dialog(app: &AppHandle, message: String) {
+    app.dialog()
+        .message(message)
+        .title("Import Error")
+        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+        .show(|_| {});
+}
+
+fn hide_main_window(app: &AppHandle) {
+    if let Some(main_window) = CapWindowId::Main.get(app) {
+        let _ = main_window.hide();
+    }
+}
+
+fn open_importable_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
+    if import::is_supported_video_import_path(path) {
+        let source_path = path.to_path_buf();
+        tokio::spawn(async move {
+            match import::start_video_import(app.clone(), source_path).await {
+                Ok(project_path) => {
+                    if let Err(err) = (ShowCapWindow::Editor { project_path }).show(&app).await {
+                        error!("Failed to show imported video editor: {err}");
+                        show_import_error_dialog(
+                            &app,
+                            format!("Failed to open imported video: {err}"),
+                        );
+                        return;
+                    }
+
+                    hide_main_window(&app);
+                }
+                Err(err) => {
+                    error!("Failed to import dropped video: {err}");
+                    show_import_error_dialog(&app, format!("Failed to import video: {err}"));
+                }
+            }
+        });
+        return Ok(());
+    }
+
+    if import::is_supported_image_import_path(path) {
+        let source_path = path.to_path_buf();
+        tokio::spawn(async move {
+            match import::start_image_import(app.clone(), source_path).await {
+                Ok(path) => {
+                    if let Err(err) = (ShowCapWindow::ScreenshotEditor { path }).show(&app).await {
+                        error!("Failed to show imported image editor: {err}");
+                        show_import_error_dialog(
+                            &app,
+                            format!("Failed to open imported image: {err}"),
+                        );
+                        return;
+                    }
+
+                    hide_main_window(&app);
+                }
+                Err(err) => {
+                    error!("Failed to import dropped image: {err}");
+                    show_import_error_dialog(&app, format!("Failed to import image: {err}"));
+                }
+            }
+        });
+        return Ok(());
+    }
+
+    open_project_from_path(path, app)
+}
 
 fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
     let meta = RecordingMeta::load_for_project(path).map_err(|v| v.to_string())?;

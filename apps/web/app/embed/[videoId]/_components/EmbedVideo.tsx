@@ -4,6 +4,7 @@ import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Avatar, Logo } from "@cap/ui";
+import type { ViewerSettings } from "@cap/web-backend";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranscript } from "hooks/use-transcript";
 import {
@@ -56,6 +57,7 @@ export const EmbedVideo = forwardRef<
 		chapters?: { title: string; start: number }[];
 		ownerName?: string | null;
 		autoplay?: boolean;
+		viewerSettings?: ViewerSettings | null;
 		showPlaybackStatusBadge?: boolean;
 	}
 >(
@@ -67,6 +69,7 @@ export const EmbedVideo = forwardRef<
 			chapters = [],
 			ownerName,
 			autoplay: _autoplay = false,
+			viewerSettings,
 			showPlaybackStatusBadge = false,
 		},
 		ref,
@@ -86,10 +89,12 @@ export const EmbedVideo = forwardRef<
 		);
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
+		const captionsDisabled = viewerSettings?.disableCaptions ?? false;
+		const chaptersDisabled = viewerSettings?.disableChapters ?? false;
 
 		const { data: transcriptContent, error: transcriptError } = useTranscript(
 			data.id,
-			data.transcriptionStatus,
+			captionsDisabled ? null : data.transcriptionStatus,
 		);
 
 		useEffect(() => {
@@ -106,6 +111,7 @@ export const EmbedVideo = forwardRef<
 
 		useEffect(() => {
 			if (
+				!captionsDisabled &&
 				data.transcriptionStatus === "COMPLETE" &&
 				transcriptData &&
 				transcriptData.length > 0
@@ -125,10 +131,10 @@ export const EmbedVideo = forwardRef<
 				if (prev) URL.revokeObjectURL(prev);
 				return null;
 			});
-		}, [data.transcriptionStatus, transcriptData]);
+		}, [captionsDisabled, data.transcriptionStatus, transcriptData]);
 
 		useEffect(() => {
-			if (chapters?.length > 0) {
+			if (!chaptersDisabled && chapters?.length > 0) {
 				const vttContent = formatChaptersAsVTT(chapters);
 				const blob = new Blob([vttContent], { type: "text/vtt" });
 				const newUrl = URL.createObjectURL(blob);
@@ -144,7 +150,7 @@ export const EmbedVideo = forwardRef<
 				if (prev) URL.revokeObjectURL(prev);
 				return null;
 			});
-		}, [chapters]);
+		}, [chapters, chaptersDisabled]);
 
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
@@ -237,8 +243,9 @@ export const EmbedVideo = forwardRef<
 							rawFallbackSrc={rawFallbackSrc}
 							duration={data.duration}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}
-							chaptersSrc={chaptersUrl || ""}
-							captionsSrc={subtitleUrl || ""}
+							disableCaptions={captionsDisabled}
+							chaptersSrc={chaptersDisabled ? "" : chaptersUrl || ""}
+							captionsSrc={captionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							enableCrossOrigin={enableCrossOrigin}
 							hasActiveUpload={data.hasActiveUpload}
@@ -249,8 +256,9 @@ export const EmbedVideo = forwardRef<
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
 							duration={data.duration}
-							chaptersSrc={chaptersUrl || ""}
-							captionsSrc={subtitleUrl || ""}
+							disableCaptions={captionsDisabled}
+							chaptersSrc={chaptersDisabled ? "" : chaptersUrl || ""}
+							captionsSrc={captionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							hasActiveUpload={data.hasActiveUpload}
 							isLiveSegments={isSegmentsSource}

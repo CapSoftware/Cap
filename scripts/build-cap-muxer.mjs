@@ -62,7 +62,8 @@ async function isUpToDate(destPath, sourcePaths) {
 }
 
 async function main() {
-	const target = process.argv[2] || detectHostTriple();
+	const target =
+		process.argv[2] || process.env.RUST_TARGET_TRIPLE || detectHostTriple();
 	const ext = target.includes("windows") ? ".exe" : "";
 	const src = path.join(
 		repoRoot,
