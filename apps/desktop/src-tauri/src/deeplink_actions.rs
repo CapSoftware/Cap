@@ -161,7 +161,7 @@ impl DeepLinkAction {
                 crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
-                let capture_target = capture_target_from_mode(capture_mode)?;
+                let capture_target = capture_target_from_mode(capture_mode).await?;
 
                 let inputs = StartRecordingInputs {
                     mode,
@@ -193,7 +193,7 @@ impl DeepLinkAction {
             .await
             .map(|_| ()),
             DeepLinkAction::TakeScreenshot { capture_mode } => {
-                let capture_target = capture_target_from_mode(capture_mode)?;
+                let capture_target = capture_target_from_mode(capture_mode).await?;
                 let path = crate::recording::take_screenshot(app.clone(), capture_target).await?;
                 write_raycast_screenshot_result(app, path).await
             }
@@ -214,8 +214,8 @@ impl DeepLinkAction {
     }
 }
 
-fn capture_target_from_mode(capture_mode: CaptureMode) -> Result<ScreenCaptureTarget, String> {
-    match capture_mode {
+async fn capture_target_from_mode(capture_mode: CaptureMode) -> Result<ScreenCaptureTarget, String> {
+    tokio::task::spawn_blocking(move || match capture_mode {
         CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
             .into_iter()
             .find(|(screen, _)| screen.name == name)
@@ -226,7 +226,9 @@ fn capture_target_from_mode(capture_mode: CaptureMode) -> Result<ScreenCaptureTa
             .find(|(window, _)| window.name == name)
             .map(|(window, _)| ScreenCaptureTarget::Window { id: window.id })
             .ok_or(format!("No window with name \"{}\"", &name)),
-    }
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 async fn refresh_raycast_device_cache(app: &AppHandle) -> Result<(), String> {
