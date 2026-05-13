@@ -92,11 +92,18 @@ async fn run_out_of_process_export(
     progress: &tauri::ipc::Channel<FramesRendered>,
     force_ffmpeg: bool,
 ) -> Result<PathBuf, String> {
-    match run_out_of_process_export_attempt(project_path, settings, progress, force_ffmpeg, false)
-        .await
+    let safe_mode = should_start_export_sidecar_in_safe_mode();
+    match run_out_of_process_export_attempt(
+        project_path,
+        settings,
+        progress,
+        force_ffmpeg,
+        safe_mode,
+    )
+    .await
     {
         Ok(path) => Ok(path),
-        Err(e) if e != "Export cancelled" => {
+        Err(e) if e != "Export cancelled" && !safe_mode => {
             error!(
                 error = %e,
                 "Export worker failed, retrying with software rendering and encoding"
@@ -462,6 +469,10 @@ fn should_use_release_export_sidecar() -> bool {
         any(target_os = "macos", target_os = "windows"),
         not(debug_assertions)
     ))
+}
+
+fn should_start_export_sidecar_in_safe_mode() -> bool {
+    cfg!(all(target_os = "windows", not(debug_assertions)))
 }
 
 fn should_use_windows_release_ffmpeg_workaround() -> bool {
