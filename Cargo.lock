@@ -1441,6 +1441,7 @@ dependencies = [
 name = "cap-export"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-enc-gif",

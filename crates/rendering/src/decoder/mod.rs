@@ -692,14 +692,11 @@ pub async fn spawn_decoder(
     #[cfg(target_os = "windows")]
     {
         if force_ffmpeg {
-            info!(
-                "Video '{}' using FFmpeg decoder (forced via experimental setting)",
-                name
-            );
+            info!("Video '{}' using FFmpeg software decoder (forced)", name);
             let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
             let (tx, rx) = mpsc::channel();
 
-            ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx)
+            ffmpeg::FfmpegDecoder::spawn_with_hw_config(name, path, fps, rx, ready_tx, false)
                 .map_err(|e| format!("'{name}' FFmpeg decoder / {e}"))?;
 
             return match tokio::time::timeout(timeout_duration, ready_rx).await {

@@ -1674,6 +1674,11 @@ fn finalize_app_exit(app: &AppHandle, exit_code: i32) {
 }
 
 pub async fn request_app_exit(app: AppHandle) {
+    if export::export_session_active() {
+        warn!("Ignoring app exit request during active export");
+        return;
+    }
+
     let Some(exit_state) = app.try_state::<AppExitState>() else {
         warn!("Exit state unavailable while requesting app exit");
         finalize_app_exit(&app, 0);
@@ -3917,7 +3922,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             fake_window::remove_fake_window,
             focus_captures_panel,
             get_current_recording,
+            export::begin_export_session,
+            export::end_export_session,
             export::export_video,
+            export::export_video_no_progress,
+            export::export_video_no_progress_detached,
             export::get_export_estimates,
             export::generate_export_preview,
             export::generate_export_preview_fast,
@@ -4445,6 +4454,15 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
+                        if export::export_session_active() {
+                            api.prevent_close();
+                            warn!(
+                                window = label,
+                                "Preventing window close request during active export"
+                            );
+                            return;
+                        }
+
                         if let Ok(window_id) = CapWindowId::from_str(label) {
                             match window_id {
                                 CapWindowId::Camera => {
@@ -4889,6 +4907,11 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
             }
 
             api.prevent_exit();
+
+            if export::export_session_active() {
+                warn!("Preventing app exit request during active export");
+                return;
+            }
 
             let _ = code;
             let handle = _handle.clone();
