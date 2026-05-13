@@ -1,4 +1,7 @@
-use super::core::{BlockingThreadFinish, combine_finish_errors, wait_for_blocking_thread_finish};
+use super::core::{
+    BlockingThreadFinish, DiskSpaceMonitor, HealthSender, PipelineHealthEvent, SharedHealthSender,
+    combine_finish_errors, wait_for_blocking_thread_finish,
+};
 use crate::{
     AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer,
     output_pipeline::{NativeCameraFrame, camera_frame_to_ffmpeg},
@@ -37,16 +40,20 @@ struct FrameDropTracker {
     total_drops: u64,
     total_frames: u64,
     last_check: std::time::Instant,
+    health_tx: SharedHealthSender,
+    source: &'static str,
 }
 
 impl FrameDropTracker {
-    fn new() -> Self {
+    fn new(health_tx: SharedHealthSender, source: &'static str) -> Self {
         Self {
             drops_in_window: 0,
             frames_in_window: 0,
             total_drops: 0,
             total_frames: 0,
             last_check: std::time::Instant::now(),
+            health_tx,
+            source,
         }
     }
 
@@ -77,6 +84,10 @@ impl FrameDropTracker {
                         total_drops = self.total_drops,
                         "Windows M4S muxer frame drop rate exceeds 5% threshold"
                     );
+                    self.health_tx.emit(PipelineHealthEvent::FrameDropRateHigh {
+                        source: self.source.to_string(),
+                        rate_pct: drop_rate,
+                    });
                 } else if self.drops_in_window > 0 {
                     debug!(
                         frames = self.frames_in_window,
@@ -191,30 +202,39 @@ pub struct WindowsFragmentedM4SMuxer {
     video_config: VideoInfo,
     segment_duration: Duration,
     preset: H264Preset,
+    bpp: f32,
     output_size: Option<(u32, u32)>,
     state: Option<EncoderState>,
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
     disk_space_callback: Option<DiskSpaceCallback>,
+    segment_tx:
+        Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
+    health_tx: SharedHealthSender,
 }
 
 pub struct WindowsFragmentedM4SMuxerConfig {
     pub segment_duration: Duration,
     pub preset: H264Preset,
+    pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
+    pub segment_tx:
+        Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
 }
 
 impl Default for WindowsFragmentedM4SMuxerConfig {
     fn default() -> Self {
         Self {
-            segment_duration: Duration::from_secs(3),
+            segment_duration: Duration::from_secs(2),
             preset: H264Preset::Ultrafast,
+            bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
+            segment_tx: None,
         }
     }
 }
@@ -248,12 +268,18 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             video_config,
             segment_duration: config.segment_duration,
             preset: config.preset,
+            bpp: config.bpp,
             output_size: config.output_size,
             state: None,
             pause,
-            frame_drops: FrameDropTracker::new(),
+            frame_drops: FrameDropTracker::new(
+                SharedHealthSender::new(),
+                "muxer:windows-fragmented",
+            ),
             started: false,
             disk_space_callback: config.disk_space_callback,
+            segment_tx: config.segment_tx,
+            health_tx: SharedHealthSender::new(),
         };
 
         muxer.start_encoder()?;
@@ -283,6 +309,11 @@ impl Muxer for WindowsFragmentedM4SMuxer {
 
         Ok(Ok(()))
     }
+
+    fn set_health_sender(&mut self, tx: HealthSender) {
+        self.health_tx.set(tx);
+        self.frame_drops.health_tx = self.health_tx.clone();
+    }
 }
 
 impl WindowsFragmentedM4SMuxer {
@@ -300,7 +331,7 @@ impl WindowsFragmentedM4SMuxer {
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
             preset: self.preset,
-            bpp: H264EncoderBuilder::QUALITY_BPP,
+            bpp: self.bpp,
             output_size: self.output_size,
         };
 
@@ -309,10 +340,15 @@ impl WindowsFragmentedM4SMuxer {
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
         }
+        if let Some(tx) = self.segment_tx.take() {
+            encoder.set_segment_callback(tx);
+        }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
 
         let video_config = self.video_config;
+        let health_tx = self.health_tx.clone();
+        let base_path = self.base_path.clone();
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-segment-encoder".to_string())
             .spawn(move || {
@@ -331,6 +367,8 @@ impl WindowsFragmentedM4SMuxer {
                 let mut slow_encode_count = 0u32;
                 let mut total_frames = 0u64;
                 let mut duplicated_frames = 0u64;
+                let mut disk_monitor = DiskSpaceMonitor::new();
+                let mut disk_exhausted = false;
                 const SLOW_THRESHOLD_MS: u128 = 5;
 
                 let normalize_timestamp =
@@ -383,6 +421,17 @@ impl WindowsFragmentedM4SMuxer {
                 };
 
                 loop {
+                    if matches!(
+                        disk_monitor.poll(&base_path, &health_tx),
+                        super::core::DiskSpacePollResult::Exhausted { .. }
+                            | super::core::DiskSpacePollResult::Stopped
+                    ) {
+                        disk_exhausted = true;
+                    }
+                    if disk_exhausted {
+                        break;
+                    }
+
                     let convert_start = std::time::Instant::now();
 
                     let (ffmpeg_frame, timestamp) = match video_rx.recv_timeout(frame_interval) {
@@ -583,17 +632,20 @@ pub struct WindowsFragmentedM4SCameraMuxer {
     video_config: VideoInfo,
     segment_duration: Duration,
     preset: H264Preset,
+    bpp: f32,
     output_size: Option<(u32, u32)>,
     state: Option<CameraEncoderState>,
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
     disk_space_callback: Option<DiskSpaceCallback>,
+    health_tx: SharedHealthSender,
 }
 
 pub struct WindowsFragmentedM4SCameraMuxerConfig {
     pub segment_duration: Duration,
     pub preset: H264Preset,
+    pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
@@ -604,6 +656,7 @@ impl Default for WindowsFragmentedM4SCameraMuxerConfig {
         Self {
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
+            bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
@@ -641,12 +694,17 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
             video_config,
             segment_duration: config.segment_duration,
             preset: config.preset,
+            bpp: config.bpp,
             output_size: config.output_size,
             state: None,
             pause,
-            frame_drops: FrameDropTracker::new(),
+            frame_drops: FrameDropTracker::new(
+                SharedHealthSender::new(),
+                "muxer:windows-fragmented-camera",
+            ),
             started: false,
             disk_space_callback: config.disk_space_callback,
+            health_tx: SharedHealthSender::new(),
         };
 
         muxer.start_encoder()?;
@@ -675,6 +733,11 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
         }
 
         Ok(Ok(()))
+    }
+
+    fn set_health_sender(&mut self, tx: HealthSender) {
+        self.health_tx.set(tx);
+        self.frame_drops.health_tx = self.health_tx.clone();
     }
 }
 
@@ -735,7 +798,7 @@ impl WindowsFragmentedM4SCameraMuxer {
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
             preset: self.preset,
-            bpp: H264EncoderBuilder::QUALITY_BPP,
+            bpp: self.bpp,
             output_size: self.output_size,
         };
 
@@ -748,6 +811,8 @@ impl WindowsFragmentedM4SCameraMuxer {
         let encoder_clone = encoder.clone();
 
         let video_config = self.video_config;
+        let health_tx = self.health_tx.clone();
+        let base_path = self.base_path.clone();
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-camera-segment-encoder".to_string())
             .spawn(move || {
@@ -768,6 +833,8 @@ impl WindowsFragmentedM4SCameraMuxer {
                 let mut slow_encode_count = 0u32;
                 let mut total_frames = 0u64;
                 let mut duplicated_frames = 0u64;
+                let mut disk_monitor = DiskSpaceMonitor::new();
+                let mut disk_exhausted = false;
                 const SLOW_THRESHOLD_MS: u128 = 5;
 
                 let normalize_timestamp =
@@ -847,6 +914,17 @@ impl WindowsFragmentedM4SCameraMuxer {
                     };
 
                 loop {
+                    if matches!(
+                        disk_monitor.poll(&base_path, &health_tx),
+                        super::core::DiskSpacePollResult::Exhausted { .. }
+                            | super::core::DiskSpacePollResult::Stopped
+                    ) {
+                        disk_exhausted = true;
+                    }
+                    if disk_exhausted {
+                        break;
+                    }
+
                     let (frame_to_encode, timestamp) = match video_rx.recv_timeout(frame_interval) {
                         Ok(Some((frame, ts))) => {
                             last_frame = Some(frame.clone());

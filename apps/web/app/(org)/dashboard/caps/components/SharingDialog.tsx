@@ -8,6 +8,7 @@ import {
 	Input,
 	Switch,
 } from "@cap/ui";
+import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import { type ImageUpload, Space, type Video } from "@cap/web-domain";
 import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -39,11 +40,15 @@ interface SharingDialogProps {
 		name: string;
 		iconUrl?: string | null;
 		organizationId: string;
+		isOrg?: boolean;
+		settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
+		hasPassword?: boolean;
 	}[];
 	onSharingUpdated: (updatedSharedSpaces: string[]) => void;
 	isPublic?: boolean;
 	spacesData?: Spaces[] | null;
 	hasPassword?: boolean;
+	inheritedPasswordSources?: SpaceRuleSource[];
 	onPasswordUpdated?: (protectedStatus: boolean) => void;
 	user?: CurrentUser | null;
 	onUpgradeRequest?: (open: boolean) => void;
@@ -59,6 +64,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	isPublic = false,
 	spacesData: propSpacesData = null,
 	hasPassword = false,
+	inheritedPasswordSources = [],
 	onPasswordUpdated,
 	user: propUser,
 	onUpgradeRequest: propOnUpgradeRequest,
@@ -281,6 +287,26 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 		) || [];
 
 	const allShareableItems = [...organizationEntries, ...realSpaces];
+	const selectedInheritedPasswordSources = [
+		...inheritedPasswordSources.filter((source) =>
+			selectedSpaces.has(source.id),
+		),
+		...sharedSpaces
+			.filter((space) => selectedSpaces.has(space.id) && space.hasPassword)
+			.map((space) => ({ id: space.id, name: space.name })),
+		...allShareableItems
+			.filter((space) => selectedSpaces.has(space.id) && space.hasPassword)
+			.map((space) => ({ id: space.id, name: space.name })),
+	].filter(
+		(source, index, sources) =>
+			sources.findIndex((item) => item.id === source.id) === index,
+	);
+	const inheritedPasswordLabel =
+		selectedInheritedPasswordSources.length === 1
+			? `Required by ${selectedInheritedPasswordSources[0]?.name}`
+			: selectedInheritedPasswordSources.length > 1
+				? `Required by ${selectedInheritedPasswordSources.length} spaces`
+				: null;
 
 	const filteredSpaces = searchTerm
 		? allShareableItems.filter((space) =>
@@ -306,7 +332,8 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 
 				<div className="flex w-full h-12 border-b bg-gray-1 border-gray-4">
 					{tabs.map((tab) => (
-						<div
+						<button
+							type="button"
 							key={tab}
 							className={clsx(
 								"flex relative flex-1 justify-center items-center w-full min-w-0 text-sm font-medium transition-colors",
@@ -326,7 +353,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 							>
 								{tab}
 							</p>
-						</div>
+						</button>
 					))}
 				</div>
 
@@ -360,6 +387,25 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 								/>
 							</div>
 
+							{inheritedPasswordLabel && (
+								<div className="flex justify-between items-center p-3 mb-4 rounded-lg border bg-gray-1 border-gray-4">
+									<div className="flex gap-3 items-center">
+										<div className="flex justify-center items-center w-8 h-8 rounded-full bg-gray-3">
+											<Lock className="w-4 h-4 text-gray-11" />
+										</div>
+										<div>
+											<p className="text-sm font-medium text-gray-12">
+												Password required
+											</p>
+											<p className="text-xs text-gray-10">
+												{inheritedPasswordLabel}
+											</p>
+										</div>
+									</div>
+									<Switch checked disabled />
+								</div>
+							)}
+
 							<div
 								className={clsx(
 									"mb-4 rounded-lg border bg-gray-1 border-gray-4",
@@ -377,11 +423,15 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 													? initialPasswordEnabled
 														? "Password protected"
 														: "Password protection"
-													: "Add password"}
+													: inheritedPasswordLabel
+														? "Add another password"
+														: "Add password"}
 											</p>
 											<p className="text-xs text-gray-10">
 												{passwordEnabled
-													? "Viewers must enter a password to view"
+													? inheritedPasswordLabel
+														? "Viewers can use this password or a space password"
+														: "Viewers must enter a password to view"
 													: "Restrict access with a password"}
 											</p>
 										</div>
@@ -522,6 +572,8 @@ const SpaceCard = ({
 		name: string;
 		iconUrl?: ImageUpload.ImageUrl | null;
 		organizationId: string;
+		settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
+		hasPassword?: boolean;
 	};
 	selectedSpaces: Set<string>;
 	handleToggleSpace: (spaceId: string) => void;
@@ -537,7 +589,8 @@ const SpaceCard = ({
 					: space.name
 			}
 		>
-			<div
+			<button
+				type="button"
 				className={clsx(
 					"flex items-center relative overflow-visible flex-col justify-center gap-2 border transition-colors bg-gray-2",
 					"duration-200 w-full p-2.5 rounded-xl cursor-pointer",
@@ -557,6 +610,11 @@ const SpaceCard = ({
 				<p className="max-w-full text-xs truncate transition-colors duration-200 text-gray-10">
 					{space.name}
 				</p>
+				{space.hasPassword && (
+					<div className="absolute top-1 left-1 flex size-4 items-center justify-center rounded-full bg-amber-500 text-white">
+						<Lock size={10} />
+					</div>
+				)}
 				<motion.div
 					key={space.id}
 					animate={{
@@ -575,7 +633,7 @@ const SpaceCard = ({
 				>
 					<Check className="text-white" size={10} />
 				</motion.div>
-			</div>
+			</button>
 		</Tooltip>
 	);
 };

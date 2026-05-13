@@ -1,7 +1,7 @@
 {
 	"version": "1.0.0",
 	"steps": {
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nes_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
 			"fetch": {
 				"stepId": "step//workflow@4.2.0-beta.73//fetch"
 			}
@@ -32,6 +32,26 @@
 			},
 			"saveMetadataAndComplete": {
 				"stepId": "step//./workflows/import-loom-video//saveMetadataAndComplete"
+			},
+			"setProcessingError": {
+				"stepId": "step//./workflows/import-loom-video//setProcessingError"
+			}
+		},
+		"workflows/generate-ai.ts": {
+			"fetchTranscript": {
+				"stepId": "step//./workflows/generate-ai//fetchTranscript"
+			},
+			"generateWithAi": {
+				"stepId": "step//./workflows/generate-ai//generateWithAi"
+			},
+			"markSkipped": {
+				"stepId": "step//./workflows/generate-ai//markSkipped"
+			},
+			"saveResults": {
+				"stepId": "step//./workflows/generate-ai//saveResults"
+			},
+			"validateAndSetProcessing": {
+				"stepId": "step//./workflows/generate-ai//validateAndSetProcessing"
 			}
 		},
 		"workflows/transcribe.ts": {
@@ -66,7 +86,7 @@
 				"stepId": "step//./workflows/transcribe//validateVideo"
 			}
 		},
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nes_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
 			"__builtin_response_array_buffer": {
 				"stepId": "__builtin_response_array_buffer"
 			},
@@ -75,23 +95,6 @@
 			},
 			"__builtin_response_text": {
 				"stepId": "__builtin_response_text"
-			}
-		},
-		"workflows/generate-ai.ts": {
-			"fetchTranscript": {
-				"stepId": "step//./workflows/generate-ai//fetchTranscript"
-			},
-			"generateWithAi": {
-				"stepId": "step//./workflows/generate-ai//generateWithAi"
-			},
-			"markSkipped": {
-				"stepId": "step//./workflows/generate-ai//markSkipped"
-			},
-			"saveResults": {
-				"stepId": "step//./workflows/generate-ai//saveResults"
-			},
-			"validateAndSetProcessing": {
-				"stepId": "step//./workflows/generate-ai//validateAndSetProcessing"
 			}
 		}
 	},
@@ -162,16 +165,16 @@
 				}
 			}
 		},
-		"workflows/transcribe.ts": {
-			"transcribeVideoWorkflow": {
-				"workflowId": "workflow//./workflows/transcribe//transcribeVideoWorkflow",
+		"workflows/generate-ai.ts": {
+			"generateAiWorkflow": {
+				"workflowId": "workflow//./workflows/generate-ai//generateAiWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: transcribeVideoWorkflow",
+								"label": "Start: generateAiWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},
@@ -195,16 +198,16 @@
 				}
 			}
 		},
-		"workflows/generate-ai.ts": {
-			"generateAiWorkflow": {
-				"workflowId": "workflow//./workflows/generate-ai//generateAiWorkflow",
+		"workflows/transcribe.ts": {
+			"transcribeVideoWorkflow": {
+				"workflowId": "workflow//./workflows/transcribe//transcribeVideoWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: generateAiWorkflow",
+								"label": "Start: transcribeVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},

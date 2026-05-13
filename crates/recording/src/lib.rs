@@ -5,6 +5,7 @@ pub mod diagnostics;
 pub mod feeds;
 pub mod fragmentation;
 pub mod instant_recording;
+pub mod memory_profiling;
 mod output_pipeline;
 pub mod output_validation;
 pub mod recovery;
@@ -20,6 +21,7 @@ pub use resolution_limits::{H264_MAX_DIMENSION, calculate_gpu_compatible_size};
 pub mod test_sources;
 
 pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};
+pub use output_pipeline::oop_muxer;
 pub use output_pipeline::*;
 pub use sources::screen_capture;
 
@@ -39,6 +41,14 @@ pub enum RecordingMode {
     Studio,
     Instant,
     Screenshot,
+}
+
+#[derive(Clone, Debug, Copy, Default, PartialEq, Eq)]
+pub enum StudioQuality {
+    Compatibility,
+    #[default]
+    Balanced,
+    Ultra,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]

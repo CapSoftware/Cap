@@ -1,5 +1,6 @@
 use anyhow::anyhow;
 use cap_fail::fail;
+use cap_media_info::ffmpeg_sample_format_for;
 use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
@@ -27,6 +28,7 @@ use cap_recording::{
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, moment_format_to_chrono, spawn_actor};
+use cpal::traits::DeviceTrait;
 use futures::{FutureExt, stream};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -37,7 +39,7 @@ use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::{
     any::Any,
-    collections::{HashMap, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     str::FromStr,
@@ -67,7 +69,7 @@ use crate::{
     thumbnails::*,
     upload::{InstantMultipartUpload, SegmentUploader, compress_image},
     web_api::ManagerExt,
-    windows::{CapWindowId, ShowCapWindow},
+    windows::{CapWindowId, ShowCapWindow, hide_overlay},
 };
 
 #[derive(Clone)]
@@ -75,6 +77,7 @@ pub struct InProgressRecordingCommon {
     pub target_name: String,
     pub inputs: StartRecordingInputs,
     pub recording_dir: PathBuf,
+    pub health: Arc<crate::recording_telemetry::RecordingHealthAccumulator>,
 }
 
 pub struct StopFailureContext {
@@ -88,11 +91,13 @@ pub enum InProgressRecording {
         segment_upload: SegmentUploader,
         video_upload_info: VideoUploadInfo,
         common: InProgressRecordingCommon,
+        mic_feed: Option<Arc<microphone::MicrophoneFeedLock>>,
         camera_feed: Option<Arc<CameraFeedLock>>,
     },
     Studio {
         handle: studio_recording::ActorHandle,
         common: InProgressRecordingCommon,
+        mic_feed: Option<Arc<microphone::MicrophoneFeedLock>>,
         camera_feed: Option<Arc<CameraFeedLock>>,
     },
 }
@@ -164,6 +169,13 @@ impl InProgressRecording {
         match self {
             Self::Instant { common, .. } => &common.inputs,
             Self::Studio { common, .. } => &common.inputs,
+        }
+    }
+
+    pub fn common(&self) -> &InProgressRecordingCommon {
+        match self {
+            Self::Instant { common, .. } => common,
+            Self::Studio { common, .. } => common,
         }
     }
 
@@ -391,6 +403,14 @@ pub struct MicrophoneInfo {
     pub name: String,
     pub sample_rate: u32,
     pub channels: u16,
+    pub formats: Vec<MicrophoneFormatInfo>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneFormatInfo {
+    pub sample_rate: u32,
+    pub channels: u16,
 }
 
 #[tauri::command(async)]
@@ -406,33 +426,86 @@ pub fn get_microphone_info(name: String) -> Option<MicrophoneInfo> {
     microphone::MicrophoneFeed::list()
         .into_iter()
         .find(|(n, _)| *n == name)
-        .map(|(name, (_device, config))| MicrophoneInfo {
-            name,
-            sample_rate: config.sample_rate().0,
-            channels: config.channels(),
+        .map(|(name, (device, config))| {
+            let formats = microphone_format_infos(&device);
+            MicrophoneInfo {
+                name,
+                sample_rate: config.sample_rate().0,
+                channels: config.channels(),
+                formats,
+            }
         })
+}
+
+fn microphone_format_infos(device: &cpal::Device) -> Vec<MicrophoneFormatInfo> {
+    let Ok(configs) = device.supported_input_configs() else {
+        return vec![];
+    };
+    let mut formats = BTreeSet::new();
+
+    for config in configs {
+        if ffmpeg_sample_format_for(config.sample_format()).is_none() {
+            continue;
+        }
+
+        for sample_rate in [
+            config.min_sample_rate().0,
+            44_100,
+            48_000,
+            96_000,
+            config.max_sample_rate().0,
+        ] {
+            if config.min_sample_rate().0 <= sample_rate
+                && sample_rate <= config.max_sample_rate().0
+            {
+                formats.insert((sample_rate, config.channels()));
+            }
+        }
+    }
+
+    formats
+        .into_iter()
+        .map(|(sample_rate, channels)| MicrophoneFormatInfo {
+            sample_rate,
+            channels,
+        })
+        .collect()
 }
 
 #[tauri::command]
 #[specta::specta]
 #[instrument]
 pub async fn list_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThumbnail>, String> {
-    tokio::task::spawn_blocking(|| {
-        tauri::async_runtime::block_on(collect_displays_with_thumbnails())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    run_non_send_thumbnail_future(collect_displays_with_thumbnails())
 }
 
 #[tauri::command]
 #[specta::specta]
 #[instrument]
 pub async fn list_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithThumbnail>, String> {
-    tokio::task::spawn_blocking(
-        || tauri::async_runtime::block_on(collect_windows_with_thumbnails()),
-    )
-    .await
-    .map_err(|e| e.to_string())?
+    run_non_send_thumbnail_future(collect_windows_with_thumbnails())
+}
+
+fn run_non_send_thumbnail_future<T, F>(future: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| tauri::async_runtime::block_on(future))
+        } else {
+            tauri::async_runtime::block_on(future)
+        }
+    }));
+
+    match result {
+        Ok(result) => result,
+        Err(panic) => {
+            let message = crate::panic_payload_message(&panic);
+            error!(panic = %message, "Suppressed panic while collecting capture thumbnails");
+            Err(format!("Failed to collect capture thumbnails: {message}"))
+        }
+    }
 }
 
 #[derive(Deserialize, Type, Clone, Debug)]
@@ -587,16 +660,17 @@ pub async fn start_recording(
             let mut app_state = state_mtx.write().await;
             app_state.was_camera_only_recording = true;
 
-            let current_mirrored = app_state
+            let (current_mirrored, current_background_blur) = app_state
                 .camera_preview
                 .get_state()
-                .map(|s| s.mirrored)
-                .unwrap_or(false);
+                .map(|s| (s.mirrored, s.background_blur))
+                .unwrap_or_default();
 
             let camera_state = CameraPreviewState {
                 size: crate::camera::CAMERA_PRESET_LARGE,
                 shape: CameraPreviewShape::Full,
                 mirrored: current_mirrored,
+                background_blur: current_background_blur,
             };
 
             if let Err(err) = app_state.camera_preview.set_state(camera_state) {
@@ -633,6 +707,37 @@ pub async fn start_recording(
     let filename = format!("{}.cap", sanitize_filename::sanitize(&filename));
 
     let recordings_base_dir = app.path().app_data_dir().unwrap().join("recordings");
+
+    ensure_dir(&recordings_base_dir)
+        .map_err(|e| format!("Failed to create recordings directory: {e}"))?;
+
+    match cap_utils::disk_space::free_bytes_for_path(&recordings_base_dir) {
+        Ok(bytes) => {
+            if bytes <= cap_utils::disk_space::LOW_DISK_STOP_BYTES {
+                let gb = bytes as f64 / 1_073_741_824.0;
+                error!(
+                    bytes_remaining = bytes,
+                    "Refusing to start recording: disk full"
+                );
+                return Err(format!(
+                    "Not enough disk space to start recording ({:.2} GB free). Free up at least {} MB and try again.",
+                    gb,
+                    (cap_utils::disk_space::LOW_DISK_STOP_BYTES / (1024 * 1024))
+                ));
+            }
+            if bytes <= cap_utils::disk_space::LOW_DISK_WARN_BYTES {
+                let gb = bytes as f64 / 1_073_741_824.0;
+                warn!(
+                    bytes_remaining = bytes,
+                    available_gb = gb,
+                    "Starting recording with low disk space"
+                );
+            }
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to check disk space before starting recording");
+        }
+    }
 
     let project_file_path = recordings_base_dir.join(&cap_utils::ensure_unique_filename(
         &filename,
@@ -767,7 +872,7 @@ pub async fn start_recording(
         .filter_map(|(label, win)| CapWindowId::from_str(label).ok().map(|id| (id, win)))
     {
         if matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
-            win.hide().ok();
+            hide_overlay(win);
         }
     }
     let _ = ShowCapWindow::InProgressRecording {
@@ -809,9 +914,19 @@ pub async fn start_recording(
             use kameo::error::SendError;
 
             // Initialize camera if selected but not active
-            let (camera_feed_actor, selected_camera_id) = {
+            let (camera_feed_actor, selected_camera_id, selected_camera_settings) = {
                 let state = state_mtx.read().await;
-                (state.camera_feed.clone(), state.selected_camera_id.clone())
+                let selected_camera_settings = state.selected_camera_id.as_ref().and_then(|id| {
+                    crate::recording_settings::RecordingSettingsStore::camera_settings_for(
+                        &state.handle,
+                        id,
+                    )
+                });
+                (
+                    state.camera_feed.clone(),
+                    state.selected_camera_id.clone(),
+                    selected_camera_settings,
+                )
             };
 
             let camera_lock_result = camera_feed_actor.ask(camera::Lock).await;
@@ -825,7 +940,10 @@ pub async fn start_recording(
                             id
                         );
                         match camera_feed_actor
-                            .ask(camera::SetInput { id: id.clone() })
+                            .ask(camera::SetInput {
+                                id: id.clone(),
+                                settings: selected_camera_settings,
+                            })
                             .await
                         {
                             Ok(fut) => match fut.await {
@@ -865,10 +983,12 @@ pub async fn start_recording(
                 _ => Some(acquire_shareable_content_for_target(&inputs.capture_target).await?),
             };
 
+            let health = crate::recording_telemetry::RecordingHealthAccumulator::new();
             let common = InProgressRecordingCommon {
                 target_name: project_name,
                 inputs: inputs.clone(),
                 recording_dir: recording_dir.clone(),
+                health,
             };
 
             #[cfg(target_os = "macos")]
@@ -879,21 +999,43 @@ pub async fn start_recording(
                         settings.excluded_windows.clone()
                     });
 
+                let window_exclusions = if matches!(inputs.mode, RecordingMode::Instant) {
+                    let camera_title = CapWindowId::Camera.title();
+                    crate::window_exclusion::filter_for_instant_mode(
+                        window_exclusions,
+                        &camera_title,
+                    )
+                } else {
+                    window_exclusions
+                };
+
                 crate::window_exclusion::resolve_window_ids(&window_exclusions)
             };
 
             let mut mic_restart_attempts = 0;
 
             let (done_fut, health_rx) = loop {
-                let mic_feed = match state.mic_feed.ask(microphone::Lock).await {
-                    Ok(lock) => Some(Arc::new(lock)),
-                    Err(SendError::HandlerError(microphone::LockFeedError::NoInput)) => None,
-                    Err(e) => return Err(anyhow!(e.to_string())),
-                };
+                let selected_mic_label = state.selected_mic_label.clone();
+                let selected_mic_settings = selected_mic_label
+                    .as_ref()
+                    .and_then(|label| state.microphone_settings_for_label(label));
+                let mic_feed = lock_selected_microphone(
+                    &state.mic_feed,
+                    selected_mic_label,
+                    selected_mic_settings,
+                )
+                .await?;
 
                 let actor_result: Result<InProgressRecording, anyhow::Error> = async {
                     match inputs.mode {
                         RecordingMode::Studio => {
+                            let max_fps =
+                                general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60);
+                            let max_fps = if camera_feed.is_some() {
+                                max_fps.min(30)
+                            } else {
+                                max_fps
+                            };
                             let mut builder = studio_recording::Actor::builder(
                                 recording_dir.clone(),
                                 inputs.capture_target.clone(),
@@ -915,10 +1057,31 @@ pub async fn start_recording(
                                 general_settings
                                     .as_ref()
                                     .map(|s| s.crash_recovery_recording)
-                                    .unwrap_or_default(),
+                                    .unwrap_or(true),
                             )
-                            .with_max_fps(
-                                general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60),
+                            .with_out_of_process_muxer(
+                                general_settings
+                                    .as_ref()
+                                    .map(|s| s.out_of_process_muxer)
+                                    .unwrap_or(false),
+                            )
+                            .with_max_fps(max_fps)
+                            .with_quality(
+                                match general_settings
+                                    .as_ref()
+                                    .map(|s| s.studio_recording_quality)
+                                    .unwrap_or_default()
+                                {
+                                    crate::general_settings::StudioRecordingQuality::Compatibility => {
+                                        cap_recording::StudioQuality::Compatibility
+                                    }
+                                    crate::general_settings::StudioRecordingQuality::Balanced => {
+                                        cap_recording::StudioQuality::Balanced
+                                    }
+                                    crate::general_settings::StudioRecordingQuality::Ultra => {
+                                        cap_recording::StudioQuality::Ultra
+                                    }
+                                },
                             );
 
                             #[cfg(target_os = "macos")]
@@ -948,6 +1111,7 @@ pub async fn start_recording(
                             Ok(InProgressRecording::Studio {
                                 handle,
                                 common: common.clone(),
+                                mic_feed: mic_feed.clone(),
                                 camera_feed: camera_feed.clone(),
                             })
                         }
@@ -1021,6 +1185,7 @@ pub async fn start_recording(
                                 segment_upload,
                                 video_upload_info,
                                 common: common.clone(),
+                                mic_feed: mic_feed.clone(),
                                 camera_feed: camera_feed.clone(),
                             })
                         }
@@ -1093,6 +1258,8 @@ pub async fn start_recording(
     let _ = RecordingEvent::Started.emit(&app);
     let _ = RecordingStarted.emit(&app);
 
+    emit_recording_started_telemetry(&app, &state_mtx).await;
+
     spawn_actor({
         let app = app.clone();
         let state_mtx = Arc::clone(&state_mtx);
@@ -1144,15 +1311,129 @@ pub async fn start_recording(
     });
 
     if let Some(mut health_rx) = health_rx {
+        let accumulator_mode = {
+            let state = state_mtx.read().await;
+            state
+                .current_recording()
+                .map(|r| (r.common().health.clone(), r.inputs().mode))
+        };
+
         spawn_actor({
             let app = app.clone();
             async move {
                 let mut is_degraded = false;
                 while let Some(event) = health_rx.recv().await {
-                    let reason = match &event {
-                        cap_recording::PipelineHealthEvent::FrameDropRateHigh { rate_pct } => {
-                            Some(format!("High frame drop rate: {rate_pct:.0}%"))
+                    if let Some((health, mode)) = accumulator_mode.as_ref()
+                        && let Some((reason_text, critical)) = health.record_event(&event)
+                    {
+                        use crate::posthog::{PostHogEvent, async_capture_event};
+                        use crate::recording_telemetry::{CriticalEvent, mode_label};
+                        match critical {
+                            CriticalEvent::MuxerCrashed {
+                                seconds_into_recording,
+                                ..
+                            } => {
+                                async_capture_event(
+                                    &app,
+                                    PostHogEvent::RecordingMuxerCrashed {
+                                        mode: mode_label(*mode),
+                                        reason: reason_text,
+                                        seconds_into_recording,
+                                    },
+                                );
+                            }
+                            CriticalEvent::AudioDegraded {
+                                seconds_into_recording,
+                                ..
+                            } => {
+                                async_capture_event(
+                                    &app,
+                                    PostHogEvent::RecordingAudioDegraded {
+                                        mode: mode_label(*mode),
+                                        reason: reason_text,
+                                        seconds_into_recording,
+                                    },
+                                );
+                            }
                         }
+                    }
+
+                    if let Some((_, mode)) = accumulator_mode.as_ref() {
+                        use crate::posthog::{PostHogEvent, async_capture_event};
+                        use crate::recording_telemetry::mode_label;
+                        let mode_str = mode_label(*mode);
+                        match &event {
+                            cap_recording::PipelineHealthEvent::DiskSpaceLow {
+                                bytes_remaining,
+                                ..
+                            } => async_capture_event(
+                                &app,
+                                PostHogEvent::RecordingDiskSpaceLow {
+                                    mode: mode_str,
+                                    bytes_remaining: *bytes_remaining,
+                                },
+                            ),
+                            cap_recording::PipelineHealthEvent::DiskSpaceExhausted {
+                                bytes_remaining,
+                            } => async_capture_event(
+                                &app,
+                                PostHogEvent::RecordingDiskSpaceExhausted {
+                                    mode: mode_str,
+                                    bytes_remaining: *bytes_remaining,
+                                },
+                            ),
+                            cap_recording::PipelineHealthEvent::DeviceLost { subsystem } => {
+                                async_capture_event(
+                                    &app,
+                                    PostHogEvent::RecordingDeviceLost {
+                                        mode: mode_str,
+                                        subsystem: subsystem.clone(),
+                                    },
+                                )
+                            }
+                            cap_recording::PipelineHealthEvent::EncoderRebuilt {
+                                backend,
+                                attempt,
+                            } => async_capture_event(
+                                &app,
+                                PostHogEvent::RecordingEncoderRebuilt {
+                                    mode: mode_str,
+                                    backend: backend.clone(),
+                                    attempt: *attempt,
+                                },
+                            ),
+                            cap_recording::PipelineHealthEvent::SourceAudioReset {
+                                source,
+                                starvation_ms,
+                            } => async_capture_event(
+                                &app,
+                                PostHogEvent::RecordingSourceAudioReset {
+                                    mode: mode_str,
+                                    source: source.clone(),
+                                    starvation_ms: *starvation_ms,
+                                },
+                            ),
+                            cap_recording::PipelineHealthEvent::CaptureTargetLost { target } => {
+                                async_capture_event(
+                                    &app,
+                                    PostHogEvent::RecordingCaptureTargetLost {
+                                        mode: mode_str,
+                                        target: target.clone(),
+                                    },
+                                )
+                            }
+                            cap_recording::PipelineHealthEvent::RecoveryFragmentCorrupt {
+                                ..
+                            } => {}
+                            _ => {}
+                        }
+                    }
+
+                    let reason = match &event {
+                        cap_recording::PipelineHealthEvent::FrameDropRateHigh {
+                            source,
+                            rate_pct,
+                        } => Some(format!("High frame drop rate on {source}: {rate_pct:.0}%")),
                         cap_recording::PipelineHealthEvent::AudioGapDetected { gap_ms } => {
                             Some(format!("Audio gap detected: {gap_ms}ms"))
                         }
@@ -1161,6 +1442,44 @@ pub async fn start_recording(
                         }
                         cap_recording::PipelineHealthEvent::AudioDegradedToVideoOnly { reason } => {
                             Some(format!("Audio lost: {reason}"))
+                        }
+                        cap_recording::PipelineHealthEvent::Stalled { source, waited_ms } => {
+                            Some(format!("Pipeline stalled on {source} ({waited_ms}ms)"))
+                        }
+                        cap_recording::PipelineHealthEvent::MuxerCrashed { reason } => {
+                            Some(format!("Muxer crashed: {reason}"))
+                        }
+                        cap_recording::PipelineHealthEvent::DiskSpaceLow {
+                            bytes_remaining,
+                            ..
+                        } => Some(format!(
+                            "Low disk space: {:.2} GB remaining",
+                            *bytes_remaining as f64 / 1_073_741_824.0
+                        )),
+                        cap_recording::PipelineHealthEvent::DiskSpaceExhausted {
+                            bytes_remaining,
+                        } => Some(format!(
+                            "Disk full: {:.2} GB remaining",
+                            *bytes_remaining as f64 / 1_073_741_824.0
+                        )),
+                        cap_recording::PipelineHealthEvent::DeviceLost { subsystem } => {
+                            Some(format!("Graphics device lost: {subsystem}"))
+                        }
+                        cap_recording::PipelineHealthEvent::EncoderRebuilt { backend, attempt } => {
+                            Some(format!("Encoder rebuilt: {backend} (attempt {attempt})"))
+                        }
+                        cap_recording::PipelineHealthEvent::SourceAudioReset {
+                            source,
+                            starvation_ms,
+                        } => Some(format!("Audio source reset: {source} ({starvation_ms}ms)")),
+                        cap_recording::PipelineHealthEvent::RecoveryFragmentCorrupt {
+                            path,
+                            reason,
+                        } => Some(format!(
+                            "Corrupt recovery fragment skipped: {path} ({reason})"
+                        )),
+                        cap_recording::PipelineHealthEvent::CaptureTargetLost { target } => {
+                            Some(format!("Capture target lost: {target}"))
                         }
                         cap_recording::PipelineHealthEvent::SourceRestarted => None,
                     };
@@ -1282,6 +1601,45 @@ fn panic_message(panic: Box<dyn Any + Send>) -> String {
     }
 }
 
+async fn lock_selected_microphone(
+    mic_feed: &kameo::actor::ActorRef<microphone::MicrophoneFeed>,
+    selected_label: Option<String>,
+    selected_settings: Option<microphone::MicrophoneDeviceSettings>,
+) -> anyhow::Result<Option<Arc<microphone::MicrophoneFeedLock>>> {
+    let Some(label) = selected_label else {
+        return Ok(None);
+    };
+
+    match mic_feed.ask(microphone::Lock).await {
+        Ok(lock) => return Ok(Some(Arc::new(lock))),
+        Err(kameo::error::SendError::HandlerError(microphone::LockFeedError::NoInput)) => {}
+        Err(err) => return Err(anyhow!(err.to_string())),
+    }
+
+    let ready = mic_feed
+        .ask(microphone::SetInput {
+            label: label.clone(),
+            settings: selected_settings,
+        })
+        .await
+        .map_err(|err| anyhow!(err.to_string()))?;
+
+    ready.await.map_err(|err| match err {
+        microphone::SetInputError::DeviceNotFound => {
+            anyhow!("Selected microphone '{label}' is no longer available")
+        }
+        err => anyhow!("Failed to initialize selected microphone '{label}': {err}"),
+    })?;
+
+    match mic_feed.ask(microphone::Lock).await {
+        Ok(lock) => Ok(Some(Arc::new(lock))),
+        Err(kameo::error::SendError::HandlerError(microphone::LockFeedError::NoInput)) => Err(
+            anyhow!("Selected microphone '{label}' did not become ready after initialization"),
+        ),
+        Err(err) => Err(anyhow!(err.to_string())),
+    }
+}
+
 fn mic_actor_not_running(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         if let Some(source) = cause.downcast_ref::<MicrophoneSourceError>() {
@@ -1323,7 +1681,8 @@ where
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
     let Some(current_recording) = state.clear_current_recording() else {
-        return Err("Recording not in progress".to_string())?;
+        warn!("Stop recording requested without active recording");
+        return Ok(());
     };
 
     let recording_dir = current_recording.recording_dir().clone();
@@ -1462,6 +1821,27 @@ pub async fn take_screenshot(
         RecordingMode::Screenshot,
         None,
     );
+
+    let mut hid_any = false;
+    for (label, window) in app.webview_windows() {
+        if let Ok(id) = CapWindowId::from_str(&label)
+            && matches!(
+                id,
+                CapWindowId::TargetSelectOverlay { .. }
+                    | CapWindowId::WindowCaptureOccluder { .. }
+                    | CapWindowId::CaptureArea
+                    | CapWindowId::ModeSelect
+                    | CapWindowId::RecordingsOverlay
+            )
+        {
+            hide_overlay(&window);
+            hid_any = true;
+        }
+    }
+
+    if hid_any {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
 
     let image = capture_screenshot(target)
         .await
@@ -1618,6 +1998,59 @@ async fn handle_recording_end(
     recording_dir: PathBuf,
 ) -> Result<(), String> {
     let cleared = app.clear_current_recording();
+
+    if let Some(in_progress) = cleared.as_ref() {
+        let mode = in_progress.inputs().mode;
+        let (snapshot, duration_secs, mic_feed) = {
+            match in_progress {
+                InProgressRecording::Instant {
+                    common, mic_feed, ..
+                }
+                | InProgressRecording::Studio {
+                    common, mic_feed, ..
+                } => (
+                    common.health.snapshot(),
+                    common.health.seconds_since_start() as u64,
+                    mic_feed.clone(),
+                ),
+            }
+        };
+        let (status, error_class) = match &recording {
+            Ok(_) => ("stopped", None),
+            Err(e) => ("failed", Some(classify_error_message(e.as_str()))),
+        };
+        let drop_rate_pct = 0.0_f64;
+        let dropped_mic_messages = match mic_feed {
+            Some(feed) => feed.dropped_message_count().await,
+            None => 0,
+        };
+        crate::posthog::async_capture_event(
+            &handle,
+            crate::posthog::PostHogEvent::RecordingCompleted {
+                mode: crate::recording_telemetry::mode_label(mode),
+                status,
+                duration_secs,
+                segment_count: 1,
+                track_failure_count: 0,
+                error_class,
+                video_frames_captured: 0,
+                video_frames_dropped: 0,
+                drop_rate_pct,
+                capture_stalls_count: snapshot.capture_stalls_count,
+                capture_stalls_max_ms: snapshot.capture_stalls_max_ms,
+                mixer_stalls_count: snapshot.mixer_stalls_count,
+                mixer_stalls_max_ms: snapshot.mixer_stalls_max_ms,
+                audio_gaps_count: snapshot.audio_gaps_count,
+                audio_gaps_total_ms: snapshot.audio_gaps_total_ms,
+                frame_drop_rate_high_count: snapshot.frame_drop_rate_high_count,
+                source_restarts_count: snapshot.source_restarts_count,
+                muxer_crash_count: snapshot.muxer_crash_count,
+                audio_degraded_count: snapshot.audio_degraded_count,
+                dropped_mic_messages,
+            },
+        );
+    }
+
     app.disconnected_inputs.clear();
     app.camera_in_use = false;
 
@@ -1685,11 +2118,22 @@ async fn handle_recording_end(
         let _ = camera.hide();
     }
 
-    if let Some(window) = CapWindowId::Main.get(&handle) {
+    app.camera_preview.pause();
+    let _ = app.mic_feed.ask(microphone::RemoveInput).await;
+    let _ = app.camera_feed.ask(camera::RemoveInput).await;
+
+    let main_window = CapWindowId::Main.get(&handle);
+    let should_restore_mic_preview = main_window
+        .as_ref()
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+
+    if let Some(window) = main_window {
         window.unminimize().ok();
+        if should_restore_mic_preview && let Err(err) = app.ensure_selected_mic_ready().await {
+            warn!("Failed to restore microphone preview after recording: {err}");
+        }
     } else {
-        let _ = app.mic_feed.ask(microphone::RemoveInput).await;
-        let _ = app.camera_feed.ask(camera::RemoveInput).await;
         app.selected_mic_label = None;
         app.selected_camera_id = None;
     }
@@ -2016,10 +2460,16 @@ async fn finalize_studio_recording(
     info!("Starting background finalization for recording");
 
     let recording_dir_for_remux = recording_dir.clone();
-    let remux_result =
-        tokio::task::spawn_blocking(move || remux_fragmented_recording(&recording_dir_for_remux))
-            .await
-            .map_err(|e| format!("Remux task panicked: {e}"))?;
+    let app_for_remux = app.clone();
+    let remux_result = tokio::task::spawn_blocking(move || {
+        remux_fragmented_recording_with_trigger(
+            &recording_dir_for_remux,
+            "recording_stop",
+            Some(&app_for_remux),
+        )
+    })
+    .await
+    .map_err(|e| format!("Remux task panicked: {e}"))?;
 
     if let Err(e) = remux_result {
         error!("Failed to remux fragmented recording: {e}");
@@ -2423,6 +2873,10 @@ fn project_config_from_recording(
                 config.camera.rounding = 25.0;
             }
         }
+
+        config.camera.background_blur = cap_project::BackgroundBlurConfig {
+            mode: camera_preview_state.background_blur,
+        };
     }
 
     let timeline_segments = recordings
@@ -2490,17 +2944,163 @@ fn mark_fragmented_recording_for_ffmpeg_export(recording_dir: &Path) -> Result<(
 }
 
 pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
+    remux_fragmented_recording_with_trigger(recording_dir, "manual_remux", None)
+}
+
+pub fn remux_fragmented_recording_with_trigger(
+    recording_dir: &Path,
+    trigger: &'static str,
+    app: Option<&AppHandle>,
+) -> Result<(), String> {
     let incomplete_recording = RecoveryManager::inspect_recording(recording_dir);
 
     if let Some(recording) = incomplete_recording {
-        RecoveryManager::recover(&recording)
-            .map_err(|e| format!("Failed to remux recording: {e}"))?;
-        mark_fragmented_recording_for_ffmpeg_export(recording_dir)?;
-        info!("Successfully remuxed fragmented recording");
-        Ok(())
+        let validation_start = std::time::Instant::now();
+        let outcome = RecoveryManager::recover(&recording);
+        let validation_took_ms = validation_start.elapsed().as_millis() as u64;
+
+        match outcome {
+            Ok(_) => {
+                mark_fragmented_recording_for_ffmpeg_export(recording_dir)?;
+                info!("Successfully remuxed fragmented recording");
+
+                if let Some(app_handle) = app {
+                    let recovered_duration_secs = RecordingMeta::load_for_project(recording_dir)
+                        .ok()
+                        .and_then(|meta| match meta.inner {
+                            RecordingMetaInner::Studio(studio) => match *studio {
+                                StudioRecordingMeta::MultipleSegments { inner } => Some(
+                                    inner
+                                        .segments
+                                        .iter()
+                                        .filter_map(|seg| seg.display.start_time)
+                                        .fold(0.0_f64, |acc, v| acc.max(v)),
+                                ),
+                                StudioRecordingMeta::SingleSegment { .. } => None,
+                            },
+                            _ => None,
+                        })
+                        .map(|s| s as u64)
+                        .unwrap_or_default();
+
+                    let segments_recovered = RecordingMeta::load_for_project(recording_dir)
+                        .ok()
+                        .and_then(|meta| match meta.inner {
+                            RecordingMetaInner::Studio(studio) => match *studio {
+                                StudioRecordingMeta::MultipleSegments { inner } => {
+                                    Some(inner.segments.len() as u32)
+                                }
+                                StudioRecordingMeta::SingleSegment { .. } => Some(1),
+                            },
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    crate::posthog::async_capture_event(
+                        app_handle,
+                        crate::posthog::PostHogEvent::RecordingRecovered {
+                            trigger,
+                            recovered_duration_secs,
+                            segments_recovered,
+                            validation_took_ms,
+                        },
+                    );
+                }
+                Ok(())
+            }
+            Err(e) => {
+                let reason = format!("{e}");
+                if let Some(app_handle) = app {
+                    crate::posthog::async_capture_event(
+                        app_handle,
+                        crate::posthog::PostHogEvent::RecordingRecoveryFailed {
+                            trigger,
+                            reason: reason.clone(),
+                        },
+                    );
+                }
+                Err(format!("Failed to remux recording: {reason}"))
+            }
+        }
     } else {
         Err("Could not find fragments to remux".to_string())
     }
+}
+
+fn classify_error_message(error: &str) -> String {
+    let lowered = error.to_ascii_lowercase();
+    let class = if lowered.contains("permission") {
+        "permission"
+    } else if lowered.contains("disk") || lowered.contains("no space") {
+        "disk"
+    } else if lowered.contains("camera") {
+        "camera"
+    } else if lowered.contains("microphone") || lowered.contains("mic") {
+        "microphone"
+    } else if lowered.contains("display") || lowered.contains("screen") {
+        "display"
+    } else if lowered.contains("muxer") {
+        "muxer"
+    } else if lowered.contains("timeout") {
+        "timeout"
+    } else if lowered.contains("cancel") {
+        "cancelled"
+    } else {
+        "other"
+    };
+    class.to_string()
+}
+
+async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableState<'_, App>) {
+    use crate::posthog::{PostHogEvent, async_capture_event};
+    use crate::recording_telemetry::{mode_label, target_kind_label};
+
+    let (mode, target_kind, has_camera, has_mic, has_system_audio) = {
+        let state = state_mtx.read().await;
+        let Some(recording) = state.current_recording() else {
+            return;
+        };
+        let inputs = recording.inputs();
+        let target_kind = target_kind_label(recording.capture_target());
+        let has_camera = match recording {
+            InProgressRecording::Instant { camera_feed, .. }
+            | InProgressRecording::Studio { camera_feed, .. } => camera_feed.is_some(),
+        };
+        (
+            mode_label(inputs.mode),
+            target_kind,
+            has_camera,
+            state.selected_mic_label.is_some(),
+            inputs.capture_system_audio,
+        )
+    };
+
+    let general = GeneralSettingsStore::get(app).ok().flatten();
+    let fragmented = general
+        .as_ref()
+        .map(|s| s.crash_recovery_recording)
+        .unwrap_or(true);
+    let custom_cursor_capture = general
+        .as_ref()
+        .map(|s| s.custom_cursor_capture)
+        .unwrap_or(true);
+    let target_fps = general.as_ref().map(|s| s.max_fps).unwrap_or(60);
+
+    async_capture_event(
+        app,
+        PostHogEvent::RecordingStarted {
+            mode,
+            target_kind,
+            has_camera,
+            has_mic,
+            has_system_audio,
+            target_fps,
+            target_width: 0,
+            target_height: 0,
+            fragmented,
+            custom_cursor_capture,
+        },
+    );
 }
 
 #[cfg(test)]

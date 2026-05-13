@@ -784,8 +784,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			project.captions?.settings.enabled ??
 			(project.timeline?.captionSegments?.length ?? 0) > 0;
 		const initialKeyboardTrackVisible =
-			project.keyboard?.settings.enabled ??
-			(project.timeline?.keyboardSegments?.length ?? 0) > 0;
+			project.keyboard?.settings.enabled ?? false;
 
 		const [editorState, setEditorState] = createStore({
 			previewTime: null as number | null,
@@ -902,16 +901,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					batch(() => {
 						if (!project.keyboard) {
 							setProject("keyboard", {
-								settings: {
-									...defaultKeyboardSettings,
-									enabled: true,
-								},
+								settings: defaultKeyboardSettings,
 							});
-						} else {
-							setProject("keyboard", "settings", "enabled", true);
 						}
 						setProject("timeline", "keyboardSegments", segments);
-						setEditorState("timeline", "tracks", "keyboard", true);
 					});
 				} catch (error) {
 					console.error("Failed to initialize keyboard segments", error);

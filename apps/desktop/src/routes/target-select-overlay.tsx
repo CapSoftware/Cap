@@ -43,6 +43,7 @@ import {
 import ModeSelect from "~/components/ModeSelect";
 import SelectionHint from "~/components/selection-hint";
 import { authStore, generalSettingsStore } from "~/store";
+import { getCameraWindow } from "~/utils/camera-window";
 import { createDevicesQuery } from "~/utils/devices";
 import {
 	createCameraMutation,
@@ -86,11 +87,10 @@ async function repositionCameraForWindow(
 	windowBounds: { x: number; y: number; width: number; height: number },
 	displayId: DisplayId,
 ) {
-	const win = await WebviewWindow.getByLabel("camera");
+	const win = await getCameraWindow();
 	if (!win) return;
 
-	const [physPos, physSize, scaleFactor] = await Promise.all([
-		win.outerPosition(),
+	const [physSize, scaleFactor] = await Promise.all([
 		win.outerSize(),
 		win.scaleFactor(),
 	]);
@@ -99,19 +99,10 @@ async function repositionCameraForWindow(
 	const displayOriginX = displayInfo.logical_bounds?.position?.x ?? 0;
 	const displayOriginY = displayInfo.logical_bounds?.position?.y ?? 0;
 
-	const camPos = physPos.toLogical(scaleFactor);
 	const camSize = physSize.toLogical(scaleFactor);
 
 	const winAbsX = windowBounds.x + displayOriginX;
 	const winAbsY = windowBounds.y + displayOriginY;
-
-	const cameraFullyInside =
-		camPos.x >= winAbsX &&
-		camPos.y >= winAbsY &&
-		camPos.x + camSize.width <= winAbsX + windowBounds.width &&
-		camPos.y + camSize.height <= winAbsY + windowBounds.height;
-
-	if (cameraFullyInside) return;
 
 	const padding = 16;
 	if (
@@ -291,25 +282,21 @@ function Inner() {
 				reconcile({ variant: "cameraOnly" } as ScreenCaptureTarget),
 			);
 			setOptions("captureSystemAudio", false);
-			WebviewWindow.getByLabel("camera").then((win) => {
+			getCameraWindow().then((win) => {
 				if (win) win.close();
 			});
+		}
+	});
+
+	createEffect(() => {
+		if (!options.targetMode) {
+			setTargetUnderCursor(reconcile({ display_id: null, window: null }));
 		}
 	});
 
 	const unsubOnEscapePress = events.onEscapePress.listen(() => {
 		setOptions("targetMode", null);
 		commands.closeTargetSelectOverlays();
-
-		// We can't easily access `revertCamera` here because it's inside the Match.
-		// However, if we close overlays, the camera might stay moved?
-		// The user request says "if the user cancels the selection".
-		// Pressing Escape cancels the selection mode entirely.
-		// Ideally we should revert the camera position if we moved it.
-		// But `revertCamera` is scoped to `Inner` -> `Match`.
-		// We can rely on the fact that `originalCameraBounds` state is local to that Match block.
-		// If the block unmounts, we might want to revert?
-		// `onCleanup` inside the Match block is the right place.
 	});
 	onCleanup(() => unsubOnEscapePress.then((f) => f()));
 
@@ -336,6 +323,10 @@ function Inner() {
 					<RecordingControls
 						target={{ variant: "cameraOnly" } as ScreenCaptureTarget}
 						showBackground
+						onClose={() => {
+							setOptions("targetMode", null);
+							commands.closeTargetSelectOverlays();
+						}}
 					/>
 				</div>
 			</Match>
@@ -382,6 +373,10 @@ function Inner() {
 						<RecordingControls
 							setToggleModeSelect={setToggleModeSelect}
 							target={{ variant: "display", id: displayId() }}
+							onClose={() => {
+								setOptions("targetMode", null);
+								commands.closeTargetSelectOverlays();
+							}}
 						/>
 						<ShowCapFreeWarning isInstantMode={options.mode === "instant"} />
 					</div>
@@ -411,9 +406,17 @@ function Inner() {
 						() => selectedWindow() ?? targetUnderCursor.window,
 					);
 
+					createEffect(() => {
+						const selected = selectedWindow();
+						const icon = windowIcon.data;
+						if (selected && icon && !lockedIcon()) {
+							setLockedIcon(icon);
+						}
+					});
+
 					onMount(async () => {
 						try {
-							const win = await WebviewWindow.getByLabel("camera");
+							const win = await getCameraWindow();
 							if (!win) return;
 							const [pos, factor] = await Promise.all([
 								win.outerPosition(),
@@ -460,7 +463,7 @@ function Inner() {
 						const original = originalCameraBounds();
 						if (!original) return;
 						try {
-							const win = await WebviewWindow.getByLabel("camera");
+							const win = await getCameraWindow();
 							if (!win) return;
 							await win.setPosition(
 								new LogicalPosition(original.x, original.y),
@@ -480,6 +483,34 @@ function Inner() {
 								<div
 									data-over={targetUnderCursor.display_id === params.displayId}
 									class="relative w-screen h-screen bg-black/70"
+									onClick={() => {
+										const current = selectedWindow();
+										const hovered = targetUnderCursor.window;
+										if (current && hovered && hovered.id !== current.id) {
+											setLockedIcon(windowIcon.data ?? null);
+											setSelectedWindow({
+												id: hovered.id,
+												bounds: {
+													position: {
+														x: hovered.bounds.position.x,
+														y: hovered.bounds.position.y,
+													},
+													size: {
+														width: hovered.bounds.size.width,
+														height: hovered.bounds.size.height,
+													},
+												},
+												app_name: hovered.app_name,
+											});
+											setOptions(
+												"captureTarget",
+												reconcile({
+													variant: "window",
+													id: hovered.id,
+												}),
+											);
+										}
+									}}
 								>
 									<div
 										class="flex absolute flex-col justify-center items-center bg-blue-600/40"
@@ -490,7 +521,9 @@ function Inner() {
 											top: `${windowUnderCursor.bounds.position.y}px`,
 										}}
 										onClick={() => {
-											if (!selectedWindow()) {
+											const current = selectedWindow();
+											const hovered = targetUnderCursor.window;
+											if (!current) {
 												setOriginalCameraBounds(null);
 												setLockedIcon(windowIcon.data ?? null);
 												setSelectedWindow({
@@ -514,6 +547,29 @@ function Inner() {
 														id: windowUnderCursor.id,
 													}),
 												);
+											} else if (hovered && hovered.id !== current.id) {
+												setLockedIcon(windowIcon.data ?? null);
+												setSelectedWindow({
+													id: hovered.id,
+													bounds: {
+														position: {
+															x: hovered.bounds.position.x,
+															y: hovered.bounds.position.y,
+														},
+														size: {
+															width: hovered.bounds.size.width,
+															height: hovered.bounds.size.height,
+														},
+													},
+													app_name: hovered.app_name,
+												});
+												setOptions(
+													"captureTarget",
+													reconcile({
+														variant: "window",
+														id: hovered.id,
+													}),
+												);
 											}
 										}}
 									>
@@ -522,7 +578,9 @@ function Inner() {
 												<Suspense>
 													<Show
 														when={
-															selectedWindow() ? lockedIcon() : windowIcon.data
+															selectedWindow()
+																? (lockedIcon() ?? windowIcon.data)
+																: windowIcon.data
 														}
 													>
 														{(icon) => (
@@ -550,6 +608,12 @@ function Inner() {
 												}}
 												onRecordingStart={() => {
 													setOriginalCameraBounds(null);
+													setOptions("targetMode", null);
+													commands.closeTargetSelectOverlays();
+												}}
+												onClose={() => {
+													setSelectedWindow(null);
+													setLockedIcon(null);
 													setOptions("targetMode", null);
 													commands.closeTargetSelectOverlays();
 												}}
@@ -623,7 +687,7 @@ function Inner() {
 					>(null);
 
 					onMount(async () => {
-						const win = await WebviewWindow.getByLabel("camera");
+						const win = await getCameraWindow();
 						if (win) setCameraWindow(win);
 					});
 
@@ -724,12 +788,7 @@ function Inner() {
 						if (!win) {
 							// Try to find it
 							try {
-								win = await WebviewWindow.getByLabel("camera");
-								if (!win) {
-									// Fallback: check all windows
-									const all = await WebviewWindow.getAll();
-									win = all.find((w) => w.label.includes("camera")) ?? null;
-								}
+								win = await getCameraWindow();
 								if (win) setCameraWindow(win);
 							} catch (e) {
 								console.error("Failed to find camera window", e);
@@ -838,6 +897,7 @@ function Inner() {
 
 					async function showCropOptionsMenu(e: UIEvent) {
 						e.preventDefault();
+						e.stopPropagation();
 						const items = [
 							{
 								text: "Reset selection",
@@ -860,7 +920,6 @@ function Inner() {
 						];
 						const menu = await Menu.new({ items });
 						await menu.popup();
-						await menu.close();
 					}
 
 					// Spacing rules:
@@ -990,6 +1049,7 @@ function Inner() {
 									const allWindows = await WebviewWindow.getAll();
 									for (const win of allWindows) {
 										if (win.label.startsWith("target-select-overlay-")) {
+											await win.setIgnoreCursorEvents(true);
 											await win.hide();
 										}
 									}
@@ -1041,6 +1101,10 @@ function Inner() {
 											disabled={!isValid()}
 											showBackground={controllerInside()}
 											onRecordingStart={() => setOriginalCameraBounds(null)}
+											onClose={() => {
+												setOptions("targetMode", null);
+												commands.closeTargetSelectOverlays();
+											}}
 										/>
 									</Show>
 									<Show when={!isValid()}>
@@ -1101,6 +1165,8 @@ function calculateBackoffWithJitter(
 	return Math.max(initialMs, Math.floor(exponentialBackoff + jitter));
 }
 
+const WS_STALL_TIMEOUT_MS = 2000;
+
 function CameraPreviewInline() {
 	const { rawOptions } = useRecordingOptions();
 	const [frame, setFrame] = createSignal<ImageData | null>(null);
@@ -1110,10 +1176,12 @@ function CameraPreviewInline() {
 	let ws: WebSocket | undefined;
 	let retryCount = 0;
 	let reconnectTimeoutId: ReturnType<typeof setTimeout> | undefined;
+	let stallCheckInterval: ReturnType<typeof setInterval> | undefined;
 	let isCleanedUp = false;
 	let reusableFrame: ImageData | null = null;
 	let reusableFrameWidth = 0;
 	let reusableFrameHeight = 0;
+	let lastFrameTime = 0;
 
 	const cameraWsPort = window.__CAP__?.cameraWsPort;
 	const hasCameraSelected = () => rawOptions.cameraID !== null;
@@ -1132,15 +1200,39 @@ function CameraPreviewInline() {
 		return reusableFrame;
 	};
 
+	let pendingRender = false;
+	let rafId: number | null = null;
+	let cachedCtx: CanvasRenderingContext2D | null = null;
+	let latestImageData: ImageData | null = null;
+
+	const scheduleRender = () => {
+		if (rafId !== null) return;
+		rafId = requestAnimationFrame(() => {
+			rafId = null;
+			if (!pendingRender || !latestImageData) return;
+			pendingRender = false;
+
+			const canvas = canvasRef;
+			if (!canvas) return;
+			if (
+				canvas.width !== latestImageData.width ||
+				canvas.height !== latestImageData.height
+			) {
+				canvas.width = latestImageData.width;
+				canvas.height = latestImageData.height;
+				cachedCtx = null;
+			}
+			if (!cachedCtx) {
+				cachedCtx = canvas.getContext("2d");
+			}
+			cachedCtx?.putImageData(latestImageData, 0, 0);
+		});
+	};
+
 	const drawFrame = (image: ImageData) => {
-		const canvas = canvasRef;
-		if (!canvas) return;
-		if (canvas.width !== image.width || canvas.height !== image.height) {
-			canvas.width = image.width;
-			canvas.height = image.height;
-		}
-		const ctx = canvas.getContext("2d");
-		ctx?.putImageData(image, 0, 0);
+		latestImageData = image;
+		pendingRender = true;
+		scheduleRender();
 	};
 
 	const scheduleReconnect = () => {
@@ -1182,6 +1274,7 @@ function CameraPreviewInline() {
 
 		socket.onopen = () => {
 			resetBackoff();
+			lastFrameTime = Date.now();
 		};
 
 		socket.onclose = () => {
@@ -1195,6 +1288,9 @@ function CameraPreviewInline() {
 		};
 
 		socket.onmessage = (event) => {
+			lastFrameTime = Date.now();
+			if (pendingRender) return;
+
 			const buffer = event.data as ArrayBuffer;
 			const clamped = new Uint8ClampedArray(buffer);
 			if (clamped.length < 24) return;
@@ -1271,6 +1367,10 @@ function CameraPreviewInline() {
 			clearTimeout(reconnectTimeoutId);
 			reconnectTimeoutId = undefined;
 		}
+		if (stallCheckInterval !== undefined) {
+			clearInterval(stallCheckInterval);
+			stallCheckInterval = undefined;
+		}
 
 		if (hasCameraSelected()) {
 			if (
@@ -1279,8 +1379,24 @@ function CameraPreviewInline() {
 				ws.readyState === WebSocket.CLOSING
 			) {
 				resetBackoff();
+				lastFrameTime = Date.now();
 				ws = createSocket();
 			}
+
+			stallCheckInterval = setInterval(() => {
+				if (
+					!isCleanedUp &&
+					ws?.readyState === WebSocket.OPEN &&
+					lastFrameTime > 0 &&
+					Date.now() - lastFrameTime > WS_STALL_TIMEOUT_MS
+				) {
+					lastFrameTime = Date.now();
+					commands.refreshCameraFeed().catch(() => {});
+					ws?.close();
+					resetBackoff();
+					ws = createSocket();
+				}
+			}, WS_STALL_TIMEOUT_MS);
 		} else {
 			if (
 				ws &&
@@ -1300,8 +1416,17 @@ function CameraPreviewInline() {
 
 	onCleanup(() => {
 		isCleanedUp = true;
+		if (rafId !== null) {
+			cancelAnimationFrame(rafId);
+			rafId = null;
+		}
+		cachedCtx = null;
+		latestImageData = null;
 		if (reconnectTimeoutId !== undefined) {
 			clearTimeout(reconnectTimeoutId);
+		}
+		if (stallCheckInterval !== undefined) {
+			clearInterval(stallCheckInterval);
 		}
 		reusableFrame = null;
 		reusableFrameWidth = 0;
@@ -1354,10 +1479,11 @@ function CameraPreviewInline() {
 		const image = frame();
 		const canvas = canvasRef;
 		if (!image || !canvas) return;
-		canvas.width = image.width;
-		canvas.height = image.height;
-		const ctx = canvas.getContext("2d");
-		ctx?.putImageData(image, 0, 0);
+		if (canvas.width !== image.width || canvas.height !== image.height) {
+			canvas.width = image.width;
+			canvas.height = image.height;
+			cachedCtx = null;
+		}
 	});
 
 	const handleRetryConnection = () => {
@@ -1415,6 +1541,7 @@ function RecordingControls(props: {
 	showBackground?: boolean;
 	disabled?: boolean;
 	onRecordingStart?: () => void;
+	onClose?: () => void;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
@@ -1458,7 +1585,7 @@ function RecordingControls(props: {
 			});
 
 		if (isCameraOnly) {
-			const win = await WebviewWindow.getByLabel("camera");
+			const win = await getCameraWindow();
 			if (win) win.close();
 		}
 	});
@@ -1555,8 +1682,12 @@ function RecordingControls(props: {
 					<div class="flex gap-2.5 items-center">
 						<div
 							onClick={() => {
-								setOptions("targetMode", null);
-								commands.closeTargetSelectOverlays();
+								if (props.onClose) {
+									props.onClose();
+								} else {
+									setOptions("targetMode", null);
+									commands.closeTargetSelectOverlays();
+								}
 							}}
 							class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
 						>
@@ -1597,11 +1728,19 @@ function RecordingControls(props: {
 
 								if (rawOptions.mode === "screenshot") {
 									try {
+										const allWindows = await WebviewWindow.getAll();
+										for (const win of allWindows) {
+											if (win.label.startsWith("target-select-overlay-")) {
+												await win.setIgnoreCursorEvents(true);
+												await win.hide();
+											}
+										}
+
 										const path = await invoke<string>("take_screenshot", {
 											target: props.target,
 										});
-										commands.showWindow({ ScreenshotEditor: { path } });
-										commands.closeTargetSelectOverlays();
+										await commands.showWindow({ ScreenshotEditor: { path } });
+										await commands.closeTargetSelectOverlays();
 									} catch (e) {
 										const message = e instanceof Error ? e.message : String(e);
 										toast.error(`Failed to take screenshot: ${message}`);

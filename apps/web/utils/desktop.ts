@@ -10,6 +10,17 @@ export function isFromDesktopSemver(
 }
 
 export const UPLOAD_PROGRESS_VERSION = [0, 3, 68] as const;
+export const GOOGLE_DRIVE_UPLOAD_FEATURE = "googleDriveUpload";
+
+export function hasDesktopFeature(request: HonoRequest, feature: string) {
+	return (
+		request
+			.header("X-Cap-Desktop-Features")
+			?.split(",")
+			.map((value) => value.trim())
+			.includes(feature) ?? false
+	);
+}
 
 export function isAtLeastSemver(
 	versionString: string,

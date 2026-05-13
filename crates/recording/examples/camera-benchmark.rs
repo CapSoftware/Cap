@@ -50,6 +50,7 @@ async fn run_camera_frame_rate_test(
     let feed = CameraFeed::spawn(CameraFeed::default());
 
     feed.ask(camera::SetInput {
+        settings: None,
         id: DeviceOrModelID::from_info(camera_info),
     })
     .await
@@ -106,6 +107,7 @@ async fn run_camera_encoding_benchmark(
     let feed = CameraFeed::spawn(CameraFeed::default());
 
     feed.ask(camera::SetInput {
+        settings: None,
         id: DeviceOrModelID::from_info(camera_info),
     })
     .await

@@ -686,14 +686,10 @@ mod macos {
 
         match transport_kind {
             OutputTransportKind::Airplay => {
-                if latency_secs < AIRPLAY_MIN_LATENCY_SECS {
-                    latency_secs = AIRPLAY_MIN_LATENCY_SECS;
-                }
+                latency_secs = latency_secs.max(AIRPLAY_MIN_LATENCY_SECS);
             }
             OutputTransportKind::Wireless | OutputTransportKind::ContinuityWireless => {
-                if latency_secs < WIRELESS_MIN_LATENCY_SECS {
-                    latency_secs = WIRELESS_MIN_LATENCY_SECS;
-                }
+                latency_secs = latency_secs.max(WIRELESS_MIN_LATENCY_SECS);
             }
             _ => {}
         }

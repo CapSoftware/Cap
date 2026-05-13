@@ -17,25 +17,11 @@ import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import {
 	canRetryFailedProcessing,
 	getUploadFailureMessage,
+	shouldDeferPlaybackSource,
 	shouldReloadPlaybackAfterUploadCompletes,
 	useUploadProgress,
 } from "./ProgressCircle";
-
-const { circumference } = getProgressCircleConfig();
-
-function getProgressStatusText(
-	status: "uploading" | "processing" | "generating_thumbnail",
-) {
-	switch (status) {
-		case "processing":
-			return "Processing";
-		case "generating_thumbnail":
-			return "Finishing up";
-		default:
-			return "Uploading";
-	}
-}
-
+import { VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -55,6 +41,35 @@ import {
 	MediaPlayerVolume,
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
+
+const { circumference } = getProgressCircleConfig();
+
+const PROBE_MAX_RETRIES = 60;
+const PROBE_INITIAL_DELAY_MS = 1000;
+const PROBE_MAX_DELAY_MS = 8000;
+
+function getProgressStatusText(
+	status: "uploading" | "processing" | "generating_thumbnail",
+) {
+	switch (status) {
+		case "processing":
+			return "Processing";
+		case "generating_thumbnail":
+			return "Finishing up";
+		default:
+			return "Uploading";
+	}
+}
+
+function getLiveProbeSrc(playbackSrc: string) {
+	if (typeof window === "undefined") return null;
+
+	const url = new URL(playbackSrc, window.location.origin);
+	if (url.searchParams.get("videoType") !== "segments-master") return null;
+
+	url.searchParams.set("videoType", "segments-video");
+	return `${url.pathname}${url.search}`;
+}
 
 type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
 
@@ -115,8 +130,12 @@ export function HLSVideoPlayer({
 	const [hlsInitFailed, setHlsInitFailed] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 	const hasPlayedOnceRef = useRef(false);
+	const videoLoadedRef = useRef(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
 	const [sourceVersion, setSourceVersion] = useState(0);
+	const [isPlaybackSourceReady, setIsPlaybackSourceReady] = useState(
+		!isLiveSegments,
+	);
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
 	const queryClient = useQueryClient();
 	const router = useRouter();
@@ -136,6 +155,72 @@ export function HLSVideoPlayer({
 	useEffect(() => {
 		setPlayerDuration(fallbackDuration ?? 0);
 	}, [fallbackDuration]);
+
+	useEffect(() => {
+		videoLoadedRef.current = videoLoaded;
+	}, [videoLoaded]);
+
+	const uploadProgressRaw = useUploadProgress(
+		videoId,
+		hasActiveUpload || false,
+	);
+	const shouldDelayPlaybackSource =
+		shouldDeferPlaybackSource(uploadProgressRaw);
+	const liveProbeSrc = isLiveSegments ? getLiveProbeSrc(playbackSrc) : null;
+
+	useEffect(() => {
+		if (!isLiveSegments) {
+			setIsPlaybackSourceReady(true);
+			return;
+		}
+
+		if (shouldDelayPlaybackSource || !liveProbeSrc) {
+			setIsPlaybackSourceReady(false);
+			return;
+		}
+
+		let cancelled = false;
+		let retryTimer: ReturnType<typeof setTimeout> | null = null;
+		let attempt = 0;
+
+		setIsPlaybackSourceReady(false);
+
+		const probe = async () => {
+			try {
+				const response = await fetch(liveProbeSrc, {
+					cache: "no-store",
+					credentials: "same-origin",
+				});
+				if (!response.ok) {
+					throw new Error(`Playback source not ready: ${response.status}`);
+				}
+				if (!cancelled) {
+					setIsPlaybackSourceReady(true);
+				}
+			} catch {
+				if (cancelled) return;
+				attempt++;
+				if (attempt >= PROBE_MAX_RETRIES) {
+					setHlsInitFailed(true);
+					return;
+				}
+				const delay = Math.min(
+					PROBE_INITIAL_DELAY_MS * 2 ** Math.min(attempt - 1, 4),
+					PROBE_MAX_DELAY_MS,
+				);
+				retryTimer = setTimeout(() => {
+					void probe();
+				}, delay);
+			}
+		};
+
+		void probe();
+
+		return () => {
+			cancelled = true;
+			if (retryTimer) clearTimeout(retryTimer);
+		};
+	}, [isLiveSegments, liveProbeSrc, shouldDelayPlaybackSource]);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -214,7 +299,7 @@ export function HLSVideoPlayer({
 
 	useEffect(() => {
 		const video = videoRef.current;
-		if (!video || !playbackSrc) return;
+		if (!video || !playbackSrc || !isPlaybackSourceReady) return;
 
 		setHlsInitFailed(false);
 
@@ -251,7 +336,7 @@ export function HLSVideoPlayer({
 			});
 
 			hls.on(Hls.Events.FRAG_LOADED, () => {
-				if (isLiveSegments && !videoLoaded) {
+				if (isLiveSegments && !videoLoadedRef.current) {
 					setVideoLoaded(true);
 					if (!hasPlayedOnceRef.current) {
 						setShowPlayButton(true);
@@ -351,7 +436,14 @@ export function HLSVideoPlayer({
 			console.error("HLSVideoPlayer: HLS is not supported in this browser");
 			setHlsInitFailed(true);
 		}
-	}, [playbackSrc, isLiveSegments, reloadPlayback, router, videoLoaded]);
+	}, [
+		playbackSrc,
+		isLiveSegments,
+		isPlaybackSourceReady,
+		reloadPlayback,
+		router,
+		videoRef.current,
+	]);
 
 	// Caption handling
 	useEffect(() => {
@@ -432,10 +524,6 @@ export function HLSVideoPlayer({
 		};
 	}, [captionsSrc, videoRef.current]);
 
-	const uploadProgressRaw = useUploadProgress(
-		videoId,
-		hasActiveUpload || false,
-	);
 	const isErrorWhileHlsLoading =
 		!videoLoaded &&
 		!hlsInitFailed &&
@@ -622,6 +710,16 @@ export function HLSVideoPlayer({
 						</motion.div>
 					)}
 			</AnimatePresence>
+			<VideoPreviewGif
+				videoId={videoId}
+				visible={
+					videoLoaded &&
+					!hasPlayedOnce &&
+					!hasFailedOrError &&
+					!hlsInitFailed &&
+					!isLiveSegments
+				}
+			/>
 			<MediaPlayerVideo
 				src={undefined} // HLS source is handled by HLS.js
 				ref={videoRef}

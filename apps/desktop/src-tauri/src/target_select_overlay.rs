@@ -13,7 +13,7 @@ use crate::{
     App, ArcLock, general_settings,
     recording_settings::RecordingTargetMode,
     window_exclusion::WindowExclusion,
-    windows::{CapWindowId, ShowCapWindow},
+    windows::{CapWindowId, ShowCapWindow, hide_overlay, show_overlay},
 };
 use scap_targets::{
     Display, DisplayId, Window, WindowId,
@@ -98,7 +98,7 @@ pub async fn open_target_select_overlays(
                 .iter()
                 .any(|display_id| display_id == &existing_id)
         {
-            let _ = window.hide();
+            hide_overlay(&window);
             state.destroy(&existing_id, app.global_shortcut());
         }
     }
@@ -112,7 +112,7 @@ pub async fn open_target_select_overlays(
         .get(&app);
 
         if let Some(window) = existing_window {
-            window.show().ok();
+            show_overlay(&window);
 
             if should_focus {
                 window.set_focus().ok();
@@ -172,25 +172,21 @@ pub async fn open_target_select_overlays(
         let app = app.clone();
 
         async move {
-            loop {
-                let Some((display, window)) = read_target_under_cursor(
-                    || crate::app_is_exiting(&app),
-                    || {
-                        focused_target
-                            .as_ref()
-                            .map(|v| v.display())
-                            .unwrap_or_else(scap_targets::Display::get_containing_cursor)
-                    },
-                    || {
-                        focused_target
-                            .as_ref()
-                            .map(|v| v.window().and_then(|id| scap_targets::Window::from_id(&id)))
-                            .unwrap_or_else(scap_targets::Window::get_topmost_at_cursor)
-                    },
-                ) else {
-                    break;
-                };
-
+            while let Some((display, window)) = read_target_under_cursor(
+                || crate::app_is_exiting(&app),
+                || {
+                    focused_target
+                        .as_ref()
+                        .map(|v| v.display())
+                        .unwrap_or_else(scap_targets::Display::get_containing_cursor)
+                },
+                || {
+                    focused_target
+                        .as_ref()
+                        .map(|v| v.window().and_then(|id| scap_targets::Window::from_id(&id)))
+                        .unwrap_or_else(scap_targets::Window::get_topmost_at_cursor)
+                },
+            ) {
                 let _ = TargetUnderCursor {
                     display_id: display.map(|d| d.id()),
                     window: window.and_then(|w| {
@@ -262,8 +258,8 @@ pub async fn update_camera_overlay_bounds(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    let window = app
-        .get_webview_window("camera")
+    let window = CapWindowId::Camera
+        .get(&app)
         .ok_or("Camera window not found")?;
 
     let width_u32 = width as u32;
@@ -306,7 +302,7 @@ pub async fn close_target_select_overlays(
 
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&id) {
-            let _ = window.hide();
+            hide_overlay(&window);
             closed_display_ids.push(display_id);
         }
     }
@@ -456,7 +452,7 @@ impl WindowFocusManager {
 
                     if main_window_was_seen && !main_window_available && !settings_window_available
                     {
-                        window.hide().ok();
+                        hide_overlay(&window);
                         app.state::<WindowFocusManager>()
                             .finish(&display_id, app.global_shortcut());
                         break;

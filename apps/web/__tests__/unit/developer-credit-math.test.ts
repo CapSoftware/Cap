@@ -25,6 +25,10 @@ function balanceAfterCharge(balance: number, charge: number): number {
 	return Math.max(0, balance - charge);
 }
 
+function isBelowMinimumPurchase(amountCents: number): boolean {
+	return amountCents < 500;
+}
+
 describe("Purchase Credits Conversion", () => {
 	it("converts $5.00 (500 cents) to 500,000 micro-credits", () => {
 		expect(purchaseCreditsFormula(500)).toBe(500_000);
@@ -52,9 +56,9 @@ describe("Purchase Credits Conversion", () => {
 	});
 
 	it("rejects purchases below $5.00 minimum (amountCents < 500)", () => {
-		expect(499 < 500).toBe(true);
-		expect(500 < 500).toBe(false);
-		expect(0 < 500).toBe(true);
+		expect(isBelowMinimumPurchase(499)).toBe(true);
+		expect(isBelowMinimumPurchase(500)).toBe(false);
+		expect(isBelowMinimumPurchase(0)).toBe(true);
 	});
 });
 

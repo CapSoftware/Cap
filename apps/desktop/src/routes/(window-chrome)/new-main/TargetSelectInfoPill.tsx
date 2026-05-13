@@ -1,5 +1,6 @@
 import type { Component, ComponentProps } from "solid-js";
 import { Dynamic } from "solid-js/web";
+import type { InfoPillVariant } from "./InfoPill";
 
 export default function TargetSelectInfoPill<T>(props: {
 	value: T | null;
@@ -7,13 +8,18 @@ export default function TargetSelectInfoPill<T>(props: {
 	requestPermission: () => void;
 	onClick: (e: MouseEvent) => void;
 	PillComponent: Component<
-		ComponentProps<"button"> & { variant: "blue" | "red" }
+		ComponentProps<"button"> & { variant: InfoPillVariant }
 	>;
 }) {
+	const variant = (): InfoPillVariant => {
+		if (!props.permissionGranted) return "red";
+		return props.value !== null ? "blue" : "gray";
+	};
+
 	return (
 		<Dynamic
 			component={props.PillComponent}
-			variant={props.value !== null && props.permissionGranted ? "blue" : "red"}
+			variant={variant()}
 			onPointerDown={(e) => {
 				if (!props.permissionGranted || props.value === null) return;
 
@@ -29,11 +35,7 @@ export default function TargetSelectInfoPill<T>(props: {
 				props.onClick(e);
 			}}
 		>
-			{!props.permissionGranted
-				? "Request Permission"
-				: props.value !== null
-					? "On"
-					: "Off"}
+			{!props.permissionGranted ? "Allow" : props.value !== null ? "On" : "Off"}
 		</Dynamic>
 	);
 }

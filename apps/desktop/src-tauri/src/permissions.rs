@@ -7,10 +7,18 @@ use cidre::av;
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
 #[cfg(target_os = "macos")]
-use std::{future::Future, str::FromStr, time::Duration};
+use std::{
+    future::Future,
+    str::FromStr,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 #[cfg(target_os = "macos")]
 use tauri::Manager;
 use tracing::instrument;
+
+#[cfg(target_os = "macos")]
+static MACOS_DOCK_VISIBILITY_SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -134,6 +142,13 @@ fn macos_sync_activation_policy(app: &tauri::AppHandle, should_show_dock: bool) 
 }
 
 #[cfg(target_os = "macos")]
+pub(crate) fn prepare_macos_panel_window(app: &tauri::AppHandle) {
+    if let Err(err) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
+        tracing::warn!("Failed to prepare macOS panel activation policy: {err}");
+    }
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn sync_macos_dock_visibility(app: &tauri::AppHandle) {
     let should_hide_dock = GeneralSettingsStore::get(app)
         .ok()
@@ -152,6 +167,18 @@ pub(crate) fn sync_macos_dock_visibility(app: &tauri::AppHandle) {
     if let Err(err) = app.set_dock_visibility(should_show_dock) {
         tracing::warn!("Failed to update dock visibility: {err}");
     }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn schedule_macos_dock_visibility_sync(app: &tauri::AppHandle) {
+    let generation = MACOS_DOCK_VISIBILITY_SYNC_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if MACOS_DOCK_VISIBILITY_SYNC_GENERATION.load(Ordering::Relaxed) == generation {
+            sync_macos_dock_visibility(&app);
+        }
+    });
 }
 
 #[cfg(target_os = "macos")]

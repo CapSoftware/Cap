@@ -13,6 +13,16 @@ vi.mock("@cap/env", () => ({
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
+const mediaServerEnv = {
+	MEDIA_SERVER_URL: "http://localhost:3456",
+	MEDIA_SERVER_WEBHOOK_SECRET: "test-secret",
+};
+
+const mediaServerHeaders = {
+	"Content-Type": "application/json",
+	"x-media-server-secret": "test-secret",
+};
+
 describe("media-client", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -21,9 +31,9 @@ describe("media-client", () => {
 	describe("isMediaServerConfigured", () => {
 		it("returns true when MEDIA_SERVER_URL is set", async () => {
 			const { serverEnv } = await import("@cap/env");
-			vi.mocked(serverEnv).mockReturnValue({
-				MEDIA_SERVER_URL: "http://localhost:3456",
-			} as ReturnType<typeof serverEnv>);
+			vi.mocked(serverEnv).mockReturnValue(
+				mediaServerEnv as ReturnType<typeof serverEnv>,
+			);
 
 			expect(isMediaServerConfigured()).toBe(true);
 		});
@@ -41,6 +51,17 @@ describe("media-client", () => {
 			const { serverEnv } = await import("@cap/env");
 			vi.mocked(serverEnv).mockReturnValue({
 				MEDIA_SERVER_URL: "",
+				MEDIA_SERVER_WEBHOOK_SECRET: "test-secret",
+			} as unknown as ReturnType<typeof serverEnv>);
+
+			expect(isMediaServerConfigured()).toBe(false);
+		});
+
+		it("returns false when MEDIA_SERVER_WEBHOOK_SECRET is missing", async () => {
+			const { serverEnv } = await import("@cap/env");
+			vi.mocked(serverEnv).mockReturnValue({
+				MEDIA_SERVER_URL: "http://localhost:3456",
+				MEDIA_SERVER_WEBHOOK_SECRET: undefined,
 			} as unknown as ReturnType<typeof serverEnv>);
 
 			expect(isMediaServerConfigured()).toBe(false);
@@ -50,9 +71,9 @@ describe("media-client", () => {
 	describe("checkHasAudioTrackViaMediaServer", () => {
 		beforeEach(async () => {
 			const { serverEnv } = await import("@cap/env");
-			vi.mocked(serverEnv).mockReturnValue({
-				MEDIA_SERVER_URL: "http://localhost:3456",
-			} as ReturnType<typeof serverEnv>);
+			vi.mocked(serverEnv).mockReturnValue(
+				mediaServerEnv as ReturnType<typeof serverEnv>,
+			);
 		});
 
 		it("throws error when MEDIA_SERVER_URL is not configured", async () => {
@@ -64,6 +85,18 @@ describe("media-client", () => {
 			await expect(
 				checkHasAudioTrackViaMediaServer("https://example.com/video.mp4"),
 			).rejects.toThrow("MEDIA_SERVER_URL is not configured");
+		});
+
+		it("throws error when MEDIA_SERVER_WEBHOOK_SECRET is not configured", async () => {
+			const { serverEnv } = await import("@cap/env");
+			vi.mocked(serverEnv).mockReturnValue({
+				MEDIA_SERVER_URL: "http://localhost:3456",
+				MEDIA_SERVER_WEBHOOK_SECRET: undefined,
+			} as unknown as ReturnType<typeof serverEnv>);
+
+			await expect(
+				checkHasAudioTrackViaMediaServer("https://example.com/video.mp4"),
+			).rejects.toThrow("MEDIA_SERVER_WEBHOOK_SECRET is not configured");
 		});
 
 		it("returns true when video has audio track", async () => {
@@ -81,7 +114,7 @@ describe("media-client", () => {
 				"http://localhost:3456/audio/check",
 				{
 					method: "POST",
-					headers: { "Content-Type": "application/json" },
+					headers: mediaServerHeaders,
 					body: JSON.stringify({ videoUrl: "https://example.com/video.mp4" }),
 				},
 			);
@@ -119,9 +152,9 @@ describe("media-client", () => {
 	describe("extractAudioViaMediaServer", () => {
 		beforeEach(async () => {
 			const { serverEnv } = await import("@cap/env");
-			vi.mocked(serverEnv).mockReturnValue({
-				MEDIA_SERVER_URL: "http://localhost:3456",
-			} as ReturnType<typeof serverEnv>);
+			vi.mocked(serverEnv).mockReturnValue(
+				mediaServerEnv as ReturnType<typeof serverEnv>,
+			);
 		});
 
 		it("throws error when MEDIA_SERVER_URL is not configured", async () => {
@@ -152,7 +185,7 @@ describe("media-client", () => {
 				"http://localhost:3456/audio/extract",
 				{
 					method: "POST",
-					headers: { "Content-Type": "application/json" },
+					headers: mediaServerHeaders,
 					body: JSON.stringify({
 						videoUrl: "https://example.com/video.mp4",
 						stream: true,
@@ -194,9 +227,9 @@ describe("media-client", () => {
 	describe("fetchConvertedVideoViaMediaServer", () => {
 		beforeEach(async () => {
 			const { serverEnv } = await import("@cap/env");
-			vi.mocked(serverEnv).mockReturnValue({
-				MEDIA_SERVER_URL: "http://localhost:3456",
-			} as ReturnType<typeof serverEnv>);
+			vi.mocked(serverEnv).mockReturnValue(
+				mediaServerEnv as ReturnType<typeof serverEnv>,
+			);
 		});
 
 		it("throws error when MEDIA_SERVER_URL is not configured", async () => {
@@ -227,7 +260,7 @@ describe("media-client", () => {
 				"http://localhost:3456/video/convert",
 				{
 					method: "POST",
-					headers: { "Content-Type": "application/json" },
+					headers: mediaServerHeaders,
 					body: JSON.stringify({
 						videoUrl: "https://example.com/video.m3u8",
 						inputExtension: ".m3u8",

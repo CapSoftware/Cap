@@ -114,7 +114,7 @@ describe("AVI to MP4 FAQ schema validity", () => {
 	it("maps each FAQ to a Question entity with acceptedAnswer", () => {
 		const schema = createFAQSchema(faqs);
 
-		expect(schema.mainEntity[0]!).toEqual({
+		expect(schema.mainEntity[0]).toEqual({
 			"@type": "Question",
 			name: "How do I convert AVI to MP4 online?",
 			acceptedAnswer: {

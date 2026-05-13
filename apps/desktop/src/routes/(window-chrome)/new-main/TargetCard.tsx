@@ -272,11 +272,7 @@ export default function TargetCard(props: TargetCardProps) {
 		e.stopPropagation();
 		const recording = recordingTarget();
 		if (!recording) return;
-		const path =
-			recording.mode === "instant"
-				? `${recording.path}/content/output.mp4`
-				: recording.path;
-		commands.openFilePath(path);
+		commands.openFilePath(recording.path);
 	};
 
 	const handleDeleteRecording = async (e: MouseEvent) => {

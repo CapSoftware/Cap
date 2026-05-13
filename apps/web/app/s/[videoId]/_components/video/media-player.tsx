@@ -1535,7 +1535,7 @@ interface MediaPlayerSeekProps
 	withoutChapter?: boolean;
 	withoutTooltip?: boolean;
 	fallbackDuration?: number | null;
-	tooltipThumbnailSrc?: string | ((time: number) => string);
+	tooltipThumbnailSrc?: string | ((time: number) => string | undefined | null);
 	tooltipTimeVariant?: "current" | "progress";
 	tooltipSideOffset?: number;
 	tooltipCollisionBoundary?: Element | Element[];
@@ -1703,6 +1703,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 					typeof tooltipThumbnailSrc === "function"
 						? tooltipThumbnailSrc(time)
 						: tooltipThumbnailSrc;
+				if (!src) return null;
 				return { src, coords: null };
 			}
 

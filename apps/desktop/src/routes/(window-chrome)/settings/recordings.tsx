@@ -9,7 +9,6 @@ import {
 import { Channel, convertFileSrc } from "@tauri-apps/api/core";
 import { ask, confirm } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
@@ -478,11 +477,7 @@ function RecordingItem(props: {
 				<TooltipIconButton
 					tooltipText="Open recording bundle"
 					onClick={() => {
-						const path =
-							mode() === "instant"
-								? `${props.recording.path}/content/output.mp4`
-								: `${props.recording.path}/`;
-						revealItemInDir(path);
+						props.onOpenFolder();
 					}}
 				>
 					<IconLucideFolder class="size-4" />
