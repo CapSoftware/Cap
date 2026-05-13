@@ -36,7 +36,7 @@ fn panic_message(panic: Box<dyn Any + Send>) -> String {
 async fn run_protected_export(
     project_path: &Path,
     settings: &ExportSettings,
-    progress: &tauri::ipc::Channel<FramesRendered>,
+    progress: ExportProgress,
     force_ffmpeg: bool,
 ) -> Result<PathBuf, String> {
     match AssertUnwindSafe(do_export(project_path, settings, progress, force_ffmpeg))
@@ -78,6 +78,25 @@ enum ExportSidecarMessage {
     },
 }
 
+#[derive(Clone)]
+enum ExportProgress {
+    Channel(tauri::ipc::Channel<FramesRendered>),
+    Disabled,
+}
+
+impl ExportProgress {
+    fn send(&self, progress: FramesRendered) -> bool {
+        match self {
+            Self::Channel(channel) => channel.send(progress).is_ok(),
+            Self::Disabled => true,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        matches!(self, Self::Channel(_))
+    }
+}
+
 #[cfg(windows)]
 fn configure_exporter_command(command: &mut tokio::process::Command) {
     command.creation_flags(CREATE_NO_WINDOW);
@@ -89,14 +108,14 @@ fn configure_exporter_command(_command: &mut tokio::process::Command) {}
 async fn run_out_of_process_export(
     project_path: &Path,
     settings: &ExportSettings,
-    progress: &tauri::ipc::Channel<FramesRendered>,
+    progress: ExportProgress,
     force_ffmpeg: bool,
 ) -> Result<PathBuf, String> {
     let safe_mode = should_start_export_sidecar_in_safe_mode();
     match run_out_of_process_export_attempt(
         project_path,
         settings,
-        progress,
+        progress.clone(),
         force_ffmpeg,
         safe_mode,
     )
@@ -118,7 +137,7 @@ async fn run_out_of_process_export(
 async fn run_out_of_process_export_attempt(
     project_path: &Path,
     settings: &ExportSettings,
-    progress: &tauri::ipc::Channel<FramesRendered>,
+    progress: ExportProgress,
     force_ffmpeg: bool,
     safe_mode: bool,
 ) -> Result<PathBuf, String> {
@@ -186,13 +205,10 @@ async fn run_out_of_process_export_attempt(
                 rendered_count,
                 total_frames,
             }) => {
-                if progress
-                    .send(FramesRendered {
-                        rendered_count,
-                        total_frames,
-                    })
-                    .is_err()
-                {
+                if !progress.send(FramesRendered {
+                    rendered_count,
+                    total_frames,
+                }) {
                     let _ = child.kill().await;
                     return Err("Export cancelled".to_string());
                 }
@@ -382,7 +398,7 @@ fn export_project_config(
 async fn do_export(
     project_path: &Path,
     settings: &ExportSettings,
-    progress: &tauri::ipc::Channel<FramesRendered>,
+    progress: ExportProgress,
     force_ffmpeg: bool,
 ) -> Result<PathBuf, String> {
     let mut exporter_builder =
@@ -398,7 +414,7 @@ async fn do_export(
 
     let total_frames = exporter_base.total_frames(settings.fps());
 
-    let _ = progress.send(FramesRendered {
+    progress.send(FramesRendered {
         rendered_count: 0,
         total_frames,
     });
@@ -408,12 +424,10 @@ async fn do_export(
             let progress = progress.clone();
             mp4_settings
                 .export(exporter_base, move |frame_index| {
-                    progress
-                        .send(FramesRendered {
-                            rendered_count: (frame_index + 1).min(total_frames),
-                            total_frames,
-                        })
-                        .is_ok()
+                    progress.send(FramesRendered {
+                        rendered_count: (frame_index + 1).min(total_frames),
+                        total_frames,
+                    })
                 })
                 .await
         }
@@ -421,12 +435,10 @@ async fn do_export(
             let progress = progress.clone();
             gif_settings
                 .export(exporter_base, move |frame_index| {
-                    progress
-                        .send(FramesRendered {
-                            rendered_count: (frame_index + 1).min(total_frames),
-                            total_frames,
-                        })
-                        .is_ok()
+                    progress.send(FramesRendered {
+                        rendered_count: (frame_index + 1).min(total_frames),
+                        total_frames,
+                    })
                 })
                 .await
         }
@@ -434,12 +446,10 @@ async fn do_export(
             let progress = progress.clone();
             mov_settings
                 .export(exporter_base, move |frame_index| {
-                    progress
-                        .send(FramesRendered {
-                            rendered_count: (frame_index + 1).min(total_frames),
-                            total_frames,
-                        })
-                        .is_ok()
+                    progress.send(FramesRendered {
+                        rendered_count: (frame_index + 1).min(total_frames),
+                        total_frames,
+                    })
                 })
                 .await
         }
@@ -488,10 +498,37 @@ pub async fn export_video(
     settings: ExportSettings,
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
+    export_video_inner(
+        project_path,
+        settings,
+        editor,
+        ExportProgress::Channel(progress),
+    )
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(editor))]
+pub async fn export_video_no_progress(
+    project_path: PathBuf,
+    settings: ExportSettings,
+    editor: OptionalWindowEditorInstance,
+) -> Result<PathBuf, String> {
+    export_video_inner(project_path, settings, editor, ExportProgress::Disabled).await
+}
+
+async fn export_video_inner(
+    project_path: PathBuf,
+    settings: ExportSettings,
+    editor: OptionalWindowEditorInstance,
+    progress: ExportProgress,
+) -> Result<PathBuf, String> {
     let force_ffmpeg = should_force_ffmpeg_export(&project_path, &settings);
     info!(
         project_path = %project_path.display(),
         force_ffmpeg,
+        progress = progress.enabled(),
         settings = ?settings,
         "Starting export"
     );
@@ -509,9 +546,9 @@ pub async fn export_video(
     }
 
     let result = if should_use_out_of_process_export() {
-        run_out_of_process_export(&project_path, &settings, &progress, force_ffmpeg).await
+        run_out_of_process_export(&project_path, &settings, progress.clone(), force_ffmpeg).await
     } else {
-        run_protected_export(&project_path, &settings, &progress, force_ffmpeg).await
+        run_protected_export(&project_path, &settings, progress.clone(), force_ffmpeg).await
     };
 
     match result {
@@ -526,9 +563,9 @@ pub async fn export_video(
             );
 
             let retry_result = if should_use_out_of_process_export() {
-                run_out_of_process_export(&project_path, &settings, &progress, true).await
+                run_out_of_process_export(&project_path, &settings, progress, true).await
             } else {
-                run_protected_export(&project_path, &settings, &progress, true).await
+                run_protected_export(&project_path, &settings, progress, true).await
             };
 
             match retry_result {

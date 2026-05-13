@@ -3918,6 +3918,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             focus_captures_panel,
             get_current_recording,
             export::export_video,
+            export::export_video_no_progress,
             export::get_export_estimates,
             export::generate_export_preview,
             export::generate_export_preview_fast,

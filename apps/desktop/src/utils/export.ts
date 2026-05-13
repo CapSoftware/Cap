@@ -1,4 +1,4 @@
-import { Channel } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { commands, type ExportSettings, type FramesRendered } from "./tauri";
 
 export function createExportTask(
@@ -6,6 +6,17 @@ export function createExportTask(
 	settings: ExportSettings,
 	onProgress: (progress: FramesRendered) => void,
 ) {
+	if (!import.meta.env.DEV) {
+		onProgress({ renderedCount: 0, totalFrames: 1, type: "FramesRendered" });
+		return {
+			cancel: () => {},
+			promise: invoke<string>("export_video_no_progress", {
+				projectPath,
+				settings,
+			}),
+		};
+	}
+
 	const progress = new Channel<FramesRendered>((e) => {
 		onProgress(e);
 	});
