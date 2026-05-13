@@ -32,6 +32,242 @@ impl ConversionProgress {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct RgbaToNv12Config {
+    pub width: u32,
+    pub height: u32,
+    pub rgba_stride: u32,
+    pub y_stride: u32,
+    pub uv_stride: u32,
+}
+
+impl RgbaToNv12Config {
+    fn as_usize(self) -> RgbaToNv12ConfigUsize {
+        RgbaToNv12ConfigUsize {
+            width: self.width as usize,
+            height: self.height as usize,
+            rgba_stride: self.rgba_stride as usize,
+            y_stride: self.y_stride as usize,
+            uv_stride: self.uv_stride as usize,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RgbaToNv12ConfigUsize {
+    width: usize,
+    height: usize,
+    rgba_stride: usize,
+    y_stride: usize,
+    uv_stride: usize,
+}
+
+impl RgbaToNv12ConfigUsize {
+    fn y_plane_size(self) -> Option<usize> {
+        self.y_stride.checked_mul(self.height)
+    }
+
+    fn uv_height(self) -> usize {
+        self.height / 2
+    }
+
+    fn uv_plane_size(self) -> Option<usize> {
+        self.uv_stride.checked_mul(self.uv_height())
+    }
+
+    fn source_required_len(self) -> Option<usize> {
+        if self.height == 0 {
+            return Some(0);
+        }
+
+        self.rgba_stride
+            .checked_mul(self.height - 1)?
+            .checked_add(self.width.checked_mul(4)?)
+    }
+
+    fn output_required_len(self) -> Option<usize> {
+        self.y_plane_size()?.checked_add(self.uv_plane_size()?)
+    }
+
+    fn is_valid_for(self, rgba: &[u8], output: &[u8]) -> bool {
+        if self.width == 0 || self.height == 0 {
+            return false;
+        }
+
+        let Some(source_required) = self.source_required_len() else {
+            return false;
+        };
+        let Some(output_required) = self.output_required_len() else {
+            return false;
+        };
+
+        self.rgba_stride >= self.width * 4
+            && self.y_stride >= self.width
+            && self.uv_stride >= self.width
+            && rgba.len() >= source_required
+            && output.len() >= output_required
+    }
+}
+
+const RGBA_TO_NV12_PARALLEL_THRESHOLD_PIXELS: usize = 1920 * 1080;
+
+pub fn rgba_to_nv12_fast(rgba: &[u8], output: &mut [u8], config: RgbaToNv12Config) -> bool {
+    let config = config.as_usize();
+    if !config.is_valid_for(rgba, output) {
+        return false;
+    }
+
+    let y_plane_size = config.y_plane_size().unwrap();
+    let uv_plane_size = config.uv_plane_size().unwrap();
+    let (y_plane, rest) = output.split_at_mut(y_plane_size);
+    let uv_plane = &mut rest[..uv_plane_size];
+
+    if config.width * config.height >= RGBA_TO_NV12_PARALLEL_THRESHOLD_PIXELS {
+        rgba_to_nv12_y_parallel(rgba, y_plane, config);
+        rgba_to_nv12_uv_parallel(rgba, uv_plane, config);
+    } else {
+        rgba_to_nv12_y_scalar(rgba, y_plane, config);
+        rgba_to_nv12_uv_scalar(rgba, uv_plane, config);
+    }
+
+    true
+}
+
+fn rgba_to_nv12_y_scalar(rgba: &[u8], y_plane: &mut [u8], config: RgbaToNv12ConfigUsize) {
+    for row in 0..config.height {
+        let src_start = row * config.rgba_stride;
+        let src_row = &rgba[src_start..src_start + config.width * 4];
+        let y_start = row * config.y_stride;
+        let y_row = &mut y_plane[y_start..y_start + config.width];
+
+        for (col, y) in y_row.iter_mut().enumerate() {
+            let src = col * 4;
+            *y = rgb_to_y(src_row[src], src_row[src + 1], src_row[src + 2]);
+        }
+    }
+}
+
+fn rgba_to_nv12_uv_scalar(rgba: &[u8], uv_plane: &mut [u8], config: RgbaToNv12ConfigUsize) {
+    for row in 0..config.uv_height() {
+        let src_start0 = row * 2 * config.rgba_stride;
+        let src_start1 = (row * 2 + 1) * config.rgba_stride;
+        let src_row0 = &rgba[src_start0..src_start0 + config.width * 4];
+        let src_row1 = &rgba[src_start1..src_start1 + config.width * 4];
+        let uv_start = row * config.uv_stride;
+        let uv_row = &mut uv_plane[uv_start..uv_start + config.width];
+
+        for (col, uv) in uv_row
+            .chunks_exact_mut(2)
+            .take(config.width / 2)
+            .enumerate()
+        {
+            let src = col * 8;
+            let r = average_2x2(
+                src_row0[src],
+                src_row0[src + 4],
+                src_row1[src],
+                src_row1[src + 4],
+            );
+            let g = average_2x2(
+                src_row0[src + 1],
+                src_row0[src + 5],
+                src_row1[src + 1],
+                src_row1[src + 5],
+            );
+            let b = average_2x2(
+                src_row0[src + 2],
+                src_row0[src + 6],
+                src_row1[src + 2],
+                src_row1[src + 6],
+            );
+            let (u, v) = rgb_to_uv(r, g, b);
+            uv[0] = u;
+            uv[1] = v;
+        }
+    }
+}
+
+fn rgba_to_nv12_y_parallel(rgba: &[u8], y_plane: &mut [u8], config: RgbaToNv12ConfigUsize) {
+    use rayon::prelude::*;
+
+    y_plane
+        .par_chunks_mut(config.y_stride)
+        .take(config.height)
+        .enumerate()
+        .for_each(|(row, y_row)| {
+            let src_start = row * config.rgba_stride;
+            let src_row = &rgba[src_start..src_start + config.width * 4];
+            for (col, y) in y_row.iter_mut().take(config.width).enumerate() {
+                let src = col * 4;
+                *y = rgb_to_y(src_row[src], src_row[src + 1], src_row[src + 2]);
+            }
+        });
+}
+
+fn rgba_to_nv12_uv_parallel(rgba: &[u8], uv_plane: &mut [u8], config: RgbaToNv12ConfigUsize) {
+    use rayon::prelude::*;
+
+    uv_plane
+        .par_chunks_mut(config.uv_stride)
+        .take(config.uv_height())
+        .enumerate()
+        .for_each(|(row, uv_row)| {
+            let src_start0 = row * 2 * config.rgba_stride;
+            let src_start1 = (row * 2 + 1) * config.rgba_stride;
+            let src_row0 = &rgba[src_start0..src_start0 + config.width * 4];
+            let src_row1 = &rgba[src_start1..src_start1 + config.width * 4];
+
+            for (col, uv) in uv_row
+                .chunks_exact_mut(2)
+                .take(config.width / 2)
+                .enumerate()
+            {
+                let src = col * 8;
+                let r = average_2x2(
+                    src_row0[src],
+                    src_row0[src + 4],
+                    src_row1[src],
+                    src_row1[src + 4],
+                );
+                let g = average_2x2(
+                    src_row0[src + 1],
+                    src_row0[src + 5],
+                    src_row1[src + 1],
+                    src_row1[src + 5],
+                );
+                let b = average_2x2(
+                    src_row0[src + 2],
+                    src_row0[src + 6],
+                    src_row1[src + 2],
+                    src_row1[src + 6],
+                );
+                let (u, v) = rgb_to_uv(r, g, b);
+                uv[0] = u;
+                uv[1] = v;
+            }
+        });
+}
+
+#[inline(always)]
+fn average_2x2(a: u8, b: u8, c: u8, d: u8) -> i32 {
+    (i32::from(a) + i32::from(b) + i32::from(c) + i32::from(d) + 2) / 4
+}
+
+#[inline(always)]
+fn rgb_to_y(r: u8, g: u8, b: u8) -> u8 {
+    let r = i32::from(r);
+    let g = i32::from(g);
+    let b = i32::from(b);
+    (16 + ((65 * r + 129 * g + 25 * b + 128) >> 8)).clamp(16, 235) as u8
+}
+
+#[inline(always)]
+fn rgb_to_uv(r: i32, g: i32, b: i32) -> (u8, u8) {
+    let u = (128 + ((-38 * r - 74 * g + 112 * b + 128) >> 8)).clamp(16, 240) as u8;
+    let v = (128 + ((112 * r - 94 * g - 18 * b + 128) >> 8)).clamp(16, 240) as u8;
+    (u, v)
+}
+
 pub fn nv12_to_rgba(
     y_data: &[u8],
     uv_data: &[u8],
@@ -919,6 +1155,149 @@ fn clamp_u8(val: i32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{hint::black_box, time::Instant};
+
+    fn rgba_to_nv12_baseline(rgba: &[u8], output: &mut [u8], config: RgbaToNv12Config) {
+        let width = config.width as usize;
+        let height = config.height as usize;
+        let rgba_stride = config.rgba_stride as usize;
+        let y_stride = config.y_stride as usize;
+        let uv_stride = config.uv_stride as usize;
+        let y_plane_size = y_stride * height;
+
+        for row in 0..height {
+            let src_row = &rgba[row * rgba_stride..row * rgba_stride + width * 4];
+            let y_row = &mut output[row * y_stride..row * y_stride + width];
+            for (col, y) in y_row.iter_mut().enumerate() {
+                let r = i32::from(src_row[col * 4]);
+                let g = i32::from(src_row[col * 4 + 1]);
+                let b = i32::from(src_row[col * 4 + 2]);
+                *y = (16 + ((65 * r + 129 * g + 25 * b + 128) >> 8)).clamp(16, 235) as u8;
+            }
+        }
+
+        for row in 0..(height / 2) {
+            let src_row0 = &rgba[row * 2 * rgba_stride..row * 2 * rgba_stride + width * 4];
+            let src_row1 =
+                &rgba[(row * 2 + 1) * rgba_stride..(row * 2 + 1) * rgba_stride + width * 4];
+            let uv_row =
+                &mut output[y_plane_size + row * uv_stride..y_plane_size + row * uv_stride + width];
+            for (col, uv) in uv_row.chunks_exact_mut(2).take(width / 2).enumerate() {
+                let src = col * 8;
+                let r = (i32::from(src_row0[src])
+                    + i32::from(src_row0[src + 4])
+                    + i32::from(src_row1[src])
+                    + i32::from(src_row1[src + 4])
+                    + 2)
+                    / 4;
+                let g = (i32::from(src_row0[src + 1])
+                    + i32::from(src_row0[src + 5])
+                    + i32::from(src_row1[src + 1])
+                    + i32::from(src_row1[src + 5])
+                    + 2)
+                    / 4;
+                let b = (i32::from(src_row0[src + 2])
+                    + i32::from(src_row0[src + 6])
+                    + i32::from(src_row1[src + 2])
+                    + i32::from(src_row1[src + 6])
+                    + 2)
+                    / 4;
+                uv[0] = (128 + ((-38 * r - 74 * g + 112 * b + 128) >> 8)).clamp(16, 240) as u8;
+                uv[1] = (128 + ((112 * r - 94 * g - 18 * b + 128) >> 8)).clamp(16, 240) as u8;
+            }
+        }
+    }
+
+    #[test]
+    fn test_rgba_to_nv12_fast_matches_baseline() {
+        let config = RgbaToNv12Config {
+            width: 32,
+            height: 16,
+            rgba_stride: 144,
+            y_stride: 40,
+            uv_stride: 40,
+        };
+        let rgba = (0..config.rgba_stride * config.height)
+            .map(|i| ((i * 37 + 19) % 251) as u8)
+            .collect::<Vec<_>>();
+        let output_len =
+            (config.y_stride * config.height + config.uv_stride * (config.height / 2)) as usize;
+        let mut baseline = vec![0u8; output_len];
+        let mut fast = vec![0u8; output_len];
+
+        rgba_to_nv12_baseline(&rgba, &mut baseline, config);
+        assert!(rgba_to_nv12_fast(&rgba, &mut fast, config));
+
+        assert_eq!(baseline, fast);
+    }
+
+    #[test]
+    fn test_rgba_to_nv12_fast_parallel_matches_baseline() {
+        let config = RgbaToNv12Config {
+            width: 1920,
+            height: 1080,
+            rgba_stride: 1920 * 4,
+            y_stride: 1920,
+            uv_stride: 1920,
+        };
+        let rgba = (0..config.rgba_stride * config.height)
+            .map(|i| ((i * 17 + 43) % 251) as u8)
+            .collect::<Vec<_>>();
+        let output_len =
+            (config.y_stride * config.height + config.uv_stride * (config.height / 2)) as usize;
+        let mut baseline = vec![0u8; output_len];
+        let mut fast = vec![0u8; output_len];
+
+        rgba_to_nv12_baseline(&rgba, &mut baseline, config);
+        assert!(rgba_to_nv12_fast(&rgba, &mut fast, config));
+
+        assert_eq!(baseline, fast);
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_rgba_to_nv12_fast_4k() {
+        let config = RgbaToNv12Config {
+            width: 3840,
+            height: 2160,
+            rgba_stride: 3840 * 4,
+            y_stride: 3840,
+            uv_stride: 3840,
+        };
+        let rgba = (0..config.rgba_stride * config.height)
+            .map(|i| ((i * 23 + 29) % 251) as u8)
+            .collect::<Vec<_>>();
+        let output_len =
+            (config.y_stride * config.height + config.uv_stride * (config.height / 2)) as usize;
+        let mut baseline = vec![0u8; output_len];
+        let mut fast = vec![0u8; output_len];
+        let iterations = 20usize;
+
+        let baseline_start = Instant::now();
+        for _ in 0..iterations {
+            rgba_to_nv12_baseline(black_box(&rgba), black_box(&mut baseline), config);
+        }
+        let baseline_elapsed = baseline_start.elapsed();
+
+        let fast_start = Instant::now();
+        for _ in 0..iterations {
+            assert!(rgba_to_nv12_fast(
+                black_box(&rgba),
+                black_box(&mut fast),
+                config
+            ));
+        }
+        let fast_elapsed = fast_start.elapsed();
+
+        assert_eq!(baseline, fast);
+
+        println!(
+            "{{\"baseline_ms\":{},\"optimized_ms\":{},\"speedup\":{:.3}}}",
+            baseline_elapsed.as_millis(),
+            fast_elapsed.as_millis(),
+            baseline_elapsed.as_secs_f64() / fast_elapsed.as_secs_f64()
+        );
+    }
 
     #[test]
     fn test_nv12_basic_conversion() {

@@ -4,6 +4,7 @@ use std::{
 };
 
 use cap_project::{AudioMeta, StudioRecordingMeta, VideoMeta};
+use rayon::prelude::*;
 use serde::Serialize;
 use specta::Type;
 
@@ -147,8 +148,9 @@ impl ProjectRecordingsMeta {
             }
             StudioRecordingMeta::MultipleSegments { inner, .. } => inner
                 .segments
-                .iter()
-                .map(|s| {
+                .par_iter()
+                .enumerate()
+                .map(|(i, s)| {
                     let has_start_times = RefCell::new(None);
 
                     let ensure_start_time = |time: Option<f64>| {
@@ -204,9 +206,8 @@ impl ProjectRecordingsMeta {
                             .map_err(|e| format!("mic / {e}"))?,
                         system_audio,
                     })
+                    .map_err(|e| format!("segment {i} / {e}"))
                 })
-                .enumerate()
-                .map(|(i, v)| v.map_err(|e| format!("segment {i} / {e}")))
                 .collect::<Result<_, String>>()?,
         };
 
@@ -215,6 +216,10 @@ impl ProjectRecordingsMeta {
 
     pub fn duration(&self) -> f64 {
         self.segments.iter().map(|s| s.duration()).sum()
+    }
+
+    pub fn first_camera_duration(&self) -> Option<f64> {
+        self.segments.first()?.camera.map(|camera| camera.duration)
     }
 
     pub fn get_source_duration(&self, path: &PathBuf) -> Result<f64, String> {

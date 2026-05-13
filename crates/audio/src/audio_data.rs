@@ -1,21 +1,27 @@
-use ffmpeg::{
-    ChannelLayout, codec as avcodec,
-    format::{self as avformat},
-};
+use ffmpeg::{ChannelLayout, codec as avcodec, format as avformat, frame};
 use std::path::Path;
 
 use crate::cast_bytes_to_f32_slice;
 
-// F32 Packed 48kHz audio
 pub struct AudioData {
     samples: Vec<f32>,
     channels: u16,
+}
+
+fn append_frame_samples(frame: &frame::Audio, samples: &mut Vec<f32>) {
+    let slice = &frame.data(0)[0..frame.samples() * 4 * frame.channels() as usize];
+    samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
 }
 
 impl AudioData {
     pub const SAMPLE_FORMAT: avformat::Sample =
         avformat::Sample::F32(avformat::sample::Type::Packed);
     pub const SAMPLE_RATE: u32 = 48_000;
+
+    #[cfg(test)]
+    pub(crate) fn from_samples(samples: Vec<f32>, channels: u16) -> Self {
+        Self { samples, channels }
+    }
 
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, String> {
         fn inner(path: &Path) -> Result<AudioData, String> {
@@ -53,7 +59,6 @@ impl AudioData {
             let mut decoded_frame = ffmpeg::frame::Audio::empty();
             let mut resampled_frame = ffmpeg::frame::Audio::empty();
 
-            // let mut resampled_frames = 0;
             let mut samples: Vec<f32> = vec![];
 
             for (stream, packet) in input_ctx.packets() {
@@ -66,74 +71,22 @@ impl AudioData {
                     .map_err(|e| format!("Send Packet / {e}"))?;
 
                 while decoder.receive_frame(&mut decoded_frame).is_ok() {
-                    let resample_delay = resampler
+                    resampler
                         .run(&decoded_frame, &mut resampled_frame)
                         .map_err(|e| format!("Run Resampler / {e:?}"))?;
 
-                    let slice = &resampled_frame.data(0)
-                        [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-                    samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
-
-                    if resample_delay.is_some() {
-                        loop {
-                            let resample_delay = resampler
-                                .flush(&mut resampled_frame)
-                                .map_err(|e| format!("Flush Resampler / {e}"))?;
-
-                            let slice = &resampled_frame.data(0)[0..resampled_frame.samples()
-                                * 4
-                                * resampled_frame.channels() as usize];
-                            samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
-
-                            if resample_delay.is_none() {
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                loop {
-                    let resample_delay = resampler
-                        .flush(&mut resampled_frame)
-                        .map_err(|e| format!("Flush Resampler / {e}"))?;
-
-                    let slice = &resampled_frame.data(0)
-                        [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-                    samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
-
-                    if resample_delay.is_none() {
-                        break;
-                    }
+                    append_frame_samples(&resampled_frame, &mut samples);
                 }
             }
 
-            decoder.send_eof().unwrap();
+            decoder.send_eof().map_err(|e| format!("Send EOF / {e}"))?;
 
             while decoder.receive_frame(&mut decoded_frame).is_ok() {
-                let resample_delay = resampler
+                resampler
                     .run(&decoded_frame, &mut resampled_frame)
                     .map_err(|e| format!("Run Resampler / {e}"))?;
 
-                let slice = &resampled_frame.data(0)
-                    [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-                samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
-
-                if resample_delay.is_some() {
-                    loop {
-                        let resample_delay = resampler
-                            .flush(&mut resampled_frame)
-                            .map_err(|e| format!("Flush Resampler / {e}"))?;
-
-                        let slice = &resampled_frame.data(0)[0..resampled_frame.samples()
-                            * 4
-                            * resampled_frame.channels() as usize];
-                        samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
-
-                        if resample_delay.is_none() {
-                            break;
-                        }
-                    }
-                }
+                append_frame_samples(&resampled_frame, &mut samples);
             }
 
             loop {
@@ -141,9 +94,7 @@ impl AudioData {
                     .flush(&mut resampled_frame)
                     .map_err(|e| format!("Flush Resampler / {e}"))?;
 
-                let slice = &resampled_frame.data(0)
-                    [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-                samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
+                append_frame_samples(&resampled_frame, &mut samples);
 
                 if resample_delay.is_none() {
                     break;

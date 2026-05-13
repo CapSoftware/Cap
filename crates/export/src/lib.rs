@@ -35,9 +35,9 @@ pub enum ExportError {
 #[derive(thiserror::Error, Debug)]
 pub enum ExporterBuildError {
     #[error("Failed to load config: {0}")]
-    ConfigLoad(#[source] Box<dyn std::error::Error>),
+    ConfigLoad(String),
     #[error("Failed to load meta: {0}")]
-    MetaLoad(#[source] Box<dyn std::error::Error>),
+    MetaLoad(String),
     #[error("Recording is not a studio recording")]
     NotStudioRecording,
     #[error("Failed to load recordings meta: {0}")]
@@ -80,11 +80,11 @@ impl ExporterBuilder {
             config
         } else {
             ProjectConfiguration::load(&self.project_path)
-                .map_err(|v| Error::ConfigLoad(v.into()))?
+                .map_err(|v| Error::ConfigLoad(v.to_string()))?
         };
 
-        let recording_meta =
-            RecordingMeta::load_for_project(&self.project_path).map_err(Error::MetaLoad)?;
+        let recording_meta = RecordingMeta::load_for_project(&self.project_path)
+            .map_err(|v| Error::MetaLoad(v.to_string()))?;
         let studio_meta = recording_meta
             .studio_meta()
             .ok_or(Error::NotStudioRecording)?;
@@ -94,20 +94,30 @@ impl ExporterBuilder {
                 .map_err(Error::RecordingsMeta)?,
         );
 
-        let render_constants = Arc::new(
-            RenderVideoConstants::new(
-                &recordings.segments,
-                recording_meta.clone(),
-                studio_meta.clone(),
-            )
-            .await
-            .map_err(Error::RendererSetup)?,
-        );
+        let render_constants_task = {
+            let recordings = Arc::clone(&recordings);
+            let recording_meta = recording_meta.clone();
+            let studio_meta = studio_meta.clone();
+            async move {
+                RenderVideoConstants::new(&recordings.segments, recording_meta, studio_meta)
+                    .await
+                    .map(Arc::new)
+                    .map_err(Error::RendererSetup)
+            }
+        };
 
-        let segments =
-            cap_editor::create_segments(&recording_meta, studio_meta, self.force_ffmpeg_decoder)
-                .await
-                .map_err(Error::MediaLoad)?;
+        let segments_task = {
+            let recording_meta = recording_meta.clone();
+            let studio_meta = studio_meta.clone();
+            let force_ffmpeg_decoder = self.force_ffmpeg_decoder;
+            async move {
+                cap_editor::create_segments(&recording_meta, &studio_meta, force_ffmpeg_decoder)
+                    .await
+                    .map_err(Error::MediaLoad)
+            }
+        };
+
+        let (render_constants, segments) = tokio::try_join!(render_constants_task, segments_task)?;
 
         let output_path = self
             .output_path

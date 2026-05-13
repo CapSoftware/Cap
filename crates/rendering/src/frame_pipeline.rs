@@ -952,11 +952,7 @@ pub async fn finish_encoder(
     uniforms: &ProjectUniforms,
     encoder: wgpu::CommandEncoder,
 ) -> Result<Option<RenderedFrame>, RenderingError> {
-    let previous_frame = if let Some(prev) = session.pipelined_readback.take_pending() {
-        Some(prev.wait(device).await?)
-    } else {
-        None
-    };
+    let previous_pending = session.pipelined_readback.take_pending();
 
     session.pipelined_readback.perform_resize_if_needed(device);
 
@@ -966,9 +962,30 @@ pub async fn finish_encoder(
         &session.textures.1
     };
 
-    session
+    let submit_result = session
         .pipelined_readback
-        .submit_readback(device, queue, texture, uniforms, encoder)?;
+        .submit_readback(device, queue, texture, uniforms, encoder);
+
+    if let Err(error) = submit_result {
+        if let Some(prev) = previous_pending {
+            let _ = prev.wait(device).await;
+        }
+        return Err(error);
+    }
+
+    let previous_frame = if let Some(prev) = previous_pending {
+        match prev.wait(device).await {
+            Ok(frame) => Some(frame),
+            Err(error) => {
+                if let Some(current) = session.pipelined_readback.take_pending() {
+                    let _ = current.cancel();
+                }
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
 
     Ok(previous_frame)
 }
@@ -984,12 +1001,7 @@ pub async fn finish_encoder_nv12_pooled(
 ) -> Result<Option<Nv12RenderedFrame>, RenderingError> {
     let width = uniforms.output_size.0;
     let height = uniforms.output_size.1;
-
-    let previous_frame = if let Some(prev) = nv12_converter.take_pending() {
-        Some(prev.wait_with_pool(device, buffer_pool).await?)
-    } else {
-        None
-    };
+    let previous_pending = nv12_converter.take_pending();
 
     let texture = if session.current_is_left {
         &session.textures.0
@@ -1012,9 +1024,24 @@ pub async fn finish_encoder_nv12_pooled(
         queue.submit(std::iter::once(encoder.finish()));
         nv12_converter.start_readback();
 
+        let previous_frame = if let Some(prev) = previous_pending {
+            match prev.wait_with_pool(device, buffer_pool).await {
+                Ok(frame) => Some(frame),
+                Err(error) => {
+                    if let Some(current) = nv12_converter.take_pending() {
+                        let _ = current.cancel();
+                    }
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(previous_frame)
-    } else if let Some(prev_frame) = previous_frame {
+    } else if let Some(prev) = previous_pending {
         queue.submit(std::iter::once(encoder.finish()));
+        let prev_frame = prev.wait_with_pool(device, buffer_pool).await?;
         Ok(Some(prev_frame))
     } else {
         let rgba_frame = finish_encoder(session, device, queue, uniforms, encoder).await?;

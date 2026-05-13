@@ -325,14 +325,7 @@ impl RecordingSegmentDecoders {
             Ok(Some(camera))
         };
 
-        #[cfg(target_os = "windows")]
         let (screen, camera) = tokio::try_join!(screen_future, camera_future)?;
-
-        #[cfg(not(target_os = "windows"))]
-        let screen = screen_future.await?;
-
-        #[cfg(not(target_os = "windows"))]
-        let camera = camera_future.await?;
 
         Ok(Self {
             screen,
@@ -500,6 +493,21 @@ pub struct RenderSegment {
     pub render_display: bool,
 }
 
+fn clip_offsets_by_index(project: &ProjectConfiguration) -> Vec<ClipOffsets> {
+    let Some(max_index) = project.clips.iter().map(|clip| clip.index as usize).max() else {
+        return Vec::new();
+    };
+    let mut offsets = vec![ClipOffsets::default(); max_index + 1];
+    for clip in &project.clips {
+        offsets[clip.index as usize] = clip.offsets;
+    }
+    offsets
+}
+
+fn clip_offsets_for_index(offsets: &[ClipOffsets], index: u32) -> ClipOffsets {
+    offsets.get(index as usize).copied().unwrap_or_default()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel(
     constants: &RenderVideoConstants,
@@ -588,6 +596,7 @@ pub async fn render_video_to_channel(
     const MAX_CONSECUTIVE_FAILURES: u32 = 200;
 
     let mut prefetched_decode: Option<(u32, f64, usize, Option<DecodedSegmentFrames>)> = None;
+    let cached_clip_offsets = clip_offsets_by_index(project);
 
     loop {
         if frame_number >= total_frames {
@@ -600,10 +609,7 @@ pub async fn render_video_to_channel(
             break;
         };
 
-        let clip_config = project
-            .clips
-            .iter()
-            .find(|v| v.index == segment.recording_clip);
+        let clip_offsets = clip_offsets_for_index(&cached_clip_offsets, segment.recording_clip);
 
         let current_frame_number = {
             let prev = frame_number;
@@ -627,7 +633,7 @@ pub async fn render_video_to_channel(
                         segment_time,
                         needs_camera,
                         render_segment.render_display,
-                        clip_config.map(|v| v.offsets).unwrap_or_default(),
+                        clip_offsets,
                         current_frame_number,
                         is_initial_frame,
                         fps,
@@ -640,7 +646,7 @@ pub async fn render_video_to_channel(
                     segment_time,
                     needs_camera,
                     render_segment.render_display,
-                    clip_config.map(|v| v.offsets).unwrap_or_default(),
+                    clip_offsets,
                     current_frame_number,
                     is_initial_frame,
                     fps,
@@ -676,10 +682,8 @@ pub async fn render_video_to_channel(
                     let next_clip_index = next_segment.recording_clip as usize;
                     next_prefetch_meta = Some((next_seg_time, next_clip_index));
                     let next_render_segment = &render_segments[next_clip_index];
-                    let next_clip_config = project
-                        .clips
-                        .iter()
-                        .find(|v| v.index == next_segment.recording_clip);
+                    let next_clip_offsets =
+                        clip_offsets_for_index(&cached_clip_offsets, next_segment.recording_clip);
                     let next_is_initial = last_successful_frame.is_none();
 
                     Some(decode_segment_frames_with_retry(
@@ -687,7 +691,7 @@ pub async fn render_video_to_channel(
                         next_seg_time,
                         needs_camera,
                         next_render_segment.render_display,
-                        next_clip_config.map(|v| v.offsets).unwrap_or_default(),
+                        next_clip_offsets,
                         next_frame_number,
                         next_is_initial,
                         fps,
@@ -911,9 +915,6 @@ pub async fn render_video_to_channel_nv12(
             )
         })
         .collect();
-    for interp in &mut zoom_focus_interpolators {
-        interp.ensure_precomputed_until(duration as f32 + 1.0);
-    }
     let zoom_focus_interpolators_construct_ms = zoom_build_start.elapsed().as_millis() as u64;
 
     let mut frame_number = 0;
@@ -947,6 +948,7 @@ pub async fn render_video_to_channel_nv12(
     const MAX_CONSECUTIVE_FAILURES: u32 = 200;
 
     let mut prefetched_decode: Option<(u32, f64, usize, Option<DecodedSegmentFrames>)> = None;
+    let cached_clip_offsets = clip_offsets_by_index(project);
 
     let mut channel_frames_sent = 0u32;
     let mut stopped_after_frame_limit = false;
@@ -964,10 +966,7 @@ pub async fn render_video_to_channel_nv12(
             break;
         };
 
-        let clip_config = project
-            .clips
-            .iter()
-            .find(|v| v.index == segment.recording_clip);
+        let clip_offsets = clip_offsets_for_index(&cached_clip_offsets, segment.recording_clip);
 
         let current_frame_number = {
             let prev = frame_number;
@@ -994,7 +993,7 @@ pub async fn render_video_to_channel_nv12(
                         segment_time,
                         needs_camera,
                         render_segment.render_display,
-                        clip_config.map(|v| v.offsets).unwrap_or_default(),
+                        clip_offsets,
                         current_frame_number,
                         is_initial_frame,
                         fps,
@@ -1007,7 +1006,7 @@ pub async fn render_video_to_channel_nv12(
                     segment_time,
                     needs_camera,
                     render_segment.render_display,
-                    clip_config.map(|v| v.offsets).unwrap_or_default(),
+                    clip_offsets,
                     current_frame_number,
                     is_initial_frame,
                     fps,
@@ -1044,10 +1043,8 @@ pub async fn render_video_to_channel_nv12(
                     let next_clip_index = next_segment.recording_clip as usize;
                     next_prefetch_meta = Some((next_seg_time, next_clip_index));
                     let next_render_segment = &render_segments[next_clip_index];
-                    let next_clip_config = project
-                        .clips
-                        .iter()
-                        .find(|v| v.index == next_segment.recording_clip);
+                    let next_clip_offsets =
+                        clip_offsets_for_index(&cached_clip_offsets, next_segment.recording_clip);
                     let next_is_initial = last_successful_frame.is_none();
 
                     Some(decode_segment_frames_with_retry(
@@ -1055,7 +1052,7 @@ pub async fn render_video_to_channel_nv12(
                         next_seg_time,
                         needs_camera,
                         next_render_segment.render_display,
-                        next_clip_config.map(|v| v.offsets).unwrap_or_default(),
+                        next_clip_offsets,
                         next_frame_number,
                         next_is_initial,
                         fps,
@@ -1452,25 +1449,22 @@ async fn decode_segment_frames_with_retry(
 
 pub fn get_duration(
     recordings: &ProjectRecordingsMeta,
-    recording_meta: &RecordingMeta,
-    meta: &StudioRecordingMeta,
+    _recording_meta: &RecordingMeta,
+    _meta: &StudioRecordingMeta,
     project: &ProjectConfiguration,
 ) -> f64 {
     let mut max_duration = recordings.duration();
 
-    if let Some(camera_path) = meta.camera_path()
-        && let Ok(camera_duration) =
-            recordings.get_source_duration(&recording_meta.path(&camera_path))
-    {
-        println!("Camera recording duration: {camera_duration}");
+    if let Some(camera_duration) = recordings.first_camera_duration() {
+        tracing::debug!(camera_duration, "Camera recording duration");
         max_duration = max_duration.max(camera_duration);
-        println!("New max duration after camera check: {max_duration}");
+        tracing::debug!(max_duration, "Updated max duration after camera check");
     }
 
     if let Some(timeline) = &project.timeline {
         timeline.duration()
     } else {
-        println!("No timeline found, using max_duration: {max_duration}");
+        tracing::debug!(max_duration, "No timeline found, using media max duration");
         max_duration
     }
 }
@@ -2976,6 +2970,27 @@ mod tests {
     }
 
     #[test]
+    fn clip_offsets_cache_handles_sparse_indexes() {
+        let project = ProjectConfiguration {
+            clips: vec![cap_project::ClipConfiguration {
+                index: 3,
+                offsets: ClipOffsets {
+                    camera: 1.0,
+                    mic: 2.0,
+                    system_audio: 3.0,
+                },
+            }],
+            ..Default::default()
+        };
+
+        let offsets = clip_offsets_by_index(&project);
+
+        assert_eq!(clip_offsets_for_index(&offsets, 0).camera, 0.0);
+        assert_eq!(clip_offsets_for_index(&offsets, 3).mic, 2.0);
+        assert_eq!(clip_offsets_for_index(&offsets, 9).system_audio, 0.0);
+    }
+
+    #[test]
     fn auto_aspect_ratio_preserves_source_ratio_with_padding() {
         let options = render_options(1920, 1080);
         let mut project = ProjectConfiguration::default();
@@ -3259,52 +3274,20 @@ impl<'a> FrameRenderer<'a> {
         let uv_plane_size = uv_stride * (height as usize / 2);
         nv12_buf.resize(y_plane_size + uv_plane_size, 0);
 
-        let src_data = &rgba_frame.data;
-        let src_stride = padded_bytes_per_row as usize;
-
-        for row in 0..height as usize {
-            let src_row = &src_data[row * src_stride..row * src_stride + width as usize * 4];
-            let y_row = &mut nv12_buf[row * y_stride..(row + 1) * y_stride];
-            for col in 0..width as usize {
-                let r = src_row[col * 4] as i32;
-                let g = src_row[col * 4 + 1] as i32;
-                let b = src_row[col * 4 + 2] as i32;
-                y_row[col] = ((16 + ((65 * r + 129 * g + 25 * b + 128) >> 8)) as u8).clamp(16, 235);
-            }
-        }
-
-        let uv_offset = y_plane_size;
-        for row in 0..(height as usize / 2) {
-            let src_row0 =
-                &src_data[row * 2 * src_stride..row * 2 * src_stride + width as usize * 4];
-            let src_row1 = &src_data
-                [(row * 2 + 1) * src_stride..(row * 2 + 1) * src_stride + width as usize * 4];
-            let uv_row =
-                &mut nv12_buf[uv_offset + row * uv_stride..uv_offset + (row + 1) * uv_stride];
-            for col in 0..(width as usize / 2) {
-                let r = (src_row0[col * 8] as i32
-                    + src_row0[col * 8 + 4] as i32
-                    + src_row1[col * 8] as i32
-                    + src_row1[col * 8 + 4] as i32
-                    + 2)
-                    / 4;
-                let g = (src_row0[col * 8 + 1] as i32
-                    + src_row0[col * 8 + 5] as i32
-                    + src_row1[col * 8 + 1] as i32
-                    + src_row1[col * 8 + 5] as i32
-                    + 2)
-                    / 4;
-                let b = (src_row0[col * 8 + 2] as i32
-                    + src_row0[col * 8 + 6] as i32
-                    + src_row1[col * 8 + 2] as i32
-                    + src_row1[col * 8 + 6] as i32
-                    + 2)
-                    / 4;
-                uv_row[col * 2] =
-                    ((128 + ((-38 * r - 74 * g + 112 * b + 128) >> 8)) as u8).clamp(16, 240);
-                uv_row[col * 2 + 1] =
-                    ((128 + ((112 * r - 94 * g - 18 * b + 128) >> 8)) as u8).clamp(16, 240);
-            }
+        if !cpu_yuv::rgba_to_nv12_fast(
+            &rgba_frame.data,
+            &mut nv12_buf,
+            cpu_yuv::RgbaToNv12Config {
+                width,
+                height,
+                rgba_stride: padded_bytes_per_row,
+                y_stride: width,
+                uv_stride: width,
+            },
+        ) {
+            return Err(RenderingError::ImageLoadError(
+                "Failed to convert RGBA frame to NV12".to_string(),
+            ));
         }
 
         Ok(Some(frame_pipeline::Nv12RenderedFrame {
