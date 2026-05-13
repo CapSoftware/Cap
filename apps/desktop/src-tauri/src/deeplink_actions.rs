@@ -125,7 +125,10 @@ fn parse_action_url(url: &Url) -> Result<DeepLinkAction, ActionParseFromUrlError
         "record" | "start-recording" | "start_recording" => Ok(DeepLinkAction::StartRecording {
             capture_mode: parse_capture_mode(&params)?,
             camera: parse_camera(&params)?,
-            mic_label: params.get("mic").or_else(|| params.get("mic_label")).map(|v| v.to_string()),
+            mic_label: params
+                .get("mic")
+                .or_else(|| params.get("mic_label"))
+                .map(|v| v.to_string()),
             capture_system_audio: parse_bool_param(&params, "system_audio", false),
             mode: parse_recording_mode(&params)?,
         }),
@@ -136,7 +139,10 @@ fn parse_action_url(url: &Url) -> Result<DeepLinkAction, ActionParseFromUrlError
             Ok(DeepLinkAction::TogglePauseRecording)
         }
         "toggle-microphone" | "toggle_microphone" | "mic" => Ok(DeepLinkAction::ToggleMicrophone {
-            mic_label: params.get("mic").or_else(|| params.get("mic_label")).map(|v| v.to_string()),
+            mic_label: params
+                .get("mic")
+                .or_else(|| params.get("mic_label"))
+                .map(|v| v.to_string()),
         }),
         "toggle-camera" | "toggle_camera" | "camera" => Ok(DeepLinkAction::ToggleCamera {
             camera: parse_camera(&params)?,
@@ -165,7 +171,10 @@ fn parse_capture_mode(
 fn parse_camera(
     params: &std::collections::HashMap<std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>>,
 ) -> Result<Option<DeviceOrModelID>, ActionParseFromUrlError> {
-    if let Some(device_id) = params.get("camera_device_id").or_else(|| params.get("camera")) {
+    if let Some(device_id) = params
+        .get("camera_device_id")
+        .or_else(|| params.get("camera"))
+    {
         return Ok(Some(DeviceOrModelID::DeviceID(device_id.to_string())));
     }
 
@@ -217,16 +226,20 @@ impl DeepLinkAction {
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
                 let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_recording::sources::screen_capture::list_displays()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_recording::sources::screen_capture::list_windows()
-                        .into_iter()
-                        .find(|(w, _)| w.name == name)
-                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
+                    CaptureMode::Screen(name) => {
+                        cap_recording::sources::screen_capture::list_displays()
+                            .into_iter()
+                            .find(|(s, _)| s.name == name)
+                            .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+                            .ok_or(format!("No screen with name \"{}\"", &name))?
+                    }
+                    CaptureMode::Window(name) => {
+                        cap_recording::sources::screen_capture::list_windows()
+                            .into_iter()
+                            .find(|(w, _)| w.name == name)
+                            .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
+                            .ok_or(format!("No window with name \"{}\"", &name))?
+                    }
                 };
 
                 let inputs = StartRecordingInputs {
@@ -244,7 +257,9 @@ impl DeepLinkAction {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::PauseRecording => crate::recording::pause_recording(app.state()).await,
-            DeepLinkAction::ResumeRecording => crate::recording::resume_recording(app.state()).await,
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.state()).await
+            }
             DeepLinkAction::TogglePauseRecording => {
                 crate::recording::toggle_pause_recording(app.state()).await
             }
