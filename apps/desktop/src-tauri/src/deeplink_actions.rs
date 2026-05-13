@@ -26,6 +26,15 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    SetMicrophone {
+        mic_label: Option<String>,
+    },
+    SetCamera {
+        camera: Option<DeviceOrModelID>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -88,9 +97,10 @@ impl TryFrom<&Url> for DeepLinkAction {
                 .map_err(|_| ActionParseFromUrlError::Invalid);
         }
 
-        match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
-            _ => Err(ActionParseFromUrlError::Invalid),
+        match url.host_str() {
+            Some("action") => Ok(()),
+            Some(_) => Err(ActionParseFromUrlError::NotAction),
+            None => Err(ActionParseFromUrlError::Invalid),
         }?;
 
         let params = url
@@ -147,6 +157,21 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SetMicrophone { mic_label } => {
+                crate::set_mic_input(app.state(), mic_label).await
+            }
+            DeepLinkAction::SetCamera { camera } => {
+                crate::set_camera_input(app.clone(), app.state(), camera, Some(true)).await
+            }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
@@ -154,5 +179,47 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ActionParseFromUrlError, DeepLinkAction};
+    use tauri::Url;
+
+    #[test]
+    fn parses_action_host_from_custom_scheme() {
+        let url = Url::parse("cap-desktop://action?value=%7B%22stop_recording%22%3Anull%7D")
+            .expect("valid action deeplink");
+
+        let action = DeepLinkAction::try_from(&url).expect("action should parse");
+
+        assert!(matches!(action, DeepLinkAction::StopRecording));
+    }
+
+    #[test]
+    fn ignores_non_action_hosts() {
+        let url = Url::parse("cap-desktop://signin?token=test").expect("valid sign-in deeplink");
+
+        let result = DeepLinkAction::try_from(&url);
+
+        assert!(matches!(result, Err(ActionParseFromUrlError::NotAction)));
+    }
+
+    #[test]
+    fn parses_camera_switch_action() {
+        let url = Url::parse(
+            "cap-desktop://action?value=%7B%22set_camera%22%3A%7B%22camera%22%3A%7B%22DeviceID%22%3A%22camera-123%22%7D%7D%7D",
+        )
+        .expect("valid set camera deeplink");
+
+        let action = DeepLinkAction::try_from(&url).expect("camera action should parse");
+
+        assert!(matches!(
+            action,
+            DeepLinkAction::SetCamera {
+                camera: Some(_)
+            }
+        ));
     }
 }

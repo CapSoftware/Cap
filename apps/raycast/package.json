@@ -1,0 +1,123 @@
+{
+	"name": "cap-raycast",
+	"title": "Cap",
+	"description": "Control the Cap desktop app from Raycast using Cap deeplinks.",
+	"icon": "assets/icon.png",
+	"author": "cap",
+	"license": "MIT",
+	"platforms": ["macOS", "Windows"],
+	"categories": ["Productivity", "Developer Tools"],
+	"commands": [
+		{
+			"name": "start-recording",
+			"title": "Start Recording",
+			"description": "Start a Cap recording for a screen or window.",
+			"mode": "no-view",
+			"arguments": [
+				{
+					"name": "captureMode",
+					"type": "dropdown",
+					"placeholder": "Capture Mode",
+					"required": true,
+					"data": [
+						{ "title": "Screen", "value": "screen" },
+						{ "title": "Window", "value": "window" }
+					]
+				},
+				{
+					"name": "targetName",
+					"type": "text",
+					"placeholder": "Exact screen or window name",
+					"required": true
+				},
+				{
+					"name": "recordingMode",
+					"type": "dropdown",
+					"placeholder": "Recording Mode",
+					"required": true,
+					"data": [
+						{ "title": "Instant", "value": "instant" },
+						{ "title": "Studio", "value": "studio" }
+					]
+				}
+			]
+		},
+		{
+			"name": "stop-recording",
+			"title": "Stop Recording",
+			"description": "Stop the current Cap recording.",
+			"mode": "no-view"
+		},
+		{
+			"name": "pause-recording",
+			"title": "Pause Recording",
+			"description": "Pause the current Cap recording.",
+			"mode": "no-view"
+		},
+		{
+			"name": "resume-recording",
+			"title": "Resume Recording",
+			"description": "Resume the current Cap recording.",
+			"mode": "no-view"
+		},
+		{
+			"name": "toggle-recording-pause",
+			"title": "Toggle Recording Pause",
+			"description": "Pause or resume the current Cap recording.",
+			"mode": "no-view"
+		},
+		{
+			"name": "switch-microphone",
+			"title": "Switch Microphone",
+			"description": "Switch Cap to a different microphone label.",
+			"mode": "no-view",
+			"arguments": [
+				{
+					"name": "micLabel",
+					"type": "text",
+					"placeholder": "Exact microphone label",
+					"required": true
+				}
+			]
+		},
+		{
+			"name": "switch-camera",
+			"title": "Switch Camera",
+			"description": "Switch Cap to a different camera identifier.",
+			"mode": "no-view",
+			"arguments": [
+				{
+					"name": "identifierType",
+					"type": "dropdown",
+					"placeholder": "Identifier Type",
+					"required": true,
+					"data": [
+						{ "title": "Device ID", "value": "device" },
+						{ "title": "Model ID", "value": "model" }
+					]
+				},
+				{
+					"name": "cameraIdentifier",
+					"type": "text",
+					"placeholder": "Exact camera device/model identifier",
+					"required": true
+				}
+			]
+		}
+	],
+	"scripts": {
+		"dev": "ray develop",
+		"build": "ray build -e dist",
+		"lint": "ray lint"
+	},
+	"dependencies": {
+		"@raycast/api": "^1.99.3"
+	},
+	"devDependencies": {
+		"@raycast/eslint-config": "^2.0.7",
+		"@types/node": "^24.0.0",
+		"eslint": "^9.30.1",
+		"prettier": "^3.6.2",
+		"typescript": "^5.8.3"
+	}
+}
