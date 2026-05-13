@@ -17,7 +17,7 @@ use std::{
     process::Stdio,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use tokio::io::AsyncBufReadExt;
@@ -62,6 +62,7 @@ async fn run_protected_export(
 
 const EXPORTER_ENV_BIN_PATH: &str = "CAP_EXPORTER_BIN";
 const EXPORTER_STDERR_TAIL_LIMIT: usize = 80;
+static ACTIVE_EXPORT_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -94,6 +95,68 @@ impl ExportProgress {
 
     fn enabled(&self) -> bool {
         matches!(self, Self::Channel(_))
+    }
+}
+
+fn retain_export_session() {
+    let active_exports = ACTIVE_EXPORT_SESSIONS.fetch_add(1, Ordering::AcqRel) + 1;
+    info!(active_exports, "Export session guard started");
+}
+
+fn release_export_session() {
+    let mut current = ACTIVE_EXPORT_SESSIONS.load(Ordering::Acquire);
+    loop {
+        if current == 0 {
+            tracing::warn!("Export session guard release requested with no active exports");
+            return;
+        }
+
+        match ACTIVE_EXPORT_SESSIONS.compare_exchange(
+            current,
+            current - 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                info!(
+                    active_exports = current - 1,
+                    "Export session guard released"
+                );
+                return;
+            }
+            Err(next) => current = next,
+        }
+    }
+}
+
+pub fn export_session_active() -> bool {
+    ACTIVE_EXPORT_SESSIONS.load(Ordering::Acquire) > 0
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn begin_export_session() {
+    retain_export_session();
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn end_export_session() {
+    release_export_session();
+}
+
+struct ExportSessionGuard;
+
+impl ExportSessionGuard {
+    fn new() -> Self {
+        retain_export_session();
+        Self
+    }
+}
+
+impl Drop for ExportSessionGuard {
+    fn drop(&mut self) {
+        release_export_session();
     }
 }
 
@@ -524,6 +587,7 @@ async fn export_video_inner(
     editor: OptionalWindowEditorInstance,
     progress: ExportProgress,
 ) -> Result<PathBuf, String> {
+    let _session_guard = ExportSessionGuard::new();
     let force_ffmpeg = should_force_ffmpeg_export(&project_path, &settings);
     info!(
         project_path = %project_path.display(),

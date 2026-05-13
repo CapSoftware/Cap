@@ -7,13 +7,33 @@ export function createExportTask(
 	onProgress: (progress: FramesRendered) => void,
 ) {
 	if (!import.meta.env.DEV) {
-		onProgress({ renderedCount: 0, totalFrames: 1, type: "FramesRendered" });
+		const promise = (async () => {
+			await invoke("begin_export_session");
+			try {
+				const exportPromise = invoke<string>("export_video_no_progress", {
+					projectPath,
+					settings,
+				});
+				try {
+					onProgress({
+						renderedCount: 0,
+						totalFrames: 1,
+						type: "FramesRendered",
+					});
+				} catch (error) {
+					console.error("Failed to handle initial export progress", error);
+				}
+				return await exportPromise;
+			} finally {
+				await invoke("end_export_session").catch((error) => {
+					console.error("Failed to release export session guard", error);
+				});
+			}
+		})();
+
 		return {
 			cancel: () => {},
-			promise: invoke<string>("export_video_no_progress", {
-				projectPath,
-				settings,
-			}),
+			promise,
 		};
 	}
 
