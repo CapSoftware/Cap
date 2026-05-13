@@ -478,8 +478,7 @@ fn probe_video_seek_point_with(
 
         if packets_tried >= SEEK_PROBE_PACKET_LIMIT {
             return Err(format!(
-                "No decodable frames found within {} packets after seeking to {position_us}us",
-                SEEK_PROBE_PACKET_LIMIT
+                "No decodable frames found within {SEEK_PROBE_PACKET_LIMIT} packets after seeking to {position_us}us"
             ));
         }
     }

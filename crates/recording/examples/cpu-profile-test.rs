@@ -44,6 +44,7 @@ async fn profile_recording(
         println!("Camera: {}", camera_info.display_name());
         let feed = CameraFeed::spawn(CameraFeed::default());
         feed.ask(camera::SetInput {
+            settings: None,
             id: DeviceOrModelID::from_info(&camera_info),
         })
         .await
@@ -63,6 +64,7 @@ async fn profile_recording(
         let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_sender));
         mic_feed
             .ask(microphone::SetInput {
+                settings: None,
                 label: mic_name.clone(),
             })
             .await
@@ -165,6 +167,7 @@ async fn profile_idle_with_camera(duration_secs: u64) {
         .expect("AddSender failed");
 
     feed.ask(camera::SetInput {
+        settings: None,
         id: DeviceOrModelID::from_info(&camera_info),
     })
     .await

@@ -11,8 +11,29 @@ export * from "./Rpcs.ts";
 export { S3Buckets } from "./S3Buckets/index.ts";
 export { Spaces } from "./Spaces/index.ts";
 export { SpacesPolicy } from "./Spaces/SpacesPolicy.ts";
+export * from "./Storage/GoogleDrive.ts";
+export { Storage } from "./Storage/index.ts";
+export {
+	createStorageObjectToken,
+	verifyStorageObjectToken,
+} from "./Storage/SignedObject.ts";
+export {
+	type GoogleDriveIntegrationConfig,
+	type GoogleDriveStorageQuota,
+	type GoogleDriveStorageQuotaCache,
+	StorageRepo,
+} from "./Storage/StorageRepo.ts";
 export { Tinybird } from "./Tinybird/index.ts";
 export { Users } from "./Users/index.ts";
+export {
+	collectPasswordHashes,
+	type EffectiveVideoRules,
+	resolveEffectiveVideoRules,
+	type SpaceRuleInput,
+	type SpaceRuleSource,
+	type ViewerSettingKey,
+	type ViewerSettings,
+} from "./Videos/EffectiveVideoRules.ts";
 export { Videos } from "./Videos/index.ts";
 export {
 	buildCanView,

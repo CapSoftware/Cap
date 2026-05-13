@@ -290,7 +290,7 @@ impl WindowImpl {
             })
             .collect::<Vec<_>>();
 
-        windows_with_level.sort_by(|a, b| b.1.cmp(&a.1));
+        windows_with_level.sort_by_key(|b| std::cmp::Reverse(b.1));
 
         windows_with_level.first().map(|(window, _)| *window)
     }

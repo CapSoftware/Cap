@@ -1,12 +1,14 @@
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
-import type { S3Bucket, Video } from "@cap/web-domain";
+import { Storage } from "@cap/web-backend";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 import { type NextRequest, NextResponse } from "next/server";
+import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 
 interface ProgressWebhookPayload {
 	jobId: string;
@@ -91,17 +93,14 @@ export async function POST(request: NextRequest) {
 					.set({
 						width: payload.metadata.width,
 						height: payload.metadata.height,
+						fps: payload.metadata.fps,
 						...(duration === undefined ? {} : { duration }),
 					})
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
 			}
 
 			const [currentVideo] = await db()
-				.select({
-					source: videos.source,
-					ownerId: videos.ownerId,
-					bucket: videos.bucket,
-				})
+				.select()
 				.from(videos)
 				.where(eq(videos.id, payload.videoId as Video.VideoId));
 
@@ -117,10 +116,9 @@ export async function POST(request: NextRequest) {
 				if (ownerId) {
 					const segmentsPrefix = `${ownerId}/${videoId}/segments/`;
 					Effect.gen(function* () {
-						const bucketId = Option.fromNullable(
-							currentVideo.bucket,
-						) as Option.Option<S3Bucket.S3BucketId>;
-						const [bucket] = yield* S3Buckets.getBucketAccess(bucketId);
+						const [bucket] = yield* Storage.getAccessForVideo(
+							decodeStorageVideo(currentVideo),
+						);
 						let totalDeleted = 0;
 						let continuationToken: string | undefined;
 
@@ -164,6 +162,9 @@ export async function POST(request: NextRequest) {
 			await db()
 				.delete(videoUploads)
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+			await invalidateGoogleDriveStorageQuotaCache(
+				currentVideo?.storageIntegrationId,
+			);
 		} else if (dbPhase === "error") {
 			await db()
 				.update(videoUploads)

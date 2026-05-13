@@ -201,6 +201,7 @@ async fn run_lifecycle_stress(
             .expect("AddSender failed");
 
         feed.ask(camera::SetInput {
+            settings: None,
             id: camera_id.clone(),
         })
         .await
@@ -291,6 +292,7 @@ async fn run_rapid_toggle(toggles: usize) -> Result<(), Box<dyn std::error::Erro
             .expect("AddSender failed");
 
         feed.ask(camera::SetInput {
+            settings: None,
             id: camera_id.clone(),
         })
         .await
@@ -347,6 +349,7 @@ async fn run_setinput_after_unlock(cycles: usize) -> Result<(), Box<dyn std::err
             .expect("AddSender");
 
         feed.ask(camera::SetInput {
+            settings: None,
             id: camera_id.clone(),
         })
         .await
@@ -369,6 +372,7 @@ async fn run_setinput_after_unlock(cycles: usize) -> Result<(), Box<dyn std::err
         let setinput_start = Instant::now();
         let result = tokio::time::timeout(Duration::from_secs(10), async {
             feed.ask(camera::SetInput {
+                settings: None,
                 id: camera_id.clone(),
             })
             .await

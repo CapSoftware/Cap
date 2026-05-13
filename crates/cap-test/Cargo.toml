@@ -44,6 +44,9 @@ parking_lot = "0.12"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 tempfile = "3"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
 

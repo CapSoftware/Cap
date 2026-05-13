@@ -130,9 +130,15 @@ extern "C" fn did_finish_launching(this: &Object, _: Sel, _: id) {
 }
 
 extern "C" fn application_will_terminate(_: &Object, _: Sel, _: id) {
-  trace!("Triggered `applicationWillTerminate`");
-  AppState::exit();
-  trace!("Completed `applicationWillTerminate`");
+  let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    trace!("Triggered `applicationWillTerminate`");
+    AppState::exit();
+    trace!("Completed `applicationWillTerminate`");
+  }));
+
+  if result.is_err() {
+    error!("Suppressed panic in `applicationWillTerminate`");
+  }
 }
 
 extern "C" fn application_open_urls(_: &Object, _: Sel, _: id, urls: &NSArray<NSURL>) {
