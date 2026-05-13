@@ -1,0 +1,92 @@
+{
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap screen recording directly from Raycast",
+  "icon": "icon.png",
+  "author": "Cap",
+  "categories": ["Productivity", "Developer Tools"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "subtitle": "Cap",
+      "description": "Start a new screen recording with Cap",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "subtitle": "Cap",
+      "description": "Stop the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "subtitle": "Cap",
+      "description": "Pause the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "subtitle": "Cap",
+      "description": "Resume a paused recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-pause-recording",
+      "title": "Toggle Pause Recording",
+      "subtitle": "Cap",
+      "description": "Toggle pause/resume on the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "restart-recording",
+      "title": "Restart Recording",
+      "subtitle": "Cap",
+      "description": "Restart the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "take-screenshot",
+      "title": "Take Screenshot",
+      "subtitle": "Cap",
+      "description": "Capture a screenshot using Cap",
+      "mode": "no-view"
+    },
+    {
+      "name": "list-devices",
+      "title": "List Available Devices",
+      "subtitle": "Cap",
+      "description": "Show available cameras and microphones",
+      "mode": "view"
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "subtitle": "Cap",
+      "description": "Switch the camera input for recording",
+      "mode": "view"
+    },
+    {
+      "name": "switch-microphone",
+      "title": "Switch Microphone",
+      "subtitle": "Cap",
+      "description": "Switch the microphone input for recording",
+      "mode": "view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.79.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.9",
+    "typescript": "^5.5.3"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop"
+  }
+}

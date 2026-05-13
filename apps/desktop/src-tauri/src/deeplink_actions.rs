@@ -26,6 +26,18 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    RestartRecording,
+    TakeScreenshot,
+    SwitchMicrophone {
+        mic_label: String,
+    },
+    SwitchCamera {
+        camera: DeviceOrModelID,
+    },
+    RefreshRaycastDeviceCache,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -88,7 +100,7 @@ impl TryFrom<&Url> for DeepLinkAction {
                 .map_err(|_| ActionParseFromUrlError::Invalid);
         }
 
-        match url.domain() {
+        match url.host_str() {
             Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
             _ => Err(ActionParseFromUrlError::Invalid),
         }?;
@@ -146,6 +158,44 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::RestartRecording => {
+                crate::recording::restart_recording(app.clone(), app.state())
+                    .await
+                    .map(|_| ())
+            }
+            DeepLinkAction::TakeScreenshot => {
+                let displays = cap_recording::sources::screen_capture::list_displays();
+                let target = displays
+                    .into_iter()
+                    .next()
+                    .map(|(d, _)| ScreenCaptureTarget::Display { id: d.id })
+                    .ok_or("No display found")?;
+                crate::recording::take_screenshot(app.clone(), target)
+                    .await
+                    .map(|_| ())
+            }
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                crate::set_mic_input(app.state(), Some(mic_label)).await
+            }
+            DeepLinkAction::SwitchCamera { camera } => {
+                crate::set_camera_input(app.clone(), app.state(), Some(camera), None).await
+            }
+            DeepLinkAction::RefreshRaycastDeviceCache => {
+                // Refresh by re-initializing the mic feed
+                let state: tauri::State<'_, ArcLock<App>> = app.state();
+                let mut app_state = state.write().await;
+                app_state.restart_mic_feed().await.map_err(|e| e.to_string())?;
+                Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
