@@ -5,7 +5,7 @@
 	"icon": "assets/icon.png",
 	"author": "cap",
 	"license": "MIT",
-	"platforms": ["macOS", "Windows"],
+	"platforms": ["macOS"],
 	"categories": ["Productivity", "Developer Tools"],
 	"commands": [
 		{

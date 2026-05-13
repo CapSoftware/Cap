@@ -1,4 +1,4 @@
-import { closeMainWindow, open, showHUD } from "@raycast/api";
+import { open, showHUD } from "@raycast/api";
 
 type RecordingMode = "instant" | "studio";
 type CaptureMode =
@@ -58,6 +58,5 @@ export async function triggerCapAction(action: CapAction, hudMessage: string) {
 	const deepLink = `cap-desktop://action?value=${value}`;
 
 	await open(deepLink);
-	await closeMainWindow();
 	await showHUD(hudMessage);
 }
