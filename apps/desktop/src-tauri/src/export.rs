@@ -538,10 +538,7 @@ fn should_use_out_of_process_export() -> bool {
 }
 
 fn should_use_release_export_sidecar() -> bool {
-    cfg!(all(
-        any(target_os = "macos", target_os = "windows"),
-        not(debug_assertions)
-    ))
+    cfg!(all(target_os = "macos", not(debug_assertions)))
 }
 
 fn should_start_export_sidecar_in_safe_mode() -> bool {
@@ -579,6 +576,28 @@ pub async fn export_video_no_progress(
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
     export_video_inner(project_path, settings, editor, ExportProgress::Disabled).await
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(settings_json))]
+pub async fn export_video_no_progress_detached(
+    project_path: PathBuf,
+    settings_json: String,
+) -> Result<PathBuf, String> {
+    info!(
+        project_path = %project_path.display(),
+        "Starting detached no-progress export command"
+    );
+    let settings = serde_json::from_str::<ExportSettings>(&settings_json)
+        .map_err(|e| format!("Invalid export settings JSON: {e}"))?;
+    export_video_inner(
+        project_path,
+        settings,
+        OptionalWindowEditorInstance(None),
+        ExportProgress::Disabled,
+    )
+    .await
 }
 
 async fn export_video_inner(

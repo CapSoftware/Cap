@@ -10,10 +10,13 @@ export function createExportTask(
 		const promise = (async () => {
 			await invoke("begin_export_session");
 			try {
-				const exportPromise = invoke<string>("export_video_no_progress", {
-					projectPath,
-					settings,
-				});
+				const exportPromise = invoke<string>(
+					"export_video_no_progress_detached",
+					{
+						projectPath,
+						settingsJson: JSON.stringify(settings),
+					},
+				);
 				try {
 					onProgress({
 						renderedCount: 0,
