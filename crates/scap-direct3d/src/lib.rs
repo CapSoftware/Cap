@@ -6,11 +6,11 @@ pub use windows_version::WindowsVersion;
 
 use std::{
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::RecvError,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use windows::{
     Foundation::{Metadata::ApiInformation, TypedEventHandler},
@@ -30,7 +30,7 @@ use windows::{
                 D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_FLAG, D3D11_MAP_READ,
                 D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
                 D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
-                ID3D11DeviceContext, ID3D11Texture2D,
+                ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
             },
             Dxgi::{
                 Common::{
@@ -72,6 +72,85 @@ impl PixelFormat {
 }
 
 const STAGING_POOL_SIZE: usize = 3;
+
+struct CallbackActivity {
+    active: Mutex<usize>,
+    idle: Condvar,
+}
+
+impl CallbackActivity {
+    fn new() -> Self {
+        Self {
+            active: Mutex::new(0),
+            idle: Condvar::new(),
+        }
+    }
+
+    fn enter(self: &Arc<Self>) -> CallbackActivityGuard {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *active += 1;
+
+        CallbackActivityGuard {
+            activity: self.clone(),
+        }
+    }
+
+    fn leave(&self) {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if *active > 0 {
+            *active -= 1;
+        }
+
+        if *active == 0 {
+            self.idle.notify_all();
+        }
+    }
+
+    fn wait_idle(&self, timeout: Duration) {
+        let started = Instant::now();
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        while *active > 0 {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+
+            match self.idle.wait_timeout(active, remaining) {
+                Ok((next_guard, wait_result)) => {
+                    active = next_guard;
+                    if wait_result.timed_out() {
+                        break;
+                    }
+                }
+                Err(poisoned) => {
+                    let (next_guard, _) = poisoned.into_inner();
+                    active = next_guard;
+                }
+            }
+        }
+    }
+}
+
+struct CallbackActivityGuard {
+    activity: Arc<CallbackActivity>,
+}
+
+impl Drop for CallbackActivityGuard {
+    fn drop(&mut self) {
+        self.activity.leave();
+    }
+}
 
 struct PooledStagingTexture {
     texture: ID3D11Texture2D,
@@ -279,6 +358,7 @@ pub struct Capturer {
     frame_pool: Direct3D11CaptureFramePool,
     frame_arrived_token: i64,
     stop_flag: Arc<AtomicBool>,
+    callback_activity: Arc<CallbackActivity>,
     is_using_warp: bool,
 }
 
@@ -347,6 +427,12 @@ impl Capturer {
             .map_err(NewCapturerError::Context)?
             .unwrap();
 
+        if let Ok(multithread) = d3d_device.cast::<ID3D11Multithread>() {
+            unsafe {
+                let _ = multithread.SetMultithreadProtected(true);
+            }
+        }
+
         let staging_pool = Arc::new(StagingTexturePool::new(
             d3d_device.clone(),
             settings.pixel_format,
@@ -355,6 +441,7 @@ impl Capturer {
         let item = item.clone();
         let settings = settings.clone();
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let callback_activity = Arc::new(CallbackActivity::new());
 
         let direct3d_device = (|| {
             let dxgi_device = d3d_device.cast::<IDXGIDevice>()?;
@@ -430,8 +517,11 @@ impl Capturer {
                     let d3d_device = d3d_device.clone();
                     let stop_flag = stop_flag.clone();
                     let staging_pool = staging_pool.clone();
+                    let callback_activity = callback_activity.clone();
 
                     move |frame_pool, _| {
+                        let _activity_guard = callback_activity.enter();
+
                         if stop_flag.load(Ordering::Relaxed) {
                             return Ok(());
                         }
@@ -511,6 +601,7 @@ impl Capturer {
             frame_pool,
             frame_arrived_token,
             stop_flag,
+            callback_activity,
             is_using_warp,
         })
     }
@@ -558,6 +649,7 @@ impl Capturer {
             return Ok(());
         }
         let _ = self.frame_pool.RemoveFrameArrived(self.frame_arrived_token);
+        self.callback_activity.wait_idle(Duration::from_secs(2));
         let _ = self.session.Close();
         self.frame_pool.Close()
     }

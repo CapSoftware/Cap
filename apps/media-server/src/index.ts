@@ -12,7 +12,7 @@ const shutdown = async () => {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	console.log("[media-server] Shutting down...");
-	const abortedJobs = abortAllJobs();
+	const abortedJobs = await abortAllJobs();
 	if (abortedJobs > 0) {
 		console.log(`[media-server] Aborted ${abortedJobs} active jobs`);
 	}

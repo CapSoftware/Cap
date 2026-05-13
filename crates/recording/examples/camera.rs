@@ -18,6 +18,7 @@ async fn main() {
 
     let feed = CameraFeed::spawn(CameraFeed::default());
     feed.ask(camera::SetInput {
+        settings: None,
         id: DeviceOrModelID::from_info(&device.0),
     })
     .await

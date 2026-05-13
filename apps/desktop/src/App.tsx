@@ -54,6 +54,12 @@ const SettingsIntegrationsPage = lazy(
 const SettingsS3ConfigPage = lazy(
 	() => import("./routes/(window-chrome)/settings/integrations/s3-config"),
 );
+const SettingsGoogleDriveConfigPage = lazy(
+	() =>
+		import(
+			"./routes/(window-chrome)/settings/integrations/google-drive-config"
+		),
+);
 const OnboardingPage = lazy(
 	() => import("./routes/(window-chrome)/onboarding"),
 );
@@ -139,7 +145,8 @@ function Inner() {
 								if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
 							}
 
-							if (location.pathname !== "/camera") currentWindow.show();
+							if (location.pathname !== "/" && location.pathname !== "/camera")
+								currentWindow.show();
 						});
 
 						return <Suspense fallback={null}>{props.children}</Suspense>;
@@ -171,6 +178,10 @@ function Inner() {
 							<Route
 								path="/integrations/s3-config"
 								component={SettingsS3ConfigPage}
+							/>
+							<Route
+								path="/integrations/google-drive-config"
+								component={SettingsGoogleDriveConfigPage}
 							/>
 						</Route>
 						<Route path="/onboarding" component={OnboardingPage} />

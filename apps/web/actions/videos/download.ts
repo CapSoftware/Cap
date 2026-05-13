@@ -3,11 +3,12 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
+import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 
 export async function downloadVideo(videoId: Video.VideoId) {
 	const user = await getCurrentUser();
@@ -36,8 +37,8 @@ export async function downloadVideo(videoId: Video.VideoId) {
 		const videoKey = `${video.ownerId}/${videoId}/result.mp4`;
 
 		const downloadUrl = await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(
-				Option.fromNullable(video.bucket),
+			const [bucket] = yield* Storage.getAccessForVideo(
+				decodeStorageVideo(video),
 			);
 			return yield* bucket.getSignedObjectUrl(videoKey);
 		}).pipe(runPromise);

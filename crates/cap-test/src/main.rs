@@ -111,6 +111,29 @@ enum Commands {
     Report {
         results: PathBuf,
     },
+
+    RecordHarness {
+        #[arg(long)]
+        output: PathBuf,
+
+        #[arg(long)]
+        ready_file: Option<PathBuf>,
+
+        #[arg(long)]
+        display: Option<String>,
+
+        #[arg(long, default_value = "30")]
+        fps: u32,
+
+        #[arg(long, default_value = "600")]
+        max_duration: u64,
+
+        #[arg(long, default_value = "true")]
+        include_mic: bool,
+
+        #[arg(long, default_value = "false")]
+        include_system_audio: bool,
+    },
 }
 
 #[tokio::main]
@@ -181,6 +204,27 @@ async fn main() -> Result<()> {
         Commands::Report { results } => {
             cmd_report(results).await?;
         }
+
+        Commands::RecordHarness {
+            output,
+            ready_file,
+            display,
+            fps,
+            max_duration,
+            include_mic,
+            include_system_audio,
+        } => {
+            suites::kill9::run_record_harness(suites::kill9::RecordHarnessArgs {
+                output,
+                ready_file,
+                display_id: display,
+                fps,
+                max_duration_secs: max_duration,
+                include_mic,
+                include_system_audio,
+            })
+            .await?;
+        }
     }
 
     Ok(())
@@ -246,9 +290,12 @@ async fn cmd_suite(
             suites::run_performance_suite(&hardware, &recording_path, duration).await?
         }
         "sync" => suites::run_sync_suite(&hardware, duration).await?,
+        "av-alignment" => suites::run_av_alignment_suite(&hardware, duration).await?,
+        "drift" => suites::run_drift_suite(&hardware, duration).await?,
+        "kill9-crash-test" | "kill9" => suites::run_kill9_crash_suite(&hardware, duration).await?,
         _ => {
             anyhow::bail!(
-                "Unknown suite: {}. Available: recording, encoding, playback, performance, sync",
+                "Unknown suite: {}. Available: recording, encoding, playback, performance, sync, av-alignment, drift, kill9-crash-test",
                 name
             );
         }

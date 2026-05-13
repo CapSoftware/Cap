@@ -4,6 +4,7 @@ import { Button } from "@cap/ui";
 import type { Space } from "@cap/web-domain";
 import {
 	faLayerGroup,
+	faLock,
 	faPlus,
 	faXmark,
 } from "@fortawesome/free-solid-svg-icons";
@@ -73,15 +74,16 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 		}
 	};
 
-	if (!spacesData) return null;
-
 	const { displayedSpaces, hasMoreSpaces, hiddenSpacesCount } = useMemo(() => {
+		const spaces = spacesData ?? [];
 		return {
-			displayedSpaces: showAllSpaces ? spacesData : spacesData.slice(0, 3),
-			hasMoreSpaces: spacesData.length > 3,
-			hiddenSpacesCount: Math.max(0, spacesData.length - 3),
+			displayedSpaces: showAllSpaces ? spaces : spaces.slice(0, 3),
+			hasMoreSpaces: spaces.length > 3,
+			hiddenSpacesCount: Math.max(0, spaces.length - 3),
 		};
 	}, [spacesData, showAllSpaces]);
+
+	if (!spacesData) return null;
 
 	const handleDragOver = (e: React.DragEvent, spaceId: string) => {
 		e.preventDefault();
@@ -228,7 +230,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 								content={space.name}
 								key={space.id}
 							>
-								<div
+								<li
 									className={clsx(
 										"relative transition-colors border border-transparent overflow-visible duration-150 rounded-xl mb-1.5",
 										activeSpaceParams(space.id)
@@ -295,9 +297,16 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 												<span className="ml-2.5 text-sm truncate transition-colors text-gray-11 group-hover:text-gray-12">
 													{space.name}
 												</span>
+												{space.hasPassword && (
+													<FontAwesomeIcon
+														icon={faLock}
+														className="ml-1.5 size-2.5 text-amber-600"
+													/>
+												)}
 												{/* Hide delete button for 'All spaces' synthetic entry */}
 												{!space.primary && isOwner && (
-													<div
+													<button
+														type="button"
 														onClick={(e) => handleDeleteSpace(e, space)}
 														className={
 															"flex justify-center items-center ml-auto rounded-full opacity-0 transition-all group size-6 group-hover:opacity-100 hover:bg-gray-4"
@@ -308,12 +317,12 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 															icon={faXmark}
 															className="size-3.5 text-gray-12"
 														/>
-													</div>
+													</button>
 												)}
 											</>
 										)}
 									</Link>
-								</div>
+								</li>
 							</Tooltip>
 						);
 					})}
@@ -374,24 +383,26 @@ const SpaceToggleControl = ({
 	if (sidebarCollapsed) return null;
 	if (!showAllSpaces && hasMoreSpaces) {
 		return (
-			<div
+			<button
+				type="button"
 				onClick={() => setShowAllSpaces(true)}
 				className="flex justify-between items-center p-2 w-full truncate rounded-xl transition-colors cursor-pointer text-gray-10 hover:text-gray-12 hover:bg-gray-3"
 			>
 				<span className="text-sm text-gray-10">+ {hiddenSpacesCount} more</span>
 				<ChevronDown size={16} className="ml-2" />
-			</div>
+			</button>
 		);
 	}
 	if (showAllSpaces) {
 		return (
-			<div
+			<button
+				type="button"
 				onClick={() => setShowAllSpaces(false)}
 				className="flex justify-between items-center p-2 w-full truncate rounded-xl transition-colors cursor-pointer text-gray-10 hover:text-gray-12 hover:bg-gray-3"
 			>
 				<span className="text-sm text-gray-10">Show less</span>
 				<ChevronUp size={16} className="ml-2" />
-			</div>
+			</button>
 		);
 	}
 	return null;

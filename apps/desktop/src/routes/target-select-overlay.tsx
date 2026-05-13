@@ -43,6 +43,7 @@ import {
 import ModeSelect from "~/components/ModeSelect";
 import SelectionHint from "~/components/selection-hint";
 import { authStore, generalSettingsStore } from "~/store";
+import { getCameraWindow } from "~/utils/camera-window";
 import { createDevicesQuery } from "~/utils/devices";
 import {
 	createCameraMutation,
@@ -86,7 +87,7 @@ async function repositionCameraForWindow(
 	windowBounds: { x: number; y: number; width: number; height: number },
 	displayId: DisplayId,
 ) {
-	const win = await WebviewWindow.getByLabel("camera");
+	const win = await getCameraWindow();
 	if (!win) return;
 
 	const [physSize, scaleFactor] = await Promise.all([
@@ -281,7 +282,7 @@ function Inner() {
 				reconcile({ variant: "cameraOnly" } as ScreenCaptureTarget),
 			);
 			setOptions("captureSystemAudio", false);
-			WebviewWindow.getByLabel("camera").then((win) => {
+			getCameraWindow().then((win) => {
 				if (win) win.close();
 			});
 		}
@@ -415,7 +416,7 @@ function Inner() {
 
 					onMount(async () => {
 						try {
-							const win = await WebviewWindow.getByLabel("camera");
+							const win = await getCameraWindow();
 							if (!win) return;
 							const [pos, factor] = await Promise.all([
 								win.outerPosition(),
@@ -462,7 +463,7 @@ function Inner() {
 						const original = originalCameraBounds();
 						if (!original) return;
 						try {
-							const win = await WebviewWindow.getByLabel("camera");
+							const win = await getCameraWindow();
 							if (!win) return;
 							await win.setPosition(
 								new LogicalPosition(original.x, original.y),
@@ -686,7 +687,7 @@ function Inner() {
 					>(null);
 
 					onMount(async () => {
-						const win = await WebviewWindow.getByLabel("camera");
+						const win = await getCameraWindow();
 						if (win) setCameraWindow(win);
 					});
 
@@ -787,12 +788,7 @@ function Inner() {
 						if (!win) {
 							// Try to find it
 							try {
-								win = await WebviewWindow.getByLabel("camera");
-								if (!win) {
-									// Fallback: check all windows
-									const all = await WebviewWindow.getAll();
-									win = all.find((w) => w.label.includes("camera")) ?? null;
-								}
+								win = await getCameraWindow();
 								if (win) setCameraWindow(win);
 							} catch (e) {
 								console.error("Failed to find camera window", e);
@@ -901,6 +897,7 @@ function Inner() {
 
 					async function showCropOptionsMenu(e: UIEvent) {
 						e.preventDefault();
+						e.stopPropagation();
 						const items = [
 							{
 								text: "Reset selection",
@@ -923,7 +920,6 @@ function Inner() {
 						];
 						const menu = await Menu.new({ items });
 						await menu.popup();
-						await menu.close();
 					}
 
 					// Spacing rules:
@@ -1293,6 +1289,8 @@ function CameraPreviewInline() {
 
 		socket.onmessage = (event) => {
 			lastFrameTime = Date.now();
+			if (pendingRender) return;
+
 			const buffer = event.data as ArrayBuffer;
 			const clamped = new Uint8ClampedArray(buffer);
 			if (clamped.length < 24) return;
@@ -1587,7 +1585,7 @@ function RecordingControls(props: {
 			});
 
 		if (isCameraOnly) {
-			const win = await WebviewWindow.getByLabel("camera");
+			const win = await getCameraWindow();
 			if (win) win.close();
 		}
 	});
