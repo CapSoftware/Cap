@@ -63,6 +63,9 @@ async fn run_protected_export(
 const EXPORTER_ENV_BIN_PATH: &str = "CAP_EXPORTER_BIN";
 const EXPORTER_STDERR_TAIL_LIMIT: usize = 80;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 enum ExportSidecarMessage {
@@ -74,6 +77,14 @@ enum ExportSidecarMessage {
         path: PathBuf,
     },
 }
+
+#[cfg(windows)]
+fn configure_exporter_command(command: &mut tokio::process::Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn configure_exporter_command(_command: &mut tokio::process::Command) {}
 
 async fn run_out_of_process_export(
     project_path: &Path,
@@ -136,6 +147,7 @@ async fn run_out_of_process_export_attempt(
             .env("CAP_RENDER_FORCE_SOFTWARE_ADAPTER", "1")
             .env("CAP_EXPORT_FORCE_SOFTWARE_ENCODER", "1");
     }
+    configure_exporter_command(&mut command);
 
     let mut child = command.spawn().map_err(|e| {
         format!(
@@ -230,111 +242,6 @@ async fn collect_exporter_stderr_tail(stderr: tokio::process::ChildStderr) -> Ve
     }
 
     tail
-}
-
-async fn run_out_of_process_export_preview(
-    project_path: &Path,
-    frame_time: f64,
-    settings: &ExportPreviewSettings,
-    force_ffmpeg: bool,
-) -> Result<ExportPreviewResult, String> {
-    match run_out_of_process_export_preview_attempt(
-        project_path,
-        frame_time,
-        settings,
-        force_ffmpeg,
-        false,
-    )
-    .await
-    {
-        Ok(result) => Ok(result),
-        Err(e) => {
-            error!(
-                error = %e,
-                "Export preview worker failed, retrying with software rendering and encoding"
-            );
-            run_out_of_process_export_preview_attempt(
-                project_path,
-                frame_time,
-                settings,
-                force_ffmpeg,
-                true,
-            )
-            .await
-        }
-    }
-}
-
-async fn run_out_of_process_export_preview_attempt(
-    project_path: &Path,
-    frame_time: f64,
-    settings: &ExportPreviewSettings,
-    force_ffmpeg: bool,
-    safe_mode: bool,
-) -> Result<ExportPreviewResult, String> {
-    let bin_path = resolve_exporter_binary()?;
-    let settings_json = serde_json::to_string(&settings.to_export_preview_settings())
-        .map_err(|e| format!("Failed to serialize preview settings: {e}"))?;
-
-    info!(
-        path = %bin_path.display(),
-        project_path = %project_path.display(),
-        frame_time,
-        force_ffmpeg,
-        safe_mode,
-        "Starting export preview worker process"
-    );
-
-    let mut command = tokio::process::Command::new(&bin_path);
-    command
-        .arg("export-preview")
-        .arg(project_path)
-        .arg("--frame-time")
-        .arg(frame_time.to_string())
-        .arg("--settings-json")
-        .arg(settings_json)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    if force_ffmpeg {
-        command.arg("--force-ffmpeg-decoder");
-    }
-
-    if safe_mode {
-        command
-            .env("CAP_RENDER_FORCE_SOFTWARE_ADAPTER", "1")
-            .env("CAP_EXPORT_FORCE_SOFTWARE_ENCODER", "1");
-    }
-
-    let output = command.output().await.map_err(|e| {
-        format!(
-            "Failed to run export preview worker '{}': {e}",
-            bin_path.display()
-        )
-    })?;
-
-    if !output.status.success() {
-        let stderr_tail = String::from_utf8_lossy(&output.stderr)
-            .lines()
-            .rev()
-            .take(EXPORTER_STDERR_TAIL_LIMIT)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Err(format!(
-            "Export preview worker exited with status {}. Stderr tail:\n{stderr_tail}",
-            output.status
-        ));
-    }
-
-    let stdout = String::from_utf8(output.stdout)
-        .map_err(|e| format!("Export preview worker emitted invalid UTF-8: {e}"))?;
-
-    serde_json::from_str(stdout.trim())
-        .map_err(|e| format!("Failed to parse export preview worker output: {e}"))
 }
 
 fn resolve_exporter_binary() -> Result<PathBuf, String> {
@@ -550,10 +457,6 @@ fn should_use_out_of_process_export() -> bool {
     should_use_release_export_sidecar()
 }
 
-fn should_use_out_of_process_preview() -> bool {
-    should_use_release_export_sidecar()
-}
-
 fn should_use_release_export_sidecar() -> bool {
     cfg!(all(
         any(target_os = "macos", target_os = "windows"),
@@ -734,17 +637,6 @@ pub struct ExportPreviewSettings {
     pub cursor_only: bool,
 }
 
-impl ExportPreviewSettings {
-    fn to_export_preview_settings(&self) -> cap_export::preview::ExportPreviewSettings {
-        cap_export::preview::ExportPreviewSettings {
-            fps: self.fps,
-            resolution_base: self.resolution_base,
-            compression_bpp: self.compression_bpp,
-            cursor_only: self.cursor_only,
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, Type)]
 pub struct ExportPreviewResult {
     pub jpeg_base64: String,
@@ -803,16 +695,6 @@ async fn generate_export_preview_inner(
     frame_time: f64,
     settings: ExportPreviewSettings,
 ) -> Result<ExportPreviewResult, String> {
-    if should_use_out_of_process_preview() {
-        return run_out_of_process_export_preview(
-            &project_path,
-            frame_time,
-            &settings,
-            should_force_ffmpeg_preview(),
-        )
-        .await;
-    }
-
     use base64::{Engine, engine::general_purpose::STANDARD};
     use cap_editor::create_segments;
     use std::time::Instant;
@@ -1113,161 +995,146 @@ async fn generate_export_preview_fast_inner(
         return Err("Export is in progress - preview generation skipped".to_string());
     }
 
-    #[cfg(all(any(target_os = "macos", target_os = "windows"), not(debug_assertions)))]
-    {
-        let _preview_guard = ExportPreviewActiveGuard::try_new(&editor.export_preview_active)?;
-        return run_out_of_process_export_preview(
-            &editor.project_path,
-            frame_time,
-            &settings,
-            should_force_ffmpeg_preview(),
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use std::time::Instant;
+
+    let _preview_guard = ExportPreviewActiveGuard::try_new(&editor.export_preview_active)?;
+
+    let project_config = export_project_config(
+        editor.project_config.1.borrow().clone(),
+        settings.cursor_only,
+    );
+
+    let Some((segment_time, segment)) = project_config.get_segment_time(frame_time) else {
+        return Err("Frame time is outside video duration".to_string());
+    };
+
+    let segment_media = &editor.segment_medias[segment.recording_clip as usize];
+    let clip_config = project_config
+        .clips
+        .iter()
+        .find(|v| v.index == segment.recording_clip);
+
+    let render_start = Instant::now();
+
+    let segment_frames = segment_media
+        .decoders
+        .get_frames(
+            segment_time as f32,
+            !project_config.camera.hide,
+            !settings.cursor_only,
+            clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
         .await;
-    }
+    let segment_frames = segment_frames.ok_or_else(|| "Failed to decode frame".to_string())?;
 
-    #[cfg(any(not(any(target_os = "macos", target_os = "windows")), debug_assertions))]
-    {
-        use base64::{Engine, engine::general_purpose::STANDARD};
-        use std::time::Instant;
+    let frame_number = (frame_time * settings.fps as f64).floor() as u32;
+    let total_duration = project_config
+        .timeline
+        .as_ref()
+        .map(|t| t.duration())
+        .unwrap_or(0.0);
 
-        let _preview_guard = ExportPreviewActiveGuard::try_new(&editor.export_preview_active)?;
+    let cursor_smoothing =
+        (!project_config.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+            tension: project_config.cursor.tension,
+            mass: project_config.cursor.mass,
+            friction: project_config.cursor.friction,
+        });
 
-        let project_config = export_project_config(
-            editor.project_config.1.borrow().clone(),
-            settings.cursor_only,
-        );
-
-        let Some((segment_time, segment)) = project_config.get_segment_time(frame_time) else {
-            return Err("Frame time is outside video duration".to_string());
-        };
-
-        let segment_media = &editor.segment_medias[segment.recording_clip as usize];
-        let clip_config = project_config
-            .clips
-            .iter()
-            .find(|v| v.index == segment.recording_clip);
-
-        let render_start = Instant::now();
-
-        let segment_frames = segment_media
-            .decoders
-            .get_frames(
-                segment_time as f32,
-                !project_config.camera.hide,
-                !settings.cursor_only,
-                clip_config.map(|v| v.offsets).unwrap_or_default(),
-            )
-            .await;
-        let segment_frames = segment_frames.ok_or_else(|| "Failed to decode frame".to_string())?;
-
-        let frame_number = (frame_time * settings.fps as f64).floor() as u32;
-        let total_duration = project_config
+    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+        &segment_media.cursor,
+        cursor_smoothing,
+        project_config.cursor.click_spring_config(),
+        project_config.screen_movement_spring,
+        total_duration,
+        project_config
             .timeline
             .as_ref()
-            .map(|t| t.duration())
-            .unwrap_or(0.0);
+            .map(|t| t.zoom_segments.as_slice())
+            .unwrap_or(&[]),
+    );
 
-        let cursor_smoothing =
-            (!project_config.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-                tension: project_config.cursor.tension,
-                mass: project_config.cursor.mass,
-                friction: project_config.cursor.friction,
-            });
+    let uniforms = ProjectUniforms::new(
+        &editor.render_constants,
+        &project_config,
+        frame_number,
+        settings.fps,
+        settings.resolution_base,
+        &segment_media.cursor,
+        &segment_frames,
+        total_duration,
+        &zoom_focus_interpolator,
+    );
 
-        let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+    let mut frame_renderer = FrameRenderer::new(&editor.render_constants);
+    let mut layers = RendererLayers::new_with_options(
+        &editor.render_constants.device,
+        &editor.render_constants.queue,
+        editor.render_constants.is_software_adapter,
+    );
+
+    let frame = frame_renderer
+        .render_immediate(
+            segment_frames,
+            uniforms,
             &segment_media.cursor,
-            cursor_smoothing,
-            project_config.cursor.click_spring_config(),
-            project_config.screen_movement_spring,
-            total_duration,
-            project_config
-                .timeline
-                .as_ref()
-                .map(|t| t.zoom_segments.as_slice())
-                .unwrap_or(&[]),
-        );
+            !settings.cursor_only,
+            &mut layers,
+        )
+        .await
+        .map_err(|e| format!("Failed to render frame: {e}"))?;
 
-        let uniforms = ProjectUniforms::new(
-            &editor.render_constants,
-            &project_config,
-            frame_number,
-            settings.fps,
-            settings.resolution_base,
-            &segment_media.cursor,
-            &segment_frames,
-            total_duration,
-            &zoom_focus_interpolator,
-        );
+    let frame_render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
 
-        let mut frame_renderer = FrameRenderer::new(&editor.render_constants);
-        let mut layers = RendererLayers::new_with_options(
-            &editor.render_constants.device,
-            &editor.render_constants.queue,
-            editor.render_constants.is_software_adapter,
-        );
+    let width = frame.width;
+    let height = frame.height;
 
-        let frame = frame_renderer
-            .render_immediate(
-                segment_frames,
-                uniforms,
-                &segment_media.cursor,
-                !settings.cursor_only,
-                &mut layers,
-            )
-            .await
-            .map_err(|e| format!("Failed to render frame: {e}"))?;
-
-        let frame_render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-
-        let width = frame.width;
-        let height = frame.height;
-
-        let rgb_data: Vec<u8> = frame
-            .data
-            .chunks(frame.padded_bytes_per_row as usize)
-            .flat_map(|row| {
-                row[0..(frame.width * 4) as usize]
-                    .chunks(4)
-                    .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
-            })
-            .collect();
-
-        let jpeg_quality = bpp_to_jpeg_quality(settings.compression_bpp);
-        let mut jpeg_buffer = Vec::new();
-        {
-            let mut encoder = JpegEncoder::new_with_quality(&mut jpeg_buffer, jpeg_quality);
-            encoder
-                .encode(&rgb_data, width, height, image::ExtendedColorType::Rgb8)
-                .map_err(|e| format!("Failed to encode JPEG: {e}"))?;
-        }
-
-        let jpeg_base64 = STANDARD.encode(&jpeg_buffer);
-
-        let total_pixels = (settings.resolution_base.x * settings.resolution_base.y) as f64;
-        let fps_f64 = settings.fps as f64;
-
-        let duration_seconds = editor.recordings.duration();
-        let total_frames = (duration_seconds * fps_f64).ceil() as u32;
-
-        let estimated_size_mb = if settings.cursor_only {
-            let total_frames_f64 = (duration_seconds * fps_f64).ceil();
-            estimate_cursor_only_size_mb(total_pixels, total_frames_f64)
-        } else {
-            let effective_fps = ((fps_f64 - 30.0).max(0.0) * 0.6) + fps_f64.min(30.0);
-            let video_bitrate = total_pixels * settings.compression_bpp as f64 * effective_fps;
-            let audio_bitrate = 192_000.0;
-            let total_bitrate = video_bitrate + audio_bitrate;
-            let encoder_efficiency = 0.5;
-            (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0)
-        };
-
-        Ok(ExportPreviewResult {
-            jpeg_base64,
-            estimated_size_mb,
-            actual_width: width,
-            actual_height: height,
-            frame_render_time_ms,
-            total_frames,
+    let rgb_data: Vec<u8> = frame
+        .data
+        .chunks(frame.padded_bytes_per_row as usize)
+        .flat_map(|row| {
+            row[0..(frame.width * 4) as usize]
+                .chunks(4)
+                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
         })
+        .collect();
+
+    let jpeg_quality = bpp_to_jpeg_quality(settings.compression_bpp);
+    let mut jpeg_buffer = Vec::new();
+    {
+        let mut encoder = JpegEncoder::new_with_quality(&mut jpeg_buffer, jpeg_quality);
+        encoder
+            .encode(&rgb_data, width, height, image::ExtendedColorType::Rgb8)
+            .map_err(|e| format!("Failed to encode JPEG: {e}"))?;
     }
+
+    let jpeg_base64 = STANDARD.encode(&jpeg_buffer);
+
+    let total_pixels = (settings.resolution_base.x * settings.resolution_base.y) as f64;
+    let fps_f64 = settings.fps as f64;
+
+    let duration_seconds = editor.recordings.duration();
+    let total_frames = (duration_seconds * fps_f64).ceil() as u32;
+
+    let estimated_size_mb = if settings.cursor_only {
+        let total_frames_f64 = (duration_seconds * fps_f64).ceil();
+        estimate_cursor_only_size_mb(total_pixels, total_frames_f64)
+    } else {
+        let effective_fps = ((fps_f64 - 30.0).max(0.0) * 0.6) + fps_f64.min(30.0);
+        let video_bitrate = total_pixels * settings.compression_bpp as f64 * effective_fps;
+        let audio_bitrate = 192_000.0;
+        let total_bitrate = video_bitrate + audio_bitrate;
+        let encoder_efficiency = 0.5;
+        (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0)
+    };
+
+    Ok(ExportPreviewResult {
+        jpeg_base64,
+        estimated_size_mb,
+        actual_width: width,
+        actual_height: height,
+        frame_render_time_ms,
+        total_frames,
+    })
 }
