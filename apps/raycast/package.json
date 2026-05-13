@@ -1,0 +1,263 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap recordings with deeplinks.",
+  "icon": "icon.png",
+  "author": "thomas",
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "description": "Start a Cap recording",
+      "mode": "view",
+      "preferences": [
+        {
+          "name": "defaultScreenName",
+          "description": "Screen display name used by Start Recording when Capture Source is Screen.",
+          "type": "textfield",
+          "required": false,
+          "title": "Default Screen Name",
+          "label": "Default Screen Name"
+        },
+        {
+          "name": "defaultWindowName",
+          "description": "Window title used by Start Recording when Capture Source is Window.",
+          "type": "textfield",
+          "required": false,
+          "title": "Default Window Name",
+          "label": "Default Window Name"
+        },
+        {
+          "name": "microphoneLabel",
+          "description": "Microphone label Cap should select before recording.",
+          "type": "textfield",
+          "required": false,
+          "title": "Microphone Label",
+          "label": "Microphone Label"
+        },
+        {
+          "name": "cameraDeviceId",
+          "description": "Camera device ID Cap should select before recording.",
+          "type": "textfield",
+          "required": false,
+          "title": "Camera Device ID",
+          "label": "Camera Device ID"
+        },
+        {
+          "name": "recordingMode",
+          "description": "Default Cap recording mode.",
+          "type": "dropdown",
+          "required": false,
+          "default": "studio",
+          "data": [
+            {
+              "title": "Studio",
+              "value": "studio"
+            },
+            {
+              "title": "Instant",
+              "value": "instant"
+            },
+            {
+              "title": "Screenshot",
+              "value": "screenshot"
+            }
+          ],
+          "title": "Recording Mode",
+          "label": "Recording Mode"
+        },
+        {
+          "name": "captureSystemAudio",
+          "description": "Capture system audio by default.",
+          "type": "checkbox",
+          "required": false,
+          "default": true,
+          "title": "Capture System Audio",
+          "label": "Capture System Audio"
+        }
+      ]
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "description": "Stop the active Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "description": "Pause the active Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "description": "Resume the active Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "switch-microphone",
+      "title": "Switch Microphone",
+      "description": "Select the microphone Cap should use",
+      "mode": "view",
+      "preferences": [
+        {
+          "name": "defaultScreenName",
+          "description": "Screen display name used by Start Recording when Capture Source is Screen.",
+          "type": "textfield",
+          "required": false,
+          "title": "Default Screen Name",
+          "label": "Default Screen Name"
+        },
+        {
+          "name": "defaultWindowName",
+          "description": "Window title used by Start Recording when Capture Source is Window.",
+          "type": "textfield",
+          "required": false,
+          "title": "Default Window Name",
+          "label": "Default Window Name"
+        },
+        {
+          "name": "microphoneLabel",
+          "description": "Microphone label Cap should select before recording.",
+          "type": "textfield",
+          "required": false,
+          "title": "Microphone Label",
+          "label": "Microphone Label"
+        },
+        {
+          "name": "cameraDeviceId",
+          "description": "Camera device ID Cap should select before recording.",
+          "type": "textfield",
+          "required": false,
+          "title": "Camera Device ID",
+          "label": "Camera Device ID"
+        },
+        {
+          "name": "recordingMode",
+          "description": "Default Cap recording mode.",
+          "type": "dropdown",
+          "required": false,
+          "default": "studio",
+          "data": [
+            {
+              "title": "Studio",
+              "value": "studio"
+            },
+            {
+              "title": "Instant",
+              "value": "instant"
+            },
+            {
+              "title": "Screenshot",
+              "value": "screenshot"
+            }
+          ],
+          "title": "Recording Mode",
+          "label": "Recording Mode"
+        },
+        {
+          "name": "captureSystemAudio",
+          "description": "Capture system audio by default.",
+          "type": "checkbox",
+          "required": false,
+          "default": true,
+          "title": "Capture System Audio",
+          "label": "Capture System Audio"
+        }
+      ]
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "description": "Select the camera Cap should use",
+      "mode": "view",
+      "preferences": [
+        {
+          "name": "defaultScreenName",
+          "description": "Screen display name used by Start Recording when Capture Source is Screen.",
+          "type": "textfield",
+          "required": false,
+          "title": "Default Screen Name",
+          "label": "Default Screen Name"
+        },
+        {
+          "name": "defaultWindowName",
+          "description": "Window title used by Start Recording when Capture Source is Window.",
+          "type": "textfield",
+          "required": false,
+          "title": "Default Window Name",
+          "label": "Default Window Name"
+        },
+        {
+          "name": "microphoneLabel",
+          "description": "Microphone label Cap should select before recording.",
+          "type": "textfield",
+          "required": false,
+          "title": "Microphone Label",
+          "label": "Microphone Label"
+        },
+        {
+          "name": "cameraDeviceId",
+          "description": "Camera device ID Cap should select before recording.",
+          "type": "textfield",
+          "required": false,
+          "title": "Camera Device ID",
+          "label": "Camera Device ID"
+        },
+        {
+          "name": "recordingMode",
+          "description": "Default Cap recording mode.",
+          "type": "dropdown",
+          "required": false,
+          "default": "studio",
+          "data": [
+            {
+              "title": "Studio",
+              "value": "studio"
+            },
+            {
+              "title": "Instant",
+              "value": "instant"
+            },
+            {
+              "title": "Screenshot",
+              "value": "screenshot"
+            }
+          ],
+          "title": "Recording Mode",
+          "label": "Recording Mode"
+        },
+        {
+          "name": "captureSystemAudio",
+          "description": "Capture system audio by default.",
+          "type": "checkbox",
+          "required": false,
+          "default": true,
+          "title": "Capture System Audio",
+          "label": "Capture System Audio"
+        }
+      ]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.93.2"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "^22.13.10",
+    "eslint": "^9.22.0",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.2",
+    "@typescript-eslint/parser": "^8.33.1"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint"
+  },
+  "type": "module"
+}

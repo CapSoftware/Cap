@@ -26,6 +26,14 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    SetMicrophone {
+        mic_label: Option<String>,
+    },
+    SetCamera {
+        camera: Option<DeviceOrModelID>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -147,6 +155,18 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SetMicrophone { mic_label } => {
+                crate::set_mic_input(app.state(), mic_label).await
+            }
+            DeepLinkAction::SetCamera { camera } => {
+                crate::set_camera_input(app.clone(), app.state(), camera, None).await
+            }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
@@ -154,5 +174,44 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(encoded_value: &str) -> DeepLinkAction {
+        let url = Url::parse(&format!("cap://action?value={encoded_value}"))
+            .expect("test URL should parse");
+        DeepLinkAction::try_from(&url).expect("action should parse")
+    }
+
+    #[test]
+    fn parses_unit_recording_actions() {
+        assert!(matches!(
+            parse("%22stop_recording%22"),
+            DeepLinkAction::StopRecording
+        ));
+        assert!(matches!(
+            parse("%22pause_recording%22"),
+            DeepLinkAction::PauseRecording
+        ));
+        assert!(matches!(
+            parse("%22resume_recording%22"),
+            DeepLinkAction::ResumeRecording
+        ));
+    }
+
+    #[test]
+    fn parses_switch_input_actions() {
+        assert!(matches!(
+            parse("%7B%22set_microphone%22%3A%7B%22mic_label%22%3A%22Studio%20Mic%22%7D%7D"),
+            DeepLinkAction::SetMicrophone { mic_label: Some(label) } if label == "Studio Mic"
+        ));
+        assert!(matches!(
+            parse("%7B%22set_camera%22%3A%7B%22camera%22%3A%7B%22DeviceID%22%3A%22camera-1%22%7D%7D%7D"),
+            DeepLinkAction::SetCamera { camera: Some(DeviceOrModelID::DeviceID(id)) } if id == "camera-1"
+        ));
     }
 }
