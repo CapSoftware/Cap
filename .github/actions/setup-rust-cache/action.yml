@@ -14,5 +14,7 @@ runs:
     - name: Cache Rust Dependencies
       uses: swatinem/rust-cache@v2
       with:
+        prefix-key: v1-rust
+        cache-bin: "false"
         save-if: ${{ inputs.save-cache }}
         shared-key: ${{ inputs.target }}

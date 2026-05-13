@@ -65,29 +65,60 @@ async function main() {
 	const target =
 		process.argv[2] || process.env.RUST_TARGET_TRIPLE || detectHostTriple();
 	const ext = target.includes("windows") ? ".exe" : "";
+
+	await fs.mkdir(binariesDir, { recursive: true });
+
+	for (const sidecar of [
+		{
+			packageName: "cap-muxer",
+			sourceBinary: "cap-muxer",
+			destBinary: "cap-muxer",
+			watchPaths: [
+				path.join(repoRoot, "crates", "cap-muxer"),
+				path.join(repoRoot, "crates", "cap-muxer-protocol"),
+				path.join(repoRoot, "Cargo.lock"),
+			],
+		},
+		{
+			packageName: "cap",
+			sourceBinary: "cap",
+			destBinary: "cap-exporter",
+			watchPaths: [
+				path.join(repoRoot, "apps", "cli"),
+				path.join(repoRoot, "crates", "editor"),
+				path.join(repoRoot, "crates", "enc-ffmpeg"),
+				path.join(repoRoot, "crates", "export"),
+				path.join(repoRoot, "crates", "media"),
+				path.join(repoRoot, "crates", "media-info"),
+				path.join(repoRoot, "crates", "project"),
+				path.join(repoRoot, "crates", "rendering"),
+				path.join(repoRoot, "Cargo.lock"),
+			],
+		},
+	]) {
+		await buildSidecar(sidecar, target, ext);
+	}
+}
+
+async function buildSidecar(sidecar, target, ext) {
 	const src = path.join(
 		repoRoot,
 		"target",
 		target,
 		"release",
-		`cap-muxer${ext}`,
+		`${sidecar.sourceBinary}${ext}`,
 	);
-	const dest = path.join(binariesDir, `cap-muxer-${target}${ext}`);
-	const watchPaths = [
-		path.join(repoRoot, "crates", "cap-muxer"),
-		path.join(repoRoot, "crates", "cap-muxer-protocol"),
-		path.join(repoRoot, "Cargo.lock"),
-	];
+	const dest = path.join(binariesDir, `${sidecar.destBinary}-${target}${ext}`);
 
-	if (await isUpToDate(dest, watchPaths)) {
-		console.log(`cap-muxer sidecar up to date: ${dest}`);
+	if (await isUpToDate(dest, sidecar.watchPaths)) {
+		console.log(`${sidecar.destBinary} sidecar up to date: ${dest}`);
 		return;
 	}
 
-	console.log(`Building cap-muxer sidecar for ${target}...`);
+	console.log(`Building ${sidecar.destBinary} sidecar for ${target}...`);
 	const cargo = spawnSync(
 		"cargo",
-		["build", "--release", "-p", "cap-muxer", "--target", target],
+		["build", "--release", "-p", sidecar.packageName, "--target", target],
 		{ stdio: "inherit", cwd: repoRoot },
 	);
 	if (cargo.status !== 0) {
@@ -99,7 +130,6 @@ async function main() {
 		process.exit(1);
 	}
 
-	await fs.mkdir(binariesDir, { recursive: true });
 	await fs.copyFile(src, dest);
 	console.log(`Copied ${src} -> ${dest}`);
 }

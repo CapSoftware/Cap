@@ -275,6 +275,7 @@ export function ExportPage() {
 
 	const [previewUrl, setPreviewUrl] = createSignal<string | null>(null);
 	const [previewLoading, setPreviewLoading] = createSignal(false);
+	const [previewUnavailable, setPreviewUnavailable] = createSignal(false);
 	const [renderEstimate, setRenderEstimate] = createSignal<{
 		frameRenderTimeMs: number;
 		totalFrames: number;
@@ -388,6 +389,7 @@ export function ExportPage() {
 			if (!cachedEstimate) {
 				estimateCache.set(cacheKey, newEstimate);
 			}
+			setPreviewUnavailable(false);
 			setRenderEstimate(newEstimate);
 		} catch (e) {
 			console.error("Failed to generate preview:", e);
@@ -397,6 +399,7 @@ export function ExportPage() {
 				);
 				return runPreviewRequest(request, retryCount + 1);
 			}
+			setPreviewUnavailable(true);
 		}
 	};
 
@@ -407,6 +410,7 @@ export function ExportPage() {
 		resHeight: number,
 		bpp: number,
 	) => {
+		setPreviewUnavailable(false);
 		pendingPreviewRequest = { frameTime, fps, resWidth, resHeight, bpp };
 		if (previewInFlight) return;
 
@@ -767,7 +771,11 @@ export function ExportPage() {
 										fallback={
 											<div class="flex flex-col items-center gap-3 text-gray-10">
 												<IconLucideImage class="size-12 text-gray-8" />
-												<span class="text-sm">Generating preview...</span>
+												<span class="text-sm">
+													{previewUnavailable()
+														? "Preview unavailable"
+														: "Generating preview..."}
+												</span>
 											</div>
 										}
 									>
@@ -803,7 +811,9 @@ export function ExportPage() {
 					</div>
 
 					<Show
-						when={!previewLoading() && renderEstimate()}
+						when={
+							!previewUnavailable() && !previewLoading() && renderEstimate()
+						}
 						fallback={
 							<div class="flex items-center justify-center gap-4 mt-4 h-4 text-xs text-gray-11">
 								<span class="flex items-center gap-1.5">

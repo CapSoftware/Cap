@@ -108,6 +108,15 @@ pub fn is_software_wgpu_adapter(info: &wgpu::AdapterInfo) -> bool {
             .contains("microsoft basic render driver")
 }
 
+fn force_software_wgpu_adapter() -> bool {
+    std::env::var("CAP_RENDER_FORCE_SOFTWARE_ADAPTER").is_ok_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
 pub async fn create_wgpu_instance() -> wgpu::Instance {
     #[cfg(not(target_os = "windows"))]
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -1564,14 +1573,23 @@ impl RenderVideoConstants {
 
         let instance = create_wgpu_instance().await;
 
-        let hardware_adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-            .ok();
+        let force_software_adapter = force_software_wgpu_adapter();
+        if force_software_adapter {
+            tracing::warn!("Forcing software WGPU adapter");
+        }
+
+        let hardware_adapter = if force_software_adapter {
+            None
+        } else {
+            instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                })
+                .await
+                .ok()
+        };
 
         let (adapter, is_software_adapter, adapter_name) = if let Some(adapter) = hardware_adapter {
             let adapter_info = adapter.get_info();
