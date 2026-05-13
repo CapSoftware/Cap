@@ -5,7 +5,7 @@
   "description": "Control Cap recordings with deeplinks.",
   "icon": "command-icon.png",
   "author": "Cap",
-  "license": "AGPL-3.0-or-later",
+  "license": "MIT",
   "commands": [
     {
       "name": "start-recording",
