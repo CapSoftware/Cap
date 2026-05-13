@@ -15,10 +15,17 @@ const targetDir = path.join(__dirname, "../../../target");
 
 async function main() {
 	if (process.platform === "darwin") {
-		const { binaryPath, releaseFile } = await findReleaseBinary();
+		const releaseBinary = await findReleaseBinary();
+		if (!releaseBinary) {
+			console.warn("No release binary found for dSYM generation; skipping.");
+			return;
+		}
 
 		await exec(
-			`dsymutil "${binaryPath}" -o "${path.join(targetDir, releaseFile)}.dSYM"`,
+			`dsymutil "${releaseBinary.binaryPath}" -o "${path.join(
+				targetDir,
+				releaseBinary.releaseFile,
+			)}.dSYM"`,
 		);
 	}
 }
@@ -42,7 +49,7 @@ async function findReleaseBinary() {
 		await new Promise((resolve) => setTimeout(resolve, 250));
 	}
 
-	throw new Error(`No binary found at ${dirs.join(", ")}`);
+	return null;
 }
 
 async function findReleaseFile(releaseDir) {
