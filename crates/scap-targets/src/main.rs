@@ -128,7 +128,7 @@ fn main() {
             })
             .collect::<Vec<_>>();
 
-        relevant_windows.sort_by(|a, b| b.1.cmp(&a.1));
+        relevant_windows.sort_by_key(|b| std::cmp::Reverse(b.1));
 
         // Print current topmost window info
         if let Some((topmost_window, level)) = relevant_windows.first()

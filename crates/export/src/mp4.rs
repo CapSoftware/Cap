@@ -8,7 +8,7 @@ use cap_rendering::{
 };
 use futures::FutureExt;
 use image::ImageBuffer;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
     path::PathBuf,
@@ -20,7 +20,7 @@ use std::{
 };
 use tracing::{info, trace, warn};
 
-#[derive(Deserialize, Type, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Type, Clone, Copy, Debug)]
 pub enum ExportCompression {
     Maximum,
     Social,
@@ -62,7 +62,7 @@ pub struct FirstFrameQueuedBenchmark {
     pub nv12_render_startup_breakdown_ms: Option<cap_rendering::Nv12RenderStartupBreakdownMs>,
 }
 
-#[derive(Deserialize, Type, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Type, Clone, Copy, Debug)]
 pub struct Mp4ExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,

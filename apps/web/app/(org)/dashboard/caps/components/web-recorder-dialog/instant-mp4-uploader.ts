@@ -6,6 +6,7 @@ const MAX_PART_UPLOAD_ATTEMPTS = 3;
 const MAX_PARALLEL_PART_UPLOADS = 3;
 const MAX_PENDING_UPLOAD_BYTES = 128 * 1024 * 1024;
 const FINAL_BLOB_PART_SIZE_BYTES = 16 * 1024 * 1024;
+const DRIVE_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const PART_UPLOAD_STALL_TIMEOUT_MS = 30_000;
 const PART_UPLOAD_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -95,20 +96,23 @@ export const initiateMultipartUpload = async ({
 	contentType: string;
 	subpath: string;
 }) => {
-	const result = await postJson<{ uploadId: string }>(
-		"/api/upload/multipart/initiate",
-		{
-			videoId,
-			contentType: normalizeMultipartContentType(contentType),
-			subpath,
-		},
-	);
+	const result = await postJson<{
+		uploadId: string;
+		provider?: "s3" | "googleDrive";
+	}>("/api/upload/multipart/initiate", {
+		videoId,
+		contentType: normalizeMultipartContentType(contentType),
+		subpath,
+	});
 
 	if (!result.uploadId) {
 		throw new Error("Multipart initiate response missing uploadId");
 	}
 
-	return result.uploadId;
+	return {
+		uploadId: result.uploadId,
+		provider: result.provider ?? "s3",
+	};
 };
 
 const presignMultipartPart = async (
@@ -116,17 +120,25 @@ const presignMultipartPart = async (
 	uploadId: string,
 	partNumber: number,
 	subpath: string,
-): Promise<string> => {
-	const result = await postJson<{ presignedUrl: string }>(
-		"/api/upload/multipart/presign-part",
-		{ videoId, uploadId, partNumber, subpath },
-	);
+): Promise<{ url: string; provider: "s3" | "googleDrive" }> => {
+	const result = await postJson<{
+		presignedUrl: string;
+		provider?: "s3" | "googleDrive";
+	}>("/api/upload/multipart/presign-part", {
+		videoId,
+		uploadId,
+		partNumber,
+		subpath,
+	});
 
 	if (!result.presignedUrl) {
 		throw new Error(`Missing presigned URL for part ${partNumber}`);
 	}
 
-	return result.presignedUrl;
+	return {
+		url: result.presignedUrl,
+		provider: result.provider ?? "s3",
+	};
 };
 
 const completeMultipartUpload = async (
@@ -181,6 +193,7 @@ interface FinalizeOptions extends MultipartCompletePayload {
 export class InstantRecordingUploader {
 	private readonly videoId: VideoId;
 	private readonly uploadId: string;
+	private readonly provider: "s3" | "googleDrive";
 	private readonly mimeType: string;
 	private readonly subpath: string;
 	private readonly setUploadStatus: SetUploadStatus;
@@ -195,7 +208,7 @@ export class InstantRecordingUploader {
 	private uploadedBytes = 0;
 	private pendingUploadBytes = 0;
 	private readonly pendingUploadTasks = new Set<Promise<void>>();
-	private availableUploadSlots = MAX_PARALLEL_PART_UPLOADS;
+	private availableUploadSlots: number;
 	private readonly uploadSlotWaiters: Array<() => void> = [];
 	private readonly parts: UploadedPartPayload[] = [];
 	private nextPartNumber = 1;
@@ -211,10 +224,13 @@ export class InstantRecordingUploader {
 	>();
 	private readonly stallTimeouts = new Set<number>();
 	private processingStarted = true;
+	private queuedBytes = 0;
+	private readonly partOffsets = new Map<number, number>();
 
 	constructor(options: {
 		videoId: VideoId;
 		uploadId: string;
+		provider?: "s3" | "googleDrive";
 		mimeType: string;
 		subpath: string;
 		setUploadStatus: SetUploadStatus;
@@ -225,6 +241,7 @@ export class InstantRecordingUploader {
 	}) {
 		this.videoId = options.videoId;
 		this.uploadId = options.uploadId;
+		this.provider = options.provider ?? "s3";
 		this.mimeType = options.mimeType;
 		this.subpath = options.subpath;
 		this.setUploadStatus = options.setUploadStatus;
@@ -232,6 +249,8 @@ export class InstantRecordingUploader {
 		this.onChunkStateChange = options.onChunkStateChange;
 		this.onOverflow = options.onOverflow;
 		this.onFatalError = options.onFatalError;
+		this.availableUploadSlots =
+			this.provider === "googleDrive" ? 1 : MAX_PARALLEL_PART_UPLOADS;
 	}
 
 	private markFatalError(error: Error) {
@@ -340,6 +359,11 @@ export class InstantRecordingUploader {
 	}
 
 	private flushBuffer(force = false) {
+		if (this.provider === "googleDrive") {
+			this.flushDriveBuffer(force);
+			return;
+		}
+
 		if (this.bufferedBytes === 0) return;
 		if (!force && this.bufferedBytes < MIN_PART_SIZE_BYTES) return;
 
@@ -350,8 +374,68 @@ export class InstantRecordingUploader {
 		this.enqueueUpload(chunk);
 	}
 
+	private flushDriveBuffer(force = false) {
+		while (this.bufferedBytes > 0) {
+			if (!force && this.bufferedBytes < DRIVE_PART_SIZE_BYTES) return;
+
+			const partSize =
+				force && this.bufferedBytes <= DRIVE_PART_SIZE_BYTES
+					? this.bufferedBytes
+					: DRIVE_PART_SIZE_BYTES;
+			const { part, remainingChunks, remainingBytes } =
+				this.takeBufferedPart(partSize);
+
+			this.bufferedChunks = remainingChunks;
+			this.bufferedBytes = remainingBytes;
+			this.enqueueUpload(part);
+
+			if (partSize < DRIVE_PART_SIZE_BYTES) return;
+		}
+	}
+
+	private takeBufferedPart(size: number) {
+		const partChunks: Blob[] = [];
+		const remainingChunks: Blob[] = [];
+		let remainingPartBytes = size;
+		let consumedBuffer = true;
+
+		for (const chunk of this.bufferedChunks) {
+			if (!consumedBuffer) {
+				remainingChunks.push(chunk);
+				continue;
+			}
+
+			if (chunk.size <= remainingPartBytes) {
+				partChunks.push(chunk);
+				remainingPartBytes -= chunk.size;
+				if (remainingPartBytes === 0) consumedBuffer = false;
+				continue;
+			}
+
+			partChunks.push(chunk.slice(0, remainingPartBytes, this.mimeType));
+			remainingChunks.push(
+				chunk.slice(remainingPartBytes, chunk.size, this.mimeType),
+			);
+			consumedBuffer = false;
+			remainingPartBytes = 0;
+		}
+
+		return {
+			part: new Blob(partChunks, { type: this.mimeType }),
+			remainingChunks,
+			remainingBytes: this.bufferedBytes - size,
+		};
+	}
+
 	private createFinalBlobPart(finalBlob: Blob, start: number, end: number) {
 		return finalBlob.slice(start, end, this.mimeType);
+	}
+
+	private resolveFinalTotalBytes(finalBlob?: Blob | null) {
+		return (
+			finalBlob?.size ??
+			Math.max(this.totalRecordedBytes, this.queuedBytes + this.bufferedBytes)
+		);
 	}
 
 	private enqueueUpload(part: Blob) {
@@ -364,6 +448,8 @@ export class InstantRecordingUploader {
 		}
 
 		const partNumber = this.nextPartNumber++;
+		this.partOffsets.set(partNumber, this.queuedBytes);
+		this.queuedBytes += part.size;
 		this.pendingUploadBytes += part.size;
 		this.registerChunk(partNumber, part.size);
 		const uploadTask = this.runPartUpload(partNumber, part);
@@ -432,7 +518,7 @@ export class InstantRecordingUploader {
 		}
 
 		this.availableUploadSlots = Math.min(
-			MAX_PARALLEL_PART_UPLOADS,
+			this.provider === "googleDrive" ? 1 : MAX_PARALLEL_PART_UPLOADS,
 			this.availableUploadSlots + 1,
 		);
 	}
@@ -541,7 +627,7 @@ export class InstantRecordingUploader {
 	}
 
 	private async uploadPart(partNumber: number, part: Blob) {
-		const presignedUrl = await presignMultipartPart(
+		const upload = await presignMultipartPart(
 			this.videoId,
 			this.uploadId,
 			partNumber,
@@ -549,7 +635,8 @@ export class InstantRecordingUploader {
 		);
 
 		const etag = await this.uploadBlobWithProgress({
-			url: presignedUrl,
+			url: upload.url,
+			provider: upload.provider,
 			partNumber,
 			part,
 		});
@@ -562,10 +649,12 @@ export class InstantRecordingUploader {
 
 	private uploadBlobWithProgress({
 		url,
+		provider,
 		partNumber,
 		part,
 	}: {
 		url: string;
+		provider: "s3" | "googleDrive";
 		partNumber: number;
 		part: Blob;
 	}): Promise<string> {
@@ -579,6 +668,19 @@ export class InstantRecordingUploader {
 			xhr.open("PUT", url);
 			xhr.responseType = "text";
 			xhr.timeout = PART_UPLOAD_REQUEST_TIMEOUT_MS;
+			let isFinalDrivePart = false;
+			if (provider === "googleDrive") {
+				const start = this.partOffsets.get(partNumber) ?? 0;
+				const end = start + part.size - 1;
+				isFinalDrivePart =
+					this.finalTotalBytes !== null && end + 1 >= this.finalTotalBytes;
+				const total =
+					isFinalDrivePart && this.finalTotalBytes !== null
+						? this.finalTotalBytes.toString()
+						: "*";
+				xhr.setRequestHeader("Content-Range", `bytes ${start}-${end}/${total}`);
+				xhr.setRequestHeader("Content-Type", this.mimeType);
+			}
 			this.activeRequests.set(partNumber, xhr);
 
 			this.updateChunkState(partNumber, {
@@ -628,9 +730,16 @@ export class InstantRecordingUploader {
 			xhr.onload = () => {
 				clearStallTimeout();
 				clearRequest();
-				if (xhr.status >= 200 && xhr.status < 300) {
+				if (
+					(xhr.status >= 200 && xhr.status < 300) ||
+					(provider === "googleDrive" &&
+						xhr.status === 308 &&
+						!isFinalDrivePart)
+				) {
 					const etagHeader = xhr.getResponseHeader("ETag");
-					const etag = etagHeader?.replace(/"/g, "");
+					const etag =
+						etagHeader?.replace(/"/g, "") ||
+						(provider === "googleDrive" ? `drive-${partNumber}` : "");
 					if (!etag) {
 						this.updateChunkState(partNumber, { status: "error" });
 						reject(new Error(`Missing ETag for part ${partNumber}`));
@@ -687,7 +796,17 @@ export class InstantRecordingUploader {
 			throw this.fatalError;
 		}
 
-		if (options.finalBlob) {
+		const finalTotalBytes = this.resolveFinalTotalBytes(options.finalBlob);
+
+		if (this.provider === "googleDrive") {
+			if (finalTotalBytes <= 0) {
+				throw new Error(
+					"Cannot finalize Google Drive upload without a byte count",
+				);
+			}
+			this.finalTotalBytes = finalTotalBytes;
+			this.totalRecordedBytes = finalTotalBytes;
+		} else if (options.finalBlob) {
 			this.finalTotalBytes = options.finalBlob.size;
 			this.totalRecordedBytes = options.finalBlob.size;
 		}

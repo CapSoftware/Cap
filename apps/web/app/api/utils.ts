@@ -82,7 +82,7 @@ function debouncedLastUsedUpdate(keyHash: string) {
 async function getAuth(c: Context) {
 	const authHeader = c.req.header("authorization")?.split(" ")[1];
 
-	let user;
+	let user: Awaited<ReturnType<typeof getCurrentUser>> | undefined;
 
 	if (authHeader?.length === 36) {
 		const res = await db()
@@ -136,7 +136,7 @@ export const allowedOrigins = [
 export const corsMiddleware = cors({
 	origin: allowedOrigins,
 	credentials: true,
-	allowMethods: ["POST", "OPTIONS"],
+	allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
 	allowHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage"],
 });
 

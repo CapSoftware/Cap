@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { validateMediaServerSecret } from "../lib/auth";
 import {
 	canAcceptNewProcess,
 	checkHasAudioTrack,
@@ -41,6 +42,10 @@ audio.get("/status", (c) => {
 });
 
 audio.post("/check", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = videoUrlSchema.safeParse(body);
 
@@ -95,6 +100,10 @@ audio.post("/check", async (c) => {
 });
 
 audio.post("/extract", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = extractSchema.safeParse(body);
 
@@ -180,6 +189,10 @@ audio.post("/extract", async (c) => {
 });
 
 audio.post("/convert", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = convertSchema.safeParse(body);
 

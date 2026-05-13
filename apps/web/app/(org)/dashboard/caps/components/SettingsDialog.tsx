@@ -7,6 +7,7 @@ import {
 	DialogTitle,
 	Switch,
 } from "@cap/ui";
+import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { faGear } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -22,6 +23,7 @@ interface SettingsDialogProps {
 	onClose: () => void;
 	capId: Video.VideoId;
 	settingsData?: OrganizationSettings;
+	inheritedSpaceSettings?: Partial<Record<ViewerSettingKey, SpaceRuleSource[]>>;
 }
 
 const options: {
@@ -70,6 +72,7 @@ export const SettingsDialog = ({
 	onClose,
 	capId,
 	settingsData,
+	inheritedSpaceSettings,
 }: SettingsDialogProps) => {
 	const { user, organizationSettings } = useDashboardContext();
 	const [saveLoading, setSaveLoading] = useState(false);
@@ -141,11 +144,20 @@ export const SettingsDialog = ({
 	);
 
 	const getEffectiveValue = (key: keyof OrganizationSettings) => {
+		const inheritedSources = inheritedSpaceSettings?.[key];
+		if (inheritedSources && inheritedSources.length > 0) return true;
 		const videoValue = settings?.[key];
 		const orgValue = organizationSettings?.[key] ?? false;
 		return videoValue !== undefined || videoValue === true
 			? videoValue
 			: orgValue;
+	};
+
+	const getInheritedLabel = (key: keyof OrganizationSettings) => {
+		const sources = inheritedSpaceSettings?.[key];
+		if (!sources || sources.length === 0) return null;
+		if (sources.length === 1) return `Required by ${sources[0]?.name}`;
+		return `Required by ${sources.length} spaces`;
 	};
 
 	return (
@@ -162,6 +174,7 @@ export const SettingsDialog = ({
 						const key = option.value as keyof OrganizationSettings;
 						const effectiveValue = getEffectiveValue(key);
 						const orgValue = organizationSettings?.[key] ?? false;
+						const inheritedLabel = getInheritedLabel(key);
 						return (
 							<div
 								key={option.value}
@@ -182,7 +195,8 @@ export const SettingsDialog = ({
 										)}
 										{effectiveValue && (
 											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-11 bg-gray-5">
-												Org {orgValue ? "disabled" : "enabled"}
+												{inheritedLabel ??
+													`Org ${orgValue ? "disabled" : "enabled"}`}
 											</p>
 										)}
 									</div>
@@ -190,6 +204,7 @@ export const SettingsDialog = ({
 								</div>
 								<Switch
 									disabled={
+										Boolean(inheritedLabel) ||
 										(option.pro && !user.isPro) ||
 										((key === "disableSummary" || key === "disableChapters") &&
 											getEffectiveValue(

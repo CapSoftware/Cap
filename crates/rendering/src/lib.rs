@@ -108,6 +108,15 @@ pub fn is_software_wgpu_adapter(info: &wgpu::AdapterInfo) -> bool {
             .contains("microsoft basic render driver")
 }
 
+fn force_software_wgpu_adapter() -> bool {
+    std::env::var("CAP_RENDER_FORCE_SOFTWARE_ADAPTER").is_ok_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
 pub async fn create_wgpu_instance() -> wgpu::Instance {
     #[cfg(not(target_os = "windows"))]
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -311,6 +320,7 @@ impl RecordingSegmentDecoders {
                 force_ffmpeg,
             )
             .await
+            .map(|decoder| decoder.with_max_fallback_distance(2))
             .map_err(|e| format!("Camera:{e}"))?;
             Ok(Some(camera))
         };
@@ -1563,14 +1573,23 @@ impl RenderVideoConstants {
 
         let instance = create_wgpu_instance().await;
 
-        let hardware_adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-            .ok();
+        let force_software_adapter = force_software_wgpu_adapter();
+        if force_software_adapter {
+            tracing::warn!("Forcing software WGPU adapter");
+        }
+
+        let hardware_adapter = if force_software_adapter {
+            None
+        } else {
+            instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                })
+                .await
+                .ok()
+        };
 
         let (adapter, is_software_adapter, adapter_name) = if let Some(adapter) = hardware_adapter {
             let adapter_info = adapter.get_info();
@@ -3407,6 +3426,8 @@ pub struct RendererLayers {
     text: TextLayer,
     captions: CaptionsLayer,
     keyboard: KeyboardLayer,
+    camera_blur_processor: Option<cap_camera_effects::BlurProcessor>,
+    camera_blur_init_failed: bool,
 }
 
 impl RendererLayers {
@@ -3447,7 +3468,88 @@ impl RendererLayers {
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
             keyboard: KeyboardLayer::new(device, queue),
+            camera_blur_processor: None,
+            camera_blur_init_failed: false,
         }
+    }
+
+    fn ensure_camera_blur_processor(&mut self, device: &wgpu::Device) {
+        if self.camera_blur_processor.is_none() && !self.camera_blur_init_failed {
+            match cap_camera_effects::BlurProcessor::new(device, wgpu::TextureFormat::Rgba8Unorm) {
+                Ok(processor) => {
+                    self.camera_blur_processor = Some(processor);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to init camera background blur in renderer: {e}");
+                    self.camera_blur_init_failed = true;
+                }
+            }
+        }
+    }
+
+    fn run_shared_camera_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mode: cap_camera_effects::BlurMode,
+    ) {
+        if self.camera.source_texture_for_blur().is_none()
+            && self.camera_only.source_texture_for_blur().is_none()
+        {
+            return;
+        }
+
+        self.ensure_camera_blur_processor(device);
+        let Some(processor) = self.camera_blur_processor.as_mut() else {
+            return;
+        };
+
+        let source_texture = self
+            .camera
+            .source_texture_for_blur()
+            .or_else(|| self.camera_only.source_texture_for_blur());
+        let Some(source_texture) = source_texture else {
+            return;
+        };
+
+        let _ = processor.process(device, queue, source_texture, mode);
+
+        let processor: &cap_camera_effects::BlurProcessor = processor;
+        self.camera.attach_shared_blur(device, processor, mode);
+        self.camera_only.attach_shared_blur(device, processor, mode);
+    }
+
+    fn run_shared_camera_blur_with_encoder(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        mode: cap_camera_effects::BlurMode,
+    ) {
+        if self.camera.source_texture_for_blur().is_none()
+            && self.camera_only.source_texture_for_blur().is_none()
+        {
+            return;
+        }
+
+        self.ensure_camera_blur_processor(device);
+        let Some(processor) = self.camera_blur_processor.as_mut() else {
+            return;
+        };
+
+        let source_texture = self
+            .camera
+            .source_texture_for_blur()
+            .or_else(|| self.camera_only.source_texture_for_blur());
+        let Some(source_texture) = source_texture else {
+            return;
+        };
+
+        processor.process_into_encoder(device, queue, source_texture, encoder, mode);
+
+        let processor: &cap_camera_effects::BlurProcessor = processor;
+        self.camera.attach_shared_blur(device, processor, mode);
+        self.camera_only.attach_shared_blur(device, processor, mode);
     }
 
     pub fn prepare_for_video_dimensions(
@@ -3536,6 +3638,10 @@ impl RendererLayers {
                     .map(|frame| (size, frame, segment_frames.recording_time))
             }),
         );
+
+        if let Some(mode) = blur_mode_from_config(&uniforms.project.camera.background_blur) {
+            self.run_shared_camera_blur(&constants.device, &constants.queue, mode);
+        }
 
         self.text.prepare(
             &constants.device,
@@ -3628,6 +3734,15 @@ impl RendererLayers {
             }),
             encoder,
         );
+
+        if let Some(mode) = blur_mode_from_config(&uniforms.project.camera.background_blur) {
+            self.run_shared_camera_blur_with_encoder(
+                &constants.device,
+                &constants.queue,
+                encoder,
+                mode,
+            );
+        }
 
         self.text.prepare(
             &constants.device,
@@ -3801,6 +3916,16 @@ async fn produce_frame(
         encoder,
     )
     .await
+}
+
+fn blur_mode_from_config(
+    config: &cap_project::BackgroundBlurConfig,
+) -> Option<cap_camera_effects::BlurMode> {
+    match config.mode {
+        cap_project::BackgroundBlurMode::Off => None,
+        cap_project::BackgroundBlurMode::Light => Some(cap_camera_effects::BlurMode::Light),
+        cap_project::BackgroundBlurMode::Heavy => Some(cap_camera_effects::BlurMode::Heavy),
+    }
 }
 
 fn parse_color_component(hex_color: &str, index: usize) -> f32 {

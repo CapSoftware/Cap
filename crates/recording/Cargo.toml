@@ -28,6 +28,7 @@ cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 cap-frame-converter = { path = "../frame-converter" }
 cap-timestamp = { path = "../timestamp" }
+cap-muxer-protocol = { path = "../cap-muxer-protocol" }
 scap-ffmpeg = { path = "../scap-ffmpeg" }
 
 specta = { workspace = true }
@@ -58,6 +59,7 @@ inquire = "0.7.5"
 replace_with = "0.1.8"
 retry = "2.1.0"
 sysinfo = "0.35"
+parking_lot = "0.12"
 dhat = { version = "0.3", optional = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 

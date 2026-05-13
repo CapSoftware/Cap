@@ -204,8 +204,8 @@ impl Muxer for FragmentedAudioMuxer {
         })
     }
 
-    fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        match self.encoder.finish() {
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        match self.encoder.finish_with_timestamp(timestamp) {
             Ok(result) => Ok(result.map_err(Into::into)),
             Err(FragmentedAudioFinishError::AlreadyFinished) => Ok(Ok(())),
             Err(FragmentedAudioFinishError::WriteTrailerFailed(error)) => Ok(Err(anyhow!(error))),

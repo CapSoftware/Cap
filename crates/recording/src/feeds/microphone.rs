@@ -1,3 +1,4 @@
+use crate::output_pipeline::{HealthSender, PipelineHealthEvent, emit_health};
 use cap_audio::estimate_input_latency;
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cap_timestamp::Timestamp;
@@ -15,14 +16,25 @@ use std::{
     ops::Deref,
     sync::{
         Arc, Weak,
+        atomic::{AtomicU64, Ordering},
         mpsc::{self, SyncSender},
     },
+    time::{Duration, Instant},
 };
 use tracing::{debug, error, info, trace, warn};
 
 pub type MicrophonesMap = IndexMap<String, (Device, SupportedStreamConfig)>;
 type StreamReadyFuture =
     BoxFuture<'static, Result<(SupportedStreamConfig, Option<u32>), SetInputError>>;
+
+#[derive(
+    serde::Serialize, serde::Deserialize, specta::Type, Clone, Copy, Debug, PartialEq, Eq, Default,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneDeviceSettings {
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u16>,
+}
 
 #[derive(Clone)]
 pub struct MicrophoneSamples {
@@ -39,8 +51,48 @@ pub struct MicrophoneFeed {
     input_id_counter: u32,
     lock_generation: u64,
     state: State,
-    senders: Vec<flume::Sender<MicrophoneSamples>>,
+    senders: Vec<MicrophoneFeedSender>,
     error_sender: flume::Sender<StreamError>,
+    dropped_message_count: Arc<AtomicU64>,
+}
+
+struct MicrophoneFeedSender {
+    sender: flume::Sender<MicrophoneSamples>,
+    health_tx: Option<HealthSender>,
+    label: Option<String>,
+    stalled_since: Option<Instant>,
+    last_stalled_event: Option<Instant>,
+}
+
+impl MicrophoneFeedSender {
+    fn new(sender: flume::Sender<MicrophoneSamples>) -> Self {
+        Self {
+            sender,
+            health_tx: None,
+            label: None,
+            stalled_since: None,
+            last_stalled_event: None,
+        }
+    }
+
+    fn recording(
+        sender: flume::Sender<MicrophoneSamples>,
+        health_tx: HealthSender,
+        label: String,
+    ) -> Self {
+        Self {
+            sender,
+            health_tx: Some(health_tx),
+            label: Some(label),
+            stalled_since: None,
+            last_stalled_event: None,
+        }
+    }
+
+    fn reset_stall(&mut self) {
+        self.stalled_since = None;
+        self.last_stalled_event = None;
+    }
 }
 
 enum State {
@@ -123,27 +175,36 @@ impl MicrophoneFeed {
             }),
             senders: Vec::new(),
             error_sender,
+            dropped_message_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub fn default_device() -> Option<(String, Device, SupportedStreamConfig)> {
         let host = cpal::default_host();
-        host.default_input_device().and_then(get_usable_device)
+        host.default_input_device()
+            .and_then(|device| get_usable_device(device, None))
     }
 
     pub fn list() -> MicrophonesMap {
+        Self::list_with_settings(None)
+    }
+
+    pub fn list_with_settings(settings: Option<&MicrophoneDeviceSettings>) -> MicrophonesMap {
         let host = cpal::default_host();
         let mut device_map = IndexMap::new();
 
-        if let Some((name, device, config)) =
-            host.default_input_device().and_then(get_usable_device)
+        if let Some((name, device, config)) = host
+            .default_input_device()
+            .and_then(|device| get_usable_device(device, settings))
         {
             device_map.insert(name, (device, config));
         }
 
         match host.input_devices() {
             Ok(devices) => {
-                for (name, device, config) in devices.filter_map(get_usable_device) {
+                for (name, device, config) in
+                    devices.filter_map(|device| get_usable_device(device, settings))
+                {
                     device_map.entry(name).or_insert((device, config));
                 }
             }
@@ -166,6 +227,7 @@ impl MicrophoneFeed {
             sample_format,
             actor_ref,
             error_sender,
+            dropped_message_count,
             log_action,
         } = params;
 
@@ -189,6 +251,7 @@ impl MicrophoneFeed {
             let config = config.clone();
             let actor_ref = actor_ref.clone();
             let error_sender = error_sender.clone();
+            let dropped_message_count = dropped_message_count.clone();
             move || {
                 let device_name_for_log = device.name().ok();
 
@@ -245,7 +308,7 @@ impl MicrophoneFeed {
                             }
                             callback_count += 1;
 
-                            let _ = actor_ref
+                            if let Err(error) = actor_ref
                                 .tell(MicrophoneSamples {
                                     data: data.bytes().to_vec(),
                                     format: data.sample_format(),
@@ -254,7 +317,11 @@ impl MicrophoneFeed {
                                     info: info.clone(),
                                     timestamp: Timestamp::from_cpal(info.timestamp().capture),
                                 })
-                                .try_send();
+                                .try_send()
+                            {
+                                dropped_message_count.fetch_add(1, Ordering::Relaxed);
+                                warn!("Failed to enqueue microphone samples: {error}");
+                            }
                         }
                     },
                     move |e| {
@@ -289,7 +356,10 @@ impl MicrophoneFeed {
     }
 }
 
-fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamConfig)> {
+fn get_usable_device(
+    device: Device,
+    settings: Option<&MicrophoneDeviceSettings>,
+) -> Option<(String, Device, SupportedStreamConfig)> {
     let device_name_for_logging = device.name().ok();
 
     let preferred_rate = cpal::SampleRate(48_000);
@@ -314,8 +384,12 @@ fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamC
                     .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
             });
 
-            // First try to find a config that natively supports 48 kHz so we
-            // don't have to rely on resampling later.
+            if let Some(settings) = settings
+                && let Some(config) = select_preferred_config(&configs, settings)
+            {
+                return Some(config);
+            }
+
             if let Some(config) = configs.iter().find(|config| {
                 ffmpeg_sample_format_for(config.sample_format()).is_some()
                     && config.min_sample_rate().0 <= preferred_rate.0
@@ -331,6 +405,36 @@ fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamC
         });
 
     result.and_then(|config| device.name().ok().map(|name| (name, device, config)))
+}
+
+fn select_preferred_config(
+    configs: &[SupportedStreamConfigRange],
+    settings: &MicrophoneDeviceSettings,
+) -> Option<SupportedStreamConfig> {
+    let rate = settings.sample_rate.map(cpal::SampleRate);
+    let compatible_configs = configs
+        .iter()
+        .filter(|config| ffmpeg_sample_format_for(config.sample_format()).is_some())
+        .collect::<Vec<_>>();
+
+    let find_config = |channels: Option<u16>, rate: Option<cpal::SampleRate>| {
+        compatible_configs.iter().find(|config| {
+            channels.is_none_or(|channels| config.channels() == channels)
+                && rate.is_none_or(|rate| {
+                    config.min_sample_rate().0 <= rate.0 && config.max_sample_rate().0 >= rate.0
+                })
+        })
+    };
+
+    let config = find_config(settings.channels, rate)
+        .or_else(|| rate.and_then(|rate| find_config(None, Some(rate))))
+        .or_else(|| {
+            settings
+                .channels
+                .and_then(|channels| find_config(Some(channels), None))
+        })?;
+
+    Some(config.with_sample_rate(rate.unwrap_or_else(|| select_sample_rate(config))))
 }
 
 fn select_sample_rate(config: &SupportedStreamConfigRange) -> cpal::SampleRate {
@@ -443,6 +547,10 @@ impl MicrophoneFeedLock {
     pub fn device_name(&self) -> &str {
         &self.device_name
     }
+
+    pub async fn dropped_message_count(&self) -> u64 {
+        self.actor.ask(GetDroppedMessageCount).await.unwrap_or(0)
+    }
 }
 
 impl Deref for MicrophoneFeedLock {
@@ -465,13 +573,22 @@ impl Drop for MicrophoneFeedLock {
 
 pub struct SetInput {
     pub label: String,
+    pub settings: Option<MicrophoneDeviceSettings>,
 }
 
 pub struct RemoveInput;
 
 pub struct AddSender(pub flume::Sender<MicrophoneSamples>);
 
+pub struct AddRecordingSender {
+    pub sender: flume::Sender<MicrophoneSamples>,
+    pub health_tx: HealthSender,
+    pub label: String,
+}
+
 pub struct Lock;
+
+pub struct GetDroppedMessageCount;
 
 // Private Events
 
@@ -524,6 +641,7 @@ struct StreamSpawnParams {
     sample_format: SampleFormat,
     actor_ref: ActorRef<MicrophoneFeed>,
     error_sender: flume::Sender<StreamError>,
+    dropped_message_count: Arc<AtomicU64>,
     log_action: StreamLogAction,
 }
 
@@ -561,7 +679,9 @@ impl Message<SetInput> for MicrophoneFeed {
                 self.input_id_counter += 1;
 
                 let label = msg.label.clone();
-                let Some((device, config)) = Self::list().swap_remove(&label) else {
+                let Some((device, config)) =
+                    Self::list_with_settings(msg.settings.as_ref()).swap_remove(&label)
+                else {
                     return Err(SetInputError::DeviceNotFound);
                 };
 
@@ -580,6 +700,7 @@ impl Message<SetInput> for MicrophoneFeed {
                     sample_format,
                     actor_ref: actor_ref.clone(),
                     error_sender: self.error_sender.clone(),
+                    dropped_message_count: self.dropped_message_count.clone(),
                     log_action: StreamLogAction::Build,
                 });
                 let ready = ready_future.shared();
@@ -645,7 +766,9 @@ impl Message<SetInput> for MicrophoneFeed {
                 }
 
                 let label = msg.label.clone();
-                let Some((device, config)) = Self::list().swap_remove(&label) else {
+                let Some((device, config)) =
+                    Self::list_with_settings(msg.settings.as_ref()).swap_remove(&label)
+                else {
                     return Err(SetInputError::DeviceNotFound);
                 };
 
@@ -669,6 +792,7 @@ impl Message<SetInput> for MicrophoneFeed {
                     sample_format,
                     actor_ref: actor_ref.clone(),
                     error_sender: self.error_sender.clone(),
+                    dropped_message_count: self.dropped_message_count.clone(),
                     log_action: StreamLogAction::Rebuild,
                 });
                 let ready = ready_future.shared();
@@ -723,7 +847,23 @@ impl Message<AddSender> for MicrophoneFeed {
     type Reply = ();
 
     async fn handle(&mut self, msg: AddSender, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.senders.push(msg.0);
+        self.senders.push(MicrophoneFeedSender::new(msg.0));
+    }
+}
+
+impl Message<AddRecordingSender> for MicrophoneFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: AddRecordingSender,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.senders.push(MicrophoneFeedSender::recording(
+            msg.sender,
+            msg.health_tx,
+            msg.label,
+        ));
     }
 }
 
@@ -736,12 +876,36 @@ impl Message<MicrophoneSamples> for MicrophoneFeed {
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let mut to_remove = vec![];
+        let now = Instant::now();
+        let stall_emit_interval = Duration::from_secs(5);
 
-        for (i, sender) in self.senders.iter().enumerate() {
-            if let Err(TrySendError::Disconnected(_)) = sender.try_send(msg.clone()) {
-                warn!("Audio sender {} disconnected, will be removed", i);
-                to_remove.push(i);
-            };
+        for (i, sender) in self.senders.iter_mut().enumerate() {
+            match sender.sender.try_send(msg.clone()) {
+                Ok(()) => sender.reset_stall(),
+                Err(TrySendError::Full(_)) => {
+                    let stalled_since = sender.stalled_since.get_or_insert(now);
+                    let should_emit = sender
+                        .last_stalled_event
+                        .is_none_or(|last| now.duration_since(last) >= stall_emit_interval);
+                    if should_emit {
+                        sender.last_stalled_event = Some(now);
+                        if let (Some(health_tx), Some(label)) = (&sender.health_tx, &sender.label) {
+                            emit_health(
+                                health_tx,
+                                PipelineHealthEvent::Stalled {
+                                    source: label.clone(),
+                                    waited_ms: now.duration_since(*stalled_since).as_millis()
+                                        as u64,
+                                },
+                            );
+                        }
+                    }
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    warn!("Audio sender {} disconnected, will be removed", i);
+                    to_remove.push(i);
+                }
+            }
         }
 
         if !to_remove.is_empty() {
@@ -821,6 +985,18 @@ impl Message<Lock> for MicrophoneFeed {
             device_name,
             _token: token,
         })
+    }
+}
+
+impl Message<GetDroppedMessageCount> for MicrophoneFeed {
+    type Reply = u64;
+
+    async fn handle(
+        &mut self,
+        _: GetDroppedMessageCount,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.dropped_message_count.load(Ordering::Relaxed)
     }
 }
 
