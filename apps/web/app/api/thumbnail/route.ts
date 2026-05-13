@@ -1,11 +1,11 @@
 import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
+import { videos } from "@cap/database/schema";
+import { Storage } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Option } from "effect";
 import type { NextRequest } from "next/server";
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 import { getHeaders } from "@/utils/helpers";
 
 export async function GET(request: NextRequest) {
@@ -26,12 +26,8 @@ export async function GET(request: NextRequest) {
 		);
 
 	const [query] = await db()
-		.select({
-			video: videos,
-			bucket: s3Buckets,
-		})
+		.select()
 		.from(videos)
-		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
 		.where(eq(videos.id, Video.VideoId.make(videoId)));
 
 	if (!query)
@@ -43,12 +39,12 @@ export async function GET(request: NextRequest) {
 			},
 		);
 
-	const prefix = `${query.video.ownerId}/${query.video.id}/`;
+	const video = decodeStorageVideo(query);
+
+	const prefix = `${video.ownerId}/${video.id}/`;
 
 	try {
-		const [bucket] = await S3Buckets.getBucketAccess(
-			Option.fromNullable(query.bucket?.id),
-		).pipe(runPromise);
+		const [bucket] = await Storage.getAccessForVideo(video).pipe(runPromise);
 
 		const listResponse = await bucket
 			.listObjects({ prefix: prefix })

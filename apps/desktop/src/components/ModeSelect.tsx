@@ -15,7 +15,7 @@ interface ModeOptionProps {
 const ModeOption = (props: ModeOptionProps) => {
 	return (
 		<div
-			data-tauri-drag-region="none"
+			data-tauri-drag-region="false"
 			onClick={() => props.onSelect(props.mode)}
 			class={cx(
 				"relative flex flex-col items-center rounded-xl border-2 transition-all duration-200 cursor-pointer overflow-hidden group",
@@ -84,7 +84,7 @@ const ModeSelect = (props: { onClose?: () => void; standalone?: boolean }) => {
 
 	return (
 		<div
-			data-tauri-drag-region="none"
+			data-tauri-drag-region="false"
 			class={cx(
 				"relative",
 				props.standalone

@@ -2,8 +2,13 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { encrypt, hashPassword, verifyPassword } from "@cap/database/crypto";
-import { videos } from "@cap/database/schema";
+import {
+	encrypt,
+	hashPassword,
+	verifyPassword as verifyPlainPassword,
+} from "@cap/database/crypto";
+import { spaces, spaceVideos, videos } from "@cap/database/schema";
+import { collectPasswordHashes } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -92,15 +97,30 @@ export async function verifyVideoPassword(
 			.from(videos)
 			.where(eq(videos.id, videoId));
 
-		if (!video || !video.password) throw new Error("No password set");
+		if (!video) throw new Error("No password set");
 
-		const valid = await verifyPassword(video.password, password);
+		const spacePasswords = await db()
+			.select({ password: spaces.password })
+			.from(spaceVideos)
+			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+			.where(eq(spaceVideos.videoId, videoId));
 
-		if (!valid) throw new Error("Invalid password");
+		const passwordHashes = collectPasswordHashes({
+			videoPassword: video.password,
+			spacePasswords,
+		});
 
-		(await cookies()).set("x-cap-password", await encrypt(video.password));
+		if (passwordHashes.length === 0) throw new Error("No password set");
 
-		return { success: true, value: "Password verified" };
+		for (const passwordHash of passwordHashes) {
+			const valid = await verifyPlainPassword(passwordHash, password);
+			if (valid) {
+				(await cookies()).set("x-cap-password", await encrypt(passwordHash));
+				return { success: true, value: "Password verified" };
+			}
+		}
+
+		throw new Error("Invalid password");
 	} catch (error) {
 		console.error("Error verifying video password:", error);
 		return { success: false, error: "Failed to verify password" };

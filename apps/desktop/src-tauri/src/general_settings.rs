@@ -42,6 +42,39 @@ pub enum EditorPreviewQuality {
     Full,
 }
 
+#[derive(Serialize, Deserialize, Type, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StudioRecordingQuality {
+    Compatibility,
+    Balanced,
+    Ultra,
+}
+
+impl Default for StudioRecordingQuality {
+    fn default() -> Self {
+        default_studio_recording_quality()
+    }
+}
+
+fn detect_total_memory_bytes() -> Option<u64> {
+    let system = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing()
+            .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
+    );
+    Some(system.total_memory()).filter(|m| *m > 0)
+}
+
+const COMPATIBILITY_MEMORY_THRESHOLD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+pub fn default_studio_recording_quality() -> StudioRecordingQuality {
+    match detect_total_memory_bytes() {
+        Some(memory) if memory < COMPATIBILITY_MEMORY_THRESHOLD_BYTES => {
+            StudioRecordingQuality::Compatibility
+        }
+        _ => StudioRecordingQuality::Balanced,
+    }
+}
+
 impl MainWindowRecordingStartBehaviour {
     pub fn perform(&self, window: &tauri::WebviewWindow) -> tauri::Result<()> {
         match self {
@@ -56,6 +89,11 @@ const DEFAULT_EXCLUDED_WINDOW_TITLES: &[&str] = &[
     "Cap Settings",
     "Cap Recording Controls",
     "Cap Camera",
+    "Cap Target Select",
+    "Cap Window Capture Occluder",
+    "Cap Capture Area",
+    "Cap Mode Selection",
+    "Cap Recordings Overlay",
 ];
 
 pub fn default_excluded_windows() -> Vec<WindowExclusion> {
@@ -144,6 +182,8 @@ pub struct GeneralSettingsStore {
     #[serde(default)]
     pub editor_preview_quality: EditorPreviewQuality,
     #[serde(default)]
+    pub studio_recording_quality: StudioRecordingQuality,
+    #[serde(default)]
     pub main_window_position: Option<WindowPosition>,
     #[serde(default)]
     pub camera_window_position: Option<WindowPosition>,
@@ -151,6 +191,10 @@ pub struct GeneralSettingsStore {
     pub camera_window_positions_by_monitor_name: BTreeMap<String, WindowPosition>,
     #[serde(default = "default_true")]
     pub has_completed_onboarding: bool,
+    #[serde(default = "default_true")]
+    pub enable_telemetry: bool,
+    #[serde(default)]
+    pub out_of_process_muxer: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -228,10 +272,13 @@ impl Default for GeneralSettingsStore {
             max_fps: 60,
             transcription_hints: default_transcription_hints(),
             editor_preview_quality: EditorPreviewQuality::Half,
+            studio_recording_quality: default_studio_recording_quality(),
             main_window_position: None,
             camera_window_position: None,
             camera_window_positions_by_monitor_name: BTreeMap::new(),
             has_completed_onboarding: false,
+            enable_telemetry: true,
+            out_of_process_muxer: false,
         }
     }
 }
@@ -270,6 +317,8 @@ impl GeneralSettingsStore {
         store.set("general_settings", json!(settings));
         store.save().map_err(|e| e.to_string())?;
 
+        crate::posthog::set_telemetry_enabled(settings.enable_telemetry);
+
         #[cfg(target_os = "macos")]
         crate::permissions::sync_macos_dock_visibility(app);
 
@@ -298,6 +347,9 @@ pub fn init(app: &AppHandle) {
         }
     };
 
+    crate::posthog::set_telemetry_enabled(store.enable_telemetry);
+    register_bundled_muxer_binary(app);
+
     if let Err(e) = store.save(app) {
         error!("Failed to save general settings: {}", e);
     }
@@ -306,6 +358,43 @@ pub fn init(app: &AppHandle) {
     crate::permissions::sync_macos_dock_visibility(app);
 
     println!("GeneralSettingsState managed");
+}
+
+fn register_bundled_muxer_binary(_app: &AppHandle) {
+    if std::env::var_os(cap_recording::oop_muxer::ENV_BIN_PATH).is_some() {
+        return;
+    }
+
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join(bundled_muxer_bin_name());
+        if candidate.is_file() {
+            match cap_recording::oop_muxer::set_muxer_binary_override(candidate.clone()) {
+                Ok(()) => {
+                    tracing::info!(
+                        path = %candidate.display(),
+                        "Registered executable-adjacent cap-muxer binary for out-of-process muxer"
+                    );
+                }
+                Err(existing) => {
+                    tracing::debug!(
+                        existing = %existing.display(),
+                        candidate = %candidate.display(),
+                        "cap-muxer override already registered; keeping existing"
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn bundled_muxer_bin_name() -> &'static str {
+    if cfg!(windows) {
+        "cap-muxer.exe"
+    } else {
+        "cap-muxer"
+    }
 }
 
 #[tauri::command]

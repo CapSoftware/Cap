@@ -1,4 +1,5 @@
 import { createEventListener } from "@solid-primitives/event-listener";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import {
 	batch,
 	createEffect,
@@ -212,15 +213,21 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 }
 
 function HotkeyText(props: { binding: Hotkey }) {
-	const keys = [];
+	const os = ostype();
+	const keys: string[] = [];
 
-	// Add modifier keys
-	if (props.binding.meta) keys.push("⌘");
-	if (props.binding.ctrl) keys.push("⌃");
-	if (props.binding.alt) keys.push("⌥");
-	if (props.binding.shift) keys.push("⇧");
+	if (os === "macos") {
+		if (props.binding.meta) keys.push("⌘");
+		if (props.binding.ctrl) keys.push("⌃");
+		if (props.binding.alt) keys.push("⌥");
+		if (props.binding.shift) keys.push("⇧");
+	} else {
+		if (props.binding.meta) keys.push("Win");
+		if (props.binding.ctrl) keys.push("Ctrl");
+		if (props.binding.alt) keys.push("Alt");
+		if (props.binding.shift) keys.push("Shift");
+	}
 
-	// Add the main key
 	const mainKey = props.binding.code.startsWith("Key")
 		? props.binding.code[3]
 		: props.binding.code;
@@ -230,7 +237,7 @@ function HotkeyText(props: { binding: Hotkey }) {
 		<div class="flex gap-1 items-center w-fit group">
 			<For each={keys}>
 				{(key) => (
-					<kbd class="inline-flex justify-center w-fit text-xs items-center p-2 text-[13px] font-medium rounded border size-6 text-gray-11 bg-gray-5 border-gray-6 group-hover:border-gray-8 transition-colors duration-200 group-hover:bg-gray-7">
+					<kbd class="inline-flex justify-center text-xs items-center px-1.5 text-[13px] font-medium rounded border h-6 min-w-6 text-gray-11 bg-gray-5 border-gray-6 group-hover:border-gray-8 transition-colors duration-200 group-hover:bg-gray-7">
 						{key}
 					</kbd>
 				)}

@@ -2,19 +2,47 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import app from "../../app";
 import * as ffmpeg from "../../lib/ffmpeg";
 
+const MEDIA_SERVER_SECRET = "test-secret";
+const AUTH_HEADERS = {
+	"Content-Type": "application/json",
+	"x-media-server-secret": MEDIA_SERVER_SECRET,
+};
+
+process.env.MEDIA_SERVER_WEBHOOK_SECRET = MEDIA_SERVER_SECRET;
+
+function audioPostRequest(path: string, body: unknown): Request {
+	return new Request(`http://localhost${path}`, {
+		method: "POST",
+		headers: AUTH_HEADERS,
+		body: JSON.stringify(body),
+	});
+}
+
+function unauthenticatedAudioPostRequest(path: string, body: unknown): Request {
+	return new Request(`http://localhost${path}`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(body),
+	});
+}
+
 describe("POST /audio/check", () => {
 	beforeEach(() => {
 		mock.restore();
 	});
 
-	test("returns 400 for missing videoUrl", async () => {
+	test("returns 401 without media server secret", async () => {
 		const response = await app.fetch(
-			new Request("http://localhost/audio/check", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({}),
+			unauthenticatedAudioPostRequest("/audio/check", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
+
+		expect(response.status).toBe(401);
+	});
+
+	test("returns 400 for missing videoUrl", async () => {
+		const response = await app.fetch(audioPostRequest("/audio/check", {}));
 
 		expect(response.status).toBe(400);
 		const data = await response.json();
@@ -23,11 +51,7 @@ describe("POST /audio/check", () => {
 
 	test("returns 400 for invalid URL format", async () => {
 		const response = await app.fetch(
-			new Request("http://localhost/audio/check", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "not-a-valid-url" }),
-			}),
+			audioPostRequest("/audio/check", { videoUrl: "not-a-valid-url" }),
 		);
 
 		expect(response.status).toBe(400);
@@ -44,10 +68,8 @@ describe("POST /audio/check", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/audio/check", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "https://example.com/video.mp4" }),
+			audioPostRequest("/audio/check", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
 
@@ -65,10 +87,8 @@ describe("POST /audio/check", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/audio/check", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "https://example.com/video.mp4" }),
+			audioPostRequest("/audio/check", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
 
@@ -83,14 +103,18 @@ describe("POST /audio/extract", () => {
 		mock.restore();
 	});
 
-	test("returns 400 for missing videoUrl", async () => {
+	test("returns 401 without media server secret", async () => {
 		const response = await app.fetch(
-			new Request("http://localhost/audio/extract", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({}),
+			unauthenticatedAudioPostRequest("/audio/extract", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
+
+		expect(response.status).toBe(401);
+	});
+
+	test("returns 400 for missing videoUrl", async () => {
+		const response = await app.fetch(audioPostRequest("/audio/extract", {}));
 
 		expect(response.status).toBe(400);
 		const data = await response.json();
@@ -99,11 +123,7 @@ describe("POST /audio/extract", () => {
 
 	test("returns 400 for invalid URL format", async () => {
 		const response = await app.fetch(
-			new Request("http://localhost/audio/extract", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "invalid-url" }),
-			}),
+			audioPostRequest("/audio/extract", { videoUrl: "invalid-url" }),
 		);
 
 		expect(response.status).toBe(400);
@@ -120,10 +140,8 @@ describe("POST /audio/extract", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/audio/extract", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "https://example.com/video.mp4" }),
+			audioPostRequest("/audio/extract", {
+				videoUrl: "https://example.com/video.mp4",
 			}),
 		);
 
@@ -143,13 +161,9 @@ describe("POST /audio/extract", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/audio/extract", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					videoUrl: "https://example.com/video.mp4",
-					stream: false,
-				}),
+			audioPostRequest("/audio/extract", {
+				videoUrl: "https://example.com/video.mp4",
+				stream: false,
 			}),
 		);
 
@@ -174,13 +188,9 @@ describe("POST /audio/extract", () => {
 		const { default: appWithMock } = await import("../../app");
 
 		const response = await appWithMock.fetch(
-			new Request("http://localhost/audio/extract", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					videoUrl: "https://example.com/video.mp4",
-					stream: false,
-				}),
+			audioPostRequest("/audio/extract", {
+				videoUrl: "https://example.com/video.mp4",
+				stream: false,
 			}),
 		);
 
@@ -188,5 +198,63 @@ describe("POST /audio/extract", () => {
 		const data = await response.json();
 		expect(data.code).toBe("FFMPEG_ERROR");
 		expect(data.details).toContain("FFmpeg failed");
+	});
+});
+
+describe("POST /audio/convert", () => {
+	beforeEach(() => {
+		mock.restore();
+	});
+
+	test("returns 401 without media server secret", async () => {
+		const response = await app.fetch(
+			unauthenticatedAudioPostRequest("/audio/convert", {
+				audioUrl: "https://example.com/audio.wav",
+			}),
+		);
+
+		expect(response.status).toBe(401);
+	});
+
+	test("returns 400 for missing audioUrl", async () => {
+		const response = await app.fetch(audioPostRequest("/audio/convert", {}));
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
+	test("returns audio stream when conversion succeeds", async () => {
+		const mockAudioData = new Uint8Array([0x49, 0x44, 0x33]);
+
+		mock.module("../../lib/ffmpeg", () => ({
+			canAcceptNewProcess: ffmpeg.canAcceptNewProcess,
+			checkHasAudioTrack: ffmpeg.checkHasAudioTrack,
+			extractAudio: ffmpeg.extractAudio,
+			extractAudioStream: () => ({
+				stream: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(mockAudioData);
+						controller.close();
+					},
+				}),
+				cleanup: () => {},
+			}),
+			getActiveProcessCount: ffmpeg.getActiveProcessCount,
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			audioPostRequest("/audio/convert", {
+				audioUrl: "https://example.com/audio.wav",
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
+
+		const buffer = await response.arrayBuffer();
+		expect(new Uint8Array(buffer)).toEqual(mockAudioData);
 	});
 });

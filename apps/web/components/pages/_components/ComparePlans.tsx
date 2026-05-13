@@ -8,6 +8,7 @@ import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useStripeContext } from "@/app/Layout/StripeContext";
+import { trackEvent } from "@/app/utils/analytics";
 import {
 	CommercialArt,
 	type CommercialArtRef,
@@ -254,7 +255,7 @@ export const ComparePlans = () => {
 		);
 
 	const planCheckout = async (planId?: string) => {
-		const finalPlanId = planId || stripeCtx.plans.yearly;
+		const finalPlanId = planId || stripeCtx.plans.monthly;
 		setProLoading(true);
 
 		try {
@@ -367,6 +368,22 @@ export const ComparePlans = () => {
 												href={plan.name === "Free" ? plan.href : undefined}
 												className="w-fit"
 												onClick={() => {
+													trackEvent("pricing_cta_clicked", {
+														source_page: "pricing_compare",
+														plan_name: plan.name,
+														authenticated: Boolean(user?.email),
+														is_pro: Boolean(user?.isPro),
+														cta_action:
+															plan.name === "Free"
+																? "download"
+																: plan.name === "Desktop License"
+																	? "commercial_checkout"
+																	: user?.email
+																		? "checkout"
+																		: "guest_checkout",
+														target_billing_period:
+															plan.name === "Cap Pro" ? "monthly" : null,
+													});
 													if (plan.name === "Free") {
 														window.location.href = "/download";
 													}

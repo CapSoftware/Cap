@@ -1,7 +1,10 @@
 "use client";
 
 import { buildEnv } from "@cap/env";
-import { TanStackDevtools } from "@tanstack/react-devtools";
+import {
+	TanStackDevtools,
+	type TanStackDevtoolsReactInit,
+} from "@tanstack/react-devtools";
 import {
 	QueryClient,
 	QueryClientProvider,
@@ -21,6 +24,10 @@ import type { BootstrapData } from "@/utils/getBootstrapData";
 
 import PostHogPageView from "./PosthogPageView";
 
+type CapPostHogConfig = Partial<PostHogConfig> & {
+	disable_session_recording?: boolean;
+};
+
 export function PostHogProvider({
 	children,
 	bootstrapData,
@@ -35,17 +42,17 @@ export function PostHogProvider({
 
 	const options = useMemo(() => {
 		if (!host) return undefined;
-		const base = {
+		const base: CapPostHogConfig = {
 			api_host: host,
 			capture_pageview: false,
 			capture_pageleave: true,
 			bootstrap: initialBootstrap.current?.distinctID
 				? initialBootstrap.current
 				: undefined,
-		} satisfies Partial<PostHogConfig>;
+		};
 
 		if (process.env.NEXT_PUBLIC_POSTHOG_DISABLE_SESSION_RECORDING === "true") {
-			(base as any).disable_session_recording = true;
+			base.disable_session_recording = true;
 		}
 
 		return base;
@@ -138,27 +145,78 @@ import {
 	promoteToPro,
 	restartOnboarding,
 } from "./devtoolsServer";
-import { useFeatureFlags } from "./features";
 
 export function SessionProvider({ children }: PropsWithChildren) {
 	return <NASessionProvider>{children}</NASessionProvider>;
 }
 
+type DevtoolsConfig = NonNullable<TanStackDevtoolsReactInit["config"]>;
+
+const devtoolsSettingsStorageKey = "tanstack_devtools_settings";
+
+const devtoolsConfig = {
+	hideUntilHover: false,
+	position: "top-left",
+	requireUrlFlag: false,
+} satisfies DevtoolsConfig;
+
+function getDevtoolsSettings(value: string | null): DevtoolsConfig {
+	if (!value) return devtoolsConfig;
+
+	try {
+		const parsed: unknown = JSON.parse(value);
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+			return {
+				...parsed,
+				...devtoolsConfig,
+			};
+		}
+	} catch {
+		return devtoolsConfig;
+	}
+
+	return devtoolsConfig;
+}
+
+function persistDevtoolsSettings() {
+	if (typeof window === "undefined") return;
+
+	try {
+		window.localStorage.setItem(
+			devtoolsSettingsStorageKey,
+			JSON.stringify(
+				getDevtoolsSettings(
+					window.localStorage.getItem(devtoolsSettingsStorageKey),
+				),
+			),
+		);
+	} catch {
+		return;
+	}
+}
+
 export function Devtools() {
 	const client = useQueryClient();
+	const [isReady, setIsReady] = useState(false);
+
+	useEffect(() => {
+		persistDevtoolsSettings();
+		setIsReady(true);
+	}, []);
+
+	if (!isReady) return null;
 
 	return (
 		<TanStackDevtools
-			config={{
-				// TODO: This doesn't seem to be working?
-				position: "top-left",
-			}}
+			config={devtoolsConfig}
 			plugins={[
 				{
+					id: "cap",
 					name: "Cap",
 					render: <CapDevtools />,
 				},
 				{
+					id: "tanstack-query",
 					name: "Tanstack Query",
 					render: <ReactQueryDevtoolsPanel client={client} />,
 				},
@@ -168,28 +226,9 @@ export function Devtools() {
 }
 
 function CapDevtools() {
-	const flags = useFeatureFlags();
-	void flags;
-
 	return (
 		<div className="flex flex-col p-4 space-y-4">
 			<h1 className="text-2xl font-semibold">Cap Devtools</h1>
-			{/*<div className="space-y-2">
-				<h1 className="text-lg font-semibold">Features</h1>
-				<label className="flex items-center space-x-2">
-					<input
-						type="checkbox"
-						checked={flags.enableUploadProgress}
-						onChange={(e) =>
-							featureFlags.setState((prev) => ({
-								...prev,
-								enableUploadProgress: e.target.checked,
-							}))
-						}
-					/>
-					<span>Enable Upload Progress UI</span>
-				</label>
-			</div>*/}
 			<div className="space-y-2">
 				<h1 className="text-lg font-semibold">Cap Pro</h1>
 				<p className="text-xs text-muted-foreground">

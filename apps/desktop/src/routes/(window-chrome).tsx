@@ -1,6 +1,5 @@
 import type { RouteSectionProps } from "@solidjs/router";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
@@ -20,23 +19,30 @@ export default function (props: RouteSectionProps) {
 
 	onMount(async () => {
 		console.log("window chrome mounted");
-		unlistenResize = await initializeTitlebar();
-		const { __CAP__ } = window as typeof window & {
-			__CAP__?: { initialTargetMode?: unknown };
-		};
-		const hasInitialTargetMode = __CAP__?.initialTargetMode != null;
-		const currentWindow = getCurrentWindow();
-		if (location.pathname === "/") {
-			void emit("main-window-ready");
+		void initializeTitlebar().then((unlisten) => {
+			unlistenResize = unlisten;
+		});
+	});
+
+	const handleKeyDown = (e: KeyboardEvent) => {
+		const isMac = ostype() === "macos";
+		const closeShortcut = isMac
+			? e.metaKey && e.key === "w"
+			: e.ctrlKey && e.key === "w";
+
+		if (closeShortcut) {
+			e.preventDefault();
+			getCurrentWindow().close();
 		}
-		if (location.pathname === "/" && !hasInitialTargetMode) {
-			await currentWindow.show();
-			await currentWindow.setFocus();
-		}
+	};
+
+	onMount(() => {
+		window.addEventListener("keydown", handleKeyDown);
 	});
 
 	onCleanup(() => {
 		unlistenResize?.();
+		window.removeEventListener("keydown", handleKeyDown);
 	});
 
 	const isMacOS = ostype() === "macos";
@@ -108,7 +114,7 @@ function Inner(props: ParentProps) {
 
 	return (
 		<div
-			data-tauri-drag-region="none"
+			data-tauri-drag-region="false"
 			class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in"
 		>
 			{props.children}

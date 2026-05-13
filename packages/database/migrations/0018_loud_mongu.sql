@@ -1,0 +1,2 @@
+ALTER TABLE `storage_objects` ADD CONSTRAINT `storage_objects_integrationId_storage_integrations_id_fk` FOREIGN KEY (`integrationId`) REFERENCES `storage_integrations`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `videos` ADD CONSTRAINT `videos_storageIntegrationId_storage_integrations_id_fk` FOREIGN KEY (`storageIntegrationId`) REFERENCES `storage_integrations`(`id`) ON DELETE restrict ON UPDATE no action;

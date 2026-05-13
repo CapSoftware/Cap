@@ -29,7 +29,7 @@ import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
 import { createExportTask } from "~/utils/export";
-import { createOrganizationsQuery } from "~/utils/queries";
+import { createSelectedOrganization } from "~/utils/organization-branding";
 import {
 	commands,
 	type ExportCompression,
@@ -169,7 +169,8 @@ export function ExportPage() {
 	const projectPath = editorInstance.path;
 
 	const auth = authStore.createQuery();
-	const organisations = createOrganizationsQuery();
+	const organizationSelection = createSelectedOrganization();
+	const organisations = organizationSelection.organizations;
 
 	const hasTransparentBackground = () => {
 		const backgroundSource =
@@ -254,10 +255,18 @@ export function ExportPage() {
 
 		Object.defineProperty(ret, "organizationId", {
 			get() {
-				if (!_settings.organizationId && organisations().length > 0)
-					return organisations()[0].id;
+				const selectedOrganizationId =
+					organizationSelection.selectedOrganizationId();
+				if (!_settings.organizationId) return selectedOrganizationId;
+				if (
+					organisations().some(
+						(organization) => organization.id === _settings.organizationId,
+					)
+				) {
+					return _settings.organizationId;
+				}
 
-				return _settings.organizationId;
+				return selectedOrganizationId;
 			},
 		});
 
@@ -266,6 +275,7 @@ export function ExportPage() {
 
 	const [previewUrl, setPreviewUrl] = createSignal<string | null>(null);
 	const [previewLoading, setPreviewLoading] = createSignal(false);
+	const [previewUnavailable, setPreviewUnavailable] = createSignal(false);
 	const [renderEstimate, setRenderEstimate] = createSignal<{
 		frameRenderTimeMs: number;
 		totalFrames: number;
@@ -325,14 +335,19 @@ export function ExportPage() {
 		),
 	);
 
-	const fetchPreview = async (
-		frameTime: number,
-		fps: number,
-		resWidth: number,
-		resHeight: number,
-		bpp: number,
-		retryCount = 0,
-	) => {
+	type PreviewRequest = {
+		frameTime: number;
+		fps: number;
+		resWidth: number;
+		resHeight: number;
+		bpp: number;
+	};
+
+	let previewInFlight = false;
+	let pendingPreviewRequest: PreviewRequest | null = null;
+
+	const runPreviewRequest = async (request: PreviewRequest, retryCount = 0) => {
+		const { frameTime, fps, resWidth, resHeight, bpp } = request;
 		const cacheKey = getEstimateCacheKey(
 			fps,
 			resWidth,
@@ -374,6 +389,7 @@ export function ExportPage() {
 			if (!cachedEstimate) {
 				estimateCache.set(cacheKey, newEstimate);
 			}
+			setPreviewUnavailable(false);
 			setRenderEstimate(newEstimate);
 		} catch (e) {
 			console.error("Failed to generate preview:", e);
@@ -381,16 +397,32 @@ export function ExportPage() {
 				await new Promise((resolve) =>
 					setTimeout(resolve, 200 * (retryCount + 1)),
 				);
-				return fetchPreview(
-					frameTime,
-					fps,
-					resWidth,
-					resHeight,
-					bpp,
-					retryCount + 1,
-				);
+				return runPreviewRequest(request, retryCount + 1);
+			}
+			setPreviewUnavailable(true);
+		}
+	};
+
+	const fetchPreview = async (
+		frameTime: number,
+		fps: number,
+		resWidth: number,
+		resHeight: number,
+		bpp: number,
+	) => {
+		setPreviewUnavailable(false);
+		pendingPreviewRequest = { frameTime, fps, resWidth, resHeight, bpp };
+		if (previewInFlight) return;
+
+		previewInFlight = true;
+		try {
+			while (pendingPreviewRequest) {
+				const request = pendingPreviewRequest;
+				pendingPreviewRequest = null;
+				await runPreviewRequest(request);
 			}
 		} finally {
+			previewInFlight = false;
 			setPreviewLoading(false);
 		}
 	};
@@ -427,6 +459,7 @@ export function ExportPage() {
 					compressionBpp(),
 				);
 			},
+			{ defer: true },
 		),
 	);
 
@@ -739,7 +772,11 @@ export function ExportPage() {
 										fallback={
 											<div class="flex flex-col items-center gap-3 text-gray-10">
 												<IconLucideImage class="size-12 text-gray-8" />
-												<span class="text-sm">Generating preview...</span>
+												<span class="text-sm">
+													{previewUnavailable()
+														? "Preview unavailable"
+														: "Generating preview..."}
+												</span>
 											</div>
 										}
 									>
@@ -775,7 +812,9 @@ export function ExportPage() {
 					</div>
 
 					<Show
-						when={!previewLoading() && renderEstimate()}
+						when={
+							!previewUnavailable() && !previewLoading() && renderEstimate()
+						}
 						fallback={
 							<div class="flex items-center justify-center gap-4 mt-4 h-4 text-xs text-gray-11">
 								<span class="flex items-center gap-1.5">
@@ -919,6 +958,9 @@ export function ExportPage() {
 															text: org.name,
 															action: () => {
 																setSettings("organizationId", org.id);
+																void organizationSelection
+																	.setSelectedOrganizationId(org.id)
+																	.catch(console.error);
 															},
 															checked: settings.organizationId === org.id,
 														}),

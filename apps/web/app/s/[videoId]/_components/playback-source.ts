@@ -63,7 +63,11 @@ async function probePlaybackSource(
 	}
 }
 
-export function detectCrossOriginSupport(url: string): boolean {
+export function detectCrossOriginSupport(
+	url: string,
+	probeWasRedirected = false,
+): boolean {
+	if (probeWasRedirected) return true;
 	try {
 		const hostname = new URL(url, "https://cap.so").hostname;
 		const isR2OrS3 =
@@ -135,7 +139,8 @@ export async function resolvePlaybackSource({
 			url: rawResult.url,
 			type: "raw",
 			supportsCrossOrigin:
-				enableCrossOrigin && detectCrossOriginSupport(rawResult.url),
+				enableCrossOrigin &&
+				detectCrossOriginSupport(rawResult.url, rawResult.response.redirected),
 		};
 	};
 
@@ -150,7 +155,8 @@ export async function resolvePlaybackSource({
 			url: mp4Result.url,
 			type: "mp4",
 			supportsCrossOrigin:
-				enableCrossOrigin && detectCrossOriginSupport(mp4Result.url),
+				enableCrossOrigin &&
+				detectCrossOriginSupport(mp4Result.url, mp4Result.response.redirected),
 		};
 	}
 

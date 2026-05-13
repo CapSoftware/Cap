@@ -619,6 +619,11 @@ impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
         self.read_position = sample_position.min(self.samples.len());
     }
 
+    pub fn current_audible_playhead(&self, device_latency_secs: f64) -> f64 {
+        let generated_secs = (self.read_position / self.channels) as f64 / self.sample_rate as f64;
+        (generated_secs - device_latency_secs.max(0.0)).max(0.0)
+    }
+
     #[allow(dead_code)]
     pub fn current_playhead_secs(&self) -> f64 {
         (self.read_position / self.channels) as f64 / self.sample_rate as f64
@@ -789,6 +794,21 @@ mod tests {
         };
 
         (dir, AudioRenderer::new(segments), project)
+    }
+
+    #[test]
+    fn prerendered_audio_reports_audible_playhead_after_output_latency() {
+        let mut buffer = PrerenderedAudioBuffer::<f32> {
+            samples: vec![0.0; AudioData::SAMPLE_RATE as usize * 2],
+            read_position: 0,
+            sample_rate: AudioData::SAMPLE_RATE,
+            channels: 2,
+        };
+
+        buffer.set_playhead(0.5);
+
+        assert!((buffer.current_audible_playhead(0.2) - 0.3).abs() < 0.000_1);
+        assert_eq!(buffer.current_audible_playhead(1.0), 0.0);
     }
 
     #[test]

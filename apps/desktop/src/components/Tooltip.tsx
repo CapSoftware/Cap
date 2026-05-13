@@ -12,12 +12,22 @@ interface Props extends ComponentProps<typeof KTooltip> {
 type Os = "android" | "ios" | "linux" | "macos" | "windows";
 
 const kbdSymbolModifier = (key: string, os: Os) => {
-	const obj = {
-		meta: os === "macos" ? "⌘" : "ctrl",
-		shift: "⇧",
-		alt: os === "macos" ? "⌥" : "⎇",
+	if (os === "macos") {
+		const symbols: Record<string, string> = {
+			meta: "⌘",
+			ctrl: "⌃",
+			shift: "⇧",
+			alt: "⌥",
+		};
+		return symbols[key] || key;
+	}
+	const labels: Record<string, string> = {
+		meta: "Ctrl",
+		ctrl: "Ctrl",
+		shift: "Shift",
+		alt: "Alt",
 	};
-	return obj[key as keyof typeof obj] || key;
+	return labels[key] || key;
 };
 
 export default function Tooltip(props: Props) {

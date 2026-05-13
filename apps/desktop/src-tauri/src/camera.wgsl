@@ -168,15 +168,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         mask = 1.0;
     }
 
-    // Apply the mask with cleaner alpha handling to reduce ghosting
     if (mask < 0.05) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    // Sample the camera texture
     let camera_color = textureSample(t_camera, s_camera, final_uv);
 
-    // Use sharper alpha cutoff to reduce ghosting
     let final_alpha = select(1.0, mask, mask < 0.95);
     return vec4<f32>(camera_color.rgb, final_alpha);
 }

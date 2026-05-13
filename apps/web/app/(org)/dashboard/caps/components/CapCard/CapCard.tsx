@@ -9,6 +9,7 @@ import {
 	DropdownMenuTrigger,
 } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
+import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { HttpClient } from "@effect/platform";
 import {
@@ -85,10 +86,18 @@ export interface CapCardProps extends PropsWithChildren {
 			name: string;
 			iconUrl?: ImageUpload.ImageUrl | null;
 			organizationId: string;
+			isOrg?: boolean;
+			settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
+			hasPassword?: boolean;
 		}[];
 		ownerName: string | null;
 		metadata?: VideoMetadata;
 		hasPassword?: boolean;
+		hasInheritedPassword?: boolean;
+		inheritedPasswordSources?: SpaceRuleSource[];
+		inheritedSpaceSettings?: Partial<
+			Record<ViewerSettingKey, SpaceRuleSource[]>
+		>;
 		hasActiveUpload: boolean | undefined;
 		duration?: number;
 		settings?: {
@@ -98,7 +107,7 @@ export interface CapCardProps extends PropsWithChildren {
 			disableChapters?: boolean;
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
-		};
+		} | null;
 	};
 	analytics: number;
 	isLoadingAnalytics: boolean;
@@ -138,6 +147,8 @@ export const CapCard = ({
 	const [passwordProtected, setPasswordProtected] = useState(
 		cap.hasPassword || false,
 	);
+	const effectivePasswordProtected =
+		passwordProtected || Boolean(cap.hasInheritedPassword);
 	const { webUrl } = usePublicEnv();
 
 	const [copyPressed, setCopyPressed] = useState(false);
@@ -261,7 +272,7 @@ export const CapCard = ({
 		return element;
 	};
 
-	const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
+	const handleDragStart = (e: React.DragEvent<HTMLElement>) => {
 		if (anyCapSelected || !isOwner) return;
 
 		// Set the data transfer
@@ -318,16 +329,6 @@ export const CapCard = ({
 		});
 	};
 
-	const handleCardClick = (e: React.MouseEvent) => {
-		if (anyCapSelected) {
-			e.preventDefault();
-			e.stopPropagation();
-			if (onSelectToggle) {
-				onSelectToggle();
-			}
-		}
-	};
-
 	const handleSelectClick = (e: React.MouseEvent) => {
 		e.preventDefault();
 		e.stopPropagation();
@@ -359,11 +360,13 @@ export const CapCard = ({
 				onSharingUpdated={handleSharingUpdated}
 				isPublic={cap.public}
 				hasPassword={passwordProtected}
+				inheritedPasswordSources={cap.inheritedPasswordSources}
 				onPasswordUpdated={handlePasswordUpdated}
 			/>
 			<SettingsDialog
 				isOpen={isSettingsDialogOpen}
-				settingsData={cap.settings}
+				settingsData={cap.settings ?? undefined}
+				inheritedSpaceSettings={cap.inheritedSpaceSettings}
 				capId={cap.id}
 				onClose={() => setIsSettingsDialogOpen(false)}
 			/>
@@ -374,8 +377,8 @@ export const CapCard = ({
 				hasPassword={passwordProtected}
 				onPasswordUpdated={handlePasswordUpdated}
 			/>
-			<div
-				onClick={handleCardClick}
+			<fieldset
+				aria-label={cap.name}
 				draggable={isOwner && !anyCapSelected}
 				onDragStart={handleDragStart}
 				onDragEnd={handleDragEnd}
@@ -391,7 +394,12 @@ export const CapCard = ({
 				)}
 			>
 				{anyCapSelected && !sharedCapCard && (
-					<div className="absolute inset-0 z-10" onClick={handleCardClick} />
+					<button
+						type="button"
+						aria-label={`Select ${cap.name}`}
+						className="absolute inset-0 z-10"
+						onClick={handleSelectClick}
+					/>
 				)}
 
 				<div
@@ -430,6 +438,7 @@ export const CapCard = ({
 									strokeWidth="2"
 									strokeLinecap="round"
 									strokeLinejoin="round"
+									aria-hidden="true"
 									className="text-gray-12 size-5 svgpathanimation"
 								>
 									<path d="M20 6 9 17l-5-5" />
@@ -536,7 +545,7 @@ export const CapCard = ({
 									>
 										<FontAwesomeIcon
 											className="size-3"
-											icon={passwordProtected ? faLock : faUnlock}
+											icon={effectivePasswordProtected ? faLock : faUnlock}
 										/>
 										<p className="text-sm text-gray-12">
 											{passwordProtected ? "Edit password" : "Add password"}
@@ -571,7 +580,9 @@ export const CapCard = ({
 				</div>
 
 				{!sharedCapCard && onSelectToggle && (
-					<div
+					<button
+						type="button"
+						aria-label={isSelected ? "Deselect cap" : "Select cap"}
 						className={clsx(
 							"absolute top-2 left-2 z-[49] duration-200",
 							isSelected || anyCapSelected || isDropdownOpen
@@ -595,7 +606,7 @@ export const CapCard = ({
 								<FontAwesomeIcon icon={faCheck} className="text-white size-3" />
 							)}
 						</div>
-					</div>
+					</button>
 				)}
 
 				<div className="relative aspect-video w-full">
@@ -641,6 +652,7 @@ export const CapCard = ({
 												<svg
 													className="w-4 h-4 animate-spin"
 													viewBox="0 0 20 20"
+													aria-hidden="true"
 												>
 													<circle
 														cx="10"
@@ -667,6 +679,7 @@ export const CapCard = ({
 												<svg
 													className="w-4 h-4 transform -rotate-90"
 													viewBox="0 0 20 20"
+													aria-hidden="true"
 												>
 													<circle
 														cx="10"
@@ -726,6 +739,18 @@ export const CapCard = ({
 								uploadProgress.status !== "error"
 							}
 						/>
+						{effectivePasswordProtected && (
+							<div
+								className="absolute right-2 top-2 z-10 flex size-7 items-center justify-center rounded-full bg-black/70 text-white"
+								title={
+									cap.hasInheritedPassword
+										? "Password required by space"
+										: "Password protected"
+								}
+							>
+								<FontAwesomeIcon icon={faLock} className="size-3" />
+							</div>
+						)}
 					</Link>
 				</div>
 				<div
@@ -751,7 +776,7 @@ export const CapCard = ({
 						totalReactions={cap.totalReactions}
 					/>
 				</div>
-			</div>
+			</fieldset>
 		</>
 	);
 };

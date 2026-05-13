@@ -106,12 +106,25 @@ function parseFrameRate(rateStr: string | undefined): number {
 	return Number.parseFloat(rateStr) || 0;
 }
 
+function redactUrl(value: string): string {
+	try {
+		const url = new URL(value);
+		if (url.protocol === "file:") {
+			return url.pathname;
+		}
+		return `${url.origin}${url.pathname}`;
+	} catch {
+		return value.split("?")[0] ?? value;
+	}
+}
+
 export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 	if (!canAcceptNewProbeProcess()) {
 		throw new Error("Server is busy, please try again later");
 	}
 
 	activeProbeProcesses++;
+	const displayUrl = redactUrl(videoUrl);
 
 	const proc = registerSubprocess(
 		spawn({
@@ -145,9 +158,16 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 				}
 
 				const data: FFprobeOutput = JSON.parse(stdoutText);
+				const format = data.format
+					? {
+							duration: data.format.duration,
+							size: data.format.size,
+							bit_rate: data.format.bit_rate,
+						}
+					: undefined;
 
 				console.log(
-					`[probeVideo] ffprobe output for ${videoUrl.substring(0, 80)}...: format=${JSON.stringify(data.format)}, streams=${data.streams?.length ?? 0}`,
+					`[probeVideo] ffprobe output for ${displayUrl}: format=${JSON.stringify(format)}, streams=${data.streams?.length ?? 0}`,
 				);
 				if (data.streams) {
 					for (const stream of data.streams) {
@@ -162,7 +182,7 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 
 				if (!videoStream) {
 					console.error(
-						`[probeVideo] No video stream found in file. Raw output: ${stdoutText.substring(0, 500)}`,
+						`[probeVideo] No video stream found in file. streams=${data.streams?.length ?? 0}`,
 					);
 					throw new Error("No video stream found");
 				}

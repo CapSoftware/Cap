@@ -7,7 +7,6 @@ import {
 	MenuItem,
 	PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
@@ -25,6 +24,7 @@ import {
 import { createStore, produce } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
 import { authStore } from "~/store";
+import { getCameraWindow } from "~/utils/camera-window";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	createCurrentRecordingQuery,
@@ -108,6 +108,7 @@ function InProgressRecordingInner() {
 	const [issueKey, setIssueKey] = createSignal("");
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
 	const [startingDismissed, setStartingDismissed] = createSignal(false);
+	const [stopRequested, setStopRequested] = createSignal(false);
 	const [interactiveAreaRef, setInteractiveAreaRef] =
 		createSignal<HTMLDivElement | null>(null);
 	let settingsButtonRef: HTMLButtonElement | undefined;
@@ -189,6 +190,7 @@ function InProgressRecordingInner() {
 				setRecordingFailure(null);
 				setDegradedReason(null);
 				setPauseResumes([]);
+				setStopRequested(false);
 				setState({
 					variant: "countdown",
 					from: payload.value,
@@ -202,6 +204,8 @@ function InProgressRecordingInner() {
 				setRecordingFailure(null);
 				setDegradedReason(null);
 				setPauseResumes([]);
+				setStopRequested(false);
+				aborted = false;
 				setState({ variant: "recording" });
 				setStart(Date.now());
 				setTime(Date.now());
@@ -254,12 +258,33 @@ function InProgressRecordingInner() {
 			| CurrentRecording
 			| null
 			| undefined;
+
+		if (s.variant === "stopped" && !currentRecording.isPending && recording) {
+			setStartingDismissed(false);
+			setDisconnectedInputs({ microphone: false, camera: false });
+			setRecordingFailure(null);
+			setDegradedReason(null);
+			setPauseResumes([]);
+			setStopRequested(false);
+			aborted = false;
+			if (recording.status === "recording") {
+				setState({ variant: "recording" });
+				setStart(Date.now());
+				setTime(Date.now());
+			} else {
+				setState({ variant: "initializing" });
+			}
+			return;
+		}
+
 		if (s.variant !== "initializing" && s.variant !== "countdown") return;
 		if (currentRecording.isPending) return;
 		if (recording?.status === "recording") {
 			setStartingDismissed(false);
 			setDisconnectedInputs({ microphone: false, camera: false });
 			setRecordingFailure(null);
+			setDegradedReason(null);
+			setPauseResumes([]);
 			setState({ variant: "recording" });
 			setStart(Date.now());
 			setTime(Date.now());
@@ -361,10 +386,20 @@ function InProgressRecordingInner() {
 
 	const stopRecording = createMutation(() => ({
 		mutationFn: async () => {
+			setStopRequested(true);
 			setState({ variant: "stopped" });
+			void getCurrentWindow().hide();
 			await commands.stopRecording();
 		},
+		onError: () => {
+			setStopRequested(false);
+		},
 	}));
+
+	const requestStopRecording = () => {
+		if (isCountdown() || stopRequested() || stopRecording.isPending) return;
+		stopRecording.mutate();
+	};
 
 	const togglePause = createMutation(() => ({
 		mutationFn: async () => {
@@ -410,7 +445,7 @@ function InProgressRecordingInner() {
 	const toggleCameraPreview = createMutation(() => ({
 		mutationFn: async () => {
 			if (cameraWindowOpen()) {
-				const cameraWindow = await WebviewWindow.getByLabel("camera");
+				const cameraWindow = await getCameraWindow();
 				if (cameraWindow) await cameraWindow.close();
 			} else {
 				await commands.showWindow({ Camera: { centered: false } });
@@ -454,7 +489,7 @@ function InProgressRecordingInner() {
 			try {
 				await commands.setCameraInput(next, null);
 				if (!next && cameraWindowOpen()) {
-					const cameraWindow = await WebviewWindow.getByLabel("camera");
+					const cameraWindow = await getCameraWindow();
 					if (cameraWindow) await cameraWindow.close();
 					await refreshCameraWindowState();
 				}
@@ -648,10 +683,20 @@ function InProgressRecordingInner() {
 									}
 								>
 									<button
-										disabled={stopRecording.isPending || isCountdown()}
+										disabled={
+											stopRequested() ||
+											stopRecording.isPending ||
+											isCountdown()
+										}
 										class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-colors duration-100 hover:bg-red-500/[0.08] active:bg-red-500/[0.12] disabled:opacity-60 disabled:hover:bg-transparent"
 										type="button"
-										onClick={() => stopRecording.mutate()}
+										onPointerDown={(event) => {
+											if (event.button !== 0) return;
+											event.preventDefault();
+											event.stopPropagation();
+											requestStopRecording();
+										}}
+										onClick={requestStopRecording}
 										title="Stop recording"
 										aria-label="Stop recording"
 									>
