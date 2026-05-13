@@ -80,3 +80,4 @@ declare namespace Arguments {
   /** Arguments passed to the `switch-camera` command */
   export type SwitchCamera = {}
 }
+
