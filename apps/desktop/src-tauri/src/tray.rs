@@ -277,7 +277,7 @@ fn load_all_previous_items(app: &AppHandle, load_thumbnails: bool) -> Vec<Cached
         }
     }
 
-    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    items.sort_by_key(|b| std::cmp::Reverse(b.created_at));
     items.truncate(MAX_PREVIOUS_ITEMS);
     items
 }

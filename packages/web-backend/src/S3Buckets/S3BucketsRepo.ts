@@ -1,5 +1,10 @@
 import * as Db from "@cap/database/schema";
-import { S3Bucket, type User, type Video } from "@cap/web-domain";
+import {
+	type Organisation,
+	S3Bucket,
+	type User,
+	type Video,
+} from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 
@@ -55,7 +60,14 @@ export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
 							db
 								.select({ bucket: Db.s3Buckets })
 								.from(Db.s3Buckets)
-								.where(Dz.eq(Db.s3Buckets.ownerId, userId)),
+								.where(
+									Dz.and(
+										Dz.eq(Db.s3Buckets.ownerId, userId),
+										Dz.isNull(Db.s3Buckets.organizationId),
+										Dz.eq(Db.s3Buckets.active, true),
+									),
+								)
+								.orderBy(Dz.desc(Db.s3Buckets.updatedAt)),
 						);
 
 						return Option.fromNullable(res).pipe(
@@ -66,7 +78,31 @@ export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
 					}),
 			);
 
-			return { getForVideo, getById, getForUser };
+			const getForOrganization = Effect.fn("S3BucketsRepo.getForOrganization")(
+				(organizationId: Organisation.OrganisationId) =>
+					Effect.gen(function* () {
+						const [res] = yield* db.use((db) =>
+							db
+								.select({ bucket: Db.s3Buckets })
+								.from(Db.s3Buckets)
+								.where(
+									Dz.and(
+										Dz.eq(Db.s3Buckets.organizationId, organizationId),
+										Dz.eq(Db.s3Buckets.active, true),
+									),
+								)
+								.orderBy(Dz.desc(Db.s3Buckets.updatedAt)),
+						);
+
+						return Option.fromNullable(res).pipe(
+							Option.map((v) =>
+								S3Bucket.decodeSync({ ...v.bucket, name: v.bucket.bucketName }),
+							),
+						);
+					}),
+			);
+
+			return { getForVideo, getById, getForUser, getForOrganization };
 		}),
 		dependencies: [Database.Default],
 	},

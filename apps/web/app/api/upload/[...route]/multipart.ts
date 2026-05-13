@@ -1,16 +1,11 @@
-import {
-	CloudFrontClient,
-	CreateInvalidationCommand,
-} from "@aws-sdk/client-cloudfront";
 import { updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import {
-	AwsCredentials,
 	Database,
 	makeCurrentUserLayer,
 	provideOptionalAuth,
-	S3Buckets,
+	Storage,
 	VideosPolicy,
 	VideosRepo,
 } from "@cap/web-backend";
@@ -21,6 +16,7 @@ import { Effect, Option, Schedule } from "effect";
 import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
+import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
@@ -31,6 +27,9 @@ import {
 } from "./multipart-utils";
 
 export const app = new Hono().use(withAuth);
+
+const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
 
 const runPromiseAnyEnv = runPromise as <A, E>(
 	effect: Effect.Effect<A, E, unknown>,
@@ -126,7 +125,16 @@ app.post(
 		try {
 			try {
 				const uploadId = await Effect.gen(function* () {
-					const [bucket] = yield* S3Buckets.getBucketAccessForUser(user.id);
+					const repo = yield* VideosRepo;
+					const policy = yield* VideosPolicy;
+					const maybeVideo = yield* repo
+						.getById(videoId)
+						.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+					if (Option.isNone(maybeVideo)) {
+						return yield* new Video.NotFoundError();
+					}
+					const [video] = maybeVideo.value;
+					const [bucket] = yield* Storage.getAccessForVideo(video);
 
 					const finalContentType = contentType || "video/mp4";
 					console.log(
@@ -153,10 +161,14 @@ app.post(
 						`Upload details: Bucket=${bucket.bucketName}, Key=${fileKey}, ContentType=${finalContentType}`,
 					);
 
-					return UploadId;
-				}).pipe(provideOptionalAuth, runPromiseAnyEnv);
+					return { uploadId: UploadId, provider: bucket.provider };
+				}).pipe(
+					Effect.provide(makeCurrentUserLayer(user)),
+					provideOptionalAuth,
+					runPromiseAnyEnv,
+				);
 
-				return c.json({ uploadId: uploadId });
+				return c.json(uploadId);
 			} catch (s3Error) {
 				console.error("S3 operation failed:", s3Error);
 				throw new Error(
@@ -206,7 +218,21 @@ app.post(
 		try {
 			try {
 				const presignedUrl = await Effect.gen(function* () {
-					const [bucket] = yield* S3Buckets.getBucketAccessForUser(user.id);
+					const videoIdFromFileKey = fileKey.split("/")[1];
+					const videoIdRaw =
+						"videoId" in body ? body.videoId : videoIdFromFileKey;
+					if (!videoIdRaw) throw new Error("Video id not found");
+					const videoId = Video.VideoId.make(videoIdRaw);
+					const repo = yield* VideosRepo;
+					const policy = yield* VideosPolicy;
+					const maybeVideo = yield* repo
+						.getById(videoId)
+						.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+					if (Option.isNone(maybeVideo)) {
+						return yield* new Video.NotFoundError();
+					}
+					const [video] = maybeVideo.value;
+					const [bucket] = yield* Storage.getAccessForVideo(video);
 
 					console.log(
 						`Getting presigned URL for part ${partNumber} of upload ${uploadId}`,
@@ -220,10 +246,14 @@ app.post(
 							{ ContentMD5: body.md5Sum },
 						);
 
-					return presignedUrl;
-				}).pipe(provideOptionalAuth, runPromiseAnyEnv);
+					return { presignedUrl, provider: bucket.provider };
+				}).pipe(
+					Effect.provide(makeCurrentUserLayer(user)),
+					provideOptionalAuth,
+					runPromiseAnyEnv,
+				);
 
-				return c.json({ presignedUrl });
+				return c.json(presignedUrl);
 			} catch (s3Error) {
 				console.error("S3 operation failed:", s3Error);
 				throw new Error(
@@ -299,9 +329,7 @@ app.post(
 			const [video] = maybeVideo.value;
 
 			return yield* Effect.gen(function* () {
-				const [bucket, customBucket] = yield* S3Buckets.getBucketAccess(
-					video.bucketId,
-				);
+				const [bucket] = yield* Storage.getAccessForVideo(video);
 
 				const { result, formattedParts } = yield* Effect.gen(function* () {
 					console.log(
@@ -348,7 +376,15 @@ app.post(
 						MultipartUpload: {
 							Parts: formattedParts,
 						},
+						...(bucket.provider === "googleDrive"
+							? { MpuObjectSize: totalSize }
+							: {}),
 					});
+					yield* Effect.promise(() =>
+						invalidateGoogleDriveStorageQuotaCache(
+							Option.getOrNull(video.storageIntegrationId),
+						),
+					);
 
 					return { result, formattedParts };
 				});
@@ -367,13 +403,13 @@ app.post(
 								`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
 							),
 						),
-						Effect.catchAll((headError) =>
-							Effect.logError(`Warning: Unable to verify object: ${headError}`),
-						),
 						Effect.retry({
 							times: 3,
 							schedule: Schedule.exponential("50 millis"),
 						}),
+						Effect.catchAll((headError) =>
+							Effect.logError(`Warning: Unable to verify object: ${headError}`),
+						),
 					);
 
 					if (isRawRecorderUpload(subpath)) {
@@ -426,30 +462,32 @@ app.post(
 						});
 					}
 
-					console.log(
-						"Performing metadata fix by copying the object to itself...",
-					);
-
-					yield* bucket
-						.copyObject(`${bucket.bucketName}/${fileKey}`, fileKey, {
-							ContentType: "video/mp4",
-							MetadataDirective: "REPLACE",
-						})
-						.pipe(
-							Effect.tap((result) =>
-								Effect.log("Copy for metadata fix successful:", result),
-							),
-							Effect.catchAll((e) =>
-								Effect.logError(
-									"Warning: Failed to copy object to fix metadata:",
-									e,
-								),
-							),
-							Effect.retry({
-								times: 3,
-								schedule: Schedule.exponential("50 millis"),
-							}),
+					if (bucket.provider === "s3") {
+						console.log(
+							"Performing metadata fix by copying the object to itself...",
 						);
+
+						yield* bucket
+							.copyObject(`${bucket.bucketName}/${fileKey}`, fileKey, {
+								ContentType: "video/mp4",
+								MetadataDirective: "REPLACE",
+							})
+							.pipe(
+								Effect.tap((result) =>
+									Effect.log("Copy for metadata fix successful:", result),
+								),
+								Effect.catchAll((e) =>
+									Effect.logError(
+										"Warning: Failed to copy object to fix metadata:",
+										e,
+									),
+								),
+								Effect.retry({
+									times: 3,
+									schedule: Schedule.exponential("50 millis"),
+								}),
+							);
+					}
 
 					yield* db.use((db) =>
 						db.transaction(() =>
@@ -481,8 +519,15 @@ app.post(
 					);
 
 					const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
-					if (video.source.type === "webMP4" && mediaServerUrl) {
-						const inputUrl = yield* bucket.getInternalSignedObjectUrl(fileKey);
+					if (
+						bucket.provider === "s3" &&
+						video.source.type === "webMP4" &&
+						mediaServerUrl
+					) {
+						const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
+						const inputUrl = yield* bucket.getInternalSignedObjectUrl(fileKey, {
+							expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+						});
 						const outputPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
 							fileKey,
 							{
@@ -493,7 +538,18 @@ app.post(
 									source: "cap-multipart-upload",
 								},
 							},
+							{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 						);
+						const previewGifKey = `${user.id}/${videoId}/preview/animated-preview.gif`;
+						const previewGifPresignedUrl =
+							yield* bucket.getInternalPresignedPutUrl(
+								previewGifKey,
+								{
+									ContentType: "image/gif",
+									CacheControl: "public, max-age=31536000, immutable",
+								},
+								{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+							);
 
 						yield* Effect.tryPromise({
 							try: async () => {
@@ -501,12 +557,18 @@ app.post(
 									`${mediaServerUrl}/video/process`,
 									{
 										method: "POST",
-										headers: { "Content-Type": "application/json" },
+										headers: {
+											"Content-Type": "application/json",
+											...(webhookSecret
+												? { "x-media-server-secret": webhookSecret }
+												: {}),
+										},
 										body: JSON.stringify({
 											videoId,
 											userId: user.id,
 											videoUrl: inputUrl,
 											outputPresignedUrl,
+											previewGifPresignedUrl,
 											remuxOnly: true,
 										}),
 									},
@@ -527,44 +589,6 @@ app.post(
 								return Effect.succeed(null);
 							}),
 						);
-					}
-
-					if (Option.isNone(customBucket)) {
-						const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
-						if (distributionId) {
-							const cloudfront = new CloudFrontClient({
-								region: serverEnv().CAP_AWS_REGION || "us-east-1",
-								credentials: yield* Effect.map(
-									AwsCredentials,
-									(c) => c.credentials,
-								),
-							});
-
-							const pathToInvalidate = `/${fileKey}`;
-
-							yield* Effect.promise(() =>
-								cloudfront.send(
-									new CreateInvalidationCommand({
-										DistributionId: distributionId,
-										InvalidationBatch: {
-											CallerReference: `${Date.now()}`,
-											Paths: {
-												Quantity: 1,
-												Items: [pathToInvalidate],
-											},
-										},
-									}),
-								),
-							).pipe(
-								Effect.catchAll((e) =>
-									Effect.logError(
-										"Failed to create CloudFront invalidation:",
-										e,
-									),
-								),
-								Effect.withSpan("CloudFrontInvalidation"),
-							);
-						}
 					}
 
 					return c.json({
@@ -643,7 +667,7 @@ app.post("/abort", abortRequestValidator, (c) => {
 		}
 		const [video] = maybeVideo.value;
 
-		const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
+		const [bucket] = yield* Storage.getAccessForVideo(video);
 		type MultipartWithAbort = typeof bucket.multipart & {
 			abort: (
 				...args: Parameters<typeof bucket.multipart.complete>

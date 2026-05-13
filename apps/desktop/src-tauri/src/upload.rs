@@ -60,6 +60,51 @@ const NETWORK_RECOVERY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CONNECTIVITY_PROBE_INITIAL_DELAY: Duration = Duration::from_secs(2);
 const CONNECTIVITY_PROBE_MAX_DELAY: Duration = Duration::from_secs(30);
 
+fn is_google_drive_resumable_url(url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    url.host_str().is_some_and(|host| {
+        (host == "googleapis.com" || host.ends_with(".googleapis.com"))
+            && url.path().starts_with("/upload/drive/")
+    })
+}
+
+fn is_google_drive_upload(provider: Option<&str>, upload_id: &str) -> bool {
+    provider == Some("googleDrive") || is_google_drive_resumable_url(upload_id)
+}
+
+fn with_drive_content_range(
+    request: reqwest::RequestBuilder,
+    url: &str,
+    offset: u64,
+    size: u64,
+    total_size: u64,
+) -> reqwest::RequestBuilder {
+    if !is_google_drive_resumable_url(url) || size == 0 {
+        return request;
+    }
+
+    let end = offset.saturating_add(size).saturating_sub(1);
+    request.header(
+        "Content-Range",
+        format!("bytes {offset}-{end}/{total_size}"),
+    )
+}
+
+fn is_upload_response_accepted(
+    url: &str,
+    status: StatusCode,
+    offset: u64,
+    size: u64,
+    total_size: u64,
+) -> bool {
+    status.is_success()
+        || (is_google_drive_resumable_url(url)
+            && status == StatusCode::PERMANENT_REDIRECT
+            && offset.saturating_add(size) < total_size)
+}
+
 #[instrument(skip(app, channel, file_path, screenshot_path))]
 pub async fn upload_video(
     app: &AppHandle,
@@ -72,7 +117,9 @@ pub async fn upload_video(
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
-    let upload_id = api::upload_multipart_initiate(app, &video_id).await?;
+    let upload = api::upload_multipart_initiate(app, &video_id).await?;
+    let is_drive_upload = is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id);
+    let upload_id = upload.upload_id;
 
     let video_fut = async {
         let failed_chunks: Arc<Mutex<Vec<FailedChunkInfo>>> = Arc::new(Mutex::new(Vec::new()));
@@ -84,6 +131,7 @@ pub async fn upload_video(
                 app.clone(),
                 video_id.clone(),
                 upload_id.clone(),
+                is_drive_upload,
                 from_pending_file_to_chunks(file_path.clone(), None),
                 failed_chunks.clone(),
             ),
@@ -480,7 +528,9 @@ impl InstantMultipartUpload {
             .map_err(|e| error!("Failed to save recording meta: {e}"))
             .ok();
 
-        let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
+        let upload = api::upload_multipart_initiate(&app, &video_id).await?;
+        let is_drive_upload = is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id);
+        let upload_id = upload.upload_id;
 
         let failed_chunks: Arc<Mutex<Vec<FailedChunkInfo>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -491,6 +541,7 @@ impl InstantMultipartUpload {
                 app.clone(),
                 video_id.clone(),
                 upload_id.clone(),
+                is_drive_upload,
                 from_pending_file_to_chunks(file_path.clone(), realtime_video_done),
                 failed_chunks.clone(),
             ),
@@ -654,6 +705,12 @@ struct SegmentUploadManifest {
     video_segments: Vec<SegmentManifestEntry>,
     audio_segments: Vec<SegmentManifestEntry>,
     is_complete: bool,
+}
+
+impl SegmentUploadManifest {
+    fn has_video_content(&self) -> bool {
+        self.video_init_uploaded && !self.video_segments.is_empty()
+    }
 }
 
 struct PresignedUrlCache {
@@ -1394,6 +1451,23 @@ impl SegmentUploader {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .to_complete_manifest();
+        if !final_manifest.has_video_content() {
+            let error = format!("Segment upload completed without video segments for {video_id}");
+            error!(video_id, "Segment upload completed without video segments");
+
+            if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
+                meta.upload = Some(UploadMeta::Failed {
+                    error: error.clone(),
+                });
+                if let Err(err) = meta.save_for_project() {
+                    warn!("Failed to save failed segment upload metadata: {err}");
+                }
+            }
+
+            emit_upload_complete(&app, &video_id);
+
+            return Err(error.into());
+        }
         Self::upload_manifest(&app, &video_id, &final_manifest).await?;
 
         {
@@ -1633,6 +1707,7 @@ fn multipart_uploader(
     app: AppHandle,
     video_id: String,
     upload_id: String,
+    is_drive_upload: bool,
     stream: impl Stream<Item = io::Result<Chunk>> + Send + 'static,
     failed_chunks: Arc<Mutex<Vec<FailedChunkInfo>>>,
 ) -> impl Stream<Item = Result<UploadedPart, AuthedApiError>> + 'static {
@@ -1644,6 +1719,11 @@ fn multipart_uploader(
 
     stream::once(async move {
         let use_md5_hashes = app.is_server_url_custom().await;
+        let max_concurrent_uploads = if is_drive_upload {
+            1
+        } else {
+            MAX_CONCURRENT_UPLOADS
+        };
         let first_chunk_presigned_url = Arc::new(Mutex::new(None::<(String, Instant)>));
 
         stream::unfold(
@@ -1747,11 +1827,18 @@ fn multipart_uploader(
                                     })?
                                     .clone();
 
-                                let mut req = client
+                                let req = client
                                     .put(&presigned_url)
                                     .header("Content-Length", size)
                                     .timeout(Duration::from_secs(5 * 60))
                                     .body(chunk);
+                                let mut req = with_drive_content_range(
+                                    req,
+                                    &presigned_url,
+                                    offset,
+                                    size as u64,
+                                    total_size,
+                                );
 
                                 if let Some(md5_sum) = &md5_sum {
                                     req = req.header("Content-MD5", md5_sum);
@@ -1784,11 +1871,18 @@ fn multipart_uploader(
                                             md5_sum.as_deref(),
                                         )
                                         .await?;
-                                        let mut retry_req = client
+                                        let retry_req = client
                                             .put(&retry_url)
                                             .header("Content-Length", size)
                                             .timeout(Duration::from_secs(5 * 60))
                                             .body(chunk_for_retry);
+                                        let mut retry_req = with_drive_content_range(
+                                            retry_req,
+                                            &retry_url,
+                                            offset,
+                                            size as u64,
+                                            total_size,
+                                        );
                                         if let Some(md5_sum) = &md5_sum {
                                             retry_req =
                                                 retry_req.header("Content-MD5", md5_sum);
@@ -1821,7 +1915,13 @@ fn multipart_uploader(
                                     .and_then(|etag| etag.to_str().ok())
                                     .map(|v| v.trim_matches('"').to_string());
 
-                                match !resp.status().is_success() {
+                                match !is_upload_response_accepted(
+                                    &presigned_url,
+                                    resp.status(),
+                                    offset,
+                                    size as u64,
+                                    total_size,
+                                ) {
                                     true => Err(format!(
                                         "uploader/part/{part_number}/error: {}",
                                         resp.text().await.unwrap_or_default()
@@ -1831,12 +1931,21 @@ fn multipart_uploader(
 
                                 trace!("Completed upload of part {part_number}");
 
-                                Ok::<_, AuthedApiError>(UploadedPart {
-                                    etag: etag.ok_or_else(|| {
-                                        format!(
-                                            "uploader/part/{part_number}/error: ETag header not found"
+                                let etag = match etag {
+                                    Some(etag) => etag,
+                                    None if is_google_drive_resumable_url(&presigned_url) => {
+                                        format!("drive-{part_number}")
+                                    }
+                                    None => {
+                                        return Err(format!(
+                                            "uploader/part/{part_number}/missing_etag"
                                         )
-                                    })?,
+                                        .into());
+                                    }
+                                };
+
+                                Ok::<_, AuthedApiError>(UploadedPart {
+                                    etag,
                                     part_number,
                                     size,
                                     total_size,
@@ -1874,7 +1983,7 @@ fn multipart_uploader(
                 }
             },
         )
-        .buffered(MAX_CONCURRENT_UPLOADS)
+        .buffered(max_concurrent_uploads)
         .filter_map(|item| async { item })
         .boxed()
     })
@@ -1948,11 +2057,18 @@ async fn retry_failed_chunks(
             .map_err(|err| format!("retry/part/{}/client: {err:?}", failed.part_number))?
             .clone();
 
-        let mut req = client
+        let req = client
             .put(&presigned_url)
             .header("Content-Length", size)
             .timeout(Duration::from_secs(5 * 60))
             .body(chunk);
+        let mut req = with_drive_content_range(
+            req,
+            &presigned_url,
+            failed.offset,
+            size as u64,
+            failed.total_size,
+        );
 
         if let Some(md5_sum) = &md5_sum {
             req = req.header("Content-MD5", md5_sum);
@@ -1990,11 +2106,18 @@ async fn retry_failed_chunks(
                     md5_sum.as_deref(),
                 )
                 .await?;
-                let mut retry_req = client
+                let retry_req = client
                     .put(&retry_url)
                     .header("Content-Length", size)
                     .timeout(Duration::from_secs(5 * 60))
                     .body(chunk_for_retry);
+                let mut retry_req = with_drive_content_range(
+                    retry_req,
+                    &retry_url,
+                    failed.offset,
+                    size as u64,
+                    failed.total_size,
+                );
                 if let Some(md5_sum) = &md5_sum {
                     retry_req = retry_req.header("Content-MD5", md5_sum);
                 }
@@ -2025,7 +2148,13 @@ async fn retry_failed_chunks(
             .and_then(|etag| etag.to_str().ok())
             .map(|v| v.trim_matches('"').to_string());
 
-        if !resp.status().is_success() {
+        if !is_upload_response_accepted(
+            &presigned_url,
+            resp.status(),
+            failed.offset,
+            size as u64,
+            failed.total_size,
+        ) {
             return Err(format!(
                 "retry/part/{}/error: {}",
                 failed.part_number,
@@ -2039,13 +2168,18 @@ async fn retry_failed_chunks(
             "Successfully retried chunk upload"
         );
 
+        let etag = match etag {
+            Some(etag) => etag,
+            None if is_google_drive_resumable_url(&presigned_url) => {
+                format!("drive-{}", failed.part_number)
+            }
+            None => {
+                return Err(format!("retry/part/{}/missing_etag", failed.part_number).into());
+            }
+        };
+
         retry_parts.push(UploadedPart {
-            etag: etag.ok_or_else(|| {
-                format!(
-                    "retry/part/{}/error: ETag header not found",
-                    failed.part_number
-                )
-            })?,
+            etag,
             part_number: failed.part_number,
             size,
             total_size: failed.total_size,
@@ -2112,13 +2246,15 @@ pub async fn singlepart_uploader(
 ) -> Result<(), AuthedApiError> {
     let presigned_url = api::upload_signed(&app, request).await?;
 
-    let resp = app
+    let request = app
         .state::<RetryableHttpClient>()
         .as_ref()
         .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
         .put(&presigned_url)
         .header("Content-Length", total_size)
-        .body(reqwest::Body::wrap_stream(stream))
+        .body(reqwest::Body::wrap_stream(stream));
+
+    let resp = with_drive_content_range(request, &presigned_url, 0, total_size, total_size)
         .send()
         .await
         .map_err(|err| format!("singlepart_uploader/error: {err:?}"))?;
@@ -2759,6 +2895,18 @@ mod tests {
         let complete = state.to_complete_manifest();
         assert!(complete.is_complete);
         assert_eq!(complete.video_segments.len(), 2);
+        assert!(complete.has_video_content());
+    }
+
+    #[tokio::test]
+    async fn upload_state_without_video_segments_has_no_video_content() {
+        let mut state = SegmentUploadState::new();
+        state.video_init_uploaded = true;
+        state.audio_init_uploaded = true;
+
+        let complete = state.to_complete_manifest();
+        assert!(complete.is_complete);
+        assert!(!complete.has_video_content());
     }
 
     #[tokio::test]

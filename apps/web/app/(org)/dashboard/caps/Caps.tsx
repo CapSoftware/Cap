@@ -2,6 +2,7 @@
 
 import type { VideoMetadata } from "@cap/database/types";
 import { Button } from "@cap/ui";
+import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { faFolderPlus, faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -45,11 +46,18 @@ export type VideoData = {
 		name: string;
 		isOrg: boolean;
 		organizationId: string;
+		iconUrl?: ImageUpload.ImageUrl | null;
+		settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
+		hasPassword?: boolean;
 	}[];
 	ownerName: string;
 	metadata?: VideoMetadata;
 	hasPassword: boolean;
+	hasInheritedPassword?: boolean;
+	inheritedPasswordSources?: SpaceRuleSource[];
+	inheritedSpaceSettings?: Partial<Record<ViewerSettingKey, SpaceRuleSource[]>>;
 	hasActiveUpload: boolean;
+	settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
 }[];
 
 export const Caps = ({

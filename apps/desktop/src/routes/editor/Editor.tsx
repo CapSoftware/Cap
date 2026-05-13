@@ -989,6 +989,7 @@ function Dialogs() {
 									positionAtCursor = false,
 								) {
 									e.preventDefault();
+									e.stopPropagation();
 									const items = createCropOptionsMenuItems({
 										aspect: aspect(),
 										snapToRatioEnabled: snapToRatio(),
@@ -999,12 +1000,11 @@ function Dialogs() {
 									let pos: LogicalPosition | undefined;
 									if (!positionAtCursor) {
 										const rect = (
-											e.target as HTMLDivElement
+											e.currentTarget as HTMLDivElement
 										).getBoundingClientRect();
 										pos = new LogicalPosition(rect.x, rect.y + 40);
 									}
 									await menu.popup(pos);
-									await menu.close();
 								}
 
 								function BoundInput(props: {
@@ -1065,7 +1065,6 @@ function Dialogs() {
 													variant="white"
 													size="xs"
 													class="flex items-center justify-center text-center rounded-full h-[2rem] w-[2rem] border focus:border-blue-9"
-													onMouseDown={showCropOptionsMenu}
 													onClick={showCropOptionsMenu}
 												>
 													<div class="relative pointer-events-none size-4">

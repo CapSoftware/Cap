@@ -1,9 +1,7 @@
 #[cfg(target_os = "macos")]
 use crate::SendableShareableContent;
 use cap_cursor_capture::CursorCropBounds;
-#[cfg(target_os = "macos")]
-use cap_media_info::ensure_even;
-use cap_media_info::{AudioInfo, VideoInfo};
+use cap_media_info::{AudioInfo, VideoInfo, ensure_even};
 use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -227,6 +225,36 @@ pub struct ScreenCaptureConfig<TCaptureFormat: ScreenCaptureFormat> {
     pub excluded_windows: Vec<WindowId>,
 }
 
+fn constrain_capture_size(size: PhysicalSize, max_size: Option<(u32, u32)>) -> PhysicalSize {
+    let width = size.width() as u32;
+    let height = size.height() as u32;
+    let Some((max_width, max_height)) = max_size else {
+        return PhysicalSize::new(ensure_even(width) as f64, ensure_even(height) as f64);
+    };
+
+    if width <= max_width && height <= max_height {
+        return PhysicalSize::new(ensure_even(width) as f64, ensure_even(height) as f64);
+    }
+
+    let width_scale = max_width as f64 / width as f64;
+    let height_scale = max_height as f64 / height as f64;
+    let scale = width_scale.min(height_scale);
+    let constrained_width = ensure_even((width as f64 * scale).round() as u32);
+    let constrained_height = ensure_even((height as f64 * scale).round() as u32);
+
+    tracing::info!(
+        input_width = width,
+        input_height = height,
+        output_width = constrained_width,
+        output_height = constrained_height,
+        max_width,
+        max_height,
+        "Screen capture input constrained for camera recording"
+    );
+
+    PhysicalSize::new(constrained_width as f64, constrained_height as f64)
+}
+
 impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureConfig<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScreenCaptureSource")
@@ -304,6 +332,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         crop_bounds: Option<CropBounds>,
         show_cursor: bool,
         max_fps: u32,
+        max_capture_size: Option<(u32, u32)>,
         start_time: SystemTime,
         system_audio: bool,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
@@ -315,7 +344,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         let target_refresh = validated_refresh_rate(display.refresh_rate());
         let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
 
-        let output_size: PhysicalSize = {
+        let native_output_size: PhysicalSize = {
             #[cfg(target_os = "macos")]
             {
                 crop_bounds.and_then(|b| {
@@ -334,6 +363,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         }
         .or_else(|| display.physical_size())
         .ok_or(ScreenCaptureInitError::NoBounds)?;
+        let output_size = constrain_capture_size(native_output_size, max_capture_size);
 
         Ok(Self {
             config: Config {

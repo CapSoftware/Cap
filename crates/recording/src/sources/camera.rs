@@ -1,7 +1,7 @@
 use crate::{
     feeds::camera::{self, CameraFeedLock},
     ffmpeg::FFmpegVideoFrame,
-    output_pipeline::{SetupCtx, VideoSource},
+    output_pipeline::{SetupCtx, StallSendOutcome, VideoSource, send_with_stall_budget_futures},
 };
 use anyhow::anyhow;
 use cap_media_info::VideoInfo;
@@ -73,12 +73,13 @@ impl VideoSource for Camera {
     async fn setup(
         feed_lock: Self::Config,
         video_tx: mpsc::Sender<Self::Frame>,
-        _: &mut SetupCtx,
+        ctx: &mut SetupCtx,
     ) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
         let (tx, rx) = flume::bounded(256);
+        let stall_health_tx = ctx.health_tx().clone();
 
         let original_video_info = *feed_lock.video_info();
         let original_width = original_video_info.width;
@@ -195,8 +196,13 @@ impl VideoSource for Camera {
                                     scaler = None;
                                 }
 
-                                match video_tx.try_send(frame) {
-                                    Ok(()) => {
+                                match send_with_stall_budget_futures(
+                                    &mut video_tx,
+                                    frame,
+                                    "camera-video",
+                                    &stall_health_tx,
+                                ) {
+                                    StallSendOutcome::Sent => {
                                         sent_count += 1;
                                         if sent_count.is_multiple_of(300) {
                                             let total_scaled = scaled_count_clone.load(Ordering::Relaxed);
@@ -209,23 +215,22 @@ impl VideoSource for Camera {
                                             );
                                         }
                                     }
-                                    Err(e) => {
-                                        if e.is_full() {
-                                            dropped_count += 1;
-                                            if dropped_count.is_multiple_of(30) {
-                                                tracing::warn!(
-                                                    dropped_count,
-                                                    "Camera source: encoder can't keep up"
-                                                );
-                                            }
-                                        } else if e.is_disconnected() {
-                                            tracing::debug!(
-                                                sent_count,
+                                    StallSendOutcome::StalledAndDropped { .. } => {
+                                        dropped_count += 1;
+                                        if dropped_count.is_multiple_of(30) {
+                                            tracing::warn!(
                                                 dropped_count,
-                                                "Camera source: pipeline closed"
+                                                "Camera source: encoder can't keep up"
                                             );
-                                            break;
                                         }
+                                    }
+                                    StallSendOutcome::Disconnected => {
+                                        tracing::debug!(
+                                            sent_count,
+                                            dropped_count,
+                                            "Camera source: pipeline closed"
+                                        );
+                                        break;
                                     }
                                 }
                             }

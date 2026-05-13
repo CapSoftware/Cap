@@ -1,4 +1,8 @@
-use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoFrame, VideoMuxer, screen_capture};
+use crate::{
+    AudioFrame, AudioMuxer, Muxer, TaskPool, VideoFrame, VideoMuxer,
+    output_pipeline::{HealthSender, PipelineHealthEvent, emit_health},
+    screen_capture,
+};
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::aac::AACEncoder;
 use cap_media_info::{AudioInfo, VideoInfo};
@@ -30,16 +34,20 @@ struct FrameDropTracker {
     total_drops: u64,
     total_frames: u64,
     last_check: std::time::Instant,
+    health_tx: Option<HealthSender>,
+    source: &'static str,
 }
 
 impl FrameDropTracker {
-    fn new() -> Self {
+    fn new(health_tx: Option<HealthSender>, source: &'static str) -> Self {
         Self {
             drops_in_window: 0,
             frames_in_window: 0,
             total_drops: 0,
             total_frames: 0,
             last_check: std::time::Instant::now(),
+            health_tx,
+            source,
         }
     }
 
@@ -69,6 +77,15 @@ impl FrameDropTracker {
                         total_drops = self.total_drops,
                         "Windows MP4 muxer frame drop rate exceeds 5% threshold"
                     );
+                    if let Some(tx) = &self.health_tx {
+                        emit_health(
+                            tx,
+                            PipelineHealthEvent::FrameDropRateHigh {
+                                source: self.source.to_string(),
+                                rate_pct: drop_rate,
+                            },
+                        );
+                    }
                 } else if self.drops_in_window > 0 {
                     debug!(
                         frames = self.frames_in_window,
@@ -485,8 +502,12 @@ impl Muxer for WindowsMuxer {
             video_tx,
             output,
             audio_encoder,
-            frame_drops: FrameDropTracker::new(),
+            frame_drops: FrameDropTracker::new(None, "muxer:windows-mp4"),
         })
+    }
+
+    fn set_health_sender(&mut self, tx: HealthSender) {
+        self.frame_drops.health_tx = Some(tx);
     }
 
     fn stop(&mut self) {
@@ -1045,8 +1066,12 @@ impl Muxer for WindowsCameraMuxer {
             video_tx,
             output,
             audio_encoder,
-            frame_drops: FrameDropTracker::new(),
+            frame_drops: FrameDropTracker::new(None, "muxer:windows-mp4-camera"),
         })
+    }
+
+    fn set_health_sender(&mut self, tx: HealthSender) {
+        self.frame_drops.health_tx = Some(tx);
     }
 
     fn stop(&mut self) {

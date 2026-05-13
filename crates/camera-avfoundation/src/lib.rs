@@ -114,33 +114,39 @@ impl VideoDataOutputSampleBufDelegateImpl for CallbackOutputDelegate {
         sample_buf: &cm::SampleBuf,
         connection: &av::CaptureConnection,
     ) {
-        let pts = sample_buf.pts();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let pts = sample_buf.pts();
 
-        let capture_begin_time = pts
-            .is_valid()
-            .then(|| mach_time_to_microseconds(cm::Clock::convert_host_time_to_sys_units(pts)));
-        let pres_timestamp = capture_begin_time.unwrap_or(Duration::ZERO);
+            let capture_begin_time = pts
+                .is_valid()
+                .then(|| mach_time_to_microseconds(cm::Clock::convert_host_time_to_sys_units(pts)));
+            let pres_timestamp = capture_begin_time.unwrap_or(Duration::ZERO);
 
-        let stream_start = self
-            .inner_mut()
-            .stream_start
-            .get_or_insert_with(|| (Instant::now(), pres_timestamp));
+            let stream_start = self
+                .inner_mut()
+                .stream_start
+                .get_or_insert_with(|| (Instant::now(), pres_timestamp));
 
-        let Some(timestamp) = pres_timestamp.checked_sub(stream_start.1) else {
-            warn!("PTS {pres_timestamp:?} less than stream start {stream_start:?}");
+            let Some(timestamp) = pres_timestamp.checked_sub(stream_start.1) else {
+                warn!("PTS {pres_timestamp:?} less than stream start {stream_start:?}");
 
-            return;
-        };
+                return;
+            };
 
-        let capture_begin_time = stream_start.0 + capture_begin_time.unwrap_or(Duration::ZERO);
+            let capture_begin_time = stream_start.0 + capture_begin_time.unwrap_or(Duration::ZERO);
 
-        (self.inner_mut().callback)(CallbackData {
-            output,
-            sample_buf,
-            connection,
-            capture_begin_time,
-            timestamp,
-        });
+            (self.inner_mut().callback)(CallbackData {
+                output,
+                sample_buf,
+                connection,
+                capture_begin_time,
+                timestamp,
+            });
+        }));
+
+        if result.is_err() {
+            warn!("Suppressed panic in AVFoundation output delegate");
+        }
     }
 }
 
@@ -149,23 +155,14 @@ fn mach_time_to_microseconds(mach_time: u64) -> Duration {
     if timebase_info.numer == timebase_info.denom {
         return Duration::from_nanos(mach_time);
     }
-    let divisor = timebase_info.denom as u64 * 1000;
-    let mut microseconds = mach_time / divisor;
+    if timebase_info.denom == 0 {
+        warn!("Invalid mach timebase denominator");
+        return Duration::ZERO;
+    }
 
-    let mach_time_remainder = mach_time % divisor;
-
-    microseconds = microseconds
-        .checked_mul(timebase_info.numer as u64)
-        .expect("Multiplication overflow");
-
-    let least_significant_microseconds =
-        (mach_time_remainder * timebase_info.numer as u64) / divisor;
-
-    microseconds = microseconds
-        .checked_add(least_significant_microseconds)
-        .expect("Addition overflow");
-
-    Duration::from_micros(microseconds)
+    let microseconds =
+        (mach_time as u128 * timebase_info.numer as u128) / (timebase_info.denom as u128 * 1000);
+    Duration::from_micros(microseconds.min(u64::MAX as u128) as u64)
 }
 
 pub trait ImageBufExt {

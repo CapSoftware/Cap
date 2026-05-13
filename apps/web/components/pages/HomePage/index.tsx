@@ -4,8 +4,8 @@ import type React from "react";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { TextReveal } from "@/components/ui/TextReveal";
 import { homepageCopy } from "../../../data/homepage-copy";
+import Bento from "./Bento";
 import Faq from "./Faq";
-import Features from "./Features";
 import Header from "./Header";
 import { HomePageSchema } from "./HomePageSchema";
 import InstantModeDetail from "./InstantModeDetail";
@@ -31,7 +31,7 @@ export const HomePage: React.FC<HomePageProps> = ({
 				<InstantModeDetail />
 				<StudioModeDetail />
 				<ScreenshotModeDetail />
-				<Features />
+				<Bento />
 				<Testimonials />
 				<Pricing />
 				<Faq />

@@ -184,7 +184,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             return mix(shadow_color, base_color, base_color.a);
         }
 
-        let scaled_dir = dir * blur_strength;
+        let max_zoom_offset = 0.12;
+        let zoom_scale = min(zoom_amount, 1.0);
+        let scaled_dir = dir / dist * min(dist * zoom_scale, max_zoom_offset);
         let max_kernel = 13.0;
 
         let offset_rand = rand(vec2<f32>(target_uv.x * 7.37, target_uv.y * 11.23));

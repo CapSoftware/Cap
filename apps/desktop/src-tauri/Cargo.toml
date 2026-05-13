@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.4.84"
+version = "0.4.85"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -48,7 +48,7 @@ serde = { workspace = true }
 serde_json = "1.0.111"
 specta.workspace = true
 specta-typescript = "0.0.7"
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 uuid = { version = "1.10.0", features = ["v4"] }
 image = "0.25.2"
 futures-intrusive = "0.5.0"
@@ -78,6 +78,7 @@ log = "0.4.20"
 
 cap-audio = { path = "../../../crates/audio" }
 cap-camera = { path = "../../../crates/camera", features = ["serde", "specta"] }
+cap-camera-effects = { path = "../../../crates/camera-effects" }
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
 cap-rendering = { path = "../../../crates/rendering" }
@@ -102,6 +103,7 @@ tokio-stream = { version = "0.1.17", features = ["sync"] }
 md5 = "0.7.0"
 tokio-util = "0.7.15"
 wgpu.workspace = true
+pollster = "0.4"
 bytemuck = "1.23.1"
 kameo = "0.17.2"
 tauri-plugin-sentry = "0.5.0"
@@ -128,6 +130,14 @@ objc2-app-kit = { version = "0.3.0", features = [
     "NSWindow",
     "NSResponder",
     "NSHapticFeedback",
+    "NSWorkspace",
+    "NSRunningApplication",
+] }
+objc2 = "0.6.0"
+objc2-foundation = { version = "0.3.0", features = [
+    "NSNotification",
+    "NSString",
+    "NSThread",
 ] }
 cocoa = "0.26.0"
 objc = "0.2.7"
@@ -140,8 +150,16 @@ parakeet-rs = "0.3.4"
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
     "Win32_Foundation",
     "Win32_System",
+    "Win32_System_Power",
+    "Win32_System_WinRT",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
 ] }

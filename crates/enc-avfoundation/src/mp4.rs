@@ -124,7 +124,7 @@ impl MP4Encoder {
             video_config,
             audio_config,
             output_height,
-            false,
+            BitrateProfile::Balanced,
             false,
         )
     }
@@ -140,8 +140,24 @@ impl MP4Encoder {
             video_config,
             audio_config,
             output_height,
+            BitrateProfile::Ultra,
             false,
-            true,
+        )
+    }
+
+    pub fn init_compatibility(
+        output: PathBuf,
+        video_config: VideoInfo,
+        audio_config: Option<AudioInfo>,
+        output_height: Option<u32>,
+    ) -> Result<Self, InitError> {
+        Self::init_with_options(
+            output,
+            video_config,
+            audio_config,
+            output_height,
+            BitrateProfile::Compatibility,
+            false,
         )
     }
 
@@ -156,8 +172,8 @@ impl MP4Encoder {
             video_config,
             audio_config,
             output_height,
+            BitrateProfile::Balanced,
             true,
-            false,
         )
     }
 
@@ -166,9 +182,10 @@ impl MP4Encoder {
         video_config: VideoInfo,
         audio_config: Option<AudioInfo>,
         output_height: Option<u32>,
+        bitrate_profile: BitrateProfile,
         instant_mode: bool,
-        ultra_quality: bool,
     ) -> Result<Self, InitError> {
+        let ultra_quality = matches!(bitrate_profile, BitrateProfile::Ultra);
         info!(
             width = video_config.width,
             height = video_config.height,
@@ -258,19 +275,27 @@ impl MP4Encoder {
 
             let bitrate = if instant_mode {
                 get_instant_mode_bitrate(output_width as f32, output_height as f32, fps)
-            } else if ultra_quality {
-                get_ultra_bitrate(output_width as f32, output_height as f32, fps)
             } else {
-                get_average_bitrate(output_width as f32, output_height as f32, fps)
+                match bitrate_profile {
+                    BitrateProfile::Ultra => {
+                        get_ultra_bitrate(output_width as f32, output_height as f32, fps)
+                    }
+                    BitrateProfile::Balanced => {
+                        get_average_bitrate(output_width as f32, output_height as f32, fps)
+                    }
+                    BitrateProfile::Compatibility => {
+                        get_compatibility_bitrate(output_width as f32, output_height as f32, fps)
+                    }
+                }
             };
 
-            debug!(instant_mode, ultra_quality, "recording bitrate: {bitrate}");
+            debug!(
+                instant_mode,
+                ?bitrate_profile,
+                "recording bitrate: {bitrate}"
+            );
 
-            let keyframe_interval = if instant_mode {
-                fps as i32
-            } else {
-                (fps * 2.0) as i32
-            };
+            let keyframe_interval = fps as i32;
 
             let allow_frame_reordering = ultra_quality && !instant_mode;
 
@@ -509,7 +534,7 @@ impl MP4Encoder {
         let effective_last_pts = self.effective_video_pts();
 
         if let Some(last_pts) = effective_last_pts
-            && pts_duration <= last_pts
+            && pts_duration <= last_pts.saturating_add(self.minimum_video_pts_step())
         {
             let frame_duration = self.video_frame_duration();
             let adjusted_pts = last_pts + frame_duration;
@@ -612,37 +637,53 @@ impl MP4Encoder {
             return Err(QueueFrameError::NotReadyForMore);
         }
 
-        let processed_frame: std::borrow::Cow<'_, frame::Audio> =
-            if let Some(resampler) = &mut self.audio_resampler {
-                let mut resampled = frame::Audio::empty();
-                match resampler.run(frame, &mut resampled) {
-                    Ok(_) => {
-                        resampled.set_rate(self.audio_output_rate);
-                        if resampled.samples() == 0 {
-                            warn!(
-                                input_samples = frame.samples(),
-                                input_rate = frame.rate(),
-                                output_rate = self.audio_output_rate,
-                                "Audio resampling produced 0 samples"
-                            );
-                            return Ok(());
-                        }
-                        std::borrow::Cow::Owned(resampled)
-                    }
-                    Err(e) => {
-                        error!(
-                            error = %e,
+        let processed_frame: std::borrow::Cow<'_, frame::Audio> = if let Some(resampler) =
+            &mut self.audio_resampler
+        {
+            let target = *resampler.output();
+            let src_rate = resampler.input().rate.max(1) as u64;
+            let dst_rate = target.rate.max(1) as u64;
+            let pending_output_samples = resampler
+                .delay()
+                .map(|d| d.output.max(0) as u64)
+                .unwrap_or(0);
+            let resampled_from_input = (frame.samples() as u64)
+                .saturating_mul(dst_rate)
+                .div_ceil(src_rate);
+            let capacity = pending_output_samples
+                .saturating_add(resampled_from_input)
+                .saturating_add(16)
+                .min(i32::MAX as u64) as usize;
+
+            let mut resampled = frame::Audio::new(target.format, capacity, target.channel_layout);
+            match resampler.run(frame, &mut resampled) {
+                Ok(_) => {
+                    resampled.set_rate(self.audio_output_rate);
+                    if resampled.samples() == 0 {
+                        warn!(
                             input_samples = frame.samples(),
                             input_rate = frame.rate(),
                             output_rate = self.audio_output_rate,
-                            "Audio resampling failed"
+                            "Audio resampling produced 0 samples"
                         );
-                        return Err(QueueFrameError::ResamplingFailed(e));
+                        return Ok(());
                     }
+                    std::borrow::Cow::Owned(resampled)
                 }
-            } else {
-                std::borrow::Cow::Borrowed(frame)
-            };
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        input_samples = frame.samples(),
+                        input_rate = frame.rate(),
+                        output_rate = self.audio_output_rate,
+                        "Audio resampling failed"
+                    );
+                    return Err(QueueFrameError::ResamplingFailed(e));
+                }
+            }
+        } else {
+            std::borrow::Cow::Borrowed(frame)
+        };
 
         let frame = processed_frame.as_ref();
 
@@ -758,10 +799,8 @@ impl MP4Encoder {
             dts: cm::Time::invalid(),
         };
 
-        let timed_frame = match pending
-            .raw_frame
-            .copy_with_new_timing(&[timing])
-            .or_else(|_| rebuild_video_sample_buf(&pending.raw_frame, timing))
+        let timed_frame = match rebuild_video_sample_buf(&pending.raw_frame, timing)
+            .or_else(|_| pending.raw_frame.copy_with_new_timing(&[timing]))
         {
             Ok(f) => f,
             Err(e) => {
@@ -822,6 +861,11 @@ impl MP4Encoder {
         let nanos = (numerator / denominator).max(1);
 
         Duration::from_nanos(nanos as u64)
+    }
+
+    fn minimum_video_pts_step(&self) -> Duration {
+        let nanos = (self.video_frame_duration().as_nanos() / 4).max(1);
+        Duration::from_nanos(nanos.min(u64::MAX as u128) as u64)
     }
 
     pub fn pause(&mut self) {
@@ -972,6 +1016,16 @@ fn timescale_value_to_duration(value: i64, timescale: i32) -> Duration {
 
 const MIN_STUDIO_BITRATE: f32 = 8_000_000.0;
 const MAX_ULTRA_BITRATE: f32 = 120_000_000.0;
+const MIN_COMPATIBILITY_BITRATE: f32 = 2_500_000.0;
+const MAX_COMPATIBILITY_BITRATE: f32 = 10_000_000.0;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub enum BitrateProfile {
+    Compatibility,
+    #[default]
+    Balanced,
+    Ultra,
+}
 
 fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
     let pixels = width * height;
@@ -983,6 +1037,12 @@ fn get_ultra_bitrate(width: f32, height: f32, fps: f32) -> f32 {
     let pixels = width * height;
     let fps_factor = fps.min(60.0) / 30.0;
     (pixels * fps_factor * 10.0).clamp(MIN_STUDIO_BITRATE, MAX_ULTRA_BITRATE)
+}
+
+fn get_compatibility_bitrate(width: f32, height: f32, fps: f32) -> f32 {
+    let pixels = width * height;
+    let fps_factor = fps.min(60.0) / 30.0;
+    (pixels * fps_factor * 2.5).clamp(MIN_COMPATIBILITY_BITRATE, MAX_COMPATIBILITY_BITRATE)
 }
 
 fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {
@@ -3453,6 +3513,49 @@ mod tests {
         );
 
         let _ = encoder.finish(Some(Duration::from_secs(15)));
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_tiny_positive_pts_step_is_expanded() {
+        let output = test_output_path("tiny_positive_pts_step");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        let timestamps = [0u64, 33_333, 33_334, 66_666, 100_000, 133_333];
+        let mut errors = Vec::new();
+
+        for ts_us in timestamps {
+            let frame = create_test_video_frame(&pool, ts_us as i64, 33_333);
+            match encoder.queue_video_frame(frame, Duration::from_micros(ts_us)) {
+                Ok(()) => {}
+                Err(QueueFrameError::WriterFailed(e)) => {
+                    errors.push(format!("WriterFailed at {ts_us}: {e}"));
+                    break;
+                }
+                Err(QueueFrameError::Failed) => {
+                    errors.push(format!("Failed at {ts_us}"));
+                    break;
+                }
+                Err(QueueFrameError::Finished) => {
+                    errors.push(format!("Finished at {ts_us}"));
+                    break;
+                }
+                Err(_) => {}
+            }
+        }
+
+        assert!(
+            errors.is_empty(),
+            "Tiny positive PTS steps should not reach AVFoundation: {:?}",
+            errors
+        );
+
+        let result = encoder.finish(Some(Duration::from_micros(166_666)));
+        assert!(result.is_ok(), "Finish failed: {result:?}");
+
         let _ = std::fs::remove_file(&output);
     }
 

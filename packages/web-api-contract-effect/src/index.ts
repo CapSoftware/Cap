@@ -35,8 +35,18 @@ const S3Config = Schema.Struct({
 	region: Schema.String,
 });
 
+const ManagedOrganizationStorage = Schema.NullOr(
+	Schema.Struct({
+		id: Schema.String,
+		name: Schema.String,
+		activeProvider: Schema.Literal("s3", "googleDrive"),
+	}),
+);
+
 const S3ConfigResponse = Schema.Struct({
 	config: S3Config,
+	source: Schema.Literal("default", "user", "organization"),
+	managedByOrganization: ManagedOrganizationStorage,
 });
 
 const ChangelogResponse = Schema.Struct({
