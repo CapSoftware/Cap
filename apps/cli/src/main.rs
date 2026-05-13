@@ -26,6 +26,8 @@ struct Cli {
 enum Commands {
     /// Export a '.cap' project to an mp4 file
     Export(Export),
+    /// Render an export preview frame
+    ExportPreview(ExportPreview),
     /// Start a recording or list available capture targets and devices
     Record(RecordArgs),
 }
@@ -74,6 +76,9 @@ async fn main() -> Result<(), String> {
 
     match cli.command {
         Commands::Export(e) => {
+            e.run().await?;
+        }
+        Commands::ExportPreview(e) => {
             e.run().await?;
         }
         Commands::Record(RecordArgs { command, args }) => match command {
@@ -160,6 +165,17 @@ struct Export {
     force_ffmpeg_decoder: bool,
     #[arg(long)]
     progress_json: bool,
+}
+
+#[derive(Args)]
+struct ExportPreview {
+    project_path: PathBuf,
+    #[arg(long)]
+    frame_time: f64,
+    #[arg(long)]
+    settings_json: String,
+    #[arg(long)]
+    force_ffmpeg_decoder: bool,
 }
 
 #[derive(Deserialize)]
@@ -293,6 +309,27 @@ impl Export {
         info!("Exported video to '{}'", output_path.display());
 
         Ok(())
+    }
+}
+
+impl ExportPreview {
+    async fn run(self) -> Result<(), String> {
+        let settings =
+            serde_json::from_str::<cap_export::preview::ExportPreviewSettings>(&self.settings_json)
+                .map_err(|e| format!("Invalid preview settings JSON: {e}"))?;
+        let result = cap_export::preview::render_preview(
+            self.project_path,
+            self.frame_time,
+            settings,
+            self.force_ffmpeg_decoder,
+        )
+        .await
+        .map_err(|e| format!("Preview render error: {e}"))?;
+
+        let mut stdout = stdout();
+        serde_json::to_writer(&mut stdout, &result).map_err(|e| e.to_string())?;
+        writeln!(&mut stdout).map_err(|e| e.to_string())?;
+        stdout.flush().map_err(|e| e.to_string())
     }
 }
 

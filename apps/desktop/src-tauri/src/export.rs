@@ -232,6 +232,111 @@ async fn collect_exporter_stderr_tail(stderr: tokio::process::ChildStderr) -> Ve
     tail
 }
 
+async fn run_out_of_process_export_preview(
+    project_path: &Path,
+    frame_time: f64,
+    settings: &ExportPreviewSettings,
+    force_ffmpeg: bool,
+) -> Result<ExportPreviewResult, String> {
+    match run_out_of_process_export_preview_attempt(
+        project_path,
+        frame_time,
+        settings,
+        force_ffmpeg,
+        false,
+    )
+    .await
+    {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            error!(
+                error = %e,
+                "Export preview worker failed, retrying with software rendering and encoding"
+            );
+            run_out_of_process_export_preview_attempt(
+                project_path,
+                frame_time,
+                settings,
+                force_ffmpeg,
+                true,
+            )
+            .await
+        }
+    }
+}
+
+async fn run_out_of_process_export_preview_attempt(
+    project_path: &Path,
+    frame_time: f64,
+    settings: &ExportPreviewSettings,
+    force_ffmpeg: bool,
+    safe_mode: bool,
+) -> Result<ExportPreviewResult, String> {
+    let bin_path = resolve_exporter_binary()?;
+    let settings_json = serde_json::to_string(&settings.to_export_preview_settings())
+        .map_err(|e| format!("Failed to serialize preview settings: {e}"))?;
+
+    info!(
+        path = %bin_path.display(),
+        project_path = %project_path.display(),
+        frame_time,
+        force_ffmpeg,
+        safe_mode,
+        "Starting export preview worker process"
+    );
+
+    let mut command = tokio::process::Command::new(&bin_path);
+    command
+        .arg("export-preview")
+        .arg(project_path)
+        .arg("--frame-time")
+        .arg(frame_time.to_string())
+        .arg("--settings-json")
+        .arg(settings_json)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if force_ffmpeg {
+        command.arg("--force-ffmpeg-decoder");
+    }
+
+    if safe_mode {
+        command
+            .env("CAP_RENDER_FORCE_SOFTWARE_ADAPTER", "1")
+            .env("CAP_EXPORT_FORCE_SOFTWARE_ENCODER", "1");
+    }
+
+    let output = command.output().await.map_err(|e| {
+        format!(
+            "Failed to run export preview worker '{}': {e}",
+            bin_path.display()
+        )
+    })?;
+
+    if !output.status.success() {
+        let stderr_tail = String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .rev()
+            .take(EXPORTER_STDERR_TAIL_LIMIT)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(format!(
+            "Export preview worker exited with status {}. Stderr tail:\n{stderr_tail}",
+            output.status
+        ));
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|e| format!("Export preview worker emitted invalid UTF-8: {e}"))?;
+
+    serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("Failed to parse export preview worker output: {e}"))
+}
+
 fn resolve_exporter_binary() -> Result<PathBuf, String> {
     if let Ok(override_path) = std::env::var(EXPORTER_ENV_BIN_PATH) {
         let path = PathBuf::from(override_path);
@@ -445,7 +550,7 @@ fn should_use_out_of_process_export() -> bool {
     should_use_release_export_sidecar()
 }
 
-fn should_disable_in_process_export_preview() -> bool {
+fn should_use_out_of_process_preview() -> bool {
     should_use_release_export_sidecar()
 }
 
@@ -506,8 +611,11 @@ pub async fn export_video(
                 e
             );
 
-            let retry_result =
-                run_protected_export(&project_path, &settings, &progress, true).await;
+            let retry_result = if should_use_out_of_process_export() {
+                run_out_of_process_export(&project_path, &settings, &progress, true).await
+            } else {
+                run_protected_export(&project_path, &settings, &progress, true).await
+            };
 
             match retry_result {
                 Ok(path) => {
@@ -617,7 +725,7 @@ pub async fn get_export_estimates(
     })
 }
 
-#[derive(Debug, Deserialize, Type)]
+#[derive(Debug, Serialize, Deserialize, Type)]
 pub struct ExportPreviewSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,
@@ -626,7 +734,18 @@ pub struct ExportPreviewSettings {
     pub cursor_only: bool,
 }
 
-#[derive(Debug, Serialize, Type)]
+impl ExportPreviewSettings {
+    fn to_export_preview_settings(&self) -> cap_export::preview::ExportPreviewSettings {
+        cap_export::preview::ExportPreviewSettings {
+            fps: self.fps,
+            resolution_base: self.resolution_base,
+            compression_bpp: self.compression_bpp,
+            cursor_only: self.cursor_only,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Type)]
 pub struct ExportPreviewResult {
     pub jpeg_base64: String,
     pub estimated_size_mb: f64,
@@ -684,9 +803,14 @@ async fn generate_export_preview_inner(
     frame_time: f64,
     settings: ExportPreviewSettings,
 ) -> Result<ExportPreviewResult, String> {
-    if should_disable_in_process_export_preview() {
-        info!("Skipping in-process export preview for production export sidecar build");
-        return Err("Export preview disabled for this build".to_string());
+    if should_use_out_of_process_preview() {
+        return run_out_of_process_export_preview(
+            &project_path,
+            frame_time,
+            &settings,
+            should_force_ffmpeg_preview(),
+        )
+        .await;
     }
 
     use base64::{Engine, engine::general_purpose::STANDARD};
@@ -991,9 +1115,14 @@ async fn generate_export_preview_fast_inner(
 
     #[cfg(all(any(target_os = "macos", target_os = "windows"), not(debug_assertions)))]
     {
-        let _ = (editor, frame_time, settings);
-        info!("Skipping in-process export preview for production export sidecar build");
-        return Err("Export preview disabled for this build".to_string());
+        let _preview_guard = ExportPreviewActiveGuard::try_new(&editor.export_preview_active)?;
+        return run_out_of_process_export_preview(
+            &editor.project_path,
+            frame_time,
+            &settings,
+            should_force_ffmpeg_preview(),
+        )
+        .await;
     }
 
     #[cfg(any(not(any(target_os = "macos", target_os = "windows")), debug_assertions))]

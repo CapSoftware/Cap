@@ -15,26 +15,7 @@ const targetDir = path.join(__dirname, "../../../target");
 
 async function main() {
 	if (process.platform === "darwin") {
-		const dirs = [];
-		let releaseDir = path.join(targetDir, "release");
-		if (!(await fileExists(releaseDir))) return;
-		const releaseFiles = await fs.readdir(releaseDir);
-		let releaseFile = releaseFiles.find((f) => f.startsWith("Cap"));
-		dirs.push(releaseDir);
-
-		if (!releaseFile) {
-			releaseDir = path.join(
-				targetDir,
-				`${process.env.TAURI_ENV_TARGET_TRIPLE}/release`,
-			);
-			dirs.push(releaseDir);
-			const releaseFiles = await fs.readdir(releaseDir);
-			releaseFile = releaseFiles.find((f) => f.startsWith("Cap"));
-		}
-
-		if (!releaseFile) throw new Error(`No binary found at ${dirs.join(", ")}`);
-
-		const binaryPath = path.join(releaseDir, releaseFile);
+		const { binaryPath, releaseFile } = await findReleaseBinary();
 
 		await exec(
 			`dsymutil "${binaryPath}" -o "${path.join(targetDir, releaseFile)}.dSYM"`,
@@ -43,6 +24,57 @@ async function main() {
 }
 
 main();
+
+async function findReleaseBinary() {
+	const dirs = [
+		path.join(targetDir, "release"),
+		process.env.TAURI_ENV_TARGET_TRIPLE
+			? path.join(targetDir, `${process.env.TAURI_ENV_TARGET_TRIPLE}/release`)
+			: null,
+	].filter(Boolean);
+
+	for (let attempt = 0; attempt < 20; attempt++) {
+		for (const releaseDir of dirs) {
+			const releaseFile = await findReleaseFile(releaseDir);
+			if (releaseFile)
+				return { binaryPath: path.join(releaseDir, releaseFile), releaseFile };
+		}
+		await new Promise((resolve) => setTimeout(resolve, 250));
+	}
+
+	throw new Error(`No binary found at ${dirs.join(", ")}`);
+}
+
+async function findReleaseFile(releaseDir) {
+	if (!(await fileExists(releaseDir))) return null;
+	const releaseFiles = await fs.readdir(releaseDir);
+	for (const name of ["Cap", "cap-desktop"]) {
+		if (
+			releaseFiles.includes(name) &&
+			(await isFile(path.join(releaseDir, name)))
+		) {
+			return name;
+		}
+	}
+
+	for (const releaseFile of releaseFiles) {
+		if (
+			releaseFile.startsWith("Cap") &&
+			(await isFile(path.join(releaseDir, releaseFile)))
+		) {
+			return releaseFile;
+		}
+	}
+
+	return null;
+}
+
+async function isFile(path) {
+	return await fs
+		.stat(path)
+		.then((stat) => stat.isFile())
+		.catch(() => false);
+}
 
 async function fileExists(path) {
 	return await fs
