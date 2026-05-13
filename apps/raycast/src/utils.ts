@@ -3,7 +3,8 @@ import { open } from "@raycast/api";
 const DEEP_LINK_BASE = "cap-desktop://action";
 
 export async function sendAction(action: string) {
-  const url = `${DEEP_LINK_BASE}?value=${encodeURIComponent(action)}`;
+  const value = JSON.stringify(action);
+  const url = `${DEEP_LINK_BASE}?value=${encodeURIComponent(value)}`;
   await open(url);
 }
 

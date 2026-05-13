@@ -11,24 +11,21 @@ export default function Command() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    async function fetchDevices() {
+    async function init() {
       // Refresh device cache via deeplink
       await open(
         `cap-desktop://action?value=${encodeURIComponent(JSON.stringify("refresh_raycast_device_cache"))}`
       );
+
+      // Populate with known device types — actual list comes from the Cap app
+      setDevices([
+        { name: "Built-in Camera", type: "camera" },
+        { name: "Built-in Microphone", type: "microphone" },
+      ]);
       setIsLoading(false);
     }
 
-    fetchDevices();
-  }, []);
-
-  useEffect(() => {
-    // Populate with known device types — actual list comes from the Cap app
-    setDevices([
-      { name: "Built-in Camera", type: "camera" },
-      { name: "Built-in Microphone", type: "microphone" },
-    ]);
-    setIsLoading(false);
+    init();
   }, []);
 
   return (

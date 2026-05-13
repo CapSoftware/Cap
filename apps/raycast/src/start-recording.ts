@@ -11,7 +11,7 @@ export default async function Command(props: LaunchProps<{ arguments: StartRecor
   await closeMainWindow();
 
   const captureMode = props.arguments.captureMode || "screen";
-  const captureName = props.arguments.captureName || "";
+  const captureName = props.arguments.captureName || undefined;
 
   await sendActionWithPayload("start_recording", {
     capture_mode: { [captureMode]: captureName },
