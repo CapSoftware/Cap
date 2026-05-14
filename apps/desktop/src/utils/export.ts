@@ -1,5 +1,17 @@
-import { Channel } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { commands, type ExportSettings, type FramesRendered } from "./tauri";
+
+export async function beginExportSessionGuard() {
+	await invoke("begin_export_session");
+	let released = false;
+	return async () => {
+		if (released) return;
+		released = true;
+		await invoke("end_export_session").catch((error) => {
+			console.error("Failed to release export session guard", error);
+		});
+	};
+}
 
 export function createExportTask(
 	projectPath: string,

@@ -60,7 +60,6 @@ async fn run_protected_export(
     }
 }
 
-const EXPORTER_ENV_BIN_PATH: &str = "CAP_EXPORTER_BIN";
 const EXPORTER_STDERR_TAIL_LIMIT: usize = 80;
 const EXPORT_PROGRESS_FORWARD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 static ACTIVE_EXPORT_SESSIONS: AtomicUsize = AtomicUsize::new(0);
@@ -171,6 +170,18 @@ fn release_export_session() {
 
 pub fn export_session_active() -> bool {
     ACTIVE_EXPORT_SESSIONS.load(Ordering::Acquire) > 0
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn begin_export_session() {
+    retain_export_session();
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn end_export_session() {
+    release_export_session();
 }
 
 struct ExportSessionGuard;
@@ -382,27 +393,12 @@ async fn collect_exporter_stderr_tail(stderr: tokio::process::ChildStderr) -> Ve
 }
 
 fn resolve_exporter_binary() -> Result<PathBuf, String> {
-    if let Ok(override_path) = std::env::var(EXPORTER_ENV_BIN_PATH) {
-        let path = PathBuf::from(override_path);
-        if path.exists() {
-            return Ok(path);
-        }
-        return Err(format!(
-            "{EXPORTER_ENV_BIN_PATH} points to missing path: {}",
-            path.display()
-        ));
-    }
-
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     if let Some(dir) = exe.parent() {
-        let candidate = dir.join(exporter_bin_name());
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-
-        let candidate = dir.join("..").join("MacOS").join(exporter_bin_name());
-        if candidate.exists() {
-            return Ok(candidate);
+        for candidate in adjacent_exporter_binary_candidates(dir) {
+            if candidate.exists() {
+                return Ok(candidate);
+            }
         }
     }
 
@@ -417,7 +413,7 @@ fn resolve_exporter_binary() -> Result<PathBuf, String> {
     }
 
     Err(format!(
-        "Export worker binary not found; set {EXPORTER_ENV_BIN_PATH} or place {} next to the app executable",
+        "Export worker binary not found; place {} next to the app executable or build the Tauri sidecar bundle",
         exporter_bin_name()
     ))
 }
@@ -432,7 +428,7 @@ fn exporter_binary_candidates(root: &Path) -> Vec<PathBuf> {
     ];
 
     if let Some(target_triple) = current_target_triple() {
-        candidates.extend([
+        candidates.push(
             root.join("apps")
                 .join("desktop")
                 .join("src-tauri")
@@ -441,21 +437,33 @@ fn exporter_binary_candidates(root: &Path) -> Vec<PathBuf> {
                     "cap-exporter-{target_triple}{}",
                     std::env::consts::EXE_SUFFIX
                 )),
-            root.join("target")
-                .join(target_triple)
-                .join("release")
-                .join(cli_bin_name()),
-            root.join("target")
-                .join(target_triple)
-                .join("debug")
-                .join(cli_bin_name()),
-        ]);
+        );
     }
 
-    candidates.extend([
-        root.join("target").join("release").join(cli_bin_name()),
-        root.join("target").join("debug").join(cli_bin_name()),
-    ]);
+    candidates
+}
+
+fn adjacent_exporter_binary_candidates(dir: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    candidates.push(dir.join(exporter_bin_name()));
+
+    if let Some(target_triple) = current_target_triple() {
+        candidates.push(dir.join(format!(
+            "cap-exporter-{target_triple}{}",
+            std::env::consts::EXE_SUFFIX
+        )));
+    }
+
+    for subdir in ["../MacOS", "../Resources"] {
+        candidates.push(dir.join(subdir).join(exporter_bin_name()));
+        if let Some(target_triple) = current_target_triple() {
+            candidates.push(dir.join(subdir).join(format!(
+                "cap-exporter-{target_triple}{}",
+                std::env::consts::EXE_SUFFIX
+            )));
+        }
+    }
 
     candidates
 }
@@ -473,6 +481,10 @@ fn current_target_triple() -> Option<&'static str> {
         target_env = "msvc"
     )) {
         Some("aarch64-pc-windows-msvc")
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        Some("aarch64-apple-darwin")
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        Some("x86_64-apple-darwin")
     } else {
         None
     }
@@ -484,10 +496,6 @@ fn exporter_bin_name() -> &'static str {
     } else {
         "cap-exporter"
     }
-}
-
-fn cli_bin_name() -> &'static str {
-    if cfg!(windows) { "cap.exe" } else { "cap" }
 }
 
 struct ExportActiveGuard<'a>(&'a AtomicBool);

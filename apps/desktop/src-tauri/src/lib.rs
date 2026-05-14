@@ -3922,6 +3922,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             fake_window::remove_fake_window,
             focus_captures_panel,
             get_current_recording,
+            export::begin_export_session,
+            export::end_export_session,
             export::export_video,
             export::get_export_estimates,
             export::generate_export_preview,
@@ -4895,6 +4897,8 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
             }
         }
         tauri::RunEvent::ExitRequested { code, api, .. } => {
+            info!(?code, "App exit requested");
+
             if _handle
                 .try_state::<AppExitState>()
                 .is_some_and(|state| state.is_exiting())

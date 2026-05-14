@@ -28,7 +28,7 @@ import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionCont
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
-import { createExportTask } from "~/utils/export";
+import { beginExportSessionGuard, createExportTask } from "~/utils/export";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import {
 	commands,
@@ -534,18 +534,23 @@ export function ExportPage() {
 		mutationFn: async () => {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
-			setExportState(reconcile({ action: "copy", type: "starting" }));
+			const releaseExportSession = await beginExportSessionGuard();
+			try {
+				setExportState(reconcile({ action: "copy", type: "starting" }));
 
-			const outputPath = await exportWithSettings((progress) => {
+				const outputPath = await exportWithSettings((progress) => {
+					if (isCancelled()) throw new SilentError("Cancelled");
+					setExportState({ type: "rendering", progress });
+				});
+
 				if (isCancelled()) throw new SilentError("Cancelled");
-				setExportState({ type: "rendering", progress });
-			});
 
-			if (isCancelled()) throw new SilentError("Cancelled");
+				setExportState({ type: "copying" });
 
-			setExportState({ type: "copying" });
-
-			await commands.copyVideoToClipboard(outputPath);
+				await commands.copyVideoToClipboard(outputPath);
+			} finally {
+				await releaseExportSession();
+			}
 		},
 		onError: (error) => {
 			if (isCancelled() || isCancellationError(error)) {
@@ -567,43 +572,47 @@ export function ExportPage() {
 		mutationFn: async () => {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
+			const releaseExportSession = await beginExportSessionGuard();
+			try {
+				const extension = exportFileExtension();
+				const savePath = await saveDialog({
+					filters: [
+						{
+							name: `${extension.toUpperCase()} filter`,
+							extensions: [extension],
+						},
+					],
+					defaultPath: `~/Desktop/${meta().prettyName}.${extension}`,
+				});
+				if (!savePath) {
+					throw new SilentError("Save dialog cancelled");
+				}
 
-			const extension = exportFileExtension();
-			const savePath = await saveDialog({
-				filters: [
-					{
-						name: `${extension.toUpperCase()} filter`,
-						extensions: [extension],
-					},
-				],
-				defaultPath: `~/Desktop/${meta().prettyName}.${extension}`,
-			});
-			if (!savePath) {
-				throw new SilentError("Save dialog cancelled");
-			}
+				setExportState(reconcile({ action: "save", type: "starting" }));
 
-			setExportState(reconcile({ action: "save", type: "starting" }));
+				setOutputPath(savePath);
 
-			setOutputPath(savePath);
+				trackEvent("export_started", {
+					resolution: settings.resolution,
+					fps: settings.fps,
+					path: savePath,
+				});
 
-			trackEvent("export_started", {
-				resolution: settings.resolution,
-				fps: settings.fps,
-				path: savePath,
-			});
+				const videoPath = await exportWithSettings((progress) => {
+					if (isCancelled()) throw new SilentError("Cancelled");
+					setExportState({ type: "rendering", progress });
+				});
 
-			const videoPath = await exportWithSettings((progress) => {
 				if (isCancelled()) throw new SilentError("Cancelled");
-				setExportState({ type: "rendering", progress });
-			});
 
-			if (isCancelled()) throw new SilentError("Cancelled");
+				setExportState({ type: "copying" });
 
-			setExportState({ type: "copying" });
+				await commands.copyFileToPath(videoPath, savePath);
 
-			await commands.copyFileToPath(videoPath, savePath);
-
-			setExportState({ type: "done" });
+				setExportState({ type: "done" });
+			} finally {
+				await releaseExportSession();
+			}
 		},
 		onError: (error) => {
 			if (isCancelled() || isCancellationError(error)) {
@@ -626,73 +635,78 @@ export function ExportPage() {
 		mutationFn: async () => {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
-			setExportState(reconcile({ action: "upload", type: "starting" }));
+			const releaseExportSession = await beginExportSessionGuard();
+			try {
+				setExportState(reconcile({ action: "upload", type: "starting" }));
 
-			const existingAuth = await authStore.get();
-			if (!existingAuth) createSignInMutation();
-			trackEvent("create_shareable_link_clicked", {
-				resolution: settings.resolution,
-				fps: settings.fps,
-				has_existing_auth: !!existingAuth,
-			});
+				const existingAuth = await authStore.get();
+				if (!existingAuth) createSignInMutation();
+				trackEvent("create_shareable_link_clicked", {
+					resolution: settings.resolution,
+					fps: settings.fps,
+					has_existing_auth: !!existingAuth,
+				});
 
-			const metadata = await commands.getVideoMetadata(projectPath);
-			const plan = await commands.checkUpgradedAndUpdate();
-			const canShare = {
-				allowed: plan || metadata.duration < 300,
-				reason: !plan && metadata.duration >= 300 ? "upgrade_required" : null,
-			};
+				const metadata = await commands.getVideoMetadata(projectPath);
+				const plan = await commands.checkUpgradedAndUpdate();
+				const canShare = {
+					allowed: plan || metadata.duration < 300,
+					reason: !plan && metadata.duration >= 300 ? "upgrade_required" : null,
+				};
 
-			if (!canShare.allowed) {
-				if (canShare.reason === "upgrade_required") {
-					await commands.showWindow("Upgrade");
-					await new Promise((resolve) => setTimeout(resolve, 1000));
-					throw new SilentError();
+				if (!canShare.allowed) {
+					if (canShare.reason === "upgrade_required") {
+						await commands.showWindow("Upgrade");
+						await new Promise((resolve) => setTimeout(resolve, 1000));
+						throw new SilentError();
+					}
 				}
-			}
 
-			const uploadChannel = new Channel<UploadProgress>((progress) => {
-				console.log("Upload progress:", progress);
-				setExportState(
-					produce((state) => {
-						if (state.type !== "uploading") return;
+				const uploadChannel = new Channel<UploadProgress>((progress) => {
+					console.log("Upload progress:", progress);
+					setExportState(
+						produce((state) => {
+							if (state.type !== "uploading") return;
 
-						state.progress = Math.round(progress.progress * 100);
-					}),
-				);
-			});
-
-			await exportWithSettings((progress) => {
-				if (isCancelled()) throw new SilentError("Cancelled");
-				setExportState({ type: "rendering", progress });
-			});
-
-			if (isCancelled()) throw new SilentError("Cancelled");
-
-			setExportState({ type: "uploading", progress: 0 });
-
-			console.log({ organizationId: settings.organizationId });
-
-			const result = meta().sharing
-				? await commands.uploadExportedVideo(
-						projectPath,
-						"Reupload",
-						uploadChannel,
-						settings.organizationId ?? null,
-					)
-				: await commands.uploadExportedVideo(
-						projectPath,
-						{ Initial: { pre_created_video: null } },
-						uploadChannel,
-						settings.organizationId ?? null,
+							state.progress = Math.round(progress.progress * 100);
+						}),
 					);
+				});
 
-			if (result === "NotAuthenticated")
-				throw new Error("You need to sign in to share recordings");
-			else if (result === "PlanCheckFailed")
-				throw new Error("Failed to verify your subscription status");
-			else if (result === "UpgradeRequired")
-				throw new Error("This feature requires an upgraded plan");
+				await exportWithSettings((progress) => {
+					if (isCancelled()) throw new SilentError("Cancelled");
+					setExportState({ type: "rendering", progress });
+				});
+
+				if (isCancelled()) throw new SilentError("Cancelled");
+
+				setExportState({ type: "uploading", progress: 0 });
+
+				console.log({ organizationId: settings.organizationId });
+
+				const result = meta().sharing
+					? await commands.uploadExportedVideo(
+							projectPath,
+							"Reupload",
+							uploadChannel,
+							settings.organizationId ?? null,
+						)
+					: await commands.uploadExportedVideo(
+							projectPath,
+							{ Initial: { pre_created_video: null } },
+							uploadChannel,
+							settings.organizationId ?? null,
+						);
+
+				if (result === "NotAuthenticated")
+					throw new Error("You need to sign in to share recordings");
+				else if (result === "PlanCheckFailed")
+					throw new Error("Failed to verify your subscription status");
+				else if (result === "UpgradeRequired")
+					throw new Error("This feature requires an upgraded plan");
+			} finally {
+				await releaseExportSession();
+			}
 		},
 		onSuccess: async () => {
 			await refetchMeta();
