@@ -1429,9 +1429,6 @@ impl CapWindow {
                     .focused(true)
                     .build()?;
 
-                let (pos_x, pos_y) = cursor_monitor.center_position(800.0, 580.0);
-                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
-
                 #[cfg(windows)]
                 {
                     if let Err(e) = window.set_size(LogicalSize::new(800.0, 580.0)) {
@@ -1454,9 +1451,6 @@ impl CapWindow {
                     .min_inner_size(1275.0, 800.0)
                     .focused(true)
                     .build()?;
-
-                let (pos_x, pos_y) = cursor_monitor.center_position(1275.0, 800.0);
-                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 #[cfg(windows)]
                 {
@@ -1497,9 +1491,6 @@ impl CapWindow {
                         return Err(error);
                     }
                 };
-
-                let (pos_x, pos_y) = cursor_monitor.center_position(1240.0, 800.0);
-                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 #[cfg(windows)]
                 {
