@@ -186,6 +186,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 				createdAt: videos.createdAt,
 				public: videos.public,
 				metadata: videos.metadata,
+				source: videos.source,
+				isScreenshot: videos.isScreenshot,
 				duration: videos.duration,
 				settings: videos.settings,
 				orgId: videos.orgId,
@@ -247,6 +249,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 				videos.createdAt,
 				videos.public,
 				videos.metadata,
+				videos.source,
+				videos.isScreenshot,
 				videos.duration,
 				videos.settings,
 				videos.orgId,
@@ -332,6 +336,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 								[key: string]: unknown;
 						  }
 						| undefined,
+					source: video.source,
+					isScreenshot: video.isScreenshot,
 					hasPassword: video.hasPassword,
 					hasInheritedPassword: rules.hasInheritedPassword,
 					inheritedPasswordSources: rules.inheritedPasswordSources,
