@@ -4,7 +4,7 @@ import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
-import { ask, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
@@ -575,15 +575,10 @@ export function ExportPage() {
 			const releaseExportSession = await beginExportSessionGuard();
 			try {
 				const extension = exportFileExtension();
-				const savePath = await saveDialog({
-					filters: [
-						{
-							name: `${extension.toUpperCase()} filter`,
-							extensions: [extension],
-						},
-					],
-					defaultPath: `~/Desktop/${meta().prettyName}.${extension}`,
-				});
+				const savePath = await commands.saveFileDialog(
+					`${meta().prettyName}.${extension}`,
+					extension,
+				);
 				if (!savePath) {
 					throw new SilentError("Save dialog cancelled");
 				}
