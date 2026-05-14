@@ -38,6 +38,37 @@ export function createExportTask(
 	return { promise, cancel };
 }
 
+export function createExportToFileTask(
+	projectPath: string,
+	settings: ExportSettings,
+	fileName: string,
+	fileType: string,
+	onProgress: (progress: FramesRendered) => void,
+) {
+	const progress = new Channel<FramesRendered>((e) => {
+		onProgress(e);
+	});
+	let closed = false;
+	const cancel = () => {
+		if (closed) return;
+		closed = true;
+		const internals = (
+			globalThis as {
+				__TAURI_INTERNALS__?: { unregisterCallback?: (id: number) => void };
+			}
+		).__TAURI_INTERNALS__;
+		internals?.unregisterCallback?.(progress.id);
+	};
+	const promise = invoke<string>("export_video_to_file", {
+		projectPath,
+		progress,
+		settings,
+		fileName,
+		fileType,
+	}).finally(cancel);
+	return { promise, cancel };
+}
+
 export async function exportVideo(
 	projectPath: string,
 	settings: ExportSettings,

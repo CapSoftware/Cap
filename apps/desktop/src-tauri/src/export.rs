@@ -20,8 +20,9 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
+use tauri_plugin_dialog::DialogExt;
 use tokio::io::AsyncBufReadExt;
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 
 fn panic_message(panic: Box<dyn Any + Send>) -> String {
     if let Some(msg) = panic.downcast_ref::<&str>() {
@@ -31,6 +32,20 @@ fn panic_message(panic: Box<dyn Any + Send>) -> String {
     } else {
         "unknown panic".to_string()
     }
+}
+
+fn export_panic_error(panic: Box<dyn Any + Send>) -> String {
+    let panic_msg = panic_message(panic);
+    error!(
+        target: "cap_desktop_export",
+        panic = %panic_msg,
+        "export command panicked"
+    );
+    sentry::capture_message(
+        &format!("Export command panicked: {panic_msg}"),
+        sentry::Level::Error,
+    );
+    "Export failed unexpectedly".to_string()
 }
 
 async fn run_protected_export(
@@ -656,7 +671,69 @@ pub async fn export_video(
     settings: ExportSettings,
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
-    export_video_inner(project_path, settings, editor, ExportProgress(progress)).await
+    match AssertUnwindSafe(export_video_inner(
+        project_path,
+        settings,
+        editor,
+        ExportProgress(progress),
+    ))
+    .catch_unwind()
+    .await
+    {
+        Ok(result) => result,
+        Err(panic) => Err(export_panic_error(panic)),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app, progress, editor))]
+pub async fn export_video_to_file(
+    app: tauri::AppHandle,
+    project_path: PathBuf,
+    progress: tauri::ipc::Channel<FramesRendered>,
+    settings: ExportSettings,
+    file_name: String,
+    file_type: String,
+    editor: OptionalWindowEditorInstance,
+) -> Result<PathBuf, String> {
+    match AssertUnwindSafe(export_video_to_file_inner(
+        app,
+        project_path,
+        progress,
+        settings,
+        file_name,
+        file_type,
+        editor,
+    ))
+    .catch_unwind()
+    .await
+    {
+        Ok(result) => result,
+        Err(panic) => Err(export_panic_error(panic)),
+    }
+}
+
+async fn export_video_to_file_inner(
+    app: tauri::AppHandle,
+    project_path: PathBuf,
+    progress: tauri::ipc::Channel<FramesRendered>,
+    settings: ExportSettings,
+    file_name: String,
+    file_type: String,
+    editor: OptionalWindowEditorInstance,
+) -> Result<PathBuf, String> {
+    let _session_guard = ExportSessionGuard::new();
+    let Some(save_path) = show_export_save_dialog(&app, file_name, file_type).await? else {
+        return Err("Save dialog cancelled".to_string());
+    };
+
+    info!(path = %save_path.display(), "Export save path selected");
+
+    let output_path =
+        export_video_inner(project_path, settings, editor, ExportProgress(progress)).await?;
+    copy_export_to_path(&output_path, &save_path).await?;
+    Ok(save_path)
 }
 
 async fn export_video_inner(
@@ -728,6 +805,73 @@ async fn export_video_inner(
             Err(e)
         }
     }
+}
+
+async fn show_export_save_dialog(
+    app: &tauri::AppHandle,
+    file_name: String,
+    file_type: String,
+) -> Result<Option<PathBuf>, String> {
+    info!(file_name, file_type, "Save file dialog requested");
+
+    let (name, extension) = match file_type.as_str() {
+        "mp4" => ("MP4 Video", "mp4"),
+        "gif" => ("GIF Image", "gif"),
+        "mov" => ("MOV Video", "mov"),
+        _ => {
+            warn!(file_type, "Invalid export save file dialog type");
+            return Err("Invalid file type".to_string());
+        }
+    };
+
+    info!(file_name, name, extension, "Showing save file dialog");
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("Save File")
+        .set_file_name(file_name)
+        .add_filter(name, &[extension])
+        .save_file(move |path| {
+            let _ = tx.send(path.and_then(|p| p.as_path().map(PathBuf::from)));
+        });
+
+    rx.await.map_err(|e| e.to_string()).inspect(|result| {
+        info!(path = ?result, "Save file dialog completed");
+    })
+}
+
+async fn copy_export_to_path(src: &Path, dst: &Path) -> Result<(), String> {
+    info!(
+        src = %src.display(),
+        dst = %dst.display(),
+        "Copying exported video to selected path"
+    );
+
+    if let Some(parent) = dst.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create export target directory: {e}"))?;
+    }
+
+    let bytes = tokio::fs::copy(src, dst)
+        .await
+        .map_err(|e| format!("Failed to copy exported file: {e}"))?;
+
+    let src_size = tokio::fs::metadata(src)
+        .await
+        .map_err(|e| format!("Failed to read exported file metadata: {e}"))?
+        .len();
+
+    if bytes != src_size {
+        let _ = tokio::fs::remove_file(dst).await;
+        return Err(format!(
+            "Export copy verification failed: copied {bytes} bytes but source is {src_size} bytes"
+        ));
+    }
+
+    info!(bytes, dst = %dst.display(), "Copied exported video to selected path");
+    Ok(())
 }
 
 #[derive(Debug, serde::Serialize, specta::Type)]

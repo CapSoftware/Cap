@@ -28,7 +28,11 @@ import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionCont
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
-import { beginExportSessionGuard, createExportTask } from "~/utils/export";
+import {
+	beginExportSessionGuard,
+	createExportTask,
+	createExportToFileTask,
+} from "~/utils/export";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import {
 	commands,
@@ -185,7 +189,10 @@ export function ExportPage() {
 	const isCancellationError = (error: unknown) =>
 		error instanceof SilentError ||
 		error === "Export cancelled" ||
-		(error instanceof Error && error.message === "Export cancelled");
+		error === "Save dialog cancelled" ||
+		(error instanceof Error &&
+			(error.message === "Export cancelled" ||
+				error.message === "Save dialog cancelled"));
 
 	const [_settings, setSettings] = makePersisted(
 		createStore<Settings>({
@@ -572,42 +579,37 @@ export function ExportPage() {
 		mutationFn: async () => {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
-			const releaseExportSession = await beginExportSessionGuard();
-			try {
-				const extension = exportFileExtension();
-				const savePath = await commands.saveFileDialog(
-					`${meta().prettyName}.${extension}`,
-					extension,
-				);
-				if (!savePath) {
-					throw new SilentError("Save dialog cancelled");
-				}
-
-				setExportState(reconcile({ action: "save", type: "starting" }));
-
-				setOutputPath(savePath);
-
-				trackEvent("export_started", {
-					resolution: settings.resolution,
-					fps: settings.fps,
-					path: savePath,
-				});
-
-				const videoPath = await exportWithSettings((progress) => {
+			const extension = exportFileExtension();
+			const customBpp =
+				advancedMode() && isCustomBpp() ? compressionBpp() : null;
+			const exportSettings = buildExportSettings(
+				settings,
+				isMovCursorOnlyExport(),
+				customBpp,
+				forceFfmpegDecoder(),
+			);
+			const { promise, cancel } = createExportToFileTask(
+				projectPath,
+				exportSettings,
+				`${meta().prettyName}.${extension}`,
+				extension,
+				(progress) => {
 					if (isCancelled()) throw new SilentError("Cancelled");
 					setExportState({ type: "rendering", progress });
-				});
+				},
+			);
+			cancelCurrentExport = cancel;
 
-				if (isCancelled()) throw new SilentError("Cancelled");
+			setExportState(reconcile({ action: "save", type: "starting" }));
 
-				setExportState({ type: "copying" });
+			const savePath = await promise.finally(() => {
+				if (cancelCurrentExport === cancel) cancelCurrentExport = null;
+			});
 
-				await commands.copyFileToPath(videoPath, savePath);
+			if (isCancelled()) throw new SilentError("Cancelled");
 
-				setExportState({ type: "done" });
-			} finally {
-				await releaseExportSession();
-			}
+			setOutputPath(savePath);
+			setExportState({ type: "done" });
 		},
 		onError: (error) => {
 			if (isCancelled() || isCancellationError(error)) {

@@ -3917,6 +3917,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             export::begin_export_session,
             export::end_export_session,
             export::export_video,
+            export::export_video_to_file,
             export::get_export_estimates,
             export::generate_export_preview,
             export::generate_export_preview_fast,
