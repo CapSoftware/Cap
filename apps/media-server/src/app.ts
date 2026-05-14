@@ -27,6 +27,7 @@ app.get("/", (c) => {
 			"/video/thumbnail",
 			"/video/convert",
 			"/video/process",
+			"/video/edit",
 			"/video/process/:jobId/status",
 			"/video/process/:jobId/cancel",
 			"/video/cleanup",

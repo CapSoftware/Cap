@@ -2,6 +2,7 @@ import { file } from "bun";
 import { Hono } from "hono";
 import { z } from "zod";
 import { validateMediaServerSecret } from "../lib/auth";
+import { renderEditedVideo } from "../lib/ffmpeg-edit";
 import type { ResilientInputFlags } from "../lib/ffmpeg-video";
 import {
 	downloadVideoToTemp,
@@ -73,6 +74,27 @@ const processSchema = z.object({
 	crf: z.number().min(0).max(51).optional(),
 	preset: z.enum(["ultrafast", "fast", "medium", "slow"]).optional(),
 	remuxOnly: z.boolean().optional(),
+});
+
+const editRangeSchema = z
+	.object({
+		start: z.number().min(0),
+		end: z.number().min(0),
+	})
+	.refine((range) => range.end > range.start, {
+		message: "Range end must be greater than start",
+	});
+
+const editSchema = z.object({
+	videoId: z.string(),
+	userId: z.string(),
+	sourceUrl: z.string().url(),
+	outputPresignedUrl: z.string().url(),
+	thumbnailPresignedUrl: z.string().url().optional(),
+	previewGifPresignedUrl: z.string().url().optional(),
+	webhookUrl: z.string().url().optional(),
+	webhookSecret: z.string().optional(),
+	keepRanges: z.array(editRangeSchema).min(1),
 });
 
 function getInstanceId(): string {
@@ -507,6 +529,100 @@ video.post("/process", async (c) => {
 	});
 });
 
+video.post("/edit", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
+	const body = await c.req.json();
+	const result = editSchema.safeParse(body);
+
+	if (!result.success) {
+		return c.json(
+			{
+				error: "Invalid request",
+				code: "INVALID_REQUEST",
+				details: result.error.message,
+			},
+			400,
+		);
+	}
+
+	if (!canAcceptNewVideoProcess()) {
+		const activeVideoProcesses = getActiveVideoProcessCount();
+		const resources = getSystemResources();
+		const jobs = getAllJobs();
+		return c.json(
+			{
+				error: "Server is busy",
+				code: "SERVER_BUSY",
+				details: resources.throttleReason
+					? `Throttled: ${resources.throttleReason} (${activeVideoProcesses}/${resources.effectiveMax} active)`
+					: `Too many concurrent video processing jobs (${activeVideoProcesses}/${resources.effectiveMax}), please retry later`,
+				instanceId: getInstanceId(),
+				pid: process.pid,
+				activeVideoProcesses,
+				maxConcurrentVideoProcesses: getMaxConcurrentVideoProcesses(),
+				effectiveMaxVideoProcesses: resources.effectiveMax,
+				resources,
+				jobCount: jobs.length,
+				jobs: jobs.map((job) => ({
+					jobId: job.jobId,
+					videoId: job.videoId,
+					phase: job.phase,
+					progress: job.progress,
+					updatedAt: job.updatedAt,
+				})),
+			},
+			503,
+		);
+	}
+
+	const {
+		videoId,
+		userId,
+		sourceUrl,
+		outputPresignedUrl,
+		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
+		webhookUrl,
+		webhookSecret,
+	} = result.data;
+
+	const jobId = generateJobId();
+	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
+
+	editVideoAsync(
+		job.jobId,
+		sourceUrl,
+		outputPresignedUrl,
+		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
+		result.data,
+	).catch((err) => {
+		console.error(`[video/edit] Async edit error for job ${jobId}:`, err);
+		const currentJob = getJob(jobId);
+		if (
+			currentJob &&
+			currentJob.phase !== "error" &&
+			currentJob.phase !== "complete" &&
+			currentJob.phase !== "cancelled"
+		) {
+			updateJob(jobId, {
+				phase: "error",
+				error: err instanceof Error ? err.message : String(err),
+				message: "Edit failed (unhandled)",
+			});
+		}
+	});
+
+	return c.json({
+		jobId,
+		status: "queued",
+		message: "Video edit started",
+	});
+});
+
 function isWebmInput(extension: string | undefined): boolean {
 	if (!extension) return false;
 	const normalized = extension.toLowerCase().replace(/^\./, "");
@@ -729,6 +845,145 @@ async function generateAndUploadPreviewGif(
 		console.warn(`[${logPrefix}] Preview GIF generation failed:`, previewErr);
 	} finally {
 		await previewGifFile?.cleanup();
+	}
+}
+
+async function editVideoAsync(
+	jobId: string,
+	sourceUrl: string,
+	outputPresignedUrl: string,
+	thumbnailPresignedUrl: string | undefined,
+	previewGifPresignedUrl: string | undefined,
+	options: z.infer<typeof editSchema>,
+): Promise<void> {
+	const job = getJob(jobId);
+	if (!job) {
+		return;
+	}
+
+	const abortController = new AbortController();
+	updateJob(jobId, { abortController });
+
+	try {
+		updateJob(jobId, {
+			phase: "downloading",
+			progress: 0,
+			message: "Downloading source video...",
+		});
+		await sendWebhook(job);
+
+		const inputTempFile = await downloadVideoToTemp(
+			sourceUrl,
+			".mp4",
+			abortController.signal,
+		);
+		updateJob(jobId, { inputTempFile });
+
+		updateJob(jobId, {
+			phase: "probing",
+			progress: 5,
+			message: "Analyzing source video...",
+		});
+		await sendWebhook(job);
+
+		const sourceMetadata = await probeVideoFile(inputTempFile.path);
+
+		updateJob(jobId, {
+			phase: "processing",
+			progress: 10,
+			message: "Applying edit...",
+		});
+		await sendWebhook(job);
+
+		const outputTempFile = await withJobHeartbeat(jobId, () =>
+			renderEditedVideo({
+				inputPath: inputTempFile.path,
+				keepRanges: options.keepRanges,
+				metadata: sourceMetadata,
+				abortSignal: abortController.signal,
+				onProgress: (progress, message) => {
+					updateJob(jobId, {
+						progress: Math.min(80, 10 + progress * 0.9),
+						message,
+					});
+					const currentJob = getJob(jobId);
+					if (currentJob) {
+						sendWebhook(currentJob);
+					}
+				},
+			}),
+		);
+		updateJob(jobId, { outputTempFile });
+
+		const outputMetadata = await probeVideoFile(outputTempFile.path);
+		updateJob(jobId, { metadata: outputMetadata });
+
+		updateJob(jobId, {
+			phase: "uploading",
+			progress: 80,
+			message: "Uploading edited video...",
+		});
+		await sendWebhook(job);
+
+		await uploadFileToS3(outputTempFile.path, outputPresignedUrl, "video/mp4");
+
+		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
+			updateJob(jobId, {
+				phase: "generating_thumbnail",
+				progress: 90,
+				message: "Generating preview assets...",
+			});
+			await sendWebhook(job);
+		}
+
+		if (thumbnailPresignedUrl) {
+			const thumbnailData = await generateThumbnail(
+				outputTempFile.path,
+				outputMetadata.duration,
+			);
+			await uploadToS3(thumbnailData, thumbnailPresignedUrl, "image/jpeg");
+		}
+
+		await generateAndUploadPreviewGif(
+			outputTempFile.path,
+			outputMetadata.duration,
+			previewGifPresignedUrl,
+			abortController.signal,
+			"video/edit",
+		);
+
+		updateJob(jobId, {
+			phase: "complete",
+			progress: 100,
+			message: "Edit complete",
+		});
+		const completedJob = getJob(jobId);
+		if (completedJob) {
+			await sendWebhook(completedJob);
+		}
+
+		await inputTempFile.cleanup();
+		await outputTempFile.cleanup();
+
+		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
+	} catch (err) {
+		console.error(`[video/edit] Error editing job ${jobId}:`, err);
+
+		const updatedJob = updateJob(jobId, {
+			phase: "error",
+			error: err instanceof Error ? err.message : String(err),
+			message: "Edit failed",
+		});
+
+		if (updatedJob) {
+			await sendWebhook(updatedJob);
+		}
+
+		const currentJob = getJob(jobId);
+		if (currentJob) {
+			await currentJob.inputTempFile?.cleanup();
+			await currentJob.outputTempFile?.cleanup();
+		}
 	}
 }
 
