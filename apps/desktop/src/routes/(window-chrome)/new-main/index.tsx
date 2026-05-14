@@ -100,6 +100,7 @@ import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 import useRequestPermission from "./useRequestPermission";
+import { showCapDebugWindow } from "~/routes/debug";
 
 const WINDOW_SIZE = { width: 330, height: 395 } as const;
 
@@ -2479,9 +2480,7 @@ function Page() {
 						{import.meta.env.DEV && (
 							<button
 								type="button"
-								onClick={() => {
-									new WebviewWindow("debug", { url: "/debug" });
-								}}
+								onClick={showCapDebugWindow}
 								class="flex justify-center items-center focus:outline-none"
 							>
 								<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />

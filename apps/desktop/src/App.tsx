@@ -1,7 +1,20 @@
-import { Route, Router, useCurrentMatches } from "@solidjs/router";
+import {
+	Route,
+	Router,
+	useCurrentMatches,
+	useIsRouting,
+} from "@solidjs/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { message } from "@tauri-apps/plugin-dialog";
-import { createEffect, lazy, onCleanup, onMount, Suspense } from "solid-js";
+import {
+	children,
+	createEffect,
+	lazy,
+	onCleanup,
+	onMount,
+	type ParentProps,
+	Suspense,
+} from "solid-js";
 import { Toaster } from "solid-toast";
 
 import "@cap/ui-solid/main.css";
@@ -142,7 +155,7 @@ function Inner() {
 					root={(props) => (
 						<Suspense fallback={null}>
 							{props.children}
-							<AutoShowWindowWhenReady />
+							<AutoRevealWindowOnReady />
 						</Suspense>
 					)}
 				>
@@ -186,7 +199,11 @@ function Inner() {
 						<Route path="/upgrade" component={UpgradePage} />
 						<Route path="/update" component={UpdatePage} />
 					</Route>
-					<Route path="/camera" component={CameraPage} info={{ autoShow: false }} />
+					<Route
+						path="/camera"
+						component={CameraPage}
+						info={{ autoShow: false }}
+					/>
 					<Route path="/capture-area" component={CaptureAreaPage} />
 					<Route path="/debug" component={DebugPage} />
 					<Route path="/editor" component={EditorPage} />
@@ -201,6 +218,7 @@ function Inner() {
 					<Route
 						path="/target-select-overlay"
 						component={TargetSelectOverlayPage}
+						info={{ autoShow: false }}
 					/>
 					<Route
 						path="/window-capture-occluder"
@@ -236,32 +254,46 @@ function createThemeListener(currentWindow: TauriWindow) {
 		try {
 			if (appearance === "system") localStorage.removeItem("cap-theme");
 			else localStorage.setItem("cap-theme", appearance);
-		} catch { }
+		} catch {}
 
 		setTheme(appearance === "system" ? null : appearance).then(() =>
 			document.documentElement.classList.toggle(
 				"dark",
 				appearance === "dark" ||
-				(appearance === "system" && prefersDark.matches),
+					(appearance === "system" && prefersDark.matches),
 			),
 		);
 	}
 }
 
-function AutoShowWindowWhenReady() {
+function AutoRevealWindowOnReady() {
 	const matches = useCurrentMatches();
+	const isRouting = useIsRouting();
+	let shown = false;
 
-	onMount(() => {
+	createEffect(() => {
+		if (isRouting() || shown) return;
 		const shouldDefer = matches().some(
 			(match) => match.route.info?.autoShow === false,
 		);
-		if (!shouldDefer) getCurrentWindow().show();
+		if (shouldDefer) return;
+		shown = true;
+		getCurrentWindow().show();
 	});
 
 	return null;
 }
 
-export function ShowWindow() {
-	onMount(() => getCurrentWindow().show());
-	return null;
+export function RevealWindowWithSuspense(props: ParentProps) {
+	const resolved = children(() => props.children);
+	const isRouting = useIsRouting();
+	let shown = false;
+
+	createEffect(() => {
+		if (shown || !resolved() || isRouting()) return;
+		shown = true;
+		getCurrentWindow().show();
+	});
+
+	return <Suspense fallback={null}>{resolved()}</Suspense>;
 }
