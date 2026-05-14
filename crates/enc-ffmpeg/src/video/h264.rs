@@ -900,7 +900,7 @@ fn export_encoder_priority_override(
         use cap_frame_converter::{GpuVendor, detect_primary_gpu};
 
         static ENCODER_PRIORITY_AMD_EXPORT: &[&str] =
-            &["h264_mf", "h264_amf", "h264_nvenc", "h264_qsv", "libx264"];
+            &["h264_amf", "h264_mf", "h264_nvenc", "h264_qsv", "libx264"];
 
         if let Some(GpuVendor::Amd) = detect_primary_gpu().map(|info| info.vendor) {
             return Some(ENCODER_PRIORITY_AMD_EXPORT);

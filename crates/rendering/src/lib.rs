@@ -1462,15 +1462,18 @@ pub fn get_duration(
         && let Ok(camera_duration) =
             recordings.get_source_duration(&recording_meta.path(&camera_path))
     {
-        println!("Camera recording duration: {camera_duration}");
         max_duration = max_duration.max(camera_duration);
-        println!("New max duration after camera check: {max_duration}");
+        tracing::debug!(
+            camera_duration,
+            max_duration,
+            "Adjusted project duration using camera recording"
+        );
     }
 
     if let Some(timeline) = &project.timeline {
         timeline.duration()
     } else {
-        println!("No timeline found, using max_duration: {max_duration}");
+        tracing::debug!(max_duration, "Using recording duration without timeline");
         max_duration
     }
 }

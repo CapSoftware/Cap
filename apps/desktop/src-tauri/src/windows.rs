@@ -1526,8 +1526,7 @@ impl ShowCapWindow {
                     .transparent(true)
                     .visible(false)
                     .initialization_script(format!(
-                        "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.cameraWsPort = {};",
-                        camera_ws_port
+                        "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.cameraWsPort = {camera_ws_port};"
                     ));
 
                 #[cfg(target_os = "macos")]
@@ -2511,8 +2510,7 @@ impl ShowCapWindow {
 
             let bg_color = if is_dark { "#141414" } else { "#ffffff" };
             let init_script = format!(
-                r#"(function(){{var s=document.createElement('style');s.textContent='html,body{{background-color:{bg}}}';document.documentElement.appendChild(s);}})();"#,
-                bg = bg_color
+                r#"(function(){{var s=document.createElement('style');s.textContent='html,body{{background-color:{bg_color}}}';document.documentElement.appendChild(s);}})();"#
             );
             builder = builder.initialization_script(&init_script);
         }
