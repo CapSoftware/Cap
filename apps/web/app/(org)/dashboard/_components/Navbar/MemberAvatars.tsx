@@ -11,7 +11,13 @@ export function MemberAvatars() {
 	const { activeOrganization, sidebarCollapsed, setInviteDialogOpen, user } =
 		useDashboardContext();
 
-	const isOwner = user?.id === activeOrganization?.organization.ownerId;
+	const userId = user?.id;
+	const isOwner =
+		userId != null &&
+		(activeOrganization?.members?.some(
+			(member) => member.userId === userId && member.role === "owner",
+		) ??
+			false);
 
 	if (sidebarCollapsed) return null;
 
@@ -19,6 +25,10 @@ export function MemberAvatars() {
 	const visibleMembers = members.slice(0, MAX_VISIBLE);
 	const extraCount = members.length - MAX_VISIBLE;
 	const emptySlots = Math.max(0, MAX_VISIBLE - members.length);
+	const emptySlotKeys = Array.from(
+		{ length: emptySlots },
+		(_, slotNumber) => `empty-${slotNumber + 1}`,
+	);
 
 	return (
 		<div className="flex items-center mt-2.5 px-2.5">
@@ -49,9 +59,9 @@ export function MemberAvatars() {
 			)}
 
 			{isOwner &&
-				Array.from({ length: emptySlots }).map((_, i) => (
+				emptySlotKeys.map((slotKey) => (
 					<Tooltip
-						key={`empty-${i}`}
+						key={slotKey}
 						content="Invite to your organization"
 						position="bottom"
 						delayDuration={0}

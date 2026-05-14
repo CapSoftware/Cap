@@ -11,7 +11,10 @@ import { SeatManagementCard } from "../components/SeatManagementCard";
 export default function BillingAndMembersPage() {
 	const { activeOrganization, user, setInviteDialogOpen } =
 		useDashboardContext();
-	const isOwner = user?.id === activeOrganization?.organization.ownerId;
+	const canManageMembers =
+		activeOrganization?.members?.some(
+			(member) => member.userId === user?.id && member.role === "owner",
+		) ?? false;
 	const ownerToastShown = useRef(false);
 
 	const showOwnerToast = useCallback(() => {
@@ -29,7 +32,7 @@ export default function BillingAndMembersPage() {
 			{buildEnv.NEXT_PUBLIC_IS_CAP && <BillingSummaryCard />}
 			{buildEnv.NEXT_PUBLIC_IS_CAP && <SeatManagementCard />}
 			<MembersCard
-				isOwner={isOwner}
+				canManageMembers={canManageMembers}
 				showOwnerToast={showOwnerToast}
 				setIsInviteDialogOpen={setInviteDialogOpen}
 			/>

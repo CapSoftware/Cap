@@ -6,12 +6,6 @@ import { organizationMembers, organizations } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-
-/**
- * Remove a member from an organization. Only the owner can perform this action.
- * @param memberId The organizationMembers.id to remove
- * @param organizationId The organization to remove from
- */
 export async function removeOrganizationMember(
 	memberId: string,
 	organizationId: Organisation.OrganisationId,
@@ -19,21 +13,33 @@ export async function removeOrganizationMember(
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
 
-	const organization = await db()
-		.select()
+	const [organization] = await db()
+		.select({ id: organizations.id })
 		.from(organizations)
 		.where(eq(organizations.id, organizationId))
 		.limit(1);
 
-	if (!organization || organization.length === 0) {
+	if (!organization) {
 		throw new Error("Organization not found");
 	}
-	if (organization[0]?.ownerId !== user.id) {
+
+	const [ownerMembership] = await db()
+		.select({ id: organizationMembers.id })
+		.from(organizationMembers)
+		.where(
+			and(
+				eq(organizationMembers.organizationId, organizationId),
+				eq(organizationMembers.userId, user.id),
+				eq(organizationMembers.role, "owner"),
+			),
+		)
+		.limit(1);
+
+	if (!ownerMembership) {
 		throw new Error("Only the owner can remove organization members");
 	}
 
-	// Prevent owner from removing themselves
-	const member = await db()
+	const [member] = await db()
 		.select()
 		.from(organizationMembers)
 		.where(
@@ -43,11 +49,10 @@ export async function removeOrganizationMember(
 			),
 		)
 		.limit(1);
-	if (!member || member.length === 0) {
+	if (!member) {
 		throw new Error("Member not found");
 	}
-	if (member[0]?.userId === user.id) {
-		// Defensive: this should never happen due to the above check, but TS wants safety
+	if (member.userId === user.id) {
 		throw new Error("Owner cannot remove themselves");
 	}
 
