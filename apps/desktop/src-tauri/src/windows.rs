@@ -1310,8 +1310,7 @@ impl CapWindow {
                     .skip_taskbar(true)
                     .transparent(true)
                     .initialization_script(format!(
-                        "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.cameraWsPort = {};",
-                        camera_ws_port
+                        "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.cameraWsPort = {camera_ws_port};"
                     ));
 
                 #[cfg(target_os = "macos")]
