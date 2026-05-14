@@ -36,33 +36,13 @@ declare namespace Preferences {
   export type ResumeRecording = ExtensionPreferences & {}
   /** Preferences accessible in the `switch-microphone` command */
   export type SwitchMicrophone = ExtensionPreferences & {
-  /** Default Screen Name - Screen display name used by Start Recording when Capture Source is Screen. */
-  "defaultScreenName"?: string,
-  /** Default Window Name - Window title used by Start Recording when Capture Source is Window. */
-  "defaultWindowName"?: string,
-  /** Microphone Label - Microphone label Cap should select before recording. */
-  "microphoneLabel"?: string,
-  /** Camera Device ID - Camera device ID Cap should select before recording. */
-  "cameraDeviceId"?: string,
-  /** Recording Mode - Default Cap recording mode. */
-  "recordingMode": "studio" | "instant" | "screenshot",
-  /** Capture System Audio - Capture system audio by default. */
-  "captureSystemAudio": boolean
+  /** Microphone Label - Microphone label Cap should select. */
+  "microphoneLabel"?: string
 }
   /** Preferences accessible in the `switch-camera` command */
   export type SwitchCamera = ExtensionPreferences & {
-  /** Default Screen Name - Screen display name used by Start Recording when Capture Source is Screen. */
-  "defaultScreenName"?: string,
-  /** Default Window Name - Window title used by Start Recording when Capture Source is Window. */
-  "defaultWindowName"?: string,
-  /** Microphone Label - Microphone label Cap should select before recording. */
-  "microphoneLabel"?: string,
-  /** Camera Device ID - Camera device ID Cap should select before recording. */
-  "cameraDeviceId"?: string,
-  /** Recording Mode - Default Cap recording mode. */
-  "recordingMode": "studio" | "instant" | "screenshot",
-  /** Capture System Audio - Capture system audio by default. */
-  "captureSystemAudio": boolean
+  /** Camera Device ID - Camera device ID Cap should select. */
+  "cameraDeviceId"?: string
 }
 }
 

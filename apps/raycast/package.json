@@ -104,68 +104,12 @@
       "mode": "view",
       "preferences": [
         {
-          "name": "defaultScreenName",
-          "description": "Screen display name used by Start Recording when Capture Source is Screen.",
-          "type": "textfield",
-          "required": false,
-          "title": "Default Screen Name",
-          "label": "Default Screen Name"
-        },
-        {
-          "name": "defaultWindowName",
-          "description": "Window title used by Start Recording when Capture Source is Window.",
-          "type": "textfield",
-          "required": false,
-          "title": "Default Window Name",
-          "label": "Default Window Name"
-        },
-        {
           "name": "microphoneLabel",
-          "description": "Microphone label Cap should select before recording.",
+          "description": "Microphone label Cap should select.",
           "type": "textfield",
           "required": false,
           "title": "Microphone Label",
           "label": "Microphone Label"
-        },
-        {
-          "name": "cameraDeviceId",
-          "description": "Camera device ID Cap should select before recording.",
-          "type": "textfield",
-          "required": false,
-          "title": "Camera Device ID",
-          "label": "Camera Device ID"
-        },
-        {
-          "name": "recordingMode",
-          "description": "Default Cap recording mode.",
-          "type": "dropdown",
-          "required": false,
-          "default": "studio",
-          "data": [
-            {
-              "title": "Studio",
-              "value": "studio"
-            },
-            {
-              "title": "Instant",
-              "value": "instant"
-            },
-            {
-              "title": "Screenshot",
-              "value": "screenshot"
-            }
-          ],
-          "title": "Recording Mode",
-          "label": "Recording Mode"
-        },
-        {
-          "name": "captureSystemAudio",
-          "description": "Capture system audio by default.",
-          "type": "checkbox",
-          "required": false,
-          "default": true,
-          "title": "Capture System Audio",
-          "label": "Capture System Audio"
         }
       ]
     },
@@ -176,68 +120,12 @@
       "mode": "view",
       "preferences": [
         {
-          "name": "defaultScreenName",
-          "description": "Screen display name used by Start Recording when Capture Source is Screen.",
-          "type": "textfield",
-          "required": false,
-          "title": "Default Screen Name",
-          "label": "Default Screen Name"
-        },
-        {
-          "name": "defaultWindowName",
-          "description": "Window title used by Start Recording when Capture Source is Window.",
-          "type": "textfield",
-          "required": false,
-          "title": "Default Window Name",
-          "label": "Default Window Name"
-        },
-        {
-          "name": "microphoneLabel",
-          "description": "Microphone label Cap should select before recording.",
-          "type": "textfield",
-          "required": false,
-          "title": "Microphone Label",
-          "label": "Microphone Label"
-        },
-        {
           "name": "cameraDeviceId",
-          "description": "Camera device ID Cap should select before recording.",
+          "description": "Camera device ID Cap should select.",
           "type": "textfield",
           "required": false,
           "title": "Camera Device ID",
           "label": "Camera Device ID"
-        },
-        {
-          "name": "recordingMode",
-          "description": "Default Cap recording mode.",
-          "type": "dropdown",
-          "required": false,
-          "default": "studio",
-          "data": [
-            {
-              "title": "Studio",
-              "value": "studio"
-            },
-            {
-              "title": "Instant",
-              "value": "instant"
-            },
-            {
-              "title": "Screenshot",
-              "value": "screenshot"
-            }
-          ],
-          "title": "Recording Mode",
-          "label": "Recording Mode"
-        },
-        {
-          "name": "captureSystemAudio",
-          "description": "Capture system audio by default.",
-          "type": "checkbox",
-          "required": false,
-          "default": true,
-          "title": "Capture System Audio",
-          "label": "Capture System Audio"
         }
       ]
     }
