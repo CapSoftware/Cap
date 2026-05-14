@@ -1401,6 +1401,10 @@ importers:
       server-only:
         specifier: ^0.0.1
         version: 0.0.1
+    devDependencies:
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/web-domain:
     dependencies:
