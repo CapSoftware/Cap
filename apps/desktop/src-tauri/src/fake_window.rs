@@ -317,7 +317,7 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
             let focused = window.is_focused().unwrap_or(false);
             if !ignore {
                 if !focused {
-                    // window.set_focus().ok();
+                    window.set_focus().ok();
                 }
             } else if focused {
                 window.set_ignore_cursor_events(ignore).ok();
