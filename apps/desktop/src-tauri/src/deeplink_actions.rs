@@ -173,6 +173,8 @@ impl DeepLinkAction {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::TakeScreenshot => {
+            let window = app.get_window("main").unwrap();
+            if !window.is_focused().unwrap_or(false) { return; }
                 crate::recording::take_screenshot(app.clone(), app.state()).await
             }
             DeepLinkAction::SwitchMicrophone { mic_label } => {
