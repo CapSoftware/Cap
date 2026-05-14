@@ -572,19 +572,6 @@ fn is_position_on_any_screen(pos_x: f64, pos_y: f64) -> bool {
     false
 }
 
-fn ensure_settings_window_bounds(window: &WebviewWindow) {
-    const MIN_W: f64 = 800.0;
-    const MIN_H: f64 = 580.0;
-    let _ = window.set_min_size(Some(LogicalSize::new(MIN_W, MIN_H)));
-    if let (Ok(physical), Ok(scale)) = (window.inner_size(), window.scale_factor()) {
-        let width = physical.width as f64 / scale;
-        let height = physical.height as f64 / scale;
-        if width < MIN_W || height < MIN_H {
-            let _ = window.set_size(LogicalSize::new(width.max(MIN_W), height.max(MIN_H)));
-        }
-    }
-}
-
 #[derive(Clone, Deserialize, Type)]
 pub enum CapWindowId {
     Main,
@@ -1189,10 +1176,6 @@ impl CapWindow {
                 window.unminimize().ok();
                 window.set_focus().ok();
 
-                if let Self::Settings { .. } = self {
-                    ensure_settings_window_bounds(&window);
-                }
-
                 if let Self::Main { init_target_mode } = self {
                     emit_app_event(
                         app,
@@ -1459,10 +1442,6 @@ impl CapWindow {
                         warn!("Failed to position Settings window on Windows: {}", e);
                     }
                 }
-
-                // window.show().ok();
-                // window.set_focus().ok();
-                ensure_settings_window_bounds(&window);
 
                 window
             }
