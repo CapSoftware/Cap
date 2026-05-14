@@ -580,14 +580,13 @@ export function HLSVideoPlayer({
 			shouldReloadPlaybackAfterUploadCompletes(
 				prevUploadProgress.current,
 				uploadProgress,
-				videoLoaded,
 			)
 		) {
 			reloadPlayback();
 			setTimeout(reloadPlayback, 1000);
 		}
 		prevUploadProgress.current = uploadProgress;
-	}, [uploadProgress, videoLoaded, reloadPlayback]);
+	}, [uploadProgress, reloadPlayback]);
 
 	return (
 		<MediaPlayer

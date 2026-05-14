@@ -6,6 +6,7 @@ import { useTranscript } from "hooks/use-transcript";
 import { useRouter } from "next/navigation";
 import {
 	forwardRef,
+	useCallback,
 	useEffect,
 	useImperativeHandle,
 	useRef,
@@ -69,6 +70,9 @@ export const ShareVideo = forwardRef<
 		const videoRef = useRef<HTMLVideoElement | null>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
 		const router = useRouter();
+		const handleUploadComplete = useCallback(() => {
+			router.refresh();
+		}, [router]);
 
 		const captionContext = useCaptionContext();
 
@@ -190,6 +194,9 @@ export const ShareVideo = forwardRef<
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		const isSegmentsSource = data.source.type === "desktopSegments";
+		const isEditProcessing =
+			data.activeUploadRawFileKey ===
+			`${data.owner.id}/${data.id}/source/original.mp4`;
 		const isActivelyRecording =
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&
@@ -256,7 +263,10 @@ export const ShareVideo = forwardRef<
 
 		return (
 			<>
-				<div className="relative h-full">
+				<div
+					className="relative h-full"
+					style={{ viewTransitionName: "cap-edit-video" }}
+				>
 					{isActivelyRecording ? (
 						<RecordingInProgressOverlay
 							onConfirmStopped={() => setUserConfirmedStopped(true)}
@@ -280,6 +290,8 @@ export const ShareVideo = forwardRef<
 							videoRef={videoRef}
 							enableCrossOrigin={enableCrossOrigin}
 							hasActiveUpload={data.hasActiveUpload}
+							blockPlaybackDuringProcessing={isEditProcessing}
+							onUploadComplete={handleUploadComplete}
 							comments={commentsData.map((comment) => ({
 								id: comment.id,
 								type: comment.type,
