@@ -465,6 +465,99 @@ describe("POST /video/process", () => {
 	});
 });
 
+describe("POST /video/edit", () => {
+	beforeEach(() => {
+		mock.restore();
+	});
+
+	test("returns 401 without media server secret", async () => {
+		const response = await app.fetch(
+			unauthenticatedVideoPostRequest("/video/edit", {
+				videoId: "test-id",
+				userId: "user-id",
+				sourceUrl: "https://example.com/source.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+				keepRanges: [{ start: 0, end: 1 }],
+			}),
+		);
+
+		expect(response.status).toBe(401);
+	});
+
+	test("returns 400 for missing keep ranges", async () => {
+		const response = await app.fetch(
+			videoPostRequest("/video/edit", {
+				videoId: "test-id",
+				userId: "user-id",
+				sourceUrl: "https://example.com/source.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+			}),
+		);
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
+	test("returns 400 for invalid ranges", async () => {
+		const response = await app.fetch(
+			videoPostRequest("/video/edit", {
+				videoId: "test-id",
+				userId: "user-id",
+				sourceUrl: "https://example.com/source.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+				keepRanges: [{ start: 3, end: 1 }],
+			}),
+		);
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
+	test("returns jobId when edit starts successfully", async () => {
+		mock.module("../../lib/job-manager", () => ({
+			canAcceptNewVideoProcess: () => true,
+			getActiveVideoProcessCount: () => 0,
+			getMaxConcurrentVideoProcesses: () => 3,
+			getSystemResources: jobManager.getSystemResources,
+			getAllJobs: () => [],
+			generateJobId: () => "edit-job-id",
+			createJob: () => ({
+				jobId: "edit-job-id",
+				videoId: "test-id",
+				userId: "user-id",
+				phase: "queued",
+				progress: 0,
+				createdAt: new Date(),
+				updatedAt: new Date(),
+			}),
+			getJob: () => null,
+			updateJob: () => null,
+			deleteJob: () => {},
+			sendWebhook: async () => {},
+			getJobProgress: jobManager.getJobProgress,
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			videoPostRequest("/video/edit", {
+				videoId: "test-id",
+				userId: "user-id",
+				sourceUrl: "https://example.com/source.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+				keepRanges: [{ start: 0, end: 1 }],
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const data = await response.json();
+		expect(data.jobId).toBe("edit-job-id");
+		expect(data.status).toBe("queued");
+	});
+});
+
 describe("GET /video/process/:jobId/status", () => {
 	beforeEach(() => {
 		mock.restore();
