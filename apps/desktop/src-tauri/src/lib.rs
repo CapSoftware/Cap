@@ -4660,9 +4660,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 for (label, window) in app.webview_windows() {
                                     if let Ok(id) = CapWindowId::from_str(&label) {
                                         match id {
-                                            CapWindowId::TargetSelectOverlay { .. } => {
-                                                show_overlay(&window);
-                                            }
                                             CapWindowId::Main => {
                                                 let _ = window.show();
                                             }
