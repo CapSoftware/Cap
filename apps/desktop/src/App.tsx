@@ -123,8 +123,7 @@ export default function App() {
 }
 
 function Inner() {
-	const currentWindow = getCurrentWindow();
-	createThemeListener(currentWindow);
+	createThemeListener();
 
 	onMount(() => {
 		initAnonymousUser();
@@ -230,24 +229,17 @@ function Inner() {
 	);
 }
 
-function createThemeListener(currentWindow: TauriWindow) {
+function createThemeListener() {
 	const settings = generalSettingsStore.createQuery();
 	const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
 
-	createEffect(() => applyTheme(settings.data?.appearance ?? null));
+	createEffect(() => apply(settings.data?.appearance));
 
-	onMount(async () => {
-		const unlisten = currentWindow.onThemeChanged(() =>
-			applyTheme(settings.data?.appearance),
-		);
-		onCleanup(() => unlisten.then((u) => u()));
-
-		createEventListener(prefersDark, "change", () => {
-			if (settings.data?.appearance === "system") applyTheme("system");
-		});
+	createEventListener(prefersDark, "change", () => {
+		if (settings.data?.appearance === "system") apply("system");
 	});
 
-	function applyTheme(appearance: Appearance | null | undefined) {
+	function apply(appearance: Appearance | null | undefined) {
 		if (location.pathname === "/camera") return;
 		if (appearance === undefined || appearance === null) return;
 
@@ -266,18 +258,19 @@ function createThemeListener(currentWindow: TauriWindow) {
 	}
 }
 
+let windowShown = false;
+
 function AutoRevealWindowOnReady() {
 	const matches = useCurrentMatches();
 	const isRouting = useIsRouting();
-	let shown = false;
 
 	createEffect(() => {
-		if (isRouting() || shown) return;
+		if (isRouting() || windowShown) return;
 		const shouldDefer = matches().some(
 			(match) => match.route.info?.autoShow === false,
 		);
 		if (shouldDefer) return;
-		shown = true;
+		windowShown = true;
 		getCurrentWindow().show();
 	});
 
@@ -287,11 +280,10 @@ function AutoRevealWindowOnReady() {
 export function RevealWindowWithSuspense(props: ParentProps) {
 	const resolved = children(() => props.children);
 	const isRouting = useIsRouting();
-	let shown = false;
 
 	createEffect(() => {
-		if (shown || !resolved() || isRouting()) return;
-		shown = true;
+		if (windowShown || !resolved() || isRouting()) return;
+		windowShown = true;
 		getCurrentWindow().show();
 	});
 

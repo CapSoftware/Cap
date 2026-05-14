@@ -4146,7 +4146,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 })
                 .with_denylist(&[
                     CapWindowId::Onboarding.label().as_str(),
-                    CapWindowId::Main.label().as_str(),
                     "window-capture-occluder",
                     "target-select-overlay",
                     CapWindowId::CaptureArea.label().as_str(),
@@ -4637,11 +4636,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             CapWindowId::Settings => {
                                 for (label, window) in app.webview_windows() {
                                     if let Ok(id) = CapWindowId::from_str(&label) {
-                                        match id {
-                                            CapWindowId::Main => {
-                                                let _ = window.show();
-                                            }
-                                            _ => {}
+                                        if let CapWindowId::Main = id {
+                                            let _ = window.show();
                                         }
                                     }
                                 }
@@ -4659,11 +4655,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             CapWindowId::Upgrade | CapWindowId::ModeSelect => {
                                 for (label, window) in app.webview_windows() {
                                     if let Ok(id) = CapWindowId::from_str(&label) {
-                                        match id {
-                                            CapWindowId::Main => {
-                                                let _ = window.show();
-                                            }
-                                            _ => {}
+                                        if let CapWindowId::Main = id {
+                                            let _ = window.show();
                                         }
                                     }
                                 }
@@ -4755,33 +4748,18 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     if let Ok(window_id) = CapWindowId::from_str(label) {
                         let scale_factor = window.scale_factor().unwrap_or(1.0);
                         let logical_pos = position.to_logical::<f64>(scale_factor);
-                        match window_id {
-                            CapWindowId::Main => {
-                                let display_id =
-                                    display_id_for_position(logical_pos.x, logical_pos.y);
-                                window_position_persistence::queue_main_position(
-                                    app,
-                                    general_settings::WindowPosition {
-                                        x: logical_pos.x,
-                                        y: logical_pos.y,
-                                        display_id,
-                                    },
-                                );
+                        if let CapWindowId::Camera = window_id {
+                            if app
+                                .try_state::<CameraWindowPositionGuard>()
+                                .is_some_and(|guard| guard.should_ignore())
+                            {
+                                return;
                             }
-                            CapWindowId::Camera => {
-                                if app
-                                    .try_state::<CameraWindowPositionGuard>()
-                                    .is_some_and(|guard| guard.should_ignore())
-                                {
-                                    return;
-                                }
-                                window_position_persistence::queue_camera_position(
-                                    app,
-                                    logical_pos.x,
-                                    logical_pos.y,
-                                );
-                            }
-                            _ => {}
+                            window_position_persistence::queue_camera_position(
+                                app,
+                                logical_pos.x,
+                                logical_pos.y,
+                            );
                         }
                     }
                 }

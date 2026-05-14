@@ -184,8 +184,6 @@ pub struct GeneralSettingsStore {
     #[serde(default)]
     pub studio_recording_quality: StudioRecordingQuality,
     #[serde(default)]
-    pub main_window_position: Option<WindowPosition>,
-    #[serde(default)]
     pub camera_window_position: Option<WindowPosition>,
     #[serde(default)]
     pub camera_window_positions_by_monitor_name: BTreeMap<String, WindowPosition>,
@@ -273,7 +271,6 @@ impl Default for GeneralSettingsStore {
             transcription_hints: default_transcription_hints(),
             editor_preview_quality: EditorPreviewQuality::Half,
             studio_recording_quality: default_studio_recording_quality(),
-            main_window_position: None,
             camera_window_position: None,
             camera_window_positions_by_monitor_name: BTreeMap::new(),
             has_completed_onboarding: false,
@@ -292,12 +289,12 @@ pub enum Appearance {
     Dark,
 }
 
-impl Into<Option<tauri::Theme>> for Appearance {
-    fn into(self) -> Option<tauri::Theme> {
-        match self {
-            Self::Light => Some(tauri::Theme::Light),
-            Self::Dark => Some(tauri::Theme::Dark),
-            Self::System => None,
+impl From<Appearance> for Option<tauri::Theme> {
+    fn from(appearance: Appearance) -> Self {
+        match appearance {
+            Appearance::Light => Some(tauri::Theme::Light),
+            Appearance::Dark => Some(tauri::Theme::Dark),
+            Appearance::System => None,
         }
     }
 }

@@ -1398,7 +1398,7 @@ impl CapWindow {
 
                             let max_level = unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
                             panel.set_level(max_level - 1);
-                            panel.set_style_mask(1<<7);
+                            panel.set_style_mask(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel.0 as i32);
 
                             panel.order_front_regardless();
                             panel.show();
@@ -2122,7 +2122,7 @@ impl CapWindow {
                             );
 
                             panel.set_delegate(delegate);
-                            panel.set_style_mask(1<<7);
+                            panel.set_style_mask(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel.0 as i32);
 
                             let max_level = unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
                             panel.set_level(max_level);
@@ -2193,7 +2193,7 @@ impl CapWindow {
                             };
 
                             panel.set_level(cocoa::appkit::NSMainMenuWindowLevel);
-                            panel.set_style_mask(1<<7);
+                            panel.set_style_mask(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel.0 as i32);
 
                             panel.set_collection_behaviour(
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
@@ -2203,8 +2203,7 @@ impl CapWindow {
                             );
 
                             #[allow(non_upper_case_globals)]
-                            const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
-                            panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
+                            panel.set_style_mask(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel.0 as i32);
                         }
                     })
                     .ok();
