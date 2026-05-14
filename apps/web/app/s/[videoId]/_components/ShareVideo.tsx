@@ -51,6 +51,7 @@ export const ShareVideo = forwardRef<
 		aiGenerationStatus?: AiGenerationStatus | null;
 		canRetryProcessing?: boolean;
 		showPlaybackStatusBadge?: boolean;
+		isEditProcessing: boolean;
 	}
 >(
 	(
@@ -64,6 +65,7 @@ export const ShareVideo = forwardRef<
 			areReactionStampsDisabled,
 			canRetryProcessing,
 			showPlaybackStatusBadge = false,
+			isEditProcessing,
 		},
 		ref,
 	) => {
@@ -194,9 +196,6 @@ export const ShareVideo = forwardRef<
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		const isSegmentsSource = data.source.type === "desktopSegments";
-		const isEditProcessing =
-			data.activeUploadRawFileKey ===
-			`${data.owner.id}/${data.id}/source/original.mp4`;
 		const isActivelyRecording =
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&

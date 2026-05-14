@@ -179,6 +179,7 @@ export async function POST(request: NextRequest) {
 						phase: "complete",
 						processingProgress: 100,
 						processingMessage: payload.message,
+						processingError: null,
 						updatedAt: new Date(),
 					})
 					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));

@@ -484,6 +484,20 @@ describe("POST /video/edit", () => {
 		expect(response.status).toBe(401);
 	});
 
+	test("returns 400 for invalid JSON", async () => {
+		const response = await app.fetch(
+			new Request("http://localhost/video/edit", {
+				method: "POST",
+				headers: AUTH_HEADERS,
+				body: "{",
+			}),
+		);
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
 	test("returns 400 for missing keep ranges", async () => {
 		const response = await app.fetch(
 			videoPostRequest("/video/edit", {

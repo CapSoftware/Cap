@@ -534,7 +534,12 @@ video.post("/edit", async (c) => {
 		return c.json({ error: "Unauthorized" }, 401);
 	}
 
-	const body = await c.req.json();
+	let body: unknown;
+	try {
+		body = await c.req.json();
+	} catch {
+		return c.json({ error: "Invalid request", code: "INVALID_REQUEST" }, 400);
+	}
 	const result = editSchema.safeParse(body);
 
 	if (!result.success) {
@@ -728,7 +733,12 @@ async function processWithResilientRetry(
 		updateJob(jobId, { progress: scaledProgress, message });
 		const currentJob = getJob(jobId);
 		if (currentJob) {
-			sendWebhook(currentJob);
+			void sendWebhook(currentJob).catch((error) =>
+				console.warn(
+					`[video/process] Failed to send webhook update for job ${jobId}:`,
+					error,
+				),
+			);
 		}
 	};
 
@@ -856,8 +866,7 @@ async function editVideoAsync(
 	previewGifPresignedUrl: string | undefined,
 	options: z.infer<typeof editSchema>,
 ): Promise<void> {
-	const job = getJob(jobId);
-	if (!job) {
+	if (!getJob(jobId)) {
 		return;
 	}
 
@@ -870,7 +879,10 @@ async function editVideoAsync(
 			progress: 0,
 			message: "Downloading source video...",
 		});
-		await sendWebhook(job);
+		const downloadingJob = getJob(jobId);
+		if (downloadingJob) {
+			await sendWebhook(downloadingJob);
+		}
 
 		const inputTempFile = await downloadVideoToTemp(
 			sourceUrl,
@@ -884,7 +896,10 @@ async function editVideoAsync(
 			progress: 5,
 			message: "Analyzing source video...",
 		});
-		await sendWebhook(job);
+		const probingJob = getJob(jobId);
+		if (probingJob) {
+			await sendWebhook(probingJob);
+		}
 
 		const sourceMetadata = await probeVideoFile(inputTempFile.path);
 
@@ -893,7 +908,10 @@ async function editVideoAsync(
 			progress: 10,
 			message: "Applying edit...",
 		});
-		await sendWebhook(job);
+		const processingJob = getJob(jobId);
+		if (processingJob) {
+			await sendWebhook(processingJob);
+		}
 
 		const outputTempFile = await withJobHeartbeat(jobId, () =>
 			renderEditedVideo({
@@ -908,7 +926,12 @@ async function editVideoAsync(
 					});
 					const currentJob = getJob(jobId);
 					if (currentJob) {
-						sendWebhook(currentJob);
+						void sendWebhook(currentJob).catch((error) =>
+							console.warn(
+								`[video/edit] Failed to send webhook update for job ${jobId}:`,
+								error,
+							),
+						);
 					}
 				},
 			}),
@@ -923,7 +946,10 @@ async function editVideoAsync(
 			progress: 80,
 			message: "Uploading edited video...",
 		});
-		await sendWebhook(job);
+		const uploadingJob = getJob(jobId);
+		if (uploadingJob) {
+			await sendWebhook(uploadingJob);
+		}
 
 		await uploadFileToS3(outputTempFile.path, outputPresignedUrl, "video/mp4");
 
@@ -933,7 +959,10 @@ async function editVideoAsync(
 				progress: 90,
 				message: "Generating preview assets...",
 			});
-			await sendWebhook(job);
+			const thumbnailJob = getJob(jobId);
+			if (thumbnailJob) {
+				await sendWebhook(thumbnailJob);
+			}
 		}
 
 		if (thumbnailPresignedUrl) {
@@ -975,14 +1004,20 @@ async function editVideoAsync(
 			message: "Edit failed",
 		});
 
-		if (updatedJob) {
-			await sendWebhook(updatedJob);
-		}
+		try {
+			if (updatedJob) {
+				await sendWebhook(updatedJob);
+			}
+		} finally {
+			const currentJob = getJob(jobId);
+			if (currentJob) {
+				await Promise.allSettled([
+					currentJob.inputTempFile?.cleanup(),
+					currentJob.outputTempFile?.cleanup(),
+				]);
+			}
 
-		const currentJob = getJob(jobId);
-		if (currentJob) {
-			await currentJob.inputTempFile?.cleanup();
-			await currentJob.outputTempFile?.cleanup();
+			setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 		}
 	}
 }

@@ -48,7 +48,10 @@ import {
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
 import { transcribeVideo } from "@/lib/transcribe";
-import { reconcileStaleEditUpload } from "@/lib/video-edit-processing";
+import {
+	isEditSourceKey,
+	reconcileStaleEditUpload,
+} from "@/lib/video-edit-processing";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
@@ -695,6 +698,11 @@ async function AuthorizedContent({
 			inheritedSpaceSettings: rules.inheritedSettings,
 		};
 	}).pipe(runPromise);
+	const isEditProcessing = isEditSourceKey({
+		ownerId: video.owner.id,
+		videoId,
+		rawFileKey: video.activeUploadRawFileKey,
+	});
 
 	return (
 		<>
@@ -725,6 +733,7 @@ async function AuthorizedContent({
 					domainVerified={domainVerified}
 					userOrganizations={userOrganizations}
 					viewerId={user?.id ?? null}
+					isEditProcessing={isEditProcessing}
 					initialAiData={initialAiData}
 					aiGenerationEnabled={aiGenerationEnabled}
 				/>
