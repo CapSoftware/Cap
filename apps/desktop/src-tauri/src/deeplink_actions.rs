@@ -170,7 +170,7 @@ impl DeepLinkAction {
                 crate::recording::resume_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::TogglePause => {
-                crate::recording::toggle_pause(app.clone(), app.state()).await
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::TakeScreenshot => {
                 crate::recording::take_screenshot(app.clone(), app.state()).await
