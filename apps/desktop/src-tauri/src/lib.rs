@@ -16,6 +16,7 @@ mod flags;
 mod frame_ws;
 mod general_settings;
 mod hotkeys;
+mod hardware_handlers;
 mod http_client;
 mod import;
 mod logging;
