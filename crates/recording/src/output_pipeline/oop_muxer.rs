@@ -4,6 +4,8 @@ use cap_muxer_protocol::{
     Frame, InitAudio, InitVideo, PACKET_FLAG_KEYFRAME, Packet, STREAM_INDEX_AUDIO,
     STREAM_INDEX_VIDEO, StartParams, write_frame,
 };
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::{
     collections::VecDeque,
     io::{BufWriter, Write},
@@ -23,6 +25,9 @@ const STDERR_RING_LIMIT: usize = 128;
 const RESPAWN_COOLDOWN: Duration = Duration::from_millis(500);
 const RESPAWN_STABILITY_WINDOW: Duration = Duration::from_secs(5);
 pub const EXIT_DISK_FULL: u8 = 60;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 static MUXER_BINARY_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
 
@@ -167,18 +172,20 @@ impl MuxerSubprocess {
         config: MuxerSubprocessConfig,
         health_tx: Option<HealthSender>,
     ) -> Result<Self, MuxerSubprocessError> {
-        let mut child = Command::new(&bin_path)
+        let mut command = Command::new(&bin_path);
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .env(
                 "CAP_MUXER_LOG",
                 std::env::var("CAP_MUXER_LOG").unwrap_or_else(|_| "info".to_string()),
-            )
-            .spawn()
-            .map_err(|e| {
-                MuxerSubprocessError::Spawn(anyhow!("failed to spawn {}: {e}", bin_path.display()))
-            })?;
+            );
+        configure_muxer_command(&mut command);
+
+        let mut child = command.spawn().map_err(|e| {
+            MuxerSubprocessError::Spawn(anyhow!("failed to spawn {}: {e}", bin_path.display()))
+        })?;
 
         let stdin = child
             .stdin
@@ -542,6 +549,14 @@ impl Drop for MuxerSubprocess {
         }
     }
 }
+
+#[cfg(windows)]
+fn configure_muxer_command(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn configure_muxer_command(_command: &mut Command) {}
 
 #[derive(Debug)]
 pub struct MuxerSubprocessReport {

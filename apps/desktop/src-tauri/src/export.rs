@@ -62,6 +62,7 @@ async fn run_protected_export(
 
 const EXPORTER_ENV_BIN_PATH: &str = "CAP_EXPORTER_BIN";
 const EXPORTER_STDERR_TAIL_LIMIT: usize = 80;
+const EXPORT_PROGRESS_FORWARD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 static ACTIVE_EXPORT_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(windows)]
@@ -77,6 +78,22 @@ enum ExportSidecarMessage {
     Completed {
         path: PathBuf,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExportWorkerMode {
+    HardwareOptimized,
+    SoftwareSafe,
+}
+
+impl ExportWorkerMode {
+    fn force_ffmpeg_decoder(self, requested: bool) -> bool {
+        requested || matches!(self, Self::SoftwareSafe)
+    }
+
+    fn is_software_safe(self) -> bool {
+        matches!(self, Self::SoftwareSafe)
+    }
 }
 
 #[derive(Clone)]
@@ -95,6 +112,47 @@ impl ExportProgress {
 
     fn enabled(&self) -> bool {
         matches!(self, Self::Channel(_))
+    }
+}
+
+struct ExportProgressForwarder {
+    progress: ExportProgress,
+    last_emit_at: Option<std::time::Instant>,
+}
+
+impl ExportProgressForwarder {
+    fn new(progress: ExportProgress) -> Self {
+        Self {
+            progress,
+            last_emit_at: None,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.progress.enabled()
+    }
+
+    fn send(&mut self, rendered_count: u32, total_frames: u32) -> bool {
+        if !self.progress.enabled() {
+            return true;
+        }
+
+        let now = std::time::Instant::now();
+        let should_emit = rendered_count == 0
+            || rendered_count >= total_frames
+            || self
+                .last_emit_at
+                .is_none_or(|last| now.duration_since(last) >= EXPORT_PROGRESS_FORWARD_INTERVAL);
+
+        if !should_emit {
+            return true;
+        }
+
+        self.last_emit_at = Some(now);
+        self.progress.send(FramesRendered {
+            rendered_count,
+            total_frames,
+        })
     }
 }
 
@@ -174,24 +232,33 @@ async fn run_out_of_process_export(
     progress: ExportProgress,
     force_ffmpeg: bool,
 ) -> Result<PathBuf, String> {
-    let safe_mode = should_start_export_sidecar_in_safe_mode();
+    let mode = ExportWorkerMode::HardwareOptimized;
+    // Windows GPU drivers, MediaFoundation, and encoder DLLs can abort the process on failure.
+    // Keep the first fast hardware attempt in the worker, then retry in software-safe mode so
+    // the desktop process never owns the crash-prone export pipeline.
     match run_out_of_process_export_attempt(
         project_path,
         settings,
         progress.clone(),
         force_ffmpeg,
-        safe_mode,
+        mode,
     )
     .await
     {
         Ok(path) => Ok(path),
-        Err(e) if e != "Export cancelled" && !safe_mode => {
+        Err(e) if e != "Export cancelled" => {
             error!(
                 error = %e,
                 "Export worker failed, retrying with software rendering and encoding"
             );
-            run_out_of_process_export_attempt(project_path, settings, progress, force_ffmpeg, true)
-                .await
+            run_out_of_process_export_attempt(
+                project_path,
+                settings,
+                progress,
+                force_ffmpeg,
+                ExportWorkerMode::SoftwareSafe,
+            )
+            .await
         }
         Err(e) => Err(e),
     }
@@ -202,17 +269,19 @@ async fn run_out_of_process_export_attempt(
     settings: &ExportSettings,
     progress: ExportProgress,
     force_ffmpeg: bool,
-    safe_mode: bool,
+    mode: ExportWorkerMode,
 ) -> Result<PathBuf, String> {
     let bin_path = resolve_exporter_binary()?;
     let settings_json = serde_json::to_string(settings)
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
+    let force_ffmpeg_decoder = mode.force_ffmpeg_decoder(force_ffmpeg);
+    let mut progress_forwarder = ExportProgressForwarder::new(progress);
 
     info!(
         path = %bin_path.display(),
         project_path = %project_path.display(),
-        force_ffmpeg,
-        safe_mode,
+        force_ffmpeg = force_ffmpeg_decoder,
+        mode = ?mode,
         "Starting export worker process"
     );
 
@@ -222,16 +291,21 @@ async fn run_out_of_process_export_attempt(
         .arg(project_path)
         .arg("--settings-json")
         .arg(settings_json)
-        .arg("--progress-json")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    if force_ffmpeg {
+    if progress_forwarder.enabled() {
+        command.arg("--progress-json");
+    } else {
+        command.arg("--completion-json");
+    }
+
+    if force_ffmpeg_decoder {
         command.arg("--force-ffmpeg-decoder");
     }
 
-    if safe_mode {
+    if mode.is_software_safe() {
         command
             .env("CAP_RENDER_FORCE_SOFTWARE_ADAPTER", "1")
             .env("CAP_EXPORT_FORCE_SOFTWARE_ENCODER", "1");
@@ -268,10 +342,7 @@ async fn run_out_of_process_export_attempt(
                 rendered_count,
                 total_frames,
             }) => {
-                if !progress.send(FramesRendered {
-                    rendered_count,
-                    total_frames,
-                }) {
+                if !progress_forwarder.send(rendered_count, total_frames) {
                     let _ = child.kill().await;
                     return Err("Export cancelled".to_string());
                 }
@@ -296,6 +367,18 @@ async fn run_out_of_process_export_attempt(
     let stderr_tail = stderr_task.await.unwrap_or_default();
 
     if !status.success() {
+        if let Some(path) = completed_path {
+            // A worker can report completion and then abort during Windows GPU/codec teardown.
+            // Treat the completed output as authoritative so a post-export sidecar crash does
+            // not become a failed export for the user.
+            error!(
+                status = %status,
+                path = %path.display(),
+                "Export worker exited unsuccessfully after reporting completion"
+            );
+            return Ok(path);
+        }
+
         let stderr_tail = stderr_tail.join("\n");
         return Err(format!(
             "Export worker exited with status {status}. Stderr tail:\n{stderr_tail}"
@@ -313,7 +396,9 @@ async fn collect_exporter_stderr_tail(stderr: tokio::process::ChildStderr) -> Ve
     loop {
         match lines.next_line().await {
             Ok(Some(line)) => {
-                info!(line = %line, "Export worker stderr");
+                if cfg!(debug_assertions) {
+                    info!(line = %line, "Export worker stderr");
+                }
                 tail.push(line);
                 if tail.len() > EXPORTER_STDERR_TAIL_LIMIT {
                     tail.remove(0);
@@ -344,6 +429,15 @@ fn resolve_exporter_binary() -> Result<PathBuf, String> {
 
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     if let Some(dir) = exe.parent() {
+        // In dev, `cap.exe` is the binary Cargo rebuilds; stale `cap-exporter.exe` copies were
+        // the reason desktop exports lagged behind the fast CLI path during this fix.
+        if cfg!(debug_assertions) {
+            let candidate = dir.join(cli_bin_name());
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+
         let candidate = dir.join(exporter_bin_name());
         if candidate.exists() {
             return Ok(candidate);
@@ -356,12 +450,11 @@ fn resolve_exporter_binary() -> Result<PathBuf, String> {
     }
 
     if let Ok(cwd) = std::env::current_dir() {
-        for candidate in [
-            cwd.join("target").join("debug").join(cli_bin_name()),
-            cwd.join("target").join("release").join(cli_bin_name()),
-        ] {
-            if candidate.exists() {
-                return Ok(candidate);
+        for root in std::iter::once(cwd.as_path()).chain(cwd.ancestors()) {
+            for candidate in exporter_binary_candidates(root) {
+                if candidate.exists() {
+                    return Ok(candidate);
+                }
             }
         }
     }
@@ -370,6 +463,59 @@ fn resolve_exporter_binary() -> Result<PathBuf, String> {
         "Export worker binary not found; set {EXPORTER_ENV_BIN_PATH} or place {} next to the app executable",
         exporter_bin_name()
     ))
+}
+
+fn exporter_binary_candidates(root: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![
+        root.join("target").join("debug").join(cli_bin_name()),
+        root.join("target").join("release").join(cli_bin_name()),
+        root.join("apps")
+            .join("desktop")
+            .join("src-tauri")
+            .join("binaries")
+            .join(exporter_bin_name()),
+    ];
+
+    if let Some(target_triple) = current_target_triple() {
+        candidates.extend([
+            root.join("target")
+                .join(target_triple)
+                .join("debug")
+                .join(cli_bin_name()),
+            root.join("target")
+                .join(target_triple)
+                .join("release")
+                .join(cli_bin_name()),
+            root.join("apps")
+                .join("desktop")
+                .join("src-tauri")
+                .join("binaries")
+                .join(format!(
+                    "cap-exporter-{target_triple}{}",
+                    std::env::consts::EXE_SUFFIX
+                )),
+        ]);
+    }
+
+    candidates
+}
+
+fn current_target_triple() -> Option<&'static str> {
+    if cfg!(all(
+        target_os = "windows",
+        target_arch = "x86_64",
+        target_env = "msvc"
+    )) {
+        Some("x86_64-pc-windows-msvc")
+    } else if cfg!(all(
+        target_os = "windows",
+        target_arch = "aarch64",
+        target_env = "msvc"
+    )) {
+        Some("aarch64-pc-windows-msvc")
+    } else {
+        None
+    }
 }
 
 fn exporter_bin_name() -> &'static str {
@@ -526,7 +672,7 @@ fn is_frame_decode_error(error: &str) -> bool {
 }
 
 fn should_force_ffmpeg_export(_project_path: &Path, settings: &ExportSettings) -> bool {
-    settings.force_ffmpeg_decoder() || should_use_windows_release_ffmpeg_workaround()
+    settings.force_ffmpeg_decoder()
 }
 
 fn should_force_ffmpeg_preview() -> bool {
@@ -534,15 +680,7 @@ fn should_force_ffmpeg_preview() -> bool {
 }
 
 fn should_use_out_of_process_export() -> bool {
-    should_use_release_export_sidecar()
-}
-
-fn should_use_release_export_sidecar() -> bool {
-    cfg!(all(target_os = "macos", not(debug_assertions)))
-}
-
-fn should_start_export_sidecar_in_safe_mode() -> bool {
-    cfg!(all(target_os = "windows", not(debug_assertions)))
+    cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
 fn should_use_windows_release_ffmpeg_workaround() -> bool {

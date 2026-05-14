@@ -14,7 +14,9 @@ use record::RecordStart;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::*;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt};
+
+const TOKIO_WORKER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Parser)]
 struct Cli {
@@ -30,6 +32,12 @@ enum Commands {
     ExportPreview(ExportPreview),
     /// Start a recording or list available capture targets and devices
     Record(RecordArgs),
+}
+
+impl Commands {
+    fn exit_after_success(&self) -> bool {
+        matches!(self, Self::Export(_) | Self::ExportPreview(_))
+    }
 }
 
 #[derive(Args)]
@@ -54,9 +62,14 @@ enum RecordCommands {
     // Mics,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), String> {
+fn main() -> Result<(), String> {
     // let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
+
+    let level_filter = if cfg!(debug_assertions) {
+        LevelFilter::TRACE
+    } else {
+        LevelFilter::WARN
+    };
 
     let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
         (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
@@ -64,6 +77,7 @@ async fn main() -> Result<(), String> {
 
     registry
         // .with(layer)
+        .with(level_filter)
         .with(
             tracing_subscriber::fmt::layer()
                 .with_ansi(true)
@@ -73,7 +87,39 @@ async fn main() -> Result<(), String> {
         .init();
 
     let cli = Cli::parse();
+    let exit_after_success = cli.command.exit_after_success();
 
+    // Windows export exercises deep WGPU/MediaFoundation/FFmpeg stacks. Running the CLI runtime
+    // on an explicitly large stack is what stopped the export worker from overflowing before
+    // the first frame; keep the sidecar and desktop runtimes in sync.
+    std::thread::Builder::new()
+        .name("cap-cli-runtime".to_string())
+        .stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
+                .build()
+                .map_err(|e| format!("Failed to build Tokio runtime: {e}"))?;
+
+            let result = runtime.block_on(run(cli));
+            if exit_after_success && result.is_ok() {
+                // Successful export/preview workers have already written their output by here.
+                // Exiting directly avoids Windows GPU/MediaFoundation teardown crashes in the
+                // short-lived sidecar process.
+                let _ = stdout().flush();
+                let _ = stderr().flush();
+                std::process::exit(0);
+            }
+
+            result
+        })
+        .map_err(|e| format!("Failed to spawn CLI runtime thread: {e}"))?
+        .join()
+        .map_err(|_| "CLI runtime thread panicked".to_string())?
+}
+
+async fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
         Commands::Export(e) => {
             e.run().await?;
@@ -165,6 +211,8 @@ struct Export {
     force_ffmpeg_decoder: bool,
     #[arg(long)]
     progress_json: bool,
+    #[arg(long)]
+    completion_json: bool,
 }
 
 #[derive(Args)]
@@ -264,6 +312,7 @@ impl Export {
 
         let total_frames = exporter_base.total_frames(settings.fps());
         let progress_json = self.progress_json;
+        let completion_json = self.completion_json;
         let stdout = Arc::new(Mutex::new(stdout()));
 
         if progress_json {
@@ -299,7 +348,7 @@ impl Export {
         }
         .map_err(|v| format!("Exporter error: {v}"))?;
 
-        if self.progress_json {
+        if progress_json || completion_json {
             emit_export_message(
                 &stdout,
                 &ExportProgressMessage::Completed { path: &output_path },
