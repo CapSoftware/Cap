@@ -3082,33 +3082,27 @@ async fn save_file_dialog(
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    println!("save_file_dialog called with file_name: {file_name}, file_type: {file_type}");
+    info!(file_name, file_type, "Save file dialog requested");
 
     let file_name = file_name
         .strip_suffix(".cap")
         .unwrap_or(&file_name)
         .to_string();
-    println!("File name after removing .cap suffix: {file_name}");
 
     let (name, extension) = match file_type.as_str() {
-        "recording" => {
-            println!("File type is recording");
-            ("MP4 Video", "mp4")
-        }
-        "screenshot" => {
-            println!("File type is screenshot");
-            ("PNG Image", "png")
-        }
+        "recording" | "mp4" => ("MP4 Video", "mp4"),
+        "gif" => ("GIF Image", "gif"),
+        "mov" => ("MOV Video", "mov"),
+        "screenshot" | "png" => ("PNG Image", "png"),
         _ => {
-            println!("Invalid file type: {file_type}");
+            warn!(file_type, "Invalid save file dialog type");
             return Err("Invalid file type".to_string());
         }
     };
 
-    println!("Showing save dialog with name: {name}, extension: {extension}");
+    info!(file_name, name, extension, "Showing save file dialog");
 
     let (tx, rx) = std::sync::mpsc::channel();
-    println!("Created channel for communication");
 
     app.dialog()
         .file()
@@ -3116,7 +3110,6 @@ async fn save_file_dialog(
         .set_file_name(file_name)
         .add_filter(name, &[extension])
         .save_file(move |path| {
-            println!("Save file callback triggered");
             let _ = tx.send(
                 path.as_ref()
                     .and_then(|p| p.as_path())
@@ -3124,14 +3117,13 @@ async fn save_file_dialog(
             );
         });
 
-    println!("Waiting for user selection");
     match rx.recv() {
         Ok(result) => {
-            println!("Save dialog result: {result:?}");
+            info!(path = ?result, "Save file dialog completed");
             Ok(result)
         }
         Err(e) => {
-            println!("Error receiving result: {e}");
+            warn!(error = %e, "Save file dialog failed");
             notifications::send_notification(
                 &app,
                 notifications::NotificationType::VideoSaveFailed,
@@ -3925,8 +3917,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             export::begin_export_session,
             export::end_export_session,
             export::export_video,
-            export::export_video_no_progress,
-            export::export_video_no_progress_detached,
+            export::export_video_to_file,
             export::get_export_estimates,
             export::generate_export_preview,
             export::generate_export_preview_fast,
@@ -4899,6 +4890,8 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
             }
         }
         tauri::RunEvent::ExitRequested { code, api, .. } => {
+            info!(?code, "App exit requested");
+
             if _handle
                 .try_state::<AppExitState>()
                 .is_some_and(|state| state.is_exiting())

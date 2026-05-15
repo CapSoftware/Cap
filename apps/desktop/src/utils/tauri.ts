@@ -101,12 +101,6 @@ async endExportSession() : Promise<void> {
 async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings) : Promise<string> {
     return await TAURI_INVOKE("export_video", { projectPath, progress, settings });
 },
-async exportVideoNoProgress(projectPath: string, settings: ExportSettings) : Promise<string> {
-    return await TAURI_INVOKE("export_video_no_progress", { projectPath, settings });
-},
-async exportVideoNoProgressDetached(projectPath: string, settingsJson: string) : Promise<string> {
-    return await TAURI_INVOKE("export_video_no_progress_detached", { projectPath, settingsJson });
-},
 async getExportEstimates(path: string, settings: ExportSettings) : Promise<ExportEstimates> {
     return await TAURI_INVOKE("get_export_estimates", { path, settings });
 },
