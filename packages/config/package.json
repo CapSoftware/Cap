@@ -1,6 +1,9 @@
 {
 	"name": "config",
 	"version": "0.0.0",
+	"scripts": {
+		"test": "vitest run"
+	},
 	"exports": {
 		"./*": "./*",
 		"./vite": "./vite"
@@ -17,7 +20,8 @@
 		"eslint-plugin-react": "^7.32.2",
 		"eslint-plugin-react-hooks": "^4.6.0",
 		"eslint-plugin-tailwindcss": "^3.12.0",
-		"eslint-utils": "^3.0.0"
+		"eslint-utils": "^3.0.0",
+		"vitest": "~2.1.9"
 	},
 	"dependencies": {
 		"@vitejs/plugin-react": "^4.0.3",

@@ -952,6 +952,9 @@ importers:
       eslint-utils:
         specifier: ^3.0.0
         version: 3.0.0(eslint@8.57.1)
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/database:
     dependencies:
