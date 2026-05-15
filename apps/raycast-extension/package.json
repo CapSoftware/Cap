@@ -55,9 +55,15 @@
       "arguments": [
         {
           "name": "camera_id",
-          "placeholder": "Camera ID",
+          "placeholder": "Camera ID (e.g. from continuity camera)",
           "type": "text",
           "required": true
+        },
+        {
+          "name": "type",
+          "placeholder": "ID Type (device or model)",
+          "type": "text",
+          "required": false
         }
       ]
     }
@@ -76,6 +82,6 @@
     "dev": "ray develop",
     "fix-lint": "ray lint --fix",
     "lint": "ray lint",
-    "publish": "npx @raycast/api@latest publish"
+    "publish": "ray publish"
   }
 }

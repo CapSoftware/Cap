@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
 use tracing::trace;
 
-use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
+use crate::{
+    App, ArcLock, RecordingEvent, recording::StartRecordingInputs, windows::ShowCapWindow,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -129,7 +131,7 @@ impl DeepLinkAction {
                     app.state(),
                     crate::recording::StartRecordingInputs {
                         capture_target: target,
-                        capture_system_audio: Some(settings.system_audio),
+                        capture_system_audio: settings.system_audio,
                         mode,
                         organization_id: settings.organization_id,
                     },
@@ -181,6 +183,7 @@ impl DeepLinkAction {
                 let mut app_state = state.write().await;
                 if let Some(recording) = app_state.current_recording_mut() {
                     recording.pause().await.map_err(|e| e.to_string())?;
+                    RecordingEvent::Paused.emit(app).ok();
                 }
                 Ok(())
             }
@@ -189,6 +192,7 @@ impl DeepLinkAction {
                 let mut app_state = state.write().await;
                 if let Some(recording) = app_state.current_recording_mut() {
                     recording.resume().await.map_err(|e| e.to_string())?;
+                    RecordingEvent::Resumed.emit(app).ok();
                 }
                 Ok(())
             }
