@@ -76,7 +76,7 @@ export async function editVideoWorkflow(
 		return result;
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
-		await clearEditProcessingState(videoId);
+		await clearEditProcessingState(videoId, sourceKey);
 		throw new FatalError(errorMessage);
 	}
 }
@@ -500,10 +500,18 @@ async function saveEditResultAndComplete(
 	}
 }
 
-async function clearEditProcessingState(videoId: string): Promise<void> {
+async function clearEditProcessingState(
+	videoId: string,
+	sourceKey: string,
+): Promise<void> {
 	"use step";
 
 	await db()
 		.delete(videoUploads)
-		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+		.where(
+			and(
+				eq(videoUploads.videoId, videoId as Video.VideoId),
+				eq(videoUploads.rawFileKey, sourceKey),
+			),
+		);
 }

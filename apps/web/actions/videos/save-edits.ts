@@ -28,6 +28,7 @@ const ACTIVE_UPLOAD_PHASES = new Set([
 	"processing",
 	"generating_thumbnail",
 	"complete",
+	"error",
 ]);
 
 function isMp4BackedVideo(source: typeof videos.$inferSelect.source) {
@@ -135,7 +136,13 @@ export async function saveVideoEdits(
 		.where(eq(videoUploads.videoId, videoId));
 
 	if (activeUpload && ACTIVE_UPLOAD_PHASES.has(activeUpload.phase)) {
-		throw new Error("Video is already uploading or processing");
+		const message =
+			activeUpload.phase === "complete"
+				? "Previous edit is finishing up. Try again in a moment."
+				: activeUpload.phase === "error"
+					? "Previous edit failed and is being cleaned up. Try again in a moment."
+					: "Video is already uploading or processing";
+		throw new Error(message);
 	}
 
 	const [existingEdit] = await db()
