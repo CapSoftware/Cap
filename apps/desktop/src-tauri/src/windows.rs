@@ -2444,6 +2444,20 @@ pub fn set_window_transparent(_window: tauri::Window, _value: bool) {
     }
 }
 
+#[specta::specta]
+#[tauri::command(async)]
+#[instrument(skip(webview))]
+pub fn mark_webview_ready_to_show(webview: tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = crate::platform::show_after_next_presentation_update(&webview);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        webview.show();
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct EditorWindowIds {
     pub ids: Arc<Mutex<Vec<(PathBuf, u32)>>>,

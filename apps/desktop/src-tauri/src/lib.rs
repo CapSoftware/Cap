@@ -3909,6 +3909,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::list_displays_with_thumbnails,
             recording::list_windows_with_thumbnails,
             windows::refresh_window_content_protection,
+            windows::mark_webview_ready_to_show,
             general_settings::get_default_excluded_windows,
             list_audio_devices,
             close_recordings_overlay_window,
