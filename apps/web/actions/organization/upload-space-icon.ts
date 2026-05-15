@@ -10,6 +10,7 @@ import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { sanitizeFile } from "@/lib/sanitizeFile";
 import { runPromise } from "@/lib/server";
+import { requireSpaceManager } from "./space-authorization";
 
 export async function uploadSpaceIcon(
 	formData: FormData,
@@ -21,7 +22,6 @@ export async function uploadSpaceIcon(
 		throw new Error("Unauthorized");
 	}
 
-	// Fetch the space and check permissions
 	const spaceArr = await db()
 		.select()
 		.from(spaces)
@@ -36,9 +36,7 @@ export async function uploadSpaceIcon(
 		throw new Error("Space not found");
 	}
 
-	if (space.organizationId !== user.activeOrganizationId) {
-		throw new Error("You do not have permission to update this space");
-	}
+	await requireSpaceManager(user.id, spaceId);
 
 	const file = formData.get("icon") as File;
 	if (!file) {
@@ -51,7 +49,6 @@ export async function uploadSpaceIcon(
 		throw new Error("File size must be less than 1MB");
 	}
 
-	// Prepare new file key
 	const fileExtension = file.name.split(".").pop();
 	const fileKey = ImageUpload.ImageKey.make(
 		`organizations/${
@@ -64,9 +61,7 @@ export async function uploadSpaceIcon(
 	);
 
 	try {
-		// Remove previous icon if exists
 		if (space.iconUrl) {
-			// Extract the S3 key (it might already be a key or could be a legacy URL)
 			const key = space.iconUrl.startsWith("organizations/")
 				? space.iconUrl
 				: space.iconUrl.match(/organizations\/.+/)?.[0];
@@ -74,7 +69,6 @@ export async function uploadSpaceIcon(
 				try {
 					await bucket.deleteObject(key).pipe(runPromise);
 				} catch (e) {
-					// Log and continue
 					console.warn("Failed to delete old space icon from S3", e);
 				}
 			}

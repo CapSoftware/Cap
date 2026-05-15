@@ -6,6 +6,7 @@ import { organizationInvites, organizations } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { requireOrganizationSettingsManager } from "./authorization";
 
 export async function removeOrganizationInvite(
 	inviteId: string,
@@ -27,9 +28,7 @@ export async function removeOrganizationInvite(
 		throw new Error("Organization not found");
 	}
 
-	if (organization[0]?.ownerId !== user.id) {
-		throw new Error("Only the owner can remove organization invites");
-	}
+	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	const [result] = await db()
 		.delete(organizationInvites)

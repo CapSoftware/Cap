@@ -6,6 +6,7 @@ import { organizations } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { requireOrganizationSettingsManager } from "./authorization";
 
 export async function removeOrganizationDomain(
 	organizationId: Organisation.OrganisationId,
@@ -21,9 +22,9 @@ export async function removeOrganizationDomain(
 		.from(organizations)
 		.where(eq(organizations.id, organizationId));
 
-	if (!organization || organization.ownerId !== user.id) {
-		throw new Error("Only the owner can remove the custom domain");
-	}
+	if (!organization) throw new Error("Organization not found");
+
+	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	try {
 		if (organization.customDomain) {
