@@ -143,8 +143,6 @@ pub struct GeneralSettingsStore {
     #[serde(default)]
     pub last_version: Option<String>,
     #[serde(default)]
-    pub window_transparency: bool,
-    #[serde(default)]
     pub post_studio_recording_behaviour: PostStudioRecordingBehaviour,
     #[serde(default)]
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
@@ -252,7 +250,6 @@ impl Default for GeneralSettingsStore {
             appearance: Appearance::System,
             commercial_license: None,
             last_version: None,
-            window_transparency: false,
             post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
             custom_cursor_capture: true,

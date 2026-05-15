@@ -69,7 +69,7 @@ use crate::{
     thumbnails::*,
     upload::{InstantMultipartUpload, SegmentUploader, compress_image},
     web_api::ManagerExt,
-    windows::{CapWindowId, CapWindow, hide_overlay},
+    windows::{CapWindow, CapWindowId, hide_overlay},
 };
 
 #[derive(Clone)]

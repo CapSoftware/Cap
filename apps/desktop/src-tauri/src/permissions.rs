@@ -27,18 +27,16 @@ fn macos_prompt_screen_recording_access() {
 
 #[cfg(target_os = "macos")]
 fn macos_prompt_accessibility_access() {
-    use objc2_core_foundation::{CFDictionary, CFString, CFBoolean};
+    use objc2_core_foundation::{CFBoolean, CFDictionary, CFString};
 
     let options = CFDictionary::from_slices(
         &[&*CFString::from_static_str("AXTrustedCheckOptionPrompt")],
         &[CFBoolean::new(true)],
     );
-    
+
     // SAFETY: The AXIsProcessTrustedWithOptions function is safe to call with a valid CFDictionaryRef.
     unsafe {
-        objc2_application_services::AXIsProcessTrustedWithOptions(Some(
-            options.as_opaque(),
-        ));
+        objc2_application_services::AXIsProcessTrustedWithOptions(Some(options.as_opaque()));
     }
 }
 
@@ -110,9 +108,9 @@ fn macos_activate_permission_request(app: &tauri::AppHandle) {
 
     macos_focus_permission_window(app);
 
-    if let Some(current_app) = unsafe {
+    if let Some(current_app) =
         NSRunningApplication::runningApplicationWithProcessIdentifier(std::process::id() as _)
-    } {
+    {
         unsafe {
             current_app
                 .activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);

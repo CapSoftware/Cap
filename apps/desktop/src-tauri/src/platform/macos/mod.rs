@@ -19,17 +19,17 @@ pub fn set_window_level(window: tauri::Window, level: objc2_app_kit::NSWindowLev
     });
 }
 
-pub trait WebviewWindowExt {
-    fn objc2_nswindow(&self) -> &NSWindow;
-}
+// pub trait WebviewWindowExt {
+//     fn objc2_nswindow(&self) -> &NSWindow;
+// }
 
-impl WebviewWindowExt for WebviewWindow {
-    #[inline]
-    fn objc2_nswindow(&self) -> &NSWindow {
-        // SAFETY: This cast is safe as long as we get a NSWindow from Tauri.
-        unsafe { &*self.ns_window().expect("NSWindow not ready").cast() }
-    }
-}
+// impl WebviewWindowExt for WebviewWindow {
+//     #[inline]
+//     fn objc2_nswindow(&self) -> &NSWindow {
+//         // SAFETY: This cast is safe as long as we get a NSWindow from Tauri.
+//         unsafe { &*self.ns_window().expect("NSWindow not ready").cast() }
+//     }
+// }
 
 pub fn show_after_next_presentation_update(webview: &WebviewWindow) -> Result<(), tauri::Error> {
     webview.with_webview({

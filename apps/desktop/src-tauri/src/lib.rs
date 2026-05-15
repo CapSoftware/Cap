@@ -108,10 +108,7 @@ use tracing::*;
 use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
-use windows::{
-    CapWindow, CapWindowId, EditorWindowIds, ScreenshotEditorWindowIds, hide_overlay,
-    set_window_transparent,
-};
+use windows::{CapWindow, CapWindowId, EditorWindowIds, ScreenshotEditorWindowIds, hide_overlay};
 
 use crate::{recording::start_recording, upload::build_video_meta};
 use crate::{
@@ -3976,7 +3973,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             list_fails,
             set_fail,
             update_auth_plan,
-            set_window_transparent,
             get_editor_meta,
             get_recording_meta_by_path,
             set_pretty_name,
@@ -4626,10 +4622,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             }
                             CapWindowId::Settings => {
                                 for (label, window) in app.webview_windows() {
-                                    if let Ok(id) = CapWindowId::from_str(&label) {
-                                        if let CapWindowId::Main = id {
+                                    if let Ok(id) = CapWindowId::from_str(&label)
+                                        && let CapWindowId::Main = id {
                                             let _ = window.show();
-                                        }
                                     }
                                 }
 
@@ -4645,10 +4640,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             }
                             CapWindowId::Upgrade | CapWindowId::ModeSelect => {
                                 for (label, window) in app.webview_windows() {
-                                    if let Ok(id) = CapWindowId::from_str(&label) {
-                                        if let CapWindowId::Main = id {
+                                    if let Ok(id) = CapWindowId::from_str(&label)
+                                        && let CapWindowId::Main = id {
                                             let _ = window.show();
-                                        }
                                     }
                                 }
                                 restore_camera_window(app);

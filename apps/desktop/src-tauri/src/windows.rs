@@ -36,7 +36,6 @@ use crate::{
     emit_camera_preview_clear, emit_camera_preview_error, fake_window,
     general_settings::{self, Appearance, GeneralSettingsStore},
     permissions,
-    platform::WebviewWindowExt,
     recording::{RecordingEvent, RecordingInputKind},
     recording_settings::RecordingTargetMode,
     screenshot_editor::PendingScreenshotEditorInstances,
@@ -1232,7 +1231,7 @@ impl CapWindow {
 
                 #[cfg(target_os = "macos")]
                 {
-                    crate::permissions::schedule_macos_dock_visibility_sync(&app);
+                    crate::permissions::schedule_macos_dock_visibility_sync(app);
 
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
@@ -2425,23 +2424,6 @@ pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), Stri
     }
 
     Ok(())
-}
-
-#[specta::specta]
-#[tauri::command(async)]
-#[instrument(skip(_window))]
-pub fn set_window_transparent(_window: tauri::Window, _value: bool) {
-    #[cfg(target_os = "macos")]
-    {
-        let ns_win = _window
-            .ns_window()
-            .expect("Failed to get native window handle")
-            as *const objc2_app_kit::NSWindow;
-
-        unsafe {
-            (*ns_win).setOpaque(!_value);
-        }
-    }
 }
 
 #[specta::specta]
