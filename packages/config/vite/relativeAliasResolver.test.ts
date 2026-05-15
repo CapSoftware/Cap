@@ -2,11 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import resolver from "./relativeAliasResolver";
+import resolver, {
+	clearRelativeAliasResolverCacheForTesting,
+} from "./relativeAliasResolver";
 
 let tempDir: string;
 
 beforeEach(async () => {
+	clearRelativeAliasResolverCacheForTesting();
 	tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cap-config-vite-"));
 });
 
@@ -32,6 +35,20 @@ describe("relativeAliasResolver", () => {
 				path.join(srcDir, "pages", "index.tsx"),
 			),
 		).resolves.toBe(path.join(srcDir, "components", "Button.tsx"));
+	});
+
+	it("normalizes Windows-style importers before resolving from src", async () => {
+		const srcDir = path.join(tempDir, "pkg", "src");
+		await fs.mkdir(path.join(srcDir, "components"), { recursive: true });
+		await fs.writeFile(path.join(srcDir, "components", "Card.tsx"), "");
+
+		const windowsImporter = path
+			.join(srcDir, "pages", "index.tsx")
+			.replaceAll(path.sep, "\\");
+
+		await expect(
+			resolveAlias("~/components/Card", windowsImporter),
+		).resolves.toBe(path.join(srcDir, "components", "Card.tsx"));
 	});
 
 	it("resolves ~/ imports from the nearest package root", async () => {

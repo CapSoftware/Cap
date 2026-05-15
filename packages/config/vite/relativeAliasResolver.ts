@@ -6,6 +6,10 @@ const pkgJsonCache = new Map();
 
 const isPathRoot = (value: string) => path.dirname(value) === value;
 
+export const clearRelativeAliasResolverCacheForTesting = () => {
+	pkgJsonCache.clear();
+};
+
 const resolver: Alias = {
 	find: /^(~\/.+)/,
 	replacement: "$1",
@@ -31,7 +35,7 @@ const resolver: Alias = {
 
 				if (hasPkgJson === undefined)
 					try {
-						await fs.stat(`${parent}/package.json`);
+						await fs.stat(path.join(parent, "package.json"));
 						hasPkgJson = true;
 						pkgJsonCache.set(parent, hasPkgJson);
 					} catch {
