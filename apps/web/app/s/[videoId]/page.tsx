@@ -25,6 +25,7 @@ import {
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
 import {
 	Comment,
+	type ImageUpload,
 	type Organisation,
 	Policy,
 	type Video,
@@ -33,6 +34,7 @@ import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
@@ -160,6 +162,82 @@ const renderPolicyDenied = (videoId: Video.VideoId, reason?: string) =>
 	Effect.succeed(<PolicyDeniedView key={videoId} reason={reason} />);
 
 const renderNoSuchElement = () => Effect.sync(() => notFound());
+
+type SharePageBranding =
+	| {
+			type: "custom";
+			imageUrl: ImageUpload.ImageUrl;
+			name: string;
+	  }
+	| {
+			type: "cap";
+	  };
+
+function getSharePageBranding(data: {
+	owner: { isPro: boolean };
+	orgSettings?: OrganizationSettings | null;
+	organizationName?: string | null;
+	organizationIconUrl?: ImageUpload.ImageUrl | null;
+	shareableLinkIconUrl?: ImageUpload.ImageUrl | null;
+}): SharePageBranding | null {
+	if (!data.owner.isPro) {
+		return { type: "cap" };
+	}
+
+	const brandedIcon = data.orgSettings?.shareableLinkUseOrganizationIcon
+		? data.organizationIconUrl
+		: data.shareableLinkIconUrl;
+
+	if (brandedIcon) {
+		return {
+			type: "custom",
+			imageUrl: brandedIcon,
+			name: data.organizationName ?? "Organization",
+		};
+	}
+
+	if (data.orgSettings?.hideShareableLinkCapLogo) {
+		return null;
+	}
+
+	return { type: "cap" };
+}
+
+function SharePageBranding({
+	branding,
+	videoId,
+}: {
+	branding: SharePageBranding | null;
+	videoId: Video.VideoId;
+}) {
+	if (!branding) return null;
+
+	return (
+		<div className="flex justify-center pt-8">
+			{branding.type === "custom" ? (
+				<div className="inline-flex h-12 max-w-64 items-center justify-center rounded-xl border border-gray-5 bg-white px-4">
+					<Image
+						src={branding.imageUrl}
+						alt={`${branding.name} logo`}
+						width={208}
+						height={32}
+						unoptimized
+						className="max-h-8 w-auto max-w-52 object-contain"
+					/>
+				</div>
+			) : (
+				<a
+					target="_blank"
+					rel="noreferrer"
+					href={`/?ref=video_${videoId}`}
+					className="inline-flex items-center rounded-full border border-gray-5 bg-white px-4 py-2"
+				>
+					<Logo className="h-7 w-auto" />
+				</a>
+			)}
+		</div>
+	);
+}
 
 const getShareVideoPageCatchers = (videoId: Video.VideoId) => ({
 	PolicyDenied: (e: Policy.PolicyDeniedError) =>
@@ -371,6 +449,9 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 						organizationId: sharedVideos.organizationId,
 					},
 					orgSettings: organizations.settings,
+					organizationName: organizations.name,
+					organizationIconUrl: organizations.iconUrl,
+					shareableLinkIconUrl: organizations.shareableLinkIconUrl,
 					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 						Boolean,
 					),
@@ -421,6 +502,9 @@ async function AuthorizedContent({
 		activeUploadRawFileKey: string | null;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
+		organizationName?: string | null;
+		organizationIconUrl?: ImageUpload.ImageUrlOrKey | null;
+		shareableLinkIconUrl?: ImageUpload.ImageUrlOrKey | null;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
@@ -692,6 +776,13 @@ async function AuthorizedContent({
 			password: null,
 			folderId: null,
 			orgSettings: video.orgSettings || null,
+			organizationName: video.organizationName,
+			organizationIconUrl: video.organizationIconUrl
+				? yield* imageUploads.resolveImageUrl(video.organizationIconUrl)
+				: null,
+			shareableLinkIconUrl: video.shareableLinkIconUrl
+				? yield* imageUploads.resolveImageUrl(video.shareableLinkIconUrl)
+				: null,
 			settings: rules.settings,
 			hasInheritedPassword: rules.hasInheritedPassword,
 			inheritedPasswordSources: rules.inheritedPasswordSources,
@@ -705,49 +796,41 @@ async function AuthorizedContent({
 	});
 
 	return (
-		<>
-			<div className="container flex-1 px-4 mx-auto">
-				<ShareHeader
-					data={{
-						...videoWithOrganizationInfo,
-						createdAt: video.metadata?.customCreatedAt
-							? new Date(video.metadata.customCreatedAt)
-							: video.createdAt,
-					}}
-					customDomain={customDomain}
-					domainVerified={domainVerified}
-					sharedOrganizations={
-						videoWithOrganizationInfo.sharedOrganizations || []
-					}
-					sharedSpaces={sharedSpaces}
-					userOrganizations={userOrganizations}
-					spacesData={spacesData}
-				/>
+		<div className="container flex-1 px-4 mx-auto">
+			<SharePageBranding
+				branding={getSharePageBranding(videoWithOrganizationInfo)}
+				videoId={video.id}
+			/>
+			<ShareHeader
+				data={{
+					...videoWithOrganizationInfo,
+					createdAt: video.metadata?.customCreatedAt
+						? new Date(video.metadata.customCreatedAt)
+						: video.createdAt,
+				}}
+				customDomain={customDomain}
+				domainVerified={domainVerified}
+				sharedOrganizations={
+					videoWithOrganizationInfo.sharedOrganizations || []
+				}
+				sharedSpaces={sharedSpaces}
+				userOrganizations={userOrganizations}
+				spacesData={spacesData}
+			/>
 
-				<Share
-					data={videoWithOrganizationInfo}
-					videoSettings={videoWithOrganizationInfo.settings}
-					comments={commentsPromise}
-					views={viewsPromise}
-					customDomain={customDomain}
-					domainVerified={domainVerified}
-					userOrganizations={userOrganizations}
-					viewerId={user?.id ?? null}
-					isEditProcessing={isEditProcessing}
-					initialAiData={initialAiData}
-					aiGenerationEnabled={aiGenerationEnabled}
-				/>
-			</div>
-			<div className="py-4 mt-auto">
-				<a
-					target="_blank"
-					href={`/?ref=video_${video.id}`}
-					className="flex justify-center items-center px-4 py-2 mx-auto mb-2 space-x-2 bg-white rounded-full border border-gray-5 w-fit"
-				>
-					<span className="text-sm">Recorded with</span>
-					<Logo className="w-14 h-auto" />
-				</a>
-			</div>
-		</>
+			<Share
+				data={videoWithOrganizationInfo}
+				videoSettings={videoWithOrganizationInfo.settings}
+				comments={commentsPromise}
+				views={viewsPromise}
+				customDomain={customDomain}
+				domainVerified={domainVerified}
+				userOrganizations={userOrganizations}
+				viewerId={user?.id ?? null}
+				isEditProcessing={isEditProcessing}
+				initialAiData={initialAiData}
+				aiGenerationEnabled={aiGenerationEnabled}
+			/>
+		</div>
 	);
 }
