@@ -6,6 +6,7 @@ import { useTranscript } from "hooks/use-transcript";
 import { useRouter } from "next/navigation";
 import {
 	forwardRef,
+	useCallback,
 	useEffect,
 	useImperativeHandle,
 	useRef,
@@ -50,6 +51,7 @@ export const ShareVideo = forwardRef<
 		aiGenerationStatus?: AiGenerationStatus | null;
 		canRetryProcessing?: boolean;
 		showPlaybackStatusBadge?: boolean;
+		isEditProcessing: boolean;
 	}
 >(
 	(
@@ -63,12 +65,16 @@ export const ShareVideo = forwardRef<
 			areReactionStampsDisabled,
 			canRetryProcessing,
 			showPlaybackStatusBadge = false,
+			isEditProcessing,
 		},
 		ref,
 	) => {
 		const videoRef = useRef<HTMLVideoElement | null>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
 		const router = useRouter();
+		const handleUploadComplete = useCallback(() => {
+			router.refresh();
+		}, [router]);
 
 		const captionContext = useCaptionContext();
 
@@ -256,7 +262,10 @@ export const ShareVideo = forwardRef<
 
 		return (
 			<>
-				<div className="relative h-full">
+				<div
+					className="relative h-full"
+					style={{ viewTransitionName: "cap-edit-video" }}
+				>
 					{isActivelyRecording ? (
 						<RecordingInProgressOverlay
 							onConfirmStopped={() => setUserConfirmedStopped(true)}
@@ -280,6 +289,8 @@ export const ShareVideo = forwardRef<
 							videoRef={videoRef}
 							enableCrossOrigin={enableCrossOrigin}
 							hasActiveUpload={data.hasActiveUpload}
+							blockPlaybackDuringProcessing={isEditProcessing}
+							onUploadComplete={handleUploadComplete}
 							comments={commentsData.map((comment) => ({
 								id: comment.id,
 								type: comment.type,

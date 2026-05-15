@@ -920,3 +920,82 @@ footer a {
 .messenger-markdown > :last-child {
 	margin-bottom: 0;
 }
+
+@supports (view-transition-name: none) {
+	::view-transition-old(root),
+	::view-transition-new(root) {
+		animation-duration: 320ms;
+		animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+	}
+
+	::view-transition-group(cap-edit-video) {
+		animation-duration: 420ms;
+		animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+		z-index: 50;
+	}
+
+	::view-transition-image-pair(cap-edit-video) {
+		isolation: auto;
+		mix-blend-mode: normal;
+	}
+
+	html[data-view-transition="edit-enter"]::view-transition-old(root) {
+		animation-name: cap-fade-out-down;
+	}
+
+	html[data-view-transition="edit-enter"]::view-transition-new(root) {
+		animation-name: cap-fade-in-up;
+	}
+
+	html[data-view-transition="edit-exit"]::view-transition-old(root) {
+		animation-name: cap-fade-out-up;
+	}
+
+	html[data-view-transition="edit-exit"]::view-transition-new(root) {
+		animation-name: cap-fade-in-down;
+	}
+
+	@keyframes cap-fade-out-down {
+		from {
+			opacity: 1;
+			transform: scale(1);
+		}
+		to {
+			opacity: 0;
+			transform: scale(0.96);
+		}
+	}
+
+	@keyframes cap-fade-in-up {
+		from {
+			opacity: 0;
+			transform: scale(1.04);
+		}
+		to {
+			opacity: 1;
+			transform: scale(1);
+		}
+	}
+
+	@keyframes cap-fade-out-up {
+		from {
+			opacity: 1;
+			transform: scale(1);
+		}
+		to {
+			opacity: 0;
+			transform: scale(1.04);
+		}
+	}
+
+	@keyframes cap-fade-in-down {
+		from {
+			opacity: 0;
+			transform: scale(0.96);
+		}
+		to {
+			opacity: 1;
+			transform: scale(1);
+		}
+	}
+}
