@@ -80,6 +80,10 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 			}) {
 				const user = yield* CurrentUser;
 
+				if (Option.isSome(data.spaceId)) {
+					yield* policy.canCreateIn(data.spaceId.value);
+				}
+
 				if (Option.isSome(data.parentId)) {
 					const parentId = data.parentId.value;
 
