@@ -18,6 +18,7 @@ pub enum CaptureMode {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeepLinkAction {
+    StartDefaultRecording,
     StartRecording {
         capture_mode: CaptureMode,
         camera: Option<DeviceOrModelID>,
@@ -26,6 +27,14 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    SwitchMic {
+        mic_label: String,
+    },
+    SwitchCamera {
+        camera_id: DeviceOrModelID,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -108,6 +117,26 @@ impl TryFrom<&Url> for DeepLinkAction {
 impl DeepLinkAction {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
         match self {
+            DeepLinkAction::StartDefaultRecording => {
+                let settings = crate::recording_settings::RecordingSettingsStore::get(app)?
+                    .unwrap_or_default();
+
+                let target = settings.target.ok_or("No capture target selected")?;
+                let mode = settings.mode.unwrap_or(RecordingMode::Studio);
+
+                crate::recording::start_recording(
+                    app.clone(),
+                    app.state(),
+                    crate::recording::StartRecordingInputs {
+                        capture_target: target,
+                        capture_system_audio: Some(settings.system_audio),
+                        mode,
+                        organization_id: settings.organization_id,
+                    },
+                )
+                .await
+                .map(|_| ())
+            }
             DeepLinkAction::StartRecording {
                 capture_mode,
                 camera,
@@ -146,6 +175,30 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                let state = app.state::<ArcLock<App>>();
+                let mut app_state = state.write().await;
+                if let Some(recording) = app_state.current_recording_mut() {
+                    recording.pause().await.map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            }
+            DeepLinkAction::ResumeRecording => {
+                let state = app.state::<ArcLock<App>>();
+                let mut app_state = state.write().await;
+                if let Some(recording) = app_state.current_recording_mut() {
+                    recording.resume().await.map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            }
+            DeepLinkAction::SwitchMic { mic_label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state.clone(), Some(mic_label)).await
+            }
+            DeepLinkAction::SwitchCamera { camera_id } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state.clone(), Some(camera_id), None).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
