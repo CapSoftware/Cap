@@ -10,8 +10,7 @@ use windows::{
         Foundation::{HANDLE, HMODULE},
         Graphics::{
             Direct3D::{
-                D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
-                D3D_SRV_DIMENSION_TEXTURE2D, ID3DBlob,
+                D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL, D3D_SRV_DIMENSION_TEXTURE2D, ID3DBlob,
             },
             Direct3D11::{
                 D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE,
@@ -877,6 +876,8 @@ impl Drop for MediaFoundationDecoder {
 }
 
 unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), String> {
+    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
+
     let flags = D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 
     let feature_levels = [
@@ -886,21 +887,16 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), S
         windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_10_0,
     ];
 
-    let driver_types = [
-        (D3D_DRIVER_TYPE_HARDWARE, "hardware"),
-        (D3D_DRIVER_TYPE_WARP, "WARP (software)"),
-    ];
-
     let mut last_error = String::new();
 
-    for (driver_type, driver_name) in driver_types {
+    if let Ok(selected) = cap_d3d_adapter::select_capture_adapter(None) {
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
 
         let result = unsafe {
             D3D11CreateDevice(
-                None,
-                driver_type,
+                Some(&selected.adapter),
+                D3D_DRIVER_TYPE_UNKNOWN,
                 HMODULE::default(),
                 flags,
                 Some(&feature_levels),
@@ -914,13 +910,10 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), S
         match result {
             Ok(()) => {
                 if let (Some(device), Some(context)) = (device, context) {
-                    if driver_type == D3D_DRIVER_TYPE_WARP {
-                        warn!(
-                            "Using WARP software rasterizer for D3D11 - hardware GPU unavailable"
-                        );
-                    } else {
-                        info!("D3D11 device created using {} adapter", driver_name);
-                    }
+                    info!(
+                        adapter = %selected.description,
+                        "D3D11 device created on pinned hardware adapter"
+                    );
 
                     let multithread: windows::Win32::Graphics::Direct3D11::ID3D11Multithread =
                         device
@@ -932,19 +925,62 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), S
 
                     return Ok((device, context));
                 }
-                last_error =
-                    format!("D3D11CreateDevice ({driver_name}) returned null device/context");
+                last_error = format!(
+                    "D3D11CreateDevice (pinned adapter '{}') returned null device/context",
+                    selected.description
+                );
             }
             Err(e) => {
-                last_error = format!("D3D11CreateDevice ({driver_name}) failed: {e:?}");
-                if driver_type == D3D_DRIVER_TYPE_HARDWARE {
-                    warn!("{}, trying WARP fallback", last_error);
-                }
+                last_error = format!(
+                    "D3D11CreateDevice (pinned adapter '{}') failed: {e:?}",
+                    selected.description
+                );
+                warn!("{}, trying WARP fallback", last_error);
             }
         }
+    } else {
+        warn!("No physical hardware DXGI adapter available, falling back to WARP");
     }
 
-    Err(last_error)
+    let mut device: Option<ID3D11Device> = None;
+    let mut context: Option<ID3D11DeviceContext> = None;
+
+    let result = unsafe {
+        D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_WARP,
+            HMODULE::default(),
+            flags,
+            Some(&feature_levels),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut context),
+        )
+    };
+
+    match result {
+        Ok(()) => {
+            if let (Some(device), Some(context)) = (device, context) {
+                warn!("Using WARP software rasterizer for D3D11 - hardware GPU unavailable");
+
+                let multithread: windows::Win32::Graphics::Direct3D11::ID3D11Multithread = device
+                    .cast()
+                    .map_err(|e| format!("Failed to get ID3D11Multithread: {e:?}"))?;
+                unsafe {
+                    let _ = multithread.SetMultithreadProtected(true);
+                }
+
+                return Ok((device, context));
+            }
+            Err(format!(
+                "{last_error}; D3D11CreateDevice (WARP) returned null device/context"
+            ))
+        }
+        Err(e) => Err(format!(
+            "{last_error}; D3D11CreateDevice (WARP) failed: {e:?}"
+        )),
+    }
 }
 
 unsafe fn create_dxgi_device_manager(

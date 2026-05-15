@@ -21,6 +21,7 @@ import {
 	normalizeKeepRanges,
 } from "@/lib/video-edits";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { isAiGenerationEnabled } from "@/utils/flags";
 import { editVideoWorkflow } from "@/workflows/edit-video";
 
 const ACTIVE_UPLOAD_PHASES = new Set([
@@ -178,6 +179,7 @@ export async function saveVideoEdits(
 		video,
 		existingEdit?.sourceKey,
 	);
+	const aiGenerationEnabled = await isAiGenerationEnabled(user);
 
 	await markEditProcessing({ videoId, sourceKey });
 
@@ -190,6 +192,7 @@ export async function saveVideoEdits(
 				previousSpec,
 				editSpec: normalizedEditSpec,
 				keepRanges: normalizedEditSpec.keepRanges,
+				aiGenerationEnabled,
 			},
 		]);
 	} catch (error) {

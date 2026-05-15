@@ -160,37 +160,53 @@ export const SharedCaps = ({
 		return (
 			<div className="flex relative flex-col w-full h-full">
 				{spaceSettingsDialog}
-				{spaceData && spaceMembers && (
-					<div className="flex flex-wrap gap-3">
-						<MembersIndicator
-							memberCount={spaceMemberCount}
-							members={spaceMembers}
-							organizationMembers={organizationMembers || []}
-							spaceId={spaceData.id}
-							canManageMembers={isSpaceOwner}
-							onAddVideos={() => setIsAddVideosDialogOpen(true)}
+				<NewFolderDialog
+					open={openNewFolderDialog}
+					spaceId={spaceId}
+					onOpenChange={setOpenNewFolderDialog}
+				/>
+				<div className="flex flex-wrap gap-3">
+					{spaceData && spaceMembers && (
+						<>
+							<MembersIndicator
+								memberCount={spaceMemberCount}
+								members={spaceMembers}
+								organizationMembers={organizationMembers || []}
+								spaceId={spaceData.id}
+								canManageMembers={isSpaceOwner}
+								onAddVideos={() => setIsAddVideosDialogOpen(true)}
+							/>
+							{isSpaceOwner && (
+								<Button
+									variant="gray"
+									size="sm"
+									onClick={() => setIsSpaceSettingsOpen(true)}
+								>
+									<FontAwesomeIcon className="size-3" icon={faGear} />
+									Space settings
+								</Button>
+							)}
+						</>
+					)}
+					{organizationData && organizationMembers && !spaceData && (
+						<OrganizationIndicator
+							memberCount={organizationMemberCount}
+							members={organizationMembers}
+							organizationName={organizationData.name}
+							canManageMembers={isOrgOwner}
+							onAddVideos={() => setIsAddOrganizationVideosDialogOpen(true)}
 						/>
-						{isSpaceOwner && (
-							<Button
-								variant="gray"
-								size="sm"
-								onClick={() => setIsSpaceSettingsOpen(true)}
-							>
-								<FontAwesomeIcon className="size-3" icon={faGear} />
-								Space settings
-							</Button>
-						)}
-					</div>
-				)}
-				{organizationData && organizationMembers && !spaceData && (
-					<OrganizationIndicator
-						memberCount={organizationMemberCount}
-						members={organizationMembers}
-						organizationName={organizationData.name}
-						canManageMembers={isOrgOwner}
-						onAddVideos={() => setIsAddOrganizationVideosDialogOpen(true)}
-					/>
-				)}
+					)}
+					<Button
+						onClick={() => setOpenNewFolderDialog(true)}
+						size="sm"
+						variant="dark"
+						className="flex gap-2 items-center w-fit"
+					>
+						<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+						New Folder
+					</Button>
+				</div>
 				<EmptySharedCapState
 					organizationName={activeOrganization?.organization.name || ""}
 					type={spaceData ? "space" : "organization"}
@@ -247,7 +263,7 @@ export const SharedCaps = ({
 			)}
 			<NewFolderDialog
 				open={openNewFolderDialog}
-				spaceId={spaceData?.id ?? activeOrganization?.organization.id}
+				spaceId={spaceId}
 				onOpenChange={setOpenNewFolderDialog}
 			/>
 			<div className="flex flex-wrap gap-3 mb-10">

@@ -1,7 +1,7 @@
+import { createHash } from "node:crypto";
 import {
 	CloudFrontClient,
 	CreateInvalidationCommand,
-	waitUntilInvalidationCompleted,
 } from "@aws-sdk/client-cloudfront";
 import { db } from "@cap/database";
 import {
@@ -22,6 +22,7 @@ import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError } from "workflow";
 import { runPromise } from "@/lib/server";
+import { transcribeVideo } from "@/lib/transcribe";
 import { remapCurrentOutputTimeThroughEdit } from "@/lib/video-edits";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
@@ -32,6 +33,7 @@ interface EditVideoWorkflowPayload {
 	previousSpec: VideoEditSpec;
 	editSpec: VideoEditSpec;
 	keepRanges: VideoEditRange[];
+	aiGenerationEnabled: boolean;
 }
 
 interface VideoEditRenderResult {
@@ -67,12 +69,19 @@ export async function editVideoWorkflow(
 ): Promise<VideoEditRenderResult> {
 	"use workflow";
 
-	const { videoId, sourceKey, previousSpec, editSpec } = payload;
+	const {
+		videoId,
+		userId,
+		sourceKey,
+		previousSpec,
+		editSpec,
+		aiGenerationEnabled,
+	} = payload;
 
 	try {
 		await validateEditRequest(videoId, sourceKey);
 		const result = await renderVideoEditOnMediaServer(payload);
-		await invalidateEditedVideoCache(videoId);
+		await invalidateEditedVideoCache(videoId, editSpec);
 		await saveEditResultAndComplete(
 			videoId,
 			sourceKey,
@@ -80,6 +89,7 @@ export async function editVideoWorkflow(
 			editSpec,
 			result.metadata,
 		);
+		await queueTranscriptionRegeneration(videoId, userId, aiGenerationEnabled);
 		return result;
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
@@ -335,11 +345,35 @@ async function getCompletedMetadata(
 
 function clearAiMetadata(metadata: VideoMetadata | null): VideoMetadata {
 	const nextMetadata = { ...(metadata ?? {}) };
-	delete nextMetadata.aiTitle;
 	delete nextMetadata.summary;
 	delete nextMetadata.chapters;
 	delete nextMetadata.aiGenerationStatus;
 	return nextMetadata;
+}
+
+async function queueTranscriptionRegeneration(
+	videoId: string,
+	userId: string,
+	aiGenerationEnabled: boolean,
+): Promise<void> {
+	"use step";
+
+	try {
+		const result = await transcribeVideo(
+			videoId as Video.VideoId,
+			userId,
+			aiGenerationEnabled,
+		);
+
+		if (!result.success) {
+			console.warn("[editVideoWorkflow] Failed to queue transcription", {
+				videoId,
+				message: result.message,
+			});
+		}
+	} catch (error) {
+		console.warn("[editVideoWorkflow] Failed to queue transcription", error);
+	}
 }
 
 async function clearTranscriptObjects(video: typeof videos.$inferSelect) {
@@ -414,7 +448,21 @@ async function waitForEditCompletion(
 	throw new Error(`Video edit timed out while ${lastStatus}`);
 }
 
-async function invalidateEditedVideoCache(videoId: string): Promise<void> {
+function getEditInvalidationCallerReference(
+	videoId: string,
+	editSpec: VideoEditSpec,
+) {
+	const editHash = createHash("sha256")
+		.update(JSON.stringify(editSpec))
+		.digest("hex")
+		.slice(0, 16);
+	return `edit-${videoId}-${editHash}`;
+}
+
+async function invalidateEditedVideoCache(
+	videoId: string,
+	editSpec: VideoEditSpec,
+): Promise<void> {
 	"use step";
 
 	const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
@@ -445,33 +493,20 @@ async function invalidateEditedVideoCache(videoId: string): Promise<void> {
 			),
 		});
 
-		const result = await cloudfront.send(
+		await cloudfront.send(
 			new CreateInvalidationCommand({
 				DistributionId: distributionId,
 				InvalidationBatch: {
-					CallerReference: `${videoId}-${Date.now()}`,
+					CallerReference: getEditInvalidationCallerReference(
+						videoId,
+						editSpec,
+					),
 					Paths: {
 						Quantity: paths.length,
 						Items: paths,
 					},
 				},
 			}),
-		);
-
-		const invalidationId = result.Invalidation?.Id;
-		if (!invalidationId) return;
-
-		await waitUntilInvalidationCompleted(
-			{
-				client: cloudfront,
-				maxWaitTime: 120,
-				minDelay: 5,
-				maxDelay: 15,
-			},
-			{
-				DistributionId: distributionId,
-				Id: invalidationId,
-			},
 		);
 	} catch (error) {
 		console.warn(

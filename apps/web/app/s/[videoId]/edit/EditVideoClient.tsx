@@ -1644,6 +1644,7 @@ export function EditVideoClient({ video }: { video: EditableVideo }) {
 							disableReactionStamps
 							disablePreviewGif
 							duration={video.duration}
+							showFloatingVolumeControl
 						/>
 					</div>
 				</section>
@@ -1892,21 +1893,22 @@ export function EditVideoClient({ video }: { video: EditableVideo }) {
 							</div>
 						</div>
 
-						<div
-							ref={playheadOverlayRef}
-							className="pointer-events-none absolute bottom-0 left-0 z-40 will-change-transform"
-							style={{
-								height: "92px",
-								transform: "translate3d(-9999px, 0, 0) translateX(-50%)",
-							}}
-						>
-							{selectedSplitIndex === null && (
-								<div className="absolute left-1/2 top-0 -translate-x-1/2 whitespace-nowrap rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-black shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
-									{formatTimeDetailed(outputPlayhead)}
-								</div>
-							)}
-							<div className="absolute left-1/2 top-6 size-2.5 -translate-x-1/2 rounded-full bg-white shadow-[0_0_0_1.5px_rgba(0,0,0,0.55),0_2px_4px_rgba(0,0,0,0.45)]" />
-							<div className="absolute bottom-0 left-1/2 top-[34px] w-[2.5px] -translate-x-1/2 bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.55),0_0_4px_rgba(0,0,0,0.3)]" />
+						<div className="pointer-events-none absolute bottom-0 left-0 right-0 z-40 h-[92px] overflow-hidden">
+							<div
+								ref={playheadOverlayRef}
+								className="absolute bottom-0 left-0 h-[92px] will-change-transform"
+								style={{
+									transform: "translate3d(-9999px, 0, 0) translateX(-50%)",
+								}}
+							>
+								{selectedSplitIndex === null && (
+									<div className="absolute left-1/2 top-0 -translate-x-1/2 whitespace-nowrap rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-black shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
+										{formatTimeDetailed(outputPlayhead)}
+									</div>
+								)}
+								<div className="absolute left-1/2 top-6 size-2.5 -translate-x-1/2 rounded-full bg-white shadow-[0_0_0_1.5px_rgba(0,0,0,0.55),0_2px_4px_rgba(0,0,0,0.45)]" />
+								<div className="absolute bottom-0 left-1/2 top-[34px] w-[2.5px] -translate-x-1/2 bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.55),0_0_4px_rgba(0,0,0,0.3)]" />
+							</div>
 						</div>
 					</div>
 				</div>

@@ -20,6 +20,7 @@ import {
 	SUPPORTED_LANGUAGES,
 } from "@/actions/videos/translation-languages";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { normalizeTranscriptCueText } from "@/lib/transcript-vtt";
 import type { VideoData } from "../../types";
 import { type CaptionLanguage, useCaptionContext } from "../CaptionContext";
 
@@ -276,7 +277,9 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	};
 
 	const saveEdit = async () => {
-		if (!editingEntry || !editText.trim()) {
+		const normalizedEditText = normalizeTranscriptCueText(editText);
+
+		if (!editingEntry || !normalizedEditText) {
 			return;
 		}
 
@@ -286,13 +289,17 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 		setIsSaving(true);
 		try {
-			const result = await editTranscriptEntry(data.id, editingEntry, editText);
+			const result = await editTranscriptEntry(
+				data.id,
+				editingEntry,
+				normalizedEditText,
+			);
 
 			if (result.success) {
 				setTranscriptData((prev) =>
 					prev.map((entry) =>
 						entry.id === editingEntry
-							? { ...entry, text: editText.trim() }
+							? { ...entry, text: normalizedEditText }
 							: entry,
 					),
 				);
@@ -404,6 +411,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 				<div className="text-center">
 					<div className="mb-3">
 						<svg
+							aria-hidden="true"
 							xmlns="http://www.w3.org/2000/svg"
 							className="mx-auto w-8 h-8"
 							viewBox="0 0 24 24"
@@ -436,6 +444,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		return (
 			<div className="flex justify-center items-center h-full">
 				<svg
+					aria-hidden="true"
 					xmlns="http://www.w3.org/2000/svg"
 					className="w-8 h-8"
 					viewBox="0 0 24 24"
@@ -578,6 +587,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 								<Copy className="mr-1 w-3 h-3" />
 							) : (
 								<svg
+									aria-hidden="true"
 									xmlns="http://www.w3.org/2000/svg"
 									width="12"
 									height="12"
@@ -604,6 +614,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 								<Download className="mr-1 w-3 h-3" />
 							) : (
 								<svg
+									aria-hidden="true"
 									xmlns="http://www.w3.org/2000/svg"
 									width="12"
 									height="12"
@@ -685,6 +696,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 					<div className="absolute inset-0 bg-gray-1/80 flex items-center justify-center z-10">
 						<div className="text-center">
 							<svg
+								aria-hidden="true"
 								xmlns="http://www.w3.org/2000/svg"
 								className="mx-auto w-8 h-8"
 								viewBox="0 0 24 24"
@@ -722,8 +734,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 									: selectedEntry === entry.id
 										? "bg-gray-2 p-3"
 										: "hover:bg-gray-2 p-3"
-							} ${editingEntry === entry.id ? "" : "cursor-pointer"}`}
-							onClick={() => handleTranscriptClick(entry)}
+							}`}
 						>
 							<div className="flex justify-between items-start mb-2">
 								<div className="text-xs font-medium text-gray-8">
@@ -787,9 +798,13 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 									</div>
 								</div>
 							) : (
-								<div className="text-sm leading-relaxed text-gray-12">
+								<button
+									className="block w-full text-sm leading-relaxed text-left text-gray-12"
+									onClick={() => handleTranscriptClick(entry)}
+									type="button"
+								>
 									{entry.text}
-								</div>
+								</button>
 							)}
 						</div>
 					))}
