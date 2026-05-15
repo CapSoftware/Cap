@@ -19,7 +19,9 @@ export function CapErrorBoundary(props: ParentProps) {
 						</p>
 						<div class="flex flex-row gap-4 max-sm:flex-col max-sm:gap-2">
 							<Button
-								onClick={() => commands.writeClipboardString(`${e.toString()}\n\n${e.stack}`)}
+								onClick={() =>
+									commands.writeClipboardString(`${e.toString()}\n\n${e.stack}`)
+								}
 							>
 								Copy Error to Clipboard
 							</Button>

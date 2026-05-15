@@ -400,9 +400,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			<div class="px-6 py-6 space-y-7 max-w-[42rem]">
 				<AppearanceSection
 					currentTheme={settings.appearance ?? "system"}
-					onThemeChange={(newTheme) => {
-						setSettings("appearance", newTheme);
-						generalSettingsStore.set({ appearance: newTheme });
+					onThemeChange={(newAppearance) => {
+						setSettings("appearance", newAppearance);
+						commands.setAppearance(newAppearance);
 					}}
 				/>
 

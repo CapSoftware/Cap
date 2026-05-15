@@ -378,6 +378,9 @@ async recoverRecording(projectPath: string) : Promise<string> {
 },
 async discardIncompleteRecording(projectPath: string) : Promise<null> {
     return await TAURI_INVOKE("discard_incomplete_recording", { projectPath });
+},
+async setAppearance(appearance: Appearance) : Promise<null> {
+    return await TAURI_INVOKE("set_appearance", { appearance });
 }
 }
 

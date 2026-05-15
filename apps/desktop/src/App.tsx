@@ -123,7 +123,11 @@ export default function App() {
 }
 
 function Inner() {
-	createThemeListener();
+	const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+	const apply = () =>
+		document.documentElement.classList.toggle("dark", prefersDark.matches);
+	apply();
+	createEventListener(prefersDark, "change", apply);
 
 	onMount(() => {
 		initAnonymousUser();
@@ -227,35 +231,6 @@ function Inner() {
 			</CapErrorBoundary>
 		</>
 	);
-}
-
-function createThemeListener() {
-	const settings = generalSettingsStore.createQuery();
-	const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
-
-	createEffect(() => apply(settings.data?.appearance));
-
-	createEventListener(prefersDark, "change", () => {
-		if (settings.data?.appearance === "system") apply("system");
-	});
-
-	function apply(appearance: Appearance | null | undefined) {
-		if (location.pathname === "/camera") return;
-		if (appearance === undefined || appearance === null) return;
-
-		try {
-			if (appearance === "system") localStorage.removeItem("cap-theme");
-			else localStorage.setItem("cap-theme", appearance);
-		} catch {}
-
-		setTheme(appearance === "system" ? null : appearance).then(() =>
-			document.documentElement.classList.toggle(
-				"dark",
-				appearance === "dark" ||
-					(appearance === "system" && prefersDark.matches),
-			),
-		);
-	}
 }
 
 let windowShown = false;

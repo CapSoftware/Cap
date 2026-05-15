@@ -4009,6 +4009,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recovery::find_incomplete_recordings,
             recovery::recover_recording,
             recovery::discard_incomplete_recording,
+            set_appearance,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -5436,6 +5437,15 @@ fn format_project_name(
 #[specta::specta]
 fn log(window: tauri::WebviewWindow, string: String) {
     println!("[{}] {}", window.label(), string);
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+#[instrument(skip(app))]
+fn set_appearance(app: AppHandle, appearance: general_settings::Appearance) -> Result<(), String> {
+    GeneralSettingsStore::update(&app, move |s| s.appearance = appearance)?;
+    app.set_theme(appearance.into());
+    Ok(())
 }
 
 trait EventExt: tauri_specta::Event {
