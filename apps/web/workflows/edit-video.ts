@@ -1,3 +1,8 @@
+import {
+	CloudFrontClient,
+	CreateInvalidationCommand,
+	waitUntilInvalidationCompleted,
+} from "@aws-sdk/client-cloudfront";
 import { db } from "@cap/database";
 import {
 	comments,
@@ -11,9 +16,10 @@ import type {
 	VideoMetadata,
 } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import { AwsCredentials, Storage } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
+import { Effect } from "effect";
 import { FatalError } from "workflow";
 import { runPromise } from "@/lib/server";
 import { remapCurrentOutputTimeThroughEdit } from "@/lib/video-edits";
@@ -66,6 +72,7 @@ export async function editVideoWorkflow(
 	try {
 		await validateEditRequest(videoId, sourceKey);
 		const result = await renderVideoEditOnMediaServer(payload);
+		await invalidateEditedVideoCache(videoId);
 		await saveEditResultAndComplete(
 			videoId,
 			sourceKey,
@@ -405,6 +412,76 @@ async function waitForEditCompletion(
 	}
 
 	throw new Error(`Video edit timed out while ${lastStatus}`);
+}
+
+async function invalidateEditedVideoCache(videoId: string): Promise<void> {
+	"use step";
+
+	const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
+	if (!distributionId) return;
+
+	const [video] = await db()
+		.select({
+			ownerId: videos.ownerId,
+			bucket: videos.bucket,
+		})
+		.from(videos)
+		.where(eq(videos.id, videoId as Video.VideoId));
+
+	if (!video || video.bucket) return;
+
+	const basePath = `/${video.ownerId}/${videoId}`;
+	const paths = [
+		`${basePath}/result.mp4`,
+		`${basePath}/screenshot/screen-capture.jpg`,
+		`${basePath}/preview/animated-preview.gif`,
+	];
+
+	try {
+		const cloudfront = new CloudFrontClient({
+			region: serverEnv().CAP_AWS_REGION || "us-east-1",
+			credentials: await runPromise(
+				Effect.map(AwsCredentials, (credentials) => credentials.credentials),
+			),
+		});
+
+		const result = await cloudfront.send(
+			new CreateInvalidationCommand({
+				DistributionId: distributionId,
+				InvalidationBatch: {
+					CallerReference: `${videoId}-${Date.now()}`,
+					Paths: {
+						Quantity: paths.length,
+						Items: paths,
+					},
+				},
+			}),
+		);
+
+		const invalidationId = result.Invalidation?.Id;
+		if (!invalidationId) return;
+
+		await waitUntilInvalidationCompleted(
+			{
+				client: cloudfront,
+				maxWaitTime: 120,
+				minDelay: 5,
+				maxDelay: 15,
+			},
+			{
+				DistributionId: distributionId,
+				Id: invalidationId,
+			},
+		);
+	} catch (error) {
+		console.warn(
+			"[editVideoWorkflow] Failed to invalidate edited video cache",
+			{
+				error,
+				videoId,
+			},
+		);
+	}
 }
 
 async function saveEditResultAndComplete(
