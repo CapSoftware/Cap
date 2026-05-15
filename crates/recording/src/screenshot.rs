@@ -24,8 +24,6 @@ use std::sync::OnceLock;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{HMODULE, HWND};
 #[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
-#[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BOX, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
 };
@@ -357,14 +355,24 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
 
 #[cfg(target_os = "windows")]
 fn shared_d3d_device() -> anyhow::Result<&'static ID3D11Device> {
+    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
+
     static DEVICE: OnceLock<Option<ID3D11Device>> = OnceLock::new();
 
     let device = DEVICE.get_or_init(|| {
+        let selected = match cap_d3d_adapter::select_capture_adapter(None) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "screenshot: no physical hardware adapter, fast path disabled");
+                return None;
+            }
+        };
+
         let mut device = None;
         let result = unsafe {
             D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
+                Some(&selected.adapter),
+                D3D_DRIVER_TYPE_UNKNOWN,
                 HMODULE::default(),
                 Default::default(),
                 None,
@@ -375,7 +383,12 @@ fn shared_d3d_device() -> anyhow::Result<&'static ID3D11Device> {
             )
         };
 
-        if result.is_err() {
+        if let Err(e) = result {
+            tracing::warn!(
+                adapter = %selected.description,
+                error = ?e,
+                "screenshot: D3D11CreateDevice failed on pinned adapter, fast path disabled"
+            );
             return None;
         }
 

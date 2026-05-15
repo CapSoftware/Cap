@@ -3,7 +3,9 @@ use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D11::{D3D11_CREATE_DEVICE_DEBUG, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows::Win32::Graphics::{
-    Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP},
+    Direct3D::{
+        D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN, D3D_DRIVER_TYPE_WARP,
+    },
     Direct3D11::{
         D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION,
         D3D11CreateDevice, ID3D11Device,
@@ -36,6 +38,35 @@ fn create_d3d_device_with_type(
     }
 }
 
+fn create_d3d_device_on_pinned_adapter(
+    flags: D3D11_CREATE_DEVICE_FLAG,
+    device: *mut Option<ID3D11Device>,
+) -> std::result::Result<String, String> {
+    let selected = cap_d3d_adapter::select_capture_adapter(None)?;
+
+    unsafe {
+        D3D11CreateDevice(
+            Some(&selected.adapter),
+            D3D_DRIVER_TYPE_UNKNOWN,
+            HMODULE(std::ptr::null_mut()),
+            flags,
+            None,
+            D3D11_SDK_VERSION,
+            Some(device),
+            None,
+            None,
+        )
+        .map_err(|e| {
+            format!(
+                "D3D11CreateDevice failed on '{}': {e:?}",
+                selected.description
+            )
+        })?;
+    }
+
+    Ok(selected.description)
+}
+
 pub fn create_d3d_device() -> Result<ID3D11Device> {
     let mut device = None;
     let flags = {
@@ -45,6 +76,23 @@ pub fn create_d3d_device() -> Result<ID3D11Device> {
         }
         flags
     };
+
+    match create_d3d_device_on_pinned_adapter(flags, &mut device) {
+        Ok(description) => {
+            tracing::info!(
+                adapter = %description,
+                "enc-mediafoundation: D3D11 device created on pinned hardware adapter"
+            );
+            return Ok(device.unwrap());
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "enc-mediafoundation: pinned-adapter device creation failed, falling back"
+            );
+        }
+    }
+
     let mut result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, flags, &mut device);
     if let Err(error) = &result
         && error.code() == DXGI_ERROR_UNSUPPORTED
