@@ -25,6 +25,15 @@ describe("getSupportedMimeType", () => {
 		expect(getSupportedMimeType()).toBe("video/webm;codecs=vp8,opus");
 	});
 
+	it("prefers vp9,opus over vp8,opus when both are supported", () => {
+		setSupportedMimeTypes([
+			"video/webm;codecs=vp9,opus",
+			"video/webm;codecs=vp8,opus",
+		]);
+
+		expect(getSupportedMimeType()).toBe("video/webm;codecs=vp9,opus");
+	});
+
 	it("falls back to an empty string when no preferred types are supported", () => {
 		setSupportedMimeTypes([]);
 

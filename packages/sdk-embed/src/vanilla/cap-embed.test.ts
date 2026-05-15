@@ -33,6 +33,8 @@ describe("createEmbedUrl", () => {
 
 		expect(url.origin).toBe("https://app.example.com");
 		expect(url.pathname).toBe("/embed/video_456");
+		expect(url.searchParams.get("sdk")).toBe("1");
+		expect(url.searchParams.get("pk")).toBe("pk_live_456");
 		expect(url.searchParams.get("autoplay")).toBe("1");
 		expect(url.searchParams.get("logo")).toBe(
 			"https://cdn.example.com/logo.svg",
