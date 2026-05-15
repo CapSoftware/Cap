@@ -2183,7 +2183,7 @@ impl CapWindow {
                                 }
                             };
 
-                            panel.set_level(cocoa::appkit::NSMainMenuWindowLevel);
+                            panel.set_level(objc2_app_kit::NSMainMenuWindowLevel as i32);
                             panel.set_style_mask(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel.0 as i32);
 
                             panel.set_collection_behaviour(
