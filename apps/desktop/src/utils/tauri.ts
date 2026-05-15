@@ -74,9 +74,6 @@ async listWindowsWithThumbnails() : Promise<CaptureWindowWithThumbnail[]> {
 async refreshWindowContentProtection() : Promise<null> {
     return await TAURI_INVOKE("refresh_window_content_protection");
 },
-async markWebviewReadyToShow() : Promise<void> {
-    await TAURI_INVOKE("mark_webview_ready_to_show");
-},
 async getDefaultExcludedWindows() : Promise<WindowExclusion[]> {
     return await TAURI_INVOKE("get_default_excluded_windows");
 },

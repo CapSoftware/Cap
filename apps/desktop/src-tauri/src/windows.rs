@@ -2426,20 +2426,6 @@ pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), Stri
     Ok(())
 }
 
-#[specta::specta]
-#[tauri::command(async)]
-#[instrument(skip(webview))]
-pub fn mark_webview_ready_to_show(webview: tauri::WebviewWindow) {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = crate::platform::show_after_next_presentation_update(&webview);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        webview.show();
-    }
-}
-
 #[derive(Default, Clone)]
 pub struct EditorWindowIds {
     pub ids: Arc<Mutex<Vec<(PathBuf, u32)>>>,
