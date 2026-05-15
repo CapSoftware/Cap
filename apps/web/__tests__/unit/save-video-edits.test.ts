@@ -91,6 +91,33 @@ describe("saveVideoEdits", () => {
 		expect(insertMock).not.toHaveBeenCalled();
 	});
 
+	it("rejects completed edit rows before the workflow clears them", async () => {
+		getCurrentUserMock.mockResolvedValueOnce({ id: "user-1", isPro: true });
+		whereMock
+			.mockResolvedValueOnce([
+				{
+					id: "video-1",
+					ownerId: "user-1",
+					duration: 10,
+					source: { type: "webMP4" },
+					isScreenshot: false,
+					metadata: null,
+				},
+			])
+			.mockResolvedValueOnce([{ phase: "complete" }]);
+		const { saveVideoEdits } = await import("@/actions/videos/save-edits");
+
+		await expect(
+			saveVideoEdits("video-1" as never, {
+				version: 1,
+				sourceDuration: 10,
+				keepRanges: [{ start: 0, end: 10 }],
+			}),
+		).rejects.toThrow("Video is already uploading or processing");
+
+		expect(insertMock).not.toHaveBeenCalled();
+	});
+
 	it("requires Cap Pro before saving edits", async () => {
 		getCurrentUserMock.mockResolvedValueOnce({ id: "user-1", isPro: false });
 		const { saveVideoEdits } = await import("@/actions/videos/save-edits");

@@ -27,6 +27,7 @@ const ACTIVE_UPLOAD_PHASES = new Set([
 	"uploading",
 	"processing",
 	"generating_thumbnail",
+	"complete",
 ]);
 
 function isMp4BackedVideo(source: typeof videos.$inferSelect.source) {

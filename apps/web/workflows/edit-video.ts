@@ -13,7 +13,7 @@ import type {
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { FatalError } from "workflow";
 import { runPromise } from "@/lib/server";
 import { remapCurrentOutputTimeThroughEdit } from "@/lib/video-edits";
@@ -481,7 +481,13 @@ async function saveEditResultAndComplete(
 
 		await tx
 			.delete(videoUploads)
-			.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+			.where(
+				and(
+					eq(videoUploads.videoId, videoId as Video.VideoId),
+					eq(videoUploads.phase, "complete"),
+					eq(videoUploads.rawFileKey, sourceKey),
+				),
+			);
 	});
 
 	try {
