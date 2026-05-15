@@ -116,6 +116,8 @@ use crate::{
     upload::InstantMultipartUpload,
 };
 use exit_shutdown::{AppExitAction, app_exit_action, collect_device_inventory, run_while_active};
+use futures::FutureExt;
+use std::panic::AssertUnwindSafe;
 
 type FinalizingRecordingsMap =
     std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>;
@@ -2233,7 +2235,11 @@ fn find_first_segment(dir: &std::path::Path) -> Option<PathBuf> {
 #[specta::specta]
 #[instrument(skip(app))]
 async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(), String> {
-    println!("Attempting to copy file from {src} to {dst}");
+    run_command_safely("copy_file_to_path", copy_file_to_path_inner(app, src, dst)).await
+}
+
+async fn copy_file_to_path_inner(app: AppHandle, src: String, dst: String) -> Result<(), String> {
+    info!(%src, %dst, "Attempting to copy file");
 
     let is_screenshot = src.contains("screenshots/");
     let is_gif = src.ends_with(".gif") || dst.ends_with(".gif");
@@ -2246,7 +2252,11 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
     if !is_screenshot && !is_gif && !is_valid_video(src_path) {
         let mut attempts = 0;
         while attempts < 10 {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            // Replaced `std::thread::sleep` with `tokio::time::sleep` — the previous version
+            // blocked the tokio worker for up to 10 seconds, which on release builds with
+            // smaller worker pools could starve the runtime and cause unrelated tasks to time
+            // out (including window/IPC events).
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             if is_valid_video(src_path) {
                 break;
             }
@@ -2298,7 +2308,7 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
                     continue;
                 }
 
-                println!("Successfully copied {bytes} bytes from {src} to {dst}");
+                info!(bytes, %src, %dst, "Successfully copied file");
 
                 notifications::send_notification(
                     &app,
@@ -2321,12 +2331,15 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
         }
     }
 
-    eprintln!(
-        "Failed to copy file from {} to {} after {} attempts. Last error: {}",
-        src,
-        dst,
-        MAX_ATTEMPTS,
-        last_error.as_ref().unwrap()
+    let last_error_message = last_error
+        .as_deref()
+        .unwrap_or("Maximum retry attempts exceeded");
+    error!(
+        %src,
+        %dst,
+        attempts = MAX_ATTEMPTS,
+        error = %last_error_message,
+        "Failed to copy file after retries"
     );
 
     notifications::send_notification(
@@ -3078,6 +3091,18 @@ async fn save_file_dialog(
     file_name: String,
     file_type: String,
 ) -> Result<Option<String>, String> {
+    run_command_safely(
+        "save_file_dialog",
+        save_file_dialog_inner(app, file_name, file_type),
+    )
+    .await
+}
+
+async fn save_file_dialog_inner(
+    app: AppHandle,
+    file_name: String,
+    file_type: String,
+) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     info!(file_name, file_type, "Save file dialog requested");
@@ -3100,7 +3125,12 @@ async fn save_file_dialog(
 
     info!(file_name, name, extension, "Showing save file dialog");
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    // Use `tokio::sync::oneshot` so the async runtime worker yields while the native dialog
+    // is open instead of being parked by a synchronous `std::sync::mpsc` receive. The
+    // previous version blocked a runtime worker for the lifetime of the dialog which, in
+    // release builds with fewer/active workers, could starve other tasks and let an unrelated
+    // exit event slip through before the export session guard incremented.
+    let (tx, rx) = tokio::sync::oneshot::channel();
 
     app.dialog()
         .file()
@@ -3115,7 +3145,7 @@ async fn save_file_dialog(
             );
         });
 
-    match rx.recv() {
+    match rx.await {
         Ok(result) => {
             info!(path = ?result, "Save file dialog completed");
             Ok(result)
@@ -4530,6 +4560,19 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     if app_is_exiting(app) {
                         return;
                     }
+                    // If a webview crashes mid-export (memory pressure, GPU teardown, etc.) we
+                    // get a Destroyed event for the editor window. Tearing down camera/mic
+                    // feeds and editor registry entries here would race the running export
+                    // sidecar and could trigger Tauri's "last window closed" exit path. Skip
+                    // cleanup entirely while an export is active — the regular Destroyed flow
+                    // will run again when the export completes if the window is still gone.
+                    if export::export_session_active() {
+                        warn!(
+                            window = label,
+                            "Skipping Destroyed cleanup during active export"
+                        );
+                        return;
+                    }
                     if let Ok(window_id) = CapWindowId::from_str(label) {
                         if matches!(window_id, CapWindowId::Camera) {
                             tracing::warn!("Camera window Destroyed event received!");
@@ -4786,6 +4829,32 @@ pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Str
         s.clone()
     } else {
         "<non-string panic payload>".to_string()
+    }
+}
+
+// Catches panics inside an async Tauri command body so a single bad code path can't
+// unwind through the IPC dispatcher and terminate the whole desktop process. This is
+// particularly important for commands that participate in the export flow because the
+// sidecar architecture relies on the desktop app remaining alive to babysit the worker.
+async fn run_command_safely<T, F>(command_name: &'static str, fut: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    match AssertUnwindSafe(fut).catch_unwind().await {
+        Ok(result) => result,
+        Err(panic) => {
+            let message = panic_payload_message(&*panic);
+            error!(
+                command = command_name,
+                panic = %message,
+                "Suppressed panic in Tauri command"
+            );
+            sentry::capture_message(
+                &format!("Tauri command '{command_name}' panicked: {message}"),
+                sentry::Level::Error,
+            );
+            Err(format!("{command_name} failed unexpectedly"))
+        }
     }
 }
 

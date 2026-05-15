@@ -48,6 +48,10 @@ import {
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
 import { transcribeVideo } from "@/lib/transcribe";
+import {
+	isEditSourceKey,
+	reconcileStaleEditUpload,
+} from "@/lib/video-edit-processing";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
@@ -327,6 +331,8 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
 
+	await reconcileStaleEditUpload(videoId);
+
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
 
@@ -368,6 +374,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 						Boolean,
 					),
+					activeUploadRawFileKey: videoUploads.rawFileKey,
 					owner: users,
 				})
 				.from(videos)
@@ -411,6 +418,7 @@ async function AuthorizedContent({
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasPassword: boolean;
 		hasActiveUpload: boolean;
+		activeUploadRawFileKey: string | null;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
 	};
@@ -690,6 +698,11 @@ async function AuthorizedContent({
 			inheritedSpaceSettings: rules.inheritedSettings,
 		};
 	}).pipe(runPromise);
+	const isEditProcessing = isEditSourceKey({
+		ownerId: video.owner.id,
+		videoId,
+		rawFileKey: video.activeUploadRawFileKey,
+	});
 
 	return (
 		<>
@@ -720,6 +733,7 @@ async function AuthorizedContent({
 					domainVerified={domainVerified}
 					userOrganizations={userOrganizations}
 					viewerId={user?.id ?? null}
+					isEditProcessing={isEditProcessing}
 					initialAiData={initialAiData}
 					aiGenerationEnabled={aiGenerationEnabled}
 				/>

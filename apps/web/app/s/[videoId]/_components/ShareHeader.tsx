@@ -9,7 +9,7 @@ import {
 	faLock,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Check, Clock, Copy, Globe2 } from "lucide-react";
+import { Check, Clock, Copy, Globe2, Scissors } from "lucide-react";
 import moment from "moment";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -23,6 +23,7 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
+import { navigateWithTransition } from "@/utils/view-transition";
 import type { VideoData } from "../types";
 
 export const ShareHeader = ({
@@ -234,6 +235,19 @@ export const ShareHeader = ({
 	};
 
 	const userIsOwnerAndNotPro = user?.id === data.owner.id && !data.owner.isPro;
+	const canEditVideo =
+		isOwner &&
+		!data.isScreenshot &&
+		!data.hasActiveUpload &&
+		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
+	const handleEditVideo = () => {
+		if (userIsOwnerAndNotPro) {
+			setUpgradeModalOpen(true);
+			return;
+		}
+
+		navigateWithTransition("edit-enter", () => push(`/s/${data.id}/edit`));
+	};
 
 	return (
 		<>
@@ -377,27 +391,54 @@ export const ShareHeader = ({
 									</button>
 								)}
 							</div>
+							{user !== null && canEditVideo && (
+								<Button
+									variant="gray"
+									aria-label="Edit video"
+									className="rounded-full flex items-center justify-center md:hidden"
+									onClick={handleEditVideo}
+								>
+									<Scissors className="size-4 text-gray-12" />
+								</Button>
+							)}
 							{user !== null && (
 								<div className="hidden md:flex gap-2">
 									{isOwner && (
-										<Tooltip
-											content="View analytics"
-											className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
-											delayDuration={100}
-										>
-											<Button
-												variant="gray"
-												className="rounded-full flex items-center justify-center"
-												onClick={() => {
-													push(`/dashboard/analytics?capId=${data.id}`);
-												}}
+										<>
+											{canEditVideo && (
+												<Tooltip
+													content="Edit video"
+													className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+													delayDuration={100}
+												>
+													<Button
+														variant="gray"
+														className="rounded-full flex items-center justify-center"
+														onClick={handleEditVideo}
+													>
+														<Scissors className="size-4 text-gray-12" />
+													</Button>
+												</Tooltip>
+											)}
+											<Tooltip
+												content="View analytics"
+												className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+												delayDuration={100}
 											>
-												<FontAwesomeIcon
-													className="size-4 text-gray-12"
-													icon={faChartSimple}
-												/>
-											</Button>
-										</Tooltip>
+												<Button
+													variant="gray"
+													className="rounded-full flex items-center justify-center"
+													onClick={() => {
+														push(`/dashboard/analytics?capId=${data.id}`);
+													}}
+												>
+													<FontAwesomeIcon
+														className="size-4 text-gray-12"
+														icon={faChartSimple}
+													/>
+												</Button>
+											</Tooltip>
+										</>
 									)}
 									<Button
 										onClick={() => {

@@ -1,7 +1,7 @@
 {
 	"version": "1.0.0",
 	"steps": {
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nes_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
 			"fetch": {
 				"stepId": "step//workflow@4.2.0-beta.73//fetch"
 			}
@@ -54,6 +54,17 @@
 				"stepId": "step//./workflows/generate-ai//validateAndSetProcessing"
 			}
 		},
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
+			"__builtin_response_array_buffer": {
+				"stepId": "__builtin_response_array_buffer"
+			},
+			"__builtin_response_json": {
+				"stepId": "__builtin_response_json"
+			},
+			"__builtin_response_text": {
+				"stepId": "__builtin_response_text"
+			}
+		},
 		"workflows/transcribe.ts": {
 			"_enhanceAndSaveAudio": {
 				"stepId": "step//./workflows/transcribe//_enhanceAndSaveAudio"
@@ -86,15 +97,18 @@
 				"stepId": "step//./workflows/transcribe//validateVideo"
 			}
 		},
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nes_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
-			"__builtin_response_array_buffer": {
-				"stepId": "__builtin_response_array_buffer"
+		"workflows/edit-video.ts": {
+			"renderVideoEditOnMediaServer": {
+				"stepId": "step//./workflows/edit-video//renderVideoEditOnMediaServer"
 			},
-			"__builtin_response_json": {
-				"stepId": "__builtin_response_json"
+			"saveMetadataAndComplete": {
+				"stepId": "step//./workflows/edit-video//saveMetadataAndComplete"
 			},
-			"__builtin_response_text": {
-				"stepId": "__builtin_response_text"
+			"setProcessingError": {
+				"stepId": "step//./workflows/edit-video//setProcessingError"
+			},
+			"validateEditRequest": {
+				"stepId": "step//./workflows/edit-video//validateEditRequest"
 			}
 		}
 	},
@@ -208,6 +222,39 @@
 							"type": "workflowStart",
 							"data": {
 								"label": "Start: transcribeVideoWorkflow",
+								"nodeKind": "workflow_start"
+							}
+						},
+						{
+							"id": "end",
+							"type": "workflowEnd",
+							"data": {
+								"label": "Return",
+								"nodeKind": "workflow_end"
+							}
+						}
+					],
+					"edges": [
+						{
+							"id": "e_start_end",
+							"source": "start",
+							"target": "end",
+							"type": "default"
+						}
+					]
+				}
+			}
+		},
+		"workflows/edit-video.ts": {
+			"editVideoWorkflow": {
+				"workflowId": "workflow//./workflows/edit-video//editVideoWorkflow",
+				"graph": {
+					"nodes": [
+						{
+							"id": "start",
+							"type": "workflowStart",
+							"data": {
+								"label": "Start: editVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},

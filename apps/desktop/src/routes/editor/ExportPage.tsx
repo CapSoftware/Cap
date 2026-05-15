@@ -31,7 +31,7 @@ import { createSignInMutation } from "~/utils/auth";
 import {
 	beginExportSessionGuard,
 	createExportTask,
-	createExportToFileTask,
+	exportVideoToFile,
 } from "~/utils/export";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import {
@@ -588,23 +588,22 @@ export function ExportPage() {
 				customBpp,
 				forceFfmpegDecoder(),
 			);
-			const { promise, cancel } = createExportToFileTask(
+			const savePath = await exportVideoToFile(
 				projectPath,
 				exportSettings,
 				`${meta().prettyName}.${extension}`,
 				extension,
+				() => {
+					setExportState(reconcile({ action: "save", type: "starting" }));
+				},
+				() => {
+					setExportState({ action: "save", type: "copying" });
+				},
 				(progress) => {
 					if (isCancelled()) throw new SilentError("Cancelled");
 					setExportState({ type: "rendering", progress });
 				},
 			);
-			cancelCurrentExport = cancel;
-
-			setExportState(reconcile({ action: "save", type: "starting" }));
-
-			const savePath = await promise.finally(() => {
-				if (cancelCurrentExport === cancel) cancelCurrentExport = null;
-			});
 
 			if (isCancelled()) throw new SilentError("Cancelled");
 

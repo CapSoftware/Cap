@@ -117,7 +117,7 @@ describe("shouldDeferPlaybackSource", () => {
 		);
 	});
 
-	it("reloads playback when upload progress clears before media finishes loading", () => {
+	it("reloads playback when upload progress clears", () => {
 		expect(
 			shouldReloadPlaybackAfterUploadCompletes(
 				{
@@ -127,7 +127,6 @@ describe("shouldDeferPlaybackSource", () => {
 					message: "Finishing video...",
 				},
 				null,
-				false,
 			),
 		).toBe(true);
 		expect(
@@ -139,12 +138,9 @@ describe("shouldDeferPlaybackSource", () => {
 					message: "Finishing video...",
 				},
 				null,
-				true,
 			),
-		).toBe(false);
-		expect(shouldReloadPlaybackAfterUploadCompletes(null, null, false)).toBe(
-			false,
-		);
+		).toBe(true);
+		expect(shouldReloadPlaybackAfterUploadCompletes(null, null)).toBe(false);
 	});
 
 	it("detects processing that never actually started", () => {
