@@ -38,6 +38,26 @@ interface AiResult {
 }
 
 const MAX_CHARS_PER_CHUNK = 24000;
+const GENERATED_TITLE_PATTERN =
+	/^(Cap (Recording|Upload) - .+|Untitled|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})$/;
+
+export function shouldReplaceVideoTitle({
+	currentTitle,
+	previousAiTitle,
+	nextAiTitle,
+}: {
+	currentTitle: string | null;
+	previousAiTitle?: string | null;
+	nextAiTitle?: string | null;
+}) {
+	const nextTitle = nextAiTitle?.trim();
+	if (!nextTitle) return false;
+
+	const title = currentTitle?.trim();
+	if (!title) return true;
+	if (previousAiTitle?.trim() && title === previousAiTitle.trim()) return true;
+	return GENERATED_TITLE_PATTERN.test(title);
+}
 
 export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 	"use workflow";
@@ -218,10 +238,11 @@ async function saveResults(
 	"use step";
 
 	const { video, metadata } = videoData;
+	const generatedTitle = result.title?.trim();
 
 	const updatedMetadata: VideoMetadata = {
 		...metadata,
-		aiTitle: result.title || metadata.aiTitle,
+		aiTitle: generatedTitle || metadata.aiTitle,
 		summary: result.summary || metadata.summary,
 		chapters: result.chapters || metadata.chapters,
 		aiGenerationStatus: "COMPLETE",
@@ -232,17 +253,17 @@ async function saveResults(
 		.set({ metadata: updatedMetadata })
 		.where(eq(videos.id, videoId as Video.VideoId));
 
-	const hasDatePattern = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(
-		video.name || "",
-	);
-
 	if (
-		(video.name?.startsWith("Cap Recording -") || hasDatePattern) &&
-		result.title
+		generatedTitle &&
+		shouldReplaceVideoTitle({
+			currentTitle: video.name,
+			previousAiTitle: metadata.aiTitle,
+			nextAiTitle: generatedTitle,
+		})
 	) {
 		await db()
 			.update(videos)
-			.set({ name: result.title })
+			.set({ name: generatedTitle })
 			.where(eq(videos.id, videoId as Video.VideoId));
 	}
 }
