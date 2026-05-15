@@ -568,7 +568,7 @@ async function getOrCreateImportSpace({
 			id: SpaceMemberId.make(nanoId()),
 			spaceId,
 			userId: createdById,
-			role: "Admin",
+			role: "admin",
 		});
 	});
 
