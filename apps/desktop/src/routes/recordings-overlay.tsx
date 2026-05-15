@@ -25,7 +25,7 @@ import { createStore, produce, type SetStoreFunction } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
 import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { exportVideo } from "~/utils/export";
+import { createExportToFileTask, exportVideo } from "~/utils/export";
 import {
 	commands,
 	events,
@@ -645,7 +645,7 @@ function createRecordingMutations(
 				: media.path.split(".cap/")[1];
 			const suggestedName = meta.pretty_name || defaultName;
 
-			const fileType = isRecording ? "recording" : "screenshot";
+			const fileType = isRecording ? "mp4" : "screenshot";
 			const extension = isRecording ? ".mp4" : ".png";
 
 			const fullFileName = suggestedName.endsWith(extension)
@@ -660,29 +660,30 @@ function createRecordingMutations(
 				},
 			});
 
-			const savePath = await commands.saveFileDialog(fullFileName, fileType);
-
-			if (!savePath) {
-				setActionState({ type: "idle" });
-				return false;
-			}
-
-			setActionState({
-				type: "save",
-				state: {
-					type: "rendering",
-					state: { type: "starting" },
-				},
-			});
-
 			if (isRecording) {
-				const outputPath = await exportWithDefaultSettings(
+				const { promise } = createExportToFileTask(
+					media.path,
+					{
+						format: "Mp4",
+						fps: FPS,
+						resolution_base: OUTPUT_SIZE,
+						compression: "Web",
+						custom_bpp: null,
+					},
+					fullFileName,
+					fileType,
 					createRenderProgressCallback("save", setActionState),
 				);
 
-				await commands.copyFileToPath(outputPath, savePath);
+				await promise;
 			} else {
-				// For screenshots, show quick progress animation
+				const savePath = await commands.saveFileDialog(fullFileName, fileType);
+
+				if (!savePath) {
+					setActionState({ type: "idle" });
+					return false;
+				}
+
 				setActionState({ type: "save", state: { type: "saving" } });
 
 				await commands.copyFileToPath(media.path, savePath);
