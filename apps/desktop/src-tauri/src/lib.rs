@@ -110,7 +110,7 @@ use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
 use windows::{
     CapWindow, CapWindowId, EditorWindowIds, ScreenshotEditorWindowIds, hide_overlay,
-    set_window_transparent, show_overlay,
+    set_window_transparent,
 };
 
 use crate::{recording::start_recording, upload::build_video_meta};

@@ -69,7 +69,6 @@
 				{ "url": "http://localhost:*" }
 			]
 		},
-		"clipboard-manager:allow-write-text",
 		"opener:allow-reveal-item-in-dir"
 	]
 }
