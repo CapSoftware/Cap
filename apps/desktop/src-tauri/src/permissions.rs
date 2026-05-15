@@ -111,10 +111,7 @@ fn macos_activate_permission_request(app: &tauri::AppHandle) {
     if let Some(current_app) =
         NSRunningApplication::runningApplicationWithProcessIdentifier(std::process::id() as _)
     {
-        unsafe {
-            current_app
-                .activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
-        }
+        current_app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
     }
 }
 

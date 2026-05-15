@@ -24,14 +24,6 @@ impl WindowPositionPersistence {
         })
     }
 
-    pub fn queue_main(&self, position: WindowPosition) {
-        {
-            let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-            guard.main = Some(position);
-        }
-        self.notify.notify_one();
-    }
-
     pub fn queue_camera(&self, x: f64, y: f64) {
         {
             let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());

@@ -2,7 +2,6 @@ mod sc_shareable_content;
 
 use block2::RcBlock;
 use objc2::{msg_send, sel};
-use objc2_app_kit::NSWindow;
 use objc2_foundation::NSObjectProtocol;
 use objc2_web_kit::WKWebView;
 pub use sc_shareable_content::*;
