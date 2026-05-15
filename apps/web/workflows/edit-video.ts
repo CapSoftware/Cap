@@ -1,7 +1,7 @@
+import { createHash } from "node:crypto";
 import {
 	CloudFrontClient,
 	CreateInvalidationCommand,
-	waitUntilInvalidationCompleted,
 } from "@aws-sdk/client-cloudfront";
 import { db } from "@cap/database";
 import {
@@ -72,7 +72,7 @@ export async function editVideoWorkflow(
 	try {
 		await validateEditRequest(videoId, sourceKey);
 		const result = await renderVideoEditOnMediaServer(payload);
-		await invalidateEditedVideoCache(videoId);
+		await invalidateEditedVideoCache(videoId, editSpec);
 		await saveEditResultAndComplete(
 			videoId,
 			sourceKey,
@@ -414,7 +414,21 @@ async function waitForEditCompletion(
 	throw new Error(`Video edit timed out while ${lastStatus}`);
 }
 
-async function invalidateEditedVideoCache(videoId: string): Promise<void> {
+function getEditInvalidationCallerReference(
+	videoId: string,
+	editSpec: VideoEditSpec,
+) {
+	const editHash = createHash("sha256")
+		.update(JSON.stringify(editSpec))
+		.digest("hex")
+		.slice(0, 16);
+	return `edit-${videoId}-${editHash}`;
+}
+
+async function invalidateEditedVideoCache(
+	videoId: string,
+	editSpec: VideoEditSpec,
+): Promise<void> {
 	"use step";
 
 	const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
@@ -445,33 +459,20 @@ async function invalidateEditedVideoCache(videoId: string): Promise<void> {
 			),
 		});
 
-		const result = await cloudfront.send(
+		await cloudfront.send(
 			new CreateInvalidationCommand({
 				DistributionId: distributionId,
 				InvalidationBatch: {
-					CallerReference: `${videoId}-${Date.now()}`,
+					CallerReference: getEditInvalidationCallerReference(
+						videoId,
+						editSpec,
+					),
 					Paths: {
 						Quantity: paths.length,
 						Items: paths,
 					},
 				},
 			}),
-		);
-
-		const invalidationId = result.Invalidation?.Id;
-		if (!invalidationId) return;
-
-		await waitUntilInvalidationCompleted(
-			{
-				client: cloudfront,
-				maxWaitTime: 120,
-				minDelay: 5,
-				maxDelay: 15,
-			},
-			{
-				DistributionId: distributionId,
-				Id: invalidationId,
-			},
 		);
 	} catch (error) {
 		console.warn(
