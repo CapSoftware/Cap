@@ -36,6 +36,17 @@ export interface VideoMetadata {
 	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
 }
 
+export type VideoEditRange = {
+	start: number;
+	end: number;
+};
+
+export type VideoEditSpec = {
+	version: 1;
+	sourceDuration: number;
+	keepRanges: VideoEditRange[];
+};
+
 /**
  * Space metadata structure
  */

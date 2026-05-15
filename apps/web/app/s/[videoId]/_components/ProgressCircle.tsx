@@ -46,13 +46,11 @@ export function shouldDeferPlaybackSource(
 export function shouldReloadPlaybackAfterUploadCompletes(
 	previousUploadProgress: UploadProgress | null,
 	uploadProgress: UploadProgress | null,
-	videoLoaded: boolean,
 ): boolean {
 	return (
 		previousUploadProgress !== null &&
 		previousUploadProgress.status !== "fetching" &&
-		uploadProgress === null &&
-		!videoLoaded
+		uploadProgress === null
 	);
 }
 
@@ -115,6 +113,10 @@ export function getStalledProcessingMessage(input: {
 		return "Video finishing stalled. Retry processing.";
 	}
 
+	if (input.phase === "complete" && ageMs > STALE_THUMBNAIL_MS) {
+		return "Video finishing stalled. Retry processing.";
+	}
+
 	return null;
 }
 
@@ -154,7 +156,13 @@ export function useUploadProgress(
 		processingProgress: query.data.processingProgress,
 	});
 
-	if (phase === "complete") return null;
+	if (phase === "complete") {
+		return {
+			status: "generating_thumbnail",
+			lastUpdated,
+			progress: 100,
+		};
+	}
 
 	if (phase === "error") {
 		return {
