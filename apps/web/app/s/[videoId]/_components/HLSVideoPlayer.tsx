@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import { getActiveCaptionText } from "./caption-cues";
 import {
 	canRetryFailedProcessing,
 	getUploadFailureMessage,
@@ -445,20 +446,17 @@ export function HLSVideoPlayer({
 		videoRef.current,
 	]);
 
-	// Caption handling
 	useEffect(() => {
 		const video = videoRef.current;
-		if (!video || !captionsSrc) return;
+		if (!video || !captionsSrc) {
+			setCurrentCue("");
+			return;
+		}
 
 		let captionTrack: TextTrack | null = null;
 
 		const handleCueChange = (): void => {
-			if (captionTrack?.activeCues && captionTrack.activeCues.length > 0) {
-				const activeCue = captionTrack.activeCues[0] as VTTCue;
-				setCurrentCue(activeCue.text);
-			} else {
-				setCurrentCue("");
-			}
+			setCurrentCue(getActiveCaptionText(captionTrack?.activeCues));
 		};
 
 		const setupTracks = (): void => {
@@ -477,7 +475,6 @@ export function HLSVideoPlayer({
 			}
 		};
 
-		// Ensure all caption tracks remain hidden
 		const ensureTracksHidden = (): void => {
 			const tracks = video.textTracks;
 			for (let i = 0; i < tracks.length; i++) {
@@ -504,7 +501,6 @@ export function HLSVideoPlayer({
 
 		video.addEventListener("loadedmetadata", handleLoadedMetadata);
 
-		// Add event listeners to monitor track changes
 		video.textTracks.addEventListener("change", handleTrackChange);
 		video.textTracks.addEventListener("addtrack", handleTrackChange);
 		video.textTracks.addEventListener("removetrack", handleTrackChange);
@@ -733,6 +729,7 @@ export function HLSVideoPlayer({
 				{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
 				{captionsSrc && (
 					<track
+						key={captionsSrc}
 						label="English"
 						kind="captions"
 						srcLang="en"

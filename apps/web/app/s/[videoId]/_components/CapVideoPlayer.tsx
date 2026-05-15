@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import CommentStamp from "./CommentStamp";
+import { getActiveCaptionText } from "./caption-cues";
 import {
 	AVC_LEVEL_IOS_HARDWARE_CEILING,
 	createLevelPatchedMp4ObjectUrl,
@@ -356,6 +357,12 @@ export function CapVideoPlayer({
 	]);
 
 	useEffect(() => {
+		if (!captionsSrc) {
+			setCurrentCue("");
+		}
+	}, [captionsSrc]);
+
+	useEffect(() => {
 		const video = videoRef.current;
 		if (!video || resolvedSrc.isPending) return;
 
@@ -398,17 +405,10 @@ export function CapVideoPlayer({
 			setHasError(true);
 		};
 
-		// Caption track setup
 		let captionTrack: TextTrack | null = null;
 
 		const handleCueChange = (): void => {
-			if (captionTrack?.activeCues && captionTrack.activeCues.length > 0) {
-				const cue = captionTrack.activeCues[0] as VTTCue;
-				const plainText = cue.text.replace(/<[^>]*>/g, "");
-				setCurrentCue(plainText);
-			} else {
-				setCurrentCue("");
-			}
+			setCurrentCue(getActiveCaptionText(captionTrack?.activeCues));
 		};
 
 		const setupTracks = (): void => {
@@ -424,7 +424,6 @@ export function CapVideoPlayer({
 			}
 		};
 
-		// Ensure all caption tracks remain hidden
 		const ensureTracksHidden = (): void => {
 			const tracks = Array.from(video.textTracks);
 			for (const track of tracks) {
@@ -708,6 +707,7 @@ export function CapVideoPlayer({
 					{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
 					{captionsSrc && (
 						<track
+							key={captionsSrc}
 							label="English"
 							kind="captions"
 							srcLang="en"
