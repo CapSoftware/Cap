@@ -111,6 +111,7 @@ interface Props {
 	canRetryProcessing?: boolean;
 	duration?: number | null;
 	showPlaybackStatusBadge?: boolean;
+	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
 }
 
@@ -142,6 +143,7 @@ export function CapVideoPlayer({
 	canRetryProcessing = false,
 	duration: fallbackDuration,
 	showPlaybackStatusBadge = false,
+	showFloatingVolumeControl = false,
 	onUploadComplete,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -819,6 +821,14 @@ export function CapVideoPlayer({
 				!showUploadFailureOverlay &&
 				!showPlaybackResolutionError && <MediaPlayerError />}
 			<MediaPlayerVolumeIndicator />
+			{showFloatingVolumeControl &&
+				videoLoaded &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<div className="absolute bottom-3 left-3 z-50 rounded-full bg-black/45 p-1 text-white shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-md">
+						<MediaPlayerVolume expandable />
+					</div>
+				)}
 
 			{mainControlsVisible &&
 				markersReady &&

@@ -1644,6 +1644,7 @@ export function EditVideoClient({ video }: { video: EditableVideo }) {
 							disableReactionStamps
 							disablePreviewGif
 							duration={video.duration}
+							showFloatingVolumeControl
 						/>
 					</div>
 				</section>
