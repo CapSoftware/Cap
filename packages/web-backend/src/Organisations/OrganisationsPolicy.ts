@@ -28,7 +28,19 @@ export class OrganisationsPolicy extends Effect.Service<OrganisationsPolicy>()(
 					),
 				);
 
-			return { isMember, isOwner };
+			const isAdminOrOwner = (orgId: Organisation.OrganisationId) =>
+				Policy.policy((user) =>
+					repo.membership(user.id, orgId).pipe(
+						Effect.map((v) =>
+							v.pipe(
+								Option.filter((v) => v.role === "owner" || v.role === "admin"),
+								Option.isSome,
+							),
+						),
+					),
+				);
+
+			return { isMember, isOwner, isAdminOrOwner };
 		}),
 		dependencies: [
 			OrganisationsRepo.Default,
