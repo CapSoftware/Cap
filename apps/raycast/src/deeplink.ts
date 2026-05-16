@@ -12,8 +12,7 @@ type ActionPayload =
 	| { switch_microphone: { mic_label: string | null } };
 
 export function buildActionUrl(payload: ActionPayload): string {
-	const value =
-		typeof payload === "string" ? `"${payload}"` : JSON.stringify(payload);
+	const value = JSON.stringify(payload);
 	const url = new URL("cap-desktop://action");
 	url.searchParams.set("value", value);
 	return url.toString();

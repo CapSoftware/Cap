@@ -5,7 +5,8 @@ interface Arguments {
 	identifier?: string;
 }
 
-const DEVICE_ID_PATTERN = /^[0-9a-fA-F-]{8,}$/;
+const DEVICE_ID_PATTERN =
+	/^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/i;
 
 export default async function SwitchCamera(
 	props: LaunchProps<{ arguments: Arguments }>,
