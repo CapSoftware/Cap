@@ -10,5 +10,8 @@
 	},
 	"scripts": {
 		"test": "pnpm exec vitest run"
+	},
+	"devDependencies": {
+		"vitest": "~2.1.9"
 	}
 }

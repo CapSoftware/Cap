@@ -19,6 +19,7 @@
 		"effect": "^3.18.4"
 	},
 	"devDependencies": {
-		"@effect/platform-node": "^0.98.3"
+		"@effect/platform-node": "^0.98.3",
+		"vitest": "~2.1.9"
 	}
 }

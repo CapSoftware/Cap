@@ -27,6 +27,7 @@
 	},
 	"devDependencies": {
 		"concurrently": "^9.2.1",
-		"dotenv-cli": "^10.0.0"
+		"dotenv-cli": "^10.0.0",
+		"vitest": "~2.1.9"
 	}
 }
