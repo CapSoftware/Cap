@@ -7,7 +7,6 @@ export type AssignableOrganizationRole =
 
 export const spaceRoles = ["admin", "member"] as const;
 export type SpaceRole = (typeof spaceRoles)[number];
-export type PersistedSpaceRole = SpaceRole | "Admin";
 
 const organizationRoleRank: Record<OrganizationRole, number> = {
 	owner: 3,
@@ -25,6 +24,19 @@ function includesValue<T extends readonly string[]>(
 	value: string,
 ): value is T[number] {
 	return values.includes(value);
+}
+
+function getOrganizationRoleRank(role: OrganizationRole | null | undefined) {
+	return role ? organizationRoleRank[role] : 0;
+}
+
+function organizationRoleOutranks(
+	actorRole: OrganizationRole | null | undefined,
+	targetRole: OrganizationRole | null | undefined,
+) {
+	return (
+		getOrganizationRoleRank(actorRole) > getOrganizationRoleRank(targetRole)
+	);
 }
 
 export function normalizeOrganizationRole(
@@ -63,7 +75,6 @@ export function normalizeSpaceRole(
 	role: string | null | undefined,
 ): SpaceRole | null {
 	if (!role) return null;
-	if (role === "Admin") return "admin";
 	const normalized = role.toLowerCase();
 	return includesValue(spaceRoles, normalized) ? normalized : null;
 }
@@ -138,6 +149,7 @@ export function canChangeOrganizationMemberRole({
 		return false;
 	}
 	if (actorUserId && targetUserId && actorUserId === targetUserId) return false;
+	if (!organizationRoleOutranks(actorRole, targetRole)) return false;
 	return true;
 }
 
@@ -159,6 +171,7 @@ export function canRemoveOrganizationMember({
 		return false;
 	}
 	if (actorUserId && targetUserId && actorUserId === targetUserId) return false;
+	if (!organizationRoleOutranks(actorRole, targetRole)) return false;
 	return true;
 }
 
