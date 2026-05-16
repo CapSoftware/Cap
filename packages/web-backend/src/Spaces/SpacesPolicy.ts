@@ -36,10 +36,9 @@ export class SpacesPolicy extends Effect.Service<SpacesPolicy>()(
 						repo.membership(user.id, spaceId).pipe(
 							Effect.map((v) =>
 								v.pipe(
-									Option.filter((v) => {
-										const role = String(v.role);
-										return role === "admin" || role === "Admin";
-									}),
+									Option.filter(
+										(v) => String(v.role).toLowerCase() === "admin",
+									),
 									Option.isSome,
 								),
 							),
