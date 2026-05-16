@@ -45,9 +45,20 @@ fn main() {
         ));
 
         // Caution! Everything before here runs in both app and crash reporter processes
-        let _guard = tauri_plugin_sentry::minidump::init(&sentry_client);
+        //
+        // DIAGNOSTIC: the minidump/crashpad initializer installs a process-wide SEH
+        // exception handler that intercepts native crashes, writes a minidump, uploads
+        // to Sentry, then terminates the process via TerminateProcess. That termination
+        // path bypasses the Rust panic hook, Tauri's RunEvent::Exit, and Windows Error
+        // Reporting, which is why the export-time crashes have left zero forensic trail
+        // (no panics.log, no WER Application Error event, no App exit requested log).
+        // We've eliminated several candidate root causes already; the remaining unknown
+        // requires a real native stack trace. Disabling crashpad lets the next crash
+        // propagate to Windows Error Reporting so Event Viewer captures the faulting
+        // module + offset. RE-ENABLE THIS LINE as soon as we have the WER trace.
+        // let _guard = tauri_plugin_sentry::minidump::init(&sentry_client);
 
-        (sentry_client, _guard)
+        sentry_client
     });
 
     let (reload_layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
