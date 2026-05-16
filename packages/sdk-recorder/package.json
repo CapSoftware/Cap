@@ -20,7 +20,8 @@
 	],
 	"scripts": {
 		"build": "tsup",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"test": "pnpm exec vitest run"
 	},
 	"dependencies": {},
 	"peerDependencies": {
