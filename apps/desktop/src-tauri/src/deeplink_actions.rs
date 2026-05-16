@@ -97,7 +97,8 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
+            Some("action") => Ok(()),
+            Some(_) => Err(ActionParseFromUrlError::NotAction),
             _ => Err(ActionParseFromUrlError::Invalid),
         }?;
 
