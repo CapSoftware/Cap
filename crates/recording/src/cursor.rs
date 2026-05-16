@@ -9,7 +9,7 @@ use serde::Serialize;
 use std::{
     collections::HashMap,
     fs::File,
-    io::BufWriter,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -67,6 +67,12 @@ fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[Cu
             if let Err(e) = serde_json::to_writer(&mut writer, &events) {
                 tracing::error!(
                     "Failed to serialize cursor data to {}: {}",
+                    output_path.display(),
+                    e
+                );
+            } else if let Err(e) = writer.flush() {
+                tracing::error!(
+                    "Failed to flush cursor data to {}: {}",
                     output_path.display(),
                     e
                 );

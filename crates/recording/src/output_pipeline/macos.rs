@@ -1198,6 +1198,22 @@ mod tests {
     mod mp4_muxer_buffer_size {
         use super::*;
 
+        static MP4_MUXER_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        fn with_muxer_env_lock(f: impl FnOnce()) {
+            let _guard = MP4_MUXER_ENV_LOCK
+                .lock()
+                .expect("mp4 muxer env lock should not be poisoned");
+            f();
+        }
+
+        fn clear_muxer_env_overrides() {
+            unsafe {
+                std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE");
+                std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE_INSTANT");
+            }
+        }
+
         #[test]
         fn instant_mode_buffer_is_larger_than_normal() {
             let instant = DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT;
@@ -1222,62 +1238,64 @@ mod tests {
 
         #[test]
         fn env_override_takes_precedence() {
-            unsafe {
-                std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE", "500");
-            }
-            let normal = get_mp4_muxer_buffer_size(false);
-            let instant = get_mp4_muxer_buffer_size(true);
-            unsafe {
-                std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE");
-            }
-            assert_eq!(normal, 500);
-            assert_eq!(instant, 500);
+            with_muxer_env_lock(|| {
+                clear_muxer_env_overrides();
+                unsafe {
+                    std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE", "500");
+                }
+                let normal = get_mp4_muxer_buffer_size(false);
+                let instant = get_mp4_muxer_buffer_size(true);
+                clear_muxer_env_overrides();
+                assert_eq!(normal, 500);
+                assert_eq!(instant, 500);
+            });
         }
 
         #[test]
         fn instant_env_override_takes_precedence_over_global_override() {
-            unsafe {
-                std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE", "500");
-                std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE_INSTANT", "120");
-            }
-            let normal = get_mp4_muxer_buffer_size(false);
-            let instant = get_mp4_muxer_buffer_size(true);
-            unsafe {
-                std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE");
-                std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE_INSTANT");
-            }
-            assert_eq!(normal, 500);
-            assert_eq!(instant, 120);
+            with_muxer_env_lock(|| {
+                clear_muxer_env_overrides();
+                unsafe {
+                    std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE", "500");
+                    std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE_INSTANT", "120");
+                }
+                let normal = get_mp4_muxer_buffer_size(false);
+                let instant = get_mp4_muxer_buffer_size(true);
+                clear_muxer_env_overrides();
+                assert_eq!(normal, 500);
+                assert_eq!(instant, 120);
+            });
         }
 
         #[test]
         fn invalid_env_falls_back_to_defaults() {
-            unsafe {
-                std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE", "not_a_number");
-            }
-            let normal = get_mp4_muxer_buffer_size(false);
-            let instant = get_mp4_muxer_buffer_size(true);
-            unsafe {
-                std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE");
-            }
-            assert_eq!(normal, DEFAULT_MP4_MUXER_BUFFER_SIZE);
-            assert_eq!(instant, DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT);
+            with_muxer_env_lock(|| {
+                clear_muxer_env_overrides();
+                unsafe {
+                    std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE", "not_a_number");
+                }
+                let normal = get_mp4_muxer_buffer_size(false);
+                let instant = get_mp4_muxer_buffer_size(true);
+                clear_muxer_env_overrides();
+                assert_eq!(normal, DEFAULT_MP4_MUXER_BUFFER_SIZE);
+                assert_eq!(instant, DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT);
+            });
         }
 
         #[test]
         fn invalid_instant_override_falls_back_to_global_override() {
-            unsafe {
-                std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE", "80");
-                std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE_INSTANT", "not_a_number");
-            }
-            let normal = get_mp4_muxer_buffer_size(false);
-            let instant = get_mp4_muxer_buffer_size(true);
-            unsafe {
-                std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE");
-                std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE_INSTANT");
-            }
-            assert_eq!(normal, 80);
-            assert_eq!(instant, 80);
+            with_muxer_env_lock(|| {
+                clear_muxer_env_overrides();
+                unsafe {
+                    std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE", "80");
+                    std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE_INSTANT", "not_a_number");
+                }
+                let normal = get_mp4_muxer_buffer_size(false);
+                let instant = get_mp4_muxer_buffer_size(true);
+                clear_muxer_env_overrides();
+                assert_eq!(normal, 80);
+                assert_eq!(instant, 80);
+            });
         }
     }
 
