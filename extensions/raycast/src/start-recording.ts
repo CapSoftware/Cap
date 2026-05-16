@@ -4,7 +4,7 @@ export default async function Command() {
   try {
     await closeMainWindow();
     await open("cap://record");
-    await showHUD("Cap recording started");
+    await showHUD("Sent start request to Cap");
   } catch (error) {
     await showToast({
       style: Toast.Style.Failure,

@@ -102,10 +102,11 @@ impl TryFrom<&Url> for DeepLinkAction {
             };
         }
 
-        match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
-            _ => Err(ActionParseFromUrlError::Invalid),
-        }?;
+        match url.host_str() {
+            Some("action") => {}
+            Some(_) => return Err(ActionParseFromUrlError::NotAction),
+            None => return Err(ActionParseFromUrlError::Invalid),
+        }
 
         let params = url
             .query_pairs()
@@ -141,9 +142,9 @@ impl DeepLinkAction {
                     .flatten()
                     .unwrap_or_default();
 
-                let _ = crate::set_mic_input(state.clone(), settings.mic_name).await;
-                let _ = crate::set_camera_input(app.clone(), state.clone(), settings.camera_id, None)
-                    .await;
+                crate::set_mic_input(state.clone(), settings.mic_name).await?;
+                crate::set_camera_input(app.clone(), state.clone(), settings.camera_id, None)
+                    .await?;
 
                 let inputs = StartRecordingInputs {
                     capture_target: settings.target.unwrap_or_else(|| {
