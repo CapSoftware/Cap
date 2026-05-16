@@ -78,7 +78,7 @@ describe("organization role permissions", () => {
 		}
 	});
 
-	it("protects organization owners and actor self role from role changes", () => {
+	it("protects organization owners, peer admins, and actor self role from role changes", () => {
 		expect(
 			canChangeOrganizationMemberRole({
 				actorRole: "admin",
@@ -89,6 +89,26 @@ describe("organization role permissions", () => {
 				nextRole: "member",
 			}),
 		).toBe(false);
+		expect(
+			canChangeOrganizationMemberRole({
+				actorRole: "admin",
+				actorUserId: "admin-1",
+				targetUserId: "admin-2",
+				ownerId: "owner",
+				targetRole: "admin",
+				nextRole: "member",
+			}),
+		).toBe(false);
+		expect(
+			canChangeOrganizationMemberRole({
+				actorRole: "owner",
+				actorUserId: "owner",
+				targetUserId: "admin",
+				ownerId: "owner",
+				targetRole: "admin",
+				nextRole: "member",
+			}),
+		).toBe(true);
 		expect(
 			canChangeOrganizationMemberRole({
 				actorRole: "admin",
@@ -111,7 +131,7 @@ describe("organization role permissions", () => {
 		).toBe(false);
 	});
 
-	it("lets admins remove non-owner members but never owners or themselves", () => {
+	it("lets admins remove members but never owners, peer admins, or themselves", () => {
 		expect(
 			canRemoveOrganizationMember({
 				actorRole: "admin",
@@ -130,6 +150,24 @@ describe("organization role permissions", () => {
 				targetRole: "owner",
 			}),
 		).toBe(false);
+		expect(
+			canRemoveOrganizationMember({
+				actorRole: "admin",
+				actorUserId: "admin-1",
+				targetUserId: "admin-2",
+				ownerId: "owner",
+				targetRole: "admin",
+			}),
+		).toBe(false);
+		expect(
+			canRemoveOrganizationMember({
+				actorRole: "owner",
+				actorUserId: "owner",
+				targetUserId: "admin",
+				ownerId: "owner",
+				targetRole: "admin",
+			}),
+		).toBe(true);
 		expect(
 			canRemoveOrganizationMember({
 				actorRole: "admin",
