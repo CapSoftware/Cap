@@ -15,6 +15,10 @@ import {
 	useState,
 } from "react";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
+import {
+	canViewOrganizationSettings,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
 import { useDashboardContext } from "../Contexts";
 import { CapIcon, CogIcon, LayersIcon } from "./AnimatedIcons";
 import { updateActiveOrganization } from "./Navbar/server";
@@ -25,15 +29,23 @@ const Tabs = [
 	{
 		icon: <CogIcon size={22} />,
 		href: "/dashboard/settings/organization",
-		ownerOnly: true,
+		adminOnly: true,
 	},
 ];
 
 const MobileTab = () => {
 	const [open, setOpen] = useState(false);
-	const containerRef = useRef<HTMLDivElement>(null);
+	const containerRef = useRef<HTMLButtonElement>(null);
 	const { activeOrganization: activeOrg, user } = useDashboardContext();
-	const isOwner = activeOrg?.organization.ownerId === user.id;
+	const currentMember = activeOrg?.members.find(
+		(member) => member.userId === user.id,
+	);
+	const currentRole = getEffectiveOrganizationRole({
+		userId: user.id,
+		ownerId: activeOrg?.organization.ownerId,
+		memberRole: currentMember?.role,
+	});
+	const canViewSettings = canViewOrganizationSettings(currentRole);
 	const menuRef = useClickAway((e) => {
 		if (
 			containerRef.current &&
@@ -51,7 +63,7 @@ const MobileTab = () => {
 				<Orgs open={open} setOpen={setOpen} containerRef={containerRef} />
 			</div>
 			<div className="flex gap-6 justify-between items-center h-full text-gray-11">
-				{Tabs.filter((i) => !i.ownerOnly || isOwner).map((tab) => (
+				{Tabs.filter((i) => !i.adminOnly || canViewSettings).map((tab) => (
 					<Link href={tab.href} key={tab.href}>
 						{tab.icon}
 					</Link>
@@ -68,11 +80,12 @@ const Orgs = ({
 }: {
 	setOpen: Dispatch<SetStateAction<boolean>>;
 	open: boolean;
-	containerRef: MutableRefObject<HTMLDivElement | null>;
+	containerRef: MutableRefObject<HTMLButtonElement | null>;
 }) => {
 	const { activeOrganization: activeOrg } = useDashboardContext();
 	return (
-		<div
+		<button
+			type="button"
 			onClick={() => setOpen((p) => !p)}
 			ref={containerRef}
 			className="flex gap-1.5 items-center flex-auto max-w-[224px] p-2 rounded-full border bg-gray-3 border-gray-5"
@@ -92,7 +105,7 @@ const Orgs = ({
 					open && "rotate-180",
 				)}
 			/>
-		</div>
+		</button>
 	);
 };
 
@@ -121,9 +134,10 @@ const OrgsMenu = ({
 				const isSelected =
 					activeOrg?.organization.id === organization.organization.id;
 				return (
-					<div
+					<button
+						type="button"
 						className={clsx(
-							"p-2 rounded-lg transition-colors duration-300 group",
+							"p-2 rounded-lg transition-colors duration-300 group w-full text-left",
 							isSelected
 								? "pointer-events-none"
 								: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
@@ -154,7 +168,7 @@ const OrgsMenu = ({
 								<Check size={18} className={"ml-auto text-gray-12"} />
 							)}
 						</div>
-					</div>
+					</button>
 				);
 			})}
 		</motion.div>

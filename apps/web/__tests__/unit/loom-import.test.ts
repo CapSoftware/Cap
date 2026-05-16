@@ -629,7 +629,7 @@ describe("importFromLoom", () => {
 			expect.objectContaining({
 				spaceId: "video-123",
 				userId: "user-123",
-				role: "Admin",
+				role: "admin",
 			}),
 		);
 		expect(valuesMock).toHaveBeenCalledWith(

@@ -194,7 +194,11 @@ async function readStream(stream: ReadableStream<Uint8Array> | null) {
 	} finally {
 		reader.releaseLock();
 	}
-	return new TextDecoder().decode(Buffer.concat(chunks));
+
+	const decoder = new TextDecoder();
+	return chunks
+		.map((chunk) => decoder.decode(chunk, { stream: true }))
+		.join("");
 }
 
 async function withTimeout<T>(

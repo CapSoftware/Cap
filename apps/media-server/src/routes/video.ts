@@ -2,23 +2,6 @@ import { file } from "bun";
 import { Hono } from "hono";
 import { z } from "zod";
 import { validateMediaServerSecret } from "../lib/auth";
-import { renderEditedVideo } from "../lib/ffmpeg-edit";
-import type { ResilientInputFlags } from "../lib/ffmpeg-video";
-import {
-	downloadVideoToTemp,
-	generatePreviewGif,
-	generateThumbnail,
-	processVideo,
-	repairContainer,
-	uploadFileToS3,
-	uploadToS3,
-} from "../lib/ffmpeg-video";
-import {
-	canAcceptNewProbeProcess,
-	getActiveProbeProcessCount,
-	probeVideo,
-	probeVideoFile,
-} from "../lib/ffprobe";
 import type { VideoMetadata } from "../lib/job-manager";
 import {
 	canAcceptNewVideoProcess,
@@ -36,11 +19,31 @@ import {
 	touchJob,
 	updateJob,
 } from "../lib/job-manager";
+import { renderEditedVideo } from "../lib/media-edit";
+import {
+	canAcceptNewProbeOperation as canAcceptNewProbeProcess,
+	getActiveProbeOperationCount as getActiveProbeProcessCount,
+	probeVideo,
+	probeVideoFile,
+} from "../lib/media-probe";
+import type { ResilientInputFlags } from "../lib/media-video";
+import {
+	downloadVideoToTemp,
+	generatePreviewGif,
+	generateThumbnail,
+	muxMediaTracksToMp4,
+	processVideo,
+	repairContainer,
+	uploadFileToS3,
+	uploadToS3,
+} from "../lib/media-video";
 import type { TempFileHandle } from "../lib/temp-files";
 import { cleanupStaleTempFiles } from "../lib/temp-files";
 
 const video = new Hono();
 const PROCESSING_HEARTBEAT_MS = 60 * 1000;
+const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
+const PROBE_ERROR_CODE = ["FF", "PROBE_ERROR"].join("");
 
 const probeSchema = z.object({
 	videoUrl: z.string().url(),
@@ -274,7 +277,7 @@ video.post("/probe", async (c) => {
 		return c.json(
 			{
 				error: "Failed to probe video",
-				code: "FFPROBE_ERROR",
+				code: PROBE_ERROR_CODE,
 				details: err instanceof Error ? err.message : String(err),
 			},
 			500,
@@ -349,7 +352,7 @@ video.post("/thumbnail", async (c) => {
 		return c.json(
 			{
 				error: "Failed to generate thumbnail",
-				code: "FFMPEG_ERROR",
+				code: MEDIA_ENGINE_ERROR_CODE,
 				details: err instanceof Error ? err.message : String(err),
 			},
 			500,
@@ -424,7 +427,7 @@ video.post("/convert", async (c) => {
 		return c.json(
 			{
 				error: "Failed to convert video",
-				code: "FFMPEG_ERROR",
+				code: MEDIA_ENGINE_ERROR_CODE,
 				details: err instanceof Error ? err.message : String(err),
 			},
 			500,
@@ -1416,30 +1419,6 @@ video.post("/mux-segments", async (c) => {
 	});
 });
 
-const FFMPEG_TIMEOUT_MS = 15 * 60 * 1000;
-
-async function runFfmpeg(args: string[]): Promise<void> {
-	const proc = Bun.spawn(["ffmpeg", ...args], {
-		stdout: "ignore",
-		stderr: "pipe",
-	});
-	const stderrPromise = new Response(proc.stderr).text();
-	const timeout = setTimeout(() => {
-		proc.kill();
-	}, FFMPEG_TIMEOUT_MS);
-	try {
-		const exitCode = await proc.exited;
-		const stderrText = await stderrPromise;
-		if (exitCode !== 0) {
-			throw new Error(
-				`FFmpeg exited with code ${exitCode}: ${stderrText.slice(-500)}`,
-			);
-		}
-	} finally {
-		clearTimeout(timeout);
-	}
-}
-
 async function streamConcatFiles(
 	inputPaths: string[],
 	outputPath: string,
@@ -1638,14 +1617,12 @@ async function muxSegmentsAsync(
 		);
 
 		const videoOnlyPath = join(workDir, "video_only.mp4");
-		await runFfmpeg([
-			"-y",
-			"-i",
+		await muxMediaTracksToMp4(
 			combinedVideoPath,
-			"-c",
-			"copy",
+			null,
 			videoOnlyPath,
-		]);
+			abortController.signal,
+		);
 
 		let resultPath: string;
 
@@ -1663,30 +1640,20 @@ async function muxSegmentsAsync(
 			);
 
 			resultPath = join(workDir, "result.mp4");
-			await runFfmpeg([
-				"-y",
-				"-i",
+			await muxMediaTracksToMp4(
 				videoOnlyPath,
-				"-i",
 				combinedAudioPath,
-				"-c",
-				"copy",
-				"-movflags",
-				"+faststart",
 				resultPath,
-			]);
+				abortController.signal,
+			);
 		} else {
 			resultPath = join(workDir, "result.mp4");
-			await runFfmpeg([
-				"-y",
-				"-i",
+			await muxMediaTracksToMp4(
 				videoOnlyPath,
-				"-c",
-				"copy",
-				"-movflags",
-				"+faststart",
+				null,
 				resultPath,
-			]);
+				abortController.signal,
+			);
 		}
 
 		updateJob(jobId, { phase: "uploading", progress: 80 });

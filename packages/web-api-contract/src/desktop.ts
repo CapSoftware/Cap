@@ -15,7 +15,7 @@ export const DesktopOrganization = z.object({
 	id: z.string(),
 	name: z.string(),
 	ownerId: z.string(),
-	role: z.enum(["owner", "member"]),
+	role: z.enum(["owner", "admin", "member"]),
 	canEditBrand: z.boolean(),
 	iconUrl: z.string().nullable(),
 	brandColors: OrganizationBrandColors,

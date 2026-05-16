@@ -29,7 +29,24 @@ export class SpacesPolicy extends Effect.Service<SpacesPolicy>()(
 			const isMember = (spaceId: Space.SpaceIdOrOrganisationId) =>
 				Policy.any(isOwner(spaceId), hasMembership(spaceId));
 
-			return { isMember, isOwner };
+			const isAdmin = (spaceId: Space.SpaceIdOrOrganisationId) =>
+				Policy.any(
+					isOwner(spaceId),
+					Policy.policy((user) =>
+						repo.membership(user.id, spaceId).pipe(
+							Effect.map((v) =>
+								v.pipe(
+									Option.filter(
+										(v) => String(v.role).toLowerCase() === "admin",
+									),
+									Option.isSome,
+								),
+							),
+						),
+					),
+				);
+
+			return { isMember, isOwner, isAdmin };
 		}),
 		dependencies: [
 			OrganisationsRepo.Default,

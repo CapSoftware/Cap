@@ -6,9 +6,15 @@ export function getActiveCaptionText(
 	}
 
 	let selectedCue: VTTCue | null = null;
+	const cueList = activeCues as TextTrackCueList & {
+		item?: (index: number) => TextTrackCue | null;
+	};
 
 	for (let index = 0; index < activeCues.length; index++) {
-		const cue = activeCues.item(index) as VTTCue | null;
+		const cue = (cueList[index] ?? cueList.item?.(index)) as
+			| VTTCue
+			| null
+			| undefined;
 		if (cue && (!selectedCue || cue.startTime >= selectedCue.startTime)) {
 			selectedCue = cue;
 		}

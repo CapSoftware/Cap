@@ -9,7 +9,23 @@ import { updateOrganizationSettings } from "@/actions/organization/settings";
 import { useDashboardContext } from "../../../Contexts";
 import type { OrganizationSettings } from "../../../dashboard-data";
 
-const options = [
+const defaultSettings: OrganizationSettings = {
+	disableComments: false,
+	disableSummary: false,
+	disableCaptions: false,
+	disableChapters: false,
+	disableReactions: false,
+	disableTranscript: false,
+	hideShareableLinkCapLogo: false,
+	shareableLinkUseOrganizationIcon: false,
+};
+
+const options: Array<{
+	label: string;
+	value: keyof OrganizationSettings;
+	description: string;
+	pro?: boolean;
+}> = [
 	{
 		label: "Enable comments",
 		value: "disableComments",
@@ -43,36 +59,31 @@ const options = [
 		description: "Enabling this also allows chapters and summary",
 		pro: true,
 	},
+	{
+		label: "Show Cap logo",
+		value: "hideShareableLinkCapLogo",
+		description: "Show Cap branding at the top of shareable links",
+		pro: true,
+	},
 ];
+
+const mergeSettings = (settings?: OrganizationSettings | null) => ({
+	...defaultSettings,
+	...(settings ?? {}),
+});
 
 const CapSettingsCard = () => {
 	const { user, organizationSettings } = useDashboardContext();
-	const [settings, setSettings] = useState<OrganizationSettings>(
-		organizationSettings || {
-			disableComments: false,
-			disableSummary: false,
-			disableCaptions: false,
-			disableChapters: false,
-			disableReactions: false,
-			disableTranscript: false,
-		},
-	);
+	const initialSettings = mergeSettings(organizationSettings);
+	const [settings, setSettings] =
+		useState<OrganizationSettings>(initialSettings);
 
-	const lastSavedSettings = useRef<OrganizationSettings>(
-		organizationSettings || settings,
-	);
+	const lastSavedSettings = useRef<OrganizationSettings>(initialSettings);
 
 	const debouncedUpdateSettings = useDebounce(settings, 1000);
 
 	useEffect(() => {
-		const next = organizationSettings ?? {
-			disableComments: false,
-			disableSummary: false,
-			disableCaptions: false,
-			disableChapters: false,
-			disableReactions: false,
-			disableTranscript: false,
-		};
+		const next = mergeSettings(organizationSettings);
 		setSettings(next);
 		lastSavedSettings.current = next;
 	}, [organizationSettings]);
@@ -103,21 +114,27 @@ const CapSettingsCard = () => {
 
 					changedKeys.forEach((changedKey) => {
 						const option = options.find((opt) => opt.value === changedKey);
-						const isDisabled = debouncedUpdateSettings[changedKey];
-						const action = isDisabled ? "disabled" : "enabled";
-						const label = option?.label.split(" ")[1] || changedKey;
-						toast.success(
-							`${label.charAt(0).toUpperCase()}${label.slice(1)} ${action}`,
-						);
+						if (changedKey === "hideShareableLinkCapLogo") {
+							toast.success(
+								debouncedUpdateSettings[changedKey]
+									? "Cap logo hidden"
+									: "Cap logo shown",
+							);
+						} else {
+							const isDisabled = debouncedUpdateSettings[changedKey];
+							const action = isDisabled ? "disabled" : "enabled";
+							const label = option?.label.split(" ")[1] || changedKey;
+							toast.success(
+								`${label.charAt(0).toUpperCase()}${label.slice(1)} ${action}`,
+							);
+						}
 					});
 
 					lastSavedSettings.current = debouncedUpdateSettings;
 				} catch (error) {
 					console.error("Error updating organization settings:", error);
 					toast.error("Failed to update settings");
-					if (organizationSettings) {
-						setSettings(organizationSettings);
-					}
+					setSettings(mergeSettings(organizationSettings));
 				}
 			};
 
@@ -182,9 +199,9 @@ const CapSettingsCard = () => {
 									settings?.disableTranscript)
 							}
 							onCheckedChange={() => {
-								handleToggle(option.value as keyof OrganizationSettings);
+								handleToggle(option.value);
 							}}
-							checked={!settings?.[option.value as keyof typeof settings]}
+							checked={!settings?.[option.value]}
 						/>
 					</div>
 				))}
