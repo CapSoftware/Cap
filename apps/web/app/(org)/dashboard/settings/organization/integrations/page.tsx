@@ -24,7 +24,8 @@ export default async function OrganizationIntegrationsPage() {
 	).catch((error: unknown) => {
 		if (
 			error instanceof Error &&
-			(error.message === "Only the owner can manage organization storage" ||
+			(error.message ===
+				"Organization settings are only available to admins and owners" ||
 				error.message === "Organization not found")
 		) {
 			redirect("/dashboard/caps");

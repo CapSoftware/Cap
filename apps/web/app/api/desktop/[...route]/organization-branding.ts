@@ -7,6 +7,10 @@ import {
 	OrganizationHexColor,
 	type OrganizationLogoUpdate,
 } from "@cap/web-api-contract";
+import {
+	getEffectiveOrganizationRole,
+	normalizeOrganizationRole,
+} from "@/lib/permissions/roles";
 
 export const EMPTY_ORGANIZATION_BRAND_COLORS = {
 	primary: null,
@@ -39,7 +43,7 @@ export type DesktopOrganizationRow = {
 	tombstoneAt: Date | null;
 	iconUrl: string | null;
 	metadata: unknown;
-	role: "owner" | "member" | null;
+	role: "owner" | "admin" | "member" | null;
 };
 
 export type DecodedOrganizationLogoUpdate =
@@ -160,7 +164,7 @@ export function filterAccessibleOrganizationRows(
 	return rows.filter(
 		(row) =>
 			row.tombstoneAt === null &&
-			(row.ownerId === userId || row.role === "owner" || row.role === "member"),
+			(row.ownerId === userId || normalizeOrganizationRole(row.role) !== null),
 	);
 }
 
@@ -170,14 +174,18 @@ export function toDesktopOrganization(
 	iconUrl: string | null,
 ): DesktopOrganization {
 	const role =
-		row.ownerId === userId || row.role === "owner" ? "owner" : "member";
+		getEffectiveOrganizationRole({
+			userId,
+			ownerId: row.ownerId,
+			memberRole: row.role,
+		}) ?? "member";
 
 	return DesktopOrganizationSchema.parse({
 		id: row.id,
 		name: row.name,
 		ownerId: row.ownerId,
 		role,
-		canEditBrand: role === "owner",
+		canEditBrand: role === "owner" || role === "admin",
 		iconUrl,
 		brandColors: organizationBrandColorsFromMetadata(row.metadata),
 	});
@@ -187,9 +195,12 @@ export function canEditOrganizationBranding(
 	row: DesktopOrganizationRow,
 	userId: string,
 ) {
-	return (
-		row.tombstoneAt === null && (row.ownerId === userId || row.role === "owner")
-	);
+	const role = getEffectiveOrganizationRole({
+		userId,
+		ownerId: row.ownerId,
+		memberRole: row.role,
+	});
+	return row.tombstoneAt === null && (role === "owner" || role === "admin");
 }
 
 export function normalizeOrganizationBrandingPatchBody(

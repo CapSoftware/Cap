@@ -2,26 +2,27 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import {
-	organizationMembers,
-	spaceMembers,
-	spaces,
-} from "@cap/database/schema";
+import { organizationMembers } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
-	canRemoveOrganizationMember,
+	canChangeOrganizationMemberRole,
 	getEffectiveOrganizationRole,
+	normalizeAssignableOrganizationRole,
 } from "@/lib/permissions/roles";
 import { requireOrganizationSettingsManager } from "./authorization";
 
-export async function removeOrganizationMember(
+export async function updateOrganizationMemberRole(
 	memberId: string,
 	organizationId: Organisation.OrganisationId,
+	roleInput: string,
 ) {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
+
+	const nextRole = normalizeAssignableOrganizationRole(roleInput);
+	if (!nextRole) throw new Error("Invalid organization role");
 
 	const actor = await requireOrganizationSettingsManager(
 		user.id,
@@ -43,9 +44,7 @@ export async function removeOrganizationMember(
 		)
 		.limit(1);
 
-	if (!member) {
-		throw new Error("Member not found");
-	}
+	if (!member) throw new Error("Member not found");
 
 	const targetRole = getEffectiveOrganizationRole({
 		userId: member.userId,
@@ -54,48 +53,25 @@ export async function removeOrganizationMember(
 	});
 
 	if (
-		!canRemoveOrganizationMember({
+		!canChangeOrganizationMemberRole({
 			actorRole: actor.role,
 			actorUserId: user.id,
 			targetUserId: member.userId,
 			ownerId: actor.ownerId,
 			targetRole,
+			nextRole,
 		})
 	) {
-		throw new Error("You do not have permission to remove this member");
+		throw new Error("You do not have permission to update this member role");
 	}
 
-	await db().transaction(async (tx) => {
-		const organizationSpaces = await tx
-			.select({ id: spaces.id })
-			.from(spaces)
-			.where(eq(spaces.organizationId, organizationId));
-		const spaceIds = organizationSpaces.map((space) => space.id);
-
-		if (spaceIds.length > 0) {
-			await tx
-				.delete(spaceMembers)
-				.where(
-					and(
-						eq(spaceMembers.userId, member.userId),
-						inArray(spaceMembers.spaceId, spaceIds),
-					),
-				);
-		}
-
-		const [result] = await tx
-			.delete(organizationMembers)
-			.where(
-				and(
-					eq(organizationMembers.id, memberId),
-					eq(organizationMembers.organizationId, organizationId),
-				),
-			);
-
-		if (result.affectedRows === 0) throw new Error("Member not found");
-	});
+	await db()
+		.update(organizationMembers)
+		.set({ role: nextRole })
+		.where(eq(organizationMembers.id, memberId));
 
 	revalidatePath("/dashboard/settings/organization");
 	revalidatePath("/dashboard");
+
 	return { success: true };
 }

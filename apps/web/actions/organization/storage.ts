@@ -26,6 +26,7 @@ import { type Organisation, S3Bucket, Storage } from "@cap/web-domain";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
+import { requireOrganizationSettingsManager } from "./authorization";
 
 const googleDriveProvider = "googleDrive";
 const settingsPath = "/dashboard/settings/organization/integrations";
@@ -85,7 +86,7 @@ export type OrganizationGoogleDriveFolder = {
 const googleDriveFolderMimeType = "application/vnd.google-apps.folder";
 const driveApiBase = "https://www.googleapis.com/drive/v3";
 
-const requireOrganizationOwner = async (
+const requireOrganizationStorageManager = async (
 	organizationId: Organisation.OrganisationId,
 ) => {
 	const user = await getCurrentUser();
@@ -107,17 +108,15 @@ const requireOrganizationOwner = async (
 		.limit(1);
 
 	if (!organization) throw new Error("Organization not found");
-	if (organization.ownerId !== user.id) {
-		throw new Error("Only the owner can manage organization storage");
-	}
+	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	return { user, organization };
 };
 
-const requireOrganizationOwnerPro = async (
+const requireOrganizationStorageManagerPro = async (
 	organizationId: Organisation.OrganisationId,
 ) => {
-	const result = await requireOrganizationOwner(organizationId);
+	const result = await requireOrganizationStorageManager(organizationId);
 	if (!userIsPro(result.user)) throw new Error(proRequiredMessage);
 	return result;
 };
@@ -344,7 +343,8 @@ const createGoogleDriveState = (
 export async function getOrganizationStorageSettings(
 	organizationId: Organisation.OrganisationId,
 ): Promise<OrganizationStorageSettings> {
-	const { organization } = await requireOrganizationOwner(organizationId);
+	const { organization } =
+		await requireOrganizationStorageManager(organizationId);
 	const [bucket, drive, activeDrive] = await Promise.all([
 		getOrganizationBucket(organizationId),
 		getOrganizationDrive(organizationId),
@@ -381,7 +381,9 @@ export async function getOrganizationStorageSettings(
 }
 
 export async function saveOrganizationS3Config(input: S3ConfigInput) {
-	const { user } = await requireOrganizationOwnerPro(input.organizationId);
+	const { user } = await requireOrganizationStorageManagerPro(
+		input.organizationId,
+	);
 	const credentials = await getS3InputCredentials(input);
 	const encryptedConfig = {
 		provider: input.provider,
@@ -413,7 +415,7 @@ export async function saveOrganizationS3Config(input: S3ConfigInput) {
 export async function removeOrganizationS3Config(
 	organizationId: Organisation.OrganisationId,
 ) {
-	await requireOrganizationOwnerPro(organizationId);
+	await requireOrganizationStorageManagerPro(organizationId);
 	await db()
 		.update(s3Buckets)
 		.set({ active: false })
@@ -423,7 +425,7 @@ export async function removeOrganizationS3Config(
 }
 
 export async function testOrganizationS3Config(input: S3ConfigInput) {
-	await requireOrganizationOwnerPro(input.organizationId);
+	await requireOrganizationStorageManagerPro(input.organizationId);
 	const credentials = await getS3InputCredentials(input);
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -455,7 +457,7 @@ export async function setOrganizationStorageProvider({
 	organizationId: Organisation.OrganisationId;
 	provider: OrganizationStorageProvider;
 }) {
-	await requireOrganizationOwnerPro(organizationId);
+	await requireOrganizationStorageManagerPro(organizationId);
 
 	if (provider === "s3") {
 		const bucket = await getOrganizationBucket(organizationId);
@@ -495,7 +497,7 @@ export async function setOrganizationStorageProvider({
 export async function connectOrganizationGoogleDrive(
 	organizationId: Organisation.OrganisationId,
 ) {
-	const { user } = await requireOrganizationOwnerPro(organizationId);
+	const { user } = await requireOrganizationStorageManagerPro(organizationId);
 	const state = createGoogleDriveState(user.id, organizationId);
 	return { url: getGoogleDriveAuthUrl({ state }) };
 }
@@ -503,7 +505,7 @@ export async function connectOrganizationGoogleDrive(
 export async function disconnectOrganizationGoogleDrive(
 	organizationId: Organisation.OrganisationId,
 ) {
-	await requireOrganizationOwnerPro(organizationId);
+	await requireOrganizationStorageManagerPro(organizationId);
 	await db()
 		.update(storageIntegrations)
 		.set({
@@ -529,7 +531,7 @@ export async function disconnectOrganizationGoogleDrive(
 export async function getOrganizationGoogleDrivePickerToken(
 	organizationId: Organisation.OrganisationId,
 ) {
-	await requireOrganizationOwnerPro(organizationId);
+	await requireOrganizationStorageManagerPro(organizationId);
 	const drive = await getOrganizationDrive(organizationId);
 	if (!drive || drive.status !== "active") {
 		throw new Error("Google Drive is not connected");
@@ -556,7 +558,7 @@ export async function listOrganizationGoogleDriveFolders({
 	organizationId: Organisation.OrganisationId;
 	parentId?: string;
 }) {
-	await requireOrganizationOwnerPro(organizationId);
+	await requireOrganizationStorageManagerPro(organizationId);
 	const drive = await getOrganizationDrive(organizationId);
 	if (!drive || drive.status !== "active") {
 		throw new Error("Google Drive is not connected");
@@ -618,7 +620,7 @@ export async function setOrganizationGoogleDriveLocation({
 	driveId?: string | null;
 	driveName?: string | null;
 }) {
-	const { user } = await requireOrganizationOwnerPro(organizationId);
+	const { user } = await requireOrganizationStorageManagerPro(organizationId);
 	const drive = await getOrganizationDrive(organizationId);
 	if (!drive || drive.status !== "active") {
 		throw new Error("Google Drive is not connected");

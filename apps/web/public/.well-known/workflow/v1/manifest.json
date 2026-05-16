@@ -1,11 +1,6 @@
 {
 	"version": "1.0.0",
 	"steps": {
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
-			"fetch": {
-				"stepId": "step//workflow@4.2.0-beta.73//fetch"
-			}
-		},
 		"workflows/process-video.ts": {
 			"cleanupRawUpload": {
 				"stepId": "step//./workflows/process-video//cleanupRawUpload"
@@ -23,18 +18,29 @@
 				"stepId": "step//./workflows/process-video//validateProcessingRequest"
 			}
 		},
-		"workflows/import-loom-video.ts": {
-			"downloadLoomToS3": {
-				"stepId": "step//./workflows/import-loom-video//downloadLoomToS3"
+		"workflows/edit-video.ts": {
+			"clearEditProcessingState": {
+				"stepId": "step//./workflows/edit-video//clearEditProcessingState"
 			},
-			"processVideoOnMediaServer": {
-				"stepId": "step//./workflows/import-loom-video//processVideoOnMediaServer"
+			"invalidateEditedVideoCache": {
+				"stepId": "step//./workflows/edit-video//invalidateEditedVideoCache"
 			},
-			"saveMetadataAndComplete": {
-				"stepId": "step//./workflows/import-loom-video//saveMetadataAndComplete"
+			"queueTranscriptionRegeneration": {
+				"stepId": "step//./workflows/edit-video//queueTranscriptionRegeneration"
 			},
-			"setProcessingError": {
-				"stepId": "step//./workflows/import-loom-video//setProcessingError"
+			"renderVideoEditOnMediaServer": {
+				"stepId": "step//./workflows/edit-video//renderVideoEditOnMediaServer"
+			},
+			"saveEditResultAndComplete": {
+				"stepId": "step//./workflows/edit-video//saveEditResultAndComplete"
+			},
+			"validateEditRequest": {
+				"stepId": "step//./workflows/edit-video//validateEditRequest"
+			}
+		},
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
+			"fetch": {
+				"stepId": "step//workflow@4.2.0-beta.73//fetch"
 			}
 		},
 		"workflows/generate-ai.ts": {
@@ -52,6 +58,20 @@
 			},
 			"validateAndSetProcessing": {
 				"stepId": "step//./workflows/generate-ai//validateAndSetProcessing"
+			}
+		},
+		"workflows/import-loom-video.ts": {
+			"downloadLoomToS3": {
+				"stepId": "step//./workflows/import-loom-video//downloadLoomToS3"
+			},
+			"processVideoOnMediaServer": {
+				"stepId": "step//./workflows/import-loom-video//processVideoOnMediaServer"
+			},
+			"saveMetadataAndComplete": {
+				"stepId": "step//./workflows/import-loom-video//saveMetadataAndComplete"
+			},
+			"setProcessingError": {
+				"stepId": "step//./workflows/import-loom-video//setProcessingError"
 			}
 		},
 		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
@@ -96,20 +116,6 @@
 			"validateVideo": {
 				"stepId": "step//./workflows/transcribe//validateVideo"
 			}
-		},
-		"workflows/edit-video.ts": {
-			"renderVideoEditOnMediaServer": {
-				"stepId": "step//./workflows/edit-video//renderVideoEditOnMediaServer"
-			},
-			"saveMetadataAndComplete": {
-				"stepId": "step//./workflows/edit-video//saveMetadataAndComplete"
-			},
-			"setProcessingError": {
-				"stepId": "step//./workflows/edit-video//setProcessingError"
-			},
-			"validateEditRequest": {
-				"stepId": "step//./workflows/edit-video//validateEditRequest"
-			}
 		}
 	},
 	"workflows": {
@@ -146,16 +152,16 @@
 				}
 			}
 		},
-		"workflows/import-loom-video.ts": {
-			"importLoomVideoWorkflow": {
-				"workflowId": "workflow//./workflows/import-loom-video//importLoomVideoWorkflow",
+		"workflows/edit-video.ts": {
+			"editVideoWorkflow": {
+				"workflowId": "workflow//./workflows/edit-video//editVideoWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: importLoomVideoWorkflow",
+								"label": "Start: editVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},
@@ -212,16 +218,16 @@
 				}
 			}
 		},
-		"workflows/transcribe.ts": {
-			"transcribeVideoWorkflow": {
-				"workflowId": "workflow//./workflows/transcribe//transcribeVideoWorkflow",
+		"workflows/import-loom-video.ts": {
+			"importLoomVideoWorkflow": {
+				"workflowId": "workflow//./workflows/import-loom-video//importLoomVideoWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: transcribeVideoWorkflow",
+								"label": "Start: importLoomVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},
@@ -245,16 +251,16 @@
 				}
 			}
 		},
-		"workflows/edit-video.ts": {
-			"editVideoWorkflow": {
-				"workflowId": "workflow//./workflows/edit-video//editVideoWorkflow",
+		"workflows/transcribe.ts": {
+			"transcribeVideoWorkflow": {
+				"workflowId": "workflow//./workflows/transcribe//transcribeVideoWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: editVideoWorkflow",
+								"label": "Start: transcribeVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},

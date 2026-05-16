@@ -28,7 +28,7 @@ import { ConfirmationDialog } from "../ConfirmationDialog";
 import SpaceDialog from "./SpaceDialog";
 
 const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
-	const { spacesData, sidebarCollapsed, user } = useDashboardContext();
+	const { spacesData, sidebarCollapsed } = useDashboardContext();
 	const [showSpaceDialog, setShowSpaceDialog] = useState(false);
 	const [showAllSpaces, setShowAllSpaces] = useState(false);
 	const [activeDropTarget, setActiveDropTarget] = useState<string | null>(null);
@@ -107,7 +107,6 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 
 			const cap = JSON.parse(capData);
 
-			// Call the share action with just this space ID
 			const result = await shareCap({
 				capId: cap.id,
 				spaceIds: [spaceId],
@@ -206,7 +205,6 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 				</Link>
 			</Tooltip>
 
-			{/* Wrapper div with overflow hidden to prevent scrollbar flash */}
 			<div className="overflow-hidden">
 				<div
 					className={clsx(
@@ -222,7 +220,6 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 					}}
 				>
 					{displayedSpaces.map((space: Spaces) => {
-						const isOwner = space.createdById === user?.id;
 						return (
 							<Tooltip
 								position="right"
@@ -303,8 +300,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 														className="ml-1.5 size-2.5 text-amber-600"
 													/>
 												)}
-												{/* Hide delete button for 'All spaces' synthetic entry */}
-												{!space.primary && isOwner && (
+												{!space.primary && space.currentUserCanManage && (
 													<button
 														type="button"
 														onClick={(e) => handleDeleteSpace(e, space)}

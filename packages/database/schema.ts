@@ -200,8 +200,13 @@ export const organizations = mysqlTable(
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
 			disableComments?: boolean;
+			hideShareableLinkCapLogo?: boolean;
+			shareableLinkUseOrganizationIcon?: boolean;
 		}>(),
 		iconUrl: varchar("iconUrl", {
+			length: 1024,
+		}).$type<ImageUpload.ImageUrlOrKey>(),
+		shareableLinkIconUrl: varchar("shareableLinkIconUrl", {
 			length: 1024,
 		}).$type<ImageUpload.ImageUrlOrKey>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
@@ -218,7 +223,7 @@ export const organizations = mysqlTable(
 	}),
 );
 
-export type OrganisationMemberRole = "owner" | "member";
+export type OrganisationMemberRole = "owner" | "admin" | "member";
 export const organizationMembers = mysqlTable(
 	"organization_members",
 	{
@@ -963,7 +968,7 @@ export const spaceMembers = mysqlTable(
 		role: varchar("role", { length: 255 })
 			.notNull()
 			.default("member")
-			.$type<"member" | "Admin">(),
+			.$type<"admin" | "member">(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},

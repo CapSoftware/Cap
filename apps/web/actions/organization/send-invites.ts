@@ -15,15 +15,31 @@ import { serverEnv } from "@cap/env";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import {
+	type AssignableOrganizationRole,
+	normalizeAssignableOrganizationRole,
+} from "@/lib/permissions/roles";
+import { requireOrganizationSettingsManager } from "./authorization";
+
+type OrganizationInviteInput = {
+	email: string;
+	role?: string | null;
+};
 
 export async function sendOrganizationInvites(
-	invitedEmails: string[],
+	inviteInputs: string[] | OrganizationInviteInput[],
 	organizationId: Organisation.OrganisationId,
+	roleInput = "member",
 ) {
 	const user = await getCurrentUser();
 
 	if (!user) {
 		throw new Error("Unauthorized");
+	}
+
+	const role = normalizeAssignableOrganizationRole(roleInput);
+	if (!role) {
+		throw new Error("Invalid organization role");
 	}
 
 	const [organization] = await db()
@@ -35,23 +51,39 @@ export async function sendOrganizationInvites(
 		throw new Error("Organization not found");
 	}
 
-	if (organization.ownerId !== user.id) {
-		throw new Error("Only the organization owner can send invites");
-	}
+	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	const MAX_INVITES = 50;
-	if (invitedEmails.length > MAX_INVITES) {
+	if (inviteInputs.length > MAX_INVITES) {
 		throw new Error(`Cannot send more than ${MAX_INVITES} invites at once`);
 	}
 
 	const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-	const validEmails = Array.from(
-		new Set(
-			invitedEmails
-				.map((email) => email.trim().toLowerCase())
-				.filter((email) => emailRegex.test(email)),
-		),
-	);
+	const inviteMap = new Map<string, AssignableOrganizationRole>();
+
+	for (const inviteInput of inviteInputs) {
+		const email =
+			typeof inviteInput === "string" ? inviteInput : inviteInput.email;
+		const normalizedEmail = email.trim().toLowerCase();
+		if (!emailRegex.test(normalizedEmail)) continue;
+
+		const inviteRole =
+			typeof inviteInput === "string" || !inviteInput.role
+				? role
+				: normalizeAssignableOrganizationRole(inviteInput.role);
+
+		if (!inviteRole) {
+			throw new Error("Invalid organization role");
+		}
+
+		inviteMap.set(normalizedEmail, inviteRole);
+	}
+
+	const validInvites = Array.from(inviteMap, ([email, inviteRole]) => ({
+		email,
+		role: inviteRole,
+	}));
+	const validEmails = validInvites.map((invite) => invite.email);
 
 	if (validEmails.length === 0) {
 		return { success: true, failedEmails: [] as string[] };
@@ -88,14 +120,16 @@ export async function sendOrganizationInvites(
 			existingMembers.map((m) => m.email.toLowerCase()),
 		);
 
-		const emailsToInvite = validEmails.filter(
-			(email) =>
-				!existingInviteEmails.has(email) && !existingMemberEmails.has(email),
+		const invitesToSend = validInvites.filter(
+			(invite) =>
+				!existingInviteEmails.has(invite.email) &&
+				!existingMemberEmails.has(invite.email),
 		);
 
-		const records = emailsToInvite.map((email) => ({
+		const records = invitesToSend.map((invite) => ({
 			id: nanoId(),
-			email,
+			email: invite.email,
+			role: invite.role,
 		}));
 
 		if (records.length > 0) {
@@ -105,7 +139,7 @@ export async function sendOrganizationInvites(
 					organizationId: organizationId,
 					invitedEmail: r.email,
 					invitedByUserId: user.id,
-					role: "member" as const,
+					role: r.role,
 				})),
 			);
 		}
