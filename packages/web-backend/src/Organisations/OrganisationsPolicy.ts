@@ -33,7 +33,10 @@ export class OrganisationsPolicy extends Effect.Service<OrganisationsPolicy>()(
 					repo.membership(user.id, orgId).pipe(
 						Effect.map((v) =>
 							v.pipe(
-								Option.filter((v) => v.role === "owner" || v.role === "admin"),
+								Option.filter((v) => {
+									const role = String(v.role).toLowerCase();
+									return role === "owner" || role === "admin";
+								}),
 								Option.isSome,
 							),
 						),
