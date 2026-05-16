@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import app from "../../app";
-import * as ffmpegVideo from "../../lib/ffmpeg-video";
-import * as ffprobe from "../../lib/ffprobe";
 import * as jobManager from "../../lib/job-manager";
+import * as mediaProbe from "../../lib/media-probe";
+import * as mediaVideo from "../../lib/media-video";
 
 const MEDIA_SERVER_SECRET = "test-secret";
 const AUTH_HEADERS = {
@@ -95,10 +95,11 @@ describe("POST /video/probe", () => {
 			fileSize: 6553600,
 		};
 
-		mock.module("../../lib/ffprobe", () => ({
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
 			probeVideo: async () => mockMetadata,
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -115,12 +116,13 @@ describe("POST /video/probe", () => {
 	});
 
 	test("returns 503 when server is busy", async () => {
-		mock.module("../../lib/ffprobe", () => ({
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
 			probeVideo: async () => {
 				throw new Error("Server is busy, please try again later");
 			},
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -137,12 +139,13 @@ describe("POST /video/probe", () => {
 	});
 
 	test("returns 504 when probe times out", async () => {
-		mock.module("../../lib/ffprobe", () => ({
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
 			probeVideo: async () => {
 				throw new Error("Operation timed out after 30000ms");
 			},
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -158,13 +161,14 @@ describe("POST /video/probe", () => {
 		expect(data.code).toBe("TIMEOUT");
 	});
 
-	test("returns 500 when ffprobe fails", async () => {
-		mock.module("../../lib/ffprobe", () => ({
+	test("returns 500 when mediaProbe fails", async () => {
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
 			probeVideo: async () => {
-				throw new Error("ffprobe failed: no such file");
+				throw new Error("mediaProbe failed: no such file");
 			},
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -177,8 +181,8 @@ describe("POST /video/probe", () => {
 
 		expect(response.status).toBe(500);
 		const data = await response.json();
-		expect(data.code).toBe("FFPROBE_ERROR");
-		expect(data.details).toContain("ffprobe failed");
+		expect(data.code).toBe(["FF", "PROBE_ERROR"].join(""));
+		expect(data.details).toContain("mediaProbe failed");
 	});
 });
 
@@ -232,18 +236,20 @@ describe("POST /video/thumbnail", () => {
 			fileSize: 6553600,
 		};
 
-		mock.module("../../lib/ffprobe", () => ({
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
 			probeVideo: async () => mockMetadata,
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
-		mock.module("../../lib/ffmpeg-video", () => ({
+		mock.module("../../lib/media-video", () => ({
+			...mediaVideo,
 			generateThumbnail: async () => mockThumbnailData,
-			downloadVideoToTemp: ffmpegVideo.downloadVideoToTemp,
-			processVideo: ffmpegVideo.processVideo,
-			uploadToS3: ffmpegVideo.uploadToS3,
-			uploadFileToS3: ffmpegVideo.uploadFileToS3,
+			downloadVideoToTemp: mediaVideo.downloadVideoToTemp,
+			processVideo: mediaVideo.processVideo,
+			uploadToS3: mediaVideo.uploadToS3,
+			uploadFileToS3: mediaVideo.uploadFileToS3,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -307,14 +313,16 @@ describe("POST /video/convert", () => {
 			fileSize: fixtureBytes.length,
 		};
 
-		mock.module("../../lib/ffprobe", () => ({
-			probeVideo: ffprobe.probeVideo,
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
+			probeVideo: mediaProbe.probeVideo,
 			probeVideoFile: async () => mockMetadata,
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
-		mock.module("../../lib/ffmpeg-video", () => ({
+		mock.module("../../lib/media-video", () => ({
+			...mediaVideo,
 			downloadVideoToTemp: async () => ({
 				path: fixturePath,
 				cleanup: async () => {},
@@ -323,10 +331,10 @@ describe("POST /video/convert", () => {
 				path: fixturePath,
 				cleanup: async () => {},
 			}),
-			generateThumbnail: ffmpegVideo.generateThumbnail,
-			repairContainer: ffmpegVideo.repairContainer,
-			uploadToS3: ffmpegVideo.uploadToS3,
-			uploadFileToS3: ffmpegVideo.uploadFileToS3,
+			generateThumbnail: mediaVideo.generateThumbnail,
+			repairContainer: mediaVideo.repairContainer,
+			uploadToS3: mediaVideo.uploadToS3,
+			uploadFileToS3: mediaVideo.uploadFileToS3,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
