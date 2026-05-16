@@ -64,6 +64,8 @@ import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
 import type { SharePageBranding } from "./types";
 
+const VIEW_NOTIFICATION_DELAY_MS = 2 * 60 * 1000;
+
 // Helper function to fetch shared spaces data for a video
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	// Fetch space-level sharing
@@ -469,8 +471,11 @@ async function AuthorizedContent({
 	// will have already been fetched if auth is required
 	const user = await getCurrentUser();
 	const videoId = video.id;
+	const canRegisterView =
+		!video.hasActiveUpload &&
+		Date.now() - video.updatedAt.getTime() >= VIEW_NOTIFICATION_DELAY_MS;
 
-	if (user && video && user.id !== video.owner.id) {
+	if (user && video && user.id !== video.owner.id && canRegisterView) {
 		try {
 			await createNotification({
 				type: "view",
