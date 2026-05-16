@@ -26,3 +26,13 @@ export type VideoOwner = {
 	name?: string | null;
 	image?: ImageUpload.ImageUrl | null;
 };
+
+export type SharePageBranding =
+	| {
+			type: "custom";
+			imageUrl: ImageUpload.ImageUrl;
+			name: string;
+	  }
+	| {
+			type: "cap";
+	  };
