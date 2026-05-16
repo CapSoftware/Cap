@@ -13,10 +13,12 @@ import {
 	type SpaceMemberRole,
 	type User,
 } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { normalizeSpaceRole } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
+import { requireSpaceManager } from "./space-authorization";
 import {
 	getSpaceSettingsFromFormData,
 	preserveProSpaceSettings,
@@ -52,14 +54,8 @@ export async function updateSpace(formData: FormData) {
 		return { success: false, error: "Space not found" };
 	}
 
-	const isCreator = space.createdById === user.id;
-	const [membership] = await db()
-		.select({ role: spaceMembers.role })
-		.from(spaceMembers)
-		.where(and(eq(spaceMembers.spaceId, id), eq(spaceMembers.userId, user.id)))
-		.limit(1);
-
-	if (!isCreator && membership?.role !== "Admin") {
+	const access = await requireSpaceManager(user.id, id).catch(() => null);
+	if (!access) {
 		return { success: false, error: "Unauthorized" };
 	}
 
@@ -92,6 +88,16 @@ export async function updateSpace(formData: FormData) {
 	await db().update(spaces).set(spaceUpdate).where(eq(spaces.id, id));
 
 	const memberIds = Array.from(new Set([...members, space.createdById]));
+	const existingMembers = await db()
+		.select({ userId: spaceMembers.userId, role: spaceMembers.role })
+		.from(spaceMembers)
+		.where(eq(spaceMembers.spaceId, id));
+	const existingRoleByUserId = new Map(
+		existingMembers.map((member) => [
+			member.userId,
+			normalizeSpaceRole(member.role) ?? "member",
+		]),
+	);
 
 	await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, id));
 	await db()
@@ -99,7 +105,9 @@ export async function updateSpace(formData: FormData) {
 		.values(
 			memberIds.map((userId) => {
 				const role: SpaceMemberRole =
-					userId === space.createdById ? "Admin" : "member";
+					userId === space.createdById
+						? "admin"
+						: (existingRoleByUserId.get(userId) ?? "member");
 				return {
 					id: SpaceMemberId.make(nanoId()),
 					spaceId: id,

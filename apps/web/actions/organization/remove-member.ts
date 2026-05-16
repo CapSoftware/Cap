@@ -2,16 +2,20 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { organizationMembers, organizations } from "@cap/database/schema";
+import {
+	organizationMembers,
+	spaceMembers,
+	spaces,
+} from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import {
+	canRemoveOrganizationMember,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
+import { requireOrganizationSettingsManager } from "./authorization";
 
-/**
- * Remove a member from an organization. Only the owner can perform this action.
- * @param memberId The organizationMembers.id to remove
- * @param organizationId The organization to remove from
- */
 export async function removeOrganizationMember(
 	memberId: string,
 	organizationId: Organisation.OrganisationId,
@@ -19,22 +23,17 @@ export async function removeOrganizationMember(
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
 
-	const organization = await db()
-		.select()
-		.from(organizations)
-		.where(eq(organizations.id, organizationId))
-		.limit(1);
+	const actor = await requireOrganizationSettingsManager(
+		user.id,
+		organizationId,
+	);
 
-	if (!organization || organization.length === 0) {
-		throw new Error("Organization not found");
-	}
-	if (organization[0]?.ownerId !== user.id) {
-		throw new Error("Only the owner can remove organization members");
-	}
-
-	// Prevent owner from removing themselves
-	const member = await db()
-		.select()
+	const [member] = await db()
+		.select({
+			id: organizationMembers.id,
+			userId: organizationMembers.userId,
+			role: organizationMembers.role,
+		})
 		.from(organizationMembers)
 		.where(
 			and(
@@ -43,25 +42,60 @@ export async function removeOrganizationMember(
 			),
 		)
 		.limit(1);
-	if (!member || member.length === 0) {
+
+	if (!member) {
 		throw new Error("Member not found");
 	}
-	if (member[0]?.userId === user.id) {
-		// Defensive: this should never happen due to the above check, but TS wants safety
-		throw new Error("Owner cannot remove themselves");
+
+	const targetRole = getEffectiveOrganizationRole({
+		userId: member.userId,
+		ownerId: actor.ownerId,
+		memberRole: member.role,
+	});
+
+	if (
+		!canRemoveOrganizationMember({
+			actorRole: actor.role,
+			actorUserId: user.id,
+			targetUserId: member.userId,
+			ownerId: actor.ownerId,
+			targetRole,
+		})
+	) {
+		throw new Error("You do not have permission to remove this member");
 	}
 
-	const [result] = await db()
-		.delete(organizationMembers)
-		.where(
-			and(
-				eq(organizationMembers.id, memberId),
-				eq(organizationMembers.organizationId, organizationId),
-			),
-		);
+	await db().transaction(async (tx) => {
+		const organizationSpaces = await tx
+			.select({ id: spaces.id })
+			.from(spaces)
+			.where(eq(spaces.organizationId, organizationId));
+		const spaceIds = organizationSpaces.map((space) => space.id);
 
-	if (result.affectedRows === 0) throw new Error("Member not found");
+		if (spaceIds.length > 0) {
+			await tx
+				.delete(spaceMembers)
+				.where(
+					and(
+						eq(spaceMembers.userId, member.userId),
+						inArray(spaceMembers.spaceId, spaceIds),
+					),
+				);
+		}
+
+		const [result] = await tx
+			.delete(organizationMembers)
+			.where(
+				and(
+					eq(organizationMembers.id, memberId),
+					eq(organizationMembers.organizationId, organizationId),
+				),
+			);
+
+		if (result.affectedRows === 0) throw new Error("Member not found");
+	});
 
 	revalidatePath("/dashboard/settings/organization");
+	revalidatePath("/dashboard");
 	return { success: true };
 }

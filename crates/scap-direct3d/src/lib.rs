@@ -260,9 +260,56 @@ fn create_d3d_device_with_type(
     }
 }
 
+fn create_d3d_device_on_pinned_adapter(
+    flags: D3D11_CREATE_DEVICE_FLAG,
+    device: *mut Option<ID3D11Device>,
+) -> Result<String, String> {
+    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
+
+    let selected = cap_d3d_adapter::select_capture_adapter(None)?;
+
+    unsafe {
+        D3D11CreateDevice(
+            Some(&selected.adapter),
+            D3D_DRIVER_TYPE_UNKNOWN,
+            HMODULE::default(),
+            flags,
+            None,
+            D3D11_SDK_VERSION,
+            Some(device),
+            None,
+            None,
+        )
+        .map_err(|e| {
+            format!(
+                "D3D11CreateDevice failed on '{}': {e:?}",
+                selected.description
+            )
+        })?;
+    }
+
+    Ok(selected.description)
+}
+
 fn create_d3d_device_with_warp_fallback() -> windows::core::Result<(ID3D11Device, bool)> {
     let mut device = None;
     let flags = D3D11_CREATE_DEVICE_FLAG::default();
+
+    match create_d3d_device_on_pinned_adapter(flags, &mut device) {
+        Ok(description) => {
+            tracing::info!(
+                adapter = %description,
+                "scap-direct3d: D3D11 device created on pinned hardware adapter"
+            );
+            return Ok((device.unwrap(), false));
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "scap-direct3d: pinned-adapter device creation failed, attempting default-hardware path"
+            );
+        }
+    }
 
     let result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, flags, &mut device);
 

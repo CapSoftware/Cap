@@ -15,7 +15,11 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { useState } from "react";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
-import { useDashboardContext } from "../../../Contexts";
+import {
+	compareOrganizationRoles,
+	normalizeOrganizationRole,
+	organizationRoleLabel,
+} from "@/lib/permissions/roles";
 
 export type OrganizationMemberData = {
 	id: string;
@@ -41,7 +45,6 @@ export const OrganizationIndicator = ({
 	canManageMembers,
 	onAddVideos,
 }: OrganizationIndicatorProps) => {
-	const { user } = useDashboardContext();
 	const [open, setOpen] = useState(false);
 
 	return (
@@ -67,7 +70,7 @@ export const OrganizationIndicator = ({
 						<div className="flex flex-col">
 							<div className="space-y-3 max-h-[320px] custom-scroll overflow-y-auto">
 								{members
-									.sort((a, b) => b.role.localeCompare(a.role))
+									.sort((a, b) => compareOrganizationRoles(a.role, b.role))
 									.map((member) => (
 										<div
 											key={member.id}
@@ -92,12 +95,16 @@ export const OrganizationIndicator = ({
 											<p
 												className={clsx(
 													"px-2.5 py-1.5 text-xs font-medium capitalize text-white rounded-full",
-													member.role === "owner"
+													normalizeOrganizationRole(member.role) === "owner"
 														? "bg-blue-500"
-														: "bg-gray-10",
+														: normalizeOrganizationRole(member.role) === "admin"
+															? "bg-gray-12"
+															: "bg-gray-10",
 												)}
 											>
-												{member.role}
+												{organizationRoleLabel(
+													normalizeOrganizationRole(member.role) ?? "member",
+												)}
 											</p>
 										</div>
 									))}

@@ -34,6 +34,10 @@ import { NewOrganization } from "@/components/forms/NewOrganization";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
+import {
+	canViewOrganizationSettings,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
 import { useDashboardContext } from "../../Contexts";
 import {
 	CapIcon,
@@ -94,7 +98,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 		{
 			name: "Organization Settings",
 			href: `/dashboard/settings/organization`,
-			ownerOnly: true,
+			adminOnly: true,
 			matchChildren: true,
 			icon: <CogIcon />,
 			subNav: [],
@@ -120,6 +124,15 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const [createLoading, setCreateLoading] = useState(false);
 	const [organizationName, setOrganizationName] = useState("");
 	const isOwner = activeOrg?.organization.ownerId === user.id;
+	const currentMember = activeOrg?.members.find(
+		(member) => member.userId === user.id,
+	);
+	const currentRole = getEffectiveOrganizationRole({
+		userId: user.id,
+		ownerId: activeOrg?.organization.ownerId,
+		memberRole: currentMember?.role,
+	});
+	const canViewSettings = canViewOrganizationSettings(currentRole);
 	const [_openAIDialog, _setOpenAIDialog] = useState(false);
 	const router = useRouter();
 
@@ -161,6 +174,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								)}
 								role="combobox"
 								aria-expanded={open}
+								tabIndex={0}
 							>
 								<div
 									className={clsx(
@@ -315,6 +329,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				>
 					{manageNavigation
 						.filter((item) => !item.ownerOnly || isOwner)
+						.filter((item) => !item.adminOnly || canViewSettings)
 						.map((item) => (
 							<div
 								key={item.name}
@@ -336,7 +351,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 											},
 										}}
 										layoutId="navlinks"
-										id="navlinks"
 										className="absolute h-[36px] w-full rounded-xl pointer-events-none bg-gray-3"
 									/>
 								)}

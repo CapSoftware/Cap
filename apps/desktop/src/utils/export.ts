@@ -1,13 +1,13 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
 import { commands, type ExportSettings, type FramesRendered } from "./tauri";
 
 export async function beginExportSessionGuard() {
-	await invoke("begin_export_session");
+	await commands.beginExportSession();
 	let released = false;
 	return async () => {
 		if (released) return;
 		released = true;
-		await invoke("end_export_session").catch((error) => {
+		await commands.endExportSession().catch((error) => {
 			console.error("Failed to release export session guard", error);
 		});
 	};
@@ -44,9 +44,21 @@ export function createExportToFileTask(
 	fileName: string,
 	fileType: string,
 	onProgress: (progress: FramesRendered) => void,
+	onStart?: () => void,
+	onCopying?: () => void,
 ) {
+	let started = false;
+	let copying = false;
 	const progress = new Channel<FramesRendered>((e) => {
+		if (!started) {
+			started = true;
+			onStart?.();
+		}
 		onProgress(e);
+		if (!copying && e.totalFrames > 0 && e.renderedCount >= e.totalFrames) {
+			copying = true;
+			onCopying?.();
+		}
 	});
 	let closed = false;
 	const cancel = () => {
@@ -59,14 +71,31 @@ export function createExportToFileTask(
 		).__TAURI_INTERNALS__;
 		internals?.unregisterCallback?.(progress.id);
 	};
-	const promise = invoke<string>("export_video_to_file", {
+	const promise = commands
+		.exportVideoToFile(projectPath, progress, settings, fileName, fileType)
+		.finally(cancel);
+	return { promise, cancel };
+}
+
+export async function exportVideoToFile(
+	projectPath: string,
+	settings: ExportSettings,
+	fileName: string,
+	fileType: string,
+	onStart: () => void,
+	onCopying: () => void,
+	onProgress: (progress: FramesRendered) => void,
+) {
+	const { promise } = createExportToFileTask(
 		projectPath,
-		progress,
 		settings,
 		fileName,
 		fileType,
-	}).finally(cancel);
-	return { promise, cancel };
+		onProgress,
+		onStart,
+		onCopying,
+	);
+	return await promise;
 }
 
 export async function exportVideo(

@@ -15,15 +15,23 @@ import { toast } from "sonner";
 
 import { deleteSpace } from "@/actions/organization/delete-space";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
+import {
+	normalizeOrganizationRole,
+	normalizeSpaceRole,
+	organizationRoleLabel,
+	spaceRoleLabel,
+} from "@/lib/permissions/roles";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
-import SpaceDialog from "../../_components/Navbar/SpaceDialog";
+import SpaceDialog, {
+	type NewSpaceFormProps,
+} from "../../_components/Navbar/SpaceDialog";
 import { useDashboardContext } from "../../Contexts";
 import type { Spaces } from "../../dashboard-data";
 
 export default function BrowseSpacesPage() {
 	const { spacesData, user, activeOrganization } = useDashboardContext();
 	const [showSpaceDialog, setShowSpaceDialog] = useState(false);
-	const [editSpace, setEditSpace] = useState<any | null>(null);
+	const [editSpace, setEditSpace] = useState<NewSpaceFormProps["space"]>(null);
 	const [searchQuery, setSearchQuery] = useState("");
 
 	const trueActiveOrgMembers = activeOrganization?.members.filter(
@@ -47,6 +55,13 @@ export default function BrowseSpacesPage() {
 		e.stopPropagation();
 		setPendingDeleteSpace(space);
 		setConfirmOpen(true);
+	};
+
+	const getRoleLabel = (role: Spaces["currentUserRole"]) => {
+		const organizationRole = normalizeOrganizationRole(role);
+		if (organizationRole) return organizationRoleLabel(organizationRole);
+		const spaceRole = normalizeSpaceRole(role);
+		return spaceRole ? spaceRoleLabel(spaceRole) : "Member";
 	};
 
 	const confirmRemoveSpace = async () => {
@@ -150,10 +165,10 @@ export default function BrowseSpacesPage() {
 										{space.videoCount === 1 ? "" : "s"}
 									</td>
 									<td className="px-6 py-4 text-sm text-gray-12">
-										{space.createdById === user?.id ? "Admin" : "Member"}
+										{getRoleLabel(space.currentUserRole)}
 									</td>
 									<td className="px-6">
-										{space.createdById === user?.id && !space.primary ? (
+										{space.currentUserCanManage && !space.primary ? (
 											<div className="flex gap-2">
 												<Button
 													variant="gray"
@@ -167,7 +182,7 @@ export default function BrowseSpacesPage() {
 															members: (trueActiveOrgMembers || []).map(
 																(m: { user: { id: string } }) => m.user.id,
 															),
-															iconUrl: space.iconUrl,
+															iconUrl: space.iconUrl ?? undefined,
 														});
 														setShowSpaceDialog(true);
 													}}

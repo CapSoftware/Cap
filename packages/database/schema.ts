@@ -31,7 +31,7 @@ import {
 import { relations } from "drizzle-orm/relations";
 
 import { nanoIdLength } from "./helpers.ts";
-import type { VideoMetadata } from "./types/index.ts";
+import type { VideoEditSpec, VideoMetadata } from "./types/index.ts";
 
 type GoogleDriveStorageQuotaCache = {
 	limit?: string | null;
@@ -200,8 +200,13 @@ export const organizations = mysqlTable(
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
 			disableComments?: boolean;
+			hideShareableLinkCapLogo?: boolean;
+			shareableLinkUseOrganizationIcon?: boolean;
 		}>(),
 		iconUrl: varchar("iconUrl", {
+			length: 1024,
+		}).$type<ImageUpload.ImageUrlOrKey>(),
+		shareableLinkIconUrl: varchar("shareableLinkIconUrl", {
 			length: 1024,
 		}).$type<ImageUpload.ImageUrlOrKey>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
@@ -218,7 +223,7 @@ export const organizations = mysqlTable(
 	}),
 );
 
-export type OrganisationMemberRole = "owner" | "member";
+export type OrganisationMemberRole = "owner" | "admin" | "member";
 export const organizationMembers = mysqlTable(
 	"organization_members",
 	{
@@ -377,6 +382,18 @@ export const videos = mysqlTable(
 		),
 	],
 );
+
+export const videoEdits = mysqlTable("video_edits", {
+	videoId: nanoId("videoId")
+		.notNull()
+		.primaryKey()
+		.$type<Video.VideoId>()
+		.references(() => videos.id, { onDelete: "cascade" }),
+	sourceKey: varchar("sourceKey", { length: 512 }).notNull(),
+	editSpec: json("editSpec").notNull().$type<VideoEditSpec>(),
+	createdAt: timestamp("createdAt").notNull().defaultNow(),
+	updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+});
 
 export const sharedVideos = mysqlTable(
 	"shared_videos",
@@ -868,6 +885,10 @@ export const videosRelations = relations(videos, ({ one, many }) => ({
 	}),
 	sharedVideos: many(sharedVideos),
 	spaceVideos: many(spaceVideos),
+	edit: one(videoEdits, {
+		fields: [videos.id],
+		references: [videoEdits.videoId],
+	}),
 	folder: one(folders, {
 		fields: [videos.folderId],
 		references: [folders.id],
@@ -875,6 +896,13 @@ export const videosRelations = relations(videos, ({ one, many }) => ({
 	storageIntegration: one(storageIntegrations, {
 		fields: [videos.storageIntegrationId],
 		references: [storageIntegrations.id],
+	}),
+}));
+
+export const videoEditsRelations = relations(videoEdits, ({ one }) => ({
+	video: one(videos, {
+		fields: [videoEdits.videoId],
+		references: [videos.id],
 	}),
 }));
 
@@ -940,7 +968,7 @@ export const spaceMembers = mysqlTable(
 		role: varchar("role", { length: 255 })
 			.notNull()
 			.default("member")
-			.$type<"member" | "Admin">(),
+			.$type<"admin" | "member">(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
