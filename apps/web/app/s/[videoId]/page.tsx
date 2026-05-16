@@ -34,7 +34,6 @@ import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
@@ -43,6 +42,10 @@ import {
 	type OrganizationSettings,
 } from "@/app/(org)/dashboard/dashboard-data";
 import { createNotification } from "@/lib/Notification";
+import {
+	canManageOrganizationSettings,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import {
@@ -59,6 +62,7 @@ import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
+import type { SharePageBranding } from "./types";
 
 // Helper function to fetch shared spaces data for a video
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
@@ -163,16 +167,6 @@ const renderPolicyDenied = (videoId: Video.VideoId, reason?: string) =>
 
 const renderNoSuchElement = () => Effect.sync(() => notFound());
 
-type SharePageBranding =
-	| {
-			type: "custom";
-			imageUrl: ImageUpload.ImageUrl;
-			name: string;
-	  }
-	| {
-			type: "cap";
-	  };
-
 function getSharePageBranding(data: {
 	owner: { isPro: boolean };
 	orgSettings?: OrganizationSettings | null;
@@ -201,42 +195,6 @@ function getSharePageBranding(data: {
 	}
 
 	return { type: "cap" };
-}
-
-function SharePageBranding({
-	branding,
-	videoId,
-}: {
-	branding: SharePageBranding | null;
-	videoId: Video.VideoId;
-}) {
-	if (!branding) return null;
-
-	return (
-		<div className="flex justify-center pt-8">
-			{branding.type === "custom" ? (
-				<div className="inline-flex h-12 max-w-64 items-center justify-center rounded-xl border border-gray-5 bg-white px-4">
-					<Image
-						src={branding.imageUrl}
-						alt={`${branding.name} logo`}
-						width={208}
-						height={32}
-						unoptimized
-						className="max-h-8 w-auto max-w-52 object-contain"
-					/>
-				</div>
-			) : (
-				<a
-					target="_blank"
-					rel="noreferrer"
-					href={`/?ref=video_${videoId}`}
-					className="inline-flex items-center rounded-full border border-gray-5 bg-white px-4 py-2"
-				>
-					<Logo className="h-7 w-auto" />
-				</a>
-			)}
-		</div>
-	);
 }
 
 const getShareVideoPageCatchers = (videoId: Video.VideoId) => ({
@@ -755,6 +713,41 @@ async function AuthorizedContent({
 		customDomainPromise,
 	]);
 
+	const canManageSharePageBranding = await (async () => {
+		if (!userId) return false;
+
+		const [organizationAccess] = await db()
+			.select({
+				ownerId: organizations.ownerId,
+				memberRole: organizationMembers.role,
+			})
+			.from(organizations)
+			.leftJoin(
+				organizationMembers,
+				and(
+					eq(organizationMembers.organizationId, organizations.id),
+					eq(organizationMembers.userId, userId),
+				),
+			)
+			.where(
+				and(
+					eq(organizations.id, video.orgId),
+					isNull(organizations.tombstoneAt),
+				),
+			)
+			.limit(1);
+
+		if (!organizationAccess) return false;
+
+		return canManageOrganizationSettings(
+			getEffectiveOrganizationRole({
+				userId,
+				ownerId: organizationAccess.ownerId,
+				memberRole: organizationAccess.memberRole,
+			}),
+		);
+	})();
+
 	const videoWithOrganizationInfo = await Effect.gen(function* () {
 		const imageUploads = yield* ImageUploads;
 
@@ -797,10 +790,6 @@ async function AuthorizedContent({
 
 	return (
 		<div className="container flex-1 px-4 mx-auto">
-			<SharePageBranding
-				branding={getSharePageBranding(videoWithOrganizationInfo)}
-				videoId={video.id}
-			/>
 			<ShareHeader
 				data={{
 					...videoWithOrganizationInfo,
@@ -816,6 +805,8 @@ async function AuthorizedContent({
 				sharedSpaces={sharedSpaces}
 				userOrganizations={userOrganizations}
 				spacesData={spacesData}
+				branding={getSharePageBranding(videoWithOrganizationInfo)}
+				canManageSharePageBranding={canManageSharePageBranding}
 			/>
 
 			<Share
