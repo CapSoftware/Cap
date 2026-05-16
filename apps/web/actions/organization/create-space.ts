@@ -76,7 +76,6 @@ export async function createSpace(
 			};
 		}
 
-		// Check for duplicate space name in the same organization
 		const existingSpace = await db()
 			.select({ id: spaces.id })
 			.from(spaces)
@@ -95,7 +94,6 @@ export async function createSpace(
 			};
 		}
 
-		// Generate the space ID early so we can use it in the file path
 		const spaceId = Space.SpaceId.make(nanoId());
 		let iconUrl: ImageUpload.ImageUrlOrKey | null = null;
 		const hashedPassword =
@@ -104,7 +102,6 @@ export async function createSpace(
 				: null;
 
 		await db().transaction(async (tx) => {
-			// Create the space first
 			await tx.insert(spaces).values({
 				id: spaceId,
 				name,
@@ -115,8 +112,6 @@ export async function createSpace(
 				password: hashedPassword,
 			});
 
-			// --- Member Management Logic ---
-			// Collect member user IDs from formData
 			const memberUserIds: string[] = [];
 			for (const entry of formData.getAll("members[]")) {
 				if (typeof entry === "string" && entry.length > 0) {
@@ -124,16 +119,13 @@ export async function createSpace(
 				}
 			}
 
-			// Always add the creator as Admin (if not already in the list)
 			if (!memberUserIds.includes(user.id)) {
 				memberUserIds.push(user.id);
 			}
 
-			// Create space members
 			if (memberUserIds.length > 0) {
 				const spaceMembersToInsert = memberUserIds.map((userId) => {
-					// Creator is always Admin, others are member
-					const role: SpaceMemberRole = userId === user.id ? "Admin" : "member";
+					const role: SpaceMemberRole = userId === user.id ? "admin" : "member";
 					return {
 						id: SpaceMemberId.make(nanoId()),
 						spaceId,

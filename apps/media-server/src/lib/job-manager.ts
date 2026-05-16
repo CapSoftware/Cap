@@ -1,5 +1,5 @@
 import os from "node:os";
-import type { Subprocess } from "bun";
+import type { MediaOperationHandle } from "./media-operations";
 import type { TempFileHandle } from "./temp-files";
 
 export type JobPhase =
@@ -51,7 +51,7 @@ export interface Job {
 	updatedAt: number;
 	inputTempFile?: TempFileHandle;
 	outputTempFile?: TempFileHandle;
-	process?: Subprocess;
+	mediaOperation?: MediaOperationHandle;
 	webhookUrl?: string;
 	webhookSecret?: string;
 	abortController?: AbortController;
@@ -220,7 +220,7 @@ export function updateJob(
 			| "outputUrl"
 			| "inputTempFile"
 			| "outputTempFile"
-			| "process"
+			| "mediaOperation"
 			| "abortController"
 		>
 	>,
@@ -246,11 +246,7 @@ export function deleteJob(jobId: string): boolean {
 		job.abortController?.abort();
 		job.inputTempFile?.cleanup().catch(() => {});
 		job.outputTempFile?.cleanup().catch(() => {});
-		if (job.process) {
-			try {
-				job.process.kill();
-			} catch {}
-		}
+		void job.mediaOperation?.cancel();
 	}
 	return jobs.delete(jobId);
 }

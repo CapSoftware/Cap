@@ -3,6 +3,10 @@
 import { Plus } from "lucide-react";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
+import {
+	canManageOrganizationMembers,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
 import { useDashboardContext } from "../../Contexts";
 
 const MAX_VISIBLE = 4;
@@ -11,7 +15,15 @@ export function MemberAvatars() {
 	const { activeOrganization, sidebarCollapsed, setInviteDialogOpen, user } =
 		useDashboardContext();
 
-	const isOwner = user?.id === activeOrganization?.organization.ownerId;
+	const currentMember = activeOrganization?.members.find(
+		(member) => member.userId === user?.id,
+	);
+	const currentRole = getEffectiveOrganizationRole({
+		userId: user?.id,
+		ownerId: activeOrganization?.organization.ownerId,
+		memberRole: currentMember?.role,
+	});
+	const canInviteMembers = canManageOrganizationMembers(currentRole);
 
 	if (sidebarCollapsed) return null;
 
@@ -19,6 +31,12 @@ export function MemberAvatars() {
 	const visibleMembers = members.slice(0, MAX_VISIBLE);
 	const extraCount = members.length - MAX_VISIBLE;
 	const emptySlots = Math.max(0, MAX_VISIBLE - members.length);
+	const emptySlotKeys = [
+		"empty-slot-1",
+		"empty-slot-2",
+		"empty-slot-3",
+		"empty-slot-4",
+	].slice(0, emptySlots);
 
 	return (
 		<div className="flex items-center mt-2.5 px-2.5">
@@ -48,10 +66,10 @@ export function MemberAvatars() {
 				</div>
 			)}
 
-			{isOwner &&
-				Array.from({ length: emptySlots }).map((_, i) => (
+			{canInviteMembers &&
+				emptySlotKeys.map((slotKey) => (
 					<Tooltip
-						key={`empty-${i}`}
+						key={slotKey}
 						content="Invite to your organization"
 						position="bottom"
 						delayDuration={0}

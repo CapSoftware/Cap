@@ -505,7 +505,7 @@ app.patch(
 
 		if (!canEditOrganizationBranding(row, user.id)) {
 			return c.json(
-				{ error: "Only organization owners can edit branding" },
+				{ error: "Only organization admins and owners can edit branding" },
 				{ status: 403 },
 			);
 		}

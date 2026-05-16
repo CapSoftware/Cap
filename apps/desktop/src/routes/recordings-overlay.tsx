@@ -673,6 +673,15 @@ function createRecordingMutations(
 					fullFileName,
 					fileType,
 					createRenderProgressCallback("save", setActionState),
+					() => {
+						setActionState({
+							type: "save",
+							state: { type: "rendering", state: { type: "starting" } },
+						});
+					},
+					() => {
+						setActionState({ type: "save", state: { type: "saving" } });
+					},
 				);
 
 				await promise;

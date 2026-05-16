@@ -18,6 +18,12 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import {
+	canManageOrganizationMembers,
+	canManageSpace,
+	getEffectiveOrganizationRole,
+	getEffectiveSpaceRole,
+} from "@/lib/permissions/roles";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import SpaceDialog from "../../_components/Navbar/SpaceDialog";
 import { useDashboardContext } from "../../Contexts";
@@ -118,8 +124,33 @@ export const SharedCaps = ({
 		setIsAddOrganizationVideosDialogOpen,
 	] = useState(false);
 
-	const isSpaceOwner = spaceData?.createdById === currentUserId;
-	const isOrgOwner = organizationData?.ownerId === currentUserId;
+	const currentOrgMember = organizationMembers?.find(
+		(member) => member.userId === currentUserId,
+	);
+	const currentOrganizationRole = getEffectiveOrganizationRole({
+		userId: currentUserId,
+		ownerId:
+			organizationData?.ownerId ?? activeOrganization?.organization.ownerId,
+		memberRole: currentOrgMember?.role,
+	});
+	const currentSpaceMember = spaceMembers?.find(
+		(member) => member.userId === currentUserId,
+	);
+	const currentSpaceRole = getEffectiveSpaceRole({
+		userId: currentUserId,
+		createdById: spaceData?.createdById,
+		memberRole: currentSpaceMember?.role,
+	});
+	const canManageCurrentSpace = canManageSpace({
+		organizationRole: currentOrganizationRole,
+		spaceRole: currentSpaceRole,
+	});
+	const canManageCurrentOrganization = canManageOrganizationMembers(
+		currentOrganizationRole,
+	);
+	const canManageCurrentSharedCollection = spaceData
+		? canManageCurrentSpace
+		: canManageCurrentOrganization;
 
 	const spaceMemberCount = spaceMembers?.length || 0;
 
@@ -160,11 +191,13 @@ export const SharedCaps = ({
 		return (
 			<div className="flex relative flex-col w-full h-full">
 				{spaceSettingsDialog}
-				<NewFolderDialog
-					open={openNewFolderDialog}
-					spaceId={spaceId}
-					onOpenChange={setOpenNewFolderDialog}
-				/>
+				{canManageCurrentSharedCollection && (
+					<NewFolderDialog
+						open={openNewFolderDialog}
+						spaceId={spaceId}
+						onOpenChange={setOpenNewFolderDialog}
+					/>
+				)}
 				<div className="flex flex-wrap gap-3">
 					{spaceData && spaceMembers && (
 						<>
@@ -173,10 +206,14 @@ export const SharedCaps = ({
 								members={spaceMembers}
 								organizationMembers={organizationMembers || []}
 								spaceId={spaceData.id}
-								canManageMembers={isSpaceOwner}
-								onAddVideos={() => setIsAddVideosDialogOpen(true)}
+								canManageMembers={canManageCurrentSpace}
+								onAddVideos={
+									canManageCurrentSpace
+										? () => setIsAddVideosDialogOpen(true)
+										: undefined
+								}
 							/>
-							{isSpaceOwner && (
+							{canManageCurrentSpace && (
 								<Button
 									variant="gray"
 									size="sm"
@@ -193,25 +230,32 @@ export const SharedCaps = ({
 							memberCount={organizationMemberCount}
 							members={organizationMembers}
 							organizationName={organizationData.name}
-							canManageMembers={isOrgOwner}
-							onAddVideos={() => setIsAddOrganizationVideosDialogOpen(true)}
+							canManageMembers={canManageCurrentOrganization}
+							onAddVideos={
+								canManageCurrentOrganization
+									? () => setIsAddOrganizationVideosDialogOpen(true)
+									: undefined
+							}
 						/>
 					)}
-					<Button
-						onClick={() => setOpenNewFolderDialog(true)}
-						size="sm"
-						variant="dark"
-						className="flex gap-2 items-center w-fit"
-					>
-						<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-						New Folder
-					</Button>
+					{canManageCurrentSharedCollection && (
+						<Button
+							onClick={() => setOpenNewFolderDialog(true)}
+							size="sm"
+							variant="dark"
+							className="flex gap-2 items-center w-fit"
+						>
+							<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+							New Folder
+						</Button>
+					)}
 				</div>
 				<EmptySharedCapState
 					organizationName={activeOrganization?.organization.name || ""}
 					type={spaceData ? "space" : "organization"}
 					spaceData={spaceData}
 					currentUserId={currentUserId}
+					canAddVideos={canManageCurrentSpace}
 					onAddVideos={
 						spaceData
 							? () => setIsAddVideosDialogOpen(true)
@@ -261,11 +305,13 @@ export const SharedCaps = ({
 					</div>
 				</div>
 			)}
-			<NewFolderDialog
-				open={openNewFolderDialog}
-				spaceId={spaceId}
-				onOpenChange={setOpenNewFolderDialog}
-			/>
+			{canManageCurrentSharedCollection && (
+				<NewFolderDialog
+					open={openNewFolderDialog}
+					spaceId={spaceId}
+					onOpenChange={setOpenNewFolderDialog}
+				/>
+			)}
 			<div className="flex flex-wrap gap-3 mb-10">
 				{spaceData && spaceMembers && (
 					<>
@@ -274,10 +320,14 @@ export const SharedCaps = ({
 							members={spaceMembers}
 							organizationMembers={organizationMembers || []}
 							spaceId={spaceData.id}
-							canManageMembers={isSpaceOwner}
-							onAddVideos={() => setIsAddVideosDialogOpen(true)}
+							canManageMembers={canManageCurrentSpace}
+							onAddVideos={
+								canManageCurrentSpace
+									? () => setIsAddVideosDialogOpen(true)
+									: undefined
+							}
 						/>
-						{isSpaceOwner && (
+						{canManageCurrentSpace && (
 							<Button
 								variant="gray"
 								size="sm"
@@ -294,8 +344,12 @@ export const SharedCaps = ({
 						memberCount={organizationMemberCount}
 						members={organizationMembers}
 						organizationName={organizationData.name}
-						canManageMembers={isOrgOwner}
-						onAddVideos={() => setIsAddOrganizationVideosDialogOpen(true)}
+						canManageMembers={canManageCurrentOrganization}
+						onAddVideos={
+							canManageCurrentOrganization
+								? () => setIsAddOrganizationVideosDialogOpen(true)
+								: undefined
+						}
 					/>
 				)}
 				{spaceData && (
@@ -317,15 +371,17 @@ export const SharedCaps = ({
 						spaceId={spaceId}
 					/>
 				)}
-				<Button
-					onClick={() => setOpenNewFolderDialog(true)}
-					size="sm"
-					variant="dark"
-					className="flex gap-2 items-center w-fit"
-				>
-					<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-					New Folder
-				</Button>
+				{canManageCurrentSharedCollection && (
+					<Button
+						onClick={() => setOpenNewFolderDialog(true)}
+						size="sm"
+						variant="dark"
+						className="flex gap-2 items-center w-fit"
+					>
+						<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+						New Folder
+					</Button>
+				)}
 			</div>
 			{folders && folders.length > 0 && (
 				<>

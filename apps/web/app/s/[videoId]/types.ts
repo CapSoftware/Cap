@@ -13,6 +13,9 @@ export type VideoData = Omit<typeof videos.$inferSelect, "ownerId"> & {
 	inheritedPasswordSources?: SpaceRuleSource[];
 	inheritedSpaceSettings?: Partial<Record<ViewerSettingKey, SpaceRuleSource[]>>;
 	orgSettings?: OrganizationSettings | null;
+	organizationName?: string | null;
+	organizationIconUrl?: ImageUpload.ImageUrl | null;
+	shareableLinkIconUrl?: ImageUpload.ImageUrl | null;
 	hasActiveUpload?: boolean;
 	activeUploadRawFileKey?: string | null;
 };
@@ -23,3 +26,13 @@ export type VideoOwner = {
 	name?: string | null;
 	image?: ImageUpload.ImageUrl | null;
 };
+
+export type SharePageBranding =
+	| {
+			type: "custom";
+			imageUrl: ImageUpload.ImageUrl;
+			name: string;
+	  }
+	| {
+			type: "cap";
+	  };

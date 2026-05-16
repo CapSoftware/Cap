@@ -295,8 +295,8 @@ export function OrganizationStorageIntegrations({
 			<div className="flex items-center gap-2 px-1">
 				<InfoIcon className="size-3.5 text-gray-9 shrink-0" />
 				<p className="text-[12px] text-gray-9">
-					Storage applies to all members of {settings.organization.name}. Only
-					owners can manage integrations.
+					Storage applies to all members of {settings.organization.name}. Admins
+					and owners can manage integrations.
 				</p>
 			</div>
 

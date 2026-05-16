@@ -44,9 +44,21 @@ export function createExportToFileTask(
 	fileName: string,
 	fileType: string,
 	onProgress: (progress: FramesRendered) => void,
+	onStart?: () => void,
+	onCopying?: () => void,
 ) {
+	let started = false;
+	let copying = false;
 	const progress = new Channel<FramesRendered>((e) => {
+		if (!started) {
+			started = true;
+			onStart?.();
+		}
 		onProgress(e);
+		if (!copying && e.totalFrames > 0 && e.renderedCount >= e.totalFrames) {
+			copying = true;
+			onCopying?.();
+		}
 	});
 	let closed = false;
 	const cancel = () => {
@@ -59,23 +71,9 @@ export function createExportToFileTask(
 		).__TAURI_INTERNALS__;
 		internals?.unregisterCallback?.(progress.id);
 	};
-	const promise = (async () => {
-		const releaseExportSession = await beginExportSessionGuard();
-		try {
-			const savePath = await commands.saveFileDialog(fileName, fileType);
-			if (!savePath) throw new Error("Save dialog cancelled");
-
-			const outputPath = await commands.exportVideo(
-				projectPath,
-				progress,
-				settings,
-			);
-			await commands.copyFileToPath(outputPath, savePath);
-			return savePath;
-		} finally {
-			await releaseExportSession();
-		}
-	})().finally(cancel);
+	const promise = commands
+		.exportVideoToFile(projectPath, progress, settings, fileName, fileType)
+		.finally(cancel);
 	return { promise, cancel };
 }
 
@@ -88,19 +86,16 @@ export async function exportVideoToFile(
 	onCopying: () => void,
 	onProgress: (progress: FramesRendered) => void,
 ) {
-	const releaseExportSession = await beginExportSessionGuard();
-	try {
-		const savePath = await commands.saveFileDialog(fileName, fileType);
-		if (!savePath) throw new Error("Save dialog cancelled");
-
-		onStart();
-		const videoPath = await exportVideo(projectPath, settings, onProgress);
-		onCopying();
-		await commands.copyFileToPath(videoPath, savePath);
-		return savePath;
-	} finally {
-		await releaseExportSession();
-	}
+	const { promise } = createExportToFileTask(
+		projectPath,
+		settings,
+		fileName,
+		fileType,
+		onProgress,
+		onStart,
+		onCopying,
+	);
+	return await promise;
 }
 
 export async function exportVideo(
