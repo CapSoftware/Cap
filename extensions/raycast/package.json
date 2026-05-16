@@ -1,0 +1,106 @@
+{
+	"$schema": "https://www.raycast.com/schemas/extension.json",
+	"name": "cap",
+	"title": "Cap",
+	"description": "Control Cap recordings from Raycast.",
+	"icon": "extension-icon.png",
+	"author": "CapSoftware",
+	"categories": [
+		"Productivity",
+		"Developer Tools"
+	],
+	"license": "MIT",
+	"commands": [
+		{
+			"name": "start-studio-recording",
+			"title": "Start Studio Recording",
+			"description": "Start a Cap Studio recording with saved settings.",
+			"mode": "no-view"
+		},
+		{
+			"name": "start-instant-recording",
+			"title": "Start Instant Recording",
+			"description": "Start a Cap Instant recording with saved settings.",
+			"mode": "no-view"
+		},
+		{
+			"name": "record-display",
+			"title": "Record Display",
+			"description": "Open Cap's display recording picker.",
+			"mode": "no-view"
+		},
+		{
+			"name": "record-window",
+			"title": "Record Window",
+			"description": "Open Cap's window recording picker.",
+			"mode": "no-view"
+		},
+		{
+			"name": "record-area",
+			"title": "Record Area",
+			"description": "Open Cap's area recording picker.",
+			"mode": "no-view"
+		},
+		{
+			"name": "pause-recording",
+			"title": "Pause Recording",
+			"description": "Pause the current Cap recording.",
+			"mode": "no-view"
+		},
+		{
+			"name": "resume-recording",
+			"title": "Resume Recording",
+			"description": "Resume the current Cap recording.",
+			"mode": "no-view"
+		},
+		{
+			"name": "toggle-pause-recording",
+			"title": "Toggle Recording Pause",
+			"description": "Pause or resume the current Cap recording.",
+			"mode": "no-view"
+		},
+		{
+			"name": "stop-recording",
+			"title": "Stop Recording",
+			"description": "Stop the current Cap recording.",
+			"mode": "no-view"
+		},
+		{
+			"name": "set-microphone",
+			"title": "Set Microphone",
+			"description": "Switch Cap's selected microphone by label.",
+			"mode": "view"
+		},
+		{
+			"name": "clear-microphone",
+			"title": "Clear Microphone",
+			"description": "Disable Cap's selected microphone.",
+			"mode": "no-view"
+		},
+		{
+			"name": "set-camera",
+			"title": "Set Camera",
+			"description": "Switch Cap's selected camera by device or model ID.",
+			"mode": "view"
+		},
+		{
+			"name": "clear-camera",
+			"title": "Clear Camera",
+			"description": "Disable Cap's selected camera.",
+			"mode": "no-view"
+		}
+	],
+	"dependencies": {
+		"@raycast/api": "^1.104.17"
+	},
+	"devDependencies": {
+		"@types/node": "22.15.17",
+		"typescript": "^5.8.3"
+	},
+	"scripts": {
+		"build": "ray build",
+		"dev": "ray develop",
+		"lint": "ray lint",
+		"publish": "ray publish"
+	}
+}

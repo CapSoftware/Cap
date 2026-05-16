@@ -4,9 +4,14 @@ use cap_recording::{
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
+use tauri_specta::Event;
 use tracing::trace;
 
-use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
+use crate::{
+    App, ArcLock, RequestOpenRecordingPicker, RequestStartRecording,
+    recording::StartRecordingInputs, recording_settings::RecordingTargetMode,
+    windows::ShowCapWindow,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -18,6 +23,9 @@ pub enum CaptureMode {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeepLinkAction {
+    StartRecordingWithSettings {
+        mode: RecordingMode,
+    },
     StartRecording {
         capture_mode: CaptureMode,
         camera: Option<DeviceOrModelID>,
@@ -26,6 +34,18 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    SetMicInput {
+        label: Option<String>,
+    },
+    SetCameraInput {
+        id: Option<DeviceOrModelID>,
+    },
+    OpenRecordingPicker {
+        target_mode: Option<RecordingTargetMode>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -108,6 +128,11 @@ impl TryFrom<&Url> for DeepLinkAction {
 impl DeepLinkAction {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
         match self {
+            DeepLinkAction::StartRecordingWithSettings { mode } => {
+                RequestStartRecording { mode }
+                    .emit(app)
+                    .map_err(|err| err.to_string())
+            }
             DeepLinkAction::StartRecording {
                 capture_mode,
                 camera,
@@ -147,6 +172,24 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SetMicInput { label } => crate::set_mic_input(app.state(), label).await,
+            DeepLinkAction::SetCameraInput { id } => {
+                crate::set_camera_input(app.clone(), app.state(), id, None).await
+            }
+            DeepLinkAction::OpenRecordingPicker { target_mode } => RequestOpenRecordingPicker {
+                target_mode,
+            }
+            .emit(app)
+            .map_err(|err| err.to_string()),
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
