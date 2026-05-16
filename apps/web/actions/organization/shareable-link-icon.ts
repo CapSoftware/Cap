@@ -2,7 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { organizations } from "@cap/database/schema";
+import { organizations, users } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { ImageUploads } from "@cap/web-backend";
 import { Organisation } from "@cap/web-domain";
@@ -157,6 +157,47 @@ export async function updateShareableLinkIconPreference({
 		.where(eq(organizations.id, organization.id));
 
 	revalidateOrganizationBrandingPaths();
+
+	return { success: true };
+}
+
+export async function hideShareableLinkCapLogo(
+	organizationId: Organisation.OrganisationId,
+) {
+	const organization = await getManageableProOrganization(organizationId);
+
+	await db()
+		.update(organizations)
+		.set({
+			settings: {
+				...(organization.settings ?? {}),
+				hideShareableLinkCapLogo: true,
+			},
+		})
+		.where(eq(organizations.id, organization.id));
+
+	revalidateOrganizationBrandingPaths();
+
+	return { success: true };
+}
+
+export async function selectShareableLinkBrandingOrganization(
+	organizationId: Organisation.OrganisationId,
+) {
+	const user = await getCurrentUser();
+
+	if (!user) {
+		throw new Error("Unauthorized");
+	}
+
+	await requireOrganizationSettingsManager(user.id, organizationId);
+
+	await db()
+		.update(users)
+		.set({ activeOrganizationId: organizationId })
+		.where(eq(users.id, user.id));
+
+	revalidatePath("/dashboard");
 
 	return { success: true };
 }
