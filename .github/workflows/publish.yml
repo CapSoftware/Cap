@@ -94,7 +94,7 @@ jobs:
                 releasePublished = !release.draft;
 
                 if (releasePublished)
-                  core.notice(`Release skipped because '${tag}' is already published: ${releaseUrl}`);
+                  throw new Error(`Release '${tag}' is already published: ${releaseUrl}. Bump apps/desktop/src-tauri/Cargo.toml before publishing a new build.`);
                 else
                   core.notice(`Draft release '${tag}' already exists. Continuing build and upload.`);
               }
