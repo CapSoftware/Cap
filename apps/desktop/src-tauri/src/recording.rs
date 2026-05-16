@@ -566,7 +566,9 @@ struct UploadProbeResult {
 
 const UPLOAD_PROBE_SIZE_BYTES: usize = 256 * 1024;
 const UPLOAD_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+const UPLOAD_PROBE_POST_COUNTDOWN_GRACE: Duration = Duration::from_millis(500);
 const UPLOAD_PROBE_FLOOR_RESOLUTION: u32 = 1280;
+const UPLOAD_PROBE_SUBPATH: &str = "probes/instant-upload-health-probe.bin";
 
 fn resolution_tier_label(max_resolution: u32) -> &'static str {
     if max_resolution >= 3840 {
@@ -634,29 +636,29 @@ fn format_probe_detail(
     )
 }
 
+fn failed_probe_result(user_max_resolution: u32, detail: String) -> UploadProbeResult {
+    let recommended_max_resolution = UPLOAD_PROBE_FLOOR_RESOLUTION;
+    let applied_max_resolution = apply_resolution_cap(user_max_resolution, recommended_max_resolution);
+
+    UploadProbeResult {
+        status: UploadProbeStatus::Failed,
+        upload_mbps: None,
+        recommended_max_resolution,
+        applied_max_resolution,
+        detail,
+    }
+}
+
 async fn run_upload_probe(
     app: &AppHandle,
     video_id: &str,
     user_max_resolution: u32,
 ) -> UploadProbeResult {
-    let fallback = |detail: String| {
-        let recommended_max_resolution = UPLOAD_PROBE_FLOOR_RESOLUTION;
-        let applied_max_resolution =
-            apply_resolution_cap(user_max_resolution, recommended_max_resolution);
-        UploadProbeResult {
-            status: UploadProbeStatus::Failed,
-            upload_mbps: None,
-            recommended_max_resolution,
-            applied_max_resolution,
-            detail,
-        }
-    };
-
     let signed_url = match crate::api::upload_signed(
         app,
         crate::api::PresignedS3PutRequest {
             video_id: video_id.to_string(),
-            subpath: "instant-upload-health-probe.bin".to_string(),
+            subpath: UPLOAD_PROBE_SUBPATH.to_string(),
             method: PresignedS3PutRequestMethod::Put,
             meta: None,
         },
@@ -665,9 +667,12 @@ async fn run_upload_probe(
     {
         Ok(url) => url,
         Err(err) => {
-            return fallback(format!(
+            return failed_probe_result(
+                user_max_resolution,
+                format!(
                 "Upload probe failed while requesting signed URL: {err}"
-            ));
+                ),
+            );
         }
     };
 
@@ -684,18 +689,18 @@ async fn run_upload_probe(
     {
         Ok(Ok(resp)) => resp,
         Ok(Err(err)) => {
-            return fallback(format!("Upload probe request failed: {err}"));
+            return failed_probe_result(user_max_resolution, format!("Upload probe request failed: {err}"));
         }
         Err(_) => {
-            return fallback("Upload probe timed out".to_string());
+            return failed_probe_result(user_max_resolution, "Upload probe timed out".to_string());
         }
     };
 
     if !response.status().is_success() {
-        return fallback(format!(
-            "Upload probe failed: HTTP {}",
-            response.status().as_u16()
-        ));
+        return failed_probe_result(
+            user_max_resolution,
+            format!("Upload probe failed: HTTP {}", response.status().as_u16()),
+        );
     }
 
     let elapsed_secs = started_at.elapsed().as_secs_f64().max(0.05);
@@ -995,19 +1000,22 @@ pub async fn start_recording(
         .map(|settings| settings.instant_mode_max_resolution)
         .unwrap_or(1920);
 
-    let upload_probe_result = if matches!(inputs.mode, RecordingMode::Instant) {
+    let mut upload_probe_task = if matches!(inputs.mode, RecordingMode::Instant) {
         match video_upload_info.as_ref() {
-            Some(video) => Some(run_upload_probe(&app, &video.id, user_max_instant_resolution).await),
+            Some(video) => {
+                let app_handle = app.clone();
+                let video_id = video.id.clone();
+                Some(tokio::spawn(async move {
+                    run_upload_probe(&app_handle, &video_id, user_max_instant_resolution).await
+                }))
+            }
             None => None,
         }
     } else {
         None
     };
-
-    let instant_max_output_size = upload_probe_result
-        .as_ref()
-        .map(|probe| probe.applied_max_resolution)
-        .unwrap_or(user_max_instant_resolution);
+    let mut upload_probe_result: Option<UploadProbeResult> = None;
+    let mut instant_max_output_size = user_max_instant_resolution;
 
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
@@ -1080,17 +1088,6 @@ pub async fn start_recording(
     .show(&app)
     .await;
 
-    if let Some(probe) = upload_probe_result.as_ref() {
-        let _ = RecordingEvent::UploadProbe {
-            status: probe.status,
-            upload_mbps: probe.upload_mbps,
-            recommended_max_resolution: probe.recommended_max_resolution,
-            applied_max_resolution: probe.applied_max_resolution,
-            detail: probe.detail.clone(),
-        }
-        .emit(&app);
-    }
-
     if let Some(window) = CapWindowId::Main.get(&app) {
         let _ = general_settings
             .map(|v| v.main_window_recording_start_behaviour)
@@ -1106,6 +1103,49 @@ pub async fn start_recording(
             .emit(&app);
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
+    }
+
+    if let Some(probe_task) = upload_probe_task.as_mut() {
+        match tokio::time::timeout(UPLOAD_PROBE_POST_COUNTDOWN_GRACE, probe_task).await {
+            Ok(Ok(result)) => {
+                upload_probe_result = Some(result);
+            }
+            Ok(Err(err)) => {
+                warn!("Upload probe task join failed: {err}");
+                upload_probe_result = Some(failed_probe_result(
+                    user_max_instant_resolution,
+                    format!("Upload probe task failed to join: {err}"),
+                ));
+            }
+            Err(_) => {
+                probe_task.abort();
+                upload_probe_result = Some(failed_probe_result(
+                    user_max_instant_resolution,
+                    format!(
+                        "Upload probe did not complete within {:?} after countdown; continuing with fallback",
+                        UPLOAD_PROBE_POST_COUNTDOWN_GRACE
+                    ),
+                ));
+            }
+        }
+    }
+
+    if let Some(probe) = upload_probe_result.as_ref() {
+        instant_max_output_size = probe.applied_max_resolution;
+
+        if countdown.is_none() || countdown == Some(0) {
+            // Give the window a short moment to attach listeners before emitting.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let _ = RecordingEvent::UploadProbe {
+            status: probe.status,
+            upload_mbps: probe.upload_mbps,
+            recommended_max_resolution: probe.recommended_max_resolution,
+            applied_max_resolution: probe.applied_max_resolution,
+            detail: probe.detail.clone(),
+        }
+        .emit(&app);
     }
 
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);

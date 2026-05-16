@@ -832,14 +832,14 @@ function InProgressRecordingInner() {
 											</div>
 										)}
 									</Show>
-										<Show when={hasCameraInput() && disconnectedInputs.camera}>
-											<div
-												class="flex h-8 w-8 items-center justify-center"
-												title="Camera disconnected - recording continues without camera overlay"
-											>
-												<IconLucideVideoOff class="size-5 text-amber-11" />
-											</div>
-										</Show>
+									<Show when={hasCameraInput() && disconnectedInputs.camera}>
+										<div
+											class="flex h-8 w-8 items-center justify-center"
+											title="Camera disconnected - recording continues without camera overlay"
+										>
+											<IconLucideVideoOff class="size-5 text-amber-11" />
+										</div>
+									</Show>
 									<Show when={degradedReason()}>
 										{(reason) => (
 											<div
