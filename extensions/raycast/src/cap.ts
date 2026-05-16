@@ -4,10 +4,10 @@ type RecordingMode = "studio" | "instant" | "screenshot";
 type RecordingTargetMode = "display" | "window" | "area" | "camera";
 type DeviceOrModelID =
 	| {
-			device_id: string;
+			DeviceID: string;
 	  }
 	| {
-			model_id: string;
+			ModelID: string;
 	  };
 
 type DeepLinkAction =
@@ -48,9 +48,9 @@ export async function runCapAction(action: DeepLinkAction, title: string) {
 }
 
 export function deviceId(value: string): DeviceOrModelID {
-	return { device_id: value };
+	return { DeviceID: value };
 }
 
 export function modelId(value: string): DeviceOrModelID {
-	return { model_id: value };
+	return { ModelID: value };
 }

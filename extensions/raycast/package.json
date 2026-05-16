@@ -101,6 +101,6 @@
 		"build": "ray build",
 		"dev": "ray develop",
 		"lint": "ray lint",
-		"publish": "ray publish"
+		"publish:raycast": "ray publish"
 	}
 }
