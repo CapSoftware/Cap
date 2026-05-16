@@ -43,6 +43,6 @@
     "fix-lint": "ray lint --fix",
     "lint": "ray lint",
     "prepublishOnly": "echo \"\\n\\nUse npm run publish for Raycast Store release.\\n\" && exit 1",
-    "publish": "npx @raycast/api@latest publish"
+    "publish": "ray publish"
   }
 }

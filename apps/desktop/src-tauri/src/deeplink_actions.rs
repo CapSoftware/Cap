@@ -5,6 +5,7 @@ use scap_targets::Display;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tracing::trace;
 
 use crate::{
@@ -122,6 +123,18 @@ impl DeepLinkAction {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
         match self {
             DeepLinkAction::StartDefaultRecording => {
+                let proceed = app
+                    .dialog()
+                    .message("Start a new recording from an external deep link?")
+                    .title("Cap")
+                    .kind(MessageDialogKind::Info)
+                    .buttons(MessageDialogButtons::OkCancel)
+                    .blocking_show();
+
+                if !proceed {
+                    return Ok(());
+                }
+
                 let state = app.state::<ArcLock<App>>();
                 let settings = RecordingSettingsStore::get(app)
                     .ok()
