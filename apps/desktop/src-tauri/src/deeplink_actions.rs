@@ -4,6 +4,7 @@ use cap_recording::{
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_specta::Event;
 use tracing::trace;
 
@@ -126,7 +127,56 @@ impl TryFrom<&Url> for DeepLinkAction {
 }
 
 impl DeepLinkAction {
+    fn confirmation_message(&self) -> Option<&'static str> {
+        match self {
+            Self::StartRecordingWithSettings { .. } | Self::StartRecording { .. } => {
+                Some("A deep link is requesting permission to start a Cap recording.")
+            }
+            Self::StopRecording => {
+                Some("A deep link is requesting permission to stop the current Cap recording.")
+            }
+            Self::PauseRecording | Self::ResumeRecording | Self::TogglePauseRecording => {
+                Some("A deep link is requesting permission to control the current Cap recording.")
+            }
+            Self::SetMicInput { .. } => {
+                Some("A deep link is requesting permission to change Cap's microphone input.")
+            }
+            Self::SetCameraInput { .. } => {
+                Some("A deep link is requesting permission to change Cap's camera input.")
+            }
+            Self::OpenRecordingPicker { .. } => {
+                Some("A deep link is requesting permission to open Cap's recording picker.")
+            }
+            Self::OpenEditor { .. } | Self::OpenSettings { .. } => None,
+        }
+    }
+
+    fn confirm_if_sensitive(&self, app: &AppHandle) -> Result<(), String> {
+        let Some(message) = self.confirmation_message() else {
+            return Ok(());
+        };
+
+        let confirmed = app
+            .dialog()
+            .message(message)
+            .title("Allow Cap deep link?")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Allow".to_string(),
+                "Cancel".to_string(),
+            ))
+            .blocking_show();
+
+        if confirmed {
+            Ok(())
+        } else {
+            Err("Deep link action cancelled".to_string())
+        }
+    }
+
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
+        self.confirm_if_sensitive(app)?;
+
         match self {
             DeepLinkAction::StartRecordingWithSettings { mode } => {
                 RequestStartRecording { mode }
