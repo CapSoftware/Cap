@@ -9,6 +9,7 @@ import { SignInButton } from "~/components/SignInButton";
 
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
+import IconLucideShieldCheck from "~icons/lucide/shield-check";
 
 export default function Settings(props: RouteSectionProps) {
 	const auth = authStore.createQuery();
@@ -41,6 +42,11 @@ export default function Settings(props: RouteSectionProps) {
 								href: "recordings",
 								name: "Recordings",
 								icon: IconLucideSquarePlay,
+							},
+							{
+								href: "recording-health",
+								name: "Health Check",
+								icon: IconLucideShieldCheck,
 							},
 							{
 								href: "screenshots",
