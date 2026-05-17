@@ -1332,7 +1332,22 @@ impl ShowCapWindow {
                 window.unminimize().ok();
                 window.set_focus().ok();
 
-                if let Self::Settings { .. } = self {
+                if let Self::Settings { page } = self {
+                    if let Some(page) = page {
+                        match window.url().and_then(|url| {
+                            url.join(&format!("/settings/{page}"))
+                                .map_err(tauri::Error::InvalidUrl)
+                        }) {
+                            Ok(url) => {
+                                if let Err(error) = window.navigate(url) {
+                                    warn!("Failed to navigate Settings window: {}", error);
+                                }
+                            }
+                            Err(error) => {
+                                warn!("Failed to build Settings window URL: {}", error);
+                            }
+                        }
+                    }
                     ensure_settings_window_bounds(&window);
                 }
 
