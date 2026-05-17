@@ -381,6 +381,18 @@ async recoverRecording(projectPath: string) : Promise<string> {
 },
 async discardIncompleteRecording(projectPath: string) : Promise<null> {
     return await TAURI_INVOKE("discard_incomplete_recording", { projectPath });
+},
+async inspectRecordingHealth(projectPath: string) : Promise<RecordingHealthReport> {
+    return await TAURI_INVOKE("inspect_recording_health", { projectPath });
+},
+async scanRecordingHealth() : Promise<RecordingHealthReport[]> {
+    return await TAURI_INVOKE("scan_recording_health");
+},
+async scanRecordingHealthWithProgress(progress: TAURI_CHANNEL<RecordingHealthProgress>) : Promise<RecordingHealthReport[]> {
+    return await TAURI_INVOKE("scan_recording_health_with_progress", { progress });
+},
+async repairRecordingHealth(projectPath: string) : Promise<RecordingHealthReport> {
+    return await TAURI_INVOKE("repair_recording_health", { projectPath });
 }
 }
 
@@ -447,7 +459,6 @@ videoImportProgress: "video-import-progress"
 
 /** user-defined types **/
 
-export type AllGpusInfo = { gpus: GpuInfoDiag[]; primaryGpuIndex: number | null; isMultiGpuSystem: boolean; hasDiscreteGpu: boolean }
 export type Annotation = { id: string; type: AnnotationType; x: number; y: number; width: number; height: number; strokeColor: string; strokeWidth: number; fillColor: string; opacity: number; rotation: number; text: string | null; maskType?: MaskType | null; maskLevel?: number | null }
 export type AnnotationType = "arrow" | "circle" | "rectangle" | "text" | "mask"
 export type AppTheme = "system" | "light" | "dark"
@@ -525,7 +536,6 @@ quality: number | null;
  */
 fast: boolean | null }
 export type GlideDirection = "none" | "left" | "right" | "up" | "down"
-export type GpuInfoDiag = { vendor: string; description: string; dedicatedVideoMemoryMb: number; adapterIndex: number; isSoftwareAdapter: boolean; isBasicRenderDriver: boolean; supportsHardwareEncoding: boolean }
 export type HapticPattern = "alignment" | "levelChange" | "generic"
 export type HapticPerformanceTime = "default" | "now" | "drawCompleted"
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
@@ -543,6 +553,7 @@ export type KeyboardTrackSegment = { id: string; start: number; end: number; dis
 export type LogicalBounds = { position: LogicalPosition; size: LogicalSize }
 export type LogicalPosition = { x: number; y: number }
 export type LogicalSize = { width: number; height: number }
+export type MacOSVersionInfo = { major: number; minor: number; patch: number; displayName: string; buildNumber: string; isAppleSilicon: boolean }
 export type MainWindowRecordingStartBehaviour = "close" | "minimise"
 export type MaskKeyframes = { position?: MaskVectorKeyframe[]; size?: MaskVectorKeyframe[]; intensity?: MaskScalarKeyframe[] }
 export type MaskKind = "sensitive" | "highlight"
@@ -579,18 +590,29 @@ export type ProjectRecordingsMeta = { segments: SegmentRecordings[] }
 export type RecordingAction = "Started" | "InvalidAuthentication" | "UpgradeRequired"
 export type RecordingDeleted = { path: string }
 export type RecordingEvent = { variant: "Countdown"; value: number } | { variant: "Started" } | { variant: "Stopped" } | { variant: "Paused" } | { variant: "Resumed" } | { variant: "Failed"; error: string } | { variant: "InputLost"; input: RecordingInputKind } | { variant: "InputRestored"; input: RecordingInputKind } | { variant: "Degraded"; reason: string } | { variant: "Recovered" }
+export type RecordingHealthFile = { label: string; path: string; kind: RecordingHealthMediaKind; required: boolean; exists: boolean; sizeBytes: number | null; validContainer: boolean | null; decodable: boolean | null; durationSecs: number | null }
+export type RecordingHealthIssue = { severity: RecordingHealthSeverity; code: string; title: string; detail: string; path: string | null; repairable: boolean }
+export type RecordingHealthMediaKind = "video" | "audio" | "data" | "directory"
+export type RecordingHealthMode = "studio" | "instant" | "unknown"
+export type RecordingHealthProgress = { phase: RecordingHealthProgressPhase; completed: number; total: number; currentPath: string | null; currentName: string | null; message: string; elapsedSecs: number; etaSecs: number | null; report: RecordingHealthReport | null }
+export type RecordingHealthProgressPhase = "preparing" | "scanning" | "complete"
+export type RecordingHealthReport = { projectPath: string; prettyName: string; mode: RecordingHealthMode; recordingStatus: string; status: RecordingHealthStatus; score: number; repairable: boolean; issues: RecordingHealthIssue[]; files: RecordingHealthFile[]; recoverable: RecordingRecoverableSummary; repairs: RecordingRepairAttempt[] }
+export type RecordingHealthSeverity = "info" | "warning" | "critical"
+export type RecordingHealthStatus = "healthy" | "degraded" | "damaged" | "missing"
 export type RecordingInputKind = "microphone" | "camera"
 export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }
 export type RecordingMetaWithMetadata = ((StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }) & { mode: RecordingMode; status: StudioRecordingStatus }
 export type RecordingMode = "studio" | "instant" | "screenshot"
 export type RecordingOptionsChanged = null
+export type RecordingRecoverableSummary = { available: boolean; segmentCount: number; estimatedDurationSecs: number }
+export type RecordingRepairAttempt = { status: RecordingRepairStatus; title: string; detail: string; path: string | null }
+export type RecordingRepairStatus = "performed" | "failed" | "skipped"
 export type RecordingSettingsStore = { target: ScreenCaptureTarget | null; micName: string | null; cameraId: DeviceOrModelID | null; mode: RecordingMode | null; systemAudio: boolean; organizationId: string | null; cameraDeviceSettings: { [key in string]: CameraDeviceSettings }; microphoneDeviceSettings: { [key in string]: MicrophoneDeviceSettings } }
 export type RecordingStarted = null
 export type RecordingStatus = "pending" | "recording"
 export type RecordingStopped = null
 export type RecordingTargetMode = "display" | "window" | "area" | "camera"
 export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
-export type RenderingStatus = { isUsingSoftwareRendering: boolean; isUsingBasicRenderDriver: boolean; hardwareEncodingAvailable: boolean; warningMessage: string | null }
 export type RequestOpenRecordingPicker = { target_mode: RecordingTargetMode | null }
 export type RequestOpenSettings = { page: string }
 export type RequestScreenCapturePrewarm = { force?: boolean }
@@ -618,7 +640,7 @@ export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
 export type StudioRecordingQuality = "compatibility" | "balanced" | "ultra"
 export type StudioRecordingStatus = { status: "InProgress" } | { status: "NeedsRemux" } | { status: "Failed"; error: string } | { status: "Complete" }
-export type SystemDiagnostics = { windowsVersion: WindowsVersionInfo | null; gpuInfo: GpuInfoDiag | null; allGpus: AllGpusInfo | null; renderingStatus: RenderingStatus; availableEncoders: string[]; graphicsCaptureSupported: boolean; d3D11VideoProcessorAvailable: boolean }
+export type SystemDiagnostics = { macosVersion: MacOSVersionInfo | null; availableEncoders: string[]; screenCaptureSupported: boolean; metalSupported: boolean; gpuName: string | null }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; fadeDuration?: number }
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[] }
@@ -638,7 +660,6 @@ export type WindowExclusion = { bundleIdentifier?: string | null; ownerName?: st
 export type WindowId = string
 export type WindowPosition = { x: number; y: number; displayId?: DisplayId | null }
 export type WindowUnderCursor = { id: WindowId; app_name: string; bounds: LogicalBounds }
-export type WindowsVersionInfo = { major: number; minor: number; build: number; displayName: string; meetsRequirements: boolean; isWindows11: boolean }
 export type XY<T> = { x: T; y: T }
 export type ZoomMode = "auto" | { manual: { x: number; y: number } }
 export type ZoomSegment = { start: number; end: number; amount: number; mode: ZoomMode; glideDirection?: GlideDirection; glideSpeed?: number; instantAnimation?: boolean; edgeSnapRatio?: number }
