@@ -27,6 +27,7 @@ mod posthog;
 mod power_observer;
 mod presets;
 mod recording;
+mod recording_health;
 mod recording_settings;
 mod recording_telemetry;
 mod recovery;
@@ -4039,6 +4040,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recovery::find_incomplete_recordings,
             recovery::recover_recording,
             recovery::discard_incomplete_recording,
+            recording_health::inspect_recording_health,
+            recording_health::scan_recording_health,
+            recording_health::scan_recording_health_with_progress,
+            recording_health::repair_recording_health,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
