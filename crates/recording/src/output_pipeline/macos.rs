@@ -1212,7 +1212,7 @@ mod tests {
             instant: Option<&str>,
             test: impl FnOnce() -> T,
         ) -> T {
-            let _guard = ENV_LOCK.lock().unwrap();
+            let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             unsafe {
                 match global {
                     Some(value) => std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE", value),
@@ -1226,14 +1226,17 @@ mod tests {
                 }
             }
 
-            let result = test();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(test));
 
             unsafe {
                 std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE");
                 std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE_INSTANT");
             }
 
-            result
+            match result {
+                Ok(value) => value,
+                Err(error) => std::panic::resume_unwind(error),
+            }
         }
 
         #[test]
