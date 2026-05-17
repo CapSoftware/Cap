@@ -17,6 +17,8 @@ function setRequiredServerEnv() {
 	process.env.CAP_AWS_BUCKET = "cap-test-bucket";
 	process.env.CAP_AWS_REGION = "us-east-1";
 	process.env.NODE_ENV = "test";
+	delete process.env.S3_PATH_STYLE;
+	delete process.env.CAP_VIDEOS_DEFAULT_PUBLIC;
 }
 
 afterEach(() => {
