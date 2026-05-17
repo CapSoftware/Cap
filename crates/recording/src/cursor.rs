@@ -1,12 +1,14 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
 use cap_project::{
-    CursorClickEvent, CursorEvents, CursorMoveEvent, KeyPressEvent, KeyboardEvents, XY,
+    CursorClickEvent, CursorMoveEvent, KeyPressEvent, KeyboardEvents, XY,
 };
 use cap_timestamp::Timestamps;
 use futures::{FutureExt, future::Shared};
 use std::{
     collections::HashMap,
+    fs::File,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -51,15 +53,35 @@ impl CursorActor {
 const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
 
 fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[CursorClickEvent]) {
-    let events = CursorEvents {
-        clicks: clicks.to_vec(),
-        moves: moves.to_vec(),
+    #[derive(serde::Serialize)]
+    struct BorrowedCursorEvents<'a> {
+        clicks: &'a [CursorClickEvent],
+        moves: &'a [CursorMoveEvent],
+    }
+
+    let file = match File::create(output_path) {
+        Ok(file) => file,
+        Err(e) => {
+            tracing::error!(
+                "Failed to create cursor data file {}: {}",
+                output_path.display(),
+                e
+            );
+            return;
+        }
     };
-    if let Ok(json) = serde_json::to_string_pretty(&events)
-        && let Err(e) = std::fs::write(output_path, json)
-    {
+
+    let events = BorrowedCursorEvents { clicks, moves };
+    let mut writer = BufWriter::new(file);
+    if let Err(e) = serde_json::to_writer(&mut writer, &events) {
         tracing::error!(
-            "Failed to write cursor data to {}: {}",
+            "Failed to serialize cursor data to {}: {}",
+            output_path.display(),
+            e
+        );
+    } else if let Err(e) = writer.write_all(b"\n").and_then(|_| writer.flush()) {
+        tracing::error!(
+            "Failed to flush cursor data to {}: {}",
             output_path.display(),
             e
         );
@@ -226,6 +248,8 @@ pub fn spawn_cursor_recorder(
 
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
+        let mut last_flushed_cursor_moves = 0;
+        let mut last_flushed_cursor_clicks = 0;
         let mut last_cursor_id: Option<String> = None;
 
         loop {
@@ -362,7 +386,13 @@ pub fn spawn_cursor_recorder(
 
             if last_flush.elapsed() >= flush_interval {
                 if let Some(ref path) = incremental_outputs.cursor {
-                    flush_cursor_data(path, &response.moves, &response.clicks);
+                    if response.moves.len() != last_flushed_cursor_moves
+                        || response.clicks.len() != last_flushed_cursor_clicks
+                    {
+                        flush_cursor_data(path, &response.moves, &response.clicks);
+                        last_flushed_cursor_moves = response.moves.len();
+                        last_flushed_cursor_clicks = response.clicks.len();
+                    }
                 }
                 if let Some(ref kb_path) = incremental_outputs.keyboard {
                     flush_keyboard_data(kb_path, &response.keyboard_presses);
@@ -374,7 +404,11 @@ pub fn spawn_cursor_recorder(
         info!("cursor recorder done");
 
         if let Some(ref path) = incremental_outputs.cursor {
-            flush_cursor_data(path, &response.moves, &response.clicks);
+            if response.moves.len() != last_flushed_cursor_moves
+                || response.clicks.len() != last_flushed_cursor_clicks
+            {
+                flush_cursor_data(path, &response.moves, &response.clicks);
+            }
         }
 
         if let Some(ref kb_path) = incremental_outputs.keyboard {
