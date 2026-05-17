@@ -8,6 +8,7 @@ import type { ComponentProps } from "solid-js";
 import { createMemo, createSignal, Show, splitProps } from "solid-js";
 import toast from "solid-toast";
 import Tooltip from "~/components/Tooltip";
+import { storeRecordingHealthTarget } from "~/utils/recordingHealth";
 import {
 	type CaptureDisplayWithThumbnail,
 	type CaptureWindowWithThumbnail,
@@ -25,6 +26,7 @@ import IconLucideImage from "~icons/lucide/image";
 import IconLucideRotateCcw from "~icons/lucide/rotate-ccw";
 import IconLucideSave from "~icons/lucide/save";
 import IconLucideSquarePlay from "~icons/lucide/square-play";
+import IconLucideWrench from "~icons/lucide/wrench";
 import IconMdiMonitor from "~icons/mdi/monitor";
 import IconPhWarningBold from "~icons/ph/warning-bold";
 
@@ -291,6 +293,18 @@ export default function TargetCard(props: TargetCardProps) {
 		recordingProps()?.onReupload?.(recording.path);
 	};
 
+	const handleRepairRecording = (e: MouseEvent) => {
+		e.stopPropagation();
+		const recording = recordingTarget();
+		if (!recording) return;
+		storeRecordingHealthTarget(recording.path, true);
+		commands.showWindow({
+			Settings: {
+				page: "recording-health",
+			},
+		});
+	};
+
 	const recordingUploadFailed = createMemo(() => {
 		const recording = recordingTarget();
 		if (!recording) return false;
@@ -481,6 +495,16 @@ export default function TargetCard(props: TargetCardProps) {
 										</div>
 									</Tooltip>
 								</Show>
+								<Tooltip content="Repair">
+									<div
+										role="button"
+										tabIndex={-1}
+										onClick={handleRepairRecording}
+										class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+									>
+										<IconLucideWrench class="size-3.5" />
+									</div>
+								</Tooltip>
 								<Tooltip content="Open folder">
 									<div
 										role="button"
