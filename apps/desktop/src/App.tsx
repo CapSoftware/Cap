@@ -27,6 +27,9 @@ const SettingsGeneralPage = lazy(
 const SettingsRecordingsPage = lazy(
 	() => import("./routes/(window-chrome)/settings/recordings"),
 );
+const SettingsRecordingHealthPage = lazy(
+	() => import("./routes/(window-chrome)/settings/recording-health"),
+);
 const SettingsTranscriptionPage = lazy(
 	() => import("./routes/(window-chrome)/settings/transcription"),
 );
@@ -158,6 +161,10 @@ function Inner() {
 							<Route path="/" component={SettingsGeneralPage} />
 							<Route path="/general" component={SettingsGeneralPage} />
 							<Route path="/recordings" component={SettingsRecordingsPage} />
+							<Route
+								path="/recording-health"
+								component={SettingsRecordingHealthPage}
+							/>
 							<Route
 								path="/transcription"
 								component={SettingsTranscriptionPage}
