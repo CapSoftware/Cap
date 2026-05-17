@@ -111,7 +111,7 @@ pub fn init(app: &AppHandle) {
 
                 for (action, hotkey) in &store.hotkeys {
                     if &Shortcut::from(*hotkey) == shortcut {
-                        tokio::spawn(handle_hotkey(app.clone(), *action));
+                        tokio::spawn(handle_action(app.clone(), *action));
                     }
                 }
             })
@@ -136,7 +136,7 @@ pub fn init(app: &AppHandle) {
     app.manage(Mutex::new(store));
 }
 
-async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), String> {
+pub async fn handle_action(app: AppHandle, action: HotkeyAction) -> Result<(), String> {
     match action {
         HotkeyAction::StartStudioRecording => {
             let _ = RequestStartRecording {
