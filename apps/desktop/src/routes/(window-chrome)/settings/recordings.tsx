@@ -1,5 +1,6 @@
 import { Button, ProgressCircle } from "@cap/ui-solid";
 import Tooltip from "@corvu/tooltip";
+import { useNavigate } from "@solidjs/router";
 import {
 	createMutation,
 	createQuery,
@@ -25,6 +26,7 @@ import CapTooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
+import { storeRecordingHealthTarget } from "~/utils/recordingHealth";
 import {
 	commands,
 	events,
@@ -32,6 +34,8 @@ import {
 	type UploadProgress,
 } from "~/utils/tauri";
 import IconLucideSearch from "~icons/lucide/search";
+import IconLucideShieldCheck from "~icons/lucide/shield-check";
+import IconLucideWrench from "~icons/lucide/wrench";
 
 type Recording = {
 	meta: RecordingMetaWithMetadata;
@@ -97,6 +101,7 @@ const recordingsQuery = queryOptions<Recording[]>({
 });
 
 export default function Recordings() {
+	const navigate = useNavigate();
 	const [activeTab, setActiveTab] = createSignal<(typeof Tabs)[number]["id"]>(
 		Tabs[0].id,
 	);
@@ -183,13 +188,28 @@ export default function Recordings() {
 		});
 	};
 
+	const handleOpenHealthCheck = (path?: string, repair = false) => {
+		if (path) storeRecordingHealthTarget(path, repair);
+		navigate("/settings/recording-health");
+	};
+
 	return (
 		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
-			<div class="flex flex-col">
-				<h2 class="text-lg font-medium text-gray-12">Recordings</h2>
-				<p class="text-sm text-gray-10">
-					Manage your recordings and perform actions.
-				</p>
+			<div class="flex items-start justify-between gap-4">
+				<div class="flex flex-col">
+					<h2 class="text-lg font-medium text-gray-12">Recordings</h2>
+					<p class="text-sm text-gray-10">
+						Manage your recordings and perform actions.
+					</p>
+				</div>
+				<Button
+					variant="gray"
+					size="sm"
+					onClick={() => handleOpenHealthCheck()}
+				>
+					<IconLucideShieldCheck class="size-3.5" />
+					<span>Health Check</span>
+				</Button>
 			</div>
 			<Show
 				when={recordings.data && recordings.data.length > 0}
@@ -258,6 +278,7 @@ export default function Recordings() {
 									onCopyVideoToClipboard={() =>
 										handleCopyVideoToClipboard(recording.path)
 									}
+									onRepair={() => handleOpenHealthCheck(recording.path, true)}
 									uploadProgress={
 										recording.meta.upload &&
 										(recording.meta.upload.state === "MultipartUpload" ||
@@ -296,6 +317,7 @@ function RecordingItem(props: {
 	onOpenFolder: () => void;
 	onOpenEditor: () => void;
 	onCopyVideoToClipboard: () => void;
+	onRepair: () => void;
 	uploadProgress: number | undefined;
 }) {
 	const [imageExists, setImageExists] = createSignal(true);
@@ -474,6 +496,14 @@ function RecordingItem(props: {
 						);
 					}}
 				</Show>
+				<TooltipIconButton
+					tooltipText="Repair"
+					onClick={() => {
+						props.onRepair();
+					}}
+				>
+					<IconLucideWrench class="size-4" />
+				</TooltipIconButton>
 				<TooltipIconButton
 					tooltipText="Open recording bundle"
 					onClick={() => {
