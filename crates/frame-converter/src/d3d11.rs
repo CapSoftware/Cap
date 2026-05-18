@@ -51,6 +51,29 @@ pub enum GpuVendor {
     Unknown(u32),
 }
 
+const NON_HARDWARE_ADAPTER_MARKERS: &[&str] = &[
+    "parsec",
+    "displaylink",
+    "splashtop",
+    "synergy",
+    "virtual display",
+    "microsoft basic render",
+    "microsoft basic",
+    "warp",
+];
+
+fn matches_non_hardware_adapter_marker(description: &str) -> bool {
+    let description = description.to_ascii_lowercase();
+    NON_HARDWARE_ADAPTER_MARKERS
+        .iter()
+        .any(|marker| description.contains(marker))
+}
+
+fn is_non_hardware_adapter(vendor_id: u32, description: &str) -> bool {
+    (vendor_id == 0x1414 && description.contains("Basic Render"))
+        || matches_non_hardware_adapter_marker(description)
+}
+
 impl GpuVendor {
     pub fn from_id(vendor_id: u32) -> Self {
         match vendor_id {
@@ -85,12 +108,13 @@ impl GpuInfo {
     }
 
     pub fn is_warp(&self) -> bool {
-        self.description.contains("Microsoft Basic Render Driver")
-            || self.description.contains("WARP")
+        matches_non_hardware_adapter_marker(&self.description)
     }
 
     pub fn supports_hardware_encoding(&self) -> bool {
-        !self.is_software_adapter && !self.is_basic_render_driver()
+        !self.is_software_adapter
+            && !self.is_basic_render_driver()
+            && !matches_non_hardware_adapter_marker(&self.description)
     }
 }
 
@@ -174,10 +198,7 @@ fn enumerate_all_gpus() -> Vec<GpuInfo> {
                         .collect::<Vec<_>>(),
                 );
 
-                let is_software = desc.VendorId == 0x1414
-                    && (description.contains("Basic Render")
-                        || description.contains("WARP")
-                        || description.contains("Microsoft Basic"));
+                let is_software = is_non_hardware_adapter(desc.VendorId, &description);
 
                 let gpu_info = GpuInfo {
                     vendor: GpuVendor::from_id(desc.VendorId),
@@ -219,7 +240,10 @@ fn select_best_gpu(gpus: &[GpuInfo]) -> Option<GpuInfo> {
         return None;
     }
 
-    let hardware_gpus: Vec<&GpuInfo> = gpus.iter().filter(|g| !g.is_software_adapter).collect();
+    let hardware_gpus: Vec<&GpuInfo> = gpus
+        .iter()
+        .filter(|g| g.supports_hardware_encoding())
+        .collect();
 
     if hardware_gpus.is_empty() {
         tracing::warn!("No hardware GPUs found, falling back to software adapter");
@@ -316,10 +340,7 @@ fn get_gpu_info(device: &ID3D11Device) -> Result<GpuInfo, ConvertError> {
                 .collect::<Vec<_>>(),
         );
 
-        let is_software = desc.VendorId == 0x1414
-            && (description.contains("Basic Render")
-                || description.contains("WARP")
-                || description.contains("Microsoft Basic"));
+        let is_software = is_non_hardware_adapter(desc.VendorId, &description);
 
         Ok(GpuInfo {
             vendor: GpuVendor::from_id(desc.VendorId),
@@ -360,10 +381,7 @@ impl D3D11Converter {
                             .collect::<Vec<_>>(),
                     );
 
-                    let is_software = desc.VendorId == 0x1414
-                        && (description.contains("Basic Render")
-                            || description.contains("WARP")
-                            || description.contains("Microsoft Basic"));
+                    let is_software = is_non_hardware_adapter(desc.VendorId, &description);
 
                     if !is_software {
                         let vendor = GpuVendor::from_id(desc.VendorId);
