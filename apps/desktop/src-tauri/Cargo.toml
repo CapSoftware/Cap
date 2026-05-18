@@ -13,7 +13,7 @@ name = "cap_desktop_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.1.0", features = [] }
+tauri-build = { version = "2.6.1", features = [] }
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
 swift-rs = { version = "1.0.6", features = ["build"] }
@@ -124,23 +124,23 @@ aho-corasick.workspace = true
 
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "0.24.0"
-core-foundation = "0.10.0"
-objc2-app-kit = { version = "0.3.0", features = [
+objc2 = "0.6.4"
+block2= "0.6.2"
+objc2-core-foundation = "0.3.2"
+objc2-application-services = "0.3.2"
+objc2-foundation = { version = "0.3.2", features = [
+    "NSNotification",
+    "NSString",
+    "NSThread",
+] }
+objc2-app-kit = { version = "0.3.2", features = [
     "NSWindow",
     "NSResponder",
     "NSHapticFeedback",
     "NSWorkspace",
     "NSRunningApplication",
 ] }
-objc2 = "0.6.0"
-objc2-foundation = { version = "0.3.0", features = [
-    "NSNotification",
-    "NSString",
-    "NSThread",
-] }
-cocoa = "0.26.0"
-objc = "0.2.7"
+objc2-web-kit = "0.3.2"
 swift-rs = "1.0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 cidre = { workspace = true }

@@ -45,16 +45,9 @@ export default function (props: RouteSectionProps) {
 		window.removeEventListener("keydown", handleKeyDown);
 	});
 
-	const isMacOS = ostype() === "macos";
-
 	return (
 		<WindowChromeContext>
-			<div
-				class={cx(
-					"flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5 bg-gray-1",
-					isMacOS && "rounded-[16px]",
-				)}
-			>
+			<div class="flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5 bg-gray-1">
 				<Header />
 
 				{/* breaks sometimes */}
@@ -92,31 +85,18 @@ function Header() {
 				"flex items-center min-w-0 w-full h-9 select-none shrink-0 bg-gray-2",
 				isWindows ? "flex-row" : "flex-row-reverse",
 			)}
-			data-tauri-drag-region
+			data-tauri-drag-region="deep"
 		>
 			{ctx.state()?.items}
 			{isWindows && <CaptionControlsWindows11 class="!ml-auto" />}
-			{isMacOS && (
-				<CaptionControlsMacOS
-					class="!mr-auto ml-3"
-					showMinimize={false}
-					showZoom={false}
-				/>
-			)}
+			{isMacOS && <div class="h-full w-[4rem]" />}
 		</header>
 	);
 }
 
 function Inner(props: ParentProps) {
-	onMount(() => {
-		if (location.pathname !== "/") getCurrentWindow().show();
-	});
-
 	return (
-		<div
-			data-tauri-drag-region="false"
-			class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in"
-		>
+		<div class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in">
 			{props.children}
 		</div>
 	);

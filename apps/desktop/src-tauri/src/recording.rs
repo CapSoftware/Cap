@@ -69,7 +69,7 @@ use crate::{
     thumbnails::*,
     upload::{InstantMultipartUpload, SegmentUploader, compress_image},
     web_api::ManagerExt,
-    windows::{CapWindowId, ShowCapWindow, hide_overlay},
+    windows::{CapWindow, CapWindowId, hide_overlay},
 };
 
 #[derive(Clone)]
@@ -680,7 +680,7 @@ pub async fn start_recording(
 
         let operation_lock = app.state::<CameraWindowOperationLock>();
         let _operation_guard = operation_lock.lock().await;
-        ShowCapWindow::Camera { centered: true }
+        CapWindow::Camera { centered: true }
             .show(&app)
             .await
             .map_err(|err| format!("Failed to show centered camera window: {err}"))?;
@@ -844,13 +844,13 @@ pub async fn start_recording(
             if let Some(show) = inputs
                 .capture_target
                 .display()
-                .map(|d| ShowCapWindow::WindowCaptureOccluder { screen_id: d.id() })
+                .map(|d| CapWindow::WindowCaptureOccluder { screen_id: d.id() })
             {
                 let _ = show.show(&app).await;
             }
         }
         ScreenCaptureTarget::Area { screen, .. } => {
-            let _ = ShowCapWindow::WindowCaptureOccluder {
+            let _ = CapWindow::WindowCaptureOccluder {
                 screen_id: screen.clone(),
             }
             .show(&app)
@@ -875,7 +875,7 @@ pub async fn start_recording(
             hide_overlay(win);
         }
     }
-    let _ = ShowCapWindow::InProgressRecording {
+    let _ = CapWindow::InProgressRecording {
         countdown,
         capture_target: Some(inputs.capture_target.clone()),
     }
@@ -1783,7 +1783,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         match settings.post_deletion_behaviour {
             PostDeletionBehaviour::DoNothing => {}
             PostDeletionBehaviour::ReopenRecordingWindow => {
-                let _ = ShowCapWindow::Main {
+                let _ = CapWindow::Main {
                     init_target_mode: None,
                 }
                 .show(&app)
@@ -2186,14 +2186,14 @@ async fn handle_recording_finish(
 
                 match post_behaviour {
                     PostStudioRecordingBehaviour::OpenEditor => {
-                        let _ = ShowCapWindow::Editor {
+                        let _ = CapWindow::Editor {
                             project_path: recording_dir.clone(),
                         }
                         .show(app)
                         .await;
                     }
                     PostStudioRecordingBehaviour::ShowOverlay => {
-                        let _ = ShowCapWindow::RecordingsOverlay.show(app).await;
+                        let _ = CapWindow::RecordingsOverlay.show(app).await;
 
                         let app_clone = AppHandle::clone(app);
                         let recording_dir_clone = recording_dir.clone();
@@ -2422,14 +2422,14 @@ async fn handle_recording_finish(
             .unwrap_or(PostStudioRecordingBehaviour::OpenEditor)
         {
             PostStudioRecordingBehaviour::OpenEditor => {
-                let _ = ShowCapWindow::Editor {
+                let _ = CapWindow::Editor {
                     project_path: recording_dir,
                 }
                 .show(app)
                 .await;
             }
             PostStudioRecordingBehaviour::ShowOverlay => {
-                let _ = ShowCapWindow::RecordingsOverlay.show(app).await;
+                let _ = CapWindow::RecordingsOverlay.show(app).await;
 
                 let app = AppHandle::clone(app);
                 tokio::spawn(async move {

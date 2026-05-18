@@ -1,21 +1,29 @@
-import { Route, Router, useCurrentMatches } from "@solidjs/router";
-import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import {
-	getCurrentWebviewWindow,
-	type WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
+	Route,
+	Router,
+	useCurrentMatches,
+	useIsRouting,
+} from "@solidjs/router";
+import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { message } from "@tauri-apps/plugin-dialog";
-import { createEffect, lazy, onCleanup, onMount, Suspense } from "solid-js";
+import {
+	children,
+	createEffect,
+	lazy,
+	onMount,
+	type ParentProps,
+	Suspense,
+} from "solid-js";
 import { Toaster } from "solid-toast";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 
+import { createEventListener } from "@solid-primitives/event-listener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
-import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
-import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
 const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
@@ -108,8 +116,11 @@ export default function App() {
 }
 
 function Inner() {
-	const currentWindow = getCurrentWebviewWindow();
-	createThemeListener(currentWindow);
+	const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+	const apply = () =>
+		document.documentElement.classList.toggle("dark", prefersDark.matches);
+	apply();
+	createEventListener(prefersDark, "change", apply);
 
 	onMount(() => {
 		initAnonymousUser();
@@ -137,24 +148,20 @@ function Inner() {
 			/>
 			<CapErrorBoundary>
 				<Router
-					root={(props) => {
-						const matches = useCurrentMatches();
-
-						onMount(() => {
-							for (const match of matches()) {
-								if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
-							}
-
-							if (location.pathname !== "/" && location.pathname !== "/camera")
-								currentWindow.show();
-						});
-
-						return <Suspense fallback={null}>{props.children}</Suspense>;
-					}}
+					root={(props) => (
+						<Suspense fallback={null}>
+							{props.children}
+							<AutoRevealWindowOnReady />
+						</Suspense>
+					)}
 				>
 					<Route path="/" component={WindowChromeLayout}>
 						<Route path="/" component={NewMainPage} />
-						<Route path="/settings" component={SettingsLayout}>
+						<Route
+							path="/settings"
+							component={SettingsLayout}
+							info={{ autoShow: false }}
+						>
 							<Route path="/" component={SettingsGeneralPage} />
 							<Route path="/general" component={SettingsGeneralPage} />
 							<Route path="/recordings" component={SettingsRecordingsPage} />
@@ -188,7 +195,11 @@ function Inner() {
 						<Route path="/upgrade" component={UpgradePage} />
 						<Route path="/update" component={UpdatePage} />
 					</Route>
-					<Route path="/camera" component={CameraPage} />
+					<Route
+						path="/camera"
+						component={CameraPage}
+						info={{ autoShow: false }}
+					/>
 					<Route path="/capture-area" component={CaptureAreaPage} />
 					<Route path="/debug" component={DebugPage} />
 					<Route path="/editor" component={EditorPage} />
@@ -203,6 +214,7 @@ function Inner() {
 					<Route
 						path="/target-select-overlay"
 						component={TargetSelectOverlayPage}
+						info={{ autoShow: false }}
 					/>
 					<Route
 						path="/window-capture-occluder"
@@ -214,40 +226,34 @@ function Inner() {
 	);
 }
 
-function createThemeListener(currentWindow: WebviewWindow) {
-	const generalSettings = generalSettingsStore.createQuery();
+let windowShown = false;
+
+function AutoRevealWindowOnReady() {
+	const matches = useCurrentMatches();
+	const isRouting = useIsRouting();
 
 	createEffect(() => {
-		update(generalSettings.data?.theme ?? null);
-	});
-
-	onMount(async () => {
-		const unlisten = await currentWindow.onThemeChanged((_) =>
-			update(generalSettings.data?.theme),
+		if (isRouting() || windowShown) return;
+		const shouldDefer = matches().some(
+			(match) => match.route.info?.autoShow === false,
 		);
-		onCleanup(() => unlisten?.());
+		if (shouldDefer) return;
+		windowShown = true;
+		getCurrentWindow().show();
 	});
 
-	function update(appTheme: AppTheme | null | undefined) {
-		if (location.pathname === "/camera") return;
+	return null;
+}
 
-		if (appTheme === undefined || appTheme === null) return;
+export function RevealWindowWithSuspense(props: ParentProps) {
+	const resolved = children(() => props.children);
+	const isRouting = useIsRouting();
 
-		const isDark =
-			appTheme === "dark" ||
-			(appTheme === "system" &&
-				window.matchMedia("(prefers-color-scheme: dark)").matches);
+	createEffect(() => {
+		if (windowShown || !resolved() || isRouting()) return;
+		windowShown = true;
+		getCurrentWindow().show();
+	});
 
-		try {
-			if (appTheme === "system") {
-				localStorage.removeItem("cap-theme");
-			} else {
-				localStorage.setItem("cap-theme", appTheme);
-			}
-		} catch {}
-
-		commands.setTheme(appTheme).then(() => {
-			document.documentElement.classList.toggle("dark", isDark);
-		});
-	}
+	return <Suspense fallback={null}>{resolved()}</Suspense>;
 }

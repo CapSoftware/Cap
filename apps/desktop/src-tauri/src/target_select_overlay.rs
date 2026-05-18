@@ -13,7 +13,7 @@ use crate::{
     App, ArcLock, general_settings,
     recording_settings::RecordingTargetMode,
     window_exclusion::WindowExclusion,
-    windows::{CapWindowId, ShowCapWindow, hide_overlay, show_overlay},
+    windows::{CapWindow, CapWindowId, hide_overlay, show_overlay},
 };
 use scap_targets::{
     Display, DisplayId, Window, WindowId,
@@ -120,7 +120,7 @@ pub async fn open_target_select_overlays(
 
             state.spawn(display_id, window.clone());
         } else if start.elapsed() < Duration::from_secs(1) {
-            if let Ok(window) = (ShowCapWindow::TargetSelectOverlay {
+            if let Ok(window) = (CapWindow::TargetSelectOverlay {
                 display_id: display_id.clone(),
                 target_mode,
             })
@@ -136,7 +136,7 @@ pub async fn open_target_select_overlays(
             let app_clone = app.clone();
             let display_id_clone = display_id.clone();
             tokio::spawn(async move {
-                if let Ok(window) = (ShowCapWindow::TargetSelectOverlay {
+                if let Ok(window) = (CapWindow::TargetSelectOverlay {
                     display_id: display_id_clone,
                     target_mode,
                 })
@@ -361,12 +361,8 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
             .owner_pid()
             .ok_or("Could not get window owner PID")?;
 
-        if let Some(app) =
-            unsafe { NSRunningApplication::runningApplicationWithProcessIdentifier(pid) }
-        {
-            unsafe {
-                app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
-            }
+        if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+            app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
         }
     }
 

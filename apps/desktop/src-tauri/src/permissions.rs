@@ -21,32 +21,22 @@ use tracing::instrument;
 static MACOS_DOCK_VISIBILITY_SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(target_os = "macos")]
-#[link(name = "ApplicationServices", kind = "framework")]
-unsafe extern "C" {
-    fn AXIsProcessTrusted() -> bool;
-    fn AXIsProcessTrustedWithOptions(options: core_foundation::dictionary::CFDictionaryRef)
-    -> bool;
-}
-
-#[cfg(target_os = "macos")]
 fn macos_prompt_screen_recording_access() {
     scap_screencapturekit::request_permission();
 }
 
 #[cfg(target_os = "macos")]
 fn macos_prompt_accessibility_access() {
-    use core_foundation::base::TCFType;
-    use core_foundation::dictionary::CFDictionary;
-    use core_foundation::string::CFString;
+    use objc2_core_foundation::{CFBoolean, CFDictionary, CFString};
 
-    let prompt_key = CFString::new("AXTrustedCheckOptionPrompt");
-    let prompt_value = core_foundation::boolean::CFBoolean::true_value();
+    let options = CFDictionary::from_slices(
+        &[&*CFString::from_static_str("AXTrustedCheckOptionPrompt")],
+        &[CFBoolean::new(true)],
+    );
 
-    let options =
-        CFDictionary::from_CFType_pairs(&[(prompt_key.as_CFType(), prompt_value.as_CFType())]);
-
+    // SAFETY: The AXIsProcessTrustedWithOptions function is safe to call with a valid CFDictionaryRef.
     unsafe {
-        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef());
+        objc2_application_services::AXIsProcessTrustedWithOptions(Some(options.as_opaque()));
     }
 }
 
@@ -118,13 +108,10 @@ fn macos_activate_permission_request(app: &tauri::AppHandle) {
 
     macos_focus_permission_window(app);
 
-    if let Some(current_app) = unsafe {
+    if let Some(current_app) =
         NSRunningApplication::runningApplicationWithProcessIdentifier(std::process::id() as _)
-    } {
-        unsafe {
-            current_app
-                .activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
-        }
+    {
+        current_app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
     }
 }
 
@@ -215,7 +202,7 @@ fn macos_permission_status(permission: &OSPermission, initial_check: bool) -> OS
             }
         }
         OSPermission::Accessibility => {
-            if unsafe { AXIsProcessTrusted() } {
+            if unsafe { objc2_application_services::AXIsProcessTrusted() } {
                 OSPermissionStatus::Granted
             } else if initial_check {
                 OSPermissionStatus::Empty

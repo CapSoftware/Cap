@@ -9,7 +9,6 @@ async function initApp() {
 	} catch (error) {
 		console.error("Failed to get OS type:", error);
 	}
-
 	const app = document.getElementById("app");
 	if (!app) throw new Error("App root element not found");
 

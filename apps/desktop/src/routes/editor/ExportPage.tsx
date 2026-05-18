@@ -737,14 +737,13 @@ export function ExportPage() {
 	return (
 		<div class="flex flex-col h-full bg-gray-1 overflow-hidden">
 			<div
-				data-tauri-drag-region
+				data-tauri-drag-region="deep"
 				class="flex relative flex-row items-center w-full h-14 border-b border-gray-3 shrink-0"
 			>
 				<h1 class="absolute inset-0 flex items-center justify-center text-sm font-medium text-gray-12 pointer-events-none">
 					Export
 				</h1>
 				<div
-					data-tauri-drag-region
 					class={cx(
 						"flex flex-row flex-1 gap-2 items-center px-4 h-full",
 						ostype() !== "windows" && "pr-2",
@@ -759,7 +758,7 @@ export function ExportPage() {
 						<IconLucideArrowLeft class="size-4" />
 						<span>Back to Editor</span>
 					</Button>
-					<div data-tauri-drag-region class="flex-1 h-full" />
+					<div class="flex-1 h-full" />
 					{ostype() === "windows" && <CaptionControlsWindows11 />}
 				</div>
 			</div>

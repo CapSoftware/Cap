@@ -41,11 +41,11 @@ export function EditorErrorScreen(props: {
 	return (
 		<div class="flex flex-col flex-1 min-h-0">
 			<div
-				data-tauri-drag-region
+				data-tauri-drag-region="deep"
 				class="flex relative flex-row items-center w-full h-14 px-4"
 			>
 				{isMac() && <div class="h-full w-[4rem]" />}
-				<div data-tauri-drag-region class="flex-1 h-full" />
+				<div class="flex-1 h-full" />
 				{ostype() === "windows" && <CaptionControlsWindows11 />}
 			</div>
 
