@@ -108,7 +108,8 @@ impl GpuInfo {
     }
 
     pub fn is_warp(&self) -> bool {
-        matches_non_hardware_adapter_marker(&self.description)
+        self.description.contains("Microsoft Basic Render Driver")
+            || self.description.contains("WARP")
     }
 
     pub fn supports_hardware_encoding(&self) -> bool {

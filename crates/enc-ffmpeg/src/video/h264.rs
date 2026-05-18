@@ -860,7 +860,7 @@ fn get_default_encoder_priority(_config: &VideoInfo) -> &'static [&'static str] 
                 GpuVendor::Intel => ENCODER_PRIORITY_INTEL,
                 _ => ENCODER_PRIORITY_DEFAULT,
             },
-            None => &["libx264"],
+            None => ENCODER_PRIORITY_DEFAULT,
         }
     }
 

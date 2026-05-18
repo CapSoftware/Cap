@@ -1,6 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { Dialog as KDialog } from "@kobalte/core/dialog";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
@@ -131,10 +131,8 @@ export function Header() {
 			}
 
 			await commands.setProjectConfig(serializeProjectConfiguration(project));
-			const importedCount = await invoke<number>(
-				"add_existing_recording_to_editor",
-				{ sourcePath },
-			);
+			const importedCount =
+				await commands.addExistingRecordingToEditor(sourcePath);
 			toast.success(
 				importedCount === 1
 					? "Recording imported"

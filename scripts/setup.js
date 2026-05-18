@@ -435,7 +435,7 @@ async function canUseSccache(sccachePath) {
 	const probePath = path.join(probeDir, "lib.rs");
 
 	try {
-		await fs.writeFile(probePath, "");
+		await fs.writeFile(probePath, "fn main() {}\n");
 		await execFile(sccachePath, [
 			rustcPath,
 			probePath,
@@ -452,8 +452,6 @@ async function canUseSccache(sccachePath) {
 			"cdylib",
 			"--crate-type",
 			"staticlib",
-			"--crate-type",
-			"proc-macro",
 			"--print=sysroot",
 			"--print=split-debuginfo",
 			"--print=crate-name",
