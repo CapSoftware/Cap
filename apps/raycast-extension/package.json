@@ -1,0 +1,61 @@
+{
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap screen recordings from Raycast",
+  "icon": "extension-icon.png",
+  "author": "capsoftware",
+  "license": "AGPL-3.0",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "subtitle": "Cap",
+      "description": "Start a new screen recording with Cap",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "subtitle": "Cap",
+      "description": "Stop the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-pause",
+      "title": "Toggle Pause",
+      "subtitle": "Cap",
+      "description": "Pause or resume the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "open-settings",
+      "title": "Open Settings",
+      "subtitle": "Cap",
+      "description": "Open Cap settings",
+      "mode": "no-view"
+    },
+    {
+      "name": "list-recent-recordings",
+      "title": "Recent Recordings",
+      "subtitle": "Cap",
+      "description": "Browse recent Cap recordings",
+      "mode": "view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.93.2",
+    "@raycast/utils": "^1.19.1"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "typescript": "^5.8.3",
+    "@types/node": "^22.13.4",
+    "eslint": "^8.57.0"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint"
+  }
+}
