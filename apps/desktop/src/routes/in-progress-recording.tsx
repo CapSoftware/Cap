@@ -36,6 +36,7 @@ import type {
 	CurrentRecording,
 	DeviceOrModelID,
 	RecordingInputKind,
+	UploadProbeStatus,
 } from "~/utils/tauri";
 import { commands, events } from "~/utils/tauri";
 
@@ -47,6 +48,13 @@ type State =
 	| { variant: "stopped" };
 
 type RecordingInputState = Record<RecordingInputKind, boolean>;
+type UploadProbeState = {
+	status: UploadProbeStatus;
+	upload_mbps: number | null;
+	recommended_max_resolution: number;
+	applied_max_resolution: number;
+	detail: string;
+};
 
 declare global {
 	interface Window {
@@ -104,6 +112,7 @@ function InProgressRecordingInner() {
 		null,
 	);
 	const [degradedReason, setDegradedReason] = createSignal<string | null>(null);
+	const [uploadProbe, setUploadProbe] = createSignal<UploadProbeState | null>(null);
 	const [issuePanelVisible, setIssuePanelVisible] = createSignal(false);
 	const [issueKey, setIssueKey] = createSignal("");
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
@@ -231,6 +240,9 @@ function InProgressRecordingInner() {
 				setState({ variant: "recording" });
 				setTime(Date.now());
 				break;
+			case "Stopped":
+				setUploadProbe(null);
+				break;
 			case "InputLost": {
 				setDisconnectedInputs(payload.input, () => true);
 				break;
@@ -249,6 +261,15 @@ function InProgressRecordingInner() {
 			case "Recovered":
 				setDegradedReason(null);
 				break;
+			case "UploadProbe":
+				setUploadProbe(payload);
+				break;
+		}
+	});
+
+	createEffect(() => {
+		if (recordingMode() !== "instant") {
+			setUploadProbe(null);
 		}
 	});
 
@@ -792,6 +813,25 @@ function InProgressRecordingInner() {
 											/>
 										)}
 									</div>
+									<Show when={uploadProbe()}>
+										{(probe) => (
+											<div
+												class={cx(
+													"flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-medium",
+													uploadProbeStatusClass(probe().status),
+												)}
+												title={probe().detail}
+											>
+												<span>
+													{probe().upload_mbps == null
+														? "Upload n/a"
+														: `Upload ${probe().upload_mbps.toFixed(1)} Mbps`}
+												</span>
+												<span>•</span>
+												<span>{resolutionTierLabel(probe().applied_max_resolution)}</span>
+											</div>
+										)}
+									</Show>
 									<Show when={hasCameraInput() && disconnectedInputs.camera}>
 										<div
 											class="flex h-8 w-8 items-center justify-center"
@@ -932,6 +972,24 @@ function formatTime(secs: number) {
 	const seconds = Math.floor(secs % 60);
 
 	return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function uploadProbeStatusClass(status: UploadProbeStatus) {
+	switch (status) {
+		case "Healthy":
+			return "border border-emerald-8/50 bg-emerald-4/35 text-emerald-11";
+		case "Degraded":
+			return "border border-amber-8/50 bg-amber-4/35 text-amber-11";
+		case "Failed":
+			return "border border-red-8/50 bg-red-4/35 text-red-11";
+	}
+}
+
+function resolutionTierLabel(maxResolution: number) {
+	if (maxResolution >= 3840) return "4K";
+	if (maxResolution >= 2560) return "1440p";
+	if (maxResolution >= 1920) return "1080p";
+	return "720p";
 }
 
 function createAudioInputLevel() {
