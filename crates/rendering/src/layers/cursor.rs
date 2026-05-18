@@ -37,6 +37,7 @@ pub struct CursorLayer {
     circle_cursor: Option<CursorTexture>,
     prev_is_svg_assets_enabled: Option<bool>,
     prev_cursor_type: Option<CursorType>,
+    prev_circle_color: Option<String>,
 }
 
 struct Statics {
@@ -185,6 +186,18 @@ impl Statics {
     }
 }
 
+fn parse_hex_color(hex: &str) -> [f32; 3] {
+    let stripped = hex.strip_prefix('#').unwrap_or(hex);
+    if stripped.len() != 6 {
+        return [1.0, 1.0, 1.0];
+    }
+    let parse = |i: usize| u8::from_str_radix(&stripped[i..i + 2], 16);
+    match (parse(0), parse(2), parse(4)) {
+        (Ok(r), Ok(g), Ok(b)) => [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0],
+        _ => [1.0, 1.0, 1.0],
+    }
+}
+
 impl CursorLayer {
     pub fn new(device: &wgpu::Device) -> Self {
         let statics = Statics::new(device);
@@ -196,10 +209,11 @@ impl CursorLayer {
             circle_cursor: None,
             prev_is_svg_assets_enabled: None,
             prev_cursor_type: None,
+            prev_circle_color: None,
         }
     }
 
-    fn create_circle_cursor(constants: &RenderVideoConstants) -> CursorTexture {
+    fn create_circle_cursor(constants: &RenderVideoConstants, color: [f32; 3]) -> CursorTexture {
         let size = CIRCLE_CURSOR_SIZE;
         let mut rgba = vec![0u8; (size * size * 4) as usize];
         let center = size as f32 / 2.0;
@@ -209,6 +223,8 @@ impl CursorLayer {
 
         let fill_alpha = 0.2_f32;
         let border_alpha = 0.55_f32;
+
+        let [r, g, b] = color;
 
         for y in 0..size {
             for x in 0..size {
@@ -230,11 +246,10 @@ impl CursorLayer {
                     let base_alpha = fill_alpha + border_factor * (border_alpha - fill_alpha);
                     let alpha = base_alpha * outer_fade;
 
-                    let premul = (255.0 * alpha) as u8;
-                    rgba[idx] = premul;
-                    rgba[idx + 1] = premul;
-                    rgba[idx + 2] = premul;
-                    rgba[idx + 3] = premul;
+                    rgba[idx] = ((r * 255.0) * alpha) as u8;
+                    rgba[idx + 1] = ((g * 255.0) * alpha) as u8;
+                    rgba[idx + 2] = ((b * 255.0) * alpha) as u8;
+                    rgba[idx + 3] = (255.0 * alpha) as u8;
                 }
             }
         }
@@ -323,7 +338,7 @@ impl CursorLayer {
             XY::new(0.0, 0.0)
         };
 
-        let mut cursor_opacity = 1.0f32;
+        let mut cursor_opacity = uniforms.project.cursor.cursor_opacity.max(0.0);
         if uniforms.project.cursor.hide_when_idle && !cursor.moves.is_empty() {
             let hide_delay_secs = uniforms
                 .project
@@ -331,7 +346,7 @@ impl CursorLayer {
                 .hide_when_idle_delay
                 .max((CURSOR_IDLE_MIN_DELAY_MS / 1000.0) as f32);
             let hide_delay_ms = (hide_delay_secs as f64 * 1000.0).max(CURSOR_IDLE_MIN_DELAY_MS);
-            cursor_opacity = compute_cursor_idle_opacity(
+            cursor_opacity *= compute_cursor_idle_opacity(
                 cursor,
                 segment_frames.recording_time as f64 * 1000.0,
                 hide_delay_ms,
@@ -348,6 +363,12 @@ impl CursorLayer {
             self.circle_cursor = None;
         }
 
+        let circle_color_str = uniforms.project.cursor.circle_color.clone();
+        if self.prev_circle_color.as_deref() != Some(circle_color_str.as_str()) {
+            self.prev_circle_color = Some(circle_color_str.clone());
+            self.circle_cursor = None;
+        }
+
         if self.prev_is_svg_assets_enabled != Some(uniforms.project.cursor.use_svg) {
             self.prev_is_svg_assets_enabled = Some(uniforms.project.cursor.use_svg);
             self.cursors.drain();
@@ -355,7 +376,8 @@ impl CursorLayer {
 
         let cursor_texture = if cursor_type == CursorType::Circle {
             if self.circle_cursor.is_none() {
-                self.circle_cursor = Some(Self::create_circle_cursor(constants));
+                let color = parse_hex_color(&circle_color_str);
+                self.circle_cursor = Some(Self::create_circle_cursor(constants, color));
             }
             self.circle_cursor.as_ref().unwrap()
         } else {
