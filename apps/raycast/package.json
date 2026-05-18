@@ -1,0 +1,68 @@
+{
+  "name": "cap-raycast",
+  "title": "Cap",
+  "description": "Control Cap desktop recording via deeplinks",
+  "version": "0.0.1",
+  "author": "Cap Contributors",
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "description": "Start a Cap recording from Raycast",
+      "mode": "view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "description": "Stop an active Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "description": "Pause active recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "description": "Resume paused recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-pause-recording",
+      "title": "Toggle Pause Recording",
+      "description": "Toggle pause state",
+      "mode": "no-view"
+    },
+    {
+      "name": "switch-microphone",
+      "title": "Switch Microphone",
+      "description": "Switch Cap microphone by label",
+      "mode": "form"
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "description": "Switch Cap camera by id/model",
+      "mode": "form"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.99.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.0.0",
+    "@types/node": "20.17.24",
+    "eslint": "^8.57.0",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.2"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray dev",
+    "lint": "ray lint",
+    "publish": "ray publish"
+  }
+}
