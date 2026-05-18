@@ -129,7 +129,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 										Clear
 									</Button>
 								</Show>
-								<span class="text-xs text-gray-11 min-w-[3.75rem] text-right">
+								<span class="text-xs text-gray-11 min-w-15 text-right">
 									{saveState() === "saving"
 										? "Saving..."
 										: saveState() === "saved"
@@ -154,7 +154,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								autocapitalize="off"
 								autocomplete="off"
 								autocorrect="off"
-								class="flex-1 px-3 py-2 bg-gray-1 border border-gray-3 rounded-md text-gray-12 placeholder:text-gray-10 focus:outline-none focus:ring-1 focus:ring-gray-8 hover:border-gray-6"
+								class="flex-1 px-3 py-2 bg-gray-1 border border-gray-3 rounded-md text-gray-12 placeholder:text-gray-10 focus:outline-hidden focus:ring-1 focus:ring-gray-8 hover:border-gray-6"
 							/>
 							<Button
 								onClick={addHint}

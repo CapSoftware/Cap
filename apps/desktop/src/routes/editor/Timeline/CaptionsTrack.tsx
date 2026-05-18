@@ -134,7 +134,7 @@ export function CaptionsTrack(props: {
 			<For
 				each={captionSegments()}
 				fallback={
-					<div class="text-center text-sm text-[--text-tertiary] flex flex-col gap-2 justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl">
+					<div class="text-center text-sm text-(--text-tertiary) flex flex-col gap-2 justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl">
 						<div>No captions</div>
 						<button
 							class="h-8 px-3 rounded-lg border border-green-7/50 bg-green-6/15 text-green-11 text-xs font-medium transition-colors hover:bg-green-6/25 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -165,7 +165,7 @@ export function CaptionsTrack(props: {
 							data-index={i()}
 							class={cx(
 								"border duration-200 hover:border-green-6 transition-colors group",
-								"bg-gradient-to-r from-[#0d1f12] via-[#162618] to-[#0d1f12]",
+								"bg-linear-to-r from-[#0d1f12] via-[#162618] to-[#0d1f12]",
 								isSelected() ? "border-green-7" : "border-transparent",
 							)}
 							innerClass="ring-green-6"

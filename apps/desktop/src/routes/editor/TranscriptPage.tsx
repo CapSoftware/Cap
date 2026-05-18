@@ -298,7 +298,7 @@ export function TranscriptPanel() {
 				<div class="flex items-center gap-1">
 					<button
 						type="button"
-						class="flex items-center justify-center size-5 rounded hover:bg-gray-3 text-gray-9 hover:text-gray-12 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+						class="flex items-center justify-center size-5 rounded-sm hover:bg-gray-3 text-gray-9 hover:text-gray-12 transition-colors disabled:opacity-30 disabled:pointer-events-none"
 						disabled={textSizeIndex() <= 0}
 						onClick={() => setTextSizeIndex(Math.max(0, textSizeIndex() - 1))}
 					>
@@ -306,7 +306,7 @@ export function TranscriptPanel() {
 					</button>
 					<button
 						type="button"
-						class="flex items-center justify-center size-5 rounded hover:bg-gray-3 text-gray-9 hover:text-gray-12 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+						class="flex items-center justify-center size-5 rounded-sm hover:bg-gray-3 text-gray-9 hover:text-gray-12 transition-colors disabled:opacity-30 disabled:pointer-events-none"
 						disabled={textSizeIndex() >= TEXT_SIZES.length - 1}
 						onClick={() =>
 							setTextSizeIndex(
@@ -360,7 +360,7 @@ function WordWithTooltip(props: {
 		<span
 			ref={props.ref}
 			class={cx(
-				"cursor-pointer transition-colors duration-100 rounded-sm relative",
+				"cursor-pointer transition-colors duration-100 rounded-xs relative",
 				props.isSelected && "bg-blue-4/50",
 				props.isActive
 					? "text-blue-11"
@@ -551,7 +551,7 @@ function TranscriptEditor(props: {
 	return (
 		<div
 			ref={scrollContainerRef}
-			class="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 pb-8 focus:outline-none w-full"
+			class="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 pb-8 focus:outline-hidden w-full"
 			tabIndex={0}
 			onKeyDown={handleKeyDown}
 			onClick={handleContainerClick}
