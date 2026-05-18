@@ -17,7 +17,7 @@ use ffmpeg::{
     format::{self as avformat},
 };
 use image::ImageEncoder;
-use relative_path::RelativePathBuf;
+use relative_path::{Component as RelativeComponent, RelativePathBuf};
 use serde::Serialize;
 use specta::Type;
 use std::{
@@ -38,6 +38,9 @@ use crate::{
 const VIDEO_IMPORT_EXTENSIONS: &[&str] = &["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"];
 const IMAGE_IMPORT_EXTENSIONS: &[&str] =
     &["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"];
+const AUDIO_IMPORT_EXTENSIONS: &[&str] = &["ogg", "m4a", "mp3", "wav", "aac", "flac"];
+const KEYBOARD_IMPORT_EXTENSIONS: &[&str] = &["bin", "json"];
+const CURSOR_EVENTS_IMPORT_EXTENSIONS: &[&str] = &["json"];
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
 
 #[derive(Serialize, Type, Clone, Debug)]
@@ -158,6 +161,89 @@ fn is_cap_project_path(path: &Path) -> bool {
     path.is_dir() && path.join("recording-meta.json").is_file()
 }
 
+fn normalized_metadata_relative_path(
+    path: &RelativePathBuf,
+    asset_kind: &str,
+) -> Result<RelativePathBuf, String> {
+    let normalized = path.as_str().replace('\\', "/");
+    let path = RelativePathBuf::from(normalized);
+    let raw = path.as_str();
+    if raw.is_empty()
+        || raw.starts_with('/')
+        || raw.contains(':')
+        || path
+            .components()
+            .any(|component| matches!(component, RelativeComponent::ParentDir))
+    {
+        return Err(format!(
+            "Invalid {asset_kind} path in recording metadata: {raw}"
+        ));
+    }
+
+    Ok(path)
+}
+
+fn source_asset_path(
+    source_project_path: &Path,
+    source_relative_path: &RelativePathBuf,
+    asset_kind: &str,
+    allowed_extensions: &[&str],
+) -> Result<Option<PathBuf>, String> {
+    let source_relative_path = normalized_metadata_relative_path(source_relative_path, asset_kind)?;
+
+    if !has_supported_extension(Path::new(source_relative_path.as_str()), allowed_extensions) {
+        return Err(format!(
+            "Unsupported {asset_kind} file type: {}",
+            source_relative_path.as_str()
+        ));
+    }
+
+    let source_path = source_relative_path.to_path(source_project_path);
+    if !source_path.is_file() {
+        return Ok(None);
+    }
+
+    let source_root = source_project_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve source project path: {e}"))?;
+    let canonical_source_path = source_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve {asset_kind} path: {e}"))?;
+
+    if !canonical_source_path.starts_with(&source_root) {
+        return Err(format!(
+            "{asset_kind} path escapes source project: {}",
+            source_relative_path.as_str()
+        ));
+    }
+
+    Ok(Some(canonical_source_path))
+}
+
+fn required_source_asset_path(
+    source_project_path: &Path,
+    source_relative_path: &RelativePathBuf,
+    asset_kind: &str,
+    allowed_extensions: &[&str],
+) -> Result<PathBuf, String> {
+    source_asset_path(
+        source_project_path,
+        source_relative_path,
+        asset_kind,
+        allowed_extensions,
+    )?
+    .ok_or_else(|| {
+        format!(
+            "Missing {asset_kind} file: {}",
+            source_relative_path.to_path(source_project_path).display()
+        )
+    })
+}
+
+fn legacy_cursor_relative_path(path: &str) -> Result<RelativePathBuf, String> {
+    normalized_metadata_relative_path(&RelativePathBuf::from(path), "cursor image")
+}
+
 fn editor_project_path_from_window(window: &Window) -> Result<PathBuf, String> {
     let CapWindowId::Editor { id } =
         CapWindowId::from_str(window.label()).map_err(|e| e.to_string())?
@@ -230,6 +316,38 @@ fn full_timeline_for_segments(
         .enumerate()
         .map(|(index, segment)| {
             let duration = get_video_duration_secs(&segment.display.path.to_path(project_path))?;
+            Ok(TimelineSegment {
+                recording_clip: index as u32,
+                timescale: 1.0,
+                start: 0.0,
+                end: duration,
+            })
+        })
+        .collect()
+}
+
+fn get_source_video_duration_secs(
+    source_meta: &RecordingMeta,
+    video: &VideoMeta,
+) -> Result<f64, String> {
+    let source_path = required_source_asset_path(
+        &source_meta.project_path,
+        &video.path,
+        "video",
+        VIDEO_IMPORT_EXTENSIONS,
+    )?;
+    get_video_duration_secs(&source_path)
+}
+
+fn full_timeline_for_source_segments(
+    source_meta: &RecordingMeta,
+    segments: &[MultipleSegment],
+) -> Result<Vec<TimelineSegment>, String> {
+    segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| {
+            let duration = get_source_video_duration_secs(source_meta, &segment.display)?;
             Ok(TimelineSegment {
                 recording_clip: index as u32,
                 timescale: 1.0,
@@ -385,13 +503,21 @@ fn copy_video_meta(
     name: &str,
     required: bool,
 ) -> Result<Option<VideoMeta>, String> {
-    let source_path = source.path.to_path(source_project_path);
-    if !source_path.is_file() {
+    let Some(source_path) = source_asset_path(
+        source_project_path,
+        &source.path,
+        "video",
+        VIDEO_IMPORT_EXTENSIONS,
+    )?
+    else {
         if required {
-            return Err(format!("Missing video file: {}", source_path.display()));
+            return Err(format!(
+                "Missing video file: {}",
+                source.path.to_path(source_project_path).display()
+            ));
         }
         return Ok(None);
-    }
+    };
 
     let can_decode = probe_video_can_decode(&source_path)
         .map_err(|e| format!("Cannot decode video {}: {e}", source_path.display()))?;
@@ -419,10 +545,15 @@ fn copy_audio_meta(
     target_relative_dir: &str,
     name: &str,
 ) -> Result<Option<AudioMeta>, String> {
-    let source_path = source.path.to_path(source_project_path);
-    if !source_path.is_file() {
+    let Some(source_path) = source_asset_path(
+        source_project_path,
+        &source.path,
+        "audio",
+        AUDIO_IMPORT_EXTENSIONS,
+    )?
+    else {
         return Ok(None);
-    }
+    };
 
     let extension = relative_file_extension(&source.path, "ogg");
     let target_relative_path =
@@ -440,43 +571,57 @@ fn copy_keyboard_path(
     target_project_path: &Path,
     target_relative_dir: &str,
 ) -> Result<Option<RelativePathBuf>, String> {
-    let explicit = source_segment.keyboard.as_ref().map(|path| {
-        (
-            path.clone(),
-            relative_file_name(path, cap_project::KEYBOARD_EVENTS_FILE_NAME),
-        )
-    });
+    if let Some(source_relative_path) = &source_segment.keyboard {
+        let file_name =
+            relative_file_name(source_relative_path, cap_project::KEYBOARD_EVENTS_FILE_NAME);
+        let Some(source_path) = source_asset_path(
+            &source_meta.project_path,
+            source_relative_path,
+            "keyboard events",
+            KEYBOARD_IMPORT_EXTENSIONS,
+        )?
+        else {
+            return Ok(None);
+        };
 
-    let implicit = || {
-        let display_dir = source_segment.display.path.parent()?;
-        for file_name in [
-            cap_project::KEYBOARD_EVENTS_FILE_NAME,
-            cap_project::LEGACY_KEYBOARD_EVENTS_FILE_NAME,
-        ] {
-            let path = display_dir.join(file_name);
-            if path.to_path(&source_meta.project_path).is_file() {
-                return Some((path, file_name.to_string()));
-            }
-        }
-        None
+        let target_relative_path = RelativePathBuf::from(format!(
+            "{target_relative_dir}/{}",
+            sanitize_filename(&file_name)
+        ));
+        copy_file_to_relative_path(&source_path, target_project_path, &target_relative_path)?;
+
+        return Ok(Some(target_relative_path));
     };
 
-    let Some((source_relative_path, file_name)) = explicit.or_else(implicit) else {
+    let Some(display_dir) = source_segment.display.path.parent() else {
         return Ok(None);
     };
 
-    let source_path = source_relative_path.to_path(&source_meta.project_path);
-    if !source_path.is_file() {
-        return Ok(None);
+    for file_name in [
+        cap_project::KEYBOARD_EVENTS_FILE_NAME,
+        cap_project::LEGACY_KEYBOARD_EVENTS_FILE_NAME,
+    ] {
+        let source_relative_path = display_dir.join(file_name);
+        let Some(source_path) = source_asset_path(
+            &source_meta.project_path,
+            &source_relative_path,
+            "keyboard events",
+            KEYBOARD_IMPORT_EXTENSIONS,
+        )?
+        else {
+            continue;
+        };
+
+        let target_relative_path = RelativePathBuf::from(format!(
+            "{target_relative_dir}/{}",
+            sanitize_filename(file_name)
+        ));
+        copy_file_to_relative_path(&source_path, target_project_path, &target_relative_path)?;
+
+        return Ok(Some(target_relative_path));
     }
 
-    let target_relative_path = RelativePathBuf::from(format!(
-        "{target_relative_dir}/{}",
-        sanitize_filename(&file_name)
-    ));
-    copy_file_to_relative_path(&source_path, target_project_path, &target_relative_path)?;
-
-    Ok(Some(target_relative_path))
+    Ok(None)
 }
 
 fn normalize_cursors_to_correct(cursors: &mut Cursors) -> &mut HashMap<String, CursorMeta> {
@@ -545,10 +690,15 @@ fn copy_source_cursor_images(
     match source_cursors {
         Cursors::Correct(source_map) => {
             for (source_id, cursor) in source_map {
-                let source_path = cursor.image_path.to_path(&source_meta.project_path);
-                if !source_path.is_file() {
+                let Some(source_path) = source_asset_path(
+                    &source_meta.project_path,
+                    &cursor.image_path,
+                    "cursor image",
+                    IMAGE_IMPORT_EXTENSIONS,
+                )?
+                else {
                     continue;
-                }
+                };
 
                 let new_id = unique_cursor_id(target_cursors, import_token, source_id);
                 let source_file_name = relative_file_name(&cursor.image_path, "cursor.png");
@@ -576,21 +726,19 @@ fn copy_source_cursor_images(
         }
         Cursors::Old(source_map) => {
             for (source_id, source_path) in source_map {
-                let source_path = PathBuf::from(source_path);
-                let source_path = if source_path.is_absolute() {
-                    source_path
-                } else {
-                    source_meta.project_path.join(source_path)
-                };
-                if !source_path.is_file() {
+                let source_relative_path = legacy_cursor_relative_path(source_path)?;
+                let Some(source_path) = source_asset_path(
+                    &source_meta.project_path,
+                    &source_relative_path,
+                    "cursor image",
+                    IMAGE_IMPORT_EXTENSIONS,
+                )?
+                else {
                     continue;
-                }
+                };
 
                 let new_id = unique_cursor_id(target_cursors, import_token, source_id);
-                let source_file_name = source_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("cursor.png");
+                let source_file_name = relative_file_name(&source_relative_path, "cursor.png");
                 let target_file_name =
                     unique_file_name(&target_cursor_dir, &format!("{new_id}-{source_file_name}"));
                 let target_relative_path =
@@ -625,10 +773,15 @@ fn copy_cursor_events_path(
     target_relative_dir: &str,
     cursor_id_map: &HashMap<String, String>,
 ) -> Result<Option<RelativePathBuf>, String> {
-    let source_path = source_relative_path.to_path(&source_meta.project_path);
-    if !source_path.is_file() {
+    let Some(source_path) = source_asset_path(
+        &source_meta.project_path,
+        source_relative_path,
+        "cursor events",
+        CURSOR_EVENTS_IMPORT_EXTENSIONS,
+    )?
+    else {
         return Ok(None);
-    }
+    };
 
     let target_relative_path = RelativePathBuf::from(format!("{target_relative_dir}/cursor.json"));
     let target_path = target_relative_path.to_path(target_project_path);
@@ -698,11 +851,11 @@ fn source_timeline_segments_for_import(
 ) -> Result<Vec<TimelineSegment>, String> {
     let source_config = ProjectConfiguration::load(&source_meta.project_path).unwrap_or_default();
     let Some(timeline) = source_config.timeline else {
-        return full_timeline_for_segments(&source_meta.project_path, source_segments);
+        return full_timeline_for_source_segments(source_meta, source_segments);
     };
 
     if timeline.segments.is_empty() {
-        return full_timeline_for_segments(&source_meta.project_path, source_segments);
+        return full_timeline_for_source_segments(source_meta, source_segments);
     }
 
     let mut duration_cache = HashMap::new();
@@ -717,12 +870,7 @@ fn source_timeline_segments_for_import(
         let max_duration = if let Some(duration) = duration_cache.get(&source_index) {
             *duration
         } else {
-            let duration = get_video_duration_secs(
-                &source_segment
-                    .display
-                    .path
-                    .to_path(&source_meta.project_path),
-            )?;
+            let duration = get_source_video_duration_secs(source_meta, &source_segment.display)?;
             duration_cache.insert(source_index, duration);
             duration
         };
@@ -760,7 +908,7 @@ fn source_timeline_segments_for_import(
     }
 
     if imported_segments.is_empty() {
-        full_timeline_for_segments(&source_meta.project_path, source_segments)
+        full_timeline_for_source_segments(source_meta, source_segments)
     } else {
         Ok(imported_segments)
     }
@@ -1906,4 +2054,130 @@ pub async fn check_import_ready(project_path: PathBuf) -> Result<bool, String> {
 
     debug!("check_import_ready: all checks passed, returning true");
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_asset_path_allows_file_inside_source_project() {
+        let source_project = tempfile::tempdir().unwrap();
+        let source_relative_path = RelativePathBuf::from("content/segments/segment-0/display.mp4");
+        let source_path = source_relative_path.to_path(source_project.path());
+        std::fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+        std::fs::write(&source_path, b"video").unwrap();
+
+        let resolved = source_asset_path(
+            source_project.path(),
+            &source_relative_path,
+            "video",
+            VIDEO_IMPORT_EXTENSIONS,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(resolved, source_path.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn source_asset_path_allows_backslash_separators() {
+        let source_project = tempfile::tempdir().unwrap();
+        let source_relative_path =
+            RelativePathBuf::from("content\\segments\\segment-0\\display.mp4");
+        let source_path = RelativePathBuf::from("content/segments/segment-0/display.mp4")
+            .to_path(source_project.path());
+        std::fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+        std::fs::write(&source_path, b"video").unwrap();
+
+        let resolved = source_asset_path(
+            source_project.path(),
+            &source_relative_path,
+            "video",
+            VIDEO_IMPORT_EXTENSIONS,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(resolved, source_path.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn source_asset_path_rejects_parent_traversal() {
+        let source_project = tempfile::tempdir().unwrap();
+        let source_relative_path = RelativePathBuf::from("../secret.mp4");
+
+        let error = source_asset_path(
+            source_project.path(),
+            &source_relative_path,
+            "video",
+            VIDEO_IMPORT_EXTENSIONS,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("Invalid video path"));
+    }
+
+    #[test]
+    fn source_asset_path_rejects_absolute_path() {
+        let source_project = tempfile::tempdir().unwrap();
+        let source_relative_path = RelativePathBuf::from("/tmp/secret.mp4");
+
+        let error = source_asset_path(
+            source_project.path(),
+            &source_relative_path,
+            "video",
+            VIDEO_IMPORT_EXTENSIONS,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("Invalid video path"));
+    }
+
+    #[test]
+    fn legacy_cursor_relative_path_rejects_windows_absolute_path() {
+        let error = legacy_cursor_relative_path("C:\\Users\\me\\cursor.png").unwrap_err();
+
+        assert!(error.contains("Invalid cursor image path"));
+    }
+
+    #[test]
+    fn source_asset_path_rejects_unsupported_extension() {
+        let source_project = tempfile::tempdir().unwrap();
+        let source_relative_path = RelativePathBuf::from("content/segments/segment-0/display.txt");
+
+        let error = source_asset_path(
+            source_project.path(),
+            &source_relative_path,
+            "video",
+            VIDEO_IMPORT_EXTENSIONS,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("Unsupported video file type"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_asset_path_rejects_symlink_escape() {
+        let source_project = tempfile::tempdir().unwrap();
+        let external_dir = tempfile::tempdir().unwrap();
+        let external_file = external_dir.path().join("cursor.png");
+        std::fs::write(&external_file, b"cursor").unwrap();
+
+        let source_relative_path = RelativePathBuf::from("content/cursors/cursor.png");
+        let source_path = source_relative_path.to_path(source_project.path());
+        std::fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&external_file, &source_path).unwrap();
+
+        let error = source_asset_path(
+            source_project.path(),
+            &source_relative_path,
+            "cursor image",
+            IMAGE_IMPORT_EXTENSIONS,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("cursor image path escapes source project"));
+    }
 }
