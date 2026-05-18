@@ -60,6 +60,10 @@ fn default_alpha() -> u8 {
     u8::MAX
 }
 
+fn default_rounding_smoothness() -> f32 {
+    0.6
+}
+
 impl Default for BackgroundSource {
     fn default() -> Self {
         BackgroundSource::Color {
@@ -191,14 +195,6 @@ impl<T> From<(T, T)> for XY<T> {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum CornerStyle {
-    #[default]
-    Squircle,
-    Rounded,
-}
-
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
@@ -236,7 +232,8 @@ pub struct BackgroundConfiguration {
     pub blur: f64,
     pub padding: f64,
     pub rounding: f64,
-    pub rounding_type: CornerStyle,
+    #[serde(default = "default_rounding_smoothness")]
+    pub rounding_smoothness: f32,
     pub inset: u32,
     pub crop: Option<Crop>,
     pub shadow: f32,
@@ -262,12 +259,12 @@ impl Default for BackgroundConfiguration {
             blur: 0.0,
             padding: 0.0,
             rounding: 0.0,
-            rounding_type: CornerStyle::default(),
+            rounding_smoothness: 0.6,
             inset: 0,
             crop: None,
             shadow: 73.6,
             advanced_shadow: Some(ShadowConfiguration::default()),
-            border: None, // Border is disabled by default for backwards compatibility
+            border: None,
         }
     }
 }
@@ -339,8 +336,8 @@ pub struct Camera {
     #[serde(alias = "advanced_shadow")]
     pub advanced_shadow: Option<ShadowConfiguration>,
     pub shape: CameraShape,
-    #[serde(alias = "rounding_type")]
-    pub rounding_type: CornerStyle,
+    #[serde(default = "default_rounding_smoothness")]
+    pub rounding_smoothness: f32,
     #[serde(default = "Camera::default_scale_during_zoom")]
     pub scale_during_zoom: f32,
     #[serde(default)]
@@ -385,7 +382,7 @@ impl Default for Camera {
                 blur: 10.5,
             }),
             shape: CameraShape::Square,
-            rounding_type: CornerStyle::default(),
+            rounding_smoothness: 0.0,
             scale_during_zoom: Self::default_scale_during_zoom(),
             background_blur: BackgroundBlurConfig::default(),
         }

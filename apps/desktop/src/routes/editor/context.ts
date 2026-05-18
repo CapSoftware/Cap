@@ -132,10 +132,6 @@ export type CustomDomainResponse = {
 	domain_verified: boolean | null;
 };
 
-export type CornerRoundingType = "rounded" | "squircle";
-
-type WithCornerStyle<T> = T & { roundingType: CornerRoundingType };
-
 type EditorTimelineConfiguration = Omit<
 	TimelineConfiguration,
 	"sceneSegments" | "maskSegments"
@@ -149,24 +145,11 @@ export type EditorProjectConfiguration = Omit<
 	ProjectConfiguration,
 	"background" | "camera" | "timeline"
 > & {
-	background: WithCornerStyle<ProjectConfiguration["background"]>;
-	camera: WithCornerStyle<ProjectConfiguration["camera"]>;
+	background: ProjectConfiguration["background"];
+	camera: ProjectConfiguration["camera"];
 	timeline?: EditorTimelineConfiguration | null;
 	hiddenTextSegments?: number[];
 };
-
-function withCornerDefaults<
-	T extends {
-		roundingType?: CornerRoundingType;
-		rounding_type?: CornerRoundingType;
-	},
->(value: T): T & { roundingType: CornerRoundingType } {
-	const roundingType = value.roundingType ?? value.rounding_type ?? "squircle";
-	return {
-		...value,
-		roundingType,
-	};
-}
 
 export function normalizeProject(
 	config: ProjectConfiguration,
@@ -209,8 +192,6 @@ export function normalizeProject(
 		...config,
 		keyboard,
 		timeline,
-		background: withCornerDefaults(config.background),
-		camera: withCornerDefaults(config.camera),
 	};
 }
 
@@ -218,9 +199,6 @@ export function serializeProjectConfiguration(
 	project: EditorProjectConfiguration,
 ): ProjectConfiguration {
 	const { background, camera, ...rest } = project;
-	const { roundingType: backgroundRoundingType, ...backgroundRest } =
-		background;
-	const { roundingType: cameraRoundingType, ...cameraRest } = camera;
 
 	const timeline = project.timeline
 		? {
@@ -235,14 +213,8 @@ export function serializeProjectConfiguration(
 	return {
 		...rest,
 		timeline: timeline as unknown as ProjectConfiguration["timeline"],
-		background: {
-			...backgroundRest,
-			roundingType: backgroundRoundingType,
-		},
-		camera: {
-			...cameraRest,
-			roundingType: cameraRoundingType,
-		},
+		background,
+		camera,
 	};
 }
 
