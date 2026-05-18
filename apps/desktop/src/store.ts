@@ -18,10 +18,17 @@ const store = () => {
 	return _store;
 };
 
-function declareStore<T extends object>(name: string) {
-	const get = () => store().then((s) => s.get<T>(name));
+function declareStore<T extends object>(name: string, defaults?: T) {
+	const withDefaults = (value?: T) =>
+		defaults ? { ...defaults, ...(value ?? {}) } : value;
+	const get = async () => {
+		const s = await store();
+		return withDefaults(await s.get<T>(name));
+	};
 	const listen = (fn: (data?: T | undefined) => void) =>
-		store().then((s) => s.onKeyChange<T>(name, fn));
+		store().then((s) =>
+			s.onKeyChange<T>(name, (data) => fn(withDefaults(data))),
+		);
 
 	return {
 		get,
@@ -59,5 +66,16 @@ export const authStore = declareStore<AuthStore>("auth");
 export const hotkeysStore = declareStore<HotkeysStore>("hotkeys");
 export const generalSettingsStore =
 	declareStore<GeneralSettingsStore>("general_settings");
-export const recordingSettingsStore =
-	declareStore<RecordingSettingsStore>("recording_settings");
+export const recordingSettingsStore = declareStore<RecordingSettingsStore>(
+	"recording_settings",
+	{
+		target: null,
+		micName: null,
+		cameraId: null,
+		mode: "instant",
+		systemAudio: false,
+		organizationId: null,
+		cameraDeviceSettings: {},
+		microphoneDeviceSettings: {},
+	},
+);
