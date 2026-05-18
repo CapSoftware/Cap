@@ -1,0 +1,79 @@
+{
+  "$schema": "https://www.raycast.com/downloads/extension.schema.json",
+  "name": "cap-controls",
+  "title": "Cap Controls",
+  "description": "Control the Cap screen recording app directly from Raycast",
+  "icon": "command-icon.png",
+  "author": "Ojas2095",
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start",
+      "title": "Start Recording",
+      "description": "Start a Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop",
+      "title": "Stop Recording",
+      "description": "Stops the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause",
+      "title": "Pause Recording",
+      "description": "Pauses the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume",
+      "title": "Resume Recording",
+      "description": "Resumes the paused Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "switch-mic",
+      "title": "Switch Microphone",
+      "description": "Switch Cap's recording microphone",
+      "mode": "no-view",
+      "arguments": [
+        {
+          "name": "micLabel",
+          "type": "text",
+          "placeholder": "Microphone Name (or 'none')",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "description": "Switch Cap's recording camera",
+      "mode": "no-view",
+      "arguments": [
+        {
+          "name": "cameraId",
+          "type": "text",
+          "placeholder": "Camera ID (or 'none')",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.65.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.6",
+    "@types/node": "20.8.10",
+    "@types/react": "18.2.27",
+    "eslint": "^8.51.0",
+    "prettier": "^3.0.3",
+    "typescript": "^5.2.2"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
