@@ -1472,6 +1472,7 @@ impl SegmentUploader {
 
         {
             let mut signal_ok = false;
+            let mut last_signal_error = None::<String>;
             for attempt in 0..3u32 {
                 match api::signal_recording_complete(&app, &video_id).await {
                     Ok(()) => {
@@ -1479,10 +1480,12 @@ impl SegmentUploader {
                         break;
                     }
                     Err(e) => {
+                        let error = e.to_string();
                         warn!(
                             attempt = attempt + 1,
-                            "Failed to signal recording complete: {e}"
+                            "Failed to signal recording complete: {error}"
                         );
+                        last_signal_error = Some(error);
                         if attempt < 2 {
                             tokio::time::sleep(Duration::from_millis(1000 * (1 << attempt) as u64))
                                 .await;
@@ -1504,8 +1507,11 @@ impl SegmentUploader {
 
                 emit_upload_complete(&app, &video_id);
 
+                let detail = last_signal_error
+                    .map(|error| format!(": {error}"))
+                    .unwrap_or_default();
                 return Err(format!(
-                    "Failed to signal recording complete for {video_id} after 3 attempts"
+                    "Failed to signal recording complete for {video_id} after 3 attempts{detail}"
                 )
                 .into());
             }
