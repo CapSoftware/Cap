@@ -8,16 +8,17 @@
 		"main": "./dist/index.js"
 	},
 	"scripts": {
-		"build": "tsdown"
+		"build": "tsdown",
+		"test": "vitest run"
 	},
 	"dependencies": {
-		"@cap/env": "workspace:*",
 		"@aws-sdk/client-s3": "^3.485.0",
 		"@aws-sdk/cloudfront-signer": "^3.821.0",
 		"@aws-sdk/credential-providers": "^3.908.0",
 		"@aws-sdk/s3-presigned-post": "^3.485.0",
 		"@aws-sdk/s3-request-presigner": "^3.485.0",
 		"@cap/database": "workspace:*",
+		"@cap/env": "workspace:*",
 		"@cap/utils": "workspace:*",
 		"@cap/web-domain": "workspace:*",
 		"@effect/cluster": "^0.50.4",
@@ -30,5 +31,8 @@
 		"effect": "^3.18.4",
 		"next": "15.5.9",
 		"server-only": "^0.0.1"
+	},
+	"devDependencies": {
+		"vitest": "~2.1.9"
 	}
 }
