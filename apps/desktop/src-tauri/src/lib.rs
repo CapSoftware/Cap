@@ -3952,6 +3952,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             export::generate_export_preview,
             export::generate_export_preview_fast,
             import::start_video_import,
+            import::add_existing_recording_to_editor,
             import::start_image_import,
             import::check_import_ready,
             copy_file_to_path,
