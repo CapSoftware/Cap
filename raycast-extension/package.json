@@ -1,0 +1,78 @@
+{
+  "name": "cap-screen-recorder",
+  "title": "Cap Screen Recorder",
+  "description": "Control Cap screen recorder from Raycast — start, stop, pause, resume, and switch devices",
+  "icon": "cap-icon.png",
+  "author": "Ojas2095",
+  "categories": ["Applications", "Productivity"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "subtitle": "Cap",
+      "description": "Start a new screen recording with Cap",
+      "mode": "no-view",
+      "icon": "record-icon.png"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "subtitle": "Cap",
+      "description": "Stop the current Cap screen recording",
+      "mode": "no-view",
+      "icon": "stop-icon.png"
+    },
+    {
+      "name": "pause-resume-recording",
+      "title": "Pause / Resume Recording",
+      "subtitle": "Cap",
+      "description": "Toggle pause state of the current Cap recording",
+      "mode": "no-view",
+      "icon": "pause-icon.png"
+    },
+    {
+      "name": "switch-microphone",
+      "title": "Switch Microphone",
+      "subtitle": "Cap",
+      "description": "Choose an active microphone for Cap recording",
+      "mode": "view",
+      "icon": "mic-icon.png"
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "subtitle": "Cap",
+      "description": "Choose an active camera for Cap recording",
+      "mode": "view",
+      "icon": "camera-icon.png"
+    },
+    {
+      "name": "get-status",
+      "title": "Recording Status",
+      "subtitle": "Cap",
+      "description": "Check if Cap is currently recording",
+      "mode": "no-view",
+      "icon": "status-icon.png"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.77.0",
+    "@raycast/utils": "^1.16.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.8",
+    "@types/node": "20.8.10",
+    "@types/react": "18.3.3",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
