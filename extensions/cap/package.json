@@ -1,0 +1,143 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap (cap.so) via cap-desktop:// deeplinks",
+  "icon": "extension-icon.png",
+  "author": "Leviann",
+  "categories": ["Productivity"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "subtitle": "Cap",
+      "description": "Stop the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "subtitle": "Cap",
+      "description": "Pause the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "subtitle": "Cap",
+      "description": "Resume a paused Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-pause-recording",
+      "title": "Toggle Pause Recording",
+      "subtitle": "Cap",
+      "description": "Pause or resume the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "refresh-device-cache",
+      "title": "Refresh Device Cache",
+      "subtitle": "Cap",
+      "description": "Writes raycast-device-cache.json (displays, windows, cameras, mics)",
+      "mode": "no-view"
+    },
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "subtitle": "Cap",
+      "description": "Start Cap recording (screen:name or window:name; mode studio|instant)",
+      "mode": "no-view",
+      "arguments": [
+        {
+          "name": "target",
+          "placeholder": "screen:Built-in Retina Display",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "mode",
+          "placeholder": "studio or instant",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "captureSystemAudio",
+          "placeholder": "true or false",
+          "type": "text",
+          "required": false
+        },
+        {
+          "name": "micLabel",
+          "placeholder": "optional mic label",
+          "type": "text",
+          "required": false
+        },
+        {
+          "name": "cameraJson",
+          "placeholder": "optional camera JSON (device_or_model_id)",
+          "type": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "take-screenshot",
+      "title": "Take Screenshot",
+      "subtitle": "Cap",
+      "description": "Format: screen:Display Name or window:Window Name (see Refresh Device Cache)",
+      "mode": "no-view",
+      "arguments": [
+        {
+          "name": "target",
+          "placeholder": "screen:Built-in Retina Display",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "set-microphone",
+      "title": "Set Microphone",
+      "subtitle": "Cap",
+      "description": "Switch microphone by label (see device cache). Leave empty to clear.",
+      "mode": "no-view",
+      "arguments": [
+        {
+          "name": "micLabel",
+          "placeholder": "Microphone label",
+          "type": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "set-camera",
+      "title": "Set Camera",
+      "subtitle": "Cap",
+      "description": "Paste device_or_model_id JSON from cache, or leave empty to disable camera",
+      "mode": "no-view",
+      "arguments": [
+        {
+          "name": "cameraJson",
+          "placeholder": "{\"device_id\":\"...\"}",
+          "type": "text",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.83.1"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "lint": "ray lint"
+  }
+}
