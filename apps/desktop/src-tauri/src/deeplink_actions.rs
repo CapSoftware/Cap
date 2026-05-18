@@ -210,7 +210,9 @@ fn parse_device_url(url: &Url) -> Result<DeepLinkAction, ActionParseFromUrlError
 }
 
 fn parse_recording_mode(value: String) -> Result<RecordingMode, ActionParseFromUrlError> {
-    serde_json::from_str::<RecordingMode>(&format!("\"{value}\""))
+    let json = serde_json::to_string(&value)
+        .map_err(|e| ActionParseFromUrlError::ParseFailed(e.to_string()))?;
+    serde_json::from_str::<RecordingMode>(&json)
         .map_err(|e| ActionParseFromUrlError::ParseFailed(e.to_string()))
 }
 
@@ -287,7 +289,7 @@ fn resolve_camera_selector(
         }
         CameraSelector::Label(label) => cameras
             .iter()
-            .find(|camera| camera.display_name == *label)
+            .find(|camera| camera.display_name.eq_ignore_ascii_case(label))
             .ok_or_else(|| format!("No camera with label \"{label}\""))?
             .device_or_model_id(),
     }

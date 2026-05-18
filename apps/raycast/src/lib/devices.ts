@@ -204,8 +204,10 @@ function buildCameraUrl(
 }
 
 function readModelId(object: JsonObject): string | undefined {
-	for (const value of Object.values(object)) {
+	const MODEL_ID_KEYS = ["model", "vendor", "product", "usb"];
+	for (const [key, value] of Object.entries(object)) {
 		if (typeof value !== "string") continue;
+		if (!MODEL_ID_KEYS.some((k) => key.toLowerCase().includes(k))) continue;
 		const directMatch = value.match(/\b[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\b/);
 		if (directMatch) return directMatch[0].toLowerCase();
 	}
