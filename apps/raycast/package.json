@@ -1,0 +1,81 @@
+{
+	"name": "@cap/raycast",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"description": "Control Cap recording from Raycast via cap-desktop:// deep links.",
+	"scripts": {
+		"build": "ray build",
+		"dev": "ray develop",
+		"lint": "ray lint"
+	},
+	"dependencies": {
+		"@raycast/api": "^1.83.0",
+		"@raycast/utils": "^1.17.0"
+	},
+	"devDependencies": {
+		"@types/node": "^20",
+		"@types/react": "^19.1.9",
+		"react": "^19",
+		"typescript": "^5"
+	},
+	"raycast": {
+		"schemaVersion": 1,
+		"title": "Cap Recorder",
+		"description": "Control Cap recording (start, stop, pause, resume, switch camera/microphone) without leaving the keyboard.",
+		"icon": "icon.png",
+		"author": "cap",
+		"categories": [
+			"Productivity",
+			"Developer Tools"
+		],
+		"commands": [
+			{
+				"name": "stop-recording",
+				"title": "Stop Cap Recording",
+				"description": "Stop the active Cap recording.",
+				"mode": "no-view"
+			},
+			{
+				"name": "pause-recording",
+				"title": "Pause Cap Recording",
+				"description": "Pause the active Cap recording.",
+				"mode": "no-view"
+			},
+			{
+				"name": "resume-recording",
+				"title": "Resume Cap Recording",
+				"description": "Resume a paused Cap recording.",
+				"mode": "no-view"
+			},
+			{
+				"name": "switch-microphone",
+				"title": "Switch Cap Microphone",
+				"description": "Switch the active Cap microphone by label.",
+				"mode": "no-view",
+				"arguments": [
+					{
+						"name": "label",
+						"placeholder": "Microphone label (empty to clear)",
+						"type": "text",
+						"required": false
+					}
+				]
+			},
+			{
+				"name": "switch-camera",
+				"title": "Switch Cap Camera",
+				"description": "Switch the active Cap camera by model or device ID.",
+				"mode": "no-view",
+				"arguments": [
+					{
+						"name": "identifier",
+						"placeholder": "Camera model or device ID (empty to clear)",
+						"type": "text",
+						"required": false
+					}
+				]
+			}
+		]
+	}
+}
