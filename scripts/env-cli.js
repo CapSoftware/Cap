@@ -141,6 +141,16 @@ async function main() {
 		}
 
 		envs.NEXT_PUBLIC_WEB_URL = envs.WEB_URL;
+
+		if (!allEnvs.TINYBIRD_HOST) {
+			allEnvs.TINYBIRD_HOST = "https://api.tinybird.co";
+		}
+		envs.TINYBIRD_HOST = allEnvs.TINYBIRD_HOST;
+		
+		if (!allEnvs.TINYBIRD_TOKEN) {
+			allEnvs.TINYBIRD_TOKEN = "";
+		}
+		envs.TINYBIRD_TOKEN = allEnvs.TINYBIRD_TOKEN;
 	}
 
 	if (hasDesktop) {
