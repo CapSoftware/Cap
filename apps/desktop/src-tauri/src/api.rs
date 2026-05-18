@@ -339,11 +339,18 @@ pub async fn signal_recording_complete(
         .map_err(|err| format!("api/signal_recording_complete/request: {err}"))?;
 
     if !resp.status().is_success() {
-        let status = resp.status().as_u16();
+        let status = resp.status();
         let error_body = resp
             .text()
             .await
             .unwrap_or_else(|_| "<no response body>".to_string());
+        if status == reqwest::StatusCode::CONFLICT
+            && error_body.contains("Muxing already in progress")
+        {
+            return Ok(());
+        }
+
+        let status = status.as_u16();
         return Err(format!("api/signal_recording_complete/{status}: {error_body}").into());
     }
 
