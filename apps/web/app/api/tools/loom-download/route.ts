@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { getCurrentUser } from "@cap/database/auth/session";
 import { type NextRequest, NextResponse } from "next/server";
 import {
 	fetchConvertedVideoViaMediaServer,
@@ -160,6 +161,11 @@ async function tryMp4CandidateDownload(
 }
 
 export async function GET(request: NextRequest) {
+	const user = await getCurrentUser();
+	if (!user) {
+		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+	}
+
 	const videoId = request.nextUrl.searchParams.get("id");
 	const videoName = request.nextUrl.searchParams.get("name");
 
