@@ -1,9 +1,15 @@
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { organizations, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
+import {
+	AI_GENERATION_LANGUAGE_AUTO,
+	type AiGenerationLanguage,
+	getAiGenerationLanguageName,
+	parseAiGenerationLanguage,
+	type Video,
+} from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
@@ -19,6 +25,7 @@ interface GenerateAiWorkflowPayload {
 interface VideoData {
 	video: typeof videos.$inferSelect;
 	metadata: VideoMetadata;
+	aiGenerationLanguage: AiGenerationLanguage;
 }
 
 interface VttSegment {
@@ -76,7 +83,10 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 		};
 	}
 
-	const result = await generateWithAi(transcript);
+	const result = await generateWithAi(
+		transcript,
+		videoData.aiGenerationLanguage,
+	);
 
 	await saveResults(videoId, videoData, result);
 
@@ -92,8 +102,9 @@ async function validateAndSetProcessing(videoId: string): Promise<VideoData> {
 	}
 
 	const query = await db()
-		.select({ video: videos })
+		.select({ video: videos, orgSettings: organizations.settings })
 		.from(videos)
+		.leftJoin(organizations, eq(videos.orgId, organizations.id))
 		.where(eq(videos.id, videoId as Video.VideoId));
 
 	if (query.length === 0 || !query[0]?.video) {
@@ -124,6 +135,9 @@ async function validateAndSetProcessing(videoId: string): Promise<VideoData> {
 	return {
 		video,
 		metadata,
+		aiGenerationLanguage: parseAiGenerationLanguage(
+			query[0]?.orgSettings?.aiGenerationLanguage,
+		),
 	};
 }
 
@@ -175,13 +189,17 @@ async function markSkipped(
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
-async function generateWithAi(transcript: TranscriptData): Promise<AiResult> {
+async function generateWithAi(
+	transcript: TranscriptData,
+	language: AiGenerationLanguage,
+): Promise<AiResult> {
 	"use step";
 
 	const groqClient = getGroqClient();
 	const chunks = chunkTranscriptWithTimestamps(transcript.segments);
 
 	const videoDuration = getVideoDuration(transcript.segments);
+	const languageInstruction = getAiLanguageInstruction(language);
 
 	let result: AiResult;
 	if (chunks.length === 1) {
@@ -189,9 +207,15 @@ async function generateWithAi(transcript: TranscriptData): Promise<AiResult> {
 			transcript.segments,
 			videoDuration,
 			groqClient,
+			languageInstruction,
 		);
 	} else {
-		result = await generateMultipleChunks(chunks, videoDuration, groqClient);
+		result = await generateMultipleChunks(
+			chunks,
+			videoDuration,
+			groqClient,
+			languageInstruction,
+		);
 	}
 
 	if (result.chapters) {
@@ -199,6 +223,16 @@ async function generateWithAi(transcript: TranscriptData): Promise<AiResult> {
 	}
 
 	return result;
+}
+
+export function getAiLanguageInstruction(
+	language: AiGenerationLanguage,
+): string {
+	if (language === AI_GENERATION_LANGUAGE_AUTO) {
+		return "Write the title, summary, chapter titles, section summaries, and key points in the same language as the transcript.";
+	}
+
+	return `Write the title, summary, chapter titles, section summaries, and key points in ${getAiGenerationLanguageName(language)}.`;
 }
 
 function getVideoDuration(segments: VttSegment[]): number {
@@ -388,6 +422,7 @@ async function generateSingleChunk(
 	segments: VttSegment[],
 	videoDuration: number,
 	groqClient: ReturnType<typeof getGroqClient>,
+	languageInstruction: string,
 ): Promise<AiResult> {
 	const transcriptWithTimestamps = segments
 		.map(
@@ -406,6 +441,8 @@ The video is ${videoDuration} seconds long (${Math.floor(videoDuration / 60)}:${
 }
 
 Guidelines:
+- ${languageInstruction}
+- Keep JSON property names exactly as shown
 - The summary should be detailed and comprehensive, not a brief overview
 - Capture ALL important topics, not just the main theme
 - For longer content, organize the summary by topic or chronologically
@@ -425,6 +462,7 @@ async function generateMultipleChunks(
 	chunks: { text: string; startTime: number; endTime: number }[],
 	videoDuration: number,
 	groqClient: ReturnType<typeof getGroqClient>,
+	languageInstruction: string,
 ): Promise<AiResult> {
 	const chunkSummaries: {
 		summary: string;
@@ -447,6 +485,8 @@ Analyze this section thoroughly and provide JSON:
   "chapters": [{"title": "string (descriptive title for this topic/section)", "start": number (seconds from video start)}]
 }
 
+${languageInstruction}
+Keep JSON property names exactly as shown.
 IMPORTANT: All chapter "start" values MUST be between ${chunk.startTime} and ${chunk.endTime} seconds. The total video is only ${videoDuration} seconds long.
 Be thorough - this summary will be combined with other sections to create a comprehensive overview.
 Return ONLY valid JSON without any markdown formatting or code blocks.
@@ -505,6 +545,8 @@ Provide JSON in the following format:
 }
 
 The summary must be detailed and comprehensive - not a brief overview. Capture all the important information from every section.
+${languageInstruction}
+Keep JSON property names exactly as shown.
 Return ONLY valid JSON without any markdown formatting or code blocks.`;
 
 	const finalContent = await callAiApi(finalPrompt, groqClient);

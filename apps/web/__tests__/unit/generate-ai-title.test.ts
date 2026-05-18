@@ -31,7 +31,10 @@ vi.mock("workflow", () => ({
 
 vi.mock("server-only", () => ({}));
 
-import { shouldReplaceVideoTitle } from "@/workflows/generate-ai";
+import {
+	getAiLanguageInstruction,
+	shouldReplaceVideoTitle,
+} from "@/workflows/generate-ai";
 
 describe("shouldReplaceVideoTitle", () => {
 	it("replaces default Cap titles", () => {
@@ -82,5 +85,17 @@ describe("shouldReplaceVideoTitle", () => {
 				nextAiTitle: "   ",
 			}),
 		).toBe(false);
+	});
+});
+
+describe("getAiLanguageInstruction", () => {
+	it("uses transcript language when auto-detect is selected", () => {
+		expect(getAiLanguageInstruction("auto")).toContain(
+			"same language as the transcript",
+		);
+	});
+
+	it("uses the selected language name", () => {
+		expect(getAiLanguageInstruction("es")).toContain("Spanish");
 	});
 });
