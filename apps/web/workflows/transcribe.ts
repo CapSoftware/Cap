@@ -10,7 +10,13 @@ import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
+import {
+	AI_GENERATION_LANGUAGE_AUTO,
+	type AiGenerationLanguage,
+	type AiGenerationLanguageCode,
+	parseAiGenerationLanguage,
+	type Video,
+} from "@cap/web-domain";
 import { createClient } from "@deepgram/sdk";
 import { eq } from "drizzle-orm";
 import { FatalError } from "workflow";
@@ -41,6 +47,7 @@ interface VideoData {
 	video: typeof videos.$inferSelect;
 	transcriptionDisabled: boolean;
 	isOwnerPro: boolean;
+	aiGenerationLanguage: AiGenerationLanguage;
 }
 
 export async function transcribeVideoWorkflow(
@@ -57,19 +64,27 @@ export async function transcribeVideoWorkflow(
 		return { success: true, message: "Transcription disabled - skipped" };
 	}
 
-	const audioUrl = await extractAudio(videoId, userId, videoData.video);
+	try {
+		const audioUrl = await extractAudio(videoId, userId, videoData.video);
 
-	if (!audioUrl) {
-		await markNoAudio(videoId);
-		return {
-			success: true,
-			message: "Video has no audio track - skipped transcription",
-		};
+		if (!audioUrl) {
+			await markNoAudio(videoId);
+			return {
+				success: true,
+				message: "Video has no audio track - skipped transcription",
+			};
+		}
+
+		const [transcription] = await Promise.all([
+			transcribeWithDeepgram(audioUrl, videoData.aiGenerationLanguage),
+		]);
+
+		await saveTranscription(videoId, userId, videoData.video, transcription);
+	} catch (error) {
+		await markError(videoId);
+		await cleanupTempAudio(videoId, userId, videoData.video);
+		throw error;
 	}
-
-	const [transcription] = await Promise.all([transcribeWithDeepgram(audioUrl)]);
-
-	await saveTranscription(videoId, userId, videoData.video, transcription);
 
 	await cleanupTempAudio(videoId, userId, videoData.video);
 
@@ -128,6 +143,9 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 		video: result.video,
 		transcriptionDisabled,
 		isOwnerPro,
+		aiGenerationLanguage: parseAiGenerationLanguage(
+			result.orgSettings?.aiGenerationLanguage,
+		),
 	};
 }
 
@@ -146,6 +164,15 @@ async function markNoAudio(videoId: string): Promise<void> {
 	await db()
 		.update(videos)
 		.set({ transcriptionStatus: "NO_AUDIO" })
+		.where(eq(videos.id, videoId as Video.VideoId));
+}
+
+async function markError(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videos)
+		.set({ transcriptionStatus: "ERROR" })
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
@@ -274,7 +301,33 @@ async function resolveVideoSourceUrl(
 	throw new Error("Video file not accessible");
 }
 
-async function transcribeWithDeepgram(audioUrl: string): Promise<string> {
+export function getDeepgramTranscriptionOptions(
+	language: AiGenerationLanguage,
+) {
+	const baseOptions = {
+		model: "nova-3",
+		smart_format: true,
+		utterances: true,
+		mime_type: "audio/mpeg",
+	} as const;
+
+	if (language === AI_GENERATION_LANGUAGE_AUTO) {
+		return {
+			...baseOptions,
+			detect_language: [...DEEPGRAM_DETECTABLE_LANGUAGES],
+		};
+	}
+
+	return {
+		...baseOptions,
+		language,
+	};
+}
+
+async function transcribeWithDeepgram(
+	audioUrl: string,
+	language: AiGenerationLanguage,
+): Promise<string> {
 	"use step";
 
 	const audioResponse = await fetch(audioUrl);
@@ -290,21 +343,35 @@ async function transcribeWithDeepgram(audioUrl: string): Promise<string> {
 
 	const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
 		audioBuffer,
-		{
-			model: "nova-3",
-			smart_format: true,
-			detect_language: true,
-			utterances: true,
-			mime_type: "audio/mpeg",
-		},
+		getDeepgramTranscriptionOptions(language),
 	);
 
 	if (error) {
-		throw new Error(`Deepgram transcription failed: ${error.message}`);
+		throw new Error(
+			`Deepgram transcription failed (language=${language}): ${error.message}`,
+		);
 	}
 
 	return formatToWebVTT(result as unknown as DeepgramResult);
 }
+
+const DEEPGRAM_DETECTABLE_LANGUAGES = [
+	"en",
+	"es",
+	"fr",
+	"de",
+	"pt",
+	"it",
+	"nl",
+	"pl",
+	"sk",
+	"ru",
+	"tr",
+	"ja",
+	"ko",
+	"zh",
+	"hi",
+] as const satisfies readonly AiGenerationLanguageCode[];
 
 async function saveTranscription(
 	videoId: string,
