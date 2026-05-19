@@ -134,7 +134,7 @@ export default function S3ConfigPage() {
 		<div class="space-y-2">
 			<label class="text-[13px] text-gray-12">{label}</label>
 			<Input
-				class="!bg-gray-3"
+				class="bg-gray-3!"
 				type={type}
 				value={s3Config()[key] ?? ""}
 				disabled={!!managedByOrganization()}
@@ -201,7 +201,7 @@ export default function S3ConfigPage() {
 												provider: e.currentTarget.value,
 											}))
 										}
-										class="px-3 py-2 pr-10 w-full rounded-lg border border-transparent transition-all duration-200 appearance-none outline-none bg-gray-3 focus:border-gray-8"
+										class="px-3 py-2 pr-10 w-full rounded-lg border border-transparent transition-all duration-200 appearance-none outline-hidden bg-gray-3 focus:border-gray-8"
 									>
 										<option value="aws">AWS S3</option>
 										<option value="cloudflare">Cloudflare R2</option>
@@ -245,7 +245,7 @@ export default function S3ConfigPage() {
 					</Suspense>
 				</div>
 			</div>
-			<div class="flex-shrink-0 mt-5">
+			<div class="shrink-0 mt-5">
 				<fieldset
 					class="flex justify-between items-center"
 					disabled={

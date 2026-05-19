@@ -1041,11 +1041,11 @@ function DefaultProjectNameCard(props: {
 
 					<Collapsible class="w-full rounded-lg">
 						<Collapsible.Trigger class="inline-flex gap-1 items-center text-xs transition-colors text-gray-10 hover:text-gray-12 group">
-							<IconCapChevronDown class="size-3.5 ui-group-expanded:rotate-180 transition-transform duration-200" />
+							<IconCapChevronDown class="size-3.5 data-group-expanded:rotate-180 transition-transform duration-200" />
 							<span>Available placeholders</span>
 						</Collapsible.Trigger>
 
-						<Collapsible.Content class="space-y-3 pt-3 text-xs text-gray-12 opacity-0 transition animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
+						<Collapsible.Content class="space-y-3 pt-3 text-xs text-gray-12 opacity-0 transition animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
 							<p class="text-gray-10">
 								Click any placeholder to copy it. Time supports custom formats
 								via <code class="text-gray-12">{"{moment:HH:mm}"}</code>.
@@ -1249,8 +1249,8 @@ function ExcludedWindowsSkeleton() {
 				{(width) => (
 					<div class="flex gap-2 items-center pr-1 pl-3 py-1.5 rounded-full border bg-gray-3 border-gray-4 animate-pulse">
 						<div class="flex flex-col gap-1 leading-tight">
-							<div class={cx("h-2.5 rounded bg-gray-4", width)} />
-							<div class="w-14 h-2 rounded bg-gray-4" />
+							<div class={cx("h-2.5 rounded-sm bg-gray-4", width)} />
+							<div class="w-14 h-2 rounded-sm bg-gray-4" />
 						</div>
 						<div class="rounded-full size-5 bg-gray-4" />
 					</div>

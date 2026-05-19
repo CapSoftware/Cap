@@ -194,7 +194,7 @@ export default function Recordings() {
 			<Show
 				when={recordings.data && recordings.data.length > 0}
 				fallback={
-					<p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
+					<p class="text-center text-(--text-tertiary) absolute flex items-center justify-center w-full h-full">
 						No recordings found
 					</p>
 				}
@@ -243,11 +243,11 @@ export default function Recordings() {
 
 				<div class="flex relative flex-col flex-1 mt-4 rounded-xl border custom-scroll bg-gray-2 border-gray-3">
 					<Show when={filteredRecordings().length === 0}>
-						<p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
+						<p class="text-center text-(--text-tertiary) absolute flex items-center justify-center w-full h-full">
 							{emptyMessage()}
 						</p>
 					</Show>
-					<ul class="flex flex-col w-full text-[--text-primary]">
+					<ul class="flex flex-col w-full text-(--text-primary)">
 						<For each={visibleRecordings()}>
 							{(recording) => (
 								<RecordingItem
@@ -315,7 +315,7 @@ function RecordingItem(props: {
 				}
 			}}
 			class={cx(
-				"flex flex-row justify-between p-3 [&:not(:last-child)]:border-b [&:not(:last-child)]:border-gray-3 items-center w-full  transition-colors duration-200",
+				"flex flex-row justify-between p-3 not-last:border-b not-last:border-gray-3 items-center w-full  transition-colors duration-200",
 				studioCompleteCheck()
 					? "cursor-pointer hover:bg-gray-3"
 					: "cursor-default",
@@ -324,10 +324,10 @@ function RecordingItem(props: {
 			<div class="flex gap-5 items-center">
 				<Show
 					when={imageExists()}
-					fallback={<div class="mr-4 rounded bg-gray-10 size-11" />}
+					fallback={<div class="mr-4 rounded-sm bg-gray-10 size-11" />}
 				>
 					<img
-						class="object-cover rounded size-12"
+						class="object-cover rounded-sm size-12"
 						alt="Recording thumbnail"
 						src={`${convertFileSrc(
 							props.recording.thumbnailPath,

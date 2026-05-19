@@ -1018,7 +1018,7 @@ export function Cropper(
 	return (
 		<div
 			ref={containerRef}
-			class="relative w-full h-full select-none overscroll-contain focus:outline-none touch-none"
+			class="relative w-full h-full select-none overscroll-contain focus:outline-hidden touch-none"
 			style={{
 				cursor: cursorStyle() ?? (props.aspectRatio ? "default" : "crosshair"),
 			}}
@@ -1031,11 +1031,11 @@ export function Cropper(
 			<Transition
 				appear
 				enterActiveClass="transition-opacity duration-300 ease-in-out"
-				enterClass="opacity-0 blur-sm"
+				enterClass="opacity-0 blur-xs"
 				enterToClass="opacity-100 blur-none"
 				exitActiveClass="transition-opacity duration-300 ease-in-out"
 				exitClass="opacity-100 blur-none"
-				exitToClass="opacity-0 blur-sm"
+				exitToClass="opacity-0 blur-xs"
 			>
 				<Show when={props.showBounds && labelTransform()}>
 					{(transform) => (
@@ -1110,7 +1110,7 @@ export function Cropper(
 							handle.isCorner ? (
 								<button
 									type="button"
-									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-none"
+									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-hidden"
 									tabIndex={-1}
 									classList={{ "opacity-0": mouseState.drag === "overlay" }}
 									style={{
@@ -1136,7 +1136,7 @@ export function Cropper(
 								>
 									<svg
 										aria-hidden="true"
-										class="absolute pointer-events-none drop-shadow-sm shadow-black"
+										class="absolute pointer-events-none drop-shadow-xs shadow-black"
 										classList={{
 											"size-1": boundsTooSmall(),
 											"size-6": !boundsTooSmall(),
@@ -1172,7 +1172,7 @@ export function Cropper(
 							) : (
 								<button
 									type="button"
-									class="absolute focus:outline-none focus:ring-0 outline-none"
+									class="absolute focus:outline-hidden focus:ring-0 outline-hidden"
 									tabIndex={-1}
 									style={{
 										visibility:
@@ -1239,9 +1239,9 @@ export function Cropper(
 								aria-live="polite"
 							>
 								<div
-									class="h-[18px] w-11 rounded-full text-center text-xs text-gray-12 border border-white/70 dark:border-white/20 drop-shadow-md outline-1 outline outline-black/80"
+									class="h-[18px] w-11 rounded-full text-center text-xs text-gray-12 border border-white/70 dark:border-white/20 drop-shadow-md outline-1 outline-solid outline-black/80"
 									classList={{
-										"backdrop-blur-sm bg-white/50 dark:bg-black/50 dark:backdrop-brightness-90 backdrop-brightness-200":
+										"backdrop-blur-xs bg-white/50 dark:bg-black/50 dark:backdrop-brightness-90 backdrop-brightness-200":
 											props.useBackdropFilter,
 										"bg-gray-3 opacity-80": !props.useBackdropFilter,
 									}}

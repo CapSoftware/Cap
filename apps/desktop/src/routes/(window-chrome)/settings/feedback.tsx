@@ -81,7 +81,7 @@ export default function FeedbackTab() {
 									placeholder="Tell us what you think about Cap..."
 									required
 									minLength={10}
-									class="p-2 w-full h-32 text-[13px] rounded-md border transition-colors duration-200 resize-none bg-gray-2 placeholder:text-gray-10 border-gray-3 text-primary focus:outline-none focus:ring-1 focus:ring-gray-8 hover:border-gray-6"
+									class="p-2 w-full h-32 text-[13px] rounded-md border transition-colors duration-200 resize-none bg-gray-2 placeholder:text-gray-10 border-gray-3 text-primary focus:outline-hidden focus:ring-1 focus:ring-gray-8 hover:border-gray-6"
 								/>
 							</div>
 
@@ -176,7 +176,7 @@ export default function FeedbackTab() {
 													<p class="text-gray-11 font-medium">
 														Operating System
 													</p>
-													<p class="text-gray-10 bg-gray-2 px-2 py-1.5 rounded font-mono text-xs">
+													<p class="text-gray-10 bg-gray-2 px-2 py-1.5 rounded-sm font-mono text-xs">
 														{ver().displayName}
 													</p>
 												</div>
@@ -207,7 +207,7 @@ export default function FeedbackTab() {
 												<div class="flex gap-1.5 flex-wrap">
 													<For each={d.availableEncoders as string[]}>
 														{(encoder) => (
-															<span class="px-2 py-1 bg-gray-2 rounded text-xs text-gray-10 font-mono">
+															<span class="px-2 py-1 bg-gray-2 rounded-sm text-xs text-gray-10 font-mono">
 																{encoder}
 															</span>
 														)}
