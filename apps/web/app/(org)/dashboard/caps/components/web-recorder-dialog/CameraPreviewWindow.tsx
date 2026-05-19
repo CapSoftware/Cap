@@ -438,9 +438,9 @@ export const CameraPreviewWindow = ({
 	const totalHeight = metrics.height + BAR_HEIGHT;
 	const videoStyle = videoDimensions
 		? {
-			transform: mirrored ? "scaleX(-1)" : "scaleX(1)",
-			opacity: isInPictureInPicture ? 0 : 1,
-		}
+				transform: mirrored ? "scaleX(-1)" : "scaleX(1)",
+				opacity: isInPictureInPicture ? 0 : 1,
+			}
 		: { opacity: 0 };
 	// Keep the video node rendered even in PiP mode so the track keeps producing frames.
 
