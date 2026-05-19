@@ -1237,6 +1237,9 @@ importers:
       vite-tsconfig-paths:
         specifier: ^4.2.1
         version: 4.3.2(typescript@5.8.3)(vite@6.3.5(@types/node@20.17.43)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/ui-solid:
     dependencies:
@@ -1292,6 +1295,15 @@ importers:
       unplugin-icons:
         specifier: ^0.19.2
         version: 0.19.3
+      vite:
+        specifier: ^6.3.5
+        version: 6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
+      vite-plugin-solid:
+        specifier: ^2.10.2
+        version: 2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/utils:
     dependencies:
