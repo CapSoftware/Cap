@@ -116,6 +116,9 @@ async generateExportPreviewFast(frameTime: number, settings: ExportPreviewSettin
 async startVideoImport(sourcePath: string) : Promise<string> {
     return await TAURI_INVOKE("start_video_import", { sourcePath });
 },
+async addExistingRecordingToEditor(sourcePath: string) : Promise<number> {
+    return await TAURI_INVOKE("add_existing_recording_to_editor", { sourcePath });
+},
 async startImageImport(sourcePath: string) : Promise<string> {
     return await TAURI_INVOKE("start_image_import", { sourcePath });
 },

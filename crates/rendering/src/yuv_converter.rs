@@ -25,6 +25,12 @@ pub enum YuvConversionError {
         expected: usize,
         actual: usize,
     },
+    #[error("{plane} plane stride too small: expected at least {expected}, got {actual}")]
+    PlaneStrideTooSmall {
+        plane: &'static str,
+        expected: u32,
+        actual: u32,
+    },
     #[error("{dimension} dimension ({value}) exceeds maximum allowed ({max})")]
     DimensionExceedsLimit {
         dimension: &'static str,
@@ -51,6 +57,14 @@ fn upload_plane_with_stride(
     stride: u32,
     plane_name: &'static str,
 ) -> Result<(), YuvConversionError> {
+    if stride < width {
+        return Err(YuvConversionError::PlaneStrideTooSmall {
+            plane: plane_name,
+            expected: width,
+            actual: stride,
+        });
+    }
+
     let expected_data_size = (stride * height) as usize;
     if data.len() < expected_data_size {
         return Err(YuvConversionError::PlaneSizeMismatch {
@@ -697,6 +711,14 @@ impl YuvToRgbaConverter {
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
         let half_height = height / 2;
+        if uv_stride < width {
+            return Err(YuvConversionError::PlaneStrideTooSmall {
+                plane: "UV",
+                expected: width,
+                actual: uv_stride,
+            });
+        }
+
         let expected_uv_size = (uv_stride * half_height) as usize;
         if uv_data.len() < expected_uv_size {
             return Err(YuvConversionError::PlaneSizeMismatch {
@@ -778,6 +800,14 @@ impl YuvToRgbaConverter {
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
         let half_height = height / 2;
+        if uv_stride < width {
+            return Err(YuvConversionError::PlaneStrideTooSmall {
+                plane: "UV",
+                expected: width,
+                actual: uv_stride,
+            });
+        }
+
         let expected_uv_size = (uv_stride * half_height) as usize;
         if uv_data.len() < expected_uv_size {
             return Err(YuvConversionError::PlaneSizeMismatch {

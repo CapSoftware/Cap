@@ -4,6 +4,11 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
+import {
+	AI_GENERATION_LANGUAGE_AUTO,
+	type AiGenerationLanguage,
+	isAiGenerationLanguage,
+} from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireOrganizationSettingsManager } from "./authorization";
@@ -17,6 +22,7 @@ type OrganizationSettingsInput = {
 	disableComments?: boolean;
 	hideShareableLinkCapLogo?: boolean;
 	shareableLinkUseOrganizationIcon?: boolean;
+	aiGenerationLanguage?: AiGenerationLanguage;
 };
 
 const proOrganizationSettingKeys = [
@@ -25,7 +31,20 @@ const proOrganizationSettingKeys = [
 	"disableTranscript",
 	"hideShareableLinkCapLogo",
 	"shareableLinkUseOrganizationIcon",
+	"aiGenerationLanguage",
 ] as const satisfies readonly (keyof OrganizationSettingsInput)[];
+
+const defaultProOrganizationSettings = {
+	disableSummary: false,
+	disableChapters: false,
+	disableTranscript: false,
+	hideShareableLinkCapLogo: false,
+	shareableLinkUseOrganizationIcon: false,
+	aiGenerationLanguage: AI_GENERATION_LANGUAGE_AUTO,
+} as const satisfies Pick<
+	Required<OrganizationSettingsInput>,
+	(typeof proOrganizationSettingKeys)[number]
+>;
 
 const preserveProSettings = (
 	submittedSettings: OrganizationSettingsInput,
@@ -35,7 +54,7 @@ const preserveProSettings = (
 	...Object.fromEntries(
 		proOrganizationSettingKeys.map((key) => [
 			key,
-			existingSettings?.[key] ?? false,
+			existingSettings?.[key] ?? defaultProOrganizationSettings[key],
 		]),
 	),
 });
@@ -51,6 +70,13 @@ export async function updateOrganizationSettings(
 
 	if (!settings) {
 		throw new Error("Settings are required");
+	}
+
+	if (
+		settings.aiGenerationLanguage !== undefined &&
+		!isAiGenerationLanguage(settings.aiGenerationLanguage)
+	) {
+		throw new Error("Unsupported AI generation language");
 	}
 
 	if (!user.activeOrganizationId) {
