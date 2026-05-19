@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import { open, showHUD, showToast, Toast } from "@raycast/api";
 
 export type CapControlAction = {
@@ -60,12 +63,45 @@ export const capControlActions: CapControlAction[] = [
 	},
 ];
 
+const RAYCAST_DEEPLINK_TOKEN_FILE = "raycast-deeplink-token";
+
+function requiresToken(url: string): boolean {
+	return (
+		url.startsWith("cap-desktop://record/") ||
+		url.startsWith("cap-desktop://device/")
+	);
+}
+
+async function readCapDeeplinkToken(): Promise<string> {
+	const tokenPath = join(
+		homedir(),
+		"Library",
+		"Application Support",
+		"so.cap.desktop",
+		RAYCAST_DEEPLINK_TOKEN_FILE,
+	);
+	const token = (await readFile(tokenPath, "utf8")).trim();
+	if (!token) {
+		throw new Error("Cap deeplink token is empty. Open Cap once and try again.");
+	}
+	return token;
+}
+
+async function authorizeCapDeeplink(url: string): Promise<string> {
+	if (!requiresToken(url)) return url;
+
+	const token = await readCapDeeplinkToken();
+	const parsed = new URL(url);
+	parsed.searchParams.set("token", token);
+	return parsed.toString();
+}
+
 export async function openCapDeeplink(
 	url: string,
 	successTitle: string,
 ): Promise<void> {
 	try {
-		await open(url);
+		await open(await authorizeCapDeeplink(url));
 		await showHUD(successTitle);
 	} catch (error) {
 		await showToast({

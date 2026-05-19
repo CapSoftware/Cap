@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
 use tracing::trace;
+use uuid::Uuid;
 
 use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
+
+const RAYCAST_DEEPLINK_TOKEN_FILE: &str = "raycast-deeplink-token";
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +49,12 @@ pub enum DeepLinkAction {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct DeepLinkRequest {
+    action: DeepLinkAction,
+    auth_token: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CameraSelector {
@@ -57,11 +66,11 @@ pub enum CameraSelector {
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     trace!("Handling deep actions for: {:?}", &urls);
 
-    let actions: Vec<_> = urls
+    let requests: Vec<_> = urls
         .into_iter()
         .filter(|url| !url.as_str().is_empty())
         .filter_map(|url| {
-            parse_deeplink(url.as_str())
+            parse_deeplink_request(url.as_str())
                 .map_err(|e| match e {
                     ActionParseFromUrlError::ParseFailed(msg) => {
                         eprintln!("Failed to parse deep link \"{}\": {}", &url, msg)
@@ -76,14 +85,14 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
         })
         .collect();
 
-    if actions.is_empty() {
+    if requests.is_empty() {
         return;
     }
 
     let app_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
-        for action in actions {
-            if let Err(e) = action.execute(&app_handle).await {
+        for request in requests {
+            if let Err(e) = request.execute(&app_handle).await {
                 eprintln!("Failed to handle deep link action: {e}");
             }
         }
@@ -127,9 +136,16 @@ impl CameraIdentity {
 }
 
 pub fn parse_deeplink(url: &str) -> Result<DeepLinkAction, ActionParseFromUrlError> {
+    parse_deeplink_request(url).map(|request| request.action)
+}
+
+fn parse_deeplink_request(url: &str) -> Result<DeepLinkRequest, ActionParseFromUrlError> {
     let url =
         Url::parse(url).map_err(|err| ActionParseFromUrlError::ParseFailed(err.to_string()))?;
-    parse_url(&url)
+    Ok(DeepLinkRequest {
+        action: parse_url(&url)?,
+        auth_token: optional_non_empty_query_param(&url, "token")?,
+    })
 }
 
 fn parse_url(url: &Url) -> Result<DeepLinkAction, ActionParseFromUrlError> {
@@ -265,6 +281,35 @@ fn query_param(url: &Url, name: &str) -> Option<String> {
         .map(|(_, value)| value.into_owned())
 }
 
+fn raycast_deeplink_token_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join(RAYCAST_DEEPLINK_TOKEN_FILE))
+        .map_err(|e| format!("Failed to resolve app data directory: {e}"))
+}
+
+pub fn ensure_raycast_deeplink_token(app: &AppHandle) -> Result<String, String> {
+    let token_path = raycast_deeplink_token_path(app)?;
+
+    if let Ok(token) = std::fs::read_to_string(&token_path) {
+        let token = token.trim().to_string();
+        if token.len() >= 32 {
+            return Ok(token);
+        }
+    }
+
+    if let Some(parent) = token_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create deeplink token directory: {e}"))?;
+    }
+
+    let token = Uuid::new_v4().to_string();
+    std::fs::write(&token_path, format!("{token}\n"))
+        .map_err(|e| format!("Failed to write deeplink token: {e}"))?;
+
+    Ok(token)
+}
+
 fn resolve_camera_selector(
     selector: &CameraSelector,
     cameras: &[CameraIdentity],
@@ -314,6 +359,16 @@ async fn pause_for_input_change(app: &AppHandle) -> Result<(), String> {
 }
 
 impl DeepLinkAction {
+    fn requires_auth_token(&self) -> bool {
+        matches!(
+            self,
+            DeepLinkAction::StartRecording { .. }
+                | DeepLinkAction::StartSavedRecording { .. }
+                | DeepLinkAction::SetMicrophone { .. }
+                | DeepLinkAction::SetCamera { .. }
+        )
+    }
+
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
         match self {
             DeepLinkAction::StartRecording {
@@ -391,6 +446,22 @@ impl DeepLinkAction {
     }
 }
 
+impl DeepLinkRequest {
+    async fn execute(self, app: &AppHandle) -> Result<(), String> {
+        if self.action.requires_auth_token() {
+            let expected = ensure_raycast_deeplink_token(app)?;
+            if self.auth_token.as_deref() != Some(expected.as_str()) {
+                return Err(
+                    "Recording and device deeplinks require the local Raycast deeplink token"
+                        .to_string(),
+                );
+            }
+        }
+
+        self.action.execute(app).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,6 +535,27 @@ mod tests {
             parse_deeplink("cap-desktop://record/toggle-pause").unwrap(),
             DeepLinkAction::TogglePauseRecording
         );
+    }
+
+    #[test]
+    fn parses_raycast_token_without_changing_action() {
+        assert_eq!(
+            parse_deeplink_request("cap-desktop://record/start?mode=studio&token=local-token")
+                .unwrap(),
+            DeepLinkRequest {
+                action: DeepLinkAction::StartSavedRecording {
+                    mode: Some(RecordingMode::Studio),
+                },
+                auth_token: Some("local-token".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn recording_and_device_actions_require_auth_token() {
+        assert!(DeepLinkAction::StartSavedRecording { mode: None }.requires_auth_token());
+        assert!(DeepLinkAction::SetMicrophone { label: None }.requires_auth_token());
+        assert!(!DeepLinkAction::OpenSettings { page: None }.requires_auth_token());
     }
 
     #[test]

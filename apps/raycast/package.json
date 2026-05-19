@@ -32,7 +32,7 @@
 	"scripts": {
 		"typecheck": "tsc --noEmit",
 		"smoke:devices": "tsc scripts/device-parser-smoke.ts src/lib/devices.ts --outDir ../../target/raycast-device-smoke --module NodeNext --moduleResolution NodeNext --target es2022 --strict --esModuleInterop --skipLibCheck --types node && node ../../target/raycast-device-smoke/scripts/device-parser-smoke.js",
-		"lint": "npx @raycast/api@latest lint"
+		"lint": "npx @raycast/api@1.104.17 lint"
 	},
 	"dependencies": {
 		"@raycast/api": "1.104.17",

@@ -18,6 +18,8 @@ cap-desktop://action?value=%7B%22open_settings%22%3A%7B%22page%22%3A%22general%2
 
 ## Recording Control
 
+Recording and device-control deeplinks require the local Raycast deeplink token stored in Cap's app data directory as `raycast-deeplink-token`. Cap creates this token locally and the Raycast extension appends it before opening recording or device URLs, so arbitrary websites cannot invoke privacy-sensitive recording controls by navigating to the public `cap-desktop://` scheme alone.
+
 | URL | Behavior |
 | --- | --- |
 | `cap-desktop://record/start` | Starts recording with the saved recording mode from `RecordingSettingsStore`; falls back to Cap's default mode when none is saved |
