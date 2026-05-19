@@ -1,0 +1,22 @@
+{
+	"extends": "expo/tsconfig.base",
+	"compilerOptions": {
+		"strict": true,
+		"allowImportingTsExtensions": true,
+		"baseUrl": ".",
+		"paths": {
+			"@/*": ["src/*"],
+			"@modules/*": ["modules/*"]
+		},
+		"types": ["vitest/globals"]
+	},
+	"include": [
+		"app",
+		"src",
+		"modules",
+		"plugins",
+		"expo-env.d.ts",
+		"*.js",
+		".expo/types/**/*.ts"
+	]
+}
