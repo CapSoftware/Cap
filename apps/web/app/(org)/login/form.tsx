@@ -15,7 +15,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
@@ -43,10 +43,7 @@ export function LoginForm() {
 	const theme = Cookies.get("theme") || "light";
 
 	useEffect(() => {
-		theme === "dark"
-			? (document.body.className = "dark")
-			: (document.body.className = "light");
-		//remove the dark mode when we leave the dashboard
+		document.body.className = theme === "dark" ? "dark" : "light";
 		return () => {
 			document.body.className = "light";
 		};
@@ -104,7 +101,7 @@ export function LoginForm() {
 		}
 	}, [emailSent]);
 
-	const handleGoogleSignIn = () => {
+	const handleGoogleSignIn = useCallback(() => {
 		trackEvent("auth_started", {
 			method: "google",
 			is_signup: false,
@@ -113,7 +110,50 @@ export function LoginForm() {
 		signIn("google", {
 			...(next && next.length > 0 ? { callbackUrl: next } : {}),
 		});
-	};
+	}, [next]);
+
+	const handleWorkosSignIn = useCallback(
+		async (orgId: string) => {
+			const data = await getOrganizationSSOData(
+				Organisation.OrganisationId.make(orgId),
+			);
+			setOrganizationName(data.name);
+
+			signIn(
+				"workos",
+				next && next.length > 0 ? { callbackUrl: next } : undefined,
+				{
+					organization: data.organizationId,
+					connection: data.connectionId,
+				},
+			);
+		},
+		[next],
+	);
+
+	useEffect(() => {
+		if (searchParams?.get("mobileProvider") === "google") {
+			handleGoogleSignIn();
+		}
+
+		if (searchParams?.get("mobileProvider") !== "workos") return;
+		const mobileOrganizationId = searchParams.get("organizationId");
+		if (!mobileOrganizationId) {
+			setShowOrgInput(true);
+			return;
+		}
+
+		let active = true;
+		handleWorkosSignIn(mobileOrganizationId).catch(() => {
+			if (!active) return;
+			setOrganizationId(mobileOrganizationId);
+			setShowOrgInput(true);
+			toast.error("Organization not found or SSO not configured");
+		});
+		return () => {
+			active = false;
+		};
+	}, [handleGoogleSignIn, handleWorkosSignIn, searchParams]);
 
 	const handleOrganizationLookup = async (e: React.FormEvent) => {
 		e.preventDefault();
@@ -123,15 +163,7 @@ export function LoginForm() {
 		}
 
 		try {
-			const data = await getOrganizationSSOData(
-				Organisation.OrganisationId.make(organizationId),
-			);
-			setOrganizationName(data.name);
-
-			signIn("workos", undefined, {
-				organization: data.organizationId,
-				connection: data.connectionId,
-			});
+			await handleWorkosSignIn(organizationId);
 		} catch (error) {
 			console.error("Lookup Error:", error);
 			toast.error("Organization not found or SSO not configured");
@@ -372,6 +404,8 @@ const LoginWithSSO = ({
 	setOrganizationId: (organizationId: string) => void;
 	organizationName: string | null;
 }) => {
+	const organizationIdInputId = useId();
+
 	return (
 		<motion.form
 			layout
@@ -379,7 +413,7 @@ const LoginWithSSO = ({
 			className="relative space-y-2"
 		>
 			<MotionInput
-				id="organizationId"
+				id={organizationIdInputId}
 				placeholder="Enter your Organization ID..."
 				value={organizationId}
 				onChange={(e) => setOrganizationId(e.target.value)}
@@ -415,12 +449,13 @@ const NormalLogin = ({
 	handleGoogleSignIn: () => void;
 }) => {
 	const publicEnv = usePublicEnv();
+	const emailInputId = useId();
 
 	return (
 		<motion.div>
 			<motion.div layout className="flex flex-col space-y-3">
 				<MotionInput
-					id="email"
+					id={emailInputId}
 					name="email"
 					autoFocus
 					type="email"
