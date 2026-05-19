@@ -375,6 +375,9 @@ importers:
       vite-plugin-solid:
         specifier: ^2.10.2
         version: 2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   apps/web:
     dependencies:
@@ -890,6 +893,9 @@ importers:
       dotenv-cli:
         specifier: ^10.0.0
         version: 10.0.0
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   infra:
     dependencies:
@@ -961,6 +967,9 @@ importers:
       eslint-utils:
         specifier: ^3.0.0
         version: 3.0.0(eslint@8.57.1)
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/database:
     dependencies:
@@ -1064,6 +1073,9 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.8.3
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/env:
     dependencies:
@@ -1077,6 +1089,9 @@ importers:
       '@types/node':
         specifier: ^22.15.14
         version: 22.15.14
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/local-docker: {}
 
@@ -1098,6 +1113,9 @@ importers:
       typescript:
         specifier: ^5.7.3
         version: 5.8.3
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/sdk-recorder:
     dependencies:
@@ -1117,8 +1135,15 @@ importers:
       typescript:
         specifier: ^5.7.3
         version: 5.8.3
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
-  packages/tsconfig: {}
+  packages/tsconfig:
+    devDependencies:
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/ui:
     dependencies:
@@ -1344,6 +1369,9 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.8.3
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/web-api-contract:
     dependencies:
@@ -1353,6 +1381,10 @@ importers:
       zod:
         specifier: ^3.25.76
         version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/web-api-contract-effect:
     dependencies:
@@ -1362,6 +1394,10 @@ importers:
       effect:
         specifier: ^3.18.4
         version: 3.18.4
+    devDependencies:
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/web-backend:
     dependencies:
@@ -1422,6 +1458,10 @@ importers:
       server-only:
         specifier: ^0.0.1
         version: 0.0.1
+    devDependencies:
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
   packages/web-domain:
     dependencies:
@@ -1441,6 +1481,9 @@ importers:
       '@effect/platform-node':
         specifier: ^0.98.3
         version: 0.98.3(@effect/cluster@0.50.4(@effect/platform@0.92.1(effect@3.18.4))(@effect/rpc@0.71.0(@effect/platform@0.92.1(effect@3.18.4))(effect@3.18.4))(@effect/sql@0.44.2(@effect/experimental@0.56.0(@effect/platform@0.92.1(effect@3.18.4))(effect@3.18.4)(ioredis@5.6.1))(@effect/platform@0.92.1(effect@3.18.4))(effect@3.18.4))(@effect/workflow@0.11.3(@effect/platform@0.92.1(effect@3.18.4))(@effect/rpc@0.71.0(@effect/platform@0.92.1(effect@3.18.4))(effect@3.18.4))(effect@3.18.4))(effect@3.18.4))(@effect/platform@0.92.1(effect@3.18.4))(@effect/rpc@0.71.0(@effect/platform@0.92.1(effect@3.18.4))(effect@3.18.4))(@effect/sql@0.44.2(@effect/experimental@0.56.0(@effect/platform@0.92.1(effect@3.18.4))(effect@3.18.4)(ioredis@5.6.1))(@effect/platform@0.92.1(effect@3.18.4))(effect@3.18.4))(effect@3.18.4)
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.44.0)
 
 packages:
 

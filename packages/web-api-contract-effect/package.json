@@ -4,8 +4,14 @@
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"type": "module",
+	"scripts": {
+		"test": "vitest run"
+	},
 	"dependencies": {
 		"@effect/platform": "^0.92.1",
 		"effect": "^3.18.4"
+	},
+	"devDependencies": {
+		"vitest": "~2.1.9"
 	}
 }
