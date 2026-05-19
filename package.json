@@ -18,6 +18,7 @@
 		"dev": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
 		"dev:desktop": "pnpm run --filter=@cap/desktop dev",
 		"dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
+		"dev:mobile": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS=1 EXPO_PUBLIC_CAP_WEB_URL=${EXPO_PUBLIC_CAP_WEB_URL:-http://localhost:3000} dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/mobile --env-mode=loose --ui tui",
 		"dev:web": "pnpm dev --filter=!@cap/desktop",
 		"dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
 		"docker:clean": "turbo run docker:clean",
@@ -59,6 +60,9 @@
 		"typescript": "^5.8.3"
 	},
 	"pnpm": {
+		"overrides": {
+			"react-native-worklets": "0.7.4"
+		},
 		"peerDependencyRules": {
 			"allowedVersions": {
 				"next-auth>next": ">=16.0.0"
