@@ -5,13 +5,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as shell from "@tauri-apps/plugin-shell";
 import { check } from "@tauri-apps/plugin-updater";
-import {
-	createMemo,
-	createResource,
-	createSignal,
-	For,
-	Show,
-} from "solid-js";
+import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 import { RevealWindowWithSuspense } from "~/App";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
