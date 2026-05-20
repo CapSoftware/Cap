@@ -4054,6 +4054,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             get_display_frame_for_cropping,
             windows::position_traffic_lights,
             windows::set_theme,
+            windows::apply_macos_liquid_glass_background,
             global_message_dialog,
             show_window,
             write_clipboard_string,
@@ -4274,8 +4275,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(PendingScreenshots::default());
             app.manage(FinalizingRecordings::default());
 
-            gpu_context::prewarm_gpu();
-
             #[cfg(unix)]
             {
                 let app_for_signal = app.clone();
@@ -4405,6 +4404,21 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 let app = app.clone();
                 move |_| {
                     app.state::<MainWindowReadyState>().set_ready(true);
+                    gpu_context::prewarm_gpu();
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        let app = app.clone();
+                        tokio::spawn(async move {
+                            if let Some(prewarmer) =
+                                app.try_state::<crate::platform::ScreenCapturePrewarmer>()
+                            {
+                                prewarmer.request(false).await;
+                            } else {
+                                warn!("ScreenCapturePrewarmer state unavailable after main window ready");
+                            }
+                        });
+                    }
                 }
             });
 

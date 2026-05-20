@@ -29,8 +29,7 @@ use crate::panel_manager::{PanelManager, PanelState, PanelWindowType, is_window_
 
 use crate::{
     App, ArcLock, CameraWindowCloseGate, CameraWindowPositionGuard, MainWindowReadyState,
-    NewNotification, RequestScreenCapturePrewarm, RequestSetTargetMode,
-    camera_preview_error_message,
+    NewNotification, RequestSetTargetMode, camera_preview_error_message,
     editor_window::PendingEditorInstances,
     emit_camera_preview_clear, emit_camera_preview_error, fake_window,
     general_settings::{self, AppTheme, GeneralSettingsStore},
@@ -700,8 +699,8 @@ fn is_position_on_any_screen(pos_x: f64, pos_y: f64) -> bool {
 }
 
 fn ensure_settings_window_bounds(window: &WebviewWindow) {
-    const MIN_W: f64 = 800.0;
-    const MIN_H: f64 = 580.0;
+    const MIN_W: f64 = 780.0;
+    const MIN_H: f64 = 560.0;
     let _ = window.set_min_size(Some(LogicalSize::new(MIN_W, MIN_H)));
     if let (Ok(physical), Ok(scale)) = (window.inner_size(), window.scale_factor()) {
         let width = physical.width as f64 / scale;
@@ -837,6 +836,10 @@ impl CapWindowId {
     }
 
     pub fn is_transparent(&self) -> bool {
+        if matches!(self, Self::Settings) {
+            return cfg!(target_os = "macos");
+        }
+
         matches!(
             self,
             Self::Main
@@ -873,6 +876,7 @@ impl CapWindowId {
             | Self::RecordingsOverlay
             | Self::RecordingControls
             | Self::TargetSelectOverlay { .. } => None,
+            Self::Settings => Some(Some(LogicalPosition::new(22.0, 22.0))),
             _ => Some(None),
         }
     }
@@ -882,7 +886,7 @@ impl CapWindowId {
             Self::Main => (330.0, 395.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
-            Self::Settings => (800.0, 580.0),
+            Self::Settings => (780.0, 560.0),
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (580.0, 340.0),
@@ -1320,9 +1324,7 @@ impl ShowCapWindow {
                     },
                 );
             } else {
-                if let Self::Main { .. } = self {
-                    restore_main_window_inputs(app).await;
-                }
+                let should_restore_main_window_inputs = matches!(self, Self::Main { .. });
 
                 if let Self::Onboarding = self {
                     let _ = window.set_ignore_cursor_events(false);
@@ -1344,6 +1346,13 @@ impl ShowCapWindow {
                             display_id: cursor_display_id,
                         },
                     );
+                }
+
+                if should_restore_main_window_inputs {
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        restore_main_window_inputs(&app).await;
+                    });
                 }
             }
 
@@ -1450,21 +1459,6 @@ impl ShowCapWindow {
                         }
                     })
                     .ok();
-
-                    let app_handle = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Some(prewarmer) =
-                            app_handle.try_state::<crate::platform::ScreenCapturePrewarmer>()
-                        {
-                            prewarmer.request(false).await;
-                        } else {
-                            warn!(
-                                "ScreenCapturePrewarmer state unavailable during main window creation"
-                            );
-                        }
-                    });
-
-                    emit_app_event(app, RequestScreenCapturePrewarm { force: false });
                 }
 
                 #[cfg(not(target_os = "macos"))]
@@ -1640,24 +1634,30 @@ impl ShowCapWindow {
                 window
             }
             Self::Settings { page } => {
-                let window = self
+                let mut builder = self
                     .window_builder(
                         app,
                         format!("/settings/{}", page.clone().unwrap_or_default()),
                     )
-                    .inner_size(800.0, 580.0)
-                    .min_inner_size(800.0, 580.0)
+                    .inner_size(782.0, 775.0)
+                    .min_inner_size(780.0, 560.0)
                     .resizable(true)
                     .maximized(false)
-                    .focused(true)
-                    .build()?;
+                    .focused(true);
 
-                let (pos_x, pos_y) = cursor_monitor.center_position(800.0, 580.0);
+                #[cfg(target_os = "macos")]
+                {
+                    builder = builder.transparent(true);
+                }
+
+                let window = builder.build()?;
+
+                let (pos_x, pos_y) = cursor_monitor.center_position(782.0, 775.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 #[cfg(windows)]
                 {
-                    if let Err(e) = window.set_size(LogicalSize::new(800.0, 580.0)) {
+                    if let Err(e) = window.set_size(LogicalSize::new(782.0, 775.0)) {
                         warn!("Failed to set Settings window size on Windows: {}", e);
                     }
                     if let Err(e) = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y)) {
@@ -2854,6 +2854,38 @@ impl MonitorExt for Display {
             .into_iter()
             .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
         }
+    }
+}
+
+#[specta::specta]
+#[tauri::command(async)]
+#[instrument(skip(_window))]
+pub async fn apply_macos_liquid_glass_background(
+    _window: tauri::Window,
+    _enabled: bool,
+    _radius: f64,
+) -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let window = _window.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        _window
+            .run_on_main_thread(move || {
+                let result =
+                    crate::platform::apply_liquid_glass_background(&window, _enabled, _radius);
+                let _ = tx.send(result);
+            })
+            .map_err(|error| error.to_string())?;
+
+        return rx
+            .await
+            .map_err(|_| "macOS Liquid Glass task was cancelled".to_string())?;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(false)
     }
 }
 
