@@ -469,9 +469,17 @@ async fn add_camera_preview_ws_sender(
     camera_feed: &ActorRef<CameraFeed>,
     sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
 ) {
+    add_camera_preview_sender(camera_feed, sender, "WebSocket").await;
+}
+
+async fn add_camera_preview_sender(
+    camera_feed: &ActorRef<CameraFeed>,
+    sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
+    label: &str,
+) {
     let result = camera_feed.ask(feeds::camera::AddSender(sender)).await;
     if let Err(err) = result {
-        warn!(error = %err, "Failed to add camera WebSocket sender");
+        warn!(error = %err, "Failed to add {label} camera sender");
     }
 }
 
@@ -483,6 +491,26 @@ async fn remove_camera_preview_sender(
     let result = camera_feed.ask(feeds::camera::RemoveSender(sender)).await;
     if let Err(err) = result {
         warn!(error = %err, "Failed to remove {label} camera sender");
+    }
+}
+
+async fn sync_camera_preview_sender(
+    camera_feed: &ActorRef<CameraFeed>,
+    camera_ws_sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
+    camera_preview_sender: Option<flume::Sender<cap_recording::FFmpegVideoFrame>>,
+    use_ws_preview: bool,
+) {
+    if use_ws_preview {
+        if let Some(sender) = camera_preview_sender {
+            remove_camera_preview_sender(camera_feed, sender, "native preview").await;
+        }
+
+        add_camera_preview_ws_sender(camera_feed, camera_ws_sender).await;
+    } else if let Some(sender) = camera_preview_sender {
+        add_camera_preview_sender(camera_feed, sender, "native preview").await;
+        remove_camera_preview_sender(camera_feed, camera_ws_sender, "WebSocket").await;
+    } else {
+        add_camera_preview_ws_sender(camera_feed, camera_ws_sender).await;
     }
 }
 
@@ -847,27 +875,15 @@ async fn set_camera_input(
     };
     let current_id = app.selected_camera_id.clone();
     let camera_in_use = app.camera_in_use;
-    #[allow(deprecated)]
-    let camera_ws_sender = app.camera_ws_sender.clone();
-    let camera_preview_sender = app.camera_preview.sender();
     drop(app);
 
     let skip_camera_window = skip_camera_window.unwrap_or(false);
-
-    if id == current_id && camera_in_use && skip_camera_window {
-        if let Some(sender) = camera_preview_sender {
-            remove_camera_preview_sender(&camera_feed, sender, "native preview").await;
-        }
-        add_camera_preview_ws_sender(&camera_feed, camera_ws_sender).await;
-        return Ok(());
-    }
+    let camera_window_is_visible = CapWindowId::Camera
+        .get(&app_handle)
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
 
     if id == current_id && camera_in_use && !skip_camera_window {
-        let camera_window_is_visible = CapWindowId::Camera
-            .get(&app_handle)
-            .and_then(|window| window.is_visible().ok())
-            .unwrap_or(false);
-
         let show_result = if camera_window_is_visible {
             Ok(())
         } else {
@@ -925,6 +941,9 @@ async fn set_camera_input(
                 recording_settings::RecordingSettingsStore::camera_settings_for(&app_handle, id);
             let (camera_ws_sender, camera_preview_sender, use_ws_preview) = {
                 let app = &mut *state.write().await;
+                let use_ws_preview = !(camera_window_is_visible
+                    && app.camera_preview.is_initialized()
+                    && !app.camera_preview.is_paused());
                 app.selected_camera_id = Some(id.clone());
                 app.camera_in_use = true;
                 app.camera_cleanup_done = false;
@@ -932,21 +951,17 @@ async fn set_camera_input(
                 (
                     app.camera_ws_sender.clone(),
                     app.camera_preview.sender(),
-                    skip_camera_window
-                        || app.camera_preview.is_paused()
-                        || !app.camera_preview.is_initialized(),
+                    use_ws_preview,
                 )
             };
 
-            if use_ws_preview {
-                if let Some(sender) = camera_preview_sender {
-                    remove_camera_preview_sender(&camera_feed, sender, "native preview").await;
-                }
-                add_camera_preview_ws_sender(&camera_feed, camera_ws_sender).await;
-            } else {
-                #[allow(deprecated)]
-                remove_camera_preview_sender(&camera_feed, camera_ws_sender, "WebSocket").await;
-            }
+            sync_camera_preview_sender(
+                &camera_feed,
+                camera_ws_sender,
+                camera_preview_sender,
+                use_ws_preview,
+            )
+            .await;
 
             let mut showed_camera_window = skip_camera_window;
             let mut attempts = 0;
