@@ -1286,7 +1286,7 @@ function CameraPreviewInline() {
 	};
 
 	const scheduleReconnect = () => {
-		if (isCleanedUp) return;
+		if (isCleanedUp || reconnectTimeoutId !== undefined || ws) return;
 
 		if (retryCount >= WS_MAX_RETRIES) {
 			setConnectionFailed(true);
@@ -1301,7 +1301,8 @@ function CameraPreviewInline() {
 		);
 
 		reconnectTimeoutId = setTimeout(() => {
-			if (isCleanedUp) return;
+			reconnectTimeoutId = undefined;
+			if (isCleanedUp || ws || !hasCameraSelected()) return;
 			retryCount += 1;
 			ws = createSocket();
 		}, backoffMs);
@@ -1316,6 +1317,13 @@ function CameraPreviewInline() {
 		}
 	};
 
+	const cleanupSocket = (socket: WebSocket) => {
+		socket.onopen = null;
+		socket.onclose = null;
+		socket.onerror = null;
+		socket.onmessage = null;
+	};
+
 	const createSocket = () => {
 		if (!cameraWsPort) return undefined;
 
@@ -1323,14 +1331,14 @@ function CameraPreviewInline() {
 		socket.binaryType = "arraybuffer";
 
 		socket.onopen = () => {
-			resetBackoff();
+			setConnectionFailed(false);
 			lastFrameTime = Date.now();
 		};
 
 		socket.onclose = () => {
-			if (!isCleanedUp) {
-				scheduleReconnect();
-			}
+			cleanupSocket(socket);
+			if (ws === socket) ws = undefined;
+			if (!isCleanedUp && hasCameraSelected()) scheduleReconnect();
 		};
 
 		socket.onerror = () => {
@@ -1338,6 +1346,7 @@ function CameraPreviewInline() {
 		};
 
 		socket.onmessage = (event) => {
+			resetBackoff();
 			lastFrameTime = Date.now();
 			if (pendingRender) return;
 
@@ -1443,8 +1452,6 @@ function CameraPreviewInline() {
 					lastFrameTime = Date.now();
 					commands.refreshCameraFeed().catch(() => {});
 					ws?.close();
-					resetBackoff();
-					ws = createSocket();
 				}
 			}, WS_STALL_TIMEOUT_MS);
 		} else {
@@ -1453,6 +1460,7 @@ function CameraPreviewInline() {
 				ws.readyState !== WebSocket.CLOSING &&
 				ws.readyState !== WebSocket.CLOSED
 			) {
+				cleanupSocket(ws);
 				ws.close();
 			}
 			ws = undefined;
@@ -1474,14 +1482,20 @@ function CameraPreviewInline() {
 		latestImageData = null;
 		if (reconnectTimeoutId !== undefined) {
 			clearTimeout(reconnectTimeoutId);
+			reconnectTimeoutId = undefined;
 		}
 		if (stallCheckInterval !== undefined) {
 			clearInterval(stallCheckInterval);
+			stallCheckInterval = undefined;
 		}
 		reusableFrame = null;
 		reusableFrameWidth = 0;
 		reusableFrameHeight = 0;
-		ws?.close();
+		if (ws) {
+			cleanupSocket(ws);
+			ws.close();
+			ws = undefined;
+		}
 	});
 
 	const previewDimensions = () => {

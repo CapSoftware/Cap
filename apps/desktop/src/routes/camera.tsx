@@ -510,13 +510,18 @@ function LegacyCameraPreviewPage(props: {
 	}
 
 	const STALL_TIMEOUT_MS = 2000;
+	const WS_INITIAL_BACKOFF_MS = 1000;
+	const WS_MAX_BACKOFF_MS = 30000;
+	const WS_MAX_RETRIES = 10;
 
 	const { cameraWsPort } = window.__CAP__;
 	const [isWindowVisible, setIsWindowVisible] = createSignal(!document.hidden);
 	const [_isConnected, setIsConnected] = createSignal(false);
 	let ws: WebSocket | undefined;
-	let reconnectInterval: ReturnType<typeof setInterval> | undefined;
+	let reconnectTimeout: ReturnType<typeof setTimeout> | undefined;
 	let stallCheckInterval: ReturnType<typeof setInterval> | undefined;
+	let retryCount = 0;
+	let isCleanedUp = false;
 	let lastFrameTime = 0;
 
 	onMount(() => {
@@ -537,7 +542,7 @@ function LegacyCameraPreviewPage(props: {
 		const socket = new WebSocket(`ws://localhost:${cameraWsPort}`);
 		socket.binaryType = "arraybuffer";
 
-		socket.addEventListener("open", () => {
+		socket.onopen = () => {
 			setIsConnected(true);
 			lastFrameTime = Date.now();
 			reusableFrameData = null;
@@ -551,19 +556,24 @@ function LegacyCameraPreviewPage(props: {
 					cameraCanvasRef.height,
 				);
 			}
-		});
+		};
 
-		socket.addEventListener("close", () => {
+		socket.onclose = () => {
 			setIsConnected(false);
-		});
+			cleanupSocket(socket);
+			if (ws === socket) ws = undefined;
+			scheduleReconnect();
+		};
 
-		socket.addEventListener("error", () => {
+		socket.onerror = () => {
 			setIsConnected(false);
-		});
+			socket.close();
+		};
 
 		socket.onmessage = (event) => {
 			if (!isWindowVisible()) return;
 
+			retryCount = 0;
 			lastFrameTime = Date.now();
 			if (pendingRender) return;
 
@@ -623,10 +633,42 @@ function LegacyCameraPreviewPage(props: {
 		return socket;
 	};
 
+	const cleanupSocket = (socket: WebSocket) => {
+		socket.onopen = null;
+		socket.onclose = null;
+		socket.onerror = null;
+		socket.onmessage = null;
+	};
+
+	const scheduleReconnect = () => {
+		if (
+			isCleanedUp ||
+			reconnectTimeout ||
+			ws ||
+			!isWindowVisible() ||
+			retryCount >= WS_MAX_RETRIES
+		) {
+			return;
+		}
+
+		const backoffMs = Math.min(
+			WS_INITIAL_BACKOFF_MS * 2 ** retryCount,
+			WS_MAX_BACKOFF_MS,
+		);
+
+		reconnectTimeout = setTimeout(() => {
+			reconnectTimeout = undefined;
+			if (isCleanedUp || ws || !isWindowVisible()) return;
+			retryCount += 1;
+			lastFrameTime = Date.now();
+			ws = createSocket();
+		}, backoffMs);
+	};
+
 	const stopSocket = () => {
-		if (reconnectInterval) {
-			clearInterval(reconnectInterval);
-			reconnectInterval = undefined;
+		if (reconnectTimeout) {
+			clearTimeout(reconnectTimeout);
+			reconnectTimeout = undefined;
 		}
 
 		if (stallCheckInterval) {
@@ -635,6 +677,7 @@ function LegacyCameraPreviewPage(props: {
 		}
 
 		if (ws) {
+			cleanupSocket(ws);
 			ws.close();
 			ws = undefined;
 		}
@@ -645,15 +688,9 @@ function LegacyCameraPreviewPage(props: {
 	const startSocket = () => {
 		if (ws || !isWindowVisible()) return;
 
+		retryCount = 0;
 		lastFrameTime = Date.now();
 		ws = createSocket();
-
-		reconnectInterval = setInterval(() => {
-			if (!ws || ws.readyState !== WebSocket.OPEN) {
-				if (ws) ws.close();
-				ws = createSocket();
-			}
-		}, 5000);
 
 		stallCheckInterval = setInterval(() => {
 			if (
@@ -664,8 +701,7 @@ function LegacyCameraPreviewPage(props: {
 			) {
 				lastFrameTime = Date.now();
 				commands.refreshCameraFeed().catch(() => {});
-				if (ws) ws.close();
-				ws = createSocket();
+				ws.close();
 			}
 		}, STALL_TIMEOUT_MS);
 	};
@@ -679,6 +715,7 @@ function LegacyCameraPreviewPage(props: {
 	});
 
 	onCleanup(() => {
+		isCleanedUp = true;
 		if (rafId !== null) {
 			cancelAnimationFrame(rafId);
 			rafId = null;
