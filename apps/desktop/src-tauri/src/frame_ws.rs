@@ -7,6 +7,12 @@ use tokio_util::sync::CancellationToken;
 static TOTAL_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
 static TOTAL_FRAMES_SENT: AtomicU32 = AtomicU32::new(0);
 static LAST_LOG_TIME: AtomicU64 = AtomicU64::new(0);
+static TOTAL_PACK_NS: AtomicU64 = AtomicU64::new(0);
+static MAX_PACK_NS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_SEND_NS: AtomicU64 = AtomicU64::new(0);
+static MAX_SEND_NS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_CREATED_TO_SENT_NS: AtomicU64 = AtomicU64::new(0);
+static MAX_CREATED_TO_SENT_NS: AtomicU64 = AtomicU64::new(0);
 
 const NV12_FORMAT_MAGIC: u32 = 0x4e563132;
 
@@ -73,6 +79,29 @@ fn pack_ws_frame(frame: &WSFrame) -> Vec<u8> {
     }
 
     buf
+}
+
+fn duration_ns(duration: std::time::Duration) -> u64 {
+    duration.as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+fn record_ws_frame_stats(
+    packed_len: usize,
+    pack_duration: std::time::Duration,
+    send_duration: std::time::Duration,
+    created_to_sent: std::time::Duration,
+) {
+    TOTAL_BYTES_SENT.fetch_add(packed_len as u64, Ordering::Relaxed);
+    TOTAL_FRAMES_SENT.fetch_add(1, Ordering::Relaxed);
+    let pack_ns = duration_ns(pack_duration);
+    let send_ns = duration_ns(send_duration);
+    let created_to_sent_ns = duration_ns(created_to_sent);
+    TOTAL_PACK_NS.fetch_add(pack_ns, Ordering::Relaxed);
+    MAX_PACK_NS.fetch_max(pack_ns, Ordering::Relaxed);
+    TOTAL_SEND_NS.fetch_add(send_ns, Ordering::Relaxed);
+    MAX_SEND_NS.fetch_max(send_ns, Ordering::Relaxed);
+    TOTAL_CREATED_TO_SENT_NS.fetch_add(created_to_sent_ns, Ordering::Relaxed);
+    MAX_CREATED_TO_SENT_NS.fetch_max(created_to_sent_ns, Ordering::Relaxed);
 }
 
 pub async fn create_watch_frame_ws(
@@ -142,13 +171,21 @@ pub async fn create_watch_frame_ws(
                             WSFrameFormat::Rgba => "RGBA",
                         };
 
+                        let pack_start = Instant::now();
                         let packed = pack_ws_frame(frame);
+                        let pack_duration = pack_start.elapsed();
                         let packed_len = packed.len();
 
+                        let send_start = Instant::now();
                         match socket.send(Message::Binary(packed)).await {
                             Ok(()) => {
-                                TOTAL_BYTES_SENT.fetch_add(packed_len as u64, Ordering::Relaxed);
-                                TOTAL_FRAMES_SENT.fetch_add(1, Ordering::Relaxed);
+                                let send_duration = send_start.elapsed();
+                                record_ws_frame_stats(
+                                    packed_len,
+                                    pack_duration,
+                                    send_duration,
+                                    frame.created_at.elapsed(),
+                                );
                                 let now_ms = SystemTime::now()
                                     .duration_since(UNIX_EPOCH)
                                     .map(|duration| duration.as_millis() as u64)
@@ -158,11 +195,26 @@ pub async fn create_watch_frame_ws(
                                     LAST_LOG_TIME.store(now_ms, Ordering::Relaxed);
                                     let total_bytes = TOTAL_BYTES_SENT.swap(0, Ordering::Relaxed);
                                     let total_frames = TOTAL_FRAMES_SENT.swap(0, Ordering::Relaxed);
+                                    let total_pack_ns = TOTAL_PACK_NS.swap(0, Ordering::Relaxed);
+                                    let max_pack_ns = MAX_PACK_NS.swap(0, Ordering::Relaxed);
+                                    let total_send_ns = TOTAL_SEND_NS.swap(0, Ordering::Relaxed);
+                                    let max_send_ns = MAX_SEND_NS.swap(0, Ordering::Relaxed);
+                                    let total_created_to_sent_ns =
+                                        TOTAL_CREATED_TO_SENT_NS.swap(0, Ordering::Relaxed);
+                                    let max_created_to_sent_ns =
+                                        MAX_CREATED_TO_SENT_NS.swap(0, Ordering::Relaxed);
+                                    let frames = total_frames.max(1) as f64;
                                     let mb_per_sec = total_bytes as f64 / 1_000_000.0 / 2.0;
                                     tracing::info!(
                                         fps = total_frames / 2,
                                         mb_per_sec = format!("{:.1}", mb_per_sec),
                                         avg_kb = format!("{:.1}", (total_bytes as f64 / total_frames.max(1) as f64) / 1024.0),
+                                        pack_avg_ms = format!("{:.3}", total_pack_ns as f64 / frames / 1_000_000.0),
+                                        pack_max_ms = format!("{:.3}", max_pack_ns as f64 / 1_000_000.0),
+                                        send_avg_ms = format!("{:.3}", total_send_ns as f64 / frames / 1_000_000.0),
+                                        send_max_ms = format!("{:.3}", max_send_ns as f64 / 1_000_000.0),
+                                        created_to_sent_avg_ms = format!("{:.3}", total_created_to_sent_ns as f64 / frames / 1_000_000.0),
+                                        created_to_sent_max_ms = format!("{:.3}", max_created_to_sent_ns as f64 / 1_000_000.0),
                                         dims = format!("{}x{}", width, height),
                                         format = format_label,
                                         "WS frame stats"

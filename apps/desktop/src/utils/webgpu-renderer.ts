@@ -76,6 +76,24 @@ export interface WebGPURenderer {
 	canvas: OffscreenCanvas;
 }
 
+export interface WebGPURenderTiming {
+	resizeMs: number;
+	textureSetupMs: number;
+	uploadMs: number;
+	drawMs: number;
+	totalMs: number;
+}
+
+function createEmptyTiming(start: number): WebGPURenderTiming {
+	return {
+		resizeMs: 0,
+		textureSetupMs: 0,
+		uploadMs: 0,
+		drawMs: 0,
+		totalMs: performance.now() - start,
+	};
+}
+
 async function requestWebGPUAdapter(): Promise<GPUAdapter | null> {
 	let highPerformanceAdapter: GPUAdapter | null = null;
 	try {
@@ -244,11 +262,17 @@ export function renderFrameWebGPU(
 	width: number,
 	height: number,
 	bytesPerRow: number = width * 4,
-): void {
+): WebGPURenderTiming {
+	const totalStart = performance.now();
+	let resizeMs = 0;
+	let textureSetupMs = 0;
+	let uploadMs = 0;
+	let drawMs = 0;
 	const { device, context, pipeline, sampler, bindGroupLayout, canvas } =
 		renderer;
 
 	if (canvas.width !== width || canvas.height !== height) {
+		const start = performance.now();
 		canvas.width = width;
 		canvas.height = height;
 		const format = navigator.gpu.getPreferredCanvasFormat();
@@ -257,9 +281,11 @@ export function renderFrameWebGPU(
 			format,
 			alphaMode: "opaque",
 		});
+		resizeMs = performance.now() - start;
 	}
 
 	if (renderer.cachedWidth !== width || renderer.cachedHeight !== height) {
+		const start = performance.now();
 		renderer.frameTexture?.destroy();
 		renderer.frameTexture = device.createTexture({
 			size: { width, height },
@@ -275,10 +301,11 @@ export function renderFrameWebGPU(
 		});
 		renderer.cachedWidth = width;
 		renderer.cachedHeight = height;
+		textureSetupMs = performance.now() - start;
 	}
 
 	if (!renderer.frameTexture || !renderer.bindGroup) {
-		return;
+		return createEmptyTiming(totalStart);
 	}
 
 	const requiredBytes = bytesPerRow * height;
@@ -286,19 +313,22 @@ export function renderFrameWebGPU(
 		console.error(
 			`WebGPU renderFrame: buffer too small. Expected at least ${requiredBytes} bytes, got ${data.byteLength}`,
 		);
-		return;
+		return createEmptyTiming(totalStart);
 	}
 
 	const textureData =
 		data.byteLength > requiredBytes ? data.subarray(0, requiredBytes) : data;
 
+	const uploadStart = performance.now();
 	device.queue.writeTexture(
 		{ texture: renderer.frameTexture },
 		textureData.buffer as unknown as GPUAllowSharedBufferSource,
 		{ offset: textureData.byteOffset, bytesPerRow, rowsPerImage: height },
 		{ width, height },
 	);
+	uploadMs = performance.now() - uploadStart;
 
+	const drawStart = performance.now();
 	const encoder = device.createCommandEncoder();
 	const currentTexture = context.getCurrentTexture();
 	const pass = encoder.beginRenderPass({
@@ -318,6 +348,15 @@ export function renderFrameWebGPU(
 	pass.end();
 
 	device.queue.submit([encoder.finish()]);
+	drawMs = performance.now() - drawStart;
+
+	return {
+		resizeMs,
+		textureSetupMs,
+		uploadMs,
+		drawMs,
+		totalMs: performance.now() - totalStart,
+	};
 }
 
 export function renderNv12FrameWebGPU(
@@ -326,7 +365,12 @@ export function renderNv12FrameWebGPU(
 	width: number,
 	height: number,
 	yStride: number,
-): void {
+): WebGPURenderTiming {
+	const totalStart = performance.now();
+	let resizeMs = 0;
+	let textureSetupMs = 0;
+	let uploadMs = 0;
+	let drawMs = 0;
 	const {
 		device,
 		context,
@@ -337,6 +381,7 @@ export function renderNv12FrameWebGPU(
 	} = renderer;
 
 	if (canvas.width !== width || canvas.height !== height) {
+		const start = performance.now();
 		canvas.width = width;
 		canvas.height = height;
 		const format = navigator.gpu.getPreferredCanvasFormat();
@@ -345,12 +390,14 @@ export function renderNv12FrameWebGPU(
 			format,
 			alphaMode: "opaque",
 		});
+		resizeMs = performance.now() - start;
 	}
 
 	if (
 		renderer.cachedNv12Width !== width ||
 		renderer.cachedNv12Height !== height
 	) {
+		const start = performance.now();
 		renderer.yTexture?.destroy();
 		renderer.uvTexture?.destroy();
 
@@ -377,10 +424,11 @@ export function renderNv12FrameWebGPU(
 
 		renderer.cachedNv12Width = width;
 		renderer.cachedNv12Height = height;
+		textureSetupMs = performance.now() - start;
 	}
 
 	if (!renderer.yTexture || !renderer.uvTexture || !renderer.nv12BindGroup) {
-		return;
+		return createEmptyTiming(totalStart);
 	}
 
 	const ySize = yStride * height;
@@ -390,12 +438,13 @@ export function renderNv12FrameWebGPU(
 	const uvSize = uvStride * uvHeight;
 
 	if (data.byteLength < ySize + uvSize) {
-		return;
+		return createEmptyTiming(totalStart);
 	}
 
 	const yData = data.subarray(0, ySize);
 	const uvData = data.subarray(ySize, ySize + uvSize);
 
+	const uploadStart = performance.now();
 	device.queue.writeTexture(
 		{ texture: renderer.yTexture },
 		yData.buffer as unknown as GPUAllowSharedBufferSource,
@@ -413,7 +462,9 @@ export function renderNv12FrameWebGPU(
 		},
 		{ width: uvWidth, height: uvHeight },
 	);
+	uploadMs = performance.now() - uploadStart;
 
+	const drawStart = performance.now();
 	const encoder = device.createCommandEncoder();
 	const pass = encoder.beginRenderPass({
 		colorAttachments: [
@@ -432,6 +483,15 @@ export function renderNv12FrameWebGPU(
 	pass.end();
 
 	device.queue.submit([encoder.finish()]);
+	drawMs = performance.now() - drawStart;
+
+	return {
+		resizeMs,
+		textureSetupMs,
+		uploadMs,
+		drawMs,
+		totalMs: performance.now() - totalStart,
+	};
 }
 
 export function disposeWebGPU(renderer: WebGPURenderer): void {

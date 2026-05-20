@@ -1,7 +1,8 @@
 use anyhow::Result;
 use cap_project::{
     AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, CornerStyle, Crop,
-    CursorEvents, MaskKind, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
+    CursorEvents, CursorType, MaskKind, ProjectConfiguration, RecordingMeta, StudioRecordingMeta,
+    XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -10,7 +11,7 @@ use cursor_interpolation::{
 };
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use frame_pipeline::{
-    NV12BufferPool, RenderSession, finish_encoder, finish_encoder_nv12_pooled,
+    NV12BufferPool, RenderSession, finish_encoder_nv12_pooled, finish_encoder_timed,
     flush_pending_readback,
 };
 use futures::future::OptionFuture;
@@ -3292,6 +3293,27 @@ pub struct DecodedSegmentFrames {
     pub recording_time: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameRenderStageTimings {
+    pub prepare_duration: std::time::Duration,
+    pub background_prepare_duration: std::time::Duration,
+    pub background_blur_prepare_duration: std::time::Duration,
+    pub display_prepare_duration: std::time::Duration,
+    pub cursor_prepare_duration: std::time::Duration,
+    pub camera_prepare_duration: std::time::Duration,
+    pub camera_only_prepare_duration: std::time::Duration,
+    pub camera_blur_prepare_duration: std::time::Duration,
+    pub text_prepare_duration: std::time::Duration,
+    pub captions_prepare_duration: std::time::Duration,
+    pub keyboard_prepare_duration: std::time::Duration,
+    pub layer_render_duration: std::time::Duration,
+    pub finish_duration: std::time::Duration,
+    pub finish_wait_previous_duration: std::time::Duration,
+    pub finish_resize_duration: std::time::Duration,
+    pub finish_submit_readback_duration: std::time::Duration,
+    pub immediate_flush_duration: std::time::Duration,
+}
+
 pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
     session: Option<RenderSession>,
@@ -3330,6 +3352,19 @@ impl<'a> FrameRenderer<'a> {
         render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<Option<RenderedFrame>, RenderingError> {
+        self.render_with_timings(segment_frames, uniforms, cursor, render_display, layers)
+            .await
+            .map(|(frame, _)| frame)
+    }
+
+    pub async fn render_with_timings(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        render_display: bool,
+        layers: &mut RendererLayers,
+    ) -> Result<(Option<RenderedFrame>, FrameRenderStageTimings), RenderingError> {
         let mut last_error = None;
 
         for attempt in 0..Self::MAX_RENDER_RETRIES {
@@ -3358,7 +3393,7 @@ impl<'a> FrameRenderer<'a> {
                 uniforms.output_size.1,
             );
 
-            match produce_frame(
+            match produce_frame_with_timings(
                 self.constants,
                 segment_frames.clone(),
                 uniforms.clone(),
@@ -3369,7 +3404,7 @@ impl<'a> FrameRenderer<'a> {
             )
             .await
             {
-                Ok(opt_frame) => return Ok(opt_frame),
+                Ok(result) => return Ok(result),
                 Err(RenderingError::BufferMapWaitingFailed) => {
                     tracing::warn!(
                         frame_number = uniforms.frame_number,
@@ -3402,15 +3437,34 @@ impl<'a> FrameRenderer<'a> {
         render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<RenderedFrame, RenderingError> {
-        if let Some(frame) = self
-            .render(segment_frames, uniforms, cursor, render_display, layers)
-            .await?
-        {
-            return Ok(frame);
-        }
-        self.flush_pipeline()
+        self.render_immediate_with_timings(segment_frames, uniforms, cursor, render_display, layers)
             .await
-            .unwrap_or(Err(RenderingError::BufferMapWaitingFailed))
+            .map(|(frame, _)| frame)
+    }
+
+    pub async fn render_immediate_with_timings(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        render_display: bool,
+        layers: &mut RendererLayers,
+    ) -> Result<(RenderedFrame, FrameRenderStageTimings), RenderingError> {
+        let (frame, mut timings) = self
+            .render_with_timings(segment_frames, uniforms, cursor, render_display, layers)
+            .await?;
+
+        if let Some(frame) = frame {
+            return Ok((frame, timings));
+        }
+
+        let flush_start = Instant::now();
+        let frame = self
+            .flush_pipeline()
+            .await
+            .unwrap_or(Err(RenderingError::BufferMapWaitingFailed))?;
+        timings.immediate_flush_duration = flush_start.elapsed();
+        Ok((frame, timings))
     }
 
     pub async fn flush_pipeline(&mut self) -> Option<Result<RenderedFrame, RenderingError>> {
@@ -3824,6 +3878,15 @@ impl RendererLayers {
         }
     }
 
+    pub fn preload_cursor_assets(
+        &mut self,
+        constants: &RenderVideoConstants,
+        use_svg: bool,
+        cursor_type: &CursorType,
+    ) {
+        self.cursor.preload_assets(constants, use_svg, cursor_type);
+    }
+
     pub async fn prepare(
         &mut self,
         constants: &RenderVideoConstants,
@@ -3925,6 +3988,30 @@ impl RendererLayers {
         encoder: &mut wgpu::CommandEncoder,
         render_display: bool,
     ) -> Result<(), RenderingError> {
+        self.prepare_with_encoder_timed(
+            constants,
+            uniforms,
+            segment_frames,
+            cursor,
+            encoder,
+            render_display,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn prepare_with_encoder_timed(
+        &mut self,
+        constants: &RenderVideoConstants,
+        uniforms: &ProjectUniforms,
+        segment_frames: &DecodedSegmentFrames,
+        cursor: &CursorEvents,
+        encoder: &mut wgpu::CommandEncoder,
+        render_display: bool,
+    ) -> Result<FrameRenderStageTimings, RenderingError> {
+        let mut timings = FrameRenderStageTimings::default();
+
+        let start = Instant::now();
         self.background
             .prepare(
                 constants,
@@ -3932,11 +4019,15 @@ impl RendererLayers {
                 Background::from(uniforms.project.background.source.clone()),
             )
             .await?;
+        timings.background_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         if uniforms.project.background.blur > 0.0 {
             self.background_blur.prepare(&constants.queue, uniforms);
         }
+        timings.background_blur_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         if render_display {
             self.display.prepare_with_encoder(
                 &constants.device,
@@ -3947,7 +4038,9 @@ impl RendererLayers {
                 encoder,
             );
         }
+        timings.display_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         self.cursor.prepare(
             segment_frames,
             uniforms.resolution_base,
@@ -3956,7 +4049,9 @@ impl RendererLayers {
             uniforms,
             constants,
         );
+        timings.cursor_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         self.camera.prepare_with_encoder(
             &constants.device,
             &constants.queue,
@@ -3969,7 +4064,9 @@ impl RendererLayers {
             }),
             encoder,
         );
+        timings.camera_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         self.camera_only.prepare_with_encoder(
             &constants.device,
             &constants.queue,
@@ -3982,7 +4079,9 @@ impl RendererLayers {
             }),
             encoder,
         );
+        timings.camera_only_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         if let Some(mode) = blur_mode_from_config(&uniforms.project.camera.background_blur) {
             self.run_shared_camera_blur_with_encoder(
                 &constants.device,
@@ -3991,21 +4090,27 @@ impl RendererLayers {
                 mode,
             );
         }
+        timings.camera_blur_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         self.text.prepare(
             &constants.device,
             &constants.queue,
             uniforms.output_size,
             &uniforms.texts,
         );
+        timings.text_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         self.captions.prepare(
             uniforms,
             segment_frames,
             XY::new(uniforms.output_size.0, uniforms.output_size.1),
             constants,
         );
+        timings.captions_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         self.keyboard.prepare(
             uniforms,
             segment_frames,
@@ -4013,8 +4118,9 @@ impl RendererLayers {
             constants,
             self.captions.active_layout(),
         );
+        timings.keyboard_prepare_duration = start.elapsed();
 
-        Ok(())
+        Ok(timings)
     }
 
     pub fn render(
@@ -4121,7 +4227,7 @@ impl RendererLayers {
     }
 }
 
-async fn produce_frame(
+async fn produce_frame_with_timings(
     constants: &RenderVideoConstants,
     segment_frames: DecodedSegmentFrames,
     uniforms: ProjectUniforms,
@@ -4129,15 +4235,16 @@ async fn produce_frame(
     render_display: bool,
     layers: &mut RendererLayers,
     session: &mut RenderSession,
-) -> Result<Option<RenderedFrame>, RenderingError> {
+) -> Result<(Option<RenderedFrame>, FrameRenderStageTimings), RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         }),
     );
 
-    layers
-        .prepare_with_encoder(
+    let prepare_start = Instant::now();
+    let mut timings = layers
+        .prepare_with_encoder_timed(
             constants,
             &uniforms,
             &segment_frames,
@@ -4146,7 +4253,9 @@ async fn produce_frame(
             render_display,
         )
         .await?;
+    timings.prepare_duration = prepare_start.elapsed();
 
+    let layer_render_start = Instant::now();
     layers.render(
         &constants.device,
         &constants.queue,
@@ -4155,15 +4264,23 @@ async fn produce_frame(
         &uniforms,
         render_display,
     );
+    timings.layer_render_duration = layer_render_start.elapsed();
 
-    finish_encoder(
+    let finish_start = Instant::now();
+    let (frame, finish_timings) = finish_encoder_timed(
         session,
         &constants.device,
         &constants.queue,
         &uniforms,
         encoder,
     )
-    .await
+    .await?;
+    timings.finish_duration = finish_start.elapsed();
+    timings.finish_wait_previous_duration = finish_timings.wait_previous_duration;
+    timings.finish_resize_duration = finish_timings.resize_duration;
+    timings.finish_submit_readback_duration = finish_timings.submit_readback_duration;
+
+    Ok((frame, timings))
 }
 
 fn blur_mode_from_config(

@@ -8,6 +8,13 @@ use crate::{ProjectUniforms, RenderingError};
 
 const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FinishEncoderTimings {
+    pub wait_previous_duration: std::time::Duration,
+    pub resize_duration: std::time::Duration,
+    pub submit_readback_duration: std::time::Duration,
+}
+
 pub struct NV12BufferPool {
     buffers: Arc<Mutex<Vec<Vec<u8>>>>,
 }
@@ -952,13 +959,31 @@ pub async fn finish_encoder(
     uniforms: &ProjectUniforms,
     encoder: wgpu::CommandEncoder,
 ) -> Result<Option<RenderedFrame>, RenderingError> {
+    finish_encoder_timed(session, device, queue, uniforms, encoder)
+        .await
+        .map(|(frame, _)| frame)
+}
+
+pub async fn finish_encoder_timed(
+    session: &mut RenderSession,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    uniforms: &ProjectUniforms,
+    encoder: wgpu::CommandEncoder,
+) -> Result<(Option<RenderedFrame>, FinishEncoderTimings), RenderingError> {
+    let mut timings = FinishEncoderTimings::default();
+
+    let wait_start = Instant::now();
     let previous_frame = if let Some(prev) = session.pipelined_readback.take_pending() {
         Some(prev.wait(device).await?)
     } else {
         None
     };
+    timings.wait_previous_duration = wait_start.elapsed();
 
+    let resize_start = Instant::now();
     session.pipelined_readback.perform_resize_if_needed(device);
+    timings.resize_duration = resize_start.elapsed();
 
     let texture = if session.current_is_left {
         &session.textures.0
@@ -966,11 +991,13 @@ pub async fn finish_encoder(
         &session.textures.1
     };
 
+    let submit_start = Instant::now();
     session
         .pipelined_readback
         .submit_readback(device, queue, texture, uniforms, encoder)?;
+    timings.submit_readback_duration = submit_start.elapsed();
 
-    Ok(previous_frame)
+    Ok((previous_frame, timings))
 }
 
 pub async fn finish_encoder_nv12_pooled(
