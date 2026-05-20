@@ -5,6 +5,7 @@ import { SolidMarkdown } from "solid-markdown";
 
 import { AbsoluteInsetLoader } from "~/components/Loader";
 import { apiClient } from "~/utils/web-api";
+import { SettingsPageContent } from "./Setting";
 
 export default function Page() {
 	console.log("[Changelog] Component mounted");
@@ -47,12 +48,12 @@ export default function Page() {
 	const fadeIn = changelog.isLoading;
 
 	return (
-		<div class="cap-settings-page flex flex-col h-full">
-			<div class="relative flex-1 custom-scroll">
+		<div class="cap-settings-page flex flex-col h-full custom-scroll">
+			<SettingsPageContent class="max-w-none">
 				<Suspense fallback={<AbsoluteInsetLoader />}>
 					<div
 						class={cx(
-							"flex flex-col p-6 gap-6 text-sm font-normal",
+							"flex flex-col gap-6 text-sm font-normal",
 							fadeIn && "animate-in fade-in",
 						)}
 					>
@@ -76,10 +77,10 @@ export default function Page() {
 													</div>
 												</Show>
 											</div>
-											<h3 class="font-semibold text-(--text-primary) mb-2">
+											<h3 class="text-sm font-semibold tracking-tight text-gray-12 mb-2">
 												{entry.title}
 											</h3>
-											<div class="text-(--text-tertiary) text-sm mb-4">
+											<div class="text-xs leading-relaxed text-gray-10 mb-4">
 												Version {entry.version} -{" "}
 												{new Date(entry.publishedAt).toLocaleDateString()}
 											</div>
@@ -98,7 +99,7 @@ export default function Page() {
 						</ErrorBoundary>
 					</div>
 				</Suspense>
-			</div>
+			</SettingsPageContent>
 		</div>
 	);
 }
