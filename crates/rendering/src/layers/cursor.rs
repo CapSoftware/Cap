@@ -36,6 +36,7 @@ pub struct CursorLayer {
     circle_cursor: Option<CursorTexture>,
     prev_is_svg_assets_enabled: Option<bool>,
     prev_cursor_type: Option<CursorType>,
+    cursor_assets_preloaded: bool,
 }
 
 struct Statics {
@@ -195,6 +196,7 @@ impl CursorLayer {
             circle_cursor: None,
             prev_is_svg_assets_enabled: None,
             prev_cursor_type: None,
+            cursor_assets_preloaded: false,
         }
     }
 
@@ -239,6 +241,91 @@ impl CursorLayer {
         }
 
         CursorTexture::prepare(constants, &rgba, (size, size), XY::new(0.5, 0.5))
+    }
+
+    fn load_cursor_texture(
+        constants: &RenderVideoConstants,
+        cursor_id: &str,
+        use_svg: bool,
+    ) -> Option<CursorTexture> {
+        let mut loaded_cursor = None;
+
+        let cursor_shape = match &constants.recording_meta.inner {
+            RecordingMetaInner::Studio(studio) => match studio.as_ref() {
+                StudioRecordingMeta::MultipleSegments {
+                    inner:
+                        MultipleSegments {
+                            cursors: Cursors::Correct(cursors),
+                            ..
+                        },
+                } => cursors.get(cursor_id).and_then(|v| v.shape),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        if let Some(cursor_shape) = cursor_shape
+            && use_svg
+            && let Some(info) = cursor_shape.resolve()
+        {
+            loaded_cursor = CursorTexture::prepare_svg(constants, info.raw, info.hotspot.into())
+                .map_err(|err| error!("Error loading SVG cursor {cursor_id:?}: {err}"))
+                .ok();
+        }
+
+        if let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta
+            && loaded_cursor.is_none()
+            && let Some(c) = inner.get_cursor_image(&constants.recording_meta, cursor_id)
+            && let Ok(img) = image::open(&c.path)
+                .map_err(|err| error!("Failed to load cursor image from {:?}: {err}", c.path))
+        {
+            loaded_cursor = Some(CursorTexture::prepare(
+                constants,
+                &img.to_rgba8(),
+                img.dimensions(),
+                c.hotspot,
+            ));
+        }
+
+        loaded_cursor
+    }
+
+    fn preload_cursor_textures(&mut self, constants: &RenderVideoConstants, use_svg: bool) {
+        let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta else {
+            return;
+        };
+
+        let Cursors::Correct(cursors) = &inner.cursors else {
+            return;
+        };
+
+        for cursor_id in cursors.keys() {
+            if !self.cursors.contains_key(cursor_id)
+                && let Some(texture) = Self::load_cursor_texture(constants, cursor_id, use_svg)
+            {
+                self.cursors.insert(cursor_id.clone(), texture);
+            }
+        }
+    }
+
+    pub(crate) fn preload_assets(
+        &mut self,
+        constants: &RenderVideoConstants,
+        use_svg: bool,
+        cursor_type: &CursorType,
+    ) {
+        self.prev_cursor_type = Some(cursor_type.clone());
+
+        if cursor_type == &CursorType::Circle {
+            if self.circle_cursor.is_none() {
+                self.circle_cursor = Some(Self::create_circle_cursor(constants));
+            }
+            return;
+        }
+
+        self.prev_is_svg_assets_enabled = Some(use_svg);
+        self.preload_cursor_textures(constants, use_svg);
+        self.cursor_assets_preloaded = true;
     }
 
     pub fn prepare(
@@ -335,6 +422,7 @@ impl CursorLayer {
         if self.prev_is_svg_assets_enabled != Some(uniforms.project.cursor.use_svg) {
             self.prev_is_svg_assets_enabled = Some(uniforms.project.cursor.use_svg);
             self.cursors.drain();
+            self.cursor_assets_preloaded = false;
         }
 
         let cursor_texture = if cursor_type == CursorType::Circle {
@@ -343,60 +431,19 @@ impl CursorLayer {
             }
             self.circle_cursor.as_ref().unwrap()
         } else {
-            if !self.cursors.contains_key(&interpolated_cursor.cursor_id) {
-                let mut loaded_cursor = None;
-
-                let cursor_shape = match &constants.recording_meta.inner {
-                    RecordingMetaInner::Studio(studio) => match studio.as_ref() {
-                        StudioRecordingMeta::MultipleSegments {
-                            inner:
-                                MultipleSegments {
-                                    cursors: Cursors::Correct(cursors),
-                                    ..
-                                },
-                        } => cursors
-                            .get(&interpolated_cursor.cursor_id)
-                            .and_then(|v| v.shape),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-
-                if let Some(cursor_shape) = cursor_shape
-                    && uniforms.project.cursor.use_svg
-                    && let Some(info) = cursor_shape.resolve()
-                {
-                    loaded_cursor =
-                        CursorTexture::prepare_svg(constants, info.raw, info.hotspot.into())
-                            .map_err(|err| {
-                                error!(
-                                    "Error loading SVG cursor {:?}: {err}",
-                                    interpolated_cursor.cursor_id
-                                )
-                            })
-                            .ok();
-                }
-
-                if let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta
-                    && loaded_cursor.is_none()
-                    && let Some(c) = inner
-                        .get_cursor_image(&constants.recording_meta, &interpolated_cursor.cursor_id)
-                    && let Ok(img) = image::open(&c.path).map_err(|err| {
-                        error!("Failed to load cursor image from {:?}: {err}", c.path)
-                    })
-                {
-                    loaded_cursor = Some(CursorTexture::prepare(
-                        constants,
-                        &img.to_rgba8(),
-                        img.dimensions(),
-                        c.hotspot,
-                    ));
-                }
-
-                if let Some(c) = loaded_cursor {
-                    self.cursors
-                        .insert(interpolated_cursor.cursor_id.clone(), c);
-                }
+            if !self.cursor_assets_preloaded {
+                self.preload_cursor_textures(constants, uniforms.project.cursor.use_svg);
+                self.cursor_assets_preloaded = true;
+            }
+            if !self.cursors.contains_key(&interpolated_cursor.cursor_id)
+                && let Some(texture) = Self::load_cursor_texture(
+                    constants,
+                    &interpolated_cursor.cursor_id,
+                    uniforms.project.cursor.use_svg,
+                )
+            {
+                self.cursors
+                    .insert(interpolated_cursor.cursor_id.clone(), texture);
             }
             let Some(tex) = self.cursors.get(&interpolated_cursor.cursor_id) else {
                 error!("Cursor {:?} not found!", interpolated_cursor.cursor_id);
