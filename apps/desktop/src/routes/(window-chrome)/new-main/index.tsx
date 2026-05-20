@@ -2133,25 +2133,6 @@ function Page() {
 		setOpenMicrophoneSettingsWhenReady(false);
 	});
 
-	createEffect(() => {
-		if (!enableDeviceQueries() || devices.isPending || devices.isLoading)
-			return;
-		const permissions = currentPermissions();
-		if (
-			permissions?.microphone !== "granted" &&
-			permissions?.microphone !== "notNeeded"
-		) {
-			return;
-		}
-		const micList = devices.microphones;
-		if (
-			rawOptions.micName &&
-			!micList.find((m) => m.name === rawOptions.micName)
-		) {
-			setOptions("micName", null);
-		}
-	});
-
 	const options = {
 		screen: () => {
 			let screen: CaptureDisplay | undefined;
