@@ -492,6 +492,8 @@ export const Share = ({
 							<Toolbar
 								onOptimisticComment={handleOptimisticComment}
 								onCommentSuccess={handleCommentSuccess}
+								disableComments={areCommentStampsDisabled}
+								disableReactions={areReactionStampsDisabled}
 								data={data}
 							/>
 						</div>
@@ -527,10 +529,8 @@ export const Share = ({
 						<Toolbar
 							onOptimisticComment={handleOptimisticComment}
 							onCommentSuccess={handleCommentSuccess}
-							disableReactions={
-								videoSettings?.disableReactions ??
-								data.orgSettings?.disableReactions
-							}
+							disableComments={areCommentStampsDisabled}
+							disableReactions={areReactionStampsDisabled}
 							data={data}
 						/>
 					</div>
