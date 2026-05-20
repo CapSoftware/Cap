@@ -11,6 +11,7 @@ import type { Organisation } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { calculateProSeats } from "@/utils/organization";
+import { requireOrganizationProSeatManager } from "./authorization";
 
 export async function toggleProSeat(
 	memberId: string,
@@ -20,19 +21,10 @@ export async function toggleProSeat(
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
 
-	const [organization] = await db()
-		.select()
-		.from(organizations)
-		.where(eq(organizations.id, organizationId))
-		.limit(1);
-
-	if (!organization) {
-		throw new Error("Organization not found");
-	}
-
-	if (organization.ownerId !== user.id) {
-		throw new Error("Only the owner can manage Pro seats");
-	}
+	const actor = await requireOrganizationProSeatManager(
+		user.id,
+		organizationId,
+	);
 
 	await db().transaction(async (tx) => {
 		const [member] = await tx
@@ -50,7 +42,7 @@ export async function toggleProSeat(
 			throw new Error("Member not found");
 		}
 
-		if (member.userId === organization.ownerId) {
+		if (member.userId === actor.ownerId) {
 			throw new Error("Cannot toggle Pro seat for the organization owner");
 		}
 
@@ -74,7 +66,7 @@ export async function toggleProSeat(
 					stripeSubscriptionId: users.stripeSubscriptionId,
 				})
 				.from(users)
-				.where(eq(users.id, organization.ownerId))
+				.where(eq(users.id, actor.ownerId))
 				.limit(1);
 
 			const { proSeatsRemaining } = calculateProSeats({
