@@ -82,24 +82,23 @@
 /* Dark theme variables */
 :root.dark {
 	color-scheme: dark;
-	/* Main background colors */
-	--gray-50: #141414; /* Main background - slightly darker */
-	--gray-100: #181818; /* Secondary background */
-	--gray-200: #222222; /* Borders and dividers */
-	--gray-300: #323232; /* Subtle highlights */
-	--gray-400: #868686; /* Secondary text - slightly softer */
-	--gray-450: #eaeaea; /* Adjusted to be more balanced */
-	--gray-500: #ffffff; /* Primary text - titles/headings */
+	--gray-50: #111111;
+	--gray-100: #1c1c1c;
+	--gray-200: #282828;
+	--gray-300: #323232;
+	--gray-400: #a1a1a1;
+	--gray-450: #eaeaea;
+	--gray-500: #ffffff;
 
-	--gray-50-transparent-50: rgba(20, 20, 20, 0.5);
-	--gray-100-transparent-50: rgba(24, 24, 24, 0.5);
-	--gray-200-transparent-50: rgba(34, 34, 34, 0.5);
+	--gray-50-transparent-50: rgba(17, 17, 17, 0.5);
+	--gray-100-transparent-50: rgba(28, 28, 28, 0.5);
+	--gray-200-transparent-50: rgba(40, 40, 40, 0.5);
 	--gray-300-transparent-50: rgba(50, 50, 50, 0.5);
-	--gray-400-transparent-50: rgba(134, 134, 134, 0.5);
+	--gray-400-transparent-50: rgba(161, 161, 161, 0.5);
 	--gray-450-transparent-50: rgba(234, 234, 234, 0.5);
 	--gray-500-transparent-50: rgba(255, 255, 255, 0.5);
 
-	--transparent-window: rgba(22, 22, 22, 0.7);
+	--transparent-window: rgba(28, 28, 28, 0.85);
 
 	/* Add new variables for text hierarchy */
 	--text-primary: rgba(255, 255, 255, 0.95); /* Section titles, headings */
@@ -130,6 +129,7 @@
 	--blue-200: #2e426b;
 	--blue-300: #4785ff;
 	--blue-400: #5c8fff;
+	--blue-500: #0a84ff;
 
 	--blue-transparent-10: rgba(71, 133, 255, 0.1);
 	--blue-transparent-20: rgba(71, 133, 255, 0.2);
@@ -143,6 +143,14 @@
 	--red-transparent-20: rgba(255, 71, 102, 0.2);
 
 	--shadow-s: 0px 8px 16px 0px rgba(0, 0, 0, 0.4);
+
+	--gray-1: #111111;
+	--gray-2: #1c1c1c;
+	--gray-3: #282828;
+	--gray-4: #323232;
+	--gray-5: #3a3a3a;
+	--gray-6: #444444;
+	--gray-11: #a1a1a1;
 }
 
 .dark .dark-button-shadow {
@@ -257,22 +265,22 @@
 }
 
 :root.dark {
-	--macos-settings-window: rgba(30, 30, 30, 0.86);
-	--macos-settings-sidebar: rgba(36, 36, 36, 0.74);
-	--macos-settings-content: rgba(28, 28, 28, 0.82);
-	--macos-settings-card: rgba(38, 38, 38, 0.94);
-	--macos-settings-fill: rgba(255, 255, 255, 0.1);
-	--macos-settings-control-fill: rgba(255, 255, 255, 0.32);
-	--macos-settings-control-hover: rgba(255, 255, 255, 0.42);
-	--macos-settings-control-active: rgba(255, 255, 255, 0.16);
-	--macos-settings-selection: rgba(255, 255, 255, 0.14);
-	--macos-settings-hover: rgba(255, 255, 255, 0.1);
-	--macos-settings-border: rgba(255, 255, 255, 0.1);
-	--macos-settings-text: rgba(255, 255, 255, 0.9);
-	--macos-settings-muted: rgba(255, 255, 255, 0.5);
+	--macos-settings-window: rgba(17, 17, 17, 0.94);
+	--macos-settings-sidebar: rgba(22, 22, 22, 0.9);
+	--macos-settings-content: rgba(17, 17, 17, 0.94);
+	--macos-settings-card: rgba(28, 28, 28, 0.96);
+	--macos-settings-fill: rgba(255, 255, 255, 0.05);
+	--macos-settings-control-fill: rgba(255, 255, 255, 0.08);
+	--macos-settings-control-hover: rgba(255, 255, 255, 0.12);
+	--macos-settings-control-active: rgba(255, 255, 255, 0.06);
+	--macos-settings-selection: #2c2c2c;
+	--macos-settings-hover: rgba(255, 255, 255, 0.05);
+	--macos-settings-border: rgba(255, 255, 255, 0.07);
+	--macos-settings-text: rgba(255, 255, 255, 0.95);
+	--macos-settings-muted: #a1a1a1;
 	--macos-settings-shadow:
-		0 28px 80px rgba(0, 0, 0, 0.44), 0 4px 18px rgba(0, 0, 0, 0.26);
-	--macos-settings-dimmed-bg: rgba(51, 51, 51, 0.3);
+		0 28px 80px rgba(0, 0, 0, 0.55), 0 4px 18px rgba(0, 0, 0, 0.32);
+	--macos-settings-dimmed-bg: rgba(17, 17, 17, 0.7);
 }
 
 [data-macos-visual-system="liquid-glass"] {
@@ -290,16 +298,18 @@
 }
 
 :root.dark[data-macos-visual-system="liquid-glass"] {
-	--macos-settings-sidebar: rgba(255, 255, 255, 0.24);
-	--macos-settings-content: #1c1c1c;
-	--macos-settings-card: rgba(255, 255, 255, 0.18);
-	--macos-settings-fill: rgba(255, 255, 255, 0.09);
-	--macos-settings-control-fill: rgba(255, 255, 255, 0.36);
-	--macos-settings-control-hover: rgba(255, 255, 255, 0.56);
-	--macos-settings-control-active: rgba(255, 255, 255, 0.2);
-	--macos-settings-hover: rgba(255, 255, 255, 0.12);
-	--macos-settings-selection: rgba(255, 255, 255, 0.18);
-	--macos-settings-border: rgba(255, 255, 255, 0.2);
+	--macos-settings-sidebar: rgba(28, 28, 28, 0.88);
+	--macos-settings-content: rgba(17, 17, 17, 0.92);
+	--macos-settings-card: rgba(28, 28, 28, 0.94);
+	--macos-settings-fill: rgba(255, 255, 255, 0.05);
+	--macos-settings-control-fill: rgba(255, 255, 255, 0.08);
+	--macos-settings-control-hover: rgba(255, 255, 255, 0.12);
+	--macos-settings-control-active: rgba(255, 255, 255, 0.06);
+	--macos-settings-hover: rgba(255, 255, 255, 0.05);
+	--macos-settings-selection: #2c2c2c;
+	--macos-settings-border: rgba(255, 255, 255, 0.07);
+	--macos-settings-text: rgba(255, 255, 255, 0.95);
+	--macos-settings-muted: #a1a1a1;
 }
 
 [data-macos-native-material],
@@ -319,6 +329,10 @@
 	border-bottom: 1px solid var(--macos-settings-border);
 	-webkit-backdrop-filter: blur(28px) saturate(1.45);
 	backdrop-filter: blur(28px) saturate(1.45);
+}
+
+:root.dark[data-macos-native-material] .cap-window-header {
+	background: rgba(28, 28, 28, 0.88);
 }
 
 [data-macos-visual-system="liquid-glass"] .cap-window-shell {
@@ -341,10 +355,9 @@
 	background: rgba(255, 255, 255, 0.55);
 }
 
-.dark
-	[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+.dark[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
 	.cap-window-shell {
-	background: rgba(30, 30, 30, 0.45);
+	background: rgba(17, 17, 17, 0.88);
 }
 
 [data-macos-visual-system="liquid-glass"] .cap-window-shell > * + * {
@@ -372,12 +385,10 @@
 	background-color: var(--macos-settings-control-fill);
 }
 
-.dark
-	[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+.dark[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
 	.cap-window-body
 	.dark\:bg-gray-3,
-.dark
-	[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+.dark[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
 	.cap-window-body
 	.dark\:bg-gray-4 {
 	background-color: var(--macos-settings-control-fill);
@@ -398,8 +409,7 @@
 [data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
 	.cap-window-body
 	.border-gray-4,
-.dark
-	[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+.dark[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
 	.cap-window-body
 	.dark\:border-gray-5 {
 	border-color: var(--macos-settings-border);
