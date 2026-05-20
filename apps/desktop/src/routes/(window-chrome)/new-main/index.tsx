@@ -2058,7 +2058,60 @@ function Page() {
 
 	const setCamera = createCameraMutation();
 
+	const suspendRecordingInputsForScreenshot = async () => {
+		await Promise.all([
+			commands
+				.setMicInput(null)
+				.catch((error) =>
+					console.error(
+						"Failed to suspend mic input for screenshot mode:",
+						error,
+					),
+				),
+			commands
+				.setCameraInput(null, null)
+				.catch((error) =>
+					console.error(
+						"Failed to suspend camera input for screenshot mode:",
+						error,
+					),
+				),
+		]);
+	};
+
+	const restoreRecordingInputs = async (
+		micName: string | null,
+		cameraID: DeviceOrModelID | null,
+	) => {
+		if (micName) {
+			await setMicInput
+				.mutateAsync(micName)
+				.catch((error) => console.error("Failed to set mic input:", error));
+		}
+
+		if (cameraID) {
+			await setCamera
+				.mutateAsync({ model: cameraID })
+				.catch((error) => console.error("Failed to set camera input:", error));
+		}
+	};
+
 	createUpdateCheck();
+
+	createEffect((wasScreenshotMode) => {
+		const isScreenshotMode = rawOptions.mode === "screenshot";
+
+		if (isScreenshotMode && !wasScreenshotMode) {
+			void suspendRecordingInputsForScreenshot();
+		} else if (!isScreenshotMode && wasScreenshotMode) {
+			void restoreRecordingInputs(
+				rawOptions.micName ?? null,
+				rawOptions.cameraID ?? null,
+			);
+		}
+
+		return isScreenshotMode;
+	}, false);
 
 	onMount(async () => {
 		if (document.activeElement instanceof HTMLElement) {
@@ -2091,16 +2144,19 @@ function Page() {
 		void emit("main-window-ready");
 		scheduleTargetListPrewarm();
 
-		if (rawOptions.micName) {
-			setMicInput
-				.mutateAsync(rawOptions.micName)
-				.catch((error) => console.error("Failed to set mic input:", error));
-		}
+		const storedSettings = await recordingSettingsStore.get().catch((error) => {
+			console.error("Failed to read recording settings:", error);
+			return null;
+		});
+		const mode = storedSettings?.mode ?? rawOptions.mode;
 
-		if (rawOptions.cameraID) {
-			setCamera
-				.mutateAsync({ model: rawOptions.cameraID })
-				.catch((error) => console.error("Failed to set camera input:", error));
+		if (mode === "screenshot") {
+			await suspendRecordingInputsForScreenshot();
+		} else {
+			await restoreRecordingInputs(
+				storedSettings?.micName ?? rawOptions.micName ?? null,
+				storedSettings?.cameraId ?? rawOptions.cameraID ?? null,
+			);
 		}
 
 		const unlistenFocus = currentWindow.onFocusChanged(
@@ -2528,19 +2584,23 @@ function Page() {
 							name="Area"
 							class="flex-1"
 						/>
-						<TargetTypeButton
-							selected={rawOptions.targetMode === "camera"}
-							Component={IconLucideVideo}
-							disabled={isRecording()}
-							onClick={() => {
-								toggleTargetMode("camera");
-							}}
-							name="Camera Only"
-							class="flex-1"
-						/>
+						<Show when={(rawOptions.mode as string) !== "screenshot"}>
+							<TargetTypeButton
+								selected={rawOptions.targetMode === "camera"}
+								Component={IconLucideVideo}
+								disabled={isRecording()}
+								onClick={() => {
+									toggleTargetMode("camera");
+								}}
+								name="Camera Only"
+								class="flex-1"
+							/>
+						</Show>
 					</div>
 				</div>
-				<BaseControls />
+				<Show when={(rawOptions.mode as string) !== "screenshot"}>
+					<BaseControls />
+				</Show>
 			</div>
 		</Transition>
 	);

@@ -56,7 +56,11 @@ import {
 } from "~/components/Cropper";
 import ModeSelect from "~/components/ModeSelect";
 import SelectionHint from "~/components/selection-hint";
-import { authStore, generalSettingsStore } from "~/store";
+import {
+	authStore,
+	generalSettingsStore,
+	recordingSettingsStore,
+} from "~/store";
 import { getCameraWindow } from "~/utils/camera-window";
 import { createDevicesQuery } from "~/utils/devices";
 import {
@@ -1637,25 +1641,81 @@ function RecordingControls(props: {
 	}));
 	const setCamera = createCameraMutation();
 
-	onMount(async () => {
-		if (rawOptions.micName) {
-			setMicInput
-				.mutateAsync(rawOptions.micName)
+	const suspendRecordingInputsForScreenshot = async () => {
+		await Promise.all([
+			commands
+				.setMicInput(null)
+				.catch((error) =>
+					console.error(
+						"Failed to suspend mic input for screenshot mode:",
+						error,
+					),
+				),
+			commands
+				.setCameraInput(null, null)
+				.catch((error) =>
+					console.error(
+						"Failed to suspend camera input for screenshot mode:",
+						error,
+					),
+				),
+		]);
+	};
+
+	const restoreRecordingInputs = async (
+		micName: string | null,
+		cameraID: DeviceOrModelID | null,
+	) => {
+		const isCameraOnly = props.target.variant === "cameraOnly";
+
+		if (micName) {
+			await setMicInput
+				.mutateAsync(micName)
 				.catch((error) => console.error("Failed to set mic input:", error));
 		}
 
-		const isCameraOnly = props.target.variant === "cameraOnly";
-		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
-			await setCamera.mutateAsync({
-				model: { ModelID: rawOptions.cameraID.ModelID },
-				skipCameraWindow: isCameraOnly,
-			});
-		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
-			await setCamera.mutateAsync({
-				model: { DeviceID: rawOptions.cameraID.DeviceID },
-				skipCameraWindow: isCameraOnly,
-			});
+		if (cameraID) {
+			await setCamera
+				.mutateAsync({
+					model: cameraID,
+					skipCameraWindow: isCameraOnly,
+				})
+				.catch((error) => console.error("Failed to set camera input:", error));
+		}
+	};
 
+	createEffect((wasScreenshotMode) => {
+		const isScreenshotMode = rawOptions.mode === "screenshot";
+
+		if (isScreenshotMode && !wasScreenshotMode) {
+			void suspendRecordingInputsForScreenshot();
+		} else if (!isScreenshotMode && wasScreenshotMode) {
+			void restoreRecordingInputs(
+				rawOptions.micName ?? null,
+				rawOptions.cameraID ?? null,
+			);
+		}
+
+		return isScreenshotMode;
+	}, false);
+
+	onMount(async () => {
+		const storedSettings = await recordingSettingsStore.get().catch((error) => {
+			console.error("Failed to read recording settings:", error);
+			return null;
+		});
+		const mode = storedSettings?.mode ?? rawOptions.mode;
+
+		if (mode === "screenshot") {
+			await suspendRecordingInputsForScreenshot();
+		} else {
+			await restoreRecordingInputs(
+				storedSettings?.micName ?? rawOptions.micName ?? null,
+				storedSettings?.cameraId ?? rawOptions.cameraID ?? null,
+			);
+		}
+
+		const isCameraOnly = props.target.variant === "cameraOnly";
 		if (isCameraOnly) {
 			const win = await getCameraWindow();
 			if (win) win.close();

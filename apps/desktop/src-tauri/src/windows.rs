@@ -40,7 +40,7 @@ use crate::{
     target_select_overlay::WindowFocusManager,
     window_exclusion::WindowExclusion,
 };
-use cap_recording::{feeds, sources::screen_capture::ScreenCaptureTarget};
+use cap_recording::{RecordingMode, feeds, sources::screen_capture::ScreenCaptureTarget};
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -300,6 +300,40 @@ pub(crate) async fn restore_main_window_inputs(app: &AppHandle) {
         .ok()
         .flatten()
         .unwrap_or_default();
+
+    if matches!(settings.mode, Some(RecordingMode::Screenshot)) {
+        if let Err(err) = crate::set_mic_input(state.clone(), None).await {
+            warn!("Failed to suspend microphone input for screenshot mode: {err}");
+        }
+
+        let Some(operation_lock) = app.try_state::<crate::CameraWindowOperationLock>() else {
+            warn!("CameraWindowOperationLock unavailable while suspending camera input");
+            return;
+        };
+
+        let _operation_guard = operation_lock.lock().await;
+        let (camera_feed, had_camera_input) = {
+            let app_state = &mut *state.write().await;
+            let had_camera_input =
+                app_state.selected_camera_id.is_some() || app_state.camera_in_use;
+            app_state.selected_camera_id = None;
+            app_state.camera_in_use = false;
+            app_state.camera_cleanup_done = true;
+            app_state.camera_preview.pause();
+            (app_state.camera_feed.clone(), had_camera_input)
+        };
+
+        if had_camera_input && let Err(err) = camera_feed.ask(feeds::camera::RemoveInput).await {
+            warn!("Failed to suspend camera input for screenshot mode: {err}");
+        }
+
+        if let Some(window) = CapWindowId::Camera.get(app) {
+            let _ = window.hide();
+        }
+
+        return;
+    }
+
     let stored_camera_id = settings.camera_id.clone();
 
     if let Err(err) = crate::set_mic_input(state.clone(), settings.mic_name).await {
