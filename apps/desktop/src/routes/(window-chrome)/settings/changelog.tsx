@@ -58,7 +58,7 @@ export default function Page() {
 					>
 						<ErrorBoundary
 							fallback={(e) => (
-								<div class="text-[--text-primary] font-medium">
+								<div class="text-(--text-primary) font-medium">
 									{e.toString()}
 								</div>
 							)}
@@ -66,20 +66,20 @@ export default function Page() {
 							<ul class="space-y-8">
 								<For each={changelog.data}>
 									{(entry, i) => (
-										<li class="border-b-2 border-[--gray-200] pb-8 last:border-b-0">
+										<li class="border-b-2 border-(--gray-200) pb-8 last:border-b-0">
 											<div class="flex mb-2">
 												<Show when={i() === 0}>
-													<div class="bg-[--blue-400] text-[--text-primary] px-2 py-1 rounded-md uppercase font-bold">
+													<div class="bg-(--blue-400) text-(--text-primary) px-2 py-1 rounded-md uppercase font-bold">
 														<span style="color: #fff" class="text-xs">
 															New
 														</span>
 													</div>
 												</Show>
 											</div>
-											<h3 class="font-semibold text-[--text-primary] mb-2">
+											<h3 class="font-semibold text-(--text-primary) mb-2">
 												{entry.title}
 											</h3>
-											<div class="text-[--text-tertiary] text-sm mb-4">
+											<div class="text-(--text-tertiary) text-sm mb-4">
 												Version {entry.version} -{" "}
 												{new Date(entry.publishedAt).toLocaleDateString()}
 											</div>
@@ -87,7 +87,7 @@ export default function Page() {
 												components={{
 													a: (props) => <a {...props} target="_blank" />,
 												}}
-												class="prose dark:prose-invert prose-sm max-w-none text-[--text-tertiary]"
+												class="prose dark:prose-invert prose-sm max-w-none text-(--text-tertiary)"
 											>
 												{entry.content}
 											</SolidMarkdown>

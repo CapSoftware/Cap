@@ -49,7 +49,7 @@ export default function ModeInfoPanel(props: ModeInfoPanelProps) {
 					onClick={() => props.onBack()}
 					class="flex gap-1 items-center rounded-md px-1.5 text-xs cursor-pointer
 					text-gray-11 transition-opacity hover:opacity-70 hover:text-gray-12
-					focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
+					focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
 				>
 					<IconLucideArrowLeft class="size-3 text-gray-11" />
 					<span class="font-medium text-gray-12">Back</span>
@@ -89,7 +89,7 @@ export default function ModeInfoPanel(props: ModeInfoPanelProps) {
 													</div>
 												)}
 
-												<div class="flex-shrink-0">
+												<div class="shrink-0">
 													<option.icon
 														class={cx(
 															"size-5 invert dark:invert-0",

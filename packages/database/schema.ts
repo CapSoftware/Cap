@@ -1,4 +1,5 @@
 import type {
+	AiGenerationLanguage,
 	Comment,
 	Folder,
 	ImageUpload,
@@ -202,6 +203,7 @@ export const organizations = mysqlTable(
 			disableComments?: boolean;
 			hideShareableLinkCapLogo?: boolean;
 			shareableLinkUseOrganizationIcon?: boolean;
+			aiGenerationLanguage?: AiGenerationLanguage;
 		}>(),
 		iconUrl: varchar("iconUrl", {
 			length: 1024,

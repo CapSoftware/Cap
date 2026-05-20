@@ -101,8 +101,8 @@ export function SegmentContent(props: ComponentProps<"div">) {
 		<div
 			{...props}
 			class={cx(
-				"relative w-full h-full flex flex-row items-center py-[0.25rem]",
-				ctx.width() < 100 ? "px-0" : "px-[0.5rem]",
+				"relative w-full h-full flex flex-row items-center py-1",
+				ctx.width() < 100 ? "px-0" : "px-2",
 				props.class,
 			)}
 		/>

@@ -474,7 +474,7 @@ function ControlButton(
 	return (
 		<KToggleButton
 			type="button"
-			class="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12"
+			class="p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12"
 			{...props}
 		/>
 	);
@@ -1003,7 +1003,7 @@ function LegacyCameraPreviewPage(props: {
 	const chrome = createCameraWindowChromeVisibility();
 	const toolbarClass = () =>
 		cx(
-			"flex flex-row gap-[0.25rem] p-[0.25rem] rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10",
+			"flex flex-row gap-1 p-1 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10",
 			chrome.visible()
 				? "opacity-100 translate-y-0"
 				: "opacity-0 translate-y-2",
@@ -1364,7 +1364,7 @@ function CameraIssueOverlay(props: {
 	return (
 		<div
 			class={cx(
-				"absolute z-10 flex items-center justify-center overflow-hidden bg-black/75 backdrop-blur-sm px-4 pointer-events-none",
+				"absolute z-10 flex items-center justify-center overflow-hidden bg-black/75 backdrop-blur-xs px-4 pointer-events-none",
 				props.class ?? "inset-0",
 			)}
 			style={style()}

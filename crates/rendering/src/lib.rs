@@ -100,12 +100,27 @@ impl Nv12RenderStartupBreakdownMs {
     }
 }
 
+const NON_HARDWARE_WGPU_ADAPTER_MARKERS: &[&str] = &[
+    "parsec",
+    "displaylink",
+    "splashtop",
+    "synergy",
+    "virtual display",
+    "microsoft basic render",
+    "microsoft basic",
+    "warp",
+];
+
 pub fn is_software_wgpu_adapter(info: &wgpu::AdapterInfo) -> bool {
-    matches!(info.device_type, wgpu::DeviceType::Cpu)
-        || info
-            .name
-            .to_lowercase()
-            .contains("microsoft basic render driver")
+    matches!(
+        info.device_type,
+        wgpu::DeviceType::Cpu | wgpu::DeviceType::VirtualGpu
+    ) || {
+        let name = info.name.to_ascii_lowercase();
+        NON_HARDWARE_WGPU_ADAPTER_MARKERS
+            .iter()
+            .any(|marker| name.contains(marker))
+    }
 }
 
 fn force_software_wgpu_adapter() -> bool {

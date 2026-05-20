@@ -34,7 +34,11 @@ export function CaptionsTrack(props: {
 	const minDuration = () =>
 		Math.max(MIN_SEGMENT_SECS, secsPerPixel() * MIN_SEGMENT_PIXELS);
 
-	const captionSegments = () => project.timeline?.captionSegments ?? [];
+	const captionSegments = createMemo(() =>
+		(project.timeline?.captionSegments ?? []).filter(
+			(s) => s.start < totalDuration(),
+		),
+	);
 	const selectedCaptionIndices = createMemo(() => {
 		const selection = editorState.timeline.selection;
 		if (!selection || selection.type !== "caption") return null;
@@ -134,7 +138,7 @@ export function CaptionsTrack(props: {
 			<For
 				each={captionSegments()}
 				fallback={
-					<div class="text-center text-sm text-[--text-tertiary] flex flex-col gap-2 justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl">
+					<div class="text-center text-sm text-(--text-tertiary) flex flex-col gap-2 justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl">
 						<div>No captions</div>
 						<button
 							class="h-8 px-3 rounded-lg border border-green-7/50 bg-green-6/15 text-green-11 text-xs font-medium transition-colors hover:bg-green-6/25 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -157,7 +161,8 @@ export function CaptionsTrack(props: {
 						return indices.has(i());
 					});
 
-					const segmentWidth = () => segment.end - segment.start;
+					const segmentWidth = () =>
+						Math.min(segment.end, totalDuration()) - segment.start;
 
 					return (
 						<SegmentRoot
@@ -165,11 +170,14 @@ export function CaptionsTrack(props: {
 							data-index={i()}
 							class={cx(
 								"border duration-200 hover:border-green-6 transition-colors group",
-								"bg-gradient-to-r from-[#0d1f12] via-[#162618] to-[#0d1f12]",
+								"bg-linear-to-r from-[#0d1f12] via-[#162618] to-[#0d1f12]",
 								isSelected() ? "border-green-7" : "border-transparent",
 							)}
 							innerClass="ring-green-6"
-							segment={segment}
+							segment={{
+								start: segment.start,
+								end: Math.min(segment.end, totalDuration()),
+							}}
 							onMouseDown={(e) => {
 								e.stopPropagation();
 								if (editorState.timeline.interactMode === "split") {
