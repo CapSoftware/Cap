@@ -110,6 +110,12 @@ export function canManageOrganizationBilling(
 	return role === "owner";
 }
 
+export function canManageOrganizationProSeats(
+	role: OrganizationRole | null | undefined,
+) {
+	return role === "owner" || role === "admin";
+}
+
 export function canManageOrganizationSettings(
 	role: OrganizationRole | null | undefined,
 ) {
