@@ -8,6 +8,7 @@ import { authStore } from "~/store";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
+import { Section, SectionCard, SettingsPageContent } from "../Setting";
 
 const GoogleDriveIcon = (props: { class?: string }) => (
 	<svg
@@ -101,39 +102,43 @@ export default function AppsTab() {
 	};
 
 	return (
-		<div class="cap-settings-page p-4 space-y-4">
-			<div class="flex flex-col pb-4 border-b border-gray-2">
-				<h2 class="text-lg font-medium text-gray-12">Integrations</h2>
-				<p class="text-sm text-gray-10">
-					Configure integrations to extend Cap's functionality and connect with
-					third-party services.
-				</p>
-			</div>
-			<For each={apps}>
-				{(app) => (
-					<div class="px-4 py-2 rounded-lg border bg-gray-2 border-gray-3">
-						<div class="flex justify-between items-center pb-2 mb-3 border-b border-gray-3">
-							<div class="flex gap-2 items-center">
-								<app.icon class="w-4 h-4 text-gray-12" />
-								<p class="text-sm font-medium text-gray-12">{app.name}</p>
-							</div>
-							<Button
-								size="sm"
-								variant="primary"
-								disabled={!!managedByOrganization()}
-								onClick={() => handleAppClick(app)}
-							>
-								{managedByOrganization()
-									? "Managed by your organization"
-									: app.pro && !isPro()
-										? "Upgrade to Pro"
-										: "Configure"}
-							</Button>
-						</div>
-						<p class="text-[13px] text-gray-11">{app.description}</p>
+		<div class="cap-settings-page flex flex-col h-full custom-scroll">
+			<SettingsPageContent>
+				<Section
+					title="Integrations"
+					description="Configure integrations to extend Cap's functionality and connect with third-party services."
+				>
+					<div class="space-y-3">
+						<For each={apps}>
+							{(app) => (
+								<SectionCard padded class="space-y-3">
+									<div class="flex justify-between items-center gap-3">
+										<div class="flex gap-2 items-center min-w-0">
+											<app.icon class="w-4 h-4 shrink-0 text-gray-12" />
+											<p class="text-[13px] text-gray-12">{app.name}</p>
+										</div>
+										<Button
+											size="sm"
+											variant="primary"
+											disabled={!!managedByOrganization()}
+											onClick={() => handleAppClick(app)}
+										>
+											{managedByOrganization()
+												? "Managed by your organization"
+												: app.pro && !isPro()
+													? "Upgrade to Pro"
+													: "Configure"}
+										</Button>
+									</div>
+									<p class="text-xs leading-snug text-gray-10">
+										{app.description}
+									</p>
+								</SectionCard>
+							)}
+						</For>
 					</div>
-				)}
-			</For>
+				</Section>
+			</SettingsPageContent>
 		</div>
 	);
 }
