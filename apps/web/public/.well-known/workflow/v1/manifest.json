@@ -1,37 +1,44 @@
 {
 	"version": "1.0.0",
 	"steps": {
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
-			"__builtin_response_array_buffer": {
-				"stepId": "__builtin_response_array_buffer"
-			},
-			"__builtin_response_json": {
-				"stepId": "__builtin_response_json"
-			},
-			"__builtin_response_text": {
-				"stepId": "__builtin_response_text"
-			}
-		},
 		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
 			"fetch": {
 				"stepId": "step//workflow@4.2.0-beta.73//fetch"
 			}
 		},
-		"workflows/process-video.ts": {
-			"cleanupRawUpload": {
-				"stepId": "step//./workflows/process-video//cleanupRawUpload"
+		"workflows/transcribe.ts": {
+			"_enhanceAndSaveAudio": {
+				"stepId": "step//./workflows/transcribe//_enhanceAndSaveAudio"
 			},
-			"processVideoOnMediaServer": {
-				"stepId": "step//./workflows/process-video//processVideoOnMediaServer"
+			"_markEnhancedAudioProcessing": {
+				"stepId": "step//./workflows/transcribe//_markEnhancedAudioProcessing"
 			},
-			"saveMetadataAndComplete": {
-				"stepId": "step//./workflows/process-video//saveMetadataAndComplete"
+			"cleanupTempAudio": {
+				"stepId": "step//./workflows/transcribe//cleanupTempAudio"
 			},
-			"setProcessingError": {
-				"stepId": "step//./workflows/process-video//setProcessingError"
+			"extractAudio": {
+				"stepId": "step//./workflows/transcribe//extractAudio"
 			},
-			"validateProcessingRequest": {
-				"stepId": "step//./workflows/process-video//validateProcessingRequest"
+			"markError": {
+				"stepId": "step//./workflows/transcribe//markError"
+			},
+			"markNoAudio": {
+				"stepId": "step//./workflows/transcribe//markNoAudio"
+			},
+			"markSkipped": {
+				"stepId": "step//./workflows/transcribe//markSkipped"
+			},
+			"queueAiGeneration": {
+				"stepId": "step//./workflows/transcribe//queueAiGeneration"
+			},
+			"saveTranscription": {
+				"stepId": "step//./workflows/transcribe//saveTranscription"
+			},
+			"transcribeWithDeepgram": {
+				"stepId": "step//./workflows/transcribe//transcribeWithDeepgram"
+			},
+			"validateVideo": {
+				"stepId": "step//./workflows/transcribe//validateVideo"
 			}
 		},
 		"workflows/edit-video.ts": {
@@ -68,36 +75,32 @@
 				"stepId": "step//./workflows/import-loom-video//setProcessingError"
 			}
 		},
-		"workflows/transcribe.ts": {
-			"_enhanceAndSaveAudio": {
-				"stepId": "step//./workflows/transcribe//_enhanceAndSaveAudio"
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
+			"__builtin_response_array_buffer": {
+				"stepId": "__builtin_response_array_buffer"
 			},
-			"_markEnhancedAudioProcessing": {
-				"stepId": "step//./workflows/transcribe//_markEnhancedAudioProcessing"
+			"__builtin_response_json": {
+				"stepId": "__builtin_response_json"
 			},
-			"cleanupTempAudio": {
-				"stepId": "step//./workflows/transcribe//cleanupTempAudio"
+			"__builtin_response_text": {
+				"stepId": "__builtin_response_text"
+			}
+		},
+		"workflows/process-video.ts": {
+			"cleanupRawUpload": {
+				"stepId": "step//./workflows/process-video//cleanupRawUpload"
 			},
-			"extractAudio": {
-				"stepId": "step//./workflows/transcribe//extractAudio"
+			"processVideoOnMediaServer": {
+				"stepId": "step//./workflows/process-video//processVideoOnMediaServer"
 			},
-			"markNoAudio": {
-				"stepId": "step//./workflows/transcribe//markNoAudio"
+			"saveMetadataAndComplete": {
+				"stepId": "step//./workflows/process-video//saveMetadataAndComplete"
 			},
-			"markSkipped": {
-				"stepId": "step//./workflows/transcribe//markSkipped"
+			"setProcessingError": {
+				"stepId": "step//./workflows/process-video//setProcessingError"
 			},
-			"queueAiGeneration": {
-				"stepId": "step//./workflows/transcribe//queueAiGeneration"
-			},
-			"saveTranscription": {
-				"stepId": "step//./workflows/transcribe//saveTranscription"
-			},
-			"transcribeWithDeepgram": {
-				"stepId": "step//./workflows/transcribe//transcribeWithDeepgram"
-			},
-			"validateVideo": {
-				"stepId": "step//./workflows/transcribe//validateVideo"
+			"validateProcessingRequest": {
+				"stepId": "step//./workflows/process-video//validateProcessingRequest"
 			}
 		},
 		"workflows/generate-ai.ts": {
@@ -119,16 +122,16 @@
 		}
 	},
 	"workflows": {
-		"workflows/process-video.ts": {
-			"processVideoWorkflow": {
-				"workflowId": "workflow//./workflows/process-video//processVideoWorkflow",
+		"workflows/transcribe.ts": {
+			"transcribeVideoWorkflow": {
+				"workflowId": "workflow//./workflows/transcribe//transcribeVideoWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: processVideoWorkflow",
+								"label": "Start: transcribeVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},
@@ -218,16 +221,16 @@
 				}
 			}
 		},
-		"workflows/transcribe.ts": {
-			"transcribeVideoWorkflow": {
-				"workflowId": "workflow//./workflows/transcribe//transcribeVideoWorkflow",
+		"workflows/process-video.ts": {
+			"processVideoWorkflow": {
+				"workflowId": "workflow//./workflows/process-video//processVideoWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: transcribeVideoWorkflow",
+								"label": "Start: processVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},
