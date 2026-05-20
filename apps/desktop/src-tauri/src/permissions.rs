@@ -164,10 +164,6 @@ pub(crate) fn prepare_macos_panel_window(
 ) -> MacosPanelWindowActivationGuard {
     MACOS_PENDING_PANEL_WINDOWS.fetch_add(1, Ordering::AcqRel);
 
-    if let Err(err) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
-        tracing::warn!("Failed to prepare macOS panel activation policy: {err}");
-    }
-
     MacosPanelWindowActivationGuard { app: app.clone() }
 }
 
