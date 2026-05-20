@@ -17,13 +17,12 @@ const CLICK_SHRINK_SIZE: f32 = 0.8;
 const CURSOR_IDLE_MIN_DELAY_MS: f64 = 500.0;
 const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
 const CURSOR_IDLE_RESUME_LOOKAHEAD_MS: f64 = 250.0;
-const CURSOR_VECTOR_CAP: f32 = 320.0;
-const CURSOR_MIN_MOTION_NORMALIZED: f32 = 0.01;
-const CURSOR_MIN_MOTION_PX: f32 = 1.0;
+const CURSOR_VECTOR_CAP: f32 = 64.0;
+const CURSOR_MIN_MOTION_NORMALIZED: f32 = 0.004;
+const CURSOR_FULL_MOTION_NORMALIZED: f32 = 0.035;
 const CURSOR_BASELINE_FPS: f32 = 60.0;
 const CURSOR_MULTIPLIER: f32 = 1.0;
-const CURSOR_MAX_STRENGTH: f32 = 2.0;
-const VELOCITY_BLEND_RATIO: f32 = 0.7;
+const CURSOR_MAX_STRENGTH: f32 = 1.0;
 
 /// The size to render the svg to.
 static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
@@ -275,50 +274,35 @@ impl CursorLayer {
         let fps_scale = fps / CURSOR_BASELINE_FPS;
         let cursor_strength = (uniforms.motion_blur_amount * CURSOR_MULTIPLIER * fps_scale)
             .clamp(0.0, CURSOR_MAX_STRENGTH);
-        let parent_motion = uniforms.display_parent_motion_px;
-        let child_motion = {
-            let delta_motion = uniforms
-                .prev_cursor
-                .as_ref()
-                .filter(|prev| prev.cursor_id == interpolated_cursor.cursor_id)
-                .map(|prev| {
-                    let delta_uv = XY::new(
-                        (interpolated_cursor.position.coord.x - prev.position.coord.x) as f32,
-                        (interpolated_cursor.position.coord.y - prev.position.coord.y) as f32,
-                    );
-                    XY::new(
-                        delta_uv.x * screen_size.x as f32,
-                        delta_uv.y * screen_size.y as f32,
-                    )
-                })
-                .unwrap_or_else(|| XY::new(0.0, 0.0));
-
-            let spring_velocity = XY::new(
-                interpolated_cursor.velocity.x * screen_size.x as f32 / fps,
-                interpolated_cursor.velocity.y * screen_size.y as f32 / fps,
-            );
-
-            XY::new(
-                delta_motion.x * (1.0 - VELOCITY_BLEND_RATIO)
-                    + spring_velocity.x * VELOCITY_BLEND_RATIO,
-                delta_motion.y * (1.0 - VELOCITY_BLEND_RATIO)
-                    + spring_velocity.y * VELOCITY_BLEND_RATIO,
-            )
-        };
+        let child_motion = uniforms
+            .prev_cursor
+            .as_ref()
+            .filter(|prev| prev.cursor_id == interpolated_cursor.cursor_id)
+            .map(|prev| {
+                let delta_uv = XY::new(
+                    (interpolated_cursor.position.coord.x - prev.position.coord.x) as f32,
+                    (interpolated_cursor.position.coord.y - prev.position.coord.y) as f32,
+                );
+                XY::new(
+                    delta_uv.x * screen_size.x as f32,
+                    delta_uv.y * screen_size.y as f32,
+                )
+            })
+            .unwrap_or_else(|| XY::new(0.0, 0.0));
 
         let combined_motion_px = if cursor_strength <= f32::EPSILON {
             XY::new(0.0, 0.0)
         } else {
-            combine_cursor_motion(parent_motion, child_motion)
+            child_motion
         };
 
         let normalized_motion = ((combined_motion_px.x / screen_diag).powi(2)
             + (combined_motion_px.y / screen_diag).powi(2))
         .sqrt();
-        let has_motion =
-            normalized_motion > CURSOR_MIN_MOTION_NORMALIZED && cursor_strength > f32::EPSILON;
-        let scaled_motion = if has_motion {
-            clamp_cursor_vector(combined_motion_px * cursor_strength)
+        let motion_response = cursor_motion_response(normalized_motion);
+        let effective_cursor_strength = cursor_strength * motion_response;
+        let scaled_motion = if effective_cursor_strength > f32::EPSILON {
+            cursor_blur_vector(combined_motion_px, effective_cursor_strength)
         } else {
             XY::new(0.0, 0.0)
         };
@@ -478,8 +462,6 @@ impl CursorLayer {
             zoom,
         ) - zoomed_position;
 
-        let effective_strength = if has_motion { cursor_strength } else { 0.0 };
-
         let cursor_uniforms = CursorUniforms {
             position_size: [
                 zoomed_position.x as f32,
@@ -497,7 +479,7 @@ impl CursorLayer {
             motion_vector_strength: [
                 scaled_motion.x,
                 scaled_motion.y,
-                effective_strength,
+                effective_cursor_strength,
                 cursor_opacity,
             ],
             rotation_params: [
@@ -529,22 +511,22 @@ impl CursorLayer {
     }
 }
 
-fn combine_cursor_motion(parent: XY<f32>, child: XY<f32>) -> XY<f32> {
-    fn combine_axis(parent: f32, child: f32) -> f32 {
-        if parent.abs() > CURSOR_MIN_MOTION_PX
-            && child.abs() > CURSOR_MIN_MOTION_PX
-            && parent.signum() != child.signum()
-        {
-            0.0
-        } else {
-            parent + child
-        }
+fn cursor_blur_vector(motion: XY<f32>, strength: f32) -> XY<f32> {
+    clamp_cursor_vector(motion * strength)
+}
+
+fn cursor_motion_response(amount: f32) -> f32 {
+    if amount <= CURSOR_MIN_MOTION_NORMALIZED {
+        return 0.0;
+    }
+    if amount >= CURSOR_FULL_MOTION_NORMALIZED {
+        return 1.0;
     }
 
-    XY::new(
-        combine_axis(parent.x, child.x),
-        combine_axis(parent.y, child.y),
-    )
+    let t = ((amount - CURSOR_MIN_MOTION_NORMALIZED)
+        / (CURSOR_FULL_MOTION_NORMALIZED - CURSOR_MIN_MOTION_NORMALIZED))
+        .clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 fn clamp_cursor_vector(vec: XY<f32>) -> XY<f32> {
@@ -804,6 +786,32 @@ mod tests {
                 .collect(),
             clicks: vec![],
         }
+    }
+
+    #[test]
+    fn cursor_blur_vector_caps_fast_motion() {
+        let motion = cursor_blur_vector(XY::new(800.0, 0.0), CURSOR_MAX_STRENGTH);
+        let len = (motion.x * motion.x + motion.y * motion.y).sqrt();
+
+        assert!(len <= CURSOR_VECTOR_CAP + f32::EPSILON);
+    }
+
+    #[test]
+    fn cursor_motion_response_ramps_with_velocity() {
+        assert_eq!(
+            cursor_motion_response(CURSOR_MIN_MOTION_NORMALIZED * 0.5),
+            0.0
+        );
+
+        let mid = cursor_motion_response(
+            (CURSOR_MIN_MOTION_NORMALIZED + CURSOR_FULL_MOTION_NORMALIZED) * 0.5,
+        );
+
+        assert!(mid > 0.0 && mid < 1.0);
+        assert_eq!(
+            cursor_motion_response(CURSOR_FULL_MOTION_NORMALIZED * 1.5),
+            1.0
+        );
     }
 
     #[test]
