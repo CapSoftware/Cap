@@ -240,8 +240,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	) => {
 		console.log(`Handling settings change for ${key}: ${value}`);
 
+		const previousValue = settings[key];
 		setSettings(key as keyof GeneralSettingsStore, value);
-		generalSettingsStore.set({ [key]: value, ...(extra ?? {}) });
+		try {
+			await generalSettingsStore.set({ [key]: value, ...(extra ?? {}) });
+		} catch (error) {
+			setSettings(key as keyof GeneralSettingsStore, previousValue);
+			console.error(`Failed to update ${key}`, error);
+		}
 	};
 
 	const ostype: OsType = type();
