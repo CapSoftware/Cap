@@ -44,10 +44,12 @@ pub enum PlaybackTelemetryEvent {
     },
     RendererFrame {
         frame_number: u32,
+        input_frame_number: u32,
         queue_wait: Duration,
         drain_duration: Duration,
         flush_duration: Duration,
         render_duration: Duration,
+        render_stage_timings: Box<cap_rendering::FrameRenderStageTimings>,
         callback_duration: Duration,
         drained_count: u32,
         output_format: PlaybackRenderOutputFormat,

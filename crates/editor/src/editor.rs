@@ -263,8 +263,9 @@ impl Renderer {
             };
 
             let render_start = Instant::now();
+            let input_frame_number = current.uniforms.frame_number;
             match frame_renderer
-                .render_immediate(
+                .render_immediate_with_timings(
                     current.segment_frames,
                     current.uniforms,
                     &current.cursor,
@@ -273,7 +274,7 @@ impl Renderer {
                 )
                 .await
             {
-                Ok(frame) => {
+                Ok((frame, render_stage_timings)) => {
                     let render_duration = render_start.elapsed();
                     let frame_number = frame.frame_number;
                     let output_format = PlaybackRenderOutputFormat::Rgba;
@@ -283,10 +284,12 @@ impl Renderer {
                     if let Some(telemetry) = &telemetry {
                         telemetry.emit(PlaybackTelemetryEvent::RendererFrame {
                             frame_number,
+                            input_frame_number,
                             queue_wait,
                             drain_duration,
                             flush_duration,
                             render_duration,
+                            render_stage_timings: Box::new(render_stage_timings),
                             callback_duration,
                             drained_count,
                             output_format,
