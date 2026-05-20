@@ -1261,7 +1261,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.4.87"
+version = "0.5.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1288,6 +1288,7 @@ dependencies = [
  "chrono",
  "cidre",
  "clipboard-rs",
+ "cocoa",
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=3cc779a7b4ca)",
  "device_query",
  "dirs 6.0.0",
@@ -1305,6 +1306,7 @@ dependencies = [
  "lz4_flex",
  "md5",
  "nix 0.29.0",
+ "objc",
  "objc2",
  "objc2-app-kit",
  "objc2-application-services",

@@ -144,6 +144,8 @@ objc2-web-kit = "0.3.2"
 swift-rs = "1.0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 cidre = { workspace = true }
+objc = "0.2.7"
+cocoa = "0.26.0"
 
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
 parakeet-rs = "0.3.4"
