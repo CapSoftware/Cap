@@ -154,6 +154,12 @@ impl CameraPreviewManager {
         self.preview.is_some()
     }
 
+    pub fn is_paused(&self) -> bool {
+        self.preview
+            .as_ref()
+            .is_some_and(|preview| preview.is_paused)
+    }
+
     pub fn sender(&self) -> Option<flume::Sender<FFmpegVideoFrame>> {
         self.preview.as_ref().map(|p| p.camera_tx.clone())
     }
