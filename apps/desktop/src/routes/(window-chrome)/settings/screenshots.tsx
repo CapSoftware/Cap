@@ -166,7 +166,7 @@ export default function Screenshots() {
 											setSearch("");
 										}
 									}}
-									placeholder="Search screenshots"
+									placeholder="Search"
 									autoCapitalize="off"
 									autocorrect="off"
 									autocomplete="off"

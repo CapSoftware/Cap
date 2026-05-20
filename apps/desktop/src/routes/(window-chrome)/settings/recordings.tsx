@@ -256,7 +256,7 @@ export default function Recordings() {
 											setSearch("");
 										}
 									}}
-									placeholder="Search recordings"
+									placeholder="Search"
 									autoCapitalize="off"
 									autocorrect="off"
 									autocomplete="off"
