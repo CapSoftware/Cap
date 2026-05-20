@@ -28,6 +28,7 @@ import IconLucideEdit from "~icons/lucide/edit";
 import IconLucideFolder from "~icons/lucide/folder";
 import IconLucideImport from "~icons/lucide/import";
 import IconLucideSearch from "~icons/lucide/search";
+import { Section, SettingsPageContent } from "./Setting";
 
 type Screenshot = RecordingMeta & {
 	path: string;
@@ -124,96 +125,100 @@ export default function Screenshots() {
 	};
 
 	return (
-		<div class="cap-settings-page flex relative flex-col p-4 space-y-4 w-full h-full">
-			<div class="flex items-start justify-between gap-3">
-				<div class="flex flex-col">
-					<h2 class="text-lg font-medium text-gray-12">Screenshots</h2>
-					<p class="text-sm text-gray-10">
-						Manage your screenshots and perform actions.
-					</p>
-				</div>
-				<Button
-					variant="gray"
-					size="sm"
-					class="h-[36px] px-3 shrink-0 flex items-center gap-1.5"
-					onClick={handleImportImage}
+		<div class="cap-settings-page flex relative flex-col w-full h-full custom-scroll">
+			<SettingsPageContent class="max-w-none space-y-4">
+				<Section
+					title="Screenshots"
+					description="Manage your screenshots and perform actions."
+					right={
+						<Button
+							variant="gray"
+							size="sm"
+							class="h-[36px] px-3 shrink-0 flex items-center gap-1.5"
+							onClick={handleImportImage}
+						>
+							<IconLucideImport class="size-3.5" />
+							<span>Import image</span>
+						</Button>
+					}
 				>
-					<IconLucideImport class="size-3.5" />
-					<span>Import image</span>
-				</Button>
-			</div>
-			<Show
-				when={screenshots.data && screenshots.data.length > 0}
-				fallback={
-					<div class="flex flex-1 items-center justify-center">
-						<p class="text-center text-(--text-tertiary)">
-							No screenshots found
-						</p>
-					</div>
-				}
-			>
-				<div class="flex flex-col gap-3 pb-4 w-full border-b border-gray-2">
-					<div class="relative w-full max-w-[260px] h-[36px] flex items-center">
-						<IconLucideSearch class="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
-						<Input
-							type="search"
-							class="py-2 pl-6 h-full w-full"
-							value={search()}
-							onInput={(event) => setSearch(event.currentTarget.value)}
-							onKeyDown={(event) => {
-								if (event.key === "Escape" && search()) {
-									event.preventDefault();
-									setSearch("");
-								}
-							}}
-							placeholder="Search screenshots"
-							autoCapitalize="off"
-							autocorrect="off"
-							autocomplete="off"
-							spellcheck={false}
-							aria-label="Search screenshots"
-						/>
-					</div>
-				</div>
-
-				<div class="flex relative flex-col flex-1 mt-4 rounded-xl border custom-scroll bg-gray-2 border-gray-3">
-					<Show when={filteredScreenshots().length === 0}>
-						<p class="text-center text-(--text-tertiary) absolute flex items-center justify-center w-full h-full">
-							{emptyMessage()}
-						</p>
-					</Show>
-					<ul class="flex flex-col w-full text-(--text-primary)">
-						<For each={visibleScreenshots()}>
-							{(screenshot) => (
-								<ScreenshotItem
-									screenshot={screenshot}
-									onClick={() => handleScreenshotClick(screenshot)}
-									onOpenEditor={() => handleOpenEditor(screenshot.path)}
-									onOpenFolder={() => handleOpenFolder(screenshot.path)}
-									onCopyImageToClipboard={() =>
-										handleCopyImageToClipboard(screenshot.path)
-									}
+					<Show
+						when={screenshots.data && screenshots.data.length > 0}
+						fallback={
+							<div class="flex flex-1 items-center justify-center">
+								<p class="text-center text-(--text-tertiary)">
+									No screenshots found
+								</p>
+							</div>
+						}
+					>
+						<div class="flex flex-col gap-3 pb-4 w-full border-b border-gray-2">
+							<div class="relative w-full max-w-[260px] h-[36px] flex items-center">
+								<IconLucideSearch class="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
+								<Input
+									type="search"
+									class="py-2 pl-6 h-full w-full"
+									value={search()}
+									onInput={(event) => setSearch(event.currentTarget.value)}
+									onKeyDown={(event) => {
+										if (event.key === "Escape" && search()) {
+											event.preventDefault();
+											setSearch("");
+										}
+									}}
+									placeholder="Search screenshots"
+									autoCapitalize="off"
+									autocorrect="off"
+									autocomplete="off"
+									spellcheck={false}
+									aria-label="Search screenshots"
 								/>
-							)}
-						</For>
-					</ul>
-					<Show when={hasMoreScreenshots()}>
-						<div class="flex justify-center p-3 border-t border-gray-3">
-							<Button
-								variant="gray"
-								size="sm"
-								onClick={() =>
-									setVisibleCount((count) =>
-										Math.min(count + PAGE_SIZE, filteredScreenshots().length),
-									)
-								}
-							>
-								Load more
-							</Button>
+							</div>
+						</div>
+
+						<div class="flex relative flex-col flex-1 mt-4 rounded-xl border custom-scroll bg-gray-2 border-gray-3">
+							<Show when={filteredScreenshots().length === 0}>
+								<p class="text-center text-(--text-tertiary) absolute flex items-center justify-center w-full h-full">
+									{emptyMessage()}
+								</p>
+							</Show>
+							<ul class="flex flex-col w-full text-(--text-primary)">
+								<For each={visibleScreenshots()}>
+									{(screenshot) => (
+										<ScreenshotItem
+											screenshot={screenshot}
+											onClick={() => handleScreenshotClick(screenshot)}
+											onOpenEditor={() => handleOpenEditor(screenshot.path)}
+											onOpenFolder={() => handleOpenFolder(screenshot.path)}
+											onCopyImageToClipboard={() =>
+												handleCopyImageToClipboard(screenshot.path)
+											}
+										/>
+									)}
+								</For>
+							</ul>
+							<Show when={hasMoreScreenshots()}>
+								<div class="flex justify-center p-3 border-t border-gray-3">
+									<Button
+										variant="gray"
+										size="sm"
+										onClick={() =>
+											setVisibleCount((count) =>
+												Math.min(
+													count + PAGE_SIZE,
+													filteredScreenshots().length,
+												),
+											)
+										}
+									>
+										Load more
+									</Button>
+								</div>
+							</Show>
 						</div>
 					</Show>
-				</div>
-			</Show>
+				</Section>
+			</SettingsPageContent>
 		</div>
 	);
 }
