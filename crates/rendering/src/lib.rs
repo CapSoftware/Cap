@@ -3315,6 +3315,13 @@ impl<'a> FrameRenderer<'a> {
         self.session = None;
     }
 
+    pub fn prepare_output_size(&mut self, width: u32, height: u32) {
+        let session = self
+            .session
+            .get_or_insert_with(|| RenderSession::new(&self.constants.device, width, height));
+        session.update_texture_size(&self.constants.device, width, height);
+    }
+
     pub async fn render(
         &mut self,
         segment_frames: DecodedSegmentFrames,
