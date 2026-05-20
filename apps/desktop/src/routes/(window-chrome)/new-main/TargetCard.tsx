@@ -8,6 +8,7 @@ import type { ComponentProps } from "solid-js";
 import { createMemo, createSignal, Show, splitProps } from "solid-js";
 import toast from "solid-toast";
 import Tooltip from "~/components/Tooltip";
+import { openRecordingFolder } from "~/utils/recording";
 import {
 	type CaptureDisplayWithThumbnail,
 	type CaptureWindowWithThumbnail,
@@ -272,7 +273,10 @@ export default function TargetCard(props: TargetCardProps) {
 		e.stopPropagation();
 		const recording = recordingTarget();
 		if (!recording) return;
-		commands.openFilePath(recording.path);
+		openRecordingFolder(recording.path, recording.mode).catch((error) => {
+			console.error("Failed to open recording folder:", error);
+			toast.error("Failed to open folder");
+		});
 	};
 
 	const handleDeleteRecording = async (e: MouseEvent) => {

@@ -25,6 +25,7 @@ import CapTooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
+import { openRecordingFolder } from "~/utils/recording";
 import {
 	commands,
 	events,
@@ -166,9 +167,11 @@ export default function Recordings() {
 		events.newStudioRecordingAdded.emit({ path: recording.path });
 	};
 
-	const handleOpenFolder = (path: string) => {
+	const handleOpenFolder = (recording: Recording) => {
 		trackEvent("recording_folder_clicked");
-		commands.openFilePath(path);
+		openRecordingFolder(recording.path, recording.meta.mode).catch((error) => {
+			console.error("Failed to open recording folder:", error);
+		});
 	};
 
 	const handleCopyVideoToClipboard = (path: string) => {
@@ -253,7 +256,7 @@ export default function Recordings() {
 								<RecordingItem
 									recording={recording}
 									onClick={() => handleRecordingClick(recording)}
-									onOpenFolder={() => handleOpenFolder(recording.path)}
+									onOpenFolder={() => handleOpenFolder(recording)}
 									onOpenEditor={() => handleOpenEditor(recording.path)}
 									onCopyVideoToClipboard={() =>
 										handleCopyVideoToClipboard(recording.path)
