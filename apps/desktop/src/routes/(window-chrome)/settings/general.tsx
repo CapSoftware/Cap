@@ -129,11 +129,11 @@ function AppearanceSection(props: {
 									aria-checked={isSelected()}
 									aria-label={`Select theme: ${theme.name}`}
 									onClick={() => props.onThemeChange(theme.id)}
-									class="flex flex-col gap-2 items-center group focus:outline-none"
+									class="flex flex-col gap-2 items-center group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1 rounded-xl"
 								>
 									<div
 										class={cx(
-											"w-full aspect-[5/3] rounded-lg overflow-hidden border-2 transition-all duration-150",
+											"w-full aspect-[5/3] rounded-lg overflow-hidden border-2 transition-[border-color,box-shadow] duration-150",
 											isSelected()
 												? "border-blue-9"
 												: "border-gray-4 group-hover:border-gray-6",
@@ -402,7 +402,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	};
 
 	return (
-		<div ref={scrollContainerRef} class="flex flex-col h-full custom-scroll">
+		<div
+			ref={scrollContainerRef}
+			class="cap-settings-page flex flex-col h-full custom-scroll"
+		>
 			<div class="px-6 py-6 space-y-7 max-w-[42rem]">
 				<AppearanceSection
 					currentTheme={settings.theme ?? "system"}
@@ -700,7 +703,7 @@ function SegmentedControl<T extends string | number>(props: {
 							type="button"
 							onClick={() => props.onChange(option.value)}
 							class={cx(
-								"px-3 py-1 text-xs font-medium rounded-md transition-all",
+								"px-3 py-1 text-xs font-medium rounded-md transition-[background-color,color,box-shadow]",
 								isSelected()
 									? "bg-gray-1 text-gray-12 shadow-sm"
 									: "text-gray-10 hover:text-gray-12",
@@ -860,7 +863,7 @@ function SectionCard(props: ParentProps<{ class?: string; padded?: boolean }>) {
 	return (
 		<div
 			class={cx(
-				"overflow-hidden rounded-xl border border-gray-3 bg-gray-2",
+				"cap-settings-card overflow-hidden rounded-xl border border-gray-3 bg-gray-2",
 				props.padded && "px-4 py-4",
 				props.class,
 			)}
@@ -981,7 +984,7 @@ function DefaultProjectNameCard(props: {
 			<button
 				type="button"
 				title="Click to copy"
-				class="px-1.5 py-0.5 mx-0.5 font-mono text-[11px] rounded-md transition-all duration-150 ease-out cursor-pointer bg-gray-3 hover:bg-gray-4 active:scale-95 text-gray-12"
+				class="px-1.5 py-0.5 mx-0.5 font-mono text-[11px] rounded-md transition-[background-color,color,transform] duration-150 ease-out cursor-pointer bg-gray-3 hover:bg-gray-4 active:scale-95 text-gray-12"
 				onClick={() => commands.writeClipboardString(props.children)}
 			>
 				{props.children}
