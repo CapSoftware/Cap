@@ -3809,13 +3809,7 @@ function ClipSegmentConfig(props: {
 					onClick={() => {
 						projectActions.deleteClipSegment(props.segmentIndex);
 					}}
-					disabled={
-						(
-							project.timeline?.segments.filter(
-								(s) => s.recordingSegment === props.segment.recordingSegment,
-							) ?? []
-						).length < 2
-					}
+					disabled={(project.timeline?.segments.length ?? 0) < 2}
 					leftIcon={<IconCapTrash />}
 				>
 					Delete

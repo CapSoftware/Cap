@@ -208,10 +208,9 @@ jobs:
         run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
 
       - name: Rust setup
-        shell: bash
-        run: |
-          rustup toolchain install --profile minimal --target "${{ matrix.settings.target }}"
-          rustc --version
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.settings.target }}
 
       - uses: ./.github/actions/setup-rust-cache
         with:
