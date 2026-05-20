@@ -16,10 +16,8 @@ import {
 	createResource,
 	createSignal,
 	For,
-	type JSX,
 	onCleanup,
 	onMount,
-	type ParentProps,
 	Show,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
@@ -45,7 +43,14 @@ import {
 } from "~/utils/tauri";
 import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideX from "~icons/lucide/x";
-import { SettingItem, ToggleSettingItem } from "./Setting";
+import {
+	Section,
+	SectionCard,
+	SectionRows,
+	SettingItem,
+	SettingsPageContent,
+	ToggleSettingItem,
+} from "./Setting";
 
 const getExclusionPrimaryLabel = (entry: WindowExclusion) =>
 	entry.ownerName ?? entry.windowTitle ?? entry.bundleIdentifier ?? "Unknown";
@@ -406,7 +411,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			ref={scrollContainerRef}
 			class="cap-settings-page flex flex-col h-full custom-scroll"
 		>
-			<div class="px-6 py-6 space-y-7 max-w-[42rem]">
+			<SettingsPageContent>
 				<AppearanceSection
 					currentTheme={settings.theme ?? "system"}
 					onThemeChange={(newTheme) => {
@@ -620,7 +625,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					value={settings.enableTelemetry !== false}
 					onChange={(v) => handleChange("enableTelemetry", v)}
 				/>
-			</div>
+			</SettingsPageContent>
 		</div>
 	);
 }
@@ -735,7 +740,7 @@ function StudioQualitySubsection(props: {
 		>
 			<div class="flex justify-between items-start gap-4">
 				<div class="flex flex-col gap-0.5 min-w-0">
-					<p class="text-[13px] font-medium text-gray-12">Studio mode</p>
+					<p class="text-[13px] text-gray-12">Studio mode</p>
 					<p class="text-xs leading-snug text-gray-10">
 						Encoder profile for local Studio recordings.
 					</p>
@@ -776,7 +781,7 @@ function InstantQualitySubsection(props: {
 		>
 			<div class="flex justify-between items-start gap-4">
 				<div class="flex flex-col gap-0.5 min-w-0">
-					<p class="text-[13px] font-medium text-gray-12">Instant mode</p>
+					<p class="text-[13px] text-gray-12">Instant mode</p>
 					<p class="text-xs leading-snug text-gray-10">
 						Maximum upload resolution for Instant recordings.
 					</p>
@@ -819,63 +824,6 @@ function QualitySection(props: {
 				/>
 			</SectionCard>
 		</Section>
-	);
-}
-
-function Section(
-	props: ParentProps<{
-		title: string;
-		description?: string;
-		right?: JSX.Element;
-		pro?: boolean;
-	}>,
-) {
-	return (
-		<section class="space-y-2.5">
-			<header class="flex justify-between items-end gap-3 px-1">
-				<div class="flex flex-col gap-0.5 min-w-0">
-					<div class="flex gap-2 items-center">
-						<h3 class="text-sm font-semibold tracking-tight text-gray-12">
-							{props.title}
-						</h3>
-						<Show when={props.pro}>
-							<span class="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-blue-9 text-white">
-								Pro
-							</span>
-						</Show>
-					</div>
-					<Show when={props.description}>
-						<p class="text-xs leading-relaxed text-gray-10">
-							{props.description}
-						</p>
-					</Show>
-				</div>
-				<Show when={props.right}>
-					<div class="flex shrink-0 gap-2 items-center">{props.right}</div>
-				</Show>
-			</header>
-			{props.children}
-		</section>
-	);
-}
-
-function SectionCard(props: ParentProps<{ class?: string; padded?: boolean }>) {
-	return (
-		<div
-			class={cx(
-				"cap-settings-card overflow-hidden rounded-xl border border-gray-3 bg-gray-2",
-				props.padded && "px-4 py-4",
-				props.class,
-			)}
-		>
-			{props.children}
-		</div>
-	);
-}
-
-function SectionRows(props: ParentProps) {
-	return (
-		<SectionCard class="divide-y divide-gray-3">{props.children}</SectionCard>
 	);
 }
 
