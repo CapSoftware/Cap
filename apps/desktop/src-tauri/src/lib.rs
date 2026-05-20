@@ -4722,6 +4722,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                             }
                                             CapWindowId::Main => {
                                                 let _ = window.show();
+                                                restore_main_window_inputs(app);
                                             }
                                             _ => {}
                                         }
@@ -4747,6 +4748,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                             }
                                             CapWindowId::Main => {
                                                 let _ = window.show();
+                                                restore_main_window_inputs(app);
                                             }
                                             _ => {}
                                         }
@@ -5087,11 +5089,19 @@ fn restore_main_windows_if_no_editors(app: &AppHandle) {
                 let _ = main.show();
             }
 
+            restore_main_window_inputs(app);
             restore_camera_window(app);
         }
 
         spawn_on_runtime(captions::release_ml_models());
     }
+}
+
+fn restore_main_window_inputs(app: &AppHandle) {
+    let handle = app.clone();
+    spawn_on_runtime(async move {
+        windows::restore_main_window_inputs(&handle).await;
+    });
 }
 
 fn restore_camera_window(app: &AppHandle) {
@@ -5142,6 +5152,7 @@ fn reopen_main_window(app: &AppHandle) {
     if let Some(main) = CapWindowId::Main.get(app) {
         let _ = main.show();
         let _ = main.set_focus();
+        restore_main_window_inputs(app);
     } else {
         let handle = app.clone();
         tokio::spawn(async move {

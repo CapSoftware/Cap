@@ -282,7 +282,7 @@ pub(crate) async fn ensure_camera_input_active(app_state: &mut App) {
     }
 }
 
-async fn restore_main_window_inputs(app: &AppHandle) {
+pub(crate) async fn restore_main_window_inputs(app: &AppHandle) {
     let Some(state) = app.try_state::<ArcLock<App>>() else {
         warn!("App state unavailable while restoring main window inputs");
         return;
