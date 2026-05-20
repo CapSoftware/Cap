@@ -31,7 +31,7 @@ services:
       PORT: 3456
       MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:-local-media-server-secret}
 
-  # Local S3 Strorage
+  # Local S3 Storage
   minio:
     container_name: minio-storage
     image: "minio/minio:latest"
@@ -62,5 +62,3 @@ services:
       "
 volumes:
   ps-mysql:
-  minio-data:
-  minio-certs:
