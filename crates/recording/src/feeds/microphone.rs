@@ -580,6 +580,8 @@ pub struct RemoveInput;
 
 pub struct AddSender(pub flume::Sender<MicrophoneSamples>);
 
+pub struct RemoveSender(pub flume::Sender<MicrophoneSamples>);
+
 pub struct AddRecordingSender {
     pub sender: flume::Sender<MicrophoneSamples>,
     pub health_tx: HealthSender,
@@ -848,6 +850,19 @@ impl Message<AddSender> for MicrophoneFeed {
 
     async fn handle(&mut self, msg: AddSender, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         self.senders.push(MicrophoneFeedSender::new(msg.0));
+    }
+}
+
+impl Message<RemoveSender> for MicrophoneFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: RemoveSender,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.senders
+            .retain(|sender| !sender.sender.same_channel(&msg.0));
     }
 }
 

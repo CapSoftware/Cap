@@ -298,9 +298,10 @@ async fn run_out_of_process_export_attempt(
     }
 
     if mode.is_software_safe() {
-        command
-            .env("CAP_RENDER_FORCE_SOFTWARE_ADAPTER", "1")
-            .env("CAP_EXPORT_FORCE_SOFTWARE_ENCODER", "1");
+        command.env("CAP_EXPORT_FORCE_SOFTWARE_ENCODER", "1");
+        if cfg!(windows) {
+            command.env("CAP_RENDER_FORCE_SOFTWARE_ADAPTER", "1");
+        }
     }
     configure_exporter_command(&mut command);
 

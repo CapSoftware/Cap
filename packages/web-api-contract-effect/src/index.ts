@@ -149,6 +149,17 @@ export class ApiContract extends HttpApi.make("cap-web-api")
 					),
 			)
 			.add(
+				HttpApiEndpoint.get("getUserProfile", "/desktop/user/profile")
+					.setHeaders(AuthHeaders)
+					.addSuccess(
+						Schema.Struct({
+							name: Schema.NullOr(Schema.String),
+							email: Schema.NullOr(Schema.String),
+							imageUrl: Schema.NullOr(Schema.String),
+						}),
+					),
+			)
+			.add(
 				HttpApiEndpoint.get("getS3Config", "/desktop/s3/config/get")
 					.setHeaders(AuthHeaders)
 					.addSuccess(S3ConfigResponse),

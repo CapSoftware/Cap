@@ -30,11 +30,17 @@ async function main() {
 	let cargoConfigContents = BASE_CARGO_TOML;
 	let cargoBuildContents = "";
 	const sccachePath = await findExecutable("sccache");
+	const useSccache = env.CAP_USE_SCCACHE === "1";
 
-	if (sccachePath) {
+	if (sccachePath && useSccache && (await canUseSccache(sccachePath))) {
 		cargoBuildContents += `\n[build]\nrustc-wrapper = "${sccachePath.replaceAll("\\", "/")}"\n`;
 		console.log(`Using sccache at ${sccachePath}`);
-	} else console.log("sccache not found, using rustc directly");
+	} else if (!sccachePath)
+		console.log("sccache not found, using rustc directly");
+	else if (!useSccache)
+		console.log(
+			`sccache found at ${sccachePath}, using rustc directly. Set CAP_USE_SCCACHE=1 to enable it.`,
+		);
 
 	if (process.platform === "darwin") {
 		const NATIVE_DEPS_VERSION = "v0.25";
@@ -421,4 +427,50 @@ async function findExecutable(name) {
 	return await execFile(command, [name])
 		.then(({ stdout }) => stdout.trim().split(/\r?\n/).find(Boolean) ?? null)
 		.catch(() => null);
+}
+
+async function canUseSccache(sccachePath) {
+	const rustcPath = env.RUSTC || (await findExecutable("rustc")) || "rustc";
+	const probeDir = await fs.mkdtemp(path.join(targetDir, "sccache-probe-"));
+	const probePath = path.join(probeDir, "lib.rs");
+
+	try {
+		await fs.writeFile(probePath, "fn main() {}\n");
+		await execFile(sccachePath, [
+			rustcPath,
+			probePath,
+			"--crate-name",
+			"___",
+			"--print=file-names",
+			"--crate-type",
+			"bin",
+			"--crate-type",
+			"rlib",
+			"--crate-type",
+			"dylib",
+			"--crate-type",
+			"cdylib",
+			"--crate-type",
+			"staticlib",
+			"--print=sysroot",
+			"--print=split-debuginfo",
+			"--print=crate-name",
+			"--print=cfg",
+			"-Wwarnings",
+		]);
+		return true;
+	} catch (error) {
+		const stderr = typeof error.stderr === "string" ? error.stderr.trim() : "";
+		const message = stderr || (error instanceof Error ? error.message : "");
+		const detail = message.split(/\r?\n/).find(Boolean);
+
+		if (detail)
+			console.log(`sccache at ${sccachePath} failed rustc probe: ${detail}`);
+		else console.log(`sccache at ${sccachePath} failed rustc probe`);
+
+		console.log("Using rustc directly");
+		return false;
+	} finally {
+		await fs.rm(probeDir, { recursive: true, force: true });
+	}
 }

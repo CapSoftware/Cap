@@ -529,10 +529,7 @@ async fn run_preset(
     let fps = preset.fps();
 
     println!("\n--- {} ---", preset.label());
-    println!(
-        "  Resolution: {}x{}, FPS: {}, Duration: {:.1}s",
-        width, height, fps, duration_seconds
-    );
+    println!("  Resolution: {width}x{height}, FPS: {fps}, Duration: {duration_seconds:.1}s");
 
     let estimated_size_mb = match preset {
         ExportPreset::Mp4 { compression, .. } => {
@@ -582,14 +579,12 @@ async fn run_preset(
                 frames_rendered,
                 effective_fps
             );
-            println!("  Output size: {:.2} MB", output_file_size_mb);
+            println!("  Output size: {output_file_size_mb:.2} MB");
             println!(
-                "  Estimated size: {:.2} MB (error: {:+.1}%)",
-                estimated_size_mb, estimation_error_pct
+                "  Estimated size: {estimated_size_mb:.2} MB (error: {estimation_error_pct:+.1}%)"
             );
             println!(
-                "  Estimated time: {:.2}s (error: {:+.1}%)",
-                estimated_time_seconds, time_estimation_error_pct
+                "  Estimated time: {estimated_time_seconds:.2}s (error: {time_estimation_error_pct:+.1}%)"
             );
             println!("  Status: {}", if passed { "PASS" } else { "FAIL" });
 
@@ -681,10 +676,7 @@ fn print_summary(results: &[ExportResult]) {
                 .map(|r| r.estimation_error_pct.abs())
                 .sum::<f64>()
                 / mp4_results.len() as f64;
-            println!(
-                "  MP4: avg error {:+.1}%, avg |error| {:.1}%",
-                avg_error, avg_abs_error
-            );
+            println!("  MP4: avg error {avg_error:+.1}%, avg |error| {avg_abs_error:.1}%");
         }
 
         let gif_results: Vec<&&ExportResult> = successful
@@ -702,10 +694,7 @@ fn print_summary(results: &[ExportResult]) {
                 .map(|r| r.estimation_error_pct.abs())
                 .sum::<f64>()
                 / gif_results.len() as f64;
-            println!(
-                "  GIF: avg error {:+.1}%, avg |error| {:.1}%",
-                avg_error, avg_abs_error
-            );
+            println!("  GIF: avg error {avg_error:+.1}%, avg |error| {avg_abs_error:.1}%");
         }
     }
 
@@ -729,8 +718,8 @@ fn generate_benchmark_markdown(
     let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
     let local_timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    md.push_str(&format!("### Benchmark Run: {}\n\n", timestamp));
-    md.push_str(&format!("*Local time: {}*\n\n", local_timestamp));
+    md.push_str(&format!("### Benchmark Run: {timestamp}\n\n"));
+    md.push_str(&format!("*Local time: {local_timestamp}*\n\n"));
 
     let passed = results.iter().filter(|r| r.passed).count();
     let total = results.len();
@@ -741,20 +730,18 @@ fn generate_benchmark_markdown(
     };
 
     md.push_str(&format!(
-        "**Overall Result:** {} ({}/{})\n\n",
-        overall_status, passed, total
+        "**Overall Result:** {overall_status} ({passed}/{total})\n\n"
     ));
 
     md.push_str(&format!(
-        "**Test Video:** {}s at {}x{} {}fps\n\n",
-        duration_secs, SOURCE_VIDEO_WIDTH, SOURCE_VIDEO_HEIGHT, SOURCE_VIDEO_FPS
+        "**Test Video:** {duration_secs}s at {SOURCE_VIDEO_WIDTH}x{SOURCE_VIDEO_HEIGHT} {SOURCE_VIDEO_FPS}fps\n\n"
     ));
 
     if let Some(notes_text) = notes {
-        md.push_str(&format!("**Notes:** {}\n\n", notes_text));
+        md.push_str(&format!("**Notes:** {notes_text}\n\n"));
     }
 
-    md.push_str(&format!("**Command:** `{}`\n\n", command));
+    md.push_str(&format!("**Command:** `{command}`\n\n"));
 
     md.push_str("<details>\n<summary>System Information</summary>\n\n");
     md.push_str(&format!("- **OS:** {}\n", std::env::consts::OS));
@@ -822,12 +809,10 @@ fn generate_benchmark_markdown(
                 / mp4_results.len() as f64;
 
             md.push_str(&format!(
-                "- **MP4 Size**: avg error {:+.1}%, avg |error| {:.1}%\n",
-                avg_size_error, avg_abs_size_error
+                "- **MP4 Size**: avg error {avg_size_error:+.1}%, avg |error| {avg_abs_size_error:.1}%\n"
             ));
             md.push_str(&format!(
-                "- **MP4 Time**: avg error {:+.1}%, avg |error| {:.1}%\n",
-                avg_time_error, avg_abs_time_error
+                "- **MP4 Time**: avg error {avg_time_error:+.1}%, avg |error| {avg_abs_time_error:.1}%\n"
             ));
         }
 
@@ -848,8 +833,7 @@ fn generate_benchmark_markdown(
                 / gif_results.len() as f64;
 
             md.push_str(&format!(
-                "- **GIF Size**: avg error {:+.1}%, avg |error| {:.1}%\n",
-                avg_size_error, avg_abs_size_error
+                "- **GIF Size**: avg error {avg_size_error:+.1}%, avg |error| {avg_abs_size_error:.1}%\n"
             ));
         }
 
@@ -911,8 +895,7 @@ fn write_benchmark_to_file(benchmark_md: &str) -> Result<(), String> {
 
     if !benchmark_file.exists() {
         return Err(format!(
-            "EXPORT-BENCHMARKS.md not found at {:?}. Please ensure the file exists.",
-            benchmark_file
+            "EXPORT-BENCHMARKS.md not found at {benchmark_file:?}. Please ensure the file exists."
         ));
     }
 
@@ -983,95 +966,93 @@ async fn main() {
 
     println!("Export Benchmark Runner");
     println!("======================");
-    println!("Mode: {}", command_name);
+    println!("Mode: {command_name}");
     println!("Presets to test: {}", presets.len());
 
-    let (project_dir, duration_seconds, _temp_dir) =
-        if let Some(ref recording_path) = cli.recording_path {
-            if !recording_path.join("recording-meta.json").exists()
-                || !recording_path.join("project-config.json").exists()
-            {
-                eprintln!(
-                    "ERROR: {:?} is not a valid Cap recording (missing meta files)",
-                    recording_path
-                );
-                std::process::exit(1);
-            }
-
-            println!("Using existing recording: {}", recording_path.display());
-
-            let meta_content =
-                fs::read_to_string(recording_path.join("recording-meta.json")).unwrap_or_default();
-            let config_content =
-                fs::read_to_string(recording_path.join("project-config.json")).unwrap_or_default();
-
-            let duration = serde_json::from_str::<serde_json::Value>(&config_content)
-                .ok()
-                .and_then(|v| v.get("timeline")?.get("segments")?.as_array().cloned())
-                .map(|segments| {
-                    segments
-                        .iter()
-                        .filter_map(|s| {
-                            let start = s.get("start")?.as_f64()?;
-                            let end = s.get("end")?.as_f64()?;
-                            Some(end - start)
-                        })
-                        .sum::<f64>()
-                })
-                .unwrap_or_else(|| {
-                    serde_json::from_str::<serde_json::Value>(&meta_content)
-                        .ok()
-                        .and_then(|v| v.get("display")?.get("fps")?.as_f64())
-                        .unwrap_or(30.0)
-                        * cli.duration as f64
-                        / 30.0
-                });
-
-            println!("Recording duration: {:.1}s", duration);
-            (recording_path.clone(), duration, None)
-        } else {
-            let duration_secs = cli.duration;
-            println!(
-                "Test video: {}s at {}x{} {}fps",
-                duration_secs, SOURCE_VIDEO_WIDTH, SOURCE_VIDEO_HEIGHT, SOURCE_VIDEO_FPS
+    let (project_dir, duration_seconds, _temp_dir) = if let Some(ref recording_path) =
+        cli.recording_path
+    {
+        if !recording_path.join("recording-meta.json").exists()
+            || !recording_path.join("project-config.json").exists()
+        {
+            eprintln!(
+                "ERROR: {recording_path:?} is not a valid Cap recording (missing meta files)"
             );
-            println!();
+            std::process::exit(1);
+        }
 
-            let temp_dir = tempfile::TempDir::new().expect("Failed to create temp directory");
-            let project_dir = temp_dir.path().to_path_buf();
+        println!("Using existing recording: {}", recording_path.display());
 
-            println!("Setting up test project in {:?}", project_dir);
+        let meta_content =
+            fs::read_to_string(recording_path.join("recording-meta.json")).unwrap_or_default();
+        let config_content =
+            fs::read_to_string(recording_path.join("project-config.json")).unwrap_or_default();
 
-            create_cap_project(&project_dir, duration_secs, SOURCE_VIDEO_FPS)
-                .expect("Failed to create cap project");
+        let duration = serde_json::from_str::<serde_json::Value>(&config_content)
+            .ok()
+            .and_then(|v| v.get("timeline")?.get("segments")?.as_array().cloned())
+            .map(|segments| {
+                segments
+                    .iter()
+                    .filter_map(|s| {
+                        let start = s.get("start")?.as_f64()?;
+                        let end = s.get("end")?.as_f64()?;
+                        Some(end - start)
+                    })
+                    .sum::<f64>()
+            })
+            .unwrap_or_else(|| {
+                serde_json::from_str::<serde_json::Value>(&meta_content)
+                    .ok()
+                    .and_then(|v| v.get("display")?.get("fps")?.as_f64())
+                    .unwrap_or(30.0)
+                    * cli.duration as f64
+                    / 30.0
+            });
 
-            let video_path = project_dir.join("content/display.mp4");
-            println!(
-                "Generating {}s test video at {}x{}...",
-                duration_secs, SOURCE_VIDEO_WIDTH, SOURCE_VIDEO_HEIGHT
-            );
-            let gen_start = Instant::now();
-            generate_test_video(
-                &video_path,
-                duration_secs,
-                SOURCE_VIDEO_WIDTH,
-                SOURCE_VIDEO_HEIGHT,
-                SOURCE_VIDEO_FPS,
-            )
-            .expect("Failed to generate test video");
-            println!(
-                "Video generated in {:.2}s",
-                gen_start.elapsed().as_secs_f64()
-            );
+        println!("Recording duration: {duration:.1}s");
+        (recording_path.clone(), duration, None)
+    } else {
+        let duration_secs = cli.duration;
+        println!(
+            "Test video: {duration_secs}s at {SOURCE_VIDEO_WIDTH}x{SOURCE_VIDEO_HEIGHT} {SOURCE_VIDEO_FPS}fps"
+        );
+        println!();
 
-            let source_size = fs::metadata(&video_path).map(|m| m.len()).unwrap_or(0);
-            println!(
-                "Source video size: {:.2} MB",
-                source_size as f64 / 1024.0 / 1024.0
-            );
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp directory");
+        let project_dir = temp_dir.path().to_path_buf();
 
-            (project_dir, duration_secs as f64, Some(temp_dir))
-        };
+        println!("Setting up test project in {project_dir:?}");
+
+        create_cap_project(&project_dir, duration_secs, SOURCE_VIDEO_FPS)
+            .expect("Failed to create cap project");
+
+        let video_path = project_dir.join("content/display.mp4");
+        println!(
+            "Generating {duration_secs}s test video at {SOURCE_VIDEO_WIDTH}x{SOURCE_VIDEO_HEIGHT}..."
+        );
+        let gen_start = Instant::now();
+        generate_test_video(
+            &video_path,
+            duration_secs,
+            SOURCE_VIDEO_WIDTH,
+            SOURCE_VIDEO_HEIGHT,
+            SOURCE_VIDEO_FPS,
+        )
+        .expect("Failed to generate test video");
+        println!(
+            "Video generated in {:.2}s",
+            gen_start.elapsed().as_secs_f64()
+        );
+
+        let source_size = fs::metadata(&video_path).map(|m| m.len()).unwrap_or(0);
+        println!(
+            "Source video size: {:.2} MB",
+            source_size as f64 / 1024.0 / 1024.0
+        );
+
+        (project_dir, duration_secs as f64, Some(temp_dir))
+    };
 
     let mut results = Vec::new();
     let total_presets = presets.len();

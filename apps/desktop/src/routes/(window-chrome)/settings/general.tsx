@@ -16,10 +16,8 @@ import {
 	createResource,
 	createSignal,
 	For,
-	type JSX,
 	onCleanup,
 	onMount,
-	type ParentProps,
 	Show,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
@@ -45,7 +43,14 @@ import {
 } from "~/utils/tauri";
 import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideX from "~icons/lucide/x";
-import { SettingItem, ToggleSettingItem } from "./Setting";
+import {
+	Section,
+	SectionCard,
+	SectionRows,
+	SettingItem,
+	SettingsPageContent,
+	ToggleSettingItem,
+} from "./Setting";
 
 const getExclusionPrimaryLabel = (entry: WindowExclusion) =>
 	entry.ownerName ?? entry.windowTitle ?? entry.bundleIdentifier ?? "Unknown";
@@ -129,11 +134,11 @@ function AppearanceSection(props: {
 									aria-checked={isSelected()}
 									aria-label={`Select theme: ${theme.name}`}
 									onClick={() => props.onThemeChange(theme.id)}
-									class="flex flex-col gap-2 items-center group focus:outline-none"
+									class="flex flex-col gap-2 items-center group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1 rounded-xl"
 								>
 									<div
 										class={cx(
-											"w-full aspect-[5/3] rounded-lg overflow-hidden border-2 transition-all duration-150",
+											"w-full aspect-[5/3] rounded-lg overflow-hidden border-2 transition-[border-color,box-shadow] duration-150",
 											isSelected()
 												? "border-blue-9"
 												: "border-gray-4 group-hover:border-gray-6",
@@ -240,8 +245,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	) => {
 		console.log(`Handling settings change for ${key}: ${value}`);
 
+		const previousValue = settings[key];
 		setSettings(key as keyof GeneralSettingsStore, value);
-		generalSettingsStore.set({ [key]: value, ...(extra ?? {}) });
+		try {
+			await generalSettingsStore.set({ [key]: value, ...(extra ?? {}) });
+		} catch (error) {
+			setSettings(key as keyof GeneralSettingsStore, previousValue);
+			console.error(`Failed to update ${key}`, error);
+		}
 	};
 
 	const ostype: OsType = type();
@@ -396,8 +407,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	};
 
 	return (
-		<div ref={scrollContainerRef} class="flex flex-col h-full custom-scroll">
-			<div class="px-6 py-6 space-y-7 max-w-[42rem]">
+		<div
+			ref={scrollContainerRef}
+			class="cap-settings-page flex flex-col h-full custom-scroll"
+		>
+			<SettingsPageContent>
 				<AppearanceSection
 					currentTheme={settings.appearance ?? "system"}
 					onThemeChange={(newAppearance) => {
@@ -611,7 +625,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					value={settings.enableTelemetry !== false}
 					onChange={(v) => handleChange("enableTelemetry", v)}
 				/>
-			</div>
+			</SettingsPageContent>
 		</div>
 	);
 }
@@ -694,7 +708,7 @@ function SegmentedControl<T extends string | number>(props: {
 							type="button"
 							onClick={() => props.onChange(option.value)}
 							class={cx(
-								"px-3 py-1 text-xs font-medium rounded-md transition-all",
+								"px-3 py-1 text-xs font-medium rounded-md transition-[background-color,color,box-shadow]",
 								isSelected()
 									? "bg-gray-1 text-gray-12 shadow-sm"
 									: "text-gray-10 hover:text-gray-12",
@@ -726,7 +740,7 @@ function StudioQualitySubsection(props: {
 		>
 			<div class="flex justify-between items-start gap-4">
 				<div class="flex flex-col gap-0.5 min-w-0">
-					<p class="text-[13px] font-medium text-gray-12">Studio mode</p>
+					<p class="text-[13px] text-gray-12">Studio mode</p>
 					<p class="text-xs leading-snug text-gray-10">
 						Encoder profile for local Studio recordings.
 					</p>
@@ -767,7 +781,7 @@ function InstantQualitySubsection(props: {
 		>
 			<div class="flex justify-between items-start gap-4">
 				<div class="flex flex-col gap-0.5 min-w-0">
-					<p class="text-[13px] font-medium text-gray-12">Instant mode</p>
+					<p class="text-[13px] text-gray-12">Instant mode</p>
 					<p class="text-xs leading-snug text-gray-10">
 						Maximum upload resolution for Instant recordings.
 					</p>
@@ -810,63 +824,6 @@ function QualitySection(props: {
 				/>
 			</SectionCard>
 		</Section>
-	);
-}
-
-function Section(
-	props: ParentProps<{
-		title: string;
-		description?: string;
-		right?: JSX.Element;
-		pro?: boolean;
-	}>,
-) {
-	return (
-		<section class="space-y-2.5">
-			<header class="flex justify-between items-end gap-3 px-1">
-				<div class="flex flex-col gap-0.5 min-w-0">
-					<div class="flex gap-2 items-center">
-						<h3 class="text-sm font-semibold tracking-tight text-gray-12">
-							{props.title}
-						</h3>
-						<Show when={props.pro}>
-							<span class="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-blue-9 text-white">
-								Pro
-							</span>
-						</Show>
-					</div>
-					<Show when={props.description}>
-						<p class="text-xs leading-relaxed text-gray-10">
-							{props.description}
-						</p>
-					</Show>
-				</div>
-				<Show when={props.right}>
-					<div class="flex shrink-0 gap-2 items-center">{props.right}</div>
-				</Show>
-			</header>
-			{props.children}
-		</section>
-	);
-}
-
-function SectionCard(props: ParentProps<{ class?: string; padded?: boolean }>) {
-	return (
-		<div
-			class={cx(
-				"overflow-hidden rounded-xl border border-gray-3 bg-gray-2",
-				props.padded && "px-4 py-4",
-				props.class,
-			)}
-		>
-			{props.children}
-		</div>
-	);
-}
-
-function SectionRows(props: ParentProps) {
-	return (
-		<SectionCard class="divide-y divide-gray-3">{props.children}</SectionCard>
 	);
 }
 
@@ -975,7 +932,7 @@ function DefaultProjectNameCard(props: {
 			<button
 				type="button"
 				title="Click to copy"
-				class="px-1.5 py-0.5 mx-0.5 font-mono text-[11px] rounded-md transition-all duration-150 ease-out cursor-pointer bg-gray-3 hover:bg-gray-4 active:scale-95 text-gray-12"
+				class="px-1.5 py-0.5 mx-0.5 font-mono text-[11px] rounded-md transition-[background-color,color,transform] duration-150 ease-out cursor-pointer bg-gray-3 hover:bg-gray-4 active:scale-95 text-gray-12"
 				onClick={() => commands.writeClipboardString(props.children)}
 			>
 				{props.children}
@@ -1041,11 +998,11 @@ function DefaultProjectNameCard(props: {
 
 					<Collapsible class="w-full rounded-lg">
 						<Collapsible.Trigger class="inline-flex gap-1 items-center text-xs transition-colors text-gray-10 hover:text-gray-12 group">
-							<IconCapChevronDown class="size-3.5 ui-group-expanded:rotate-180 transition-transform duration-200" />
+							<IconCapChevronDown class="size-3.5 data-group-expanded:rotate-180 transition-transform duration-200" />
 							<span>Available placeholders</span>
 						</Collapsible.Trigger>
 
-						<Collapsible.Content class="space-y-3 pt-3 text-xs text-gray-12 opacity-0 transition animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
+						<Collapsible.Content class="space-y-3 pt-3 text-xs text-gray-12 opacity-0 transition animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
 							<p class="text-gray-10">
 								Click any placeholder to copy it. Time supports custom formats
 								via <code class="text-gray-12">{"{moment:HH:mm}"}</code>.
@@ -1249,8 +1206,8 @@ function ExcludedWindowsSkeleton() {
 				{(width) => (
 					<div class="flex gap-2 items-center pr-1 pl-3 py-1.5 rounded-full border bg-gray-3 border-gray-4 animate-pulse">
 						<div class="flex flex-col gap-1 leading-tight">
-							<div class={cx("h-2.5 rounded bg-gray-4", width)} />
-							<div class="w-14 h-2 rounded bg-gray-4" />
+							<div class={cx("h-2.5 rounded-sm bg-gray-4", width)} />
+							<div class="w-14 h-2 rounded-sm bg-gray-4" />
 						</div>
 						<div class="rounded-full size-5 bg-gray-4" />
 					</div>

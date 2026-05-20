@@ -119,6 +119,9 @@ async generateExportPreviewFast(frameTime: number, settings: ExportPreviewSettin
 async startVideoImport(sourcePath: string) : Promise<string> {
     return await TAURI_INVOKE("start_video_import", { sourcePath });
 },
+async addExistingRecordingToEditor(sourcePath: string) : Promise<number> {
+    return await TAURI_INVOKE("add_existing_recording_to_editor", { sourcePath });
+},
 async startImageImport(sourcePath: string) : Promise<string> {
     return await TAURI_INVOKE("start_image_import", { sourcePath });
 },
@@ -247,6 +250,9 @@ async seekTo(frameNumber: number) : Promise<null> {
 },
 async getDisplayFrameForCropping(fps: number) : Promise<number[]> {
     return await TAURI_INVOKE("get_display_frame_for_cropping", { fps });
+},
+async applyMacosLiquidGlassBackground(enabled: boolean, radius: number) : Promise<boolean> {
+    return await TAURI_INVOKE("apply_macos_liquid_glass_background", { enabled, radius });
 },
 async globalMessageDialog(message: string) : Promise<void> {
     await TAURI_INVOKE("global_message_dialog", { message });

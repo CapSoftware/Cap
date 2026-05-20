@@ -40,7 +40,6 @@ const CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(1
 pub const MIN_CAMERA_SIZE: f32 = 150.0;
 pub const MAX_CAMERA_SIZE: f32 = 600.0;
 pub const DEFAULT_CAMERA_SIZE: f32 = 230.0;
-pub const CAMERA_PRESET_LARGE: f32 = 400.0;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -152,6 +151,12 @@ impl CameraPreviewManager {
 
     pub fn is_initialized(&self) -> bool {
         self.preview.is_some()
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.preview
+            .as_ref()
+            .is_some_and(|preview| preview.is_paused)
     }
 
     pub fn sender(&self) -> Option<flume::Sender<FFmpegVideoFrame>> {

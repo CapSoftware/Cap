@@ -70,18 +70,18 @@ export default function Debug() {
 		<main
 			ref={mainContent}
 			data-tauri-drag-region="deep"
-			class="min-w-[500px] text-[--text-primary] p-4 pt-10 overflow-y-scroll"
+			class="min-w-[500px] text-(--text-primary) p-4 pt-10 overflow-y-scroll"
 		>
 			<h2 class="text-xl font-bold">Debug Windows</h2>
 			<div class="p-2 mb-4 flex gap-2">
 				<button
-					class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-1 px-2 rounded"
+					class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-1 px-2 rounded-sm"
 					onClick={() => commands.showWindow("Onboarding")}
 				>
 					Show Onboarding Window
 				</button>
 				<button
-					class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-1 px-2 rounded"
+					class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-1 px-2 rounded-sm"
 					onClick={() =>
 						commands.showWindow({ InProgressRecording: { countdown: 3 } })
 					}
@@ -92,25 +92,25 @@ export default function Debug() {
 
 			<h2 class="text-xl font-bold mt-4">Updates</h2>
 			<div class="p-2 mb-2">
-				<p class="mb-2 text-sm text-[--text-secondary]">
+				<p class="mb-2 text-sm text-(--text-secondary)">
 					Current version: v{version()}
 				</p>
 				<div class="flex flex-row gap-2 items-center">
 					<button
-						class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-1 px-2 rounded disabled:opacity-50"
+						class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-1 px-2 rounded-sm disabled:opacity-50"
 						onClick={checkForUpdates}
 						disabled={isChecking()}
 					>
 						Check for Updates
 					</button>
 					<button
-						class="bg-green-500 hover:bg-green-600 text-white font-medium py-1 px-2 rounded"
+						class="bg-green-500 hover:bg-green-600 text-white font-medium py-1 px-2 rounded-sm"
 						onClick={() => navigate("/update")}
 					>
 						Go to Update Page
 					</button>
 					<button
-						class="bg-purple-500 hover:bg-purple-600 text-white font-medium py-1 px-2 rounded disabled:opacity-50"
+						class="bg-purple-500 hover:bg-purple-600 text-white font-medium py-1 px-2 rounded-sm disabled:opacity-50"
 						onClick={simulateUpdatePopup}
 						disabled={isChecking()}
 					>

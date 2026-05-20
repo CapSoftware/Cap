@@ -1,4 +1,5 @@
 import type {
+	AiGenerationLanguage,
 	Comment,
 	Folder,
 	ImageUpload,
@@ -122,6 +123,7 @@ export const users = mysqlTable(
 		inviteQuota: int("inviteQuota").notNull().default(1),
 		defaultOrgId:
 			nanoIdNullable("defaultOrgId").$type<Organisation.OrganisationId>(),
+		authSessionVersion: int("authSessionVersion").notNull().default(0),
 	},
 	(table) => ({
 		emailIndex: uniqueIndex("email_idx").on(table.email),
@@ -202,6 +204,7 @@ export const organizations = mysqlTable(
 			disableComments?: boolean;
 			hideShareableLinkCapLogo?: boolean;
 			shareableLinkUseOrganizationIcon?: boolean;
+			aiGenerationLanguage?: AiGenerationLanguage;
 		}>(),
 		iconUrl: varchar("iconUrl", {
 			length: 1024,

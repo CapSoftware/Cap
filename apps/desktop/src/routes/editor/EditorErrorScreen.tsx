@@ -44,7 +44,7 @@ export function EditorErrorScreen(props: {
 				data-tauri-drag-region="deep"
 				class="flex relative flex-row items-center w-full h-14 px-4"
 			>
-				{isMac() && <div class="h-full w-[4rem]" />}
+				{isMac() && <div class="h-full w-16" />}
 				<div class="flex-1 h-full" />
 				{ostype() === "windows" && <CaptionControlsWindows11 />}
 			</div>

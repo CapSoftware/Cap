@@ -10,7 +10,7 @@ use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
 use std::{
     future::Future,
     str::FromStr,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicU32, AtomicU64, Ordering},
     time::Duration,
 };
 #[cfg(target_os = "macos")]
@@ -19,6 +19,23 @@ use tracing::instrument;
 
 #[cfg(target_os = "macos")]
 static MACOS_DOCK_VISIBILITY_SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "macos")]
+static MACOS_PENDING_PANEL_WINDOWS: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(target_os = "macos")]
+pub(crate) struct MacosPanelWindowActivationGuard {
+    app: tauri::AppHandle,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacosPanelWindowActivationGuard {
+    fn drop(&mut self) {
+        let pending = MACOS_PENDING_PANEL_WINDOWS.fetch_sub(1, Ordering::AcqRel);
+        if pending == 1 {
+            schedule_macos_dock_visibility_sync(&self.app);
+        }
+    }
+}
 
 #[cfg(target_os = "macos")]
 fn macos_prompt_screen_recording_access() {
@@ -129,25 +146,36 @@ fn macos_sync_activation_policy(app: &tauri::AppHandle, should_show_dock: bool) 
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn prepare_macos_panel_window(app: &tauri::AppHandle) {
+pub(crate) fn prepare_macos_panel_window(
+    app: &tauri::AppHandle,
+) -> MacosPanelWindowActivationGuard {
+    MACOS_PENDING_PANEL_WINDOWS.fetch_add(1, Ordering::AcqRel);
+
     if let Err(err) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
         tracing::warn!("Failed to prepare macOS panel activation policy: {err}");
     }
+
+    MacosPanelWindowActivationGuard { app: app.clone() }
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) fn sync_macos_dock_visibility(app: &tauri::AppHandle) {
+    if MACOS_PENDING_PANEL_WINDOWS.load(Ordering::Acquire) > 0 {
+        return;
+    }
+
     let should_hide_dock = GeneralSettingsStore::get(app)
         .ok()
         .flatten()
         .is_some_and(|settings| settings.hide_dock_icon);
 
-    let should_show_dock = !should_hide_dock
-        || app.webview_windows().keys().any(|label| {
-            CapWindowId::from_str(label)
-                .map(|window_id| window_id.activates_dock())
-                .unwrap_or(false)
-        });
+    let has_visible_dock_window = app.webview_windows().iter().any(|(label, window)| {
+        CapWindowId::from_str(label)
+            .map(|window_id| window_id.activates_dock() && window.is_visible().unwrap_or(false))
+            .unwrap_or(false)
+    });
+
+    let should_show_dock = !should_hide_dock || has_visible_dock_window;
 
     macos_sync_activation_policy(app, should_show_dock);
 
@@ -158,11 +186,11 @@ pub(crate) fn sync_macos_dock_visibility(app: &tauri::AppHandle) {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn schedule_macos_dock_visibility_sync(app: &tauri::AppHandle) {
-    let generation = MACOS_DOCK_VISIBILITY_SYNC_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let generation = MACOS_DOCK_VISIBILITY_SYNC_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        if MACOS_DOCK_VISIBILITY_SYNC_GENERATION.load(Ordering::Relaxed) == generation {
+        if MACOS_DOCK_VISIBILITY_SYNC_GENERATION.load(Ordering::Acquire) == generation {
             sync_macos_dock_visibility(&app);
         }
     });
@@ -170,6 +198,14 @@ pub(crate) fn schedule_macos_dock_visibility_sync(app: &tauri::AppHandle) {
 
 #[cfg(target_os = "macos")]
 fn macos_permission_status(permission: &OSPermission, initial_check: bool) -> OSPermissionStatus {
+    #[cfg(debug_assertions)]
+    if matches!(
+        permission,
+        OSPermission::ScreenRecording | OSPermission::Accessibility
+    ) {
+        return OSPermissionStatus::Granted;
+    }
+
     match permission {
         OSPermission::ScreenRecording => {
             let granted = scap_screencapturekit::has_permission();

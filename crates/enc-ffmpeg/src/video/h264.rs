@@ -183,7 +183,7 @@ impl H264EncoderBuilder {
                         );
                     } else {
                         let is_high_throughput =
-                            requires_software_encoder(&input_config, self.preset);
+                            requires_software_encoder(&input_config, self.preset, self.is_export);
                         if is_high_throughput {
                             warn!(
                                 encoder = %codec_name,
@@ -776,7 +776,11 @@ fn estimate_hw_encoder_max_fps(encoder_name: &str, width: u32, height: u32) -> f
     }
 }
 
-fn requires_software_encoder(config: &VideoInfo, preset: H264Preset) -> bool {
+fn requires_software_encoder(config: &VideoInfo, preset: H264Preset, is_export: bool) -> bool {
+    if is_export {
+        return false;
+    }
+
     if preset == H264Preset::HighThroughput {
         return true;
     }
@@ -848,11 +852,15 @@ fn get_default_encoder_priority(_config: &VideoInfo) -> &'static [&'static str] 
         static ENCODER_PRIORITY_DEFAULT: &[&str] =
             &["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf", "libx264"];
 
-        match detect_primary_gpu().map(|info| info.vendor) {
-            Some(GpuVendor::Nvidia) => ENCODER_PRIORITY_NVIDIA,
-            Some(GpuVendor::Amd) => ENCODER_PRIORITY_AMD,
-            Some(GpuVendor::Intel) => ENCODER_PRIORITY_INTEL,
-            _ => ENCODER_PRIORITY_DEFAULT,
+        match detect_primary_gpu() {
+            Some(info) if !info.supports_hardware_encoding() => &["libx264"],
+            Some(info) => match info.vendor {
+                GpuVendor::Nvidia => ENCODER_PRIORITY_NVIDIA,
+                GpuVendor::Amd => ENCODER_PRIORITY_AMD,
+                GpuVendor::Intel => ENCODER_PRIORITY_INTEL,
+                _ => ENCODER_PRIORITY_DEFAULT,
+            },
+            None => ENCODER_PRIORITY_DEFAULT,
         }
     }
 
@@ -866,12 +874,13 @@ fn get_encoder_priority_with_override(
     config: &VideoInfo,
     preset: H264Preset,
     override_priority: Option<&'static [&'static str]>,
+    is_export: bool,
 ) -> &'static [&'static str] {
     if force_software_encoder() {
         return &["libx264"];
     }
 
-    if requires_software_encoder(config, preset) {
+    if requires_software_encoder(config, preset, is_export) {
         return &["libx264"];
     }
 
@@ -888,13 +897,9 @@ fn force_software_encoder() -> bool {
 }
 
 fn export_encoder_priority_override(
-    config: &VideoInfo,
-    preset: H264Preset,
+    _config: &VideoInfo,
+    _preset: H264Preset,
 ) -> Option<&'static [&'static str]> {
-    if requires_software_encoder(config, preset) {
-        return None;
-    }
-
     #[cfg(target_os = "windows")]
     {
         use cap_frame_converter::{GpuVendor, detect_primary_gpu};
@@ -902,7 +907,10 @@ fn export_encoder_priority_override(
         static ENCODER_PRIORITY_AMD_EXPORT: &[&str] =
             &["h264_amf", "h264_mf", "h264_nvenc", "h264_qsv", "libx264"];
 
-        if let Some(GpuVendor::Amd) = detect_primary_gpu().map(|info| info.vendor) {
+        if let Some(info) = detect_primary_gpu()
+            && info.supports_hardware_encoding()
+            && info.vendor == GpuVendor::Amd
+        {
             return Some(ENCODER_PRIORITY_AMD_EXPORT);
         }
     }
@@ -931,7 +939,7 @@ fn get_codec_and_options(
     let encoder_priority = if crf.is_some() {
         &["libx264"] as &[&str]
     } else {
-        get_encoder_priority_with_override(config, preset, encoder_priority_override)
+        get_encoder_priority_with_override(config, preset, encoder_priority_override, is_export)
     };
 
     let mut encoders = Vec::new();

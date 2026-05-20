@@ -115,7 +115,7 @@ pub async fn open_target_select_overlays(
             show_overlay(&window);
 
             if should_focus {
-                window.set_focus().ok();
+                focus_target_select_overlay(&window);
             }
 
             state.spawn(display_id, window.clone());
@@ -127,10 +127,7 @@ pub async fn open_target_select_overlays(
             .show(&app)
             .await
             {
-                window.show().ok();
-                if should_focus {
-                    window.set_focus().ok();
-                }
+                finish_created_target_select_overlay(&window, should_focus);
             }
         } else {
             let app_clone = app.clone();
@@ -143,10 +140,7 @@ pub async fn open_target_select_overlays(
                 .show(&app_clone)
                 .await
                 {
-                    window.show().ok();
-                    if should_focus {
-                        window.set_focus().ok();
-                    }
+                    finish_created_target_select_overlay(&window, should_focus);
                 }
             });
         }
@@ -158,7 +152,7 @@ pub async fn open_target_select_overlays(
     .get(&app);
 
     if let Some(window) = focus_window {
-        window.set_focus().ok();
+        focus_target_select_overlay(&window);
     }
 
     let window_exclusions = general_settings::GeneralSettingsStore::get(&app)
@@ -223,6 +217,27 @@ pub async fn open_target_select_overlays(
     }
 
     Ok(())
+}
+
+fn finish_created_target_select_overlay(window: &WebviewWindow, should_focus: bool) {
+    #[cfg(target_os = "macos")]
+    let _ = (window, should_focus);
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.show().ok();
+        if should_focus {
+            focus_target_select_overlay(window);
+        }
+    }
+}
+
+fn focus_target_select_overlay(window: &WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    let _ = window;
+
+    #[cfg(not(target_os = "macos"))]
+    window.set_focus().ok();
 }
 
 fn should_skip_window(window: &Window, exclusions: &[WindowExclusion]) -> bool {

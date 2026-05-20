@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
+#[cfg(target_os = "macos")]
+use tauri::Listener;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
 use tracing::{error, instrument};
@@ -339,6 +341,26 @@ impl GeneralSettingsStore {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Deserialize)]
+struct StoreChangePayload {
+    key: String,
+}
+
+#[cfg(target_os = "macos")]
+fn sync_dock_visibility_on_general_settings_change(app: &AppHandle) {
+    let app_for_listener = app.clone();
+    app.listen("store://change", move |event| {
+        let Ok(payload) = serde_json::from_str::<StoreChangePayload>(event.payload()) else {
+            return;
+        };
+
+        if payload.key == "general_settings" {
+            crate::permissions::schedule_macos_dock_visibility_sync(&app_for_listener);
+        }
+    });
+}
+
 pub fn init(app: &AppHandle) {
     println!("Initializing GeneralSettingsStore");
 
@@ -357,6 +379,9 @@ pub fn init(app: &AppHandle) {
     if let Err(e) = store.save(app) {
         error!("Failed to save general settings: {}", e);
     }
+
+    #[cfg(target_os = "macos")]
+    sync_dock_visibility_on_general_settings_change(app);
 
     #[cfg(target_os = "macos")]
     crate::permissions::sync_macos_dock_visibility(app);

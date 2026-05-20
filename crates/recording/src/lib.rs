@@ -37,8 +37,8 @@ use crate::{feeds::camera::CameraFeedLock, sources::screen_capture::ScreenCaptur
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingMode {
-    #[default]
     Studio,
+    #[default]
     Instant,
     Screenshot,
 }

@@ -1954,14 +1954,12 @@ fn report_to_markdown(report: &TestReport) -> String {
         }
         if !seg.jitter_ok {
             md.push_str(&format!(
-                "| | ⚠️ | Jitter exceeds {}ms |\n",
-                JITTER_TOLERANCE_MS
+                "| | ⚠️ | Jitter exceeds {JITTER_TOLERANCE_MS}ms |\n"
             ));
         }
         if !seg.dropped_ok {
             md.push_str(&format!(
-                "| | ⚠️ | Dropped frames exceed {}% |\n",
-                MAX_DROPPED_FRAME_PERCENT
+                "| | ⚠️ | Dropped frames exceed {MAX_DROPPED_FRAME_PERCENT}% |\n"
             ));
         }
     }
@@ -2056,8 +2054,8 @@ fn generate_benchmark_markdown(
     let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
     let local_timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    md.push_str(&format!("### Benchmark Run: {}\n\n", timestamp));
-    md.push_str(&format!("*Local time: {}*\n\n", local_timestamp));
+    md.push_str(&format!("### Benchmark Run: {timestamp}\n\n"));
+    md.push_str(&format!("*Local time: {local_timestamp}*\n\n"));
 
     let passed = reports.iter().filter(|r| r.passed).count();
     let total = reports.len();
@@ -2068,15 +2066,14 @@ fn generate_benchmark_markdown(
     };
 
     md.push_str(&format!(
-        "**Overall Result:** {} ({}/{})\n\n",
-        overall_status, passed, total
+        "**Overall Result:** {overall_status} ({passed}/{total})\n\n"
     ));
 
     if let Some(notes_text) = notes {
-        md.push_str(&format!("**Notes:** {}\n\n", notes_text));
+        md.push_str(&format!("**Notes:** {notes_text}\n\n"));
     }
 
-    md.push_str(&format!("**Command:** `{}`\n\n", command));
+    md.push_str(&format!("**Command:** `{command}`\n\n"));
 
     md.push_str("<details>\n<summary>System Information</summary>\n\n");
     let sys_info = SystemInfo::collect(devices);
