@@ -1,6 +1,7 @@
 "use client";
 
 import type { comments as commentsSchema } from "@cap/database/schema";
+import type { ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
@@ -149,6 +150,7 @@ interface ShareProps {
 	videoSettings?: OrganizationSettings | null;
 	userOrganizations?: { id: string; name: string }[];
 	viewerId?: string | null;
+	isEditProcessing: boolean;
 	initialAiData?: {
 		title?: string | null;
 		summary?: string | null;
@@ -261,6 +263,7 @@ export const Share = ({
 	aiGenerationEnabled,
 	videoSettings,
 	viewerId,
+	isEditProcessing,
 }: ShareProps) => {
 	const effectiveDate: Date = data.metadata?.customCreatedAt
 		? new Date(data.metadata.customCreatedAt)
@@ -446,7 +449,7 @@ export const Share = ({
 		}, 100);
 	}, []);
 
-	const isDisabled = (setting: keyof NonNullable<OrganizationSettings>) =>
+	const isDisabled = (setting: ViewerSettingKey) =>
 		videoSettings?.[setting] ?? data.orgSettings?.[setting] ?? false;
 
 	const areChaptersDisabled = isDisabled("disableChapters");
@@ -480,6 +483,7 @@ export const Share = ({
 									aiGenerationStatus={aiData?.aiGenerationStatus}
 									canRetryProcessing={viewerId === data.owner.id}
 									showPlaybackStatusBadge={viewerId === data.owner.id}
+									isEditProcessing={isEditProcessing}
 									ref={playerRef}
 								/>
 							</div>
@@ -488,6 +492,8 @@ export const Share = ({
 							<Toolbar
 								onOptimisticComment={handleOptimisticComment}
 								onCommentSuccess={handleCommentSuccess}
+								disableComments={areCommentStampsDisabled}
+								disableReactions={areReactionStampsDisabled}
 								data={data}
 							/>
 						</div>
@@ -523,10 +529,8 @@ export const Share = ({
 						<Toolbar
 							onOptimisticComment={handleOptimisticComment}
 							onCommentSuccess={handleCommentSuccess}
-							disableReactions={
-								videoSettings?.disableReactions ??
-								data.orgSettings?.disableReactions
-							}
+							disableComments={areCommentStampsDisabled}
+							disableReactions={areReactionStampsDisabled}
 							data={data}
 						/>
 					</div>

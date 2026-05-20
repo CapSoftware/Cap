@@ -28,7 +28,7 @@ interface SettingsDialogProps {
 
 const options: {
 	label: string;
-	value: keyof NonNullable<OrganizationSettings>;
+	value: ViewerSettingKey;
 	description: string;
 	pro?: boolean;
 }[] = [
@@ -77,7 +77,9 @@ export const SettingsDialog = ({
 	const { user, organizationSettings } = useDashboardContext();
 	const [saveLoading, setSaveLoading] = useState(false);
 	const buildSettings = useCallback(
-		(data?: OrganizationSettings): OrganizationSettings => ({
+		(
+			data?: OrganizationSettings,
+		): Partial<Record<ViewerSettingKey, boolean>> => ({
 			disableComments: data?.disableComments,
 			disableSummary: data?.disableSummary,
 			disableCaptions: data?.disableCaptions,
@@ -117,9 +119,9 @@ export const SettingsDialog = ({
 	};
 
 	const toggleSettingHandler = useCallback(
-		(value: string) => {
+		(value: ViewerSettingKey) => {
 			setSettings((prev) => {
-				const key = value as keyof OrganizationSettings;
+				const key = value;
 				const currentValue = prev?.[key];
 				const orgValue = organizationSettings?.[key] ?? false;
 
@@ -143,7 +145,7 @@ export const SettingsDialog = ({
 		[organizationSettings],
 	);
 
-	const getEffectiveValue = (key: keyof OrganizationSettings) => {
+	const getEffectiveValue = (key: ViewerSettingKey) => {
 		const inheritedSources = inheritedSpaceSettings?.[key];
 		if (inheritedSources && inheritedSources.length > 0) return true;
 		const videoValue = settings?.[key];
@@ -153,7 +155,7 @@ export const SettingsDialog = ({
 			: orgValue;
 	};
 
-	const getInheritedLabel = (key: keyof OrganizationSettings) => {
+	const getInheritedLabel = (key: ViewerSettingKey) => {
 		const sources = inheritedSpaceSettings?.[key];
 		if (!sources || sources.length === 0) return null;
 		if (sources.length === 1) return `Required by ${sources[0]?.name}`;
@@ -171,7 +173,7 @@ export const SettingsDialog = ({
 				</DialogHeader>
 				<div className="grid grid-cols-2 gap-3 p-5">
 					{options.map((option) => {
-						const key = option.value as keyof OrganizationSettings;
+						const key = option.value;
 						const effectiveValue = getEffectiveValue(key);
 						const orgValue = organizationSettings?.[key] ?? false;
 						const inheritedLabel = getInheritedLabel(key);
@@ -207,9 +209,7 @@ export const SettingsDialog = ({
 										Boolean(inheritedLabel) ||
 										(option.pro && !user.isPro) ||
 										((key === "disableSummary" || key === "disableChapters") &&
-											getEffectiveValue(
-												"disableTranscript" as keyof OrganizationSettings,
-											))
+											getEffectiveValue("disableTranscript"))
 									}
 									onCheckedChange={() => toggleSettingHandler(option.value)}
 									checked={!effectiveValue}

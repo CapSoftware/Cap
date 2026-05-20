@@ -6,6 +6,8 @@ const valuesMock = vi.fn();
 const startMock = vi.fn();
 const revalidatePathMock = vi.fn();
 const storageGetWritableAccessForUserMock = vi.hoisted(() => vi.fn());
+const checkRateLimitMock = vi.hoisted(() => vi.fn());
+const headersMock = vi.hoisted(() => vi.fn());
 
 const mockDb = {
 	select: vi.fn(() => mockDb),
@@ -83,7 +85,7 @@ vi.mock("@cap/database/schema", () => ({
 
 vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_IS_CAP: false },
-	NODE_ENV: "test",
+	NODE_ENV: "production",
 	serverEnv: vi.fn(() => ({
 		CAP_VIDEOS_DEFAULT_PUBLIC: true,
 		WEB_URL: "https://cap.test",
@@ -131,6 +133,14 @@ vi.mock("next/cache", () => ({
 	revalidatePath: revalidatePathMock,
 }));
 
+vi.mock("next/headers", () => ({
+	headers: headersMock,
+}));
+
+vi.mock("@vercel/firewall", () => ({
+	checkRateLimit: checkRateLimitMock,
+}));
+
 vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
 	return { runPromise: Effect.runPromise };
@@ -173,6 +183,13 @@ describe("importFromLoom", () => {
 		valuesMock.mockResolvedValue(undefined);
 		whereMock.mockResolvedValue([]);
 		startMock.mockResolvedValue(undefined);
+		checkRateLimitMock.mockResolvedValue({ rateLimited: false });
+		headersMock.mockResolvedValue(
+			new Headers({
+				host: "cap.test",
+				"x-real-ip": "127.0.0.1",
+			}),
+		);
 		storageGetWritableAccessForUserMock.mockReturnValue(
 			Effect.succeed({
 				bucketId: Option.some("bucket-1"),
@@ -202,6 +219,32 @@ describe("importFromLoom", () => {
 			success: false,
 			error: "This Loom video has already been imported.",
 		});
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(valuesMock).not.toHaveBeenCalled();
+	});
+
+	it("rate limits single Loom imports per user", async () => {
+		checkRateLimitMock.mockResolvedValueOnce({ rateLimited: true });
+
+		const fetchMock = vi.mocked(fetch);
+		const { importFromLoom } = await import("@/actions/loom");
+
+		const result = await importFromLoom({
+			loomUrl: "https://www.loom.com/share/loom-abc1234567",
+			orgId: "org-1" as never,
+		});
+
+		expect(result).toEqual({
+			success: false,
+			error:
+				"Too many Loom imports started. Please wait a few minutes, then try again.",
+		});
+		expect(checkRateLimitMock).toHaveBeenCalledWith(
+			"rl_loom_import_per_user",
+			expect.objectContaining({
+				rateLimitKey: "loom-import:user-123",
+			}),
+		);
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(valuesMock).not.toHaveBeenCalled();
 	});
@@ -332,6 +375,82 @@ describe("importFromLoom", () => {
 			],
 			error: "No Loom videos were imported.",
 		});
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(valuesMock).not.toHaveBeenCalled();
+	});
+
+	it("rejects CSV imports when the current user is rate limited", async () => {
+		whereMock
+			.mockReturnValueOnce(withLimit([{ ownerId: "user-123" }]))
+			.mockReturnValueOnce(
+				withLimit([{ userId: "member-123", email: "member@example.com" }]),
+			);
+		checkRateLimitMock.mockResolvedValueOnce({ rateLimited: true });
+
+		const fetchMock = vi.mocked(fetch);
+		const { importFromLoomCsv } = await import("@/actions/loom");
+
+		const result = await importFromLoomCsv({
+			orgId: "org-1" as never,
+			rows: [
+				{
+					rowNumber: 2,
+					loomUrl: "https://www.loom.com/share/loom-abc1234567",
+					userEmail: "member@example.com",
+				},
+			],
+		});
+
+		expect(result).toEqual({
+			success: false,
+			importedCount: 0,
+			failedCount: 1,
+			results: [
+				{
+					rowNumber: 2,
+					userEmail: "member@example.com",
+					spaceName: undefined,
+					success: false,
+					error:
+						"Too many Loom imports started. Please wait a few minutes, then try again.",
+				},
+			],
+			error: "No Loom videos were imported.",
+		});
+		expect(checkRateLimitMock).toHaveBeenCalledWith(
+			"rl_loom_import_per_user",
+			expect.objectContaining({
+				rateLimitKey: "loom-import:user-123",
+			}),
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(valuesMock).not.toHaveBeenCalled();
+	});
+
+	it("limits CSV imports to 500 rows", async () => {
+		whereMock.mockReturnValueOnce(withLimit([{ ownerId: "user-123" }]));
+
+		const fetchMock = vi.mocked(fetch);
+		const { importFromLoomCsv } = await import("@/actions/loom");
+
+		const result = await importFromLoomCsv({
+			orgId: "org-1" as never,
+			rows: Array.from({ length: 501 }, (_, index) => ({
+				rowNumber: index + 2,
+				loomUrl: `https://www.loom.com/share/loom-${String(index).padStart(10, "0")}`,
+				userEmail: "member@example.com",
+			})),
+		});
+
+		expect(result).toEqual({
+			success: false,
+			importedCount: 0,
+			failedCount: 501,
+			results: [],
+			error:
+				"CSV imports are limited to 500 rows at a time. Contact support to raise this limit.",
+		});
+		expect(checkRateLimitMock).not.toHaveBeenCalled();
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(valuesMock).not.toHaveBeenCalled();
 	});
@@ -510,7 +629,7 @@ describe("importFromLoom", () => {
 			expect.objectContaining({
 				spaceId: "video-123",
 				userId: "user-123",
-				role: "Admin",
+				role: "admin",
 			}),
 		);
 		expect(valuesMock).toHaveBeenCalledWith(

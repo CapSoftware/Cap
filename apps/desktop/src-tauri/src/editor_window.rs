@@ -253,9 +253,17 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowEditorInstance {
         let Some(instances) = window.try_state::<EditorInstances>() else {
             return Err("editor instance registry unavailable".into());
         };
-        let instance = futures::executor::block_on(instances.0.read());
 
-        let Some(instance) = instance.get(window.label()).cloned() else {
+        // Avoid `futures::executor::block_on` on a tokio RwLock here. That can deadlock or
+        // panic when the IPC handler runs from inside the tokio runtime (release builds hit
+        // this path much more aggressively than dev builds and silently terminate the process).
+        // `try_read` is sync and never blocks; if the lock is contended we surface a transient
+        // error and let the frontend retry.
+        let Ok(instance_guard) = instances.0.try_read() else {
+            return Err("editor instance registry busy".into());
+        };
+
+        let Some(instance) = instance_guard.get(window.label()).cloned() else {
             return Err("editor instance unavailable".into());
         };
 
@@ -291,8 +299,10 @@ impl<'de, R: Runtime> CommandArg<'de, R> for OptionalWindowEditorInstance {
             return Ok(Self(None));
         };
 
-        let instance = futures::executor::block_on(instances.0.read());
-        Ok(Self(instance.get(window.label()).cloned()))
+        match instances.0.try_read() {
+            Ok(instance_guard) => Ok(Self(instance_guard.get(window.label()).cloned())),
+            Err(_) => Ok(Self(None)),
+        }
     }
 }
 

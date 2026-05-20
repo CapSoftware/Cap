@@ -11,6 +11,9 @@ async setMicInput(label: string | null) : Promise<null> {
 async setCameraInput(id: DeviceOrModelID | null, skipCameraWindow: boolean | null) : Promise<null> {
     return await TAURI_INVOKE("set_camera_input", { id, skipCameraWindow });
 },
+async setNativeCameraPreviewEnabled(enabled: boolean) : Promise<null> {
+    return await TAURI_INVOKE("set_native_camera_preview_enabled", { enabled });
+},
 async setRecordingMode(mode: RecordingMode) : Promise<null> {
     return await TAURI_INVOKE("set_recording_mode", { mode });
 },
@@ -89,8 +92,17 @@ async focusCapturesPanel() : Promise<void> {
 async getCurrentRecording() : Promise<JsonValue<CurrentRecording | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
+async beginExportSession() : Promise<void> {
+    await TAURI_INVOKE("begin_export_session");
+},
+async endExportSession() : Promise<void> {
+    await TAURI_INVOKE("end_export_session");
+},
 async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings) : Promise<string> {
     return await TAURI_INVOKE("export_video", { projectPath, progress, settings });
+},
+async exportVideoToFile(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings, fileName: string, fileType: string) : Promise<string> {
+    return await TAURI_INVOKE("export_video_to_file", { projectPath, progress, settings, fileName, fileType });
 },
 async getExportEstimates(path: string, settings: ExportSettings) : Promise<ExportEstimates> {
     return await TAURI_INVOKE("get_export_estimates", { path, settings });
@@ -103,6 +115,12 @@ async generateExportPreviewFast(frameTime: number, settings: ExportPreviewSettin
 },
 async startVideoImport(sourcePath: string) : Promise<string> {
     return await TAURI_INVOKE("start_video_import", { sourcePath });
+},
+async addExistingRecordingToEditor(sourcePath: string) : Promise<number> {
+    return await TAURI_INVOKE("add_existing_recording_to_editor", { sourcePath });
+},
+async startImageImport(sourcePath: string) : Promise<string> {
+    return await TAURI_INVOKE("start_image_import", { sourcePath });
 },
 async checkImportReady(projectPath: string) : Promise<boolean> {
     return await TAURI_INVOKE("check_import_ready", { projectPath });
@@ -188,6 +206,9 @@ async createScreenshotEditorInstance() : Promise<SerializedScreenshotEditorInsta
 async updateScreenshotConfig(config: ProjectConfiguration, save: boolean, revision: number) : Promise<null> {
     return await TAURI_INVOKE("update_screenshot_config", { config, save, revision });
 },
+async recognizeScreenshotText(region: ScreenshotOcrRegion) : Promise<ScreenshotOcrResult> {
+    return await TAURI_INVOKE("recognize_screenshot_text", { region });
+},
 async getRecordingMeta(path: string, fileType: FileType) : Promise<RecordingMetaWithMetadata> {
     return await TAURI_INVOKE("get_recording_meta", { path, fileType });
 },
@@ -232,6 +253,9 @@ async positionTrafficLights(controlsInset: [number, number] | null) : Promise<vo
 },
 async setTheme(theme: AppTheme) : Promise<void> {
     await TAURI_INVOKE("set_theme", { theme });
+},
+async applyMacosLiquidGlassBackground(enabled: boolean, radius: number) : Promise<boolean> {
+    return await TAURI_INVOKE("apply_macos_liquid_glass_background", { enabled, radius });
 },
 async globalMessageDialog(message: string) : Promise<void> {
     await TAURI_INVOKE("global_message_dialog", { message });
@@ -438,7 +462,7 @@ export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb:
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null }
 export type AuthSecret = { api_key: string } | { token: string; expires: number }
-export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; organizations?: Organization[] }
+export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; organizations?: Organization[]; organizations_updated_at?: number | null }
 export type BackgroundBlurConfig = { mode: BackgroundBlurMode }
 export type BackgroundBlurMode = "off" | "light" | "heavy"
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; roundingSmoothness?: number; inset: number; crop: Crop | null; shadow: number; advancedShadow: ShadowConfiguration | null; border: BorderConfiguration | null }
@@ -545,7 +569,8 @@ export type OSPermission = "screenRecording" | "camera" | "microphone" | "access
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnEscapePress = null
-export type Organization = { id: string; name: string; ownerId: string }
+export type Organization = { id: string; name: string; ownerId: string; role?: string; canEditBrand?: boolean; iconUrl?: string | null; brandColors?: OrganizationBrandColors }
+export type OrganizationBrandColors = { primary: string | null; secondary: string | null; accent: string | null; background: string | null }
 export type PhysicalSize = { width: number; height: number }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows"
@@ -580,6 +605,9 @@ export type SceneMode = "default" | "cameraOnly" | "hideCamera"
 export type SceneSegment = { start: number; end: number; mode?: SceneMode }
 export type ScreenCaptureTarget = { variant: "window"; id: WindowId } | { variant: "display"; id: DisplayId } | { variant: "area"; screen: DisplayId; bounds: LogicalBounds } | { variant: "cameraOnly" }
 export type ScreenMovementSpring = { stiffness: number; damping: number; mass: number }
+export type ScreenshotOcrLine = { text: string; confidence: number | null; bounds: ScreenshotOcrRegion }
+export type ScreenshotOcrRegion = { x: number; y: number; width: number; height: number }
+export type ScreenshotOcrResult = { text: string; lines: ScreenshotOcrLine[]; engine: string }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }
 export type SerializedScreenshotEditorInstance = { framesSocketUrl: string; path: string; config: ProjectConfiguration | null; prettyName: string; imageWidth: number; imageHeight: number }

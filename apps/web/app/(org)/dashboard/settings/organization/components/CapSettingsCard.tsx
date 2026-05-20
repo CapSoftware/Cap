@@ -1,15 +1,45 @@
 "use client";
 
 import { Card, CardDescription, CardHeader, CardTitle, Switch } from "@cap/ui";
+import {
+	AI_GENERATION_LANGUAGE_AUTO,
+	AI_GENERATION_LANGUAGES,
+	type AiGenerationLanguage,
+	getAiGenerationLanguageName,
+	isAiGenerationLanguage,
+} from "@cap/web-domain";
 import { useDebounce } from "@uidotdev/usehooks";
 import clsx from "clsx";
+import { ChevronDown, Globe } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { updateOrganizationSettings } from "@/actions/organization/settings";
 import { useDashboardContext } from "../../../Contexts";
 import type { OrganizationSettings } from "../../../dashboard-data";
 
-const options = [
+const defaultSettings: OrganizationSettings = {
+	disableComments: false,
+	disableSummary: false,
+	disableCaptions: false,
+	disableChapters: false,
+	disableReactions: false,
+	disableTranscript: false,
+	hideShareableLinkCapLogo: false,
+	shareableLinkUseOrganizationIcon: false,
+	aiGenerationLanguage: AI_GENERATION_LANGUAGE_AUTO,
+};
+
+type BooleanOrganizationSettingKey = Exclude<
+	keyof OrganizationSettings,
+	"aiGenerationLanguage"
+>;
+
+const options: Array<{
+	label: string;
+	value: BooleanOrganizationSettingKey;
+	description: string;
+	pro?: boolean;
+}> = [
 	{
 		label: "Enable comments",
 		value: "disableComments",
@@ -43,39 +73,62 @@ const options = [
 		description: "Enabling this also allows chapters and summary",
 		pro: true,
 	},
+	{
+		label: "Show Cap logo",
+		value: "hideShareableLinkCapLogo",
+		description: "Show Cap branding at the top of shareable links",
+		pro: true,
+	},
 ];
+
+const languageOptions = Object.entries(AI_GENERATION_LANGUAGES) as [
+	AiGenerationLanguage,
+	string,
+][];
+
+const mergeSettings = (
+	settings?: OrganizationSettings | null,
+): OrganizationSettings => ({
+	...defaultSettings,
+	...(settings ?? {}),
+	aiGenerationLanguage: isAiGenerationLanguage(settings?.aiGenerationLanguage)
+		? settings.aiGenerationLanguage
+		: AI_GENERATION_LANGUAGE_AUTO,
+});
 
 const CapSettingsCard = () => {
 	const { user, organizationSettings } = useDashboardContext();
-	const [settings, setSettings] = useState<OrganizationSettings>(
-		organizationSettings || {
-			disableComments: false,
-			disableSummary: false,
-			disableCaptions: false,
-			disableChapters: false,
-			disableReactions: false,
-			disableTranscript: false,
-		},
-	);
+	const initialSettings = mergeSettings(organizationSettings);
+	const [settings, setSettings] =
+		useState<OrganizationSettings>(initialSettings);
+	const [showLanguageMenu, setShowLanguageMenu] = useState(false);
 
-	const lastSavedSettings = useRef<OrganizationSettings>(
-		organizationSettings || settings,
-	);
+	const lastSavedSettings = useRef<OrganizationSettings>(initialSettings);
+	const languageMenuRef = useRef<HTMLDivElement>(null);
 
 	const debouncedUpdateSettings = useDebounce(settings, 1000);
+	const selectedLanguage =
+		settings.aiGenerationLanguage ?? AI_GENERATION_LANGUAGE_AUTO;
 
 	useEffect(() => {
-		const next = organizationSettings ?? {
-			disableComments: false,
-			disableSummary: false,
-			disableCaptions: false,
-			disableChapters: false,
-			disableReactions: false,
-			disableTranscript: false,
-		};
+		const next = mergeSettings(organizationSettings);
 		setSettings(next);
 		lastSavedSettings.current = next;
 	}, [organizationSettings]);
+
+	useEffect(() => {
+		const handleClickOutside = (event: MouseEvent) => {
+			if (
+				languageMenuRef.current &&
+				!languageMenuRef.current.contains(event.target as Node)
+			) {
+				setShowLanguageMenu(false);
+			}
+		};
+
+		document.addEventListener("mousedown", handleClickOutside);
+		return () => document.removeEventListener("mousedown", handleClickOutside);
+	}, []);
 
 	useEffect(() => {
 		if (
@@ -102,22 +155,38 @@ const CapSettingsCard = () => {
 					await updateOrganizationSettings(debouncedUpdateSettings);
 
 					changedKeys.forEach((changedKey) => {
+						if (changedKey === "aiGenerationLanguage") {
+							const language =
+								debouncedUpdateSettings.aiGenerationLanguage ??
+								AI_GENERATION_LANGUAGE_AUTO;
+							toast.success(
+								`AI language set to ${getAiGenerationLanguageName(language)}`,
+							);
+							return;
+						}
+
 						const option = options.find((opt) => opt.value === changedKey);
-						const isDisabled = debouncedUpdateSettings[changedKey];
-						const action = isDisabled ? "disabled" : "enabled";
-						const label = option?.label.split(" ")[1] || changedKey;
-						toast.success(
-							`${label.charAt(0).toUpperCase()}${label.slice(1)} ${action}`,
-						);
+						if (changedKey === "hideShareableLinkCapLogo") {
+							toast.success(
+								debouncedUpdateSettings[changedKey]
+									? "Cap logo hidden"
+									: "Cap logo shown",
+							);
+						} else {
+							const isDisabled = Boolean(debouncedUpdateSettings[changedKey]);
+							const action = isDisabled ? "disabled" : "enabled";
+							const label = option?.label.split(" ")[1] || changedKey;
+							toast.success(
+								`${label.charAt(0).toUpperCase()}${label.slice(1)} ${action}`,
+							);
+						}
 					});
 
 					lastSavedSettings.current = debouncedUpdateSettings;
 				} catch (error) {
 					console.error("Error updating organization settings:", error);
 					toast.error("Failed to update settings");
-					if (organizationSettings) {
-						setSettings(organizationSettings);
-					}
+					setSettings(mergeSettings(organizationSettings));
 				}
 			};
 
@@ -125,7 +194,7 @@ const CapSettingsCard = () => {
 		}
 	}, [debouncedUpdateSettings, organizationSettings]);
 
-	const handleToggle = (key: keyof OrganizationSettings) => {
+	const handleToggle = (key: BooleanOrganizationSettingKey) => {
 		setSettings((prev) => {
 			const newValue = !prev?.[key];
 
@@ -143,6 +212,18 @@ const CapSettingsCard = () => {
 				[key]: newValue,
 			};
 		});
+	};
+
+	const handleLanguageChange = (language: AiGenerationLanguage) => {
+		if (!isAiGenerationLanguage(language)) {
+			return;
+		}
+
+		setShowLanguageMenu(false);
+		setSettings((prev) => ({
+			...prev,
+			aiGenerationLanguage: language,
+		}));
 	};
 
 	return (
@@ -182,12 +263,63 @@ const CapSettingsCard = () => {
 									settings?.disableTranscript)
 							}
 							onCheckedChange={() => {
-								handleToggle(option.value as keyof OrganizationSettings);
+								handleToggle(option.value);
 							}}
-							checked={!settings?.[option.value as keyof typeof settings]}
+							checked={!settings?.[option.value]}
 						/>
 					</div>
 				))}
+			</div>
+
+			<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3 sm:flex-row sm:justify-between sm:items-center">
+				<div className="flex flex-col flex-1 gap-1">
+					<div className="flex gap-1.5 items-center">
+						<p className="text-sm text-gray-12">AI generation language</p>
+						<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-white bg-blue-11">
+							Pro
+						</p>
+					</div>
+					<p className="text-xs text-gray-10">
+						Set the language used for transcripts, titles, summaries, and
+						chapters.
+					</p>
+				</div>
+				<div className="relative w-full sm:w-auto" ref={languageMenuRef}>
+					<button
+						onClick={() => setShowLanguageMenu((value) => !value)}
+						disabled={!user.isPro}
+						className="flex items-center gap-1.5 px-2.5 py-1.5 w-full justify-between text-xs font-medium rounded-lg border border-gray-3 bg-gray-1 hover:bg-gray-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors sm:min-w-40"
+						type="button"
+					>
+						<span className="flex items-center gap-1.5 text-gray-12">
+							<Globe className="w-3 h-3 text-gray-9" />
+							{getAiGenerationLanguageName(selectedLanguage)}
+						</span>
+						<ChevronDown className="w-3 h-3 text-gray-9" />
+					</button>
+					{showLanguageMenu && (
+						<div className="absolute right-0 top-full mt-1 z-50 w-full py-1 bg-gray-1 border border-gray-3 rounded-lg shadow-lg max-h-64 overflow-y-auto sm:w-56">
+							{languageOptions.map(([code, name], index) => (
+								<div key={code}>
+									{index === 1 && (
+										<div className="my-1 border-t border-gray-3" />
+									)}
+									<button
+										onClick={() => handleLanguageChange(code)}
+										className={`w-full px-3 py-1.5 text-left text-xs hover:bg-gray-2 transition-colors ${
+											selectedLanguage === code
+												? "text-blue-500 font-medium"
+												: "text-gray-12"
+										}`}
+										type="button"
+									>
+										{name}
+									</button>
+								</div>
+							))}
+						</div>
+					)}
+				</div>
 			</div>
 		</Card>
 	);

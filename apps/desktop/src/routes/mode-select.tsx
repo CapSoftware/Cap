@@ -57,7 +57,7 @@ const ModeSelectWindow = () => {
 					</p>
 				</div>
 
-				<div data-tauri-drag-region="none" class="w-full max-w-lg">
+				<div data-tauri-drag-region="false" class="w-full max-w-lg">
 					<ModeSelect />
 				</div>
 			</div>

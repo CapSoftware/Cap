@@ -1,7 +1,8 @@
 import { emit } from "@tauri-apps/api/event";
 import * as dialog from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { createOptionsQuery } from "./queries";
-import { commands, type RecordingAction } from "./tauri";
+import { commands, type RecordingAction, type RecordingMode } from "./tauri";
 
 export function handleRecordingResult(
 	result: Promise<RecordingAction>,
@@ -48,4 +49,22 @@ export function handleRecordingResult(
 				kind: "error",
 			}),
 		);
+}
+
+export async function openRecordingFolder(
+	projectPath: string,
+	mode: RecordingMode,
+) {
+	const path = projectPath.replace(/[/\\]+$/, "");
+
+	const openedContent =
+		mode === "instant" &&
+		(await commands.openFilePath(`${path}/content`).then(
+			() => true,
+			() => false,
+		));
+
+	if (openedContent) return;
+
+	await revealItemInDir(`${path}/`);
 }

@@ -31,7 +31,7 @@ export class Organisations extends Effect.Service<Organisations>()(
 							"NoSuchElementException",
 							() => new Organisation.NotFoundError(),
 						),
-						Policy.withPolicy(policy.isOwner(payload.id)),
+						Policy.withPolicy(policy.isAdminOrOwner(payload.id)),
 					);
 
 				if (payload.image) {
@@ -55,7 +55,6 @@ export class Organisations extends Effect.Service<Organisations>()(
 
 				yield* Policy.withPolicy(policy.isOwner(id))(Effect.void);
 
-				// Perform tombstone, find other org, and update user in a single transaction
 				yield* db.use((db) =>
 					db.transaction(async (tx) => {
 						await tx
@@ -63,7 +62,6 @@ export class Organisations extends Effect.Service<Organisations>()(
 							.set({ tombstoneAt: new Date() })
 							.where(Dz.eq(Db.organizations.id, id));
 
-						// Find another active organization owned by the user
 						const [otherOrg] = await tx
 							.select({ id: Db.organizations.id })
 							.from(Db.organizations)

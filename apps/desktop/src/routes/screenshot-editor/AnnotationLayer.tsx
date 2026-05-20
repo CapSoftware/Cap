@@ -488,8 +488,10 @@ export function AnnotationLayer(props: {
 	};
 
 	const startDrag = (e: MouseEvent, id: string, handle?: string) => {
+		e.preventDefault();
 		e.stopPropagation();
 		if (activeTool() !== "select") return;
+		window.getSelection()?.removeAllRanges();
 
 		const svg = (e.currentTarget as Element).closest("svg");
 		if (!svg) return;
@@ -542,8 +544,9 @@ export function AnnotationLayer(props: {
 				position: "absolute",
 				top: 0,
 				left: 0,
-				"pointer-events": "all",
-				"z-index": 10,
+				"pointer-events":
+					activeTool() === "select" && !dragState() ? "none" : "all",
+				"z-index": 20,
 				cursor:
 					activeTool() === "select"
 						? props.isPanning
@@ -586,7 +589,7 @@ export function AnnotationLayer(props: {
 								class="overflow-visible"
 							>
 								<div
-									class="text-editor bg-transparent outline-none p-0 m-0"
+									class="text-editor bg-transparent outline-hidden p-0 m-0"
 									contentEditable
 									style={{
 										"font-size": `${ann.height}px`,

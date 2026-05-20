@@ -14,7 +14,7 @@ use image::{
     GenericImageView, ImageEncoder, RgbImage, buffer::ConvertBuffer, codecs::png::PngEncoder,
 };
 use relative_path::RelativePathBuf;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::io::Cursor;
 use std::str::FromStr;
@@ -645,6 +645,37 @@ pub struct SerializedScreenshotEditorInstance {
     pub image_height: u32,
 }
 
+#[derive(Clone, Copy, Deserialize, Serialize, Type, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotOcrRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Serialize, Type, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotOcrLine {
+    pub text: String,
+    pub confidence: Option<f32>,
+    pub bounds: ScreenshotOcrRegion,
+}
+
+#[derive(Clone, Serialize, Type, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotOcrResult {
+    pub text: String,
+    pub lines: Vec<ScreenshotOcrLine>,
+    pub engine: String,
+}
+
+struct ScreenshotOcrImage {
+    bgra: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn create_screenshot_editor_instance(
@@ -712,6 +743,466 @@ pub async fn update_screenshot_config(
         println!("Not saving config: parent {parent:?} is not a .cap directory");
     }
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn recognize_screenshot_text(
+    instance: WindowScreenshotEditorInstance,
+    region: ScreenshotOcrRegion,
+) -> Result<ScreenshotOcrResult, String> {
+    let region = clamp_screenshot_ocr_region(region, instance.image_width, instance.image_height)?;
+    let image = create_screenshot_ocr_image(
+        instance.source_rgba.as_ref(),
+        instance.image_width,
+        instance.image_height,
+        region,
+    )?;
+    let mut result = recognize_screenshot_ocr_image(image).await?;
+
+    for line in &mut result.lines {
+        line.bounds.x = line.bounds.x.saturating_add(region.x);
+        line.bounds.y = line.bounds.y.saturating_add(region.y);
+    }
+
+    Ok(result)
+}
+
+fn clamp_screenshot_ocr_region(
+    region: ScreenshotOcrRegion,
+    image_width: u32,
+    image_height: u32,
+) -> Result<ScreenshotOcrRegion, String> {
+    if image_width == 0 || image_height == 0 {
+        return Err("Screenshot image is empty".to_string());
+    }
+
+    let x = region.x.min(image_width.saturating_sub(1));
+    let y = region.y.min(image_height.saturating_sub(1));
+    let width = region.width.min(image_width.saturating_sub(x));
+    let height = region.height.min(image_height.saturating_sub(y));
+
+    if width < 4 || height < 4 {
+        return Err("Select a larger text area".to_string());
+    }
+
+    Ok(ScreenshotOcrRegion {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+fn create_screenshot_ocr_image(
+    source_rgba: &[u8],
+    image_width: u32,
+    image_height: u32,
+    region: ScreenshotOcrRegion,
+) -> Result<ScreenshotOcrImage, String> {
+    let image_width = usize::try_from(image_width)
+        .map_err(|_| "Screenshot width is too large for OCR".to_string())?;
+    let image_height = usize::try_from(image_height)
+        .map_err(|_| "Screenshot height is too large for OCR".to_string())?;
+    let region_x =
+        usize::try_from(region.x).map_err(|_| "OCR region x is too large".to_string())?;
+    let region_y =
+        usize::try_from(region.y).map_err(|_| "OCR region y is too large".to_string())?;
+    let region_width =
+        usize::try_from(region.width).map_err(|_| "OCR region width is too large".to_string())?;
+    let region_height =
+        usize::try_from(region.height).map_err(|_| "OCR region height is too large".to_string())?;
+
+    let expected_len = image_width
+        .checked_mul(image_height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "Screenshot image is too large for OCR".to_string())?;
+
+    if source_rgba.len() != expected_len {
+        return Err("Screenshot image data is invalid for OCR".to_string());
+    }
+
+    let output_len = region_width
+        .checked_mul(region_height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "OCR region is too large".to_string())?;
+    let mut bgra = vec![0; output_len];
+    let source_row_bytes = image_width
+        .checked_mul(4)
+        .ok_or_else(|| "Screenshot row is too large for OCR".to_string())?;
+    let region_row_bytes = region_width
+        .checked_mul(4)
+        .ok_or_else(|| "OCR row is too large".to_string())?;
+    let region_x_bytes = region_x
+        .checked_mul(4)
+        .ok_or_else(|| "OCR region x is too large".to_string())?;
+
+    for row in 0..region_height {
+        let source_start = region_y
+            .checked_add(row)
+            .and_then(|source_row| source_row.checked_mul(source_row_bytes))
+            .and_then(|source_offset| source_offset.checked_add(region_x_bytes))
+            .ok_or_else(|| "OCR source region is invalid".to_string())?;
+        let source_end = source_start
+            .checked_add(region_row_bytes)
+            .ok_or_else(|| "OCR source region is invalid".to_string())?;
+        let output_start = row
+            .checked_mul(region_row_bytes)
+            .ok_or_else(|| "OCR output region is invalid".to_string())?;
+        let output_end = output_start
+            .checked_add(region_row_bytes)
+            .ok_or_else(|| "OCR output region is invalid".to_string())?;
+        let source_row = source_rgba
+            .get(source_start..source_end)
+            .ok_or_else(|| "OCR source region is outside the screenshot".to_string())?;
+        let output_row = bgra
+            .get_mut(output_start..output_end)
+            .ok_or_else(|| "OCR output region is invalid".to_string())?;
+
+        for (source_pixel, output_pixel) in source_row
+            .chunks_exact(4)
+            .zip(output_row.chunks_exact_mut(4))
+        {
+            output_pixel[0] = source_pixel[2];
+            output_pixel[1] = source_pixel[1];
+            output_pixel[2] = source_pixel[0];
+            output_pixel[3] = source_pixel[3];
+        }
+    }
+
+    Ok(ScreenshotOcrImage {
+        bgra,
+        width: region.width,
+        height: region.height,
+    })
+}
+
+#[cfg(target_os = "macos")]
+async fn recognize_screenshot_ocr_image(
+    image: ScreenshotOcrImage,
+) -> Result<ScreenshotOcrResult, String> {
+    tokio::task::spawn_blocking(move || recognize_screenshot_ocr_image_macos(image))
+        .await
+        .map_err(|e| format!("OCR task failed: {e}"))?
+}
+
+#[cfg(target_os = "windows")]
+async fn recognize_screenshot_ocr_image(
+    image: ScreenshotOcrImage,
+) -> Result<ScreenshotOcrResult, String> {
+    tokio::task::spawn_blocking(move || recognize_screenshot_ocr_image_windows(image))
+        .await
+        .map_err(|e| format!("OCR task failed: {e}"))?
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+async fn recognize_screenshot_ocr_image(
+    _image: ScreenshotOcrImage,
+) -> Result<ScreenshotOcrResult, String> {
+    Err("OCR is only available on macOS and Windows".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn recognize_screenshot_ocr_image_macos(
+    image: ScreenshotOcrImage,
+) -> Result<ScreenshotOcrResult, String> {
+    cidre::objc::ar_pool(|| {
+        use cidre::{cv, ns, vn};
+        use std::ffi::c_void;
+
+        extern "C" fn release_pixel_buffer_data(
+            release_ref_con: *mut c_void,
+            _base_address: *const *const c_void,
+        ) {
+            if !release_ref_con.is_null() {
+                unsafe {
+                    drop(Box::from_raw(release_ref_con.cast::<Vec<u8>>()));
+                }
+            }
+        }
+
+        let width =
+            usize::try_from(image.width).map_err(|_| "OCR image width is too large".to_string())?;
+        let height = usize::try_from(image.height)
+            .map_err(|_| "OCR image height is too large".to_string())?;
+        let bytes_per_row = width
+            .checked_mul(4)
+            .ok_or_else(|| "OCR image row is too large".to_string())?;
+        let mut data = Box::new(image.bgra);
+        let base_address = data.as_mut_ptr().cast::<c_void>();
+        let release_ref_con = Box::into_raw(data).cast::<c_void>();
+
+        let pixel_buffer = match cv::PixelBuf::with_bytes(
+            width,
+            height,
+            base_address,
+            bytes_per_row,
+            release_pixel_buffer_data,
+            release_ref_con,
+            cv::PixelFormat::_32_BGRA,
+            None,
+        ) {
+            Ok(pixel_buffer) => pixel_buffer,
+            Err(e) => {
+                unsafe {
+                    drop(Box::from_raw(release_ref_con.cast::<Vec<u8>>()));
+                }
+                return Err(format!("Failed to create OCR image: {e}"));
+            }
+        };
+
+        let mut request = vn::RecognizeTextRequest::new();
+        request.set_recognition_level(vn::RequestTextRecognitionLevel::Accurate);
+        request.set_uses_lang_correction(true);
+
+        if cidre::version!(macos = 13.0) {
+            request.set_revision(vn::RecognizeTextRequest::REVISION_3);
+            unsafe {
+                request.set_automatically_detects_lang(true);
+            }
+        } else {
+            request.set_revision(vn::RecognizeTextRequest::REVISION_2);
+        }
+
+        let handler = vn::ImageRequestHandler::with_cv_pixel_buf(&pixel_buffer, None)
+            .ok_or_else(|| "Failed to initialize OCR image handler".to_string())?;
+        let requests = ns::Array::<vn::Request>::from_slice(&[&request]);
+        handler
+            .perform(&requests)
+            .map_err(|e| format!("macOS OCR failed: {e}"))?;
+
+        let observations = request.results().unwrap_or_else(ns::Array::new);
+        let mut lines = Vec::new();
+
+        for observation in observations.iter() {
+            let candidates = observation.top_candidates(1);
+            let Some(candidate) = candidates.first() else {
+                continue;
+            };
+            let text = candidate.string().to_string();
+            if text.trim().is_empty() {
+                continue;
+            }
+            lines.push(ScreenshotOcrLine {
+                text,
+                confidence: Some(candidate.confidence()),
+                bounds: normalized_macos_ocr_rect_to_region(
+                    observation.bounding_box(),
+                    image.width,
+                    image.height,
+                ),
+            });
+        }
+
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Ok(ScreenshotOcrResult {
+            text,
+            lines,
+            engine: "macos-vision".to_string(),
+        })
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn normalized_macos_ocr_rect_to_region(
+    rect: cidre::cg::Rect,
+    width: u32,
+    height: u32,
+) -> ScreenshotOcrRegion {
+    let width_f = f64::from(width);
+    let height_f = f64::from(height);
+    let left = clamp_f64(rect.origin.x * width_f, 0.0, width_f);
+    let right = clamp_f64((rect.origin.x + rect.size.width) * width_f, 0.0, width_f);
+    let top = clamp_f64(
+        (1.0 - rect.origin.y - rect.size.height) * height_f,
+        0.0,
+        height_f,
+    );
+    let bottom = clamp_f64((1.0 - rect.origin.y) * height_f, 0.0, height_f);
+    let x = left.round() as u32;
+    let y = top.round() as u32;
+    let right = right.round() as u32;
+    let bottom = bottom.round() as u32;
+
+    ScreenshotOcrRegion {
+        x,
+        y,
+        width: right.saturating_sub(x),
+        height: bottom.saturating_sub(y),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn clamp_f64(value: f64, min: f64, max: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(min, max)
+    } else {
+        min
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsRuntimeGuard;
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsRuntimeGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows::Win32::System::WinRT::RoUninitialize();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn initialize_windows_runtime() -> Result<WindowsRuntimeGuard, String> {
+    use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
+
+    unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
+        .map_err(|e| format!("Windows OCR runtime failed: {e}"))?;
+
+    Ok(WindowsRuntimeGuard)
+}
+
+#[cfg(target_os = "windows")]
+fn recognize_screenshot_ocr_image_windows(
+    image: ScreenshotOcrImage,
+) -> Result<ScreenshotOcrResult, String> {
+    use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
+    use windows::Media::Ocr::OcrEngine;
+    use windows::Storage::Streams::DataWriter;
+
+    let _runtime = initialize_windows_runtime()?;
+
+    let max_dimension =
+        OcrEngine::MaxImageDimension().map_err(|e| format!("Windows OCR failed: {e}"))?;
+
+    if image.width > max_dimension || image.height > max_dimension {
+        return Err(format!(
+            "Select a smaller text area. Windows OCR supports up to {max_dimension}px per side"
+        ));
+    }
+
+    let width = i32::try_from(image.width).map_err(|_| "OCR image width is too large")?;
+    let height = i32::try_from(image.height).map_err(|_| "OCR image height is too large")?;
+    let writer = DataWriter::new().map_err(|e| format!("Windows OCR failed: {e}"))?;
+    writer
+        .WriteBytes(&image.bgra)
+        .map_err(|e| format!("Windows OCR failed: {e}"))?;
+    let buffer = writer
+        .DetachBuffer()
+        .map_err(|e| format!("Windows OCR failed: {e}"))?;
+    let bitmap = SoftwareBitmap::CreateCopyWithAlphaFromBuffer(
+        &buffer,
+        BitmapPixelFormat::Bgra8,
+        width,
+        height,
+        BitmapAlphaMode::Premultiplied,
+    )
+    .map_err(|e| format!("Windows OCR failed: {e}"))?;
+    let engine = OcrEngine::TryCreateFromUserProfileLanguages()
+        .map_err(|e| format!("Windows OCR is not available: {e}"))?;
+    let result = engine
+        .RecognizeAsync(&bitmap)
+        .map_err(|e| format!("Windows OCR failed: {e}"))?
+        .get()
+        .map_err(|e| format!("Windows OCR failed: {e}"))?;
+    let text = result
+        .Text()
+        .map_err(|e| format!("Windows OCR failed: {e}"))?
+        .to_string_lossy();
+    let ocr_lines = result
+        .Lines()
+        .map_err(|e| format!("Windows OCR failed: {e}"))?;
+    let mut lines = Vec::new();
+
+    for index in 0..ocr_lines
+        .Size()
+        .map_err(|e| format!("Windows OCR failed: {e}"))?
+    {
+        let line = ocr_lines
+            .GetAt(index)
+            .map_err(|e| format!("Windows OCR failed: {e}"))?;
+        let line_text = line
+            .Text()
+            .map_err(|e| format!("Windows OCR failed: {e}"))?
+            .to_string_lossy();
+        if line_text.trim().is_empty() {
+            continue;
+        }
+        let words = line
+            .Words()
+            .map_err(|e| format!("Windows OCR failed: {e}"))?;
+        let mut bounds: Option<(f32, f32, f32, f32)> = None;
+
+        for word_index in 0..words
+            .Size()
+            .map_err(|e| format!("Windows OCR failed: {e}"))?
+        {
+            let rect = words
+                .GetAt(word_index)
+                .and_then(|word| word.BoundingRect())
+                .map_err(|e| format!("Windows OCR failed: {e}"))?;
+            bounds = Some(match bounds {
+                Some((left, top, right, bottom)) => (
+                    left.min(rect.X),
+                    top.min(rect.Y),
+                    right.max(rect.X + rect.Width),
+                    bottom.max(rect.Y + rect.Height),
+                ),
+                None => (rect.X, rect.Y, rect.X + rect.Width, rect.Y + rect.Height),
+            });
+        }
+
+        lines.push(ScreenshotOcrLine {
+            text: line_text,
+            confidence: None,
+            bounds: bounds
+                .map(windows_ocr_bounds_to_region)
+                .unwrap_or(ScreenshotOcrRegion {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                }),
+        });
+    }
+
+    Ok(ScreenshotOcrResult {
+        text,
+        lines,
+        engine: "windows-media-ocr".to_string(),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn windows_ocr_bounds_to_region(
+    (left, top, right, bottom): (f32, f32, f32, f32),
+) -> ScreenshotOcrRegion {
+    let x = clamp_f32_to_u32(left);
+    let y = clamp_f32_to_u32(top);
+    let right = clamp_f32_to_u32(right);
+    let bottom = clamp_f32_to_u32(bottom);
+
+    ScreenshotOcrRegion {
+        x,
+        y,
+        width: right.saturating_sub(x),
+        height: bottom.saturating_sub(y),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn clamp_f32_to_u32(value: f32) -> u32 {
+    if value.is_finite() && value > 0.0 {
+        value.round().min(u32::MAX as f32) as u32
+    } else {
+        0
+    }
 }
 
 #[tauri::command]

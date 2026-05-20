@@ -71,8 +71,8 @@ use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use screenshot_editor::{
     PendingScreenshotEditorInstances, ScreenshotEditorInstances, WindowScreenshotEditorInstance,
-    create_screenshot_editor_instance, render_screenshot_for_export, render_screenshot_png,
-    update_screenshot_config,
+    create_screenshot_editor_instance, recognize_screenshot_text, render_screenshot_for_export,
+    render_screenshot_png, update_screenshot_config,
 };
 
 mod gpu_context;
@@ -118,6 +118,8 @@ use crate::{
     upload::InstantMultipartUpload,
 };
 use exit_shutdown::{AppExitAction, app_exit_action, collect_device_inventory, run_while_active};
+use futures::FutureExt;
+use std::panic::AssertUnwindSafe;
 
 type FinalizingRecordingsMap =
     std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>;
@@ -461,6 +463,55 @@ fn emit_camera_preview_error(app_handle: &AppHandle, message: String) {
 
 fn emit_camera_preview_clear(app_handle: &AppHandle) {
     let _ = app_handle.emit(CAMERA_PREVIEW_CLEAR_EVENT, ());
+}
+
+async fn add_camera_preview_ws_sender(
+    camera_feed: &ActorRef<CameraFeed>,
+    sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
+) {
+    add_camera_preview_sender(camera_feed, sender, "WebSocket").await;
+}
+
+async fn add_camera_preview_sender(
+    camera_feed: &ActorRef<CameraFeed>,
+    sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
+    label: &str,
+) {
+    let result = camera_feed.ask(feeds::camera::AddSender(sender)).await;
+    if let Err(err) = result {
+        warn!(error = %err, "Failed to add {label} camera sender");
+    }
+}
+
+async fn remove_camera_preview_sender(
+    camera_feed: &ActorRef<CameraFeed>,
+    sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
+    label: &str,
+) {
+    let result = camera_feed.ask(feeds::camera::RemoveSender(sender)).await;
+    if let Err(err) = result {
+        warn!(error = %err, "Failed to remove {label} camera sender");
+    }
+}
+
+async fn sync_camera_preview_sender(
+    camera_feed: &ActorRef<CameraFeed>,
+    camera_ws_sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
+    camera_preview_sender: Option<flume::Sender<cap_recording::FFmpegVideoFrame>>,
+    use_ws_preview: bool,
+) {
+    if use_ws_preview {
+        if let Some(sender) = camera_preview_sender {
+            remove_camera_preview_sender(camera_feed, sender, "native preview").await;
+        }
+
+        add_camera_preview_ws_sender(camera_feed, camera_ws_sender).await;
+    } else if let Some(sender) = camera_preview_sender {
+        add_camera_preview_sender(camera_feed, sender, "native preview").await;
+        remove_camera_preview_sender(camera_feed, camera_ws_sender, "WebSocket").await;
+    } else {
+        add_camera_preview_ws_sender(camera_feed, camera_ws_sender).await;
+    }
 }
 
 impl App {
@@ -827,13 +878,12 @@ async fn set_camera_input(
     drop(app);
 
     let skip_camera_window = skip_camera_window.unwrap_or(false);
+    let camera_window_is_visible = CapWindowId::Camera
+        .get(&app_handle)
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
 
     if id == current_id && camera_in_use && !skip_camera_window {
-        let camera_window_is_visible = CapWindowId::Camera
-            .get(&app_handle)
-            .and_then(|window| window.is_visible().ok())
-            .unwrap_or(false);
-
         let show_result = if camera_window_is_visible {
             Ok(())
         } else {
@@ -889,35 +939,29 @@ async fn set_camera_input(
             emit_camera_preview_clear(&app_handle);
             let settings =
                 recording_settings::RecordingSettingsStore::camera_settings_for(&app_handle, id);
-            let (camera_ws_sender, native_preview_active) = {
+            let (camera_ws_sender, camera_preview_sender, use_ws_preview) = {
                 let app = &mut *state.write().await;
+                let use_ws_preview = !(camera_window_is_visible
+                    && app.camera_preview.is_initialized()
+                    && !app.camera_preview.is_paused());
                 app.selected_camera_id = Some(id.clone());
                 app.camera_in_use = true;
                 app.camera_cleanup_done = false;
                 #[allow(deprecated)]
                 (
                     app.camera_ws_sender.clone(),
-                    app.camera_preview.is_initialized(),
+                    app.camera_preview.sender(),
+                    use_ws_preview,
                 )
             };
 
-            if native_preview_active {
-                #[allow(deprecated)]
-                let result = camera_feed
-                    .ask(feeds::camera::RemoveSender(camera_ws_sender))
-                    .await;
-                if let Err(err) = result {
-                    warn!(error = %err, "Failed to remove camera sender");
-                }
-            } else {
-                #[allow(deprecated)]
-                let result = camera_feed
-                    .ask(feeds::camera::AddSender(camera_ws_sender))
-                    .await;
-                if let Err(err) = result {
-                    warn!(error = %err, "Failed to add camera sender");
-                }
-            }
+            sync_camera_preview_sender(
+                &camera_feed,
+                camera_ws_sender,
+                camera_preview_sender,
+                use_ws_preview,
+            )
+            .await;
 
             let mut showed_camera_window = skip_camera_window;
             let mut attempts = 0;
@@ -1674,6 +1718,11 @@ fn finalize_app_exit(app: &AppHandle, exit_code: i32) {
 }
 
 pub async fn request_app_exit(app: AppHandle) {
+    if export::export_session_active() {
+        warn!("Ignoring app exit request during active export");
+        return;
+    }
+
     let Some(exit_state) = app.try_state::<AppExitState>() else {
         warn!("Exit state unavailable while requesting app exit");
         finalize_app_exit(&app, 0);
@@ -2230,7 +2279,11 @@ fn find_first_segment(dir: &std::path::Path) -> Option<PathBuf> {
 #[specta::specta]
 #[instrument(skip(app))]
 async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(), String> {
-    println!("Attempting to copy file from {src} to {dst}");
+    run_command_safely("copy_file_to_path", copy_file_to_path_inner(app, src, dst)).await
+}
+
+async fn copy_file_to_path_inner(app: AppHandle, src: String, dst: String) -> Result<(), String> {
+    info!(%src, %dst, "Attempting to copy file");
 
     let is_screenshot = src.contains("screenshots/");
     let is_gif = src.ends_with(".gif") || dst.ends_with(".gif");
@@ -2243,7 +2296,11 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
     if !is_screenshot && !is_gif && !is_valid_video(src_path) {
         let mut attempts = 0;
         while attempts < 10 {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            // Replaced `std::thread::sleep` with `tokio::time::sleep` — the previous version
+            // blocked the tokio worker for up to 10 seconds, which on release builds with
+            // smaller worker pools could starve the runtime and cause unrelated tasks to time
+            // out (including window/IPC events).
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             if is_valid_video(src_path) {
                 break;
             }
@@ -2295,7 +2352,7 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
                     continue;
                 }
 
-                println!("Successfully copied {bytes} bytes from {src} to {dst}");
+                info!(bytes, %src, %dst, "Successfully copied file");
 
                 notifications::send_notification(
                     &app,
@@ -2318,12 +2375,15 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
         }
     }
 
-    eprintln!(
-        "Failed to copy file from {} to {} after {} attempts. Last error: {}",
-        src,
-        dst,
-        MAX_ATTEMPTS,
-        last_error.as_ref().unwrap()
+    let last_error_message = last_error
+        .as_deref()
+        .unwrap_or("Maximum retry attempts exceeded");
+    error!(
+        %src,
+        %dst,
+        attempts = MAX_ATTEMPTS,
+        error = %last_error_message,
+        "Failed to copy file after retries"
     );
 
     notifications::send_notification(
@@ -3075,35 +3135,46 @@ async fn save_file_dialog(
     file_name: String,
     file_type: String,
 ) -> Result<Option<String>, String> {
+    run_command_safely(
+        "save_file_dialog",
+        save_file_dialog_inner(app, file_name, file_type),
+    )
+    .await
+}
+
+async fn save_file_dialog_inner(
+    app: AppHandle,
+    file_name: String,
+    file_type: String,
+) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    println!("save_file_dialog called with file_name: {file_name}, file_type: {file_type}");
+    info!(file_name, file_type, "Save file dialog requested");
 
     let file_name = file_name
         .strip_suffix(".cap")
         .unwrap_or(&file_name)
         .to_string();
-    println!("File name after removing .cap suffix: {file_name}");
 
     let (name, extension) = match file_type.as_str() {
-        "recording" => {
-            println!("File type is recording");
-            ("MP4 Video", "mp4")
-        }
-        "screenshot" => {
-            println!("File type is screenshot");
-            ("PNG Image", "png")
-        }
+        "recording" | "mp4" => ("MP4 Video", "mp4"),
+        "gif" => ("GIF Image", "gif"),
+        "mov" => ("MOV Video", "mov"),
+        "screenshot" | "png" => ("PNG Image", "png"),
         _ => {
-            println!("Invalid file type: {file_type}");
+            warn!(file_type, "Invalid save file dialog type");
             return Err("Invalid file type".to_string());
         }
     };
 
-    println!("Showing save dialog with name: {name}, extension: {extension}");
+    info!(file_name, name, extension, "Showing save file dialog");
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    println!("Created channel for communication");
+    // Use `tokio::sync::oneshot` so the async runtime worker yields while the native dialog
+    // is open instead of being parked by a synchronous `std::sync::mpsc` receive. The
+    // previous version blocked a runtime worker for the lifetime of the dialog which, in
+    // release builds with fewer/active workers, could starve other tasks and let an unrelated
+    // exit event slip through before the export session guard incremented.
+    let (tx, rx) = tokio::sync::oneshot::channel();
 
     app.dialog()
         .file()
@@ -3111,7 +3182,6 @@ async fn save_file_dialog(
         .set_file_name(file_name)
         .add_filter(name, &[extension])
         .save_file(move |path| {
-            println!("Save file callback triggered");
             let _ = tx.send(
                 path.as_ref()
                     .and_then(|p| p.as_path())
@@ -3119,14 +3189,13 @@ async fn save_file_dialog(
             );
         });
 
-    println!("Waiting for user selection");
-    match rx.recv() {
+    match rx.await {
         Ok(result) => {
-            println!("Save dialog result: {result:?}");
+            info!(path = ?result, "Save file dialog completed");
             Ok(result)
         }
         Err(e) => {
-            println!("Error receiving result: {e}");
+            warn!(error = %e, "Save file dialog failed");
             notifications::send_notification(
                 &app,
                 notifications::NotificationType::VideoSaveFailed,
@@ -3770,10 +3839,24 @@ async fn refresh_camera_feed(state: MutableState<'_, App>) -> Result<(), String>
     let camera_ws_sender = app.camera_ws_sender.clone();
 
     let camera_preview_sender = app.camera_preview.sender();
+    let use_ws_preview = app.camera_preview.is_paused() || camera_preview_sender.is_none();
 
     drop(app);
 
-    if let Some(sender) = camera_preview_sender {
+    if use_ws_preview {
+        if let Some(sender) = camera_preview_sender {
+            camera_feed
+                .ask(feeds::camera::RemoveSender(sender))
+                .await
+                .map_err(|err| format!("error removing native preview sender: {err}"))?;
+        }
+
+        #[allow(deprecated)]
+        camera_feed
+            .ask(feeds::camera::AddSender(camera_ws_sender))
+            .await
+            .map_err(|err| format!("error re-adding camera ws sender: {err}"))?;
+    } else if let Some(sender) = camera_preview_sender {
         #[allow(deprecated)]
         camera_feed
             .ask(feeds::camera::RemoveSender(camera_ws_sender))
@@ -3917,11 +4000,15 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             fake_window::remove_fake_window,
             focus_captures_panel,
             get_current_recording,
+            export::begin_export_session,
+            export::end_export_session,
             export::export_video,
+            export::export_video_to_file,
             export::get_export_estimates,
             export::generate_export_preview,
             export::generate_export_preview_fast,
             import::start_video_import,
+            import::add_existing_recording_to_editor,
             import::start_image_import,
             import::check_import_ready,
             copy_file_to_path,
@@ -3951,6 +4038,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             upload_screenshot,
             create_screenshot_editor_instance,
             update_screenshot_config,
+            recognize_screenshot_text,
             get_recording_meta,
             save_file_dialog,
             list_recordings,
@@ -3966,6 +4054,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             get_display_frame_for_cropping,
             windows::position_traffic_lights,
             windows::set_theme,
+            windows::apply_macos_liquid_glass_background,
             global_message_dialog,
             show_window,
             write_clipboard_string,
@@ -4186,8 +4275,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(PendingScreenshots::default());
             app.manage(FinalizingRecordings::default());
 
-            gpu_context::prewarm_gpu();
-
             #[cfg(unix)]
             {
                 let app_for_signal = app.clone();
@@ -4317,6 +4404,21 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 let app = app.clone();
                 move |_| {
                     app.state::<MainWindowReadyState>().set_ready(true);
+                    gpu_context::prewarm_gpu();
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        let app = app.clone();
+                        tokio::spawn(async move {
+                            if let Some(prewarmer) =
+                                app.try_state::<crate::platform::ScreenCapturePrewarmer>()
+                            {
+                                prewarmer.request(false).await;
+                            } else {
+                                warn!("ScreenCapturePrewarmer state unavailable after main window ready");
+                            }
+                        });
+                    }
                 }
             });
 
@@ -4444,6 +4546,15 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
+                        if export::export_session_active() {
+                            api.prevent_close();
+                            warn!(
+                                window = label,
+                                "Preventing window close request during active export"
+                            );
+                            return;
+                        }
+
                         if let Ok(window_id) = CapWindowId::from_str(label) {
                             match window_id {
                                 CapWindowId::Camera => {
@@ -4526,6 +4637,19 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 WindowEvent::Destroyed => {
                     fake_window::cancel_fake_window_listener(app, label);
                     if app_is_exiting(app) {
+                        return;
+                    }
+                    // If a webview crashes mid-export (memory pressure, GPU teardown, etc.) we
+                    // get a Destroyed event for the editor window. Tearing down camera/mic
+                    // feeds and editor registry entries here would race the running export
+                    // sidecar and could trigger Tauri's "last window closed" exit path. Skip
+                    // cleanup entirely while an export is active — the regular Destroyed flow
+                    // will run again when the export completes if the window is still gone.
+                    if export::export_session_active() {
+                        warn!(
+                            window = label,
+                            "Skipping Destroyed cleanup during active export"
+                        );
                         return;
                     }
                     if let Ok(window_id) = CapWindowId::from_str(label) {
@@ -4627,6 +4751,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                             }
                                             CapWindowId::Main => {
                                                 let _ = window.show();
+                                                restore_main_window_inputs(app);
                                             }
                                             _ => {}
                                         }
@@ -4652,6 +4777,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                             }
                                             CapWindowId::Main => {
                                                 let _ = window.show();
+                                                restore_main_window_inputs(app);
                                             }
                                             _ => {}
                                         }
@@ -4816,6 +4942,32 @@ pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Str
     }
 }
 
+// Catches panics inside an async Tauri command body so a single bad code path can't
+// unwind through the IPC dispatcher and terminate the whole desktop process. This is
+// particularly important for commands that participate in the export flow because the
+// sidecar architecture relies on the desktop app remaining alive to babysit the worker.
+async fn run_command_safely<T, F>(command_name: &'static str, fut: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    match AssertUnwindSafe(fut).catch_unwind().await {
+        Ok(result) => result,
+        Err(panic) => {
+            let message = panic_payload_message(&*panic);
+            error!(
+                command = command_name,
+                panic = %message,
+                "Suppressed panic in Tauri command"
+            );
+            sentry::capture_message(
+                &format!("Tauri command '{command_name}' panicked: {message}"),
+                sentry::Level::Error,
+            );
+            Err(format!("{command_name} failed unexpectedly"))
+        }
+    }
+}
+
 fn emit_app_event_safely<E>(app: &AppHandle, event: E)
 where
     E: Event + Serialize + Clone,
@@ -4880,6 +5032,8 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
             }
         }
         tauri::RunEvent::ExitRequested { code, api, .. } => {
+            info!(?code, "App exit requested");
+
             if _handle
                 .try_state::<AppExitState>()
                 .is_some_and(|state| state.is_exiting())
@@ -4888,6 +5042,11 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
             }
 
             api.prevent_exit();
+
+            if export::export_session_active() {
+                warn!("Preventing app exit request during active export");
+                return;
+            }
 
             let _ = code;
             let handle = _handle.clone();
@@ -4959,11 +5118,19 @@ fn restore_main_windows_if_no_editors(app: &AppHandle) {
                 let _ = main.show();
             }
 
+            restore_main_window_inputs(app);
             restore_camera_window(app);
         }
 
         spawn_on_runtime(captions::release_ml_models());
     }
+}
+
+fn restore_main_window_inputs(app: &AppHandle) {
+    let handle = app.clone();
+    spawn_on_runtime(async move {
+        windows::restore_main_window_inputs(&handle).await;
+    });
 }
 
 fn restore_camera_window(app: &AppHandle) {
@@ -5014,6 +5181,7 @@ fn reopen_main_window(app: &AppHandle) {
     if let Some(main) = CapWindowId::Main.get(app) {
         let _ = main.show();
         let _ = main.set_focus();
+        restore_main_window_inputs(app);
     } else {
         let handle = app.clone();
         tokio::spawn(async move {

@@ -89,6 +89,7 @@ windows = { workspace = true, features = [
     "Win32_Storage_Xps",
 ] }
 
+cap-d3d-adapter = { path = "../d3d-adapter" }
 cap-enc-mediafoundation = { path = "../enc-mediafoundation" }
 cap-mediafoundation-ffmpeg = { path = "../mediafoundation-ffmpeg" }
 cap-mediafoundation-utils = { path = "../mediafoundation-utils" }

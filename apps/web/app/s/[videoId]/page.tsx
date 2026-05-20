@@ -25,6 +25,7 @@ import {
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
 import {
 	Comment,
+	type ImageUpload,
 	type Organisation,
 	Policy,
 	type Video,
@@ -41,6 +42,10 @@ import {
 	type OrganizationSettings,
 } from "@/app/(org)/dashboard/dashboard-data";
 import { createNotification } from "@/lib/Notification";
+import {
+	canManageOrganizationSettings,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import {
@@ -48,11 +53,18 @@ import {
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
 import { transcribeVideo } from "@/lib/transcribe";
+import {
+	isEditSourceKey,
+	reconcileStaleEditUpload,
+} from "@/lib/video-edit-processing";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
+import type { SharePageBranding } from "./types";
+
+const VIEW_NOTIFICATION_DELAY_MS = 2 * 60 * 1000;
 
 // Helper function to fetch shared spaces data for a video
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
@@ -156,6 +168,36 @@ const renderPolicyDenied = (videoId: Video.VideoId, reason?: string) =>
 	Effect.succeed(<PolicyDeniedView key={videoId} reason={reason} />);
 
 const renderNoSuchElement = () => Effect.sync(() => notFound());
+
+function getSharePageBranding(data: {
+	owner: { isPro: boolean };
+	orgSettings?: OrganizationSettings | null;
+	organizationName?: string | null;
+	organizationIconUrl?: ImageUpload.ImageUrl | null;
+	shareableLinkIconUrl?: ImageUpload.ImageUrl | null;
+}): SharePageBranding | null {
+	if (!data.owner.isPro) {
+		return { type: "cap" };
+	}
+
+	const brandedIcon = data.orgSettings?.shareableLinkUseOrganizationIcon
+		? data.organizationIconUrl
+		: data.shareableLinkIconUrl;
+
+	if (brandedIcon) {
+		return {
+			type: "custom",
+			imageUrl: brandedIcon,
+			name: data.organizationName ?? "Organization",
+		};
+	}
+
+	if (data.orgSettings?.hideShareableLinkCapLogo) {
+		return null;
+	}
+
+	return { type: "cap" };
+}
 
 const getShareVideoPageCatchers = (videoId: Video.VideoId) => ({
 	PolicyDenied: (e: Policy.PolicyDeniedError) =>
@@ -327,6 +369,8 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
 
+	await reconcileStaleEditUpload(videoId);
+
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
 
@@ -365,9 +409,13 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 						organizationId: sharedVideos.organizationId,
 					},
 					orgSettings: organizations.settings,
+					organizationName: organizations.name,
+					organizationIconUrl: organizations.iconUrl,
+					shareableLinkIconUrl: organizations.shareableLinkIconUrl,
 					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 						Boolean,
 					),
+					activeUploadRawFileKey: videoUploads.rawFileKey,
 					owner: users,
 				})
 				.from(videos)
@@ -411,16 +459,23 @@ async function AuthorizedContent({
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasPassword: boolean;
 		hasActiveUpload: boolean;
+		activeUploadRawFileKey: string | null;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
+		organizationName?: string | null;
+		organizationIconUrl?: ImageUpload.ImageUrlOrKey | null;
+		shareableLinkIconUrl?: ImageUpload.ImageUrlOrKey | null;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
 	// will have already been fetched if auth is required
 	const user = await getCurrentUser();
 	const videoId = video.id;
+	const canRegisterView =
+		!video.hasActiveUpload &&
+		Date.now() - video.updatedAt.getTime() >= VIEW_NOTIFICATION_DELAY_MS;
 
-	if (user && video && user.id !== video.owner.id) {
+	if (user && video && user.id !== video.owner.id && canRegisterView) {
 		try {
 			await createNotification({
 				type: "view",
@@ -663,6 +718,41 @@ async function AuthorizedContent({
 		customDomainPromise,
 	]);
 
+	const canManageSharePageBranding = await (async () => {
+		if (!userId) return false;
+
+		const [organizationAccess] = await db()
+			.select({
+				ownerId: organizations.ownerId,
+				memberRole: organizationMembers.role,
+			})
+			.from(organizations)
+			.leftJoin(
+				organizationMembers,
+				and(
+					eq(organizationMembers.organizationId, organizations.id),
+					eq(organizationMembers.userId, userId),
+				),
+			)
+			.where(
+				and(
+					eq(organizations.id, video.orgId),
+					isNull(organizations.tombstoneAt),
+				),
+			)
+			.limit(1);
+
+		if (!organizationAccess) return false;
+
+		return canManageOrganizationSettings(
+			getEffectiveOrganizationRole({
+				userId,
+				ownerId: organizationAccess.ownerId,
+				memberRole: organizationAccess.memberRole,
+			}),
+		);
+	})();
+
 	const videoWithOrganizationInfo = await Effect.gen(function* () {
 		const imageUploads = yield* ImageUploads;
 
@@ -684,56 +774,59 @@ async function AuthorizedContent({
 			password: null,
 			folderId: null,
 			orgSettings: video.orgSettings || null,
+			organizationName: video.organizationName,
+			organizationIconUrl: video.organizationIconUrl
+				? yield* imageUploads.resolveImageUrl(video.organizationIconUrl)
+				: null,
+			shareableLinkIconUrl: video.shareableLinkIconUrl
+				? yield* imageUploads.resolveImageUrl(video.shareableLinkIconUrl)
+				: null,
 			settings: rules.settings,
 			hasInheritedPassword: rules.hasInheritedPassword,
 			inheritedPasswordSources: rules.inheritedPasswordSources,
 			inheritedSpaceSettings: rules.inheritedSettings,
 		};
 	}).pipe(runPromise);
+	const isEditProcessing = isEditSourceKey({
+		ownerId: video.owner.id,
+		videoId,
+		rawFileKey: video.activeUploadRawFileKey,
+	});
 
 	return (
-		<>
-			<div className="container flex-1 px-4 mx-auto">
-				<ShareHeader
-					data={{
-						...videoWithOrganizationInfo,
-						createdAt: video.metadata?.customCreatedAt
-							? new Date(video.metadata.customCreatedAt)
-							: video.createdAt,
-					}}
-					customDomain={customDomain}
-					domainVerified={domainVerified}
-					sharedOrganizations={
-						videoWithOrganizationInfo.sharedOrganizations || []
-					}
-					sharedSpaces={sharedSpaces}
-					userOrganizations={userOrganizations}
-					spacesData={spacesData}
-				/>
+		<div className="container flex-1 px-4 mx-auto">
+			<ShareHeader
+				data={{
+					...videoWithOrganizationInfo,
+					createdAt: video.metadata?.customCreatedAt
+						? new Date(video.metadata.customCreatedAt)
+						: video.createdAt,
+				}}
+				customDomain={customDomain}
+				domainVerified={domainVerified}
+				sharedOrganizations={
+					videoWithOrganizationInfo.sharedOrganizations || []
+				}
+				sharedSpaces={sharedSpaces}
+				userOrganizations={userOrganizations}
+				spacesData={spacesData}
+				branding={getSharePageBranding(videoWithOrganizationInfo)}
+				canManageSharePageBranding={canManageSharePageBranding}
+			/>
 
-				<Share
-					data={videoWithOrganizationInfo}
-					videoSettings={videoWithOrganizationInfo.settings}
-					comments={commentsPromise}
-					views={viewsPromise}
-					customDomain={customDomain}
-					domainVerified={domainVerified}
-					userOrganizations={userOrganizations}
-					viewerId={user?.id ?? null}
-					initialAiData={initialAiData}
-					aiGenerationEnabled={aiGenerationEnabled}
-				/>
-			</div>
-			<div className="py-4 mt-auto">
-				<a
-					target="_blank"
-					href={`/?ref=video_${video.id}`}
-					className="flex justify-center items-center px-4 py-2 mx-auto mb-2 space-x-2 bg-white rounded-full border border-gray-5 w-fit"
-				>
-					<span className="text-sm">Recorded with</span>
-					<Logo className="w-14 h-auto" />
-				</a>
-			</div>
-		</>
+			<Share
+				data={videoWithOrganizationInfo}
+				videoSettings={videoWithOrganizationInfo.settings}
+				comments={commentsPromise}
+				views={viewsPromise}
+				customDomain={customDomain}
+				domainVerified={domainVerified}
+				userOrganizations={userOrganizations}
+				viewerId={user?.id ?? null}
+				isEditProcessing={isEditProcessing}
+				initialAiData={initialAiData}
+				aiGenerationEnabled={aiGenerationEnabled}
+			/>
+		</div>
 	);
 }

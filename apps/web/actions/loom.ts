@@ -25,9 +25,11 @@ import {
 	type User,
 	Video,
 } from "@cap/web-domain";
+import { checkRateLimit } from "@vercel/firewall";
 import { and, eq, isNull } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { start } from "workflow/api";
 import { requireOrganizationAccess } from "@/actions/organization/authorization";
 import { runPromise } from "@/lib/server";
@@ -74,8 +76,30 @@ export interface LoomCsvImportResult {
 	error?: string;
 }
 
-const MAX_LOOM_CSV_ROWS = 100;
+const MAX_LOOM_CSV_ROWS = 500;
 const MAX_LOOM_SPACE_NAME_LENGTH = 255;
+const LOOM_IMPORT_RATE_LIMIT_ID = "rl_loom_import_per_user";
+const LOOM_IMPORT_RATE_LIMIT_ERROR =
+	"Too many Loom imports started. Please wait a few minutes, then try again.";
+const LOOM_CSV_LIMIT_ERROR = `CSV imports are limited to ${MAX_LOOM_CSV_ROWS} rows at a time. Contact support to raise this limit.`;
+
+async function createLoomImportRateLimitCheck(userId: User.UserId) {
+	if (NODE_ENV !== "production") return async () => false;
+
+	const headersList = await headers();
+	const request = new Request("https://cap.so/api/loom-import-rate-limit", {
+		method: "POST",
+		headers: headersList,
+	});
+
+	return async () => {
+		const { rateLimited } = await checkRateLimit(LOOM_IMPORT_RATE_LIMIT_ID, {
+			request,
+			rateLimitKey: `loom-import:${userId}`,
+		});
+		return rateLimited;
+	};
+}
 
 function extractLoomVideoId(url: string): string | null {
 	try {
@@ -416,6 +440,14 @@ export async function importFromLoom({
 
 	await requireOrganizationAccess(user.id, orgId);
 
+	const isRateLimited = await createLoomImportRateLimitCheck(user.id);
+	if (await isRateLimited()) {
+		return {
+			success: false,
+			error: LOOM_IMPORT_RATE_LIMIT_ERROR,
+		};
+	}
+
 	return importLoomVideoForOwner({
 		loomUrl,
 		orgId,
@@ -536,7 +568,7 @@ async function getOrCreateImportSpace({
 			id: SpaceMemberId.make(nanoId()),
 			spaceId,
 			userId: createdById,
-			role: "Admin",
+			role: "admin",
 		});
 	});
 
@@ -649,13 +681,14 @@ export async function importFromLoomCsv({
 			importedCount: 0,
 			failedCount: normalizedRows.length,
 			results: [],
-			error: `CSV imports are limited to ${MAX_LOOM_CSV_ROWS} rows at a time.`,
+			error: LOOM_CSV_LIMIT_ERROR,
 		};
 	}
 
 	const results: LoomCsvImportRowResult[] = [];
 	const spaceCache = new Map<string, ImportSpaceCacheValue>();
 	const touchedSpaceIds = new Set<Space.SpaceIdOrOrganisationId>();
+	const isRateLimited = await createLoomImportRateLimitCheck(user.id);
 
 	for (const row of normalizedRows) {
 		if (!row.loomUrl) {
@@ -700,6 +733,17 @@ export async function importFromLoomCsv({
 				spaceName: row.spaceName || undefined,
 				success: false,
 				error: "This email is not a member of the organization.",
+			});
+			continue;
+		}
+
+		if (await isRateLimited()) {
+			results.push({
+				rowNumber: row.rowNumber,
+				userEmail: row.userEmail,
+				spaceName: row.spaceName || undefined,
+				success: false,
+				error: LOOM_IMPORT_RATE_LIMIT_ERROR,
 			});
 			continue;
 		}

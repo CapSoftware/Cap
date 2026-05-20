@@ -1,14 +1,14 @@
 use cap_project::XY;
 use cap_rendering::{ProjectUniforms, RenderSegment, RenderedFrame};
 use futures::FutureExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::path::PathBuf;
 use tracing::trace;
 
 use crate::{ExportError, ExporterBase};
 
-#[derive(Deserialize, Clone, Copy, Debug, Type)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Type)]
 pub struct GifQuality {
     /// Encoding quality from 1-100 (default: 90)
     pub quality: Option<u8>,
@@ -16,7 +16,7 @@ pub struct GifQuality {
     pub fast: Option<bool>,
 }
 
-#[derive(Deserialize, Clone, Copy, Debug, Type)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Type)]
 pub struct GifExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,

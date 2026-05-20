@@ -105,13 +105,13 @@ impl Tracker {
 
         println!("  Start memory:    {:>6.1} MB", first.memory_mb);
         println!("  End memory:      {:>6.1} MB", last.memory_mb);
-        println!("  Peak memory:     {:>6.1} MB", peak);
+        println!("  Peak memory:     {peak:>6.1} MB");
         println!(
             "  Net growth:      {:>+6.1} MB",
             last.memory_mb - first.memory_mb
         );
-        println!("  Peak threads:    {}", peak_threads);
-        println!("  Final threads:   {}", end_threads);
+        println!("  Peak threads:    {peak_threads}");
+        println!("  Final threads:   {end_threads}");
 
         let cycle_starts: Vec<&Snapshot> = self
             .snapshots
@@ -125,16 +125,13 @@ impl Tracker {
             let per_cycle = growth_first_to_last / (cycle_starts.len() as f64 - 1.0);
 
             println!("\n  Per-cycle analysis ({} cycles):", cycle_starts.len());
-            println!("    Growth across cycles: {:>+.1} MB", growth_first_to_last);
-            println!("    Avg per cycle:        {:>+.2} MB", per_cycle);
+            println!("    Growth across cycles: {growth_first_to_last:>+.1} MB");
+            println!("    Avg per cycle:        {per_cycle:>+.2} MB");
 
             if per_cycle > 5.0 {
-                println!(
-                    "\n  *** MEMORY LEAK DETECTED: {:>+.1} MB/cycle ***",
-                    per_cycle
-                );
+                println!("\n  *** MEMORY LEAK DETECTED: {per_cycle:>+.1} MB/cycle ***");
             } else if per_cycle > 1.0 {
-                println!("\n  *** POTENTIAL LEAK: {:>+.1} MB/cycle ***", per_cycle);
+                println!("\n  *** POTENTIAL LEAK: {per_cycle:>+.1} MB/cycle ***");
             } else {
                 println!("\n  [OK] Memory stable across cycles (< 1 MB/cycle)");
             }
@@ -152,8 +149,7 @@ impl Tracker {
 
             if thread_growth > 2 {
                 println!(
-                    "  *** THREAD LEAK: {} threads accumulated across cycles ***",
-                    thread_growth
+                    "  *** THREAD LEAK: {thread_growth} threads accumulated across cycles ***"
                 );
             } else {
                 println!("  [OK] Thread count stable across cycles");
@@ -169,10 +165,7 @@ async fn run_lifecycle_stress(
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n{}", "=".repeat(72));
     println!("  CAMERA FEED LIFECYCLE STRESS TEST");
-    println!(
-        "  {} cycles x {}s active + {}s paused",
-        cycles, run_secs, pause_secs
-    );
+    println!("  {cycles} cycles x {run_secs}s active + {pause_secs}s paused");
     println!("{}\n", "=".repeat(72));
 
     let mut tracker = Tracker::new();
@@ -224,10 +217,7 @@ async fn run_lifecycle_stress(
         }
 
         let fps = received as f64 / run_secs as f64;
-        println!(
-            "    Received {} frames ({:.1} FPS) over {}s",
-            received, fps, run_secs
-        );
+        println!("    Received {received} frames ({fps:.1} FPS) over {run_secs}s");
 
         if received == 0 {
             println!("    *** WARNING: Zero frames received! Camera may be stuck. ***");
@@ -242,18 +232,15 @@ async fn run_lifecycle_stress(
         let remove_ms = remove_start.elapsed().as_millis();
 
         if remove_ms > 2000 {
-            println!(
-                "    *** WARNING: RemoveInput took {}ms (>2s) ***",
-                remove_ms
-            );
+            println!("    *** WARNING: RemoveInput took {remove_ms}ms (>2s) ***");
         } else {
-            println!("    RemoveInput took {}ms", remove_ms);
+            println!("    RemoveInput took {remove_ms}ms");
         }
 
         tracker.snap(&format!("Cycle {cycle}: after RemoveInput"));
 
         if pause_secs > 0 && cycle < cycles {
-            println!("    Pausing {}s...", pause_secs);
+            println!("    Pausing {pause_secs}s...");
             tokio::time::sleep(Duration::from_secs(pause_secs)).await;
             tracker.snap(&format!("Cycle {cycle}: after pause"));
         }
@@ -269,7 +256,7 @@ async fn run_lifecycle_stress(
 
 async fn run_rapid_toggle(toggles: usize) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n{}", "=".repeat(72));
-    println!("  RAPID CAMERA TOGGLE TEST ({} toggles)", toggles);
+    println!("  RAPID CAMERA TOGGLE TEST ({toggles} toggles)");
     println!("{}\n", "=".repeat(72));
 
     let mut tracker = Tracker::new();
@@ -322,7 +309,7 @@ async fn run_rapid_toggle(toggles: usize) -> Result<(), Box<dyn std::error::Erro
 
 async fn run_setinput_after_unlock(cycles: usize) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n{}", "=".repeat(72));
-    println!("  SETINPUT AFTER UNLOCK TEST ({} cycles)", cycles);
+    println!("  SETINPUT AFTER UNLOCK TEST ({cycles} cycles)");
     println!("  (Simulates: record → stop → reopen camera)");
     println!("{}\n", "=".repeat(72));
 
@@ -384,16 +371,13 @@ async fn run_setinput_after_unlock(cycles: usize) -> Result<(), Box<dyn std::err
         match result {
             Ok(Ok(_)) => {
                 let ms = setinput_start.elapsed().as_millis();
-                println!("    SetInput after Unlock: OK ({}ms)", ms);
+                println!("    SetInput after Unlock: OK ({ms}ms)");
                 if ms > 3000 {
-                    println!(
-                        "    *** WARNING: SetInput took {}ms (>3s), possible blocking ***",
-                        ms
-                    );
+                    println!("    *** WARNING: SetInput took {ms}ms (>3s), possible blocking ***");
                 }
             }
             Ok(Err(e)) => {
-                println!("    *** SetInput after Unlock FAILED: {} ***", e);
+                println!("    *** SetInput after Unlock FAILED: {e} ***");
             }
             Err(_) => {
                 println!("    *** TIMEOUT: SetInput blocked for >10s after Unlock! ***");

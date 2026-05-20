@@ -9,6 +9,7 @@ import {
 } from "@cap/database/schema";
 import { and, eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
+import { normalizeAssignableOrganizationRole } from "@/lib/permissions/roles";
 import { calculateProSeats } from "@/utils/organization";
 
 export async function POST(request: NextRequest) {
@@ -62,11 +63,13 @@ export async function POST(request: NextRequest) {
 
 			if (!existingMembership) {
 				const newId = nanoId();
+				const role =
+					normalizeAssignableOrganizationRole(invite.role) ?? "member";
 				await tx.insert(organizationMembers).values({
 					id: newId,
 					organizationId: invite.organizationId,
 					userId: user.id,
-					role: invite.role,
+					role,
 				});
 				memberId = newId;
 			}

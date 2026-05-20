@@ -169,6 +169,27 @@
 			"when": 1778434170430,
 			"tag": "0023_misty_luckman",
 			"breakpoints": true
+		},
+		{
+			"idx": 24,
+			"version": "5",
+			"when": 1778776694053,
+			"tag": "0024_many_speed",
+			"breakpoints": true
+		},
+		{
+			"idx": 25,
+			"version": "5",
+			"when": 1778858762935,
+			"tag": "0025_demonic_mother_askani",
+			"breakpoints": true
+		},
+		{
+			"idx": 26,
+			"version": "5",
+			"when": 1779283712737,
+			"tag": "0026_pretty_the_professor",
+			"breakpoints": true
 		}
 	]
 }

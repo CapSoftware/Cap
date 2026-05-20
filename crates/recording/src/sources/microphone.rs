@@ -573,7 +573,8 @@ mod tests {
 
     #[test]
     fn upsampling_preserves_total_duration() {
-        use cap_timestamp::{MachAbsoluteTimestamp, Timestamp};
+        use cap_timestamp::Timestamp;
+        use std::time::Instant;
 
         let target = AudioInfo::new_raw(Sample::F32(Type::Packed), 48000, 1);
         let mut resampler =
@@ -583,7 +584,7 @@ mod tests {
         const FRAME_COUNT: usize = 64;
         const CHANNELS: usize = 2;
 
-        let ts = Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::now());
+        let ts = Timestamp::Instant(Instant::now());
 
         let payload_len_bytes = FRAME_SAMPLES * CHANNELS * std::mem::size_of::<f32>();
         let payload = vec![0u8; payload_len_bytes];
@@ -608,7 +609,8 @@ mod tests {
 
     #[test]
     fn downsampling_preserves_total_duration() {
-        use cap_timestamp::{MachAbsoluteTimestamp, Timestamp};
+        use cap_timestamp::Timestamp;
+        use std::time::Instant;
 
         let target = AudioInfo::new_raw(Sample::F32(Type::Packed), 48000, 1);
         let mut resampler =
@@ -618,7 +620,7 @@ mod tests {
         const FRAME_COUNT: usize = 64;
         const CHANNELS: usize = 2;
 
-        let ts = Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::now());
+        let ts = Timestamp::Instant(Instant::now());
         let payload_len_bytes = FRAME_SAMPLES * CHANNELS * std::mem::size_of::<f32>();
         let payload = vec![0u8; payload_len_bytes];
 

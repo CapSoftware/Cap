@@ -7,8 +7,8 @@ use crate::{
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
 };
 
-const CLICK_LOOKAHEAD_TARGET_MS: f64 = 500.0;
-const CLICK_SPRING_WINDOW_MS: f64 = 175.0;
+const CLICK_LOOKAHEAD_TARGET_MS: f64 = 140.0;
+const CLICK_SPRING_WINDOW_MS: f64 = 120.0;
 const SHAKE_THRESHOLD_UV: f64 = 0.015;
 const SHAKE_DETECTION_WINDOW_MS: f64 = 100.0;
 const DECIMATE_FPS: f64 = 60.0;
@@ -647,8 +647,8 @@ mod tests {
         let clicks = vec![click_event(200.0, true)];
         let mut context = CursorSpringContext::new(&clicks);
 
-        context.advance_to(50.0);
-        assert_eq!(context.profile(50.0), SpringProfile::Snappy);
+        context.advance_to(100.0);
+        assert_eq!(context.profile(100.0), SpringProfile::Snappy);
     }
 
     #[test]

@@ -4,7 +4,7 @@ import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
-import { ask, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
@@ -28,7 +28,11 @@ import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionCont
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
-import { createExportTask } from "~/utils/export";
+import {
+	beginExportSessionGuard,
+	createExportTask,
+	exportVideoToFile,
+} from "~/utils/export";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import {
 	commands,
@@ -185,7 +189,10 @@ export function ExportPage() {
 	const isCancellationError = (error: unknown) =>
 		error instanceof SilentError ||
 		error === "Export cancelled" ||
-		(error instanceof Error && error.message === "Export cancelled");
+		error === "Save dialog cancelled" ||
+		(error instanceof Error &&
+			(error.message === "Export cancelled" ||
+				error.message === "Save dialog cancelled"));
 
 	const [_settings, setSettings] = makePersisted(
 		createStore<Settings>({
@@ -275,6 +282,7 @@ export function ExportPage() {
 
 	const [previewUrl, setPreviewUrl] = createSignal<string | null>(null);
 	const [previewLoading, setPreviewLoading] = createSignal(false);
+	const [previewUnavailable, setPreviewUnavailable] = createSignal(false);
 	const [renderEstimate, setRenderEstimate] = createSignal<{
 		frameRenderTimeMs: number;
 		totalFrames: number;
@@ -388,6 +396,7 @@ export function ExportPage() {
 			if (!cachedEstimate) {
 				estimateCache.set(cacheKey, newEstimate);
 			}
+			setPreviewUnavailable(false);
 			setRenderEstimate(newEstimate);
 		} catch (e) {
 			console.error("Failed to generate preview:", e);
@@ -397,6 +406,7 @@ export function ExportPage() {
 				);
 				return runPreviewRequest(request, retryCount + 1);
 			}
+			setPreviewUnavailable(true);
 		}
 	};
 
@@ -407,6 +417,7 @@ export function ExportPage() {
 		resHeight: number,
 		bpp: number,
 	) => {
+		setPreviewUnavailable(false);
 		pendingPreviewRequest = { frameTime, fps, resWidth, resHeight, bpp };
 		if (previewInFlight) return;
 
@@ -530,18 +541,23 @@ export function ExportPage() {
 		mutationFn: async () => {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
-			setExportState(reconcile({ action: "copy", type: "starting" }));
+			const releaseExportSession = await beginExportSessionGuard();
+			try {
+				setExportState(reconcile({ action: "copy", type: "starting" }));
 
-			const outputPath = await exportWithSettings((progress) => {
+				const outputPath = await exportWithSettings((progress) => {
+					if (isCancelled()) throw new SilentError("Cancelled");
+					setExportState({ type: "rendering", progress });
+				});
+
 				if (isCancelled()) throw new SilentError("Cancelled");
-				setExportState({ type: "rendering", progress });
-			});
 
-			if (isCancelled()) throw new SilentError("Cancelled");
+				setExportState({ type: "copying" });
 
-			setExportState({ type: "copying" });
-
-			await commands.copyVideoToClipboard(outputPath);
+				await commands.copyVideoToClipboard(outputPath);
+			} finally {
+				await releaseExportSession();
+			}
 		},
 		onError: (error) => {
 			if (isCancelled() || isCancellationError(error)) {
@@ -563,42 +579,35 @@ export function ExportPage() {
 		mutationFn: async () => {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
-
 			const extension = exportFileExtension();
-			const savePath = await saveDialog({
-				filters: [
-					{
-						name: `${extension.toUpperCase()} filter`,
-						extensions: [extension],
-					},
-				],
-				defaultPath: `~/Desktop/${meta().prettyName}.${extension}`,
-			});
-			if (!savePath) {
-				throw new SilentError("Save dialog cancelled");
-			}
-
-			setExportState(reconcile({ action: "save", type: "starting" }));
-
-			setOutputPath(savePath);
-
-			trackEvent("export_started", {
-				resolution: settings.resolution,
-				fps: settings.fps,
-				path: savePath,
-			});
-
-			const videoPath = await exportWithSettings((progress) => {
-				if (isCancelled()) throw new SilentError("Cancelled");
-				setExportState({ type: "rendering", progress });
-			});
+			const customBpp =
+				advancedMode() && isCustomBpp() ? compressionBpp() : null;
+			const exportSettings = buildExportSettings(
+				settings,
+				isMovCursorOnlyExport(),
+				customBpp,
+				forceFfmpegDecoder(),
+			);
+			const savePath = await exportVideoToFile(
+				projectPath,
+				exportSettings,
+				`${meta().prettyName}.${extension}`,
+				extension,
+				() => {
+					setExportState(reconcile({ action: "save", type: "starting" }));
+				},
+				() => {
+					setExportState({ action: "save", type: "copying" });
+				},
+				(progress) => {
+					if (isCancelled()) throw new SilentError("Cancelled");
+					setExportState({ type: "rendering", progress });
+				},
+			);
 
 			if (isCancelled()) throw new SilentError("Cancelled");
 
-			setExportState({ type: "copying" });
-
-			await commands.copyFileToPath(videoPath, savePath);
-
+			setOutputPath(savePath);
 			setExportState({ type: "done" });
 		},
 		onError: (error) => {
@@ -622,73 +631,78 @@ export function ExportPage() {
 		mutationFn: async () => {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
-			setExportState(reconcile({ action: "upload", type: "starting" }));
+			const releaseExportSession = await beginExportSessionGuard();
+			try {
+				setExportState(reconcile({ action: "upload", type: "starting" }));
 
-			const existingAuth = await authStore.get();
-			if (!existingAuth) createSignInMutation();
-			trackEvent("create_shareable_link_clicked", {
-				resolution: settings.resolution,
-				fps: settings.fps,
-				has_existing_auth: !!existingAuth,
-			});
+				const existingAuth = await authStore.get();
+				if (!existingAuth) createSignInMutation();
+				trackEvent("create_shareable_link_clicked", {
+					resolution: settings.resolution,
+					fps: settings.fps,
+					has_existing_auth: !!existingAuth,
+				});
 
-			const metadata = await commands.getVideoMetadata(projectPath);
-			const plan = await commands.checkUpgradedAndUpdate();
-			const canShare = {
-				allowed: plan || metadata.duration < 300,
-				reason: !plan && metadata.duration >= 300 ? "upgrade_required" : null,
-			};
+				const metadata = await commands.getVideoMetadata(projectPath);
+				const plan = await commands.checkUpgradedAndUpdate();
+				const canShare = {
+					allowed: plan || metadata.duration < 300,
+					reason: !plan && metadata.duration >= 300 ? "upgrade_required" : null,
+				};
 
-			if (!canShare.allowed) {
-				if (canShare.reason === "upgrade_required") {
-					await commands.showWindow("Upgrade");
-					await new Promise((resolve) => setTimeout(resolve, 1000));
-					throw new SilentError();
+				if (!canShare.allowed) {
+					if (canShare.reason === "upgrade_required") {
+						await commands.showWindow("Upgrade");
+						await new Promise((resolve) => setTimeout(resolve, 1000));
+						throw new SilentError();
+					}
 				}
-			}
 
-			const uploadChannel = new Channel<UploadProgress>((progress) => {
-				console.log("Upload progress:", progress);
-				setExportState(
-					produce((state) => {
-						if (state.type !== "uploading") return;
+				const uploadChannel = new Channel<UploadProgress>((progress) => {
+					console.log("Upload progress:", progress);
+					setExportState(
+						produce((state) => {
+							if (state.type !== "uploading") return;
 
-						state.progress = Math.round(progress.progress * 100);
-					}),
-				);
-			});
-
-			await exportWithSettings((progress) => {
-				if (isCancelled()) throw new SilentError("Cancelled");
-				setExportState({ type: "rendering", progress });
-			});
-
-			if (isCancelled()) throw new SilentError("Cancelled");
-
-			setExportState({ type: "uploading", progress: 0 });
-
-			console.log({ organizationId: settings.organizationId });
-
-			const result = meta().sharing
-				? await commands.uploadExportedVideo(
-						projectPath,
-						"Reupload",
-						uploadChannel,
-						settings.organizationId ?? null,
-					)
-				: await commands.uploadExportedVideo(
-						projectPath,
-						{ Initial: { pre_created_video: null } },
-						uploadChannel,
-						settings.organizationId ?? null,
+							state.progress = Math.round(progress.progress * 100);
+						}),
 					);
+				});
 
-			if (result === "NotAuthenticated")
-				throw new Error("You need to sign in to share recordings");
-			else if (result === "PlanCheckFailed")
-				throw new Error("Failed to verify your subscription status");
-			else if (result === "UpgradeRequired")
-				throw new Error("This feature requires an upgraded plan");
+				await exportWithSettings((progress) => {
+					if (isCancelled()) throw new SilentError("Cancelled");
+					setExportState({ type: "rendering", progress });
+				});
+
+				if (isCancelled()) throw new SilentError("Cancelled");
+
+				setExportState({ type: "uploading", progress: 0 });
+
+				console.log({ organizationId: settings.organizationId });
+
+				const result = meta().sharing
+					? await commands.uploadExportedVideo(
+							projectPath,
+							"Reupload",
+							uploadChannel,
+							settings.organizationId ?? null,
+						)
+					: await commands.uploadExportedVideo(
+							projectPath,
+							{ Initial: { pre_created_video: null } },
+							uploadChannel,
+							settings.organizationId ?? null,
+						);
+
+				if (result === "NotAuthenticated")
+					throw new Error("You need to sign in to share recordings");
+				else if (result === "PlanCheckFailed")
+					throw new Error("Failed to verify your subscription status");
+				else if (result === "UpgradeRequired")
+					throw new Error("This feature requires an upgraded plan");
+			} finally {
+				await releaseExportSession();
+			}
 		},
 		onSuccess: async () => {
 			await refetchMeta();
@@ -736,7 +750,7 @@ export function ExportPage() {
 						ostype() !== "windows" && "pr-2",
 					)}
 				>
-					{ostype() === "macos" && <div class="h-full w-[4rem]" />}
+					{ostype() === "macos" && <div class="h-full w-16" />}
 					<Button
 						variant="gray"
 						onClick={handleBack}
@@ -768,12 +782,16 @@ export function ExportPage() {
 										fallback={
 											<div class="flex flex-col items-center gap-3 text-gray-10">
 												<IconLucideImage class="size-12 text-gray-8" />
-												<span class="text-sm">Generating preview...</span>
+												<span class="text-sm">
+													{previewUnavailable()
+														? "Preview unavailable"
+														: "Generating preview..."}
+												</span>
 											</div>
 										}
 									>
 										<div class="absolute inset-4 rounded-lg bg-gray-4 overflow-hidden">
-											<div class="absolute inset-y-0 w-full animate-shimmer bg-gradient-to-r from-transparent from-30% via-gray-6 via-50% to-transparent to-70%" />
+											<div class="absolute inset-y-0 w-full animate-shimmer bg-linear-to-r from-transparent from-30% via-gray-6 via-50% to-transparent to-70%" />
 										</div>
 									</Show>
 								</div>
@@ -788,7 +806,7 @@ export function ExportPage() {
 									/>
 									<Show when={previewLoading()}>
 										<div class="absolute inset-0 z-50 overflow-hidden pointer-events-none">
-											<div class="absolute inset-y-0 w-full animate-shimmer bg-gradient-to-r from-transparent from-30% via-white/60 via-50% to-transparent to-70%" />
+											<div class="absolute inset-y-0 w-full animate-shimmer bg-linear-to-r from-transparent from-30% via-white/60 via-50% to-transparent to-70%" />
 										</div>
 									</Show>
 									<button
@@ -804,24 +822,26 @@ export function ExportPage() {
 					</div>
 
 					<Show
-						when={!previewLoading() && renderEstimate()}
+						when={
+							!previewUnavailable() && !previewLoading() && renderEstimate()
+						}
 						fallback={
 							<div class="flex items-center justify-center gap-4 mt-4 h-4 text-xs text-gray-11">
 								<span class="flex items-center gap-1.5">
 									<IconLucideClock class="size-3.5" />
-									<span class="h-3.5 w-10 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-10 bg-gray-4 rounded-sm animate-pulse" />
 								</span>
 								<span class="flex items-center gap-1.5">
 									<IconLucideMonitor class="size-3.5" />
-									<span class="h-3.5 w-20 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-20 bg-gray-4 rounded-sm animate-pulse" />
 								</span>
 								<span class="flex items-center gap-1.5">
 									<IconLucideHardDrive class="size-3.5" />
-									<span class="h-3.5 w-16 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-16 bg-gray-4 rounded-sm animate-pulse" />
 								</span>
 								<span class="flex items-center gap-1.5">
 									<IconLucideZap class="size-3.5" />
-									<span class="h-3.5 w-12 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-12 bg-gray-4 rounded-sm animate-pulse" />
 								</span>
 							</div>
 						}
@@ -1166,7 +1186,7 @@ export function ExportPage() {
 								>
 									<div
 										class={cx(
-											"w-8 h-4 rounded-full transition-colors relative flex-shrink-0",
+											"w-8 h-4 rounded-full transition-colors relative shrink-0",
 											settings.optimizeFilesize ? "bg-blue-9" : "bg-gray-5",
 										)}
 									>
@@ -1223,7 +1243,7 @@ export function ExportPage() {
 									>
 										<div
 											class={cx(
-												"w-8 h-4 rounded-full transition-colors relative flex-shrink-0",
+												"w-8 h-4 rounded-full transition-colors relative shrink-0",
 												cursorOnly() ? "bg-blue-9" : "bg-gray-5",
 											)}
 										>
@@ -1246,7 +1266,7 @@ export function ExportPage() {
 									<Show when={cursorOnly()}>
 										<div class="rounded-lg border border-amber-6 bg-amber-3/30 px-3 py-2.5">
 											<div class="flex items-start gap-2">
-												<IconLucideAlertTriangle class="mt-0.5 size-4 flex-shrink-0 text-amber-11" />
+												<IconLucideAlertTriangle class="mt-0.5 size-4 shrink-0 text-amber-11" />
 												<div class="text-left">
 													<p class="text-xs font-medium text-amber-11">
 														Warning
@@ -1313,7 +1333,7 @@ export function ExportPage() {
 													>
 														<div
 															class={cx(
-																"w-8 h-4 rounded-full transition-colors relative flex-shrink-0",
+																"w-8 h-4 rounded-full transition-colors relative shrink-0",
 																forceFfmpegDecoder()
 																	? "bg-blue-9"
 																	: "bg-gray-5",
@@ -1465,7 +1485,7 @@ export function ExportPage() {
 
 					return (
 						<div
-							class="absolute inset-0 z-50 flex flex-col items-center justify-center p-6 text-gray-12 backdrop-blur-sm"
+							class="absolute inset-0 z-50 flex flex-col items-center justify-center p-6 text-gray-12 backdrop-blur-xs"
 							style={{
 								"background-color":
 									"color-mix(in srgb, var(--gray-1) 85%, transparent)",

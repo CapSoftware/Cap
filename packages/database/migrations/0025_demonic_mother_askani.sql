@@ -1,0 +1,1 @@
+ALTER TABLE `organizations` ADD `shareableLinkIconUrl` varchar(1024);

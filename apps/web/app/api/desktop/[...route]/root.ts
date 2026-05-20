@@ -44,6 +44,17 @@ async function resolveOrganizationIconUrl(iconUrl: string | null) {
 	}).pipe(runPromise);
 }
 
+async function resolveUserImageUrl(imageUrl: string | null) {
+	if (!imageUrl) return null;
+
+	return Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+		return yield* imageUploads.resolveImageUrl(
+			imageUrl as ImageUpload.ImageUrlOrKey,
+		);
+	}).pipe(runPromise);
+}
+
 async function toDesktopOrganizations(
 	rows: DesktopOrganizationRow[],
 	userId: string,
@@ -423,6 +434,17 @@ app.get("/plan", withAuth, async (c) => {
 	});
 });
 
+app.get("/user/profile", withAuth, async (c) => {
+	const user = c.get("user");
+	const name = [user.name, user.lastName].filter(Boolean).join(" ").trim();
+
+	return c.json({
+		name: name || null,
+		email: user.email,
+		imageUrl: await resolveUserImageUrl(user.image ?? null),
+	});
+});
+
 app.get("/organizations", withAuth, async (c) => {
 	const user = c.get("user");
 
@@ -505,7 +527,7 @@ app.patch(
 
 		if (!canEditOrganizationBranding(row, user.id)) {
 			return c.json(
-				{ error: "Only organization owners can edit branding" },
+				{ error: "Only organization admins and owners can edit branding" },
 				{ status: 403 },
 			);
 		}

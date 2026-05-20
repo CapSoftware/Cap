@@ -390,8 +390,7 @@ impl Muxer for AVFoundationMp4Muxer {
                             && available_mb < DISK_SPACE_CRITICAL_MB
                         {
                             let message = format!(
-                                "Disk space critically low ({}MB), stopping recording to preserve output",
-                                available_mb
+                                "Disk space critically low ({available_mb}MB), stopping recording to preserve output"
                             );
                             set_fatal_error(&video_fatal_error, message.clone());
                             return Err(anyhow!(message));
@@ -1203,9 +1202,7 @@ mod tests {
             let normal = DEFAULT_MP4_MUXER_BUFFER_SIZE;
             assert!(
                 instant > normal,
-                "Instant mode buffer ({}) should be larger than normal mode buffer ({})",
-                instant,
-                normal
+                "Instant mode buffer ({instant}) should be larger than normal mode buffer ({normal})"
             );
         }
 

@@ -373,10 +373,7 @@ async fn run_camera_capture(duration_secs: u64) -> Vec<FFmpegVideoFrame> {
 
 async fn profile_live_preview(duration_secs: u64, output_width: u32) {
     println!("\n{}", "=".repeat(60));
-    println!(
-        "  LIVE CAMERA PREVIEW PROFILE ({}px, {duration_secs}s)",
-        output_width
-    );
+    println!("  LIVE CAMERA PREVIEW PROFILE ({output_width}px, {duration_secs}s)");
     println!("{}\n", "=".repeat(60));
 
     let mut cpu = CpuTracker::new();
@@ -608,7 +605,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             simulate_ws_preview_optimized(&frames, "WS OPTIMIZED (640, reuse buffers)");
 
             println!("\n{}", "=".repeat(60));
-            println!("  LIVE PREVIEW CPU PROFILE ({}s per resolution)", duration);
+            println!("  LIVE PREVIEW CPU PROFILE ({duration}s per resolution)");
             println!("{}", "=".repeat(60));
 
             profile_live_preview(duration, 1280).await;

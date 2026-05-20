@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { requireOrganizationSettingsManager } from "./authorization";
 import { checkDomainStatus } from "./domain-utils";
 
 export async function checkOrganizationDomain(
@@ -21,9 +22,9 @@ export async function checkOrganizationDomain(
 		.from(organizations)
 		.where(eq(organizations.id, organizationId));
 
-	if (!organization || organization.ownerId !== user.id) {
-		throw new Error("Only the owner can check domain status");
-	}
+	if (!organization) throw new Error("Organization not found");
+
+	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	if (!organization.customDomain) {
 		throw new Error("No custom domain set");

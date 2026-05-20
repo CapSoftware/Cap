@@ -80,7 +80,7 @@ const fetchSpaceMembers = Effect.fn(function* (
 				.select({
 					id: spaceMembers.id,
 					userId: spaceMembers.userId,
-					role: sql<string>`'member'`,
+					role: spaceMembers.role,
 					name: users.name,
 					email: users.email,
 					image: users.image,

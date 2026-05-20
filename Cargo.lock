@@ -1235,8 +1235,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-d3d-adapter"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "windows 0.60.0",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cap-desktop"
-version = "0.4.85"
+version = "0.5.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1424,6 +1433,7 @@ dependencies = [
 name = "cap-enc-mediafoundation"
 version = "0.1.0"
 dependencies = [
+ "cap-d3d-adapter",
  "cap-media-info",
  "clap",
  "futures",
@@ -1441,6 +1451,7 @@ dependencies = [
 name = "cap-export"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-enc-gif",
@@ -1612,6 +1623,7 @@ dependencies = [
  "cap-camera-windows",
  "cap-cursor-capture",
  "cap-cursor-info",
+ "cap-d3d-adapter",
  "cap-enc-avfoundation",
  "cap-enc-ffmpeg",
  "cap-enc-mediafoundation",
@@ -1811,6 +1823,7 @@ dependencies = [
 name = "cap-video-decode"
 version = "0.1.0"
 dependencies = [
+ "cap-d3d-adapter",
  "cidre",
  "ffmpeg-hw-device",
  "ffmpeg-next",
@@ -8272,6 +8285,7 @@ dependencies = [
 name = "scap-direct3d"
 version = "0.1.0"
 dependencies = [
+ "cap-d3d-adapter",
  "scap-ffmpeg",
  "scap-targets",
  "thiserror 1.0.69",

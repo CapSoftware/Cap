@@ -17,6 +17,7 @@ cap-media-info = { path = "../media-info" }
 tokio.workspace = true
 tempfile = "3.12.0"
 image = "0.25.2"
+base64 = "0.22.1"
 mp4 = "0.14.0"
 thiserror.workspace = true
 futures = { workspace = true }

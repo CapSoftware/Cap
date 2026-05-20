@@ -35,7 +35,7 @@
 
 ## Current Status
 
-**Last Updated**: 2026-05-07
+**Last Updated**: 2026-05-20
 
 ### Performance Summary
 
@@ -79,6 +79,10 @@
 - [x] **Profile decoder init time** - Hardware acceleration confirmed (AVAssetReader) (2026-01-28)
 - [x] **Identify latency hotspots** - No issues found, p95=3.1ms (2026-01-28)
 - [x] **Optimize random-access scrubbing** - Reduced AVAssetReader scrub decode p95 on cap-performance-fixtures from 231.5ms to 47.6ms (2026-05-07)
+- [x] **Add live editor playback harness** - Added `cap-editor --example editor-playback-benchmark` telemetry for warmup, frame source, skips, renderer queue wait, render time, callback packing, and output format (2026-05-20)
+- [x] **Optimize live editor playback render output** - Switched live editor renderer output from NV12 to RGBA after telemetry showed NV12 renderer p95 over frame budget at 1080p (2026-05-20)
+- [x] **Reduce live editor first-render drops** - Moved renderer setup earlier and prerendered the first playback frame before starting the playback clock, reducing 1080p renderer drops from 8 to 0 on the reference live run (2026-05-20)
+- [x] **Measure desktop RGBA display bandwidth** - Time-normalized desktop frame transport stats and measured RGBA payload at 406.6 MB/s full preview, 172.8 MB/s default half preview, with callback/display packing below budget (2026-05-20)
 
 ---
 
@@ -462,6 +466,99 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `cargo clippy -p cap-rendering --all-targets -- -D warnings`
 
 **Stopping point**: Scrubbing is substantially faster and playback validation still passes. Remaining architectural opportunities are renderer readback/transport overhead and longer-duration testing on lower-powered MacBook Air hardware.
+
+---
+
+### Session 2026-05-20 (Live Editor Playback Harness + RGBA Output)
+
+**Goal**: Build an editor playback performance harness, identify the top measured bottleneck in the actual live playback path, and fix it without changing playback timing, decode behavior, or audio sync.
+
+**What was done**:
+1. Added `crates/editor/examples/editor-playback-benchmark.rs`, which drives the real `Playback` loop and `Renderer` with telemetry instead of only benchmarking direct decode/render calls.
+2. Added playback telemetry for warmup, frame source, skips, schedule overshoot, frame acquisition, uniform construction, renderer queue wait, render time, callback packing, dropped frames, and output format.
+3. Ran baseline live playback on `/tmp/cap-performance-fixtures/reference-recording.cap` at 60fps for 300 frames.
+4. Identified `render_immediate_nv12` as the top measured bottleneck.
+5. Switched live editor playback renderer output to RGBA, using the existing desktop RGBA frame transport path.
+
+**Changes Made**:
+- `crates/editor/src/telemetry.rs`: New telemetry event channel and stage enums.
+- `crates/editor/src/playback.rs`: Emits live playback telemetry without changing playback scheduling.
+- `crates/editor/src/editor.rs`: Emits renderer telemetry and uses RGBA output for live editor frames.
+- `crates/editor/examples/editor-playback-benchmark.rs`: New live playback benchmark harness.
+- `crates/editor/Cargo.toml`: Registers the new benchmark example.
+
+**Baseline Results**:
+- Live 1080p playback: submitted 300, rendered 253, renderer dropped 47, skipped 28.
+- Renderer output: NV12.
+- Renderer render p95: 19.00ms, over the 16.67ms frame budget.
+- Callback packing p95: 0.02ms.
+
+**Final Results**:
+- Live 1080p playback: submitted 300, rendered 290, renderer dropped 10, skipped 0.
+- Renderer output: RGBA.
+- Renderer render p95: 9.21ms.
+- Default half preview: renderer render p95 7.37ms, skipped 0.
+- Existing playback validation still passes: decode p95 5.0ms/3.0ms, mic diff 35.3ms/13.8ms, system audio diff 92.7ms/92.8ms, camera drift 0.0ms.
+
+**Impact**:
+- Live 1080p renderer p95 improved 19.00ms → 9.21ms (-51.5%).
+- Playback skips improved 28 → 0 on the measured 300-frame run.
+- The fix avoids NV12 color conversion for editor preview frames and uses the already-supported RGBA display path.
+
+**Validation**:
+- `cargo fmt --all`
+- `cargo check -p cap-editor --examples`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution full`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution half`
+- `cargo run -p cap-recording --example playback-test-runner -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 full`
+
+**Stopping point**: The top measured live playback bottleneck is fixed. Remaining opportunity is first-render setup latency, visible as a max render spike and a small number of initial renderer drops even though steady-state p95 is under budget.
+
+---
+
+### Session 2026-05-20 (First-Render Setup + RGBA Transport)
+
+**Goal**: Continue after the RGBA output change by reducing first-render/setup latency and remaining live renderer drops, then check whether the larger RGBA desktop payload is becoming the next limiter.
+
+**What was done**:
+1. Measured the post-RGBA live playback path on `/tmp/cap-performance-fixtures/reference-recording.cap` at 60fps for 300 frames.
+2. Confirmed the remaining drops were concentrated around renderer setup and the first rendered frame, not steady-state rendering.
+3. Moved renderer layer creation earlier so it overlaps segment/decoder creation.
+4. Added renderer output-size preparation before playback frames are queued.
+5. Prerendered the exact starting playhead frame before starting the playback clock/audio stream, then began the timed loop at the next frame.
+6. Tightened desktop display stats so `__capFpsStats()` reports true MB/s, render FPS, render duration, and active transport mode for the RGBA display path.
+
+**Before This Session**:
+- Full 1080p RGBA live playback: submitted 300, rendered 292, renderer dropped 8, skipped 0.
+- Warmup: 28.2ms.
+- Renderer render p95: 8.20ms, max 62.90ms.
+- Callback payload: 398.6 MB/s.
+
+**Final Results**:
+- Full 1080p RGBA live playback: submitted 300, rendered 300, renderer dropped 0, skipped 0.
+- Full 1080p setup/warmup including initial prerender: 65.4ms.
+- Full 1080p renderer render p95: 7.10ms; first-frame prerender max: 63.16ms before playback clock start.
+- Full 1080p callback payload: 406.6 MB/s.
+- Default half preview: submitted 300, rendered 300, renderer dropped 0, skipped 0.
+- Default half preview renderer render p95: 7.05ms.
+- Default half preview callback payload: 172.8 MB/s.
+- Existing playback validation still passes: decode p95 4.8ms/2.9ms, mic diff 35.3ms/13.8ms, system audio diff 92.7ms/92.8ms, camera drift 0.0ms.
+
+**Impact**:
+- Remaining 1080p renderer drops improved 8 → 0.
+- First-frame GPU spike still exists, but it is paid before the playback clock and audio stream start, so it no longer causes renderer queue drops or visual startup skips.
+- RGBA bandwidth is not the measured limiter on the reference runs: callback packing p95 stayed at 0.01ms and renderer queue wait p95 stayed at 0.05ms while carrying the larger RGBA payload.
+
+**Validation**:
+- `cargo fmt --all`
+- `cargo check -p cap-rendering`
+- `cargo check -p cap-editor --examples`
+- `pnpm exec biome check --write apps/desktop/src/utils/socket.ts`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution full`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution half`
+- `cargo run -p cap-recording --example playback-test-runner -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 full`
+
+**Stopping point**: The measured live editor path now renders every submitted frame on the reference fixture with no renderer drops or playback skips. The remaining first-frame cost is GPU startup work, but it is isolated to setup before timed playback begins.
 
 ---
 

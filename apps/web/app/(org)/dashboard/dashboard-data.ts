@@ -14,11 +14,25 @@ import { Database, ImageUploads } from "@cap/web-backend";
 import type { ImageUpload } from "@cap/web-domain";
 import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
+import {
+	canManageOrganizationMembers,
+	canManageOrganizationProSeats,
+	canManageSpace,
+	getEffectiveOrganizationRole,
+	getEffectiveSpaceRole,
+	type OrganizationRole,
+	type SpaceRole,
+} from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
+import { selectProSeatProvider } from "@/utils/organization";
 
 export type Organization = {
-	organization: Omit<typeof organizations.$inferSelect, "iconUrl"> & {
+	organization: Omit<
+		typeof organizations.$inferSelect,
+		"iconUrl" | "shareableLinkIconUrl"
+	> & {
 		iconUrl: ImageUpload.ImageUrl | null;
+		shareableLinkIconUrl: ImageUpload.ImageUrl | null;
 	};
 	members: (typeof organizationMembers.$inferSelect & {
 		user: Pick<
@@ -43,6 +57,8 @@ export type Spaces = Omit<
 	videoCount: number;
 	iconUrl: ImageUpload.ImageUrl | null;
 	hasPassword: boolean;
+	currentUserRole: OrganizationRole | SpaceRole | null;
+	currentUserCanManage: boolean;
 };
 
 export type UserPreferences = (typeof users.$inferSelect)["preferences"];
@@ -82,7 +98,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 		let spacesData: Spaces[] = [];
 		let organizationSettings: OrganizationSettings | null = null;
 		let userCapsCount = 0;
-		// Find active organization ID
+		let currentOrganizationRole: OrganizationRole | null = null;
 
 		let activeOrganizationId = organizationIds.find(
 			(orgId) => orgId === user.activeOrganizationId,
@@ -92,9 +108,26 @@ export async function getDashboardData(user: typeof userSelectProps) {
 			activeOrganizationId = organizationIds[0];
 		}
 
-		// Only fetch spaces for the active organization
-
 		if (activeOrganizationId) {
+			const activeOrgInfo = userOrganizations.find(
+				(org) => org.id === activeOrganizationId,
+			);
+			const [activeOrgMembership] = await db()
+				.select({ role: organizationMembers.role })
+				.from(organizationMembers)
+				.where(
+					and(
+						eq(organizationMembers.organizationId, activeOrganizationId),
+						eq(organizationMembers.userId, user.id),
+					),
+				)
+				.limit(1);
+			currentOrganizationRole = getEffectiveOrganizationRole({
+				userId: user.id,
+				ownerId: activeOrgInfo?.ownerId,
+				memberRole: activeOrgMembership?.role,
+			});
+
 			const [notification] = await db()
 				.select({ id: notifications.id })
 				.from(notifications)
@@ -132,6 +165,12 @@ export async function getDashboardData(user: typeof userSelectProps) {
 								createdById: spaces.createdById,
 								iconUrl: spaces.iconUrl,
 								settings: spaces.settings,
+								currentUserSpaceRole: sql<string | null>`(
+          SELECT space_members.role FROM space_members
+          WHERE space_members.spaceId = spaces.id
+          AND space_members.userId = ${user.id}
+          LIMIT 1
+        )`,
 								hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(
 									Boolean,
 								),
@@ -147,11 +186,8 @@ export async function getDashboardData(user: typeof userSelectProps) {
 								and(
 									eq(spaces.organizationId, activeOrganizationId),
 									or(
-										// User is the space creator
 										eq(spaces.createdById, user.id),
-										// Space is public within the organization
 										eq(spaces.privacy, "Public"),
-										// User is a member of the space
 										sql`EXISTS (
           SELECT 1 FROM space_members 
           WHERE space_members.spaceId = spaces.id 
@@ -165,11 +201,22 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						Effect.map((rows) =>
 							rows.map(
 								Effect.fn(function* (row) {
+									const { currentUserSpaceRole, ...spaceRow } = row;
+									const currentUserRole = getEffectiveSpaceRole({
+										userId: user.id,
+										createdById: row.createdById,
+										memberRole: currentUserSpaceRole,
+									});
 									return {
-										...row,
+										...spaceRow,
 										iconUrl: row.iconUrl
 											? yield* imageUploads.resolveImageUrl(row.iconUrl)
 											: null,
+										currentUserRole,
+										currentUserCanManage: canManageSpace({
+											organizationRole: currentOrganizationRole,
+											spaceRole: currentUserRole,
+										}),
 									};
 								}),
 							),
@@ -178,10 +225,6 @@ export async function getDashboardData(user: typeof userSelectProps) {
 					);
 			}).pipe(runPromise);
 
-			// Add a single 'All spaces' entry for the active organization
-			const activeOrgInfo = userOrganizations.find(
-				(org) => org.id === activeOrganizationId,
-			);
 			if (activeOrgInfo) {
 				const orgMemberCountResult = await db()
 					.select({ value: sql<number>`COUNT(*)` })
@@ -231,6 +274,10 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						videoCount: orgVideoCount,
 						settings: null,
 						hasPassword: false,
+						currentUserRole: currentOrganizationRole,
+						currentUserCanManage: canManageOrganizationMembers(
+							currentOrganizationRole,
+						),
 					} as const;
 				}).pipe(runPromise);
 
@@ -269,15 +316,39 @@ export async function getDashboardData(user: typeof userSelectProps) {
 							.where(eq(organizationMembers.organizationId, organization.id)),
 					);
 
-					const owner = yield* db.use((db) =>
+					const managerIds = Array.from(
+						new Set([organization.ownerId, user.id]),
+					);
+					const managers = yield* db.use((db) =>
 						db
 							.select({
+								id: users.id,
 								inviteQuota: users.inviteQuota,
+								stripeSubscriptionId: users.stripeSubscriptionId,
+								stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 							})
 							.from(users)
-							.where(eq(users.id, organization.ownerId))
-							.then((result) => result[0]),
+							.where(inArray(users.id, managerIds)),
 					);
+					const owner = managers.find(
+						(manager) => manager.id === organization.ownerId,
+					);
+					const currentManager = managers.find(
+						(manager) => manager.id === user.id,
+					);
+					const currentMember = allMembers.find(
+						(member) => member.member.userId === user.id,
+					);
+					const currentRole = getEffectiveOrganizationRole({
+						userId: user.id,
+						ownerId: organization.ownerId,
+						memberRole: currentMember?.member.role,
+					});
+					const proSeatProvider = selectProSeatProvider({
+						actor: currentManager,
+						owner,
+						actorCanManageProSeats: canManageOrganizationProSeats(currentRole),
+					});
 
 					const ownedOrgIds = db.use((db) =>
 						db
@@ -322,6 +393,11 @@ export async function getDashboardData(user: typeof userSelectProps) {
 							iconUrl: organization.iconUrl
 								? yield* iconImages.resolveImageUrl(organization.iconUrl)
 								: null,
+							shareableLinkIconUrl: organization.shareableLinkIconUrl
+								? yield* iconImages.resolveImageUrl(
+										organization.shareableLinkIconUrl,
+									)
+								: null,
 						},
 						members: yield* Effect.all(
 							allMembers.map(
@@ -345,7 +421,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						invites: organizationInvitesData.filter(
 							(invite) => invite.organizationId === organization.id,
 						),
-						inviteQuota: owner?.inviteQuota || 1,
+						inviteQuota: proSeatProvider?.inviteQuota || 1,
 						totalInvites,
 					};
 				}),

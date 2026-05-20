@@ -76,14 +76,22 @@ export interface WebGPURenderer {
 	canvas: OffscreenCanvas;
 }
 
+async function requestWebGPUAdapter(): Promise<GPUAdapter | null> {
+	let highPerformanceAdapter: GPUAdapter | null = null;
+	try {
+		highPerformanceAdapter = await navigator.gpu.requestAdapter({
+			powerPreference: "high-performance",
+		});
+	} catch {}
+	return highPerformanceAdapter ?? navigator.gpu.requestAdapter();
+}
+
 export async function isWebGPUSupported(): Promise<boolean> {
 	if (typeof navigator === "undefined" || !navigator.gpu) {
 		return false;
 	}
 	try {
-		const adapter = await navigator.gpu.requestAdapter({
-			powerPreference: "high-performance",
-		});
+		const adapter = await requestWebGPUAdapter();
 		return adapter !== null;
 	} catch {
 		return false;
@@ -93,9 +101,7 @@ export async function isWebGPUSupported(): Promise<boolean> {
 export async function initWebGPU(
 	canvas: OffscreenCanvas,
 ): Promise<WebGPURenderer> {
-	const adapter = await navigator.gpu.requestAdapter({
-		powerPreference: "high-performance",
-	});
+	const adapter = await requestWebGPUAdapter();
 	if (!adapter) {
 		throw new Error("No WebGPU adapter available");
 	}
@@ -299,7 +305,8 @@ export function renderFrameWebGPU(
 		colorAttachments: [
 			{
 				view: currentTexture.createView(),
-				loadOp: "load",
+				clearValue: { r: 0, g: 0, b: 0, a: 1 },
+				loadOp: "clear",
 				storeOp: "store",
 			},
 		],
@@ -412,7 +419,8 @@ export function renderNv12FrameWebGPU(
 		colorAttachments: [
 			{
 				view: context.getCurrentTexture().createView(),
-				loadOp: "load",
+				clearValue: { r: 0, g: 0, b: 0, a: 1 },
+				loadOp: "clear",
 				storeOp: "store",
 			},
 		],

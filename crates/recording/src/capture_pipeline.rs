@@ -458,7 +458,7 @@ pub fn target_to_display_and_crop(
 pub fn create_d3d_device()
 -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Device> {
     use windows::Win32::Graphics::{
-        Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE},
+        Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN},
         Direct3D11::{D3D11_CREATE_DEVICE_FLAG, ID3D11Device},
     };
 
@@ -474,6 +474,19 @@ pub fn create_d3d_device()
         }
         flags
     };
+
+    if let Ok(selected) = cap_d3d_adapter::select_capture_adapter(None) {
+        if let Err(error) = create_d3d_device_on_adapter(&selected.adapter, flags, &mut device) {
+            tracing::warn!(
+                adapter = %selected.description,
+                error = ?error,
+                "capture_pipeline: pinned-adapter D3D11CreateDevice failed, falling back"
+            );
+        } else {
+            return Ok(device.unwrap());
+        }
+    }
+
     let mut result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, flags, &mut device);
     if let Err(error) = &result {
         use windows::Win32::Graphics::Dxgi::DXGI_ERROR_UNSUPPORTED;
@@ -485,6 +498,31 @@ pub fn create_d3d_device()
         }
     }
     result?;
+
+    fn create_d3d_device_on_adapter(
+        adapter: &windows::Win32::Graphics::Dxgi::IDXGIAdapter,
+        flags: D3D11_CREATE_DEVICE_FLAG,
+        device: *mut Option<ID3D11Device>,
+    ) -> windows::core::Result<()> {
+        unsafe {
+            use windows::Win32::{
+                Foundation::HMODULE,
+                Graphics::Direct3D11::{D3D11_SDK_VERSION, D3D11CreateDevice},
+            };
+
+            D3D11CreateDevice(
+                Some(adapter),
+                D3D_DRIVER_TYPE_UNKNOWN,
+                HMODULE(std::ptr::null_mut()),
+                flags,
+                None,
+                D3D11_SDK_VERSION,
+                Some(device),
+                None,
+                None,
+            )
+        }
+    }
 
     fn create_d3d_device_with_type(
         driver_type: D3D_DRIVER_TYPE,

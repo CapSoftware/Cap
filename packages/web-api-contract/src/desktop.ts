@@ -15,7 +15,7 @@ export const DesktopOrganization = z.object({
 	id: z.string(),
 	name: z.string(),
 	ownerId: z.string(),
-	role: z.enum(["owner", "member"]),
+	role: z.enum(["owner", "admin", "member"]),
 	canEditBrand: z.boolean(),
 	iconUrl: z.string().nullable(),
 	brandColors: OrganizationBrandColors,
@@ -140,6 +140,17 @@ const protectedContract = c.router(
 				200: z.object({
 					upgraded: z.boolean(),
 					stripeSubscriptionStatus: z.string().nullable(),
+				}),
+			},
+		},
+		getUserProfile: {
+			method: "GET",
+			path: "/desktop/user/profile",
+			responses: {
+				200: z.object({
+					name: z.string().nullable(),
+					email: z.string().nullable(),
+					imageUrl: z.string().nullable(),
 				}),
 			},
 		},
