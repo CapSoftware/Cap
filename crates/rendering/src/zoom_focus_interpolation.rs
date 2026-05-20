@@ -27,6 +27,7 @@ struct ClickCluster {
     min_y: f64,
     max_y: f64,
     start_time_ms: f64,
+    last_time_ms: f64,
 }
 
 impl ClickCluster {
@@ -37,6 +38,7 @@ impl ClickCluster {
             min_y: y,
             max_y: y,
             start_time_ms: time_ms,
+            last_time_ms: time_ms,
         }
     }
 
@@ -46,11 +48,12 @@ impl ClickCluster {
         new_w <= max_w && new_h <= max_h
     }
 
-    fn add(&mut self, x: f64, y: f64) {
+    fn add(&mut self, x: f64, y: f64, time_ms: f64) {
         self.min_x = self.min_x.min(x);
         self.max_x = self.max_x.max(x);
         self.min_y = self.min_y.min(y);
         self.max_y = self.max_y.max(y);
+        self.last_time_ms = time_ms;
     }
 
     fn center(&self) -> (f64, f64) {
@@ -59,6 +62,103 @@ impl ClickCluster {
             (self.min_y + self.max_y) / 2.0,
         )
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use cap_project::{ClickSpringConfig, CursorMoveEvent, GlideDirection, ZoomMode};
+
+    use super::*;
+
+    fn move_event(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "default".to_string(),
+            time_ms,
+            x,
+            y,
+        }
+    }
+
+    #[test]
+    fn focus_uses_smoothed_cursor_timeline() {
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.1, 0.5),
+                move_event(100.0, 0.9, 0.5),
+                move_event(200.0, 0.9, 0.5),
+            ],
+            clicks: vec![],
+        };
+        let smoothing = SpringMassDamperSimulationConfig {
+            tension: 470.0,
+            mass: 3.0,
+            friction: 70.0,
+        };
+        let zoom_segments = vec![ZoomSegment {
+            start: 0.0,
+            end: 0.3,
+            amount: 2.0,
+            mode: ZoomMode::Auto,
+            glide_direction: GlideDirection::None,
+            glide_speed: 0.5,
+            instant_animation: false,
+            edge_snap_ratio: 0.25,
+        }];
+        let interpolator = ZoomFocusInterpolator::new(
+            &cursor,
+            Some(smoothing),
+            ClickSpringConfig::default(),
+            ScreenMovementSpring::default(),
+            0.3,
+            &zoom_segments,
+        );
+
+        let target = interpolator.focus_target_at(0.116);
+
+        assert!(target.x > 0.1);
+        assert!(target.x < 0.9);
+    }
+}
+
+fn cursor_position_at(moves: &[cap_project::CursorMoveEvent], time_ms: f64) -> Option<(f64, f64)> {
+    if moves.is_empty() {
+        return None;
+    }
+
+    if time_ms <= moves[0].time_ms {
+        return Some((moves[0].x, moves[0].y));
+    }
+
+    if let Some(last) = moves.last()
+        && time_ms >= last.time_ms
+    {
+        return Some((last.x, last.y));
+    }
+
+    let idx = moves.partition_point(|m| m.time_ms <= time_ms);
+    if idx == 0 {
+        return Some((moves[0].x, moves[0].y));
+    }
+
+    let prev = &moves[idx - 1];
+    let next = &moves[idx.min(moves.len() - 1)];
+    let dt = next.time_ms - prev.time_ms;
+
+    if dt > 66.67 {
+        return Some((prev.x, prev.y));
+    }
+
+    let t = if dt > 1e-9 {
+        ((time_ms - prev.time_ms) / dt).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    Some((
+        prev.x + (next.x - prev.x) * t,
+        prev.y + (next.y - prev.y) * t,
+    ))
 }
 
 fn build_clusters(
@@ -71,6 +171,36 @@ fn build_clusters(
     let end_ms = segment_end_secs * 1000.0;
     let cluster_w = CLUSTER_WIDTH_RATIO / zoom_amount;
     let cluster_h = CLUSTER_HEIGHT_RATIO / zoom_amount;
+
+    let click_positions: Vec<(f64, f64, f64)> = cursor_events
+        .clicks
+        .iter()
+        .filter(|click| click.down && click.time_ms >= start_ms && click.time_ms <= end_ms)
+        .filter_map(|click| {
+            cursor_position_at(&cursor_events.moves, click.time_ms)
+                .map(|(x, y)| (click.time_ms, x, y))
+        })
+        .collect();
+
+    if !click_positions.is_empty() {
+        let mut clusters = Vec::new();
+        let (first_time, first_x, first_y) = click_positions[0];
+        let mut current = ClickCluster::new(first_x, first_y, first_time);
+
+        for &(time_ms, x, y) in &click_positions[1..] {
+            if time_ms - current.last_time_ms <= 2_500.0
+                && current.can_add(x, y, cluster_w, cluster_h)
+            {
+                current.add(x, y, time_ms);
+            } else {
+                clusters.push(current);
+                current = ClickCluster::new(x, y, time_ms);
+            }
+        }
+
+        clusters.push(current);
+        return clusters;
+    }
 
     let events_in_range: Vec<&cap_project::CursorMoveEvent> = cursor_events
         .moves
@@ -98,7 +228,7 @@ fn build_clusters(
 
     for evt in &events_in_range[1..] {
         if current.can_add(evt.x, evt.y, cluster_w, cluster_h) {
-            current.add(evt.x, evt.y);
+            current.add(evt.x, evt.y, evt.time_ms);
         } else {
             clusters.push(current);
             current = ClickCluster::new(evt.x, evt.y, evt.time_ms);
@@ -129,7 +259,7 @@ pub struct ZoomFocusInterpolator {
     events: Option<Vec<SmoothedFocusEvent>>,
     precompute_sim: Option<ZoomFocusPrecomputeSim>,
     cursor_events: std::sync::Arc<CursorEvents>,
-    _precomputed_cursor: Option<std::sync::Arc<PrecomputedCursorTimeline>>,
+    precomputed_cursor: Option<std::sync::Arc<PrecomputedCursorTimeline>>,
     _cursor_smoothing: Option<SpringMassDamperSimulationConfig>,
     _click_spring: ClickSpringConfig,
     screen_spring: ScreenMovementSpring,
@@ -167,11 +297,24 @@ impl ZoomFocusInterpolator {
         precomputed_cursor: Option<std::sync::Arc<PrecomputedCursorTimeline>>,
     ) -> Self {
         let segment_clusters = Self::build_segment_clusters(cursor_events, zoom_segments);
+        let precomputed_cursor = if segment_clusters.is_empty() {
+            precomputed_cursor
+        } else {
+            precomputed_cursor.or_else(|| {
+                cursor_smoothing.map(|smoothing| {
+                    std::sync::Arc::new(PrecomputedCursorTimeline::new(
+                        cursor_events,
+                        Some(smoothing),
+                        Some(click_spring),
+                    ))
+                })
+            })
+        };
         Self {
             events: None,
             precompute_sim: None,
             cursor_events: std::sync::Arc::new(cursor_events.clone()),
-            _precomputed_cursor: precomputed_cursor,
+            precomputed_cursor,
             _cursor_smoothing: cursor_smoothing,
             _click_spring: click_spring,
             screen_spring,
@@ -209,11 +352,24 @@ impl ZoomFocusInterpolator {
         precomputed_cursor: Option<std::sync::Arc<PrecomputedCursorTimeline>>,
     ) -> Self {
         let segment_clusters = Self::build_segment_clusters(cursor_events.as_ref(), zoom_segments);
+        let precomputed_cursor = if segment_clusters.is_empty() {
+            precomputed_cursor
+        } else {
+            precomputed_cursor.or_else(|| {
+                cursor_smoothing.map(|smoothing| {
+                    std::sync::Arc::new(PrecomputedCursorTimeline::new(
+                        cursor_events.as_ref(),
+                        Some(smoothing),
+                        Some(click_spring),
+                    ))
+                })
+            })
+        };
         Self {
             events: None,
             precompute_sim: None,
             cursor_events,
-            _precomputed_cursor: precomputed_cursor,
+            precomputed_cursor,
             _cursor_smoothing: cursor_smoothing,
             _click_spring: click_spring,
             screen_spring,
@@ -255,6 +411,10 @@ impl ZoomFocusInterpolator {
     }
 
     fn focus_target_at(&self, time_secs: f32) -> XY<f32> {
+        if let Some(pos) = self.smoothed_cursor_position_at(time_secs) {
+            return pos;
+        }
+
         if let Some(pos) = Self::raw_cursor_position_at(&self.cursor_events, time_secs) {
             return pos;
         }
@@ -264,6 +424,18 @@ impl ZoomFocusInterpolator {
         }
 
         XY::new(0.5, 0.5)
+    }
+
+    fn smoothed_cursor_position_at(&self, time_secs: f32) -> Option<XY<f32>> {
+        self.precomputed_cursor
+            .as_ref()
+            .and_then(|cursor| cursor.interpolate(time_secs))
+            .and_then(|cursor| {
+                let x = cursor.position.coord.x;
+                let y = cursor.position.coord.y;
+                (x.is_finite() && y.is_finite())
+                    .then(|| XY::new(x.clamp(0.0, 1.0) as f32, y.clamp(0.0, 1.0) as f32))
+            })
     }
 
     fn raw_cursor_position_at(cursor_events: &CursorEvents, time_secs: f32) -> Option<XY<f32>> {
@@ -388,7 +560,7 @@ impl ZoomFocusInterpolator {
             ps.sim.run(step_ms as f32);
 
             let viewport_half = (0.5 / zoom_amount) as f32;
-            let max_lag = (viewport_half * 0.65).max(0.05);
+            let max_lag = (viewport_half * 0.65).clamp(0.12, 0.28);
             let dx = ps.sim.position.x - target.x;
             let dy = ps.sim.position.y - target.y;
             let dist_sq = dx * dx + dy * dy;
