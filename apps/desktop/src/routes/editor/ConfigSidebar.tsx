@@ -246,7 +246,7 @@ type CursorPresetValues = {
 	friction: number;
 };
 
-const DEFAULT_CURSOR_MOTION_BLUR = 0.3;
+const DEFAULT_MOTION_BLUR = 1.0;
 
 const CURSOR_TYPE_OPTIONS = [
 	{
@@ -2128,8 +2128,18 @@ function BackgroundConfig(props: {
 			</Field>
 			<Field name="Motion Blur" icon={<IconLucideWind class="size-4" />}>
 				<Slider
-					value={[project.cursor.motionBlur ?? DEFAULT_CURSOR_MOTION_BLUR]}
-					onChange={(v) => setProject("cursor", "motionBlur", v[0])}
+					value={[
+						project.screenMotionBlur ??
+							project.cursor.motionBlur ??
+							DEFAULT_MOTION_BLUR,
+					]}
+					onChange={(v) => {
+						const value = v[0] ?? 0;
+						batch(() => {
+							setProject("cursor", "motionBlur", value);
+							setProject("screenMotionBlur", value);
+						});
+					}}
 					minValue={0}
 					maxValue={1}
 					step={0.01}
