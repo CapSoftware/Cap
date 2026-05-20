@@ -12,7 +12,6 @@ import {
 } from "solid-js";
 
 import { AbsoluteInsetLoader } from "~/components/Loader";
-import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { applyMacOSWindowMaterial } from "~/utils/macos-window-material";
 import { initializeTitlebar } from "~/utils/titlebar-state";
@@ -115,14 +114,8 @@ function Header() {
 			data-tauri-drag-region="deep"
 		>
 			{ctx.state()?.items}
-			{isWindows && <CaptionControlsWindows11 class="!ml-auto" />}
-			{isMacOS && (
-				<CaptionControlsMacOS
-					class="!mr-auto ml-3"
-					showMinimize={false}
-					showZoom={false}
-				/>
-			)}
+			{isWindows && <CaptionControlsWindows11 class="ml-auto!" />}
+			{isMacOS && <div class="h-full w-[64px]" />}
 		</header>
 	);
 }
