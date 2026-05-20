@@ -35,6 +35,9 @@ export type FpsStats = {
 	minFrameMs: number;
 	maxFrameMs: number;
 	mbPerSec: number;
+	avgRenderMs: number;
+	maxRenderMs: number;
+	transportMode: "webgpu" | "canvas2d" | "worker" | "pending";
 };
 
 let globalFpsStatsGetter: (() => FpsStats) | null = null;
@@ -347,6 +350,7 @@ export function createImageDataWS(
 			const totalSize = ySize + uvSize;
 
 			const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
+			const renderStart = performance.now();
 
 			if (directCanvas.width !== width || directCanvas.height !== height) {
 				directCanvas.width = width;
@@ -362,7 +366,7 @@ export function createImageDataWS(
 			);
 
 			storeRenderedFrame(frameData, width, height, yStride, true);
-			actualRendersCount++;
+			recordRender(performance.now() - renderStart, "webgpu");
 			onmessage({ width, height });
 		}
 	}
@@ -396,6 +400,7 @@ export function createImageDataWS(
 			if (strideBytes === 0 || buffer.byteLength - 24 < frameDataSize) return;
 
 			const frameData = new Uint8ClampedArray(buffer, 0, frameDataSize);
+			const renderStart = performance.now();
 
 			if (directCanvas.width !== width || directCanvas.height !== height) {
 				directCanvas.width = width;
@@ -409,9 +414,9 @@ export function createImageDataWS(
 				height,
 				strideBytes,
 			);
-			actualRendersCount++;
 
 			storeRenderedFrame(frameData, width, height, strideBytes, false);
+			recordRender(performance.now() - renderStart, "webgpu");
 			onmessage({ width, height });
 		}
 	}
@@ -434,6 +439,8 @@ export function createImageDataWS(
 	) {
 		if (!directCanvas || !directCtx) return;
 
+		const renderStart = performance.now();
+
 		if (directCanvas.width !== width || directCanvas.height !== height) {
 			directCanvas.width = width;
 			directCanvas.height = height;
@@ -454,7 +461,7 @@ export function createImageDataWS(
 		directCtx.putImageData(cachedDirectImageData, 0, 0);
 
 		storeRenderedFrame(frameData, width, height, yStride, true);
-		actualRendersCount++;
+		recordRender(performance.now() - renderStart, "canvas2d");
 		onmessage({ width, height });
 	}
 
@@ -560,6 +567,7 @@ export function createImageDataWS(
 						return;
 
 					const { buffer, width, height } = e.data;
+					const renderStart = performance.now();
 					if (directCanvas.width !== width || directCanvas.height !== height) {
 						directCanvas.width = width;
 						directCanvas.height = height;
@@ -585,6 +593,7 @@ export function createImageDataWS(
 						width * 4,
 						false,
 					);
+					recordRender(performance.now() - renderStart, "canvas2d");
 					onmessage({ width, height });
 				};
 			}
@@ -667,7 +676,7 @@ export function createImageDataWS(
 		if (e.data.type === "frame-rendered") {
 			const { width, height } = e.data;
 			onmessage({ width, height });
-			actualRendersCount++;
+			recordRender(0, "worker");
 			if (!hasRenderedFrame()) {
 				setHasRenderedFrame(true);
 			}
@@ -741,17 +750,52 @@ export function createImageDataWS(
 	let actualRendersCount = 0;
 	let minFrameTime = Number.MAX_VALUE;
 	let maxFrameTime = 0;
-	const getLocalFpsStats = (): FpsStats => ({
-		fps:
-			frameCount > 0 && frameTimeSum > 0
-				? 1000 / (frameTimeSum / frameCount)
-				: 0,
-		renderFps: actualRendersCount,
-		avgFrameMs: frameCount > 0 ? frameTimeSum / frameCount : 0,
-		minFrameMs: minFrameTime === Number.MAX_VALUE ? 0 : minFrameTime,
-		maxFrameMs: maxFrameTime,
-		mbPerSec: totalBytesReceived / 1_000_000,
-	});
+	let renderTimeSum = 0;
+	let renderTimeCount = 0;
+	let maxRenderMs = 0;
+	let statsWindowStartedAt = performance.now();
+	let transportMode: FpsStats["transportMode"] = "pending";
+
+	function recordRender(durationMs: number, mode: FpsStats["transportMode"]) {
+		transportMode = mode;
+		actualRendersCount++;
+		if (durationMs > 0) {
+			renderTimeSum += durationMs;
+			renderTimeCount++;
+			maxRenderMs = Math.max(maxRenderMs, durationMs);
+		}
+	}
+
+	const resetStatsWindow = (now: number) => {
+		frameCount = 0;
+		frameTimeSum = 0;
+		totalBytesReceived = 0;
+		actualRendersCount = 0;
+		minFrameTime = Number.MAX_VALUE;
+		maxFrameTime = 0;
+		renderTimeSum = 0;
+		renderTimeCount = 0;
+		maxRenderMs = 0;
+		statsWindowStartedAt = now;
+	};
+
+	const getLocalFpsStats = (): FpsStats => {
+		const elapsedSecs = Math.max(
+			(performance.now() - statsWindowStartedAt) / 1000,
+			0.001,
+		);
+		return {
+			fps: frameCount / elapsedSecs,
+			renderFps: actualRendersCount / elapsedSecs,
+			avgFrameMs: frameCount > 0 ? frameTimeSum / frameCount : 0,
+			minFrameMs: minFrameTime === Number.MAX_VALUE ? 0 : minFrameTime,
+			maxFrameMs: maxFrameTime,
+			mbPerSec: totalBytesReceived / 1_000_000 / elapsedSecs,
+			avgRenderMs: renderTimeCount > 0 ? renderTimeSum / renderTimeCount : 0,
+			maxRenderMs,
+			transportMode,
+		};
+	};
 
 	globalFpsStatsGetter = getLocalFpsStats;
 	(globalThis as Record<string, unknown>).__capFpsStats = getLocalFpsStats;
@@ -762,6 +806,9 @@ export function createImageDataWS(
 	ws.onmessage = (event) => {
 		const buffer = event.data as ArrayBuffer;
 		const now = performance.now();
+		if (now - statsWindowStartedAt >= 1000) {
+			resetStatsWindow(now);
+		}
 		totalBytesReceived += buffer.byteLength;
 
 		let isNv12Format = false;
@@ -776,15 +823,6 @@ export function createImageDataWS(
 			frameTimeSum += delta;
 			minFrameTime = Math.min(minFrameTime, delta);
 			maxFrameTime = Math.max(maxFrameTime, delta);
-
-			if (frameCount % 60 === 0) {
-				frameCount = 0;
-				frameTimeSum = 0;
-				totalBytesReceived = 0;
-				actualRendersCount = 0;
-				minFrameTime = Number.MAX_VALUE;
-				maxFrameTime = 0;
-			}
 		}
 		lastFrameTime = now;
 
@@ -892,27 +930,13 @@ export function createImageDataWS(
 					const expectedRowBytes = width * 4;
 					const needsStrideCorrection = strideBytes !== expectedRowBytes;
 
-					if (lastFrameTime > 0) {
-						const delta = now - lastFrameTime;
-						frameCount++;
-						frameTimeSum += delta;
-						minFrameTime = Math.min(minFrameTime, delta);
-						maxFrameTime = Math.max(maxFrameTime, delta);
-						if (frameCount % 60 === 0) {
-							frameTimeSum = 0;
-							totalBytesReceived = 0;
-							minFrameTime = Number.MAX_VALUE;
-							maxFrameTime = 0;
-						}
-					}
-					lastFrameTime = now;
-
 					if (!needsStrideCorrection) {
 						const frameData = new Uint8ClampedArray(
 							buffer,
 							0,
 							expectedRowBytes * height,
 						);
+						const renderStart = performance.now();
 
 						if (
 							directCanvas.width !== width ||
@@ -941,6 +965,7 @@ export function createImageDataWS(
 							width * 4,
 							false,
 						);
+						recordRender(performance.now() - renderStart, "canvas2d");
 						onmessage({ width, height });
 					} else {
 						strideWorker.postMessage(
