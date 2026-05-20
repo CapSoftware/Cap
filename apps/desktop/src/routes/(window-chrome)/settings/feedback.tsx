@@ -56,7 +56,7 @@ export default function FeedbackTab() {
 	};
 
 	return (
-		<div class="flex flex-col w-full h-full">
+		<div class="cap-settings-page flex flex-col w-full h-full">
 			<div class="flex-1 custom-scroll">
 				<div class="p-4 space-y-4">
 					<div class="flex flex-col pb-4 border-b border-gray-2">

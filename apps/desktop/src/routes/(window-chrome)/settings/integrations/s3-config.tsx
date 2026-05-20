@@ -154,7 +154,7 @@ export default function S3ConfigPage() {
 	);
 
 	return (
-		<div class="flex flex-col p-4 h-full">
+		<div class="cap-settings-page flex flex-col p-4 h-full">
 			<IntegrationConfigHeader title="S3 Config" />
 			<div class="rounded-xl border bg-gray-2 border-gray-4 custom-scroll">
 				<div class="flex-1">

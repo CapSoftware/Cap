@@ -187,7 +187,7 @@ export default function Recordings() {
 	};
 
 	return (
-		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
+		<div class="cap-settings-page flex relative flex-col p-4 space-y-4 w-full h-full">
 			<div class="flex flex-col">
 				<h2 class="text-lg font-medium text-gray-12">Recordings</h2>
 				<p class="text-sm text-gray-10">

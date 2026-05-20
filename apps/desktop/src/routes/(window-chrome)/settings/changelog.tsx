@@ -47,7 +47,7 @@ export default function Page() {
 	const fadeIn = changelog.isLoading;
 
 	return (
-		<div class="flex flex-col h-full">
+		<div class="cap-settings-page flex flex-col h-full">
 			<div class="relative flex-1 custom-scroll">
 				<Suspense fallback={<AbsoluteInsetLoader />}>
 					<div

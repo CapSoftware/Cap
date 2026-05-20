@@ -124,7 +124,7 @@ export default function Screenshots() {
 	};
 
 	return (
-		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
+		<div class="cap-settings-page flex relative flex-col p-4 space-y-4 w-full h-full">
 			<div class="flex items-start justify-between gap-3">
 				<div class="flex flex-col">
 					<h2 class="text-lg font-medium text-gray-12">Screenshots</h2>

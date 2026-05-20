@@ -94,7 +94,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	});
 
 	return (
-		<div class="flex flex-col h-full custom-scroll">
+		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<div class="p-4 space-y-4">
 				<div class="flex flex-col pb-4 border-b border-gray-2">
 					<h2 class="text-lg font-medium text-gray-12">Transcription</h2>

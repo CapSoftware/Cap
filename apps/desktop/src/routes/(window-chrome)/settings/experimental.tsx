@@ -51,7 +51,7 @@ function Inner(props: {
 	};
 
 	return (
-		<div class="flex flex-col h-full custom-scroll">
+		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<div class="px-6 py-6 space-y-7 max-w-[42rem]">
 				<div class="flex flex-col gap-1 px-1">
 					<h2 class="text-base font-semibold tracking-tight text-gray-12">
