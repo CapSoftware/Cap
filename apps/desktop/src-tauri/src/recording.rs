@@ -26,7 +26,7 @@ use cap_recording::{
     },
     studio_recording,
 };
-use cap_rendering::ProjectRecordingsMeta;
+use cap_rendering::{ProjectRecordingsMeta, STANDARD_CURSOR_HEIGHT};
 use cap_utils::{ensure_dir, moment_format_to_chrono, spawn_actor};
 use cpal::traits::DeviceTrait;
 use futures::{FutureExt, stream};
@@ -39,14 +39,14 @@ use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::{
     any::Any,
-    collections::{BTreeSet, HashMap, VecDeque},
+    collections::BTreeSet,
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
     time::Duration,
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, path::BaseDirectory};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::*;
@@ -236,6 +236,7 @@ impl InProgressRecording {
                 Ok(recording) => Ok(CompletedRecording::Studio {
                     recording,
                     target_name: common.target_name,
+                    capture_target: common.inputs.capture_target,
                 }),
                 Err(e) => Err((e, None)),
             },
@@ -281,6 +282,7 @@ pub enum CompletedRecording {
     Studio {
         recording: studio_recording::CompletedRecording,
         target_name: String,
+        capture_target: ScreenCaptureTarget,
     },
 }
 
@@ -2336,7 +2338,11 @@ async fn handle_recording_finish(
     std::fs::create_dir_all(&screenshots_dir).ok();
 
     let (meta_inner, sharing) = match completed_recording {
-        CompletedRecording::Studio { recording, .. } => {
+        CompletedRecording::Studio {
+            recording,
+            capture_target,
+            ..
+        } => {
             let meta_inner = RecordingMetaInner::Studio(Box::new(recording.meta.clone()));
 
             if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
@@ -2402,6 +2408,7 @@ async fn handle_recording_finish(
                         screenshots_dir,
                         recording,
                         default_preset,
+                        Some(capture_target),
                     )
                     .await;
 
@@ -2445,6 +2452,7 @@ async fn handle_recording_finish(
                 },
                 &recordings,
                 PresetsStore::get_default_preset(app)?.map(|p| p.config),
+                Some(&capture_target),
             );
 
             config.write(&recording_dir).map_err(|e| e.to_string())?;
@@ -2634,6 +2642,7 @@ async fn finalize_studio_recording(
     screenshots_dir: PathBuf,
     recording: cap_recording::studio_recording::CompletedRecording,
     default_preset: Option<ProjectConfiguration>,
+    capture_target: Option<ScreenCaptureTarget>,
 ) -> Result<(), String> {
     info!("Starting background finalization for recording");
 
@@ -2843,12 +2852,16 @@ fn project_config_from_recording(
     completed_recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
+    capture_target: Option<&ScreenCaptureTarget>,
 ) -> ProjectConfiguration {
     let settings = GeneralSettingsStore::get(app)
         .unwrap_or(None)
         .unwrap_or_default();
 
+    let using_default_config = default_config.is_none();
     let mut config = default_config.unwrap_or_default();
+    config.cursor.size = default_cursor_size_for_recording(recordings);
+    apply_recording_presentation_defaults(app, &mut config, capture_target, using_default_config);
 
     let camera_preview_manager = CameraPreviewManager::new(app);
     if let Ok(camera_preview_state) = camera_preview_manager.get_state() {
@@ -2890,10 +2903,6 @@ fn project_config_from_recording(
         Vec::new()
     };
 
-    if !zoom_segments.is_empty() {
-        config.cursor.size = 200;
-    }
-
     config.timeline = Some(TimelineConfiguration {
         segments: timeline_segments,
         zoom_segments,
@@ -2905,6 +2914,89 @@ fn project_config_from_recording(
     });
 
     config
+}
+
+fn apply_recording_presentation_defaults(
+    app: &AppHandle,
+    config: &mut ProjectConfiguration,
+    capture_target: Option<&ScreenCaptureTarget>,
+    using_default_config: bool,
+) {
+    let default_wallpaper_path = if using_default_config {
+        app.path()
+            .resolve("assets/backgrounds/cities/sf.jpg", BaseDirectory::Resource)
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+
+    apply_screen_recording_presentation_defaults(
+        config,
+        capture_target,
+        using_default_config,
+        default_wallpaper_path,
+    );
+}
+
+fn apply_screen_recording_presentation_defaults(
+    config: &mut ProjectConfiguration,
+    capture_target: Option<&ScreenCaptureTarget>,
+    using_default_config: bool,
+    default_wallpaper_path: Option<String>,
+) {
+    use cap_project::{BackgroundSource, ScreenMovementSpring};
+
+    if matches!(capture_target, Some(ScreenCaptureTarget::CameraOnly)) {
+        return;
+    }
+
+    let has_default_background = matches!(
+        &config.background.source,
+        BackgroundSource::Color { value, alpha } if *value == [255, 255, 255] && *alpha == 255
+    );
+
+    if using_default_config && has_default_background {
+        if let Some(path) = default_wallpaper_path {
+            config.background.source = BackgroundSource::Wallpaper { path: Some(path) };
+        }
+    }
+
+    if config.background.padding <= f64::EPSILON {
+        config.background.padding = 10.0;
+    }
+
+    if matches!(
+        capture_target,
+        Some(ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::Display { .. })
+    ) && config.background.rounding <= f64::EPSILON
+    {
+        config.background.rounding = 2.0;
+    }
+
+    if (config.screen_movement_spring.stiffness - 120.0).abs() < f32::EPSILON
+        && (config.screen_movement_spring.damping - 14.0).abs() < f32::EPSILON
+        && (config.screen_movement_spring.mass - 1.0).abs() < f32::EPSILON
+    {
+        config.screen_movement_spring = ScreenMovementSpring::default();
+    }
+}
+
+fn default_cursor_size_for_recording(recordings: &ProjectRecordingsMeta) -> u32 {
+    const REGULAR_CURSOR_HEIGHT: f32 = 24.0;
+    const DEFAULT_CURSOR_SCALE: f32 = 2.0;
+    const MAX_RECORDING_HEIGHT_RATIO: f32 = 0.075;
+
+    let Some(first_segment) = recordings.segments.first() else {
+        return cap_project::CursorConfiguration::default().size;
+    };
+
+    let desired_height = (REGULAR_CURSOR_HEIGHT * DEFAULT_CURSOR_SCALE)
+        .min(first_segment.display.height as f32 * MAX_RECORDING_HEIGHT_RATIO);
+
+    (desired_height / STANDARD_CURSOR_HEIGHT * 100.0)
+        .round()
+        .clamp(45.0, 85.0) as u32
 }
 
 pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) -> bool {
