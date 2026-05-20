@@ -64,63 +64,6 @@ impl ClickCluster {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use cap_project::{ClickSpringConfig, CursorMoveEvent, GlideDirection, ZoomMode};
-
-    use super::*;
-
-    fn move_event(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
-        CursorMoveEvent {
-            active_modifiers: vec![],
-            cursor_id: "default".to_string(),
-            time_ms,
-            x,
-            y,
-        }
-    }
-
-    #[test]
-    fn focus_uses_smoothed_cursor_timeline() {
-        let cursor = CursorEvents {
-            moves: vec![
-                move_event(0.0, 0.1, 0.5),
-                move_event(100.0, 0.9, 0.5),
-                move_event(200.0, 0.9, 0.5),
-            ],
-            clicks: vec![],
-        };
-        let smoothing = SpringMassDamperSimulationConfig {
-            tension: 470.0,
-            mass: 3.0,
-            friction: 70.0,
-        };
-        let zoom_segments = vec![ZoomSegment {
-            start: 0.0,
-            end: 0.3,
-            amount: 2.0,
-            mode: ZoomMode::Auto,
-            glide_direction: GlideDirection::None,
-            glide_speed: 0.5,
-            instant_animation: false,
-            edge_snap_ratio: 0.25,
-        }];
-        let interpolator = ZoomFocusInterpolator::new(
-            &cursor,
-            Some(smoothing),
-            ClickSpringConfig::default(),
-            ScreenMovementSpring::default(),
-            0.3,
-            &zoom_segments,
-        );
-
-        let target = interpolator.focus_target_at(0.116);
-
-        assert!(target.x > 0.1);
-        assert!(target.x < 0.9);
-    }
-}
-
 fn cursor_position_at(moves: &[cap_project::CursorMoveEvent], time_ms: f64) -> Option<(f64, f64)> {
     if moves.is_empty() {
         return None;
@@ -658,5 +601,62 @@ impl ZoomFocusInterpolator {
         );
 
         Coord::new(XY::new(lerped.x as f64, lerped.y as f64))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cap_project::{ClickSpringConfig, CursorMoveEvent, GlideDirection, ZoomMode};
+
+    use super::*;
+
+    fn move_event(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "default".to_string(),
+            time_ms,
+            x,
+            y,
+        }
+    }
+
+    #[test]
+    fn focus_uses_smoothed_cursor_timeline() {
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.1, 0.5),
+                move_event(100.0, 0.9, 0.5),
+                move_event(200.0, 0.9, 0.5),
+            ],
+            clicks: vec![],
+        };
+        let smoothing = SpringMassDamperSimulationConfig {
+            tension: 470.0,
+            mass: 3.0,
+            friction: 70.0,
+        };
+        let zoom_segments = vec![ZoomSegment {
+            start: 0.0,
+            end: 0.3,
+            amount: 2.0,
+            mode: ZoomMode::Auto,
+            glide_direction: GlideDirection::None,
+            glide_speed: 0.5,
+            instant_animation: false,
+            edge_snap_ratio: 0.25,
+        }];
+        let interpolator = ZoomFocusInterpolator::new(
+            &cursor,
+            Some(smoothing),
+            ClickSpringConfig::default(),
+            ScreenMovementSpring::default(),
+            0.3,
+            &zoom_segments,
+        );
+
+        let target = interpolator.focus_target_at(0.116);
+
+        assert!(target.x > 0.1);
+        assert!(target.x < 0.9);
     }
 }
