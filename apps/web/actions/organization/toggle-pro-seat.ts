@@ -8,9 +8,9 @@ import {
 	users,
 } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { calculateProSeats } from "@/utils/organization";
+import { calculateProSeats, selectProSeatProvider } from "@/utils/organization";
 import { requireOrganizationProSeatManager } from "./authorization";
 
 export async function toggleProSeat(
@@ -60,17 +60,26 @@ export async function toggleProSeat(
 				.where(eq(organizationMembers.organizationId, organizationId))
 				.for("update");
 
-			const [owner] = await tx
+			const managerIds = Array.from(new Set([actor.ownerId, user.id]));
+			const managers = await tx
 				.select({
+					id: users.id,
 					inviteQuota: users.inviteQuota,
 					stripeSubscriptionId: users.stripeSubscriptionId,
+					stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 				})
 				.from(users)
-				.where(eq(users.id, actor.ownerId))
-				.limit(1);
+				.where(inArray(users.id, managerIds));
+			const owner = managers.find((manager) => manager.id === actor.ownerId);
+			const currentManager = managers.find((manager) => manager.id === user.id);
+			const seatProvider = selectProSeatProvider({
+				actor: currentManager,
+				owner,
+				actorCanManageProSeats: true,
+			});
 
 			const { proSeatsRemaining } = calculateProSeats({
-				inviteQuota: owner?.inviteQuota ?? 1,
+				inviteQuota: seatProvider?.inviteQuota ?? 1,
 				members: allMembers,
 			});
 
@@ -85,10 +94,12 @@ export async function toggleProSeat(
 				.set({ hasProSeat: true })
 				.where(eq(organizationMembers.id, memberId));
 
-			if (owner?.stripeSubscriptionId) {
+			if (seatProvider?.stripeSubscriptionId) {
 				await tx
 					.update(users)
-					.set({ thirdPartyStripeSubscriptionId: owner.stripeSubscriptionId })
+					.set({
+						thirdPartyStripeSubscriptionId: seatProvider.stripeSubscriptionId,
+					})
 					.where(eq(users.id, member.userId));
 			}
 		} else {
