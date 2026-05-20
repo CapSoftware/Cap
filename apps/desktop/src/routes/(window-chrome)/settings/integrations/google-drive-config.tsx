@@ -4,6 +4,7 @@ import { createResource, createSignal, Show, Suspense } from "solid-js";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
+import { Section, SectionCard, SettingsPageContent } from "../Setting";
 import { IntegrationConfigHeader } from "./config-header";
 
 const byteUnits = ["B", "KB", "MB", "GB", "TB", "PB"] as const;
@@ -273,179 +274,181 @@ export default function GoogleDriveConfigPage() {
 		disconnect.isPending;
 
 	return (
-		<div class="cap-settings-page flex flex-col p-4 h-full">
-			<IntegrationConfigHeader title="Google Drive" />
-			<div class="rounded-xl border bg-gray-2 border-gray-4 custom-scroll">
-				<div class="flex-1">
-					<Suspense
-						fallback={
-							<div class="flex justify-center items-center w-full h-screen">
-								<IconCapLogo class="animate-spin size-16" />
-							</div>
-						}
-					>
-						<div class="p-4 space-y-4 animate-in fade-in">
-							<div class="pb-4 border-b border-gray-3">
-								<p class="text-sm text-gray-11">
-									Google Drive stores new uploads in a private Cap folder in
-									your Drive. Existing Cap-hosted and S3 videos keep using their
-									current storage.
-								</p>
+		<div class="cap-settings-page flex flex-col h-full custom-scroll">
+			<SettingsPageContent>
+				<IntegrationConfigHeader title="Google Drive" />
+				<Section
+					title="Connection"
+					description="Google Drive stores new uploads in a private Cap folder in your Drive. Existing Cap-hosted and S3 videos keep using their current storage."
+				>
+					<SectionCard padded class="custom-scroll">
+						<Suspense
+							fallback={
+								<div class="flex justify-center items-center w-full h-screen">
+									<IconCapLogo class="animate-spin size-16" />
+								</div>
+							}
+						>
+							<div class="space-y-4 animate-in fade-in">
 								<Show when={managedByOrganization()}>
 									{(organization) => (
-										<p class="mt-3 text-sm font-medium text-gray-12">
+										<p class="text-xs leading-relaxed text-gray-10">
 											Managed by your organization: {organization().name}
 										</p>
 									)}
 								</Show>
-							</div>
 
-							<div class="space-y-3">
-								<div class="flex justify-between items-start gap-4">
-									<div>
-										<p class="text-sm font-medium text-gray-12">
-											{isConnected()
-												? googleDrive()?.displayName
-												: "Google Drive"}
-										</p>
-										<p class="text-[13px] text-gray-10">
-											{isConnected()
-												? isActive()
-													? "Active for new uploads"
-													: "Connected but not active"
-												: "Not connected"}
-										</p>
-									</div>
-									<Button
-										variant="gray"
-										disabled={busy()}
-										onClick={() => refetch()}
-									>
-										{isRefreshing() ? "Refreshing..." : "Refresh"}
-									</Button>
-								</div>
-
-								<Show
-									when={isConnected()}
-									fallback={
-										<Button
-											variant="primary"
-											disabled={busy()}
-											onClick={() => connect.mutate()}
-										>
-											{isWaitingForConnection()
-												? "Waiting..."
-												: connect.isPending
-													? "Opening..."
-													: "Connect Google Drive"}
-										</Button>
-									}
-								>
-									<Show when={storageQuota()}>
-										<div class="pt-3 space-y-2 border-t border-gray-3">
-											<div class="flex justify-between items-start gap-4">
-												<div>
-													<p class="text-[13px] font-medium text-gray-12">
-														Storage
-													</p>
-													<Show when={quotaUsageLabel()}>
-														{(label) => (
-															<p class="text-[13px] text-gray-10">{label()}</p>
-														)}
-													</Show>
-												</div>
-												<Show when={quotaTimestampLabel()}>
-													{(label) => (
-														<p class="text-[12px] text-gray-9 text-right">
-															{label()}
-														</p>
-													)}
-												</Show>
-											</div>
-											<Show when={quotaUsagePercent() !== null}>
-												<div class="overflow-hidden h-1.5 rounded-full bg-gray-4">
-													<div
-														class="h-full rounded-full bg-blue-9"
-														style={{
-															width: `${quotaUsagePercent() ?? 0}%`,
-														}}
-													/>
-												</div>
-											</Show>
-											<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[12px]">
-												<Show when={formatBytes(storageQuota()?.remaining)}>
-													{(remaining) => (
-														<>
-															<p class="text-gray-10">Remaining</p>
-															<p class="text-right text-gray-11">
-																{remaining()}
-															</p>
-														</>
-													)}
-												</Show>
-												<Show when={formatBytes(storageQuota()?.usageInDrive)}>
-													{(usageInDrive) => (
-														<>
-															<p class="text-gray-10">Drive files</p>
-															<p class="text-right text-gray-11">
-																{usageInDrive()}
-															</p>
-														</>
-													)}
-												</Show>
-												<Show
-													when={formatBytes(storageQuota()?.usageInDriveTrash)}
-												>
-													{(usageInDriveTrash) => (
-														<>
-															<p class="text-gray-10">Trash</p>
-															<p class="text-right text-gray-11">
-																{usageInDriveTrash()}
-															</p>
-														</>
-													)}
-												</Show>
-											</div>
+								<div class="space-y-3">
+									<div class="flex justify-between items-start gap-4">
+										<div class="flex flex-col gap-0.5 min-w-0">
+											<p class="text-[13px] text-gray-12">
+												{isConnected()
+													? googleDrive()?.displayName
+													: "Google Drive"}
+											</p>
+											<p class="text-xs leading-snug text-gray-10">
+												{isConnected()
+													? isActive()
+														? "Active for new uploads"
+														: "Connected but not active"
+													: "Not connected"}
+											</p>
 										</div>
-									</Show>
-									<div class="flex flex-wrap gap-2">
-										<Button
-											variant="primary"
-											disabled={busy() || isActive()}
-											onClick={() => setActive.mutate("googleDrive")}
-										>
-											{isActive() ? "Active" : "Use Google Drive"}
-										</Button>
-										<Show when={hasS3Config()}>
-											<Button
-												variant="gray"
-												disabled={busy() || !isActive()}
-												onClick={() => setActive.mutate("s3")}
-											>
-												Use S3
-											</Button>
-										</Show>
 										<Button
 											variant="gray"
 											disabled={busy()}
-											onClick={() => testConnection.mutate()}
+											onClick={() => refetch()}
 										>
-											{testConnection.isPending ? "Testing..." : "Test"}
-										</Button>
-										<Button
-											variant="destructive"
-											disabled={busy()}
-											onClick={() => disconnect.mutate()}
-										>
-											Disconnect
+											{isRefreshing() ? "Refreshing..." : "Refresh"}
 										</Button>
 									</div>
-								</Show>
+
+									<Show
+										when={isConnected()}
+										fallback={
+											<Button
+												variant="primary"
+												disabled={busy()}
+												onClick={() => connect.mutate()}
+											>
+												{isWaitingForConnection()
+													? "Waiting..."
+													: connect.isPending
+														? "Opening..."
+														: "Connect Google Drive"}
+											</Button>
+										}
+									>
+										<Show when={storageQuota()}>
+											<div class="pt-3 space-y-2 border-t border-gray-3">
+												<div class="flex justify-between items-start gap-4">
+													<div class="flex flex-col gap-0.5 min-w-0">
+														<p class="text-[13px] text-gray-12">Storage</p>
+														<Show when={quotaUsageLabel()}>
+															{(label) => (
+																<p class="text-xs leading-snug text-gray-10">
+																	{label()}
+																</p>
+															)}
+														</Show>
+													</div>
+													<Show when={quotaTimestampLabel()}>
+														{(label) => (
+															<p class="text-[12px] text-gray-9 text-right">
+																{label()}
+															</p>
+														)}
+													</Show>
+												</div>
+												<Show when={quotaUsagePercent() !== null}>
+													<div class="overflow-hidden h-1.5 rounded-full bg-gray-4">
+														<div
+															class="h-full rounded-full bg-blue-9"
+															style={{
+																width: `${quotaUsagePercent() ?? 0}%`,
+															}}
+														/>
+													</div>
+												</Show>
+												<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[12px]">
+													<Show when={formatBytes(storageQuota()?.remaining)}>
+														{(remaining) => (
+															<>
+																<p class="text-gray-10">Remaining</p>
+																<p class="text-right text-gray-11">
+																	{remaining()}
+																</p>
+															</>
+														)}
+													</Show>
+													<Show
+														when={formatBytes(storageQuota()?.usageInDrive)}
+													>
+														{(usageInDrive) => (
+															<>
+																<p class="text-gray-10">Drive files</p>
+																<p class="text-right text-gray-11">
+																	{usageInDrive()}
+																</p>
+															</>
+														)}
+													</Show>
+													<Show
+														when={formatBytes(
+															storageQuota()?.usageInDriveTrash,
+														)}
+													>
+														{(usageInDriveTrash) => (
+															<>
+																<p class="text-gray-10">Trash</p>
+																<p class="text-right text-gray-11">
+																	{usageInDriveTrash()}
+																</p>
+															</>
+														)}
+													</Show>
+												</div>
+											</div>
+										</Show>
+										<div class="flex flex-wrap gap-2">
+											<Button
+												variant="primary"
+												disabled={busy() || isActive()}
+												onClick={() => setActive.mutate("googleDrive")}
+											>
+												{isActive() ? "Active" : "Use Google Drive"}
+											</Button>
+											<Show when={hasS3Config()}>
+												<Button
+													variant="gray"
+													disabled={busy() || !isActive()}
+													onClick={() => setActive.mutate("s3")}
+												>
+													Use S3
+												</Button>
+											</Show>
+											<Button
+												variant="gray"
+												disabled={busy()}
+												onClick={() => testConnection.mutate()}
+											>
+												{testConnection.isPending ? "Testing..." : "Test"}
+											</Button>
+											<Button
+												variant="destructive"
+												disabled={busy()}
+												onClick={() => disconnect.mutate()}
+											>
+												Disconnect
+											</Button>
+										</div>
+									</Show>
+								</div>
 							</div>
-						</div>
-					</Suspense>
-				</div>
-			</div>
+						</Suspense>
+					</SectionCard>
+				</Section>
+			</SettingsPageContent>
 		</div>
 	);
 }
