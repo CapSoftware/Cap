@@ -1,6 +1,11 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
-import { createMutation, queryOptions, useQuery } from "@tanstack/solid-query";
+import {
+	createMutation,
+	queryOptions,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import {
@@ -102,6 +107,10 @@ import TargetTypeButton from "./TargetTypeButton";
 import useRequestPermission from "./useRequestPermission";
 
 const WINDOW_SIZE = { width: 330, height: 395 } as const;
+const CAPTURE_LIST_STALE_TIME = 5_000;
+const CAPTURE_LIST_GC_TIME = 60_000;
+const CAPTURE_THUMBNAIL_STALE_TIME = 10_000;
+const CAPTURE_THUMBNAIL_GC_TIME = 60_000;
 
 const findCamera = (cameras: CameraWithDetails[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
@@ -204,6 +213,14 @@ const createDisplaySignature = (
 	return list
 		.map((item) => [item.id, item.name, item.refresh_rate].join(":"))
 		.join("|");
+};
+
+type IdleWindow = typeof window & {
+	requestIdleCallback?: (
+		callback: IdleRequestCallback,
+		options?: IdleRequestOptions,
+	) => number;
+	cancelIdleCallback?: (handle: number) => void;
 };
 
 type TargetMenuPanelProps =
@@ -1378,7 +1395,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 				<button
 					type="button"
 					onClick={handleHeaderBack}
-					class="flex gap-1 items-center shrink-0 rounded-md px-1.5 py-1 text-xs
+					class="flex h-[36px] gap-1 items-center shrink-0 rounded-md px-2 text-xs
 					text-gray-11 transition-colors hover:text-gray-12 hover:bg-gray-4
 					focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
 					aria-label={inSettingsMode() ? "Back to list" : "Back"}
@@ -1591,6 +1608,7 @@ function MainWindowHelpButton() {
 }
 
 function Page() {
+	const queryClient = useQueryClient();
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
 	const isRecording = () => !!currentRecording.data;
@@ -1605,6 +1623,80 @@ function Page() {
 	const compatibilityStudioMode = () =>
 		rawOptions.mode === "studio" &&
 		generalSettings.data?.studioRecordingQuality === "compatibility";
+	let cancelScheduledTargetListPrewarm: (() => void) | undefined;
+	onCleanup(() => cancelScheduledTargetListPrewarm?.());
+
+	const scheduleTargetListPrewarm = () => {
+		if (isRecording()) return;
+
+		cancelScheduledTargetListPrewarm?.();
+
+		let cancelled = false;
+		let timeoutId: number | undefined;
+		let idleId: number | undefined;
+		const idleWindow = window as IdleWindow;
+
+		const prewarm = async () => {
+			await Promise.all([
+				queryClient.prefetchQuery({
+					...listScreens,
+					staleTime: CAPTURE_LIST_STALE_TIME,
+					gcTime: CAPTURE_LIST_GC_TIME,
+				}),
+				queryClient.prefetchQuery({
+					...listWindows,
+					staleTime: CAPTURE_LIST_STALE_TIME,
+					gcTime: CAPTURE_LIST_GC_TIME,
+				}),
+			]).catch((error) => {
+				console.error("Failed to prewarm capture lists:", error);
+			});
+
+			if (cancelled) return;
+
+			await queryClient
+				.prefetchQuery({
+					...listDisplaysWithThumbnails,
+					staleTime: CAPTURE_THUMBNAIL_STALE_TIME,
+					gcTime: CAPTURE_THUMBNAIL_GC_TIME,
+				})
+				.catch((error) => {
+					console.error("Failed to prewarm display thumbnails:", error);
+				});
+
+			if (cancelled) return;
+
+			await queryClient
+				.prefetchQuery({
+					...listWindowsWithThumbnails,
+					staleTime: CAPTURE_THUMBNAIL_STALE_TIME,
+					gcTime: CAPTURE_THUMBNAIL_GC_TIME,
+				})
+				.catch((error) => {
+					console.error("Failed to prewarm window thumbnails:", error);
+				});
+		};
+
+		const run = () => {
+			timeoutId = undefined;
+			idleId = undefined;
+			cancelScheduledTargetListPrewarm = undefined;
+			if (cancelled) return;
+			void prewarm();
+		};
+
+		if (idleWindow.requestIdleCallback) {
+			idleId = idleWindow.requestIdleCallback(run, { timeout: 1_500 });
+		} else {
+			timeoutId = window.setTimeout(run, 250);
+		}
+
+		cancelScheduledTargetListPrewarm = () => {
+			cancelled = true;
+			if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+			if (idleId !== undefined) idleWindow.cancelIdleCallback?.(idleId);
+		};
+	};
 
 	const setCameraDeviceSettings = async (
 		camera: CameraWithDetails,
@@ -1705,10 +1797,8 @@ function Page() {
 		if (microphoneMenuOpen()) return "microphone";
 		return null;
 	});
-	const [hasOpenedDisplayMenu, setHasOpenedDisplayMenu] = createSignal(false);
-	const [hasOpenedWindowMenu, setHasOpenedWindowMenu] = createSignal(false);
 	const [enableDeviceQueries, setEnableDeviceQueries] = createSignal(false);
-	const [enableCaptureLists, setEnableCaptureLists] = createSignal(false);
+	const enableCaptureLists = () => displayMenuOpen() || windowMenuOpen();
 
 	createEffect(() => {
 		if (rawOptions.cameraID || rawOptions.micName) {
@@ -1722,25 +1812,23 @@ function Page() {
 		}
 	});
 
-	createEffect(() => {
-		if (displayMenuOpen() || windowMenuOpen()) {
-			setEnableCaptureLists(true);
-		}
-	});
-
 	let displayTriggerRef: HTMLButtonElement | undefined;
 	let windowTriggerRef: HTMLButtonElement | undefined;
 
 	const displayTargets = useQuery(() => ({
 		...listDisplaysWithThumbnails,
 		refetchInterval: false,
-		enabled: hasOpenedDisplayMenu(),
+		staleTime: CAPTURE_THUMBNAIL_STALE_TIME,
+		gcTime: CAPTURE_THUMBNAIL_GC_TIME,
+		enabled: displayMenuOpen(),
 	}));
 
 	const windowTargets = useQuery(() => ({
 		...listWindowsWithThumbnails,
 		refetchInterval: false,
-		enabled: hasOpenedWindowMenu(),
+		staleTime: CAPTURE_THUMBNAIL_STALE_TIME,
+		gcTime: CAPTURE_THUMBNAIL_GC_TIME,
+		enabled: windowMenuOpen(),
 	}));
 
 	const recordings = useQuery(() => ({
@@ -1817,10 +1905,14 @@ function Page() {
 		...listScreens,
 		enabled: enableCaptureLists(),
 		refetchInterval: enableCaptureLists() ? listScreens.refetchInterval : false,
+		staleTime: CAPTURE_LIST_STALE_TIME,
+		gcTime: CAPTURE_LIST_GC_TIME,
 	}));
 	const windows = useQuery(() => ({
 		...listWindows,
 		enabled: enableCaptureLists(),
+		staleTime: CAPTURE_LIST_STALE_TIME,
+		gcTime: CAPTURE_LIST_GC_TIME,
 	}));
 
 	const hasDisplayTargetsData = () => displayTargets.status === "success";
@@ -1977,25 +2069,27 @@ function Page() {
 			__CAP__?: { initialTargetMode?: RecordingTargetMode | null };
 		};
 		const targetMode = __CAP__?.initialTargetMode ?? null;
-		if (targetMode) {
-			await commands.openTargetSelectOverlays(null, null, targetMode);
-			setOptions({ targetMode });
-		} else {
-			setOptions({ targetMode });
-			await commands.closeTargetSelectOverlays();
-		}
-
 		const currentWindow = getCurrentWindow();
 
 		currentWindow.setSize(
 			new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height),
 		);
-		if (!targetMode) {
+
+		if (targetMode) {
+			await commands.openTargetSelectOverlays(null, null, targetMode);
+			setOptions({ targetMode });
+		} else {
+			setOptions({ targetMode });
 			await currentWindow.show();
 			await currentWindow.setFocus();
+			void commands.closeTargetSelectOverlays().catch((error) => {
+				console.error("Failed to close target select overlays:", error);
+			});
 		}
+
 		setCanRevealMainWindow(true);
 		void emit("main-window-ready");
+		scheduleTargetListPrewarm();
 
 		if (rawOptions.micName) {
 			setMicInput
@@ -2015,6 +2109,7 @@ function Page() {
 					currentWindow.setSize(
 						new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height),
 					);
+					scheduleTargetListPrewarm();
 				}
 			},
 		);
@@ -2082,7 +2177,7 @@ function Page() {
 	});
 
 	createEffect(() => {
-		if (!hasOpenedWindowMenu()) return;
+		if (!windowMenuOpen()) return;
 		const signature = windowListSignature();
 		if (signature === undefined) return;
 		if (windowTargets.fetchStatus !== "idle") return;
@@ -2091,7 +2186,7 @@ function Page() {
 	});
 
 	createEffect(() => {
-		if (!hasOpenedDisplayMenu()) return;
+		if (!displayMenuOpen()) return;
 		const signature = displayListSignature();
 		if (signature === undefined) return;
 		if (displayTargets.fetchStatus !== "idle") return;
@@ -2374,11 +2469,7 @@ function Page() {
 									setDisplayMenuOpen((prev) => {
 										const next = !prev;
 										if (next) {
-											setEnableCaptureLists(true);
 											setWindowMenuOpen(false);
-											setHasOpenedDisplayMenu(true);
-											screens.refetch();
-											displayTargets.refetch();
 										}
 										return next;
 									});
@@ -2416,11 +2507,7 @@ function Page() {
 									setWindowMenuOpen((prev) => {
 										const next = !prev;
 										if (next) {
-											setEnableCaptureLists(true);
 											setDisplayMenuOpen(false);
-											setHasOpenedWindowMenu(true);
-											windows.refetch();
-											windowTargets.refetch();
 										}
 										return next;
 									});
@@ -2573,25 +2660,26 @@ function Page() {
 						</a>
 						<ErrorBoundary fallback={null}>
 							<Suspense>
-								<span
-									onClick={async () => {
-										if (license.data?.type !== "pro") {
-											await commands.showWindow("Upgrade");
-										}
-									}}
-									class={cx(
-										"text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5",
-										license.data?.type === "pro"
-											? "bg-(--blue-400) text-gray-1 dark:text-gray-12"
-											: "bg-gray-3 cursor-pointer hover:bg-gray-5",
-									)}
+								<Show
+									when={license.data?.type !== "pro"}
+									fallback={
+										<span class="text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5 bg-(--blue-400) text-gray-1 dark:text-gray-12">
+											{license.data?.type === "commercial"
+												? "Commercial"
+												: "Pro"}
+										</span>
+									}
 								>
-									{license.data?.type === "commercial"
-										? "Commercial"
-										: license.data?.type === "pro"
-											? "Pro"
-											: "Personal"}
-								</span>
+									<button
+										type="button"
+										onClick={() => {
+											void commands.showWindow("Upgrade");
+										}}
+										class="text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5 bg-gray-3 hover:bg-gray-5"
+									>
+										Personal
+									</button>
+								</Show>
 							</Suspense>
 						</ErrorBoundary>
 					</div>
