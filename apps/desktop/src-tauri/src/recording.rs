@@ -547,6 +547,197 @@ pub enum RecordingAction {
     UpgradeRequired,
 }
 
+const MICROPHONE_INPUT_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+const CAMERA_INPUT_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+
+fn camera_id_label(id: &camera::DeviceOrModelID) -> String {
+    match id {
+        camera::DeviceOrModelID::DeviceID(device_id) => device_id.clone(),
+        camera::DeviceOrModelID::ModelID(model_id) => format!("{model_id:?}"),
+    }
+}
+
+fn camera_lock_matches_id(
+    lock: &CameraFeedLock,
+    selected_id: &camera::DeviceOrModelID,
+) -> bool {
+    let camera_info = lock.camera_info();
+    match selected_id {
+        camera::DeviceOrModelID::DeviceID(device_id) => camera_info.device_id() == device_id,
+        camera::DeviceOrModelID::ModelID(model_id) => camera_info.model_id() == Some(model_id),
+    }
+}
+
+async fn initialize_selected_camera(
+    camera_feed: &kameo::actor::ActorRef<camera::CameraFeed>,
+    id: &camera::DeviceOrModelID,
+    settings: Option<camera::CameraDeviceSettings>,
+) -> anyhow::Result<()> {
+    let label = camera_id_label(id);
+    let ready = camera_feed
+        .ask(camera::SetInput {
+            id: id.clone(),
+            settings,
+        })
+        .await
+        .map_err(|err| anyhow!("Failed to initialize selected camera '{label}': {err}"))?;
+
+    ready.await.map_err(|err| match err {
+        camera::SetInputError::DeviceNotFound => {
+            anyhow!("Selected camera '{label}' is no longer available")
+        }
+        err => anyhow!("Failed to initialize selected camera '{label}': {err}"),
+    })
+}
+
+async fn lock_initialized_camera(
+    camera_feed: &kameo::actor::ActorRef<camera::CameraFeed>,
+    id: &camera::DeviceOrModelID,
+) -> anyhow::Result<CameraFeedLock> {
+    let label = camera_id_label(id);
+    match camera_feed.ask(camera::Lock).await {
+        Ok(lock) => Ok(lock),
+        Err(kameo::error::SendError::HandlerError(
+            camera::LockFeedError::NoInput,
+        )) => Err(anyhow!(
+            "Selected camera '{label}' did not become ready after initialization"
+        )),
+        Err(err) => Err(anyhow!("Failed to lock selected camera '{label}': {err}")),
+    }
+}
+
+async fn validate_camera_receiving(
+    lock: &CameraFeedLock,
+    id: &camera::DeviceOrModelID,
+) -> anyhow::Result<()> {
+    let label = camera_id_label(id);
+    let (tx, rx) = flume::bounded(1);
+    let remove_sender = tx.clone();
+
+    lock.ask(camera::AddSender(tx))
+        .await
+        .map_err(|err| anyhow!("Failed to probe selected camera '{label}': {err}"))?;
+
+    let result = tokio::time::timeout(CAMERA_INPUT_PROBE_TIMEOUT, rx.recv_async()).await;
+    let _ = lock.ask(camera::RemoveSender(remove_sender)).await;
+
+    match result {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(_)) => Err(anyhow!(
+            "Selected camera '{label}' stopped before sending a frame"
+        )),
+        Err(_) => Err(anyhow!(
+            "Selected camera '{label}' is not sending video frames"
+        )),
+    }
+}
+
+async fn lock_selected_camera(
+    camera_feed: &kameo::actor::ActorRef<camera::CameraFeed>,
+    selected_id: Option<camera::DeviceOrModelID>,
+    selected_settings: Option<camera::CameraDeviceSettings>,
+    capture_target: &ScreenCaptureTarget,
+) -> anyhow::Result<Option<Arc<CameraFeedLock>>> {
+    let Some(id) = selected_id else {
+        if matches!(capture_target, ScreenCaptureTarget::CameraOnly) {
+            return Err(anyhow!(
+                "Camera-only recording requires a selected camera. Please select a camera before starting."
+            ));
+        }
+
+        return Ok(None);
+    };
+
+    let existing_lock = match camera_feed.ask(camera::Lock).await {
+        Ok(lock) if camera_lock_matches_id(&lock, &id) => Some(lock),
+        Ok(lock) => {
+            drop(lock);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            None
+        }
+        Err(kameo::error::SendError::HandlerError(
+            camera::LockFeedError::NoInput,
+        )) => None,
+        Err(err) => {
+            return Err(anyhow!(
+                "Failed to lock selected camera '{}': {err}",
+                camera_id_label(&id)
+            ));
+        }
+    };
+
+    let lock = if let Some(lock) = existing_lock {
+        lock
+    } else {
+        initialize_selected_camera(camera_feed, &id, selected_settings).await?;
+        lock_initialized_camera(camera_feed, &id).await?
+    };
+
+    validate_camera_receiving(&lock, &id).await?;
+    Ok(Some(Arc::new(lock)))
+}
+
+async fn initialize_selected_microphone(
+    mic_feed: &kameo::actor::ActorRef<microphone::MicrophoneFeed>,
+    label: &str,
+    settings: Option<microphone::MicrophoneDeviceSettings>,
+) -> anyhow::Result<()> {
+    let ready = mic_feed
+        .ask(microphone::SetInput {
+            label: label.to_string(),
+            settings,
+        })
+        .await
+        .map_err(|err| anyhow!("Failed to initialize selected microphone '{label}': {err}"))?;
+
+    ready.await.map_err(|err| match err {
+        microphone::SetInputError::DeviceNotFound => {
+            anyhow!("Selected microphone '{label}' is no longer available")
+        }
+        err => anyhow!("Failed to initialize selected microphone '{label}': {err}"),
+    })
+}
+
+async fn lock_initialized_microphone(
+    mic_feed: &kameo::actor::ActorRef<microphone::MicrophoneFeed>,
+    label: &str,
+) -> anyhow::Result<microphone::MicrophoneFeedLock> {
+    match mic_feed.ask(microphone::Lock).await {
+        Ok(lock) => Ok(lock),
+        Err(kameo::error::SendError::HandlerError(
+            microphone::LockFeedError::NoInput,
+        )) => Err(anyhow!(
+            "Selected microphone '{label}' did not become ready after initialization"
+        )),
+        Err(err) => Err(anyhow!("Failed to lock selected microphone '{label}': {err}")),
+    }
+}
+
+async fn validate_microphone_receiving(
+    lock: &microphone::MicrophoneFeedLock,
+    label: &str,
+) -> anyhow::Result<()> {
+    let (tx, rx) = flume::bounded(1);
+    let remove_sender = tx.clone();
+
+    lock.ask(microphone::AddSender(tx))
+        .await
+        .map_err(|err| anyhow!("Failed to probe selected microphone '{label}': {err}"))?;
+
+    let result = tokio::time::timeout(MICROPHONE_INPUT_PROBE_TIMEOUT, rx.recv_async()).await;
+    let _ = lock.ask(microphone::RemoveSender(remove_sender)).await;
+
+    match result {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(_)) => Err(anyhow!(
+            "Selected microphone '{label}' stopped before sending audio"
+        )),
+        Err(_) => Err(anyhow!(
+            "Selected microphone '{label}' is not sending audio"
+        )),
+    }
+}
+
 pub fn format_project_name<'a>(
     template: Option<&str>,
     target_name: &'a str,
