@@ -9,7 +9,7 @@ export function SettingItem(props: {
 	children: JSX.Element;
 }) {
 	return (
-		<div class="flex flex-row gap-4 justify-between items-center px-4 py-3.5">
+		<div class="cap-setting-row flex flex-row gap-4 justify-between items-center px-4 py-3.5">
 			<div class="flex flex-col flex-1 min-w-0 gap-0.5">
 				<p class="text-[13px] text-gray-12">{props.label}</p>
 				<Show when={props.description}>
