@@ -1,8 +1,8 @@
 import { cva, type VariantProps } from "cva";
-import type { ComponentProps } from "solid-js";
+import { type ComponentProps, splitProps } from "solid-js";
 
 const styles = cva(
-	"outline-offset-2 flex justify-center items-center focus-visible:outline-soli rounded-full transition-all will-change-transform duration-200",
+	"outline-offset-2 flex justify-center items-center focus-visible:outline-solid rounded-full transition-[background-color,border-color,color,box-shadow,filter,opacity,transform] active:scale-[0.98] will-change-transform duration-200",
 	{
 		defaultVariants: {
 			variant: "primary",
@@ -40,11 +40,19 @@ const styles = cva(
 export function Button(
 	props: VariantProps<typeof styles> & ComponentProps<"button">,
 ) {
+	const [local, otherProps] = splitProps(props, ["class", "size", "variant"]);
+
 	return (
 		<button
 			type="button"
-			{...props}
-			class={styles({ ...props, class: props.class })}
+			{...otherProps}
+			data-size={local.size ?? "md"}
+			data-variant={local.variant ?? "primary"}
+			class={styles({
+				class: local.class,
+				size: local.size,
+				variant: local.variant,
+			})}
 		/>
 	);
 }
