@@ -51,7 +51,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::*;
 
-use crate::camera::{CameraPreviewManager, CameraPreviewShape, CameraPreviewState};
+use crate::camera::{CameraPreviewManager, CameraPreviewShape};
 #[cfg(target_os = "macos")]
 use crate::general_settings;
 use crate::permissions;
@@ -843,23 +843,6 @@ pub async fn start_recording(
         {
             let mut app_state = state_mtx.write().await;
             app_state.was_camera_only_recording = true;
-
-            let (current_mirrored, current_background_blur) = app_state
-                .camera_preview
-                .get_state()
-                .map(|s| (s.mirrored, s.background_blur))
-                .unwrap_or_default();
-
-            let camera_state = CameraPreviewState {
-                size: crate::camera::CAMERA_PRESET_LARGE,
-                shape: CameraPreviewShape::Full,
-                mirrored: current_mirrored,
-                background_blur: current_background_blur,
-            };
-
-            if let Err(err) = app_state.camera_preview.set_state(camera_state) {
-                error!("Failed to set camera preview state for camera-only mode: {err}");
-            }
         }
 
         let operation_lock = app.state::<CameraWindowOperationLock>();
@@ -2268,11 +2251,6 @@ async fn handle_recording_end(
 
     if app.was_camera_only_recording {
         app.was_camera_only_recording = false;
-
-        let default_state = CameraPreviewState::default();
-        if let Err(err) = app.camera_preview.set_state(default_state) {
-            error!("Failed to reset camera preview state after camera-only recording: {err}");
-        }
     }
 
     let res = match recording {
