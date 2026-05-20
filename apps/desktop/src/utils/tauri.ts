@@ -254,6 +254,9 @@ async positionTrafficLights(controlsInset: [number, number] | null) : Promise<vo
 async setTheme(theme: AppTheme) : Promise<void> {
     await TAURI_INVOKE("set_theme", { theme });
 },
+async applyMacosLiquidGlassBackground(enabled: boolean, radius: number) : Promise<boolean> {
+    return await TAURI_INVOKE("apply_macos_liquid_glass_background", { enabled, radius });
+},
 async globalMessageDialog(message: string) : Promise<void> {
     await TAURI_INVOKE("global_message_dialog", { message });
 },
