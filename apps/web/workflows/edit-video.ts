@@ -282,8 +282,19 @@ async function renderVideoEditOnMediaServer(
 		)
 		.pipe(runPromise);
 
-	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
+	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
+
+	await db()
+		.update(videoUploads)
+		.set({
+			phase: "processing",
+			processingProgress: 0,
+			processingMessage: "Starting video edit...",
+			processingError: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
 	await startMediaServerEditJob(mediaServerUrl, {
 		videoId,
@@ -426,12 +437,12 @@ async function waitForEditCompletion(
 			return { metadata };
 		}
 
+		if (upload.processingError) {
+			throw new Error(upload.processingError);
+		}
+
 		if (upload.phase === "error") {
-			throw new Error(
-				upload.processingError ||
-					upload.processingMessage ||
-					"Video edit failed",
-			);
+			throw new Error(upload.processingMessage || "Video edit failed");
 		}
 
 		lastStatus = [
