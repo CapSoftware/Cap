@@ -106,6 +106,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     });
 }
 
+#[derive(Debug)]
 pub enum ActionParseFromUrlError {
     ParseFailed(String),
     Invalid,
@@ -125,9 +126,10 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
-            _ => Err(ActionParseFromUrlError::Invalid),
-        }?;
+            Some("action") => {}
+            Some(_) => return Err(ActionParseFromUrlError::NotAction),
+            None => return Err(ActionParseFromUrlError::Invalid),
+        };
 
         let params = url
             .query_pairs()
@@ -138,6 +140,42 @@ impl TryFrom<&Url> for DeepLinkAction {
         let action: Self = serde_json::from_str(json_value)
             .map_err(|e| ActionParseFromUrlError::ParseFailed(e.to_string()))?;
         Ok(action)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_action_deeplink() {
+        let mut url = Url::parse("cap-desktop://action").unwrap();
+        url.query_pairs_mut().append_pair(
+            "value",
+            &serde_json::to_string(&DeepLinkAction::RunHotkeyAction {
+                action: HotkeyAction::ScreenshotArea,
+            })
+            .unwrap(),
+        );
+
+        let action = DeepLinkAction::try_from(&url).unwrap();
+
+        match action {
+            DeepLinkAction::RunHotkeyAction { action } => {
+                assert_eq!(action, HotkeyAction::ScreenshotArea);
+            }
+            _ => panic!("expected RunHotkeyAction"),
+        }
+    }
+
+    #[test]
+    fn ignores_non_action_deeplink() {
+        let url = Url::parse("cap-desktop://login?value=ignored").unwrap();
+
+        assert!(matches!(
+            DeepLinkAction::try_from(&url),
+            Err(ActionParseFromUrlError::NotAction)
+        ));
     }
 }
 
@@ -314,9 +352,7 @@ async fn take_screenshot(app: &AppHandle, target: ScreenshotTarget) -> Result<()
     };
 
     match crate::recording::take_screenshot(app.clone(), capture_target).await {
-        Ok(path) => {
-            crate::show_window(app.clone(), ShowCapWindow::ScreenshotEditor { path }).await
-        }
+        Ok(path) => crate::show_window(app.clone(), ShowCapWindow::ScreenshotEditor { path }).await,
         Err(e) => Err(format!("Failed to take screenshot: {e}")),
     }
 }
