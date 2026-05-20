@@ -58,10 +58,16 @@ pub fn start_renderer_layers_creation(
     std::thread::Builder::new()
         .name("renderer-layers-init".into())
         .spawn(move || {
-            let layers = RendererLayers::new_with_options(
+            let mut layers = RendererLayers::new_with_options(
                 &constants.device,
                 &constants.queue,
                 constants.is_software_adapter,
+            );
+            let project = constants.recording_meta.project_config();
+            layers.preload_cursor_assets(
+                &constants,
+                project.cursor.use_svg,
+                project.cursor.cursor_type(),
             );
             let _ = layers_tx.send(layers);
         })
@@ -142,11 +148,18 @@ impl Renderer {
             Ok(layers) => layers,
             Err(_) => {
                 tracing::error!("Failed to receive pre-created renderer layers, creating inline");
-                RendererLayers::new_with_options(
+                let mut layers = RendererLayers::new_with_options(
                     &render_constants.device,
                     &render_constants.queue,
                     render_constants.is_software_adapter,
-                )
+                );
+                let project = render_constants.recording_meta.project_config();
+                layers.preload_cursor_assets(
+                    &render_constants,
+                    project.cursor.use_svg,
+                    project.cursor.cursor_type(),
+                );
+                layers
             }
         };
 
