@@ -21,6 +21,15 @@ pub enum PostStudioRecordingBehaviour {
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
+pub enum PostScreenshotCaptureBehaviour {
+    #[default]
+    OpenEditor,
+    ShowOverlay,
+    CopyToClipboard,
+}
+
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
 pub enum MainWindowRecordingStartBehaviour {
     #[default]
     Close,
@@ -149,6 +158,8 @@ pub struct GeneralSettingsStore {
     #[serde(default)]
     pub post_studio_recording_behaviour: PostStudioRecordingBehaviour,
     #[serde(default)]
+    pub post_screenshot_capture_behaviour: PostScreenshotCaptureBehaviour,
+    #[serde(default)]
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
     #[serde(default = "default_true", rename = "custom_cursor_capture2")]
     pub custom_cursor_capture: bool,
@@ -258,6 +269,7 @@ impl Default for GeneralSettingsStore {
             last_version: None,
             window_transparency: false,
             post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
+            post_screenshot_capture_behaviour: PostScreenshotCaptureBehaviour::OpenEditor,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
             custom_cursor_capture: true,
             server_url: default_server_url(),

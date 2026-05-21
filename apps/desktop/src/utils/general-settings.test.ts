@@ -42,6 +42,7 @@ describe("general-settings", () => {
 			autoZoomOnClicks: false,
 			captureKeyboardEvents: true,
 			custom_cursor_capture2: true,
+			postScreenshotCaptureBehaviour: "openEditor",
 		});
 	});
 

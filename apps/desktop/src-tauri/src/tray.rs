@@ -2,6 +2,7 @@ use crate::{
     NewScreenshotAdded, NewStudioRecordingAdded, RecordingStarted, RecordingStopped,
     RequestOpenSettings, recording,
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+    screenshot_post_capture::{self, ScreenshotPostCaptureAction},
     windows::ShowCapWindow,
 };
 use cap_recording::RecordingMode;
@@ -723,10 +724,15 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                         let display =
                             Display::get_containing_cursor().unwrap_or_else(Display::primary);
                         let target = ScreenCaptureTarget::Display { id: display.id() };
+                        let action = ScreenshotPostCaptureAction::from_settings(&app);
 
                         match recording::take_screenshot(app.clone(), target).await {
                             Ok(path) => {
-                                let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                                if let Err(e) =
+                                    screenshot_post_capture::handle(&app, path, action).await
+                                {
+                                    tracing::error!("Failed to handle screenshot: {e}");
+                                }
                             }
                             Err(e) => {
                                 tracing::error!("Failed to take screenshot: {e}");

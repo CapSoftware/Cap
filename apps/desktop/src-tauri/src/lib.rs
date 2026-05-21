@@ -31,6 +31,7 @@ mod recording_settings;
 mod recording_telemetry;
 mod recovery;
 mod screenshot_editor;
+mod screenshot_post_capture;
 mod target_select_overlay;
 mod thumbnails;
 mod tray;

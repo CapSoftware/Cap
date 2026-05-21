@@ -1,7 +1,13 @@
 import type { GeneralSettingsStore as TauriGeneralSettingsStore } from "~/utils/tauri";
 
+export type PostScreenshotCaptureBehaviour =
+	| "openEditor"
+	| "showOverlay"
+	| "copyToClipboard";
+
 export type GeneralSettingsStore = TauriGeneralSettingsStore & {
 	captureKeyboardEvents?: boolean;
+	postScreenshotCaptureBehaviour?: PostScreenshotCaptureBehaviour;
 	transcriptionHints?: string[];
 	enableTelemetry?: boolean;
 	outOfProcessMuxer?: boolean;
@@ -23,6 +29,7 @@ export function createDefaultGeneralSettings(): GeneralSettingsStore {
 		enableNativeCameraPreview: false,
 		autoZoomOnClicks: false,
 		captureKeyboardEvents: true,
+		postScreenshotCaptureBehaviour: "openEditor",
 		custom_cursor_capture2: true,
 		excludedWindows: [],
 		instantModeMaxResolution: 1920,

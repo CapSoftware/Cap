@@ -29,6 +29,7 @@ import { authStore, generalSettingsStore } from "~/store";
 import {
 	deriveGeneralSettings,
 	type GeneralSettingsStore,
+	type PostScreenshotCaptureBehaviour,
 } from "~/utils/general-settings";
 import {
 	type AppTheme,
@@ -362,6 +363,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		T extends
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
+			| PostScreenshotCaptureBehaviour
 			| PostDeletionBehaviour
 			| StudioRecordingQuality
 			| number,
@@ -501,6 +503,19 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							options={[
 								{ text: "Open editor", value: "openEditor" },
 								{ text: "Show in overlay", value: "showOverlay" },
+							]}
+						/>
+						<SelectSettingItem
+							label="After a screenshot"
+							description="What happens after taking a display or window screenshot."
+							value={settings.postScreenshotCaptureBehaviour ?? "openEditor"}
+							onChange={(value) =>
+								handleChange("postScreenshotCaptureBehaviour", value)
+							}
+							options={[
+								{ text: "Open editor", value: "openEditor" },
+								{ text: "Show in overlay", value: "showOverlay" },
+								{ text: "Copy to clipboard", value: "copyToClipboard" },
 							]}
 						/>
 						<SelectSettingItem
