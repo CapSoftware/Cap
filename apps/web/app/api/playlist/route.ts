@@ -1,5 +1,4 @@
 import * as Db from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import {
 	Database,
 	provideOptionalAuth,
@@ -187,9 +186,9 @@ const getPlaylistResponse = (
 					return yield* Effect.fail(new HttpApiError.NotFound());
 				}
 
-				const videoPlaylistUrl = `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=segments-video`;
+				const videoPlaylistUrl = `/api/playlist?videoId=${video.id}&videoType=segments-video`;
 				const audioPlaylistUrl = manifest.audio_init_uploaded
-					? `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=segments-audio`
+					? `/api/playlist?videoId=${video.id}&videoType=segments-audio`
 					: null;
 
 				let playlist =
@@ -375,9 +374,9 @@ const getPlaylistResponse = (
 				const generatedPlaylist = generateMasterPlaylist(
 					videoMetadata?.Metadata?.resolution ?? "",
 					videoMetadata?.Metadata?.bandwidth ?? "",
-					`${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=video`,
+					`/api/playlist?videoId=${video.id}&videoType=video`,
 					audioMetadata
-						? `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=audio`
+						? `/api/playlist?videoId=${video.id}&videoType=audio`
 						: null,
 				);
 
