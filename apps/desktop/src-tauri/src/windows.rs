@@ -2616,16 +2616,41 @@ impl ShowCapWindow {
     }
 }
 
-// Pin the WebView2 zoom factor to 1.0 on Windows. WebView2's initial zoom is
-// derived from the system "Text size" accessibility setting
-// (HKCU\Software\Microsoft\Accessibility\TextScaleFactor), which causes our
-// fixed-size panels (Main, Settings, ModeSelect, etc.) to overflow whenever
-// the user is on >100%. Explicitly setting the zoom overrides that.
 fn lock_window_text_scale(_window: &WebviewWindow<Wry>) {
     #[cfg(windows)]
     {
-        if let Err(e) = _window.set_zoom(1.0) {
-            warn!("Failed to lock window zoom to 1.0: {}", e);
+        let scale_factor = match _window.scale_factor() {
+            Ok(scale_factor) => scale_factor,
+            Err(e) => {
+                warn!("Failed to read window scale factor: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = _window.with_webview(move |webview| unsafe {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller3;
+            use windows_core::Interface;
+
+            let controller = webview.controller();
+
+            if let Err(e) = controller.SetZoomFactor(1.0) {
+                warn!("Failed to lock WebView zoom factor: {}", e);
+            }
+
+            let Ok(controller3) = controller.cast::<ICoreWebView2Controller3>() else {
+                warn!("Failed to access WebView2 controller scale APIs");
+                return;
+            };
+
+            if let Err(e) = controller3.SetShouldDetectMonitorScaleChanges(false) {
+                warn!("Failed to disable WebView scale detection: {}", e);
+            }
+
+            if let Err(e) = controller3.SetRasterizationScale(scale_factor) {
+                warn!("Failed to lock WebView rasterization scale: {}", e);
+            }
+        }) {
+            warn!("Failed to access platform WebView: {}", e);
         }
     }
 }
