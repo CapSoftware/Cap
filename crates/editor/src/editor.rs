@@ -58,10 +58,16 @@ pub fn start_renderer_layers_creation(
     std::thread::Builder::new()
         .name("renderer-layers-init".into())
         .spawn(move || {
-            let layers = RendererLayers::new_with_options(
+            let mut layers = RendererLayers::new_with_options(
                 &constants.device,
                 &constants.queue,
                 constants.is_software_adapter,
+            );
+            let project = constants.recording_meta.project_config();
+            layers.preload_cursor_assets(
+                &constants,
+                project.cursor.use_svg,
+                project.cursor.cursor_type(),
             );
             let _ = layers_tx.send(layers);
         })
@@ -142,11 +148,18 @@ impl Renderer {
             Ok(layers) => layers,
             Err(_) => {
                 tracing::error!("Failed to receive pre-created renderer layers, creating inline");
-                RendererLayers::new_with_options(
+                let mut layers = RendererLayers::new_with_options(
                     &render_constants.device,
                     &render_constants.queue,
                     render_constants.is_software_adapter,
-                )
+                );
+                let project = render_constants.recording_meta.project_config();
+                layers.preload_cursor_assets(
+                    &render_constants,
+                    project.cursor.use_svg,
+                    project.cursor.cursor_type(),
+                );
+                layers
             }
         };
 
@@ -250,8 +263,9 @@ impl Renderer {
             };
 
             let render_start = Instant::now();
+            let input_frame_number = current.uniforms.frame_number;
             match frame_renderer
-                .render_immediate(
+                .render_immediate_with_timings(
                     current.segment_frames,
                     current.uniforms,
                     &current.cursor,
@@ -260,7 +274,7 @@ impl Renderer {
                 )
                 .await
             {
-                Ok(frame) => {
+                Ok((frame, render_stage_timings)) => {
                     let render_duration = render_start.elapsed();
                     let frame_number = frame.frame_number;
                     let output_format = PlaybackRenderOutputFormat::Rgba;
@@ -270,10 +284,12 @@ impl Renderer {
                     if let Some(telemetry) = &telemetry {
                         telemetry.emit(PlaybackTelemetryEvent::RendererFrame {
                             frame_number,
+                            input_frame_number,
                             queue_wait,
                             drain_duration,
                             flush_duration,
                             render_duration,
+                            render_stage_timings: Box::new(render_stage_timings),
                             callback_duration,
                             drained_count,
                             output_format,

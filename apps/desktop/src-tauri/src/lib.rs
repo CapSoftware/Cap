@@ -14,7 +14,7 @@ mod exit_shutdown;
 mod export;
 mod fake_window;
 mod flags;
-mod frame_ws;
+pub mod frame_ws;
 mod general_settings;
 mod hotkeys;
 mod http_client;
