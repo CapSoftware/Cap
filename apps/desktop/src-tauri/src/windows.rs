@@ -29,7 +29,7 @@ use crate::panel_manager::{PanelManager, PanelState, PanelWindowType, is_window_
 
 use crate::{
     App, ArcLock, CameraWindowCloseGate, CameraWindowPositionGuard, MainWindowReadyState,
-    NewNotification, RequestSetTargetMode, camera_preview_error_message,
+    NewNotification, RequestScreenCapturePrewarm, RequestSetTargetMode, camera_preview_error_message,
     display_utils::{CursorMonitorInfo, MonitorExt},
     editor_window::PendingEditorInstances,
     emit_camera_preview_clear, emit_camera_preview_error, fake_window,
@@ -1251,7 +1251,7 @@ impl CapWindow {
                         }
                     });
 
-                    emit_app_event(app, crate::RequestScreenCapturePrewarm { force: false });
+                    emit_app_event(app, RequestScreenCapturePrewarm { force: false });
                 }
 
                 #[cfg(not(target_os = "macos"))]
