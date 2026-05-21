@@ -722,7 +722,13 @@ impl CapWindowId {
 
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
-            Self::Main => (330.0, 395.0),
+            Self::Main => {
+                #[cfg(windows)]
+                let height = 430.0;
+                #[cfg(not(windows))]
+                let height = 395.0;
+                (330.0, height)
+            }
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
             Self::Settings => (780.0, 560.0),
@@ -1234,6 +1240,10 @@ impl CapWindow {
                     ))
                     .build()?;
 
+                if let Err(e) = window.set_zoom(1.0) {
+                    warn!("Failed to lock Main window zoom to 1.0: {}", e);
+                }
+
                 #[cfg(target_os = "macos")]
                 {
                     crate::permissions::schedule_macos_dock_visibility_sync(app);
@@ -1252,6 +1262,18 @@ impl CapWindow {
                     });
 
                     emit_app_event(app, RequestScreenCapturePrewarm { force: false });
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+
+                            crate::platform::apply_squircle_corners(&window, 16.0);
+
+                            crate::permissions::schedule_macos_dock_visibility_sync(&app);
+                        }
+                    })
+                    .ok();
                 }
 
                 #[cfg(not(target_os = "macos"))]

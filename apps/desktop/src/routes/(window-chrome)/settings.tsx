@@ -168,7 +168,7 @@ export default function Settings(props: RouteSectionProps) {
 				<div class="cap-settings-window-spacer" data-tauri-drag-region />
 				<button
 					type="button"
-					class="cap-settings-profile"
+					class="cap-settings-profile flex gap-2 items-center mx-2 mt-2 mb-3 px-2 py-1.5 rounded-lg text-left transition-colors hover:bg-gray-3"
 					data-tauri-drag-region="false"
 					onClick={openDashboard}
 				>
@@ -176,10 +176,10 @@ export default function Settings(props: RouteSectionProps) {
 						when={!accountLoading()}
 						fallback={
 							<>
-								<div class="cap-settings-profile-icon cap-settings-profile-skeleton cap-settings-profile-skeleton-avatar" />
-								<div class="cap-settings-profile-copy">
-									<span class="cap-settings-profile-skeleton cap-settings-profile-skeleton-title" />
-									<span class="cap-settings-profile-skeleton cap-settings-profile-skeleton-subtitle" />
+								<div class="cap-settings-profile-icon cap-settings-profile-skeleton cap-settings-profile-skeleton-avatar size-8 shrink-0 rounded-full bg-gray-4 animate-pulse" />
+								<div class="cap-settings-profile-copy flex flex-col flex-1 gap-1.5 min-w-0">
+									<span class="cap-settings-profile-skeleton cap-settings-profile-skeleton-title block h-3 w-24 rounded-full bg-gray-4 animate-pulse" />
+									<span class="cap-settings-profile-skeleton cap-settings-profile-skeleton-subtitle block h-2.5 w-12 rounded-full bg-gray-4 animate-pulse" />
 								</div>
 							</>
 						}
@@ -187,21 +187,21 @@ export default function Settings(props: RouteSectionProps) {
 						<Show
 							when={accountImageUrl()}
 							fallback={
-								<div class="cap-settings-profile-icon">
+								<div class="cap-settings-profile-icon flex justify-center items-center size-8 shrink-0 rounded-full bg-gray-3 text-gray-11">
 									<IconLucideUserRound class="size-4" aria-hidden="true" />
 								</div>
 							}
 						>
 							{(imageUrl) => (
 								<img
-									class="cap-settings-profile-image"
+									class="cap-settings-profile-image size-8 shrink-0 rounded-full object-cover bg-gray-3"
 									src={imageUrl()}
 									alt=""
 									draggable={false}
 								/>
 							)}
 						</Show>
-						<div class="cap-settings-profile-copy">
+						<div class="cap-settings-profile-copy flex flex-col flex-1 gap-0.5 min-w-0">
 							<p class="truncate text-[13px] text-gray-12">{accountName()}</p>
 							<p class="truncate text-[11px] text-gray-10">Account</p>
 						</div>
