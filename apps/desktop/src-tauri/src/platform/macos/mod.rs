@@ -1,7 +1,9 @@
 mod sc_shareable_content;
 
-use objc2::{msg_send, sel};
+use objc2::{MainThreadMarker, msg_send, sel};
+use objc2_app_kit::NSWindow;
 pub use sc_shareable_content::*;
+use tauri::WebviewWindow;
 
 pub fn set_window_level(window: tauri::Window, level: objc2_app_kit::NSWindowLevel) {
     let c_window = window.clone();
@@ -376,5 +378,28 @@ unsafe fn force_glass_view_always_active(glass_view: cocoa::base::id) {
                 }
             }
         }
+    }
+}
+
+pub trait WebviewWindowExt {
+    fn with_nswindow_on_main<F: FnOnce(MainThreadMarker, &NSWindow) + Send + 'static>(
+        &self,
+        f: F,
+    ) -> tauri::Result<()>;
+}
+
+impl WebviewWindowExt for WebviewWindow {
+    fn with_nswindow_on_main<F: FnOnce(MainThreadMarker, &NSWindow) + Send + 'static>(
+        &self,
+        f: F,
+    ) -> tauri::Result<()> {
+        self.run_on_main_thread({
+            let webview = self.clone();
+            move || {
+                let nswindow = unsafe { &*webview.ns_window().expect("NSWindow not ready").cast() };
+                let mtm = MainThreadMarker::new().expect("Running on main");
+                f(mtm, nswindow);
+            }
+        })
     }
 }
