@@ -14,7 +14,7 @@ use cap_project::{
     ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
     TimelineConfiguration, TimelineSegment, XY,
 };
-use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants, Video};
+use cap_rendering::{FrameRenderStageTimings, ProjectRecordingsMeta, RenderVideoConstants, Video};
 use tokio::sync::{mpsc, watch};
 
 fn percentile(data: &[f64], p: f64) -> f64 {
@@ -66,6 +66,13 @@ impl DurationStats {
             self.values_ms.len()
         );
     }
+
+    fn print_values(label: &str, values_ms: &[f64]) {
+        let stats = Self {
+            values_ms: values_ms.to_vec(),
+        };
+        stats.print(label);
+    }
 }
 
 #[derive(Default)]
@@ -92,8 +99,33 @@ struct BenchmarkSummary {
     drain: DurationStats,
     flush: DurationStats,
     render: DurationStats,
+    render_prepare: DurationStats,
+    prepare_background: DurationStats,
+    prepare_background_blur: DurationStats,
+    prepare_display: DurationStats,
+    prepare_cursor: DurationStats,
+    prepare_camera: DurationStats,
+    prepare_camera_only: DurationStats,
+    prepare_camera_blur: DurationStats,
+    prepare_text: DurationStats,
+    prepare_captions: DurationStats,
+    prepare_keyboard: DurationStats,
+    render_layers: DurationStats,
+    render_finish: DurationStats,
+    render_finish_wait_previous: DurationStats,
+    render_finish_resize: DurationStats,
+    render_finish_submit: DurationStats,
+    render_immediate_flush: DurationStats,
     callback: DurationStats,
-    render_samples: Vec<(u32, f64)>,
+    render_samples: Vec<RenderSample>,
+}
+
+#[derive(Clone)]
+struct RenderSample {
+    frame_number: u32,
+    input_frame_number: u32,
+    duration_ms: f64,
+    stage_timings: FrameRenderStageTimings,
 }
 
 impl BenchmarkSummary {
@@ -137,23 +169,64 @@ impl BenchmarkSummary {
             }
             PlaybackTelemetryEvent::RendererFrame {
                 frame_number,
+                input_frame_number,
                 queue_wait,
                 drain_duration,
                 flush_duration,
                 render_duration,
+                render_stage_timings,
                 callback_duration,
                 drained_count: _,
                 output_format,
             } => {
+                let render_stage_timings = *render_stage_timings;
                 self.rendered_frames += 1;
                 *self.output_formats.entry(output_format).or_insert(0) += 1;
                 self.queue_wait.push(queue_wait);
                 self.drain.push(drain_duration);
                 self.flush.push(flush_duration);
                 self.render.push(render_duration);
+                self.render_prepare
+                    .push(render_stage_timings.prepare_duration);
+                self.prepare_background
+                    .push(render_stage_timings.background_prepare_duration);
+                self.prepare_background_blur
+                    .push(render_stage_timings.background_blur_prepare_duration);
+                self.prepare_display
+                    .push(render_stage_timings.display_prepare_duration);
+                self.prepare_cursor
+                    .push(render_stage_timings.cursor_prepare_duration);
+                self.prepare_camera
+                    .push(render_stage_timings.camera_prepare_duration);
+                self.prepare_camera_only
+                    .push(render_stage_timings.camera_only_prepare_duration);
+                self.prepare_camera_blur
+                    .push(render_stage_timings.camera_blur_prepare_duration);
+                self.prepare_text
+                    .push(render_stage_timings.text_prepare_duration);
+                self.prepare_captions
+                    .push(render_stage_timings.captions_prepare_duration);
+                self.prepare_keyboard
+                    .push(render_stage_timings.keyboard_prepare_duration);
+                self.render_layers
+                    .push(render_stage_timings.layer_render_duration);
+                self.render_finish
+                    .push(render_stage_timings.finish_duration);
+                self.render_finish_wait_previous
+                    .push(render_stage_timings.finish_wait_previous_duration);
+                self.render_finish_resize
+                    .push(render_stage_timings.finish_resize_duration);
+                self.render_finish_submit
+                    .push(render_stage_timings.finish_submit_readback_duration);
+                self.render_immediate_flush
+                    .push(render_stage_timings.immediate_flush_duration);
                 self.callback.push(callback_duration);
-                self.render_samples
-                    .push((frame_number, render_duration.as_secs_f64() * 1000.0));
+                self.render_samples.push(RenderSample {
+                    frame_number,
+                    input_frame_number,
+                    duration_ms: render_duration.as_secs_f64() * 1000.0,
+                    stage_timings: render_stage_timings,
+                });
             }
             PlaybackTelemetryEvent::RendererPrepared {
                 output_width: _,
@@ -182,6 +255,15 @@ impl BenchmarkSummary {
     fn top_stage(&self) -> (&'static str, f64) {
         let stages = [
             ("renderer render", self.render.p95()),
+            ("renderer finish", self.render_finish.p95()),
+            (
+                "renderer finish wait previous",
+                self.render_finish_wait_previous.p95(),
+            ),
+            ("renderer prepare layers", self.render_prepare.p95()),
+            ("renderer prepare display", self.prepare_display.p95()),
+            ("renderer prepare cursor", self.prepare_cursor.p95()),
+            ("renderer prepare camera", self.prepare_camera.p95()),
             ("renderer queue wait", self.queue_wait.p95()),
             ("renderer prepare", self.renderer_prepare.p95()),
             ("frame acquire", self.frame_acquire.p95()),
@@ -198,10 +280,11 @@ impl BenchmarkSummary {
     }
 }
 
-fn top_render_samples(samples: &[(u32, f64)], limit: usize) -> Vec<(u32, f64)> {
+fn top_render_samples(samples: &[RenderSample], limit: usize) -> Vec<RenderSample> {
     let mut sorted = samples.to_vec();
     sorted.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
+        b.duration_ms
+            .partial_cmp(&a.duration_ms)
             .expect("finite values should be comparable")
     });
     sorted.truncate(limit);
@@ -469,6 +552,8 @@ async fn main() {
         }
     }
 
+    let measured_elapsed = start.elapsed().as_secs_f64();
+
     playback_handle.stop();
     tokio::time::sleep(Duration::from_millis(250)).await;
 
@@ -481,12 +566,16 @@ async fn main() {
 
     renderer.stop().await;
 
-    let elapsed = start.elapsed().as_secs_f64();
-    let effective_submitted_fps = summary.submitted_frames as f64 / elapsed.max(0.001);
-    let effective_rendered_fps = summary.rendered_frames as f64 / elapsed.max(0.001);
+    let effective_submitted_fps = summary.submitted_frames as f64 / measured_elapsed.max(0.001);
+    let effective_rendered_fps = summary.rendered_frames as f64 / measured_elapsed.max(0.001);
     let mb_sent = summary.bytes_from_callback as f64 / 1_000_000.0;
-    let mb_per_sec = mb_sent / elapsed.max(0.001);
+    let mb_per_sec = mb_sent / measured_elapsed.max(0.001);
     let (top_stage, top_stage_p95) = summary.top_stage();
+    let steady_render_values = if summary.render.values_ms.len() > 1 {
+        &summary.render.values_ms[1..]
+    } else {
+        &summary.render.values_ms[..]
+    };
 
     println!();
     println!("{}", "=".repeat(64));
@@ -523,16 +612,59 @@ async fn main() {
     summary.drain.print("drain");
     summary.flush.print("flush");
     summary.render.print("render");
+    summary.render_prepare.print("render prepare");
+    summary.render_layers.print("render layers");
+    summary.render_finish.print("render finish");
+    summary
+        .render_finish_wait_previous
+        .print("finish wait previous");
+    summary.render_finish_resize.print("finish resize");
+    summary.render_finish_submit.print("finish submit");
+    summary.render_immediate_flush.print("immediate flush");
     summary.callback.print("callback packing");
+    DurationStats::print_values("render steady", steady_render_values);
 
-    if let Some((frame_number, duration_ms)) = summary.render_samples.first() {
-        println!("\nFirst renderer frame: #{frame_number} in {duration_ms:.2}ms");
+    println!("\nRenderer prepare stages:");
+    summary.prepare_background.print("background");
+    summary.prepare_background_blur.print("background blur");
+    summary.prepare_display.print("display");
+    summary.prepare_cursor.print("cursor");
+    summary.prepare_camera.print("camera");
+    summary.prepare_camera_only.print("camera only");
+    summary.prepare_camera_blur.print("camera blur");
+    summary.prepare_text.print("text");
+    summary.prepare_captions.print("captions");
+    summary.prepare_keyboard.print("keyboard");
+
+    if let Some(sample) = summary.render_samples.first() {
+        println!(
+            "\nFirst-frame setup/prewarm: warmup={:.1}ms first_renderer_frame=#{} first_render={:.2}ms immediate_flush={:.2}ms",
+            summary.warmup_ms,
+            sample.frame_number,
+            sample.duration_ms,
+            sample.stage_timings.immediate_flush_duration.as_secs_f64() * 1000.0
+        );
     }
     let slowest = top_render_samples(&summary.render_samples, 5);
     if !slowest.is_empty() {
         println!("Slowest renderer frames:");
-        for (frame_number, duration_ms) in slowest {
-            println!("  #{frame_number}: {duration_ms:.2}ms");
+        for sample in slowest {
+            let timings = sample.stage_timings;
+            println!(
+                "  rendered #{} input #{}: {:.2}ms prepare={:.2}ms display={:.2}ms cursor={:.2}ms camera={:.2}ms layers={:.2}ms finish={:.2}ms wait_previous={:.2}ms submit={:.2}ms flush={:.2}ms",
+                sample.frame_number,
+                sample.input_frame_number,
+                sample.duration_ms,
+                timings.prepare_duration.as_secs_f64() * 1000.0,
+                timings.display_prepare_duration.as_secs_f64() * 1000.0,
+                timings.cursor_prepare_duration.as_secs_f64() * 1000.0,
+                timings.camera_prepare_duration.as_secs_f64() * 1000.0,
+                timings.layer_render_duration.as_secs_f64() * 1000.0,
+                timings.finish_duration.as_secs_f64() * 1000.0,
+                timings.finish_wait_previous_duration.as_secs_f64() * 1000.0,
+                timings.finish_submit_readback_duration.as_secs_f64() * 1000.0,
+                timings.immediate_flush_duration.as_secs_f64() * 1000.0
+            );
         }
     }
 
