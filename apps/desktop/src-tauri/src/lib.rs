@@ -4581,6 +4581,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 api.prevent_close();
                                 let _ = window.hide();
 
+                                #[cfg(target_os = "macos")]
+                                crate::permissions::schedule_macos_dock_visibility_sync(app);
+
                                 let Some(state) = app.try_state::<ArcLock<App>>() else {
                                     warn!("App state unavailable during main window close request");
                                     return;
