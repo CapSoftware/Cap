@@ -1858,8 +1858,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         Ok(d) => d,
                         Err(TimestampAnomalyError::TooManyConsecutiveAnomalies { count }) => {
                             return Err(anyhow!(
-                                "Video stream timestamp anomaly: {} consecutive anomalies exceeded threshold",
-                                count
+                                "Video stream timestamp anomaly: {count} consecutive anomalies exceeded threshold"
                             ));
                         }
                     };

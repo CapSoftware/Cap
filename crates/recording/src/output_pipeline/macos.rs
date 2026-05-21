@@ -291,9 +291,7 @@ impl Muxer for AVFoundationMp4Muxer {
             info!(available_mb, "Disk space check before recording start");
             if available_mb < DISK_SPACE_MIN_START_MB {
                 return Err(anyhow!(
-                    "Insufficient disk space to start recording: {}MB available, {}MB required",
-                    available_mb,
-                    DISK_SPACE_MIN_START_MB
+                    "Insufficient disk space to start recording: {available_mb}MB available, {DISK_SPACE_MIN_START_MB}MB required"
                 ));
             }
         }

@@ -694,24 +694,6 @@ impl CapWindowId {
         )
     }
 
-    pub fn is_transparent(&self) -> bool {
-        if matches!(self, Self::Settings) {
-            return cfg!(target_os = "macos");
-        }
-
-        matches!(
-            self,
-            Self::Main
-                | Self::Onboarding
-                | Self::Camera
-                | Self::WindowCaptureOccluder { .. }
-                | Self::CaptureArea
-                | Self::RecordingControls
-                | Self::RecordingsOverlay
-                | Self::TargetSelectOverlay { .. }
-        )
-    }
-
     pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
         if matches!(self, Self::Camera) {
             return current_camera_window(app);
@@ -1230,7 +1212,7 @@ impl CapWindow {
                 let should_protect = should_protect_window(app, &title);
 
                 #[cfg(target_os = "macos")]
-                let panel_activation_guard = permissions::prepare_macos_panel_window(app);
+                let _panel_activation_guard = permissions::prepare_macos_panel_window(app);
 
                 let window = self
                     .window_builder(app, "/")
@@ -2114,7 +2096,7 @@ impl CapWindow {
                     app.run_on_main_thread({
                         let window = window.clone();
                         let app = app.clone();
-                        let panel_activation_guard = panel_activation_guard;
+                        let _panel_activation_guard = panel_activation_guard;
                         move || {
                             use tauri_nspanel::cocoa::appkit::{NSWindowCollectionBehavior, NSWindowStyleMask};
                             use tauri_nspanel::panel_delegate;
@@ -2495,7 +2477,6 @@ pub async fn apply_macos_liquid_glass_background(
         Ok(false)
     }
 }
-
 
 #[specta::specta]
 #[tauri::command(async)]
