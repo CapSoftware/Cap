@@ -883,7 +883,13 @@ impl CapWindowId {
 
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
-            Self::Main => (330.0, 395.0),
+            Self::Main => {
+                #[cfg(windows)]
+                let height = 430.0;
+                #[cfg(not(windows))]
+                let height = 395.0;
+                (330.0, height)
+            }
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
             Self::Settings => (780.0, 560.0),
@@ -1390,6 +1396,7 @@ impl ShowCapWindow {
                     .content_protected(should_protect)
                     .transparent(true)
                     .visible(false)
+                    .zoom_hotkeys_enabled(false)
                     .initialization_script(format!(
                         "
                         window.__CAP__ = window.__CAP__ ?? {{}};
@@ -1400,6 +1407,10 @@ impl ShowCapWindow {
                     ))
                     .build()?;
 
+                if let Err(e) = window.set_zoom(1.0) {
+                    warn!("Failed to lock Main window zoom to 1.0: {}", e);
+                }
+
                 let saved_position = GeneralSettingsStore::get(app)
                     .ok()
                     .flatten()
@@ -1409,7 +1420,11 @@ impl ShowCapWindow {
                 let (pos_x, pos_y) = if let Some(pos) = saved_position {
                     (pos.x, pos.y)
                 } else {
-                    cursor_monitor.center_position(330.0, 395.0)
+                    #[cfg(windows)]
+                    let center_height = 430.0;
+                    #[cfg(not(windows))]
+                    let center_height = 395.0;
+                    cursor_monitor.center_position(330.0, center_height)
                 };
 
                 #[cfg(target_os = "macos")]
@@ -1464,6 +1479,19 @@ impl ShowCapWindow {
                 #[cfg(not(target_os = "macos"))]
                 {
                     let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+
+                    #[cfg(windows)]
+                    {
+                        if let Err(e) = window.set_size(LogicalSize::new(330.0, 430.0)) {
+                            warn!("Failed to set Main window size on Windows: {}", e);
+                        }
+                        if let Err(e) =
+                            window.set_position(tauri::LogicalPosition::new(pos_x, pos_y))
+                        {
+                            warn!("Failed to position Main window on Windows: {}", e);
+                        }
+                    }
+
                     window.show().ok();
                 }
 
