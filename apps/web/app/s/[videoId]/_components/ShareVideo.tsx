@@ -52,6 +52,7 @@ export const ShareVideo = forwardRef<
 		canRetryProcessing?: boolean;
 		showPlaybackStatusBadge?: boolean;
 		isEditProcessing: boolean;
+		recordingStopped?: boolean;
 	}
 >(
 	(
@@ -66,6 +67,7 @@ export const ShareVideo = forwardRef<
 			canRetryProcessing,
 			showPlaybackStatusBadge = false,
 			isEditProcessing,
+			recordingStopped = false,
 		},
 		ref,
 	) => {
@@ -86,7 +88,8 @@ export const ShareVideo = forwardRef<
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 		const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
-		const [userConfirmedStopped, setUserConfirmedStopped] = useState(false);
+		const [userConfirmedStopped, setUserConfirmedStopped] =
+			useState(recordingStopped);
 		const segmentUploadProgress = useUploadProgress(
 			data.id,
 			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
@@ -107,6 +110,12 @@ export const ShareVideo = forwardRef<
 				}
 			}
 		}, [comments]);
+
+		useEffect(() => {
+			if (recordingStopped) {
+				setUserConfirmedStopped(true);
+			}
+		}, [recordingStopped]);
 
 		// Handle seek functionality
 		const handleSeek = (time: number) => {
@@ -205,6 +214,7 @@ export const ShareVideo = forwardRef<
 		const isProcessingInProgress =
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&
+			!userConfirmedStopped &&
 			!isActivelyRecording &&
 			shouldDeferPlaybackSource(segmentUploadProgress);
 
@@ -244,7 +254,8 @@ export const ShareVideo = forwardRef<
 		let enableCrossOrigin = false;
 
 		if (isSegmentsSource) {
-			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=segments-master`;
+			const requireComplete = userConfirmedStopped ? "&requireComplete=1" : "";
+			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=segments-master${requireComplete}`;
 		} else if (isMp4Source) {
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=mp4`;
 			enableCrossOrigin = true;
@@ -319,6 +330,9 @@ export const ShareVideo = forwardRef<
 							videoRef={videoRef}
 							hasActiveUpload={data.hasActiveUpload}
 							isLiveSegments={isSegmentsSource}
+							allowSegmentProbeDuringUpload={
+								isSegmentsSource && userConfirmedStopped
+							}
 							captionLanguage={captionContext.selectedLanguage}
 							onCaptionLanguageChange={handleCaptionLanguageChange}
 							availableCaptions={captionContext.availableTranslations}
