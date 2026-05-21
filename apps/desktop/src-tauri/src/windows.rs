@@ -1251,7 +1251,7 @@ impl CapWindow {
                 }
 
                 #[cfg(target_os = "macos")]
-                crate::permissions::schedule_macos_dock_visibility_sync(&app);
+                crate::permissions::schedule_macos_dock_visibility_sync(app);
 
                 window
             }
@@ -2196,7 +2196,7 @@ impl CapWindow {
                 // macOS center considers the height of menubar and dock
                 #[cfg(target_os = "macos")]
                 {
-                    let _ = window.with_nswindow_on_main(|_mtm, nswindow| nswindow.center())?;
+                    _ = window.with_nswindow_on_main(|_mtm, nswindow| nswindow.center())?;
                 }
 
                 #[cfg(not(target_os = "macos"))]

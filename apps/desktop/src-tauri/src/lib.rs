@@ -4214,15 +4214,17 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_prevent_default::debug())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({
                     use tauri_plugin_window_state::StateFlags;
-                    StateFlags::all() - StateFlags::VISIBLE -  StateFlags::DECORATIONS
+                    StateFlags::all() - StateFlags::VISIBLE - StateFlags::DECORATIONS
                 })
                 .with_denylist(&[
                     CapWindowId::Onboarding.label().as_str(),
                     "window-capture-occluder",
+                    
                     "target-select-overlay",
                     CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
