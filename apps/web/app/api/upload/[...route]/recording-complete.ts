@@ -12,6 +12,12 @@ import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-stora
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { withAuth } from "../../utils";
+import {
+	getRecordingCompleteIdempotentResult,
+	isMaterializedDesktopRecordingSource,
+	isSegmentedRecordingSource,
+	RECORDING_COMPLETE_UNCLAIMABLE_PHASES,
+} from "./recording-complete-utils";
 
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
 const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
@@ -39,7 +45,15 @@ export const app = new Hono().post(
 			return c.json({ error: "Video not found" }, 404);
 		}
 
-		if (video.source?.type !== "desktopSegments") {
+		if (isMaterializedDesktopRecordingSource(video.source)) {
+			return c.json({
+				success: true,
+				alreadyComplete: true,
+				source: "desktopMP4",
+			});
+		}
+
+		if (!isSegmentedRecordingSource(video.source)) {
 			return c.json({ error: "Video is not a segmented recording" }, 400);
 		}
 
@@ -59,6 +73,66 @@ export const app = new Hono().post(
 		}
 
 		try {
+			const claimResult = await db()
+				.update(Db.videoUploads)
+				.set({
+					phase: "processing",
+					processingProgress: 0,
+					processingMessage: "Muxing segments into MP4...",
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(Db.videoUploads.videoId, videoId),
+						notInArray(
+							Db.videoUploads.phase,
+							RECORDING_COMPLETE_UNCLAIMABLE_PHASES,
+						),
+					),
+				);
+
+			if ((claimResult[0]?.affectedRows ?? 0) === 0) {
+				const [existing] = await db()
+					.select({ phase: Db.videoUploads.phase })
+					.from(Db.videoUploads)
+					.where(eq(Db.videoUploads.videoId, videoId));
+				const idempotentResult = getRecordingCompleteIdempotentResult(existing);
+
+				if (idempotentResult) {
+					return c.json(idempotentResult);
+				}
+
+				if (!existing) {
+					try {
+						await db().insert(Db.videoUploads).values({
+							videoId,
+							phase: "processing",
+							processingProgress: 0,
+							processingMessage: "Muxing segments into MP4...",
+						});
+					} catch (error) {
+						const [existingAfterRace] = await db()
+							.select({ phase: Db.videoUploads.phase })
+							.from(Db.videoUploads)
+							.where(eq(Db.videoUploads.videoId, videoId));
+						const raceResult =
+							getRecordingCompleteIdempotentResult(existingAfterRace);
+
+						if (raceResult) {
+							return c.json(raceResult);
+						}
+
+						console.error(
+							"[recording-complete] Failed to claim video upload for muxing:",
+							error,
+						);
+						return c.json({ error: "Failed to claim recording complete" }, 500);
+					}
+				} else {
+					return c.json({ error: "Failed to claim recording complete" }, 500);
+				}
+			}
+
 			const muxPayload = await Effect.gen(function* () {
 				const [bucket] = yield* Storage.getAccessForVideo(
 					decodeStorageVideo(video),
@@ -190,46 +264,6 @@ export const app = new Hono().post(
 				};
 			}).pipe(runPromise);
 			await invalidateGoogleDriveStorageQuotaCache(video.storageIntegrationId);
-
-			const claimResult = await db()
-				.update(Db.videoUploads)
-				.set({
-					phase: "processing",
-					processingProgress: 0,
-					processingMessage: "Muxing segments into MP4...",
-					updatedAt: new Date(),
-				})
-				.where(
-					and(
-						eq(Db.videoUploads.videoId, videoId),
-						notInArray(Db.videoUploads.phase, [
-							"processing",
-							"generating_thumbnail",
-						]),
-					),
-				);
-
-			if (claimResult[0].affectedRows === 0) {
-				const [existing] = await db()
-					.select({ phase: Db.videoUploads.phase })
-					.from(Db.videoUploads)
-					.where(eq(Db.videoUploads.videoId, videoId));
-
-				if (existing) {
-					return c.json({ error: "Muxing already in progress" }, 409);
-				}
-
-				try {
-					await db().insert(Db.videoUploads).values({
-						videoId,
-						phase: "processing",
-						processingProgress: 0,
-						processingMessage: "Muxing segments into MP4...",
-					});
-				} catch {
-					return c.json({ error: "Muxing already in progress" }, 409);
-				}
-			}
 
 			const webhookBaseUrl =
 				serverEnv().MEDIA_SERVER_WEBHOOK_URL || serverEnv().WEB_URL;
