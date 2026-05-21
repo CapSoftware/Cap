@@ -3,6 +3,8 @@ import type { UploadStatus } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
 import type { UploadTarget, VideoId } from "./web-recorder-types";
 
+const MAX_SERVER_PROXY_UPLOAD_BYTES = 95 * 1024 * 1024;
+
 const uploadBlobThroughServer = async ({
 	blob,
 	currentVideoId,
@@ -14,6 +16,10 @@ const uploadBlobThroughServer = async ({
 	subpath: string;
 	contentType: string;
 }) => {
+	if (blob.size > MAX_SERVER_PROXY_UPLOAD_BYTES) {
+		throw new Error("Recording is too large for server proxy upload");
+	}
+
 	const response = await fetch(
 		`/api/upload/signed/proxy?videoId=${encodeURIComponent(
 			currentVideoId,

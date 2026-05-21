@@ -19,6 +19,17 @@ import { parseVideoIdOrFileKey } from "../utils";
 const decodeVideo = (video: typeof Db.videos.$inferSelect) =>
 	decodeStorageVideo(video);
 
+const MAX_SERVER_PROXY_UPLOAD_BYTES = 95 * 1024 * 1024;
+
+const parseContentLength = (value: string | undefined) => {
+	if (!value) return null;
+
+	const parsed = Number(value);
+	if (!Number.isSafeInteger(parsed) || parsed < 0) return null;
+
+	return parsed;
+};
+
 export const app = new Hono().use(withAuth);
 
 app.post(
@@ -45,8 +56,31 @@ app.post(
 			if (!video) return c.json({ error: "Video not found" }, 404);
 			if (video.ownerId !== user.id) return c.json({ error: "Forbidden" }, 403);
 
+			const contentLength = parseContentLength(c.req.header("content-length"));
+			if (
+				contentLength !== null &&
+				contentLength > MAX_SERVER_PROXY_UPLOAD_BYTES
+			) {
+				return c.json(
+					{
+						error: "Upload too large for server proxy",
+						maxBytes: MAX_SERVER_PROXY_UPLOAD_BYTES,
+					},
+					413,
+				);
+			}
+
 			const body = await c.req.arrayBuffer();
 			if (body.byteLength === 0) return c.json({ error: "Empty upload" }, 400);
+			if (body.byteLength > MAX_SERVER_PROXY_UPLOAD_BYTES) {
+				return c.json(
+					{
+						error: "Upload too large for server proxy",
+						maxBytes: MAX_SERVER_PROXY_UPLOAD_BYTES,
+					},
+					413,
+				);
+			}
 
 			const videoDomain = decodeVideo(video);
 			const fileKey = `${user.id}/${videoId}/${subpath}`;
