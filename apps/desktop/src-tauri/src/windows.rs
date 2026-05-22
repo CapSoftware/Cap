@@ -1210,7 +1210,6 @@ impl CapWindow {
             return Ok(window);
         }
 
-        let id = self.id(app);
         let cursor_monitor = CursorMonitorInfo::get();
 
         let window = match self {
@@ -2174,6 +2173,8 @@ impl CapWindow {
                 window
             }
         };
+
+        let id = self.id(app);
 
         #[cfg(target_os = "macos")]
         if id.activates_dock() {
