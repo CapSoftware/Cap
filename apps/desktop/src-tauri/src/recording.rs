@@ -72,6 +72,14 @@ use crate::{
     windows::{CapWindow, CapWindowId, hide_overlay},
 };
 
+fn recording_stopped_share_url(link: &str) -> String {
+    if link.contains('?') {
+        format!("{link}&recordingStopped=1")
+    } else {
+        format!("{link}?recordingStopped=1")
+    }
+}
+
 #[derive(Clone)]
 pub struct InProgressRecordingCommon {
     pub target_name: String,
@@ -1899,6 +1907,15 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     };
 
     let recording_dir = current_recording.recording_dir().clone();
+    if let InProgressRecording::Instant {
+        video_upload_info, ..
+    } = &current_recording
+    {
+        let _ = open_external_link(
+            app.clone(),
+            recording_stopped_share_url(&video_upload_info.link),
+        );
+    }
 
     let recording_outcome = match current_recording.stop().await {
         Ok(completed) => Ok(completed),
@@ -2514,8 +2531,6 @@ async fn handle_recording_finish(
                     }
                 })
             };
-
-            let _ = open_external_link(app.clone(), video_upload_info.link.clone());
 
             spawn_actor({
                 let video_upload_info = video_upload_info.clone();

@@ -49,31 +49,42 @@ export function createExportToFileTask(
 ) {
 	let started = false;
 	let copying = false;
-	const progress = new Channel<FramesRendered>((e) => {
+	let cancelled = false;
+	let cancelExport: (() => void) | null = null;
+	const handleProgress = (e: FramesRendered) => {
 		if (!started) {
 			started = true;
 			onStart?.();
 		}
 		onProgress(e);
-		if (!copying && e.totalFrames > 0 && e.renderedCount >= e.totalFrames) {
-			copying = true;
-			onCopying?.();
-		}
-	});
-	let closed = false;
-	const cancel = () => {
-		if (closed) return;
-		closed = true;
-		const internals = (
-			globalThis as {
-				__TAURI_INTERNALS__?: { unregisterCallback?: (id: number) => void };
-			}
-		).__TAURI_INTERNALS__;
-		internals?.unregisterCallback?.(progress.id);
 	};
-	const promise = commands
-		.exportVideoToFile(projectPath, progress, settings, fileName, fileType)
-		.finally(cancel);
+	const cancel = () => {
+		if (cancelled) return;
+		cancelled = true;
+		cancelExport?.();
+	};
+	const promise = (async () => {
+		const savePath = await commands.saveFileDialog(fileName, fileType);
+		if (!savePath) throw new Error("Save dialog cancelled");
+		if (cancelled) throw new Error("Export cancelled");
+
+		const releaseExportSession = await beginExportSessionGuard();
+		try {
+			const task = createExportTask(projectPath, settings, handleProgress);
+			cancelExport = task.cancel;
+			const outputPath = await task.promise;
+			if (cancelled) throw new Error("Export cancelled");
+			if (!copying) {
+				copying = true;
+				onCopying?.();
+			}
+			await commands.copyFileToPath(outputPath, savePath);
+			return savePath;
+		} finally {
+			cancelExport = null;
+			await releaseExportSession();
+		}
+	})();
 	return { promise, cancel };
 }
 

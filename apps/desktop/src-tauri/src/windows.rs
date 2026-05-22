@@ -726,13 +726,7 @@ impl CapWindowId {
 
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
-            Self::Main => {
-                #[cfg(windows)]
-                let height = 430.0;
-                #[cfg(not(windows))]
-                let height = 395.0;
-                (330.0, height)
-            }
+            Self::Main => (330.0, 395.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
             Self::Settings => (780.0, 560.0),
@@ -2260,7 +2254,7 @@ impl CapWindow {
 
         #[cfg(windows)]
         {
-            builder = builder.decorations(false);
+            builder = builder.decorations(false).zoom_hotkeys_enabled(false);
         }
 
         builder
@@ -2295,6 +2289,45 @@ impl CapWindow {
                 let id = s.iter().find(|(p, _)| p == path).unwrap().1;
                 CapWindowId::ScreenshotEditor { id }
             }
+        }
+    }
+}
+
+fn lock_window_text_scale(_window: &WebviewWindow<Wry>) {
+    #[cfg(windows)]
+    {
+        let scale_factor = match _window.scale_factor() {
+            Ok(scale_factor) => scale_factor,
+            Err(e) => {
+                warn!("Failed to read window scale factor: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = _window.with_webview(move |webview| unsafe {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller3;
+            use windows_core::Interface;
+
+            let controller = webview.controller();
+
+            if let Err(e) = controller.SetZoomFactor(1.0) {
+                warn!("Failed to lock WebView zoom factor: {}", e);
+            }
+
+            let Ok(controller3) = controller.cast::<ICoreWebView2Controller3>() else {
+                warn!("Failed to access WebView2 controller scale APIs");
+                return;
+            };
+
+            if let Err(e) = controller3.SetShouldDetectMonitorScaleChanges(false) {
+                warn!("Failed to disable WebView scale detection: {}", e);
+            }
+
+            if let Err(e) = controller3.SetRasterizationScale(scale_factor) {
+                warn!("Failed to lock WebView rasterization scale: {}", e);
+            }
+        }) {
+            warn!("Failed to access platform WebView: {}", e);
         }
     }
 }

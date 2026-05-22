@@ -494,6 +494,11 @@ async function AuthorizedContent({
 	const replyId = optionFromTOrFirst(searchParams.reply).pipe(
 		Option.map(Comment.CommentId.make),
 	);
+	const recordingStoppedParam = Array.isArray(searchParams.recordingStopped)
+		? searchParams.recordingStopped[0]
+		: searchParams.recordingStopped;
+	const recordingStopped =
+		recordingStoppedParam === "1" || recordingStoppedParam === "true";
 
 	// Fetch spaces data for the sharing dialog
 	let spacesData = null;
@@ -824,6 +829,7 @@ async function AuthorizedContent({
 				userOrganizations={userOrganizations}
 				viewerId={user?.id ?? null}
 				isEditProcessing={isEditProcessing}
+				recordingStopped={recordingStopped}
 				initialAiData={initialAiData}
 				aiGenerationEnabled={aiGenerationEnabled}
 			/>

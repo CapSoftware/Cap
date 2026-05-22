@@ -1,5 +1,4 @@
 import * as Db from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import {
 	Database,
 	provideOptionalAuth,
@@ -38,6 +37,7 @@ const GetPlaylistParams = Schema.Struct({
 		"segments-video",
 		"segments-audio",
 	),
+	requireComplete: Schema.OptionFromUndefinedOr(Schema.String),
 	thumbnail: Schema.OptionFromUndefinedOr(Schema.String),
 	fileType: Schema.OptionFromUndefinedOr(Schema.String),
 });
@@ -179,6 +179,13 @@ const getPlaylistResponse = (
 			const manifest = yield* Schema.decodeUnknown(Video.SegmentManifest)(
 				parsed,
 			).pipe(Effect.mapError(() => new HttpApiError.InternalServerError()));
+			const requireComplete = Option.match(urlParams.requireComplete, {
+				onNone: () => false,
+				onSome: (value) => value === "1" || value === "true",
+			});
+			if (requireComplete && !manifest.is_complete) {
+				return yield* Effect.fail(new HttpApiError.NotFound());
+			}
 			const hasVideoSegments =
 				manifest.video_init_uploaded && manifest.video_segments.length > 0;
 
@@ -187,9 +194,12 @@ const getPlaylistResponse = (
 					return yield* Effect.fail(new HttpApiError.NotFound());
 				}
 
-				const videoPlaylistUrl = `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=segments-video`;
+				const videoPlaylistUrl = `/api/playlist?videoId=${video.id}&videoType=segments-video`;
+				const requireCompleteSuffix = requireComplete
+					? "&requireComplete=1"
+					: "";
 				const audioPlaylistUrl = manifest.audio_init_uploaded
-					? `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=segments-audio`
+					? `/api/playlist?videoId=${video.id}&videoType=segments-audio${requireCompleteSuffix}`
 					: null;
 
 				let playlist =
@@ -200,7 +210,7 @@ const getPlaylistResponse = (
 				} else {
 					playlist += "#EXT-X-STREAM-INF:BANDWIDTH=2000000\n";
 				}
-				playlist += `${videoPlaylistUrl}\n`;
+				playlist += `${videoPlaylistUrl}${requireCompleteSuffix}\n`;
 
 				return HttpServerResponse.text(playlist, {
 					headers: {
@@ -375,9 +385,9 @@ const getPlaylistResponse = (
 				const generatedPlaylist = generateMasterPlaylist(
 					videoMetadata?.Metadata?.resolution ?? "",
 					videoMetadata?.Metadata?.bandwidth ?? "",
-					`${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=video`,
+					`/api/playlist?videoId=${video.id}&videoType=video`,
 					audioMetadata
-						? `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=audio`
+						? `/api/playlist?videoId=${video.id}&videoType=audio`
 						: null,
 				);
 
