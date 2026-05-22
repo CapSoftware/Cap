@@ -27,7 +27,7 @@ image: "/docs/s3-config/google-cloud-s3.jpg"
 
 1. **Create Service Account First**:
 
-   - Go to in IAM and Admin > Service Accounts, click "Create service account"
+   - Go to IAM and Admin > Service Accounts, click "Create service account"
    - Set a service account ID (e.g., "cap-app-user")
    - Click "Create and continue"
    - Skip the "Permissions" and "Principals with access" sections.
@@ -44,8 +44,8 @@ image: "/docs/s3-config/google-cloud-s3.jpg"
    - Choose your default storage class or opt for Autoclass (for lower storage but higher networking costs on rarely used recordings)
    - Under "Prevent public access", keep "Enforce public access prevention on this bucket" enabled (recommended)
    - Under "Access control", select "Uniform"
-   - Under "Data protection", decided whether you want to keep "Soft-delete policy" enabled (this will allow you to recover accidentally deleted files)
-     Under "Data protection", keep "Object versioning" disabled
+   - Under "Data protection", decide whether you want to keep "Soft-delete policy" enabled (this will allow you to recover accidentally deleted files)
+   - Under "Data protection", keep "Object versioning" disabled
    - Optional, under "Data encryption", choose your own "encryption key" (in most cases the default Google-managed encryption key is fine)
    - Keep all other settings as default
    - Click "Create bucket" at the bottom of the page
@@ -58,7 +58,7 @@ image: "/docs/s3-config/google-cloud-s3.jpg"
    - Assign the role "Storage Object Admin"
    - Click "Save"
 
-5. **Configure CORS Settings**:
+4. **Configure CORS Settings**:
    - Switch to the "Configuration" tab, scroll down to "Cross-origin resource sharing"
    - Click "Edit" and "Allow cross-origin resource sharing"
    - Add the following CORS configuration:
@@ -68,9 +68,9 @@ image: "/docs/s3-config/google-cloud-s3.jpg"
      - For cache expiry time enter: `3000`
    - Click "Save"
 
-4. **Retrieve your S3 Interoperability credentials**:
+5. **Retrieve your S3 Interoperability credentials**:
    - In Cloud Storage switch to "Settings" via the side panel.
-   - Go to "Interopability" tab
+   - Go to "Interoperability" tab
    - Under "Access keys for service accounts" click "Create key for another service account"
    - Select your service account
    - Click "Create key" and note down your "Access Key ID" and "Secret Access Key".
@@ -83,7 +83,7 @@ image: "/docs/s3-config/google-cloud-s3.jpg"
    - Secret Access Key (from interoperability credentials creation)
    - Endpoint (enter "https://storage.googleapis.com")
    - Bucket Name: Your bucket name
-   - Region: Your bucket's region (e.g., us-east-1)
+   - Region: Your bucket's region (e.g., `us-central1` or `europe-west1`)
 
 ## Step 5: Test and Save the Connection
 
