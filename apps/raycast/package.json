@@ -1,0 +1,51 @@
+{
+	"name": "cap-raycast",
+	"version": "0.1.0",
+	"private": true,
+	"title": "Cap",
+	"description": "Raycast controls for Cap Desktop",
+	"icon": "command-icon.png",
+	"author": "cap",
+	"categories": [
+		"Productivity"
+	],
+	"license": "MIT",
+	"scripts": {
+		"build": "ray build",
+		"dev": "ray develop",
+		"lint": "ray lint"
+	},
+	"dependencies": {
+		"@raycast/api": "^1.104.17"
+	},
+	"devDependencies": {
+		"@types/node": "22.15.17",
+		"typescript": "^5.8.3"
+	},
+	"commands": [
+		{
+			"name": "cap-control",
+			"title": "Control Recording",
+			"description": "Pause, resume, toggle, or stop the active Cap recording",
+			"mode": "view"
+		},
+		{
+			"name": "start-recording",
+			"title": "Start Recording",
+			"description": "Start a Cap recording by display or window name",
+			"mode": "view"
+		},
+		{
+			"name": "take-screenshot",
+			"title": "Take Screenshot",
+			"description": "Capture a display or window in Cap",
+			"mode": "view"
+		},
+		{
+			"name": "switch-device",
+			"title": "Switch Input Device",
+			"description": "Switch the active Cap microphone or camera",
+			"mode": "view"
+		}
+	]
+}

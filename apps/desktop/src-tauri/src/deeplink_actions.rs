@@ -2,11 +2,16 @@ use cap_recording::{
     RecordingMode, feeds::camera::DeviceOrModelID, sources::screen_capture::ScreenCaptureTarget,
 };
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
 use tracing::trace;
 
-use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
+use crate::{
+    App, ArcLock,
+    recording::{self, StartRecordingInputs},
+    windows::ShowCapWindow,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +31,18 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    TakeScreenshot {
+        capture_mode: CaptureMode,
+    },
+    SetMicrophone {
+        mic_label: Option<String>,
+    },
+    SetCamera {
+        camera: Option<DeviceOrModelID>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -70,6 +87,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     });
 }
 
+#[derive(Debug)]
 pub enum ActionParseFromUrlError {
     ParseFailed(String),
     Invalid,
@@ -88,9 +106,10 @@ impl TryFrom<&Url> for DeepLinkAction {
                 .map_err(|_| ActionParseFromUrlError::Invalid);
         }
 
-        match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
-            _ => Err(ActionParseFromUrlError::Invalid),
+        match url.host_str() {
+            Some("action") => Ok(()),
+            Some(_) => Err(ActionParseFromUrlError::NotAction),
+            None => Err(ActionParseFromUrlError::Invalid),
         }?;
 
         let params = url
@@ -120,18 +139,7 @@ impl DeepLinkAction {
                 crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
-                let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
-                        .into_iter()
-                        .find(|(w, _)| w.name == name)
-                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
-                };
+                let capture_target = resolve_capture_target(capture_mode)?;
 
                 let inputs = StartRecordingInputs {
                     mode,
@@ -147,6 +155,33 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::PauseRecording => {
+                recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TakeScreenshot { capture_mode } => {
+                let target = resolve_capture_target(capture_mode)?;
+                let path = recording::take_screenshot(app.clone(), target).await?;
+                let _ = ShowCapWindow::ScreenshotEditor { path }.show(app).await;
+                Ok(())
+            }
+            DeepLinkAction::SetMicrophone { mic_label } => {
+                with_recording_paused_for_input_change(app, async {
+                    crate::set_mic_input(app.state(), mic_label).await
+                })
+                .await
+            }
+            DeepLinkAction::SetCamera { camera } => {
+                with_recording_paused_for_input_change(app, async {
+                    crate::set_camera_input(app.clone(), app.state(), camera, Some(true)).await
+                })
+                .await
+            }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
@@ -154,5 +189,100 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
         }
+    }
+}
+
+fn resolve_capture_target(capture_mode: CaptureMode) -> Result<ScreenCaptureTarget, String> {
+    match capture_mode {
+        CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
+            .into_iter()
+            .find(|(s, _)| s.name == name)
+            .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+            .ok_or(format!("No screen with name \"{}\"", &name)),
+        CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
+            .into_iter()
+            .find(|(w, _)| w.name == name)
+            .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
+            .ok_or(format!("No window with name \"{}\"", &name)),
+    }
+}
+
+async fn with_recording_paused_for_input_change<F>(
+    app: &AppHandle,
+    input_change: F,
+) -> Result<(), String>
+where
+    F: Future<Output = Result<(), String>>,
+{
+    let should_resume = {
+        let state = app.state::<ArcLock<App>>();
+        let state = state.read().await;
+        match state.current_recording() {
+            Some(recording) => !recording.is_paused().await.map_err(|e| e.to_string())?,
+            None => false,
+        }
+    };
+
+    if should_resume {
+        recording::pause_recording(app.clone(), app.state()).await?;
+    }
+
+    match input_change.await {
+        Ok(()) => {
+            if should_resume {
+                recording::resume_recording(app.clone(), app.state()).await?;
+            }
+            Ok(())
+        }
+        Err(err) => {
+            if should_resume {
+                recording::resume_recording(app.clone(), app.state())
+                    .await
+                    .map_err(|resume_err| {
+                        format!("{err}; failed to resume recording after input change error: {resume_err}")
+                    })?;
+            }
+            Err(err)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn action_from(value: &str) -> DeepLinkAction {
+        let mut url = Url::parse("cap-desktop://action").unwrap();
+        url.query_pairs_mut().append_pair("value", value);
+        DeepLinkAction::try_from(&url).unwrap()
+    }
+
+    #[test]
+    fn parses_action_host_links() {
+        let action = action_from(r#"{"pause_recording":null}"#);
+
+        assert!(matches!(action, DeepLinkAction::PauseRecording));
+    }
+
+    #[test]
+    fn keeps_signin_links_out_of_action_handler() {
+        let url = Url::parse("cap-desktop://signin?token=abc").unwrap();
+
+        assert!(matches!(
+            DeepLinkAction::try_from(&url),
+            Err(ActionParseFromUrlError::NotAction)
+        ));
+    }
+
+    #[test]
+    fn parses_nullable_input_actions() {
+        let mic = action_from(r#"{"set_microphone":{"mic_label":null}}"#);
+        let camera = action_from(r#"{"set_camera":{"camera":null}}"#);
+
+        assert!(matches!(
+            mic,
+            DeepLinkAction::SetMicrophone { mic_label: None }
+        ));
+        assert!(matches!(camera, DeepLinkAction::SetCamera { camera: None }));
     }
 }
