@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tracing::trace;
 
 use crate::{
@@ -153,30 +154,37 @@ impl DeepLinkAction {
                     .map(|_| ())
             }
             DeepLinkAction::StopRecording => {
+                confirm_sensitive_action(app, "stop the active recording")?;
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::PauseRecording => {
+                confirm_sensitive_action(app, "pause the active recording")?;
                 recording::pause_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::ResumeRecording => {
+                confirm_sensitive_action(app, "resume the active recording")?;
                 recording::resume_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::TogglePauseRecording => {
+                confirm_sensitive_action(app, "toggle recording pause")?;
                 recording::toggle_pause_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::TakeScreenshot { capture_mode } => {
+                confirm_sensitive_action(app, "take a screenshot")?;
                 let target = resolve_capture_target(capture_mode)?;
                 let path = recording::take_screenshot(app.clone(), target).await?;
                 let _ = ShowCapWindow::ScreenshotEditor { path }.show(app).await;
                 Ok(())
             }
             DeepLinkAction::SetMicrophone { mic_label } => {
+                confirm_sensitive_action(app, "change the active microphone")?;
                 with_recording_paused_for_input_change(app, async {
                     crate::set_mic_input(app.state(), mic_label).await
                 })
                 .await
             }
             DeepLinkAction::SetCamera { camera } => {
+                confirm_sensitive_action(app, "change the active camera")?;
                 with_recording_paused_for_input_change(app, async {
                     crate::set_camera_input(app.clone(), app.state(), camera, Some(true)).await
                 })
@@ -189,6 +197,25 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
         }
+    }
+}
+
+fn confirm_sensitive_action(app: &AppHandle, action: &str) -> Result<(), String> {
+    let approved = app
+        .dialog()
+        .message(format!("Raycast wants to {action} in Cap."))
+        .title("Confirm Cap action")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Allow".to_string(),
+            "Cancel".to_string(),
+        ))
+        .blocking_show();
+
+    if approved {
+        Ok(())
+    } else {
+        Err("Cap action cancelled".to_string())
     }
 }
 
