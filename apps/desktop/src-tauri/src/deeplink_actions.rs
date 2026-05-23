@@ -135,6 +135,7 @@ impl DeepLinkAction {
                 capture_system_audio,
                 mode,
             } => {
+                confirm_sensitive_action(app, "start a recording")?;
                 let state = app.state::<ArcLock<App>>();
 
                 crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
