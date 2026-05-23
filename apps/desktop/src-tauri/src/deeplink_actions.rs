@@ -204,7 +204,9 @@ impl DeepLinkAction {
 fn confirm_sensitive_action(app: &AppHandle, action: &str) -> Result<(), String> {
     let approved = app
         .dialog()
-        .message(format!("Raycast wants to {action} in Cap."))
+        .message(format!(
+            "An external app or website requested to {action} in Cap."
+        ))
         .title("Confirm Cap action")
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
