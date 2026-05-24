@@ -16,5 +16,6 @@ describe("parseStageName", () => {
 
 	it("rejects unsupported stages", () => {
 		expect(() => parseStageName("preview")).toThrow("Unsupported stage");
+		expect(() => parseStageName("git-branch-")).toThrow("Unsupported stage");
 	});
 });
