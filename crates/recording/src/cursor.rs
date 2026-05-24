@@ -7,7 +7,7 @@ use cap_timestamp::Timestamps;
 use futures::{FutureExt, future::Shared};
 use std::{
     collections::HashMap,
-    fs::File,
+    fs::{self, File},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     time::Instant,
@@ -59,11 +59,20 @@ fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[Cu
         moves: &'a [CursorMoveEvent],
     }
 
-    let file = match File::create(output_path) {
+    let temp_path = output_path.with_extension(
+        output_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| format!("{ext}.tmp"))
+            .unwrap_or_else(|| "tmp".to_string()),
+    );
+
+    let file = match File::create(&temp_path) {
         Ok(file) => file,
         Err(e) => {
             tracing::error!(
-                "Failed to create cursor data file {}: {}",
+                "Failed to create temporary cursor data file {} for {}: {}",
+                temp_path.display(),
                 output_path.display(),
                 e
             );
@@ -75,16 +84,36 @@ fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[Cu
     let mut writer = BufWriter::new(file);
     if let Err(e) = serde_json::to_writer(&mut writer, &events) {
         tracing::error!(
-            "Failed to serialize cursor data to {}: {}",
+            "Failed to serialize cursor data to temporary file {} for {}: {}",
+            temp_path.display(),
             output_path.display(),
             e
         );
-    } else if let Err(e) = writer.write_all(b"\n").and_then(|_| writer.flush()) {
+        let _ = fs::remove_file(&temp_path);
+        return;
+    }
+
+    if let Err(e) = writer.write_all(b"\n").and_then(|_| writer.flush()) {
         tracing::error!(
-            "Failed to flush cursor data to {}: {}",
+            "Failed to flush cursor data to temporary file {} for {}: {}",
+            temp_path.display(),
             output_path.display(),
             e
         );
+        let _ = fs::remove_file(&temp_path);
+        return;
+    }
+
+    drop(writer);
+
+    if let Err(e) = fs::rename(&temp_path, output_path) {
+        tracing::error!(
+            "Failed to replace cursor data file {} with temporary file {}: {}",
+            output_path.display(),
+            temp_path.display(),
+            e
+        );
+        let _ = fs::remove_file(&temp_path);
     }
 }
 
