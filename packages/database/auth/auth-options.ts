@@ -69,13 +69,27 @@ export const authOptions = (): NextAuthOptions => {
 		},
 		get providers() {
 			if (_providers) return _providers;
+			const authentikIssuer = serverEnv().AUTHENTIK_ISSUER;
+			const authentikClientId = serverEnv().AUTHENTIK_CLIENT_ID;
+			const authentikClientSecret = serverEnv().AUTHENTIK_CLIENT_SECRET;
+			if (
+				authentikIssuer &&
+				(!authentikClientId || !authentikClientSecret)
+			) {
+				throw new Error(
+					"AUTHENTIK_ISSUER is set but AUTHENTIK_CLIENT_ID and/or " +
+						"AUTHENTIK_CLIENT_SECRET is missing. All three must be " +
+						"provided together to enable the Authentik OIDC provider.",
+				);
+			}
+
 			_providers = [
-				...(serverEnv().AUTHENTIK_ISSUER
+				...(authentikIssuer && authentikClientId && authentikClientSecret
 					? [
 							AuthentikProvider({
-								clientId: serverEnv().AUTHENTIK_CLIENT_ID as string,
-								clientSecret: serverEnv().AUTHENTIK_CLIENT_SECRET as string,
-								issuer: serverEnv().AUTHENTIK_ISSUER as string,
+								clientId: authentikClientId,
+								clientSecret: authentikClientSecret,
+								issuer: authentikIssuer,
 							}),
 						]
 					: []),
