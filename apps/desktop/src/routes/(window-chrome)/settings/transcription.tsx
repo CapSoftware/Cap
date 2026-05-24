@@ -16,6 +16,7 @@ import {
 } from "~/utils/general-settings";
 import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideX from "~icons/lucide/x";
+import { Section, SectionCard, SettingsPageContent } from "./Setting";
 
 export default function TranscriptionSettings() {
 	const [store] = createResource(() => generalSettingsStore.get());
@@ -94,24 +95,17 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	});
 
 	return (
-		<div class="flex flex-col h-full custom-scroll">
-			<div class="p-4 space-y-4">
-				<div class="flex flex-col pb-4 border-b border-gray-2">
-					<h2 class="text-lg font-medium text-gray-12">Transcription</h2>
-					<p class="text-sm text-gray-10">
-						Add names, spellings, domains, and capitalization preferences that
-						caption generation should keep in mind.
-					</p>
-				</div>
-
-				<div class="space-y-3">
-					<div class="px-4 py-4 space-y-3 rounded-xl border border-gray-3 bg-gray-2">
+		<div class="cap-settings-page flex flex-col h-full custom-scroll">
+			<SettingsPageContent>
+				<Section
+					title="Transcription"
+					description="Add names, spellings, domains, and capitalization preferences that caption generation should keep in mind."
+				>
+					<SectionCard padded class="space-y-3">
 						<div class="flex items-center justify-between gap-3">
-							<div>
-								<h3 class="text-sm font-medium text-gray-12">
-									Remembered terms
-								</h3>
-								<p class="text-xs text-gray-11">
+							<div class="flex flex-col gap-0.5 min-w-0">
+								<p class="text-[13px] text-gray-12">Remembered terms</p>
+								<p class="text-xs leading-snug text-gray-10">
 									Add one term at a time to reduce typos and formatting
 									mistakes.
 								</p>
@@ -129,7 +123,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 										Clear
 									</Button>
 								</Show>
-								<span class="text-xs text-gray-11 min-w-[3.75rem] text-right">
+								<span class="text-xs text-gray-11 min-w-15 text-right">
 									{saveState() === "saving"
 										? "Saving..."
 										: saveState() === "saved"
@@ -154,7 +148,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								autocapitalize="off"
 								autocomplete="off"
 								autocorrect="off"
-								class="flex-1 px-3 py-2 bg-gray-1 border border-gray-3 rounded-md text-gray-12 placeholder:text-gray-10 focus:outline-none focus:ring-1 focus:ring-gray-8 hover:border-gray-6"
+								class="flex-1 px-3 py-2 bg-gray-1 border border-gray-3 rounded-md text-gray-12 placeholder:text-gray-10 focus:outline-hidden focus:ring-1 focus:ring-gray-8 hover:border-gray-6"
 							/>
 							<Button
 								onClick={addHint}
@@ -166,19 +160,22 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							</Button>
 						</div>
 
-						<p class="text-xs text-gray-11">
+						<p class="text-xs leading-relaxed text-gray-10">
 							These hints are applied when you generate captions in the editor.
 						</p>
-					</div>
+					</SectionCard>
+				</Section>
 
-					<Show when={hints().length > 0}>
-						<div class="px-4 py-4 space-y-3 rounded-xl border border-gray-3 bg-gray-2">
-							<div class="flex items-center justify-between gap-3">
-								<h3 class="text-sm font-medium text-gray-12">Active hints</h3>
-								<span class="text-xs text-gray-11">
-									{hints().length} {hints().length === 1 ? "item" : "items"}
-								</span>
-							</div>
+				<Show when={hints().length > 0}>
+					<Section
+						title="Active hints"
+						right={
+							<span class="text-xs text-gray-10">
+								{hints().length} {hints().length === 1 ? "item" : "items"}
+							</span>
+						}
+					>
+						<SectionCard padded>
 							<div class="flex flex-wrap gap-2">
 								<For each={hints()}>
 									{(hint) => (
@@ -193,10 +190,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 									)}
 								</For>
 							</div>
-						</div>
-					</Show>
-				</div>
-			</div>
+						</SectionCard>
+					</Section>
+				</Show>
+			</SettingsPageContent>
 		</div>
 	);
 }

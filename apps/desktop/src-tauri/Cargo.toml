@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.4.87"
+version = "0.5.0"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -165,6 +165,8 @@ windows = { workspace = true, features = [
 ] }
 windows-sys = { workspace = true }
 winreg = "0.55"
+webview2-com = "0.38.0"
+windows-core = "0.61.2"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }

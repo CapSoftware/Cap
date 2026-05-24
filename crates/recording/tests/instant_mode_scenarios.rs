@@ -1049,8 +1049,7 @@ fn manifest_segment_indices_are_sequential() {
     for window in indices.windows(2) {
         assert!(
             window[1] > window[0],
-            "Segment indices should be strictly increasing: {:?}",
-            indices
+            "Segment indices should be strictly increasing: {indices:?}"
         );
     }
 }

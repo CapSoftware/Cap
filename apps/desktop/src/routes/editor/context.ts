@@ -295,14 +295,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			deleteClipSegment: (segmentIndex: number) => {
 				if (!project.timeline) return;
 				const segment = project.timeline.segments[segmentIndex];
-				if (
-					!segment ||
-					!segment.recordingSegment === undefined ||
-					project.timeline.segments.filter(
-						(s) => s.recordingSegment === segment.recordingSegment,
-					).length < 2
-				)
-					return;
+				if (!segment || project.timeline.segments.length < 2) return;
 
 				batch(() => {
 					setProject(

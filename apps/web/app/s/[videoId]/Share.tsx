@@ -151,6 +151,7 @@ interface ShareProps {
 	userOrganizations?: { id: string; name: string }[];
 	viewerId?: string | null;
 	isEditProcessing: boolean;
+	recordingStopped?: boolean;
 	initialAiData?: {
 		title?: string | null;
 		summary?: string | null;
@@ -264,6 +265,7 @@ export const Share = ({
 	videoSettings,
 	viewerId,
 	isEditProcessing,
+	recordingStopped = false,
 }: ShareProps) => {
 	const effectiveDate: Date = data.metadata?.customCreatedAt
 		? new Date(data.metadata.customCreatedAt)
@@ -484,6 +486,7 @@ export const Share = ({
 									canRetryProcessing={viewerId === data.owner.id}
 									showPlaybackStatusBadge={viewerId === data.owner.id}
 									isEditProcessing={isEditProcessing}
+									recordingStopped={recordingStopped}
 									ref={playerRef}
 								/>
 							</div>
@@ -492,6 +495,8 @@ export const Share = ({
 							<Toolbar
 								onOptimisticComment={handleOptimisticComment}
 								onCommentSuccess={handleCommentSuccess}
+								disableComments={areCommentStampsDisabled}
+								disableReactions={areReactionStampsDisabled}
 								data={data}
 							/>
 						</div>
@@ -527,10 +532,8 @@ export const Share = ({
 						<Toolbar
 							onOptimisticComment={handleOptimisticComment}
 							onCommentSuccess={handleCommentSuccess}
-							disableReactions={
-								videoSettings?.disableReactions ??
-								data.orgSettings?.disableReactions
-							}
+							disableComments={areCommentStampsDisabled}
+							disableReactions={areReactionStampsDisabled}
 							data={data}
 						/>
 					</div>

@@ -1388,10 +1388,8 @@ fn finalize_to_progressive_mp4_includes_respawn_fragments() {
 
     assert!(
         duration.as_secs_f64() > baseline_duration.as_secs_f64() * 1.5,
-        "finalized duration {:?} must be substantially longer than single-dir baseline {:?} \
-         when respawn fragments exist",
-        duration,
-        baseline_duration
+        "finalized duration {duration:?} must be substantially longer than single-dir baseline \
+         {baseline_duration:?} when respawn fragments exist"
     );
 
     assert!(

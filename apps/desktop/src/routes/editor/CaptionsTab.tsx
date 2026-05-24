@@ -540,7 +540,7 @@ export function CaptionsTab(props: {
 										</span>
 									</Show>
 									<KSelect.Icon>
-										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180" />
 									</KSelect.Icon>
 								</KSelect.Trigger>
 								<KSelect.Portal>
@@ -597,7 +597,7 @@ export function CaptionsTab(props: {
 										}}
 									</KSelect.Value>
 									<KSelect.Icon>
-										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180" />
 									</KSelect.Icon>
 								</KSelect.Trigger>
 								<KSelect.Portal>
@@ -914,7 +914,7 @@ export function CaptionsTab(props: {
 									</MenuItem>
 								)}
 							>
-								<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-none focus:ring-1 focus:ring-blue-9">
+								<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-hidden focus:ring-1 focus:ring-blue-9">
 									<KSelect.Value<{
 										label: string;
 										value: number;
@@ -925,7 +925,7 @@ export function CaptionsTab(props: {
 										}
 									</KSelect.Value>
 									<KSelect.Icon>
-										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)" />
 									</KSelect.Icon>
 								</KSelect.Trigger>
 								<KSelect.Portal>

@@ -5,20 +5,27 @@ import {
 	Card,
 	CardDescription,
 	CardTitle,
+	Dialog,
+	DialogContent,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
 	Input,
 	Select,
 } from "@cap/ui";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { useMutation } from "@tanstack/react-query";
 import { Effect, Option } from "effect";
+import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useDashboardContext } from "../../Contexts";
 import { ProfileImage } from "./components/ProfileImage";
-import { patchAccountSettings } from "./server";
+import { patchAccountSettings, signOutAllDevices } from "./server";
 
 export const Settings = () => {
 	const router = useRouter();
@@ -28,6 +35,7 @@ export const Settings = () => {
 	const [defaultOrgId, setDefaultOrgId] = useState<
 		Organisation.OrganisationId | undefined
 	>(user?.defaultOrgId || undefined);
+	const [signOutAllDevicesOpen, setSignOutAllDevicesOpen] = useState(false);
 	const firstNameId = useId();
 	const lastNameId = useId();
 	const contactEmailId = useId();
@@ -69,6 +77,18 @@ export const Settings = () => {
 		},
 		onError: () => {
 			toast.error("Failed to update name");
+		},
+	});
+
+	const signOutAllDevicesMutation = useMutation({
+		mutationFn: signOutAllDevices,
+		onSuccess: () => {
+			toast.success("Signed out of all devices");
+			setSignOutAllDevicesOpen(false);
+			signOut({ callbackUrl: "/login" });
+		},
+		onError: () => {
+			toast.error("Failed to sign out of all devices");
 		},
 	});
 
@@ -153,117 +173,184 @@ export const Settings = () => {
 	};
 
 	return (
-		<form
-			onSubmit={(e) => {
-				e.preventDefault();
-				updateName();
-			}}
-		>
-			<div className="grid gap-6 w-full md:grid-cols-2">
-				<Card className="space-y-4">
-					<div className="space-y-1">
-						<CardTitle>Profile image</CardTitle>
-						<CardDescription>
-							This image appears in your profile, comments, and shared caps.
-						</CardDescription>
-					</div>
-					<ProfileImage
-						initialPreviewUrl={profileImagePreviewUrl}
-						onChange={handleProfileImageChange}
-						onRemove={handleProfileImageRemove}
-						disabled={isProfileImageMutating}
-						isUploading={uploadProfileImageMutation.isPending}
-						isRemoving={removeProfileImageMutation.isPending}
-						userName={user?.name}
-					/>
-				</Card>
-				<Card className="space-y-4">
-					<div className="space-y-1">
-						<CardTitle>Your name</CardTitle>
-						<CardDescription>
-							Changing your name below will update how your name appears when
-							sharing a Cap, and in your profile.
-						</CardDescription>
-					</div>
-					<div className="flex flex-col flex-wrap gap-3 w-full">
-						<div className="flex-1">
-							<Input
-								type="text"
-								placeholder="First name"
-								onChange={(e) => setFirstName(e.target.value)}
-								defaultValue={firstName as string}
-								id={firstNameId}
-								name="firstName"
-							/>
-						</div>
-						<div className="flex-1 space-y-2">
-							<Input
-								type="text"
-								placeholder="Last name"
-								onChange={(e) => setLastName(e.target.value)}
-								defaultValue={lastName as string}
-								id={lastNameId}
-								name="lastName"
-							/>
-						</div>
-					</div>
-				</Card>
-				<Card className="flex flex-col gap-4">
-					<div className="space-y-1">
-						<CardTitle>Contact email address</CardTitle>
-						<CardDescription>
-							This is the email address you used to sign up to Cap with.
-						</CardDescription>
-					</div>
-					<Input
-						type="email"
-						value={user?.email as string}
-						id={contactEmailId}
-						name="contactEmail"
-						disabled
-					/>
-				</Card>
-				<Card className="flex flex-col gap-4">
-					<div className="space-y-1">
-						<CardTitle>Default organization</CardTitle>
-						<CardDescription>This is the default organization</CardDescription>
-					</div>
-
-					<Select
-						placeholder="Default organization"
-						value={
-							defaultOrgId ??
-							user?.defaultOrgId ??
-							organizationData?.[0]?.organization.id ??
-							""
-						}
-						onValueChange={(value) =>
-							setDefaultOrgId(Organisation.OrganisationId.make(value))
-						}
-						options={(organizationData || []).map((org) => ({
-							value: org.organization.id,
-							label: org.organization.name,
-							image: (
-								<SignedImageUrl
-									className="size-5"
-									image={org.organization.iconUrl}
-									name={org.organization.name}
-								/>
-							),
-						}))}
-					/>
-				</Card>
-			</div>
-			<Button
-				disabled={!firstName || updateNamePending || !hasChanges}
-				className="mt-6"
-				type="submit"
-				size="sm"
-				variant="dark"
-				spinner={updateNamePending}
+		<>
+			<form
+				onSubmit={(e) => {
+					e.preventDefault();
+					updateName();
+				}}
 			>
-				{updateNamePending ? "Saving..." : "Save"}
-			</Button>
-		</form>
+				<div className="grid gap-6 w-full md:grid-cols-2">
+					<Card className="space-y-4">
+						<div className="space-y-1">
+							<CardTitle>Profile image</CardTitle>
+							<CardDescription>
+								This image appears in your profile, comments, and shared caps.
+							</CardDescription>
+						</div>
+						<ProfileImage
+							initialPreviewUrl={profileImagePreviewUrl}
+							onChange={handleProfileImageChange}
+							onRemove={handleProfileImageRemove}
+							disabled={isProfileImageMutating}
+							isUploading={uploadProfileImageMutation.isPending}
+							isRemoving={removeProfileImageMutation.isPending}
+							userName={user?.name}
+						/>
+					</Card>
+					<Card className="space-y-4">
+						<div className="space-y-1">
+							<CardTitle>Your name</CardTitle>
+							<CardDescription>
+								Changing your name below will update how your name appears when
+								sharing a Cap, and in your profile.
+							</CardDescription>
+						</div>
+						<div className="flex flex-col flex-wrap gap-3 w-full">
+							<div className="flex-1">
+								<Input
+									type="text"
+									placeholder="First name"
+									onChange={(e) => setFirstName(e.target.value)}
+									defaultValue={firstName as string}
+									id={firstNameId}
+									name="firstName"
+								/>
+							</div>
+							<div className="flex-1 space-y-2">
+								<Input
+									type="text"
+									placeholder="Last name"
+									onChange={(e) => setLastName(e.target.value)}
+									defaultValue={lastName as string}
+									id={lastNameId}
+									name="lastName"
+								/>
+							</div>
+						</div>
+					</Card>
+					<Card className="flex flex-col gap-4">
+						<div className="space-y-1">
+							<CardTitle>Contact email address</CardTitle>
+							<CardDescription>
+								This is the email address you used to sign up to Cap with.
+							</CardDescription>
+						</div>
+						<Input
+							type="email"
+							value={user?.email as string}
+							id={contactEmailId}
+							name="contactEmail"
+							disabled
+						/>
+					</Card>
+					<Card className="flex flex-col gap-4">
+						<div className="space-y-1">
+							<CardTitle>Default organization</CardTitle>
+							<CardDescription>
+								This is the default organization
+							</CardDescription>
+						</div>
+
+						<Select
+							placeholder="Default organization"
+							value={
+								defaultOrgId ??
+								user?.defaultOrgId ??
+								organizationData?.[0]?.organization.id ??
+								""
+							}
+							onValueChange={(value) =>
+								setDefaultOrgId(Organisation.OrganisationId.make(value))
+							}
+							options={(organizationData || []).map((org) => ({
+								value: org.organization.id,
+								label: org.organization.name,
+								image: (
+									<SignedImageUrl
+										className="size-5"
+										image={org.organization.iconUrl}
+										name={org.organization.name}
+									/>
+								),
+							}))}
+						/>
+					</Card>
+				</div>
+				<Button
+					disabled={!firstName || updateNamePending || !hasChanges}
+					className="mt-6"
+					type="submit"
+					size="sm"
+					variant="dark"
+					spinner={updateNamePending}
+				>
+					{updateNamePending ? "Saving..." : "Save"}
+				</Button>
+			</form>
+			<Card className="flex flex-col gap-4 mt-6 md:flex-row md:items-center md:justify-between">
+				<div className="space-y-1">
+					<CardTitle>Sign out of all devices</CardTitle>
+					<CardDescription>
+						Invalidate every Cap web session and desktop app authentication
+						token connected to your account.
+					</CardDescription>
+				</div>
+				<Button
+					type="button"
+					size="sm"
+					variant="destructive"
+					icon={<LogOut className="size-4" />}
+					onClick={() => setSignOutAllDevicesOpen(true)}
+				>
+					Sign out all devices
+				</Button>
+			</Card>
+			<Dialog
+				open={signOutAllDevicesOpen}
+				onOpenChange={setSignOutAllDevicesOpen}
+			>
+				<DialogContent>
+					<DialogHeader
+						icon={<LogOut className="size-4" />}
+						description="This will immediately invalidate existing Cap web sessions, desktop session tokens, and desktop API keys for your account."
+					>
+						<DialogTitle>Sign out of all devices?</DialogTitle>
+					</DialogHeader>
+					<div className="p-5 space-y-3 text-sm text-gray-11">
+						<p>
+							You will be signed out of this browser after the reset completes.
+						</p>
+						<p>
+							The Cap desktop app may need you to click Sign out, then sign in
+							again before uploads and settings sync work.
+						</p>
+					</div>
+					<DialogFooter>
+						<Button
+							type="button"
+							size="sm"
+							variant="gray"
+							onClick={() => setSignOutAllDevicesOpen(false)}
+						>
+							Cancel
+						</Button>
+						<Button
+							type="button"
+							size="sm"
+							variant="destructive"
+							icon={<LogOut className="size-4" />}
+							onClick={() => signOutAllDevicesMutation.mutate()}
+							spinner={signOutAllDevicesMutation.isPending}
+							disabled={signOutAllDevicesMutation.isPending}
+						>
+							{signOutAllDevicesMutation.isPending
+								? "Signing out..."
+								: "Sign out all devices"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</>
 	);
 };

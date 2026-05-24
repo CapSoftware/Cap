@@ -6,6 +6,5 @@ export default defineConfig({
 	test: {
 		environment: "node",
 		include: ["src/**/*.test.{ts,tsx}"],
-		setupFiles: ["./src/jest-dom.setup.ts"],
 	},
 });

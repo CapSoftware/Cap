@@ -13,7 +13,7 @@ mod exit_shutdown;
 mod export;
 mod fake_window;
 mod flags;
-mod frame_ws;
+pub mod frame_ws;
 mod general_settings;
 mod hotkeys;
 mod http_client;
@@ -465,6 +465,55 @@ fn emit_camera_preview_clear(app_handle: &AppHandle) {
     let _ = app_handle.emit(CAMERA_PREVIEW_CLEAR_EVENT, ());
 }
 
+async fn add_camera_preview_ws_sender(
+    camera_feed: &ActorRef<CameraFeed>,
+    sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
+) {
+    add_camera_preview_sender(camera_feed, sender, "WebSocket").await;
+}
+
+async fn add_camera_preview_sender(
+    camera_feed: &ActorRef<CameraFeed>,
+    sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
+    label: &str,
+) {
+    let result = camera_feed.ask(feeds::camera::AddSender(sender)).await;
+    if let Err(err) = result {
+        warn!(error = %err, "Failed to add {label} camera sender");
+    }
+}
+
+async fn remove_camera_preview_sender(
+    camera_feed: &ActorRef<CameraFeed>,
+    sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
+    label: &str,
+) {
+    let result = camera_feed.ask(feeds::camera::RemoveSender(sender)).await;
+    if let Err(err) = result {
+        warn!(error = %err, "Failed to remove {label} camera sender");
+    }
+}
+
+async fn sync_camera_preview_sender(
+    camera_feed: &ActorRef<CameraFeed>,
+    camera_ws_sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
+    camera_preview_sender: Option<flume::Sender<cap_recording::FFmpegVideoFrame>>,
+    use_ws_preview: bool,
+) {
+    if use_ws_preview {
+        if let Some(sender) = camera_preview_sender {
+            remove_camera_preview_sender(camera_feed, sender, "native preview").await;
+        }
+
+        add_camera_preview_ws_sender(camera_feed, camera_ws_sender).await;
+    } else if let Some(sender) = camera_preview_sender {
+        add_camera_preview_sender(camera_feed, sender, "native preview").await;
+        remove_camera_preview_sender(camera_feed, camera_ws_sender, "WebSocket").await;
+    } else {
+        add_camera_preview_ws_sender(camera_feed, camera_ws_sender).await;
+    }
+}
+
 impl App {
     pub fn set_pending_recording(&mut self, mode: RecordingMode, target: ScreenCaptureTarget) {
         self.recording_state = RecordingState::Pending { mode, target };
@@ -829,13 +878,12 @@ async fn set_camera_input(
     drop(app);
 
     let skip_camera_window = skip_camera_window.unwrap_or(false);
+    let camera_window_is_visible = CapWindowId::Camera
+        .get(&app_handle)
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
 
     if id == current_id && camera_in_use && !skip_camera_window {
-        let camera_window_is_visible = CapWindowId::Camera
-            .get(&app_handle)
-            .and_then(|window| window.is_visible().ok())
-            .unwrap_or(false);
-
         let show_result = if camera_window_is_visible {
             Ok(())
         } else {
@@ -891,35 +939,29 @@ async fn set_camera_input(
             emit_camera_preview_clear(&app_handle);
             let settings =
                 recording_settings::RecordingSettingsStore::camera_settings_for(&app_handle, id);
-            let (camera_ws_sender, native_preview_active) = {
+            let (camera_ws_sender, camera_preview_sender, use_ws_preview) = {
                 let app = &mut *state.write().await;
+                let use_ws_preview = !(camera_window_is_visible
+                    && app.camera_preview.is_initialized()
+                    && !app.camera_preview.is_paused());
                 app.selected_camera_id = Some(id.clone());
                 app.camera_in_use = true;
                 app.camera_cleanup_done = false;
                 #[allow(deprecated)]
                 (
                     app.camera_ws_sender.clone(),
-                    app.camera_preview.is_initialized(),
+                    app.camera_preview.sender(),
+                    use_ws_preview,
                 )
             };
 
-            if native_preview_active {
-                #[allow(deprecated)]
-                let result = camera_feed
-                    .ask(feeds::camera::RemoveSender(camera_ws_sender))
-                    .await;
-                if let Err(err) = result {
-                    warn!(error = %err, "Failed to remove camera sender");
-                }
-            } else {
-                #[allow(deprecated)]
-                let result = camera_feed
-                    .ask(feeds::camera::AddSender(camera_ws_sender))
-                    .await;
-                if let Err(err) = result {
-                    warn!(error = %err, "Failed to add camera sender");
-                }
-            }
+            sync_camera_preview_sender(
+                &camera_feed,
+                camera_ws_sender,
+                camera_preview_sender,
+                use_ws_preview,
+            )
+            .await;
 
             let mut showed_camera_window = skip_camera_window;
             let mut attempts = 0;
@@ -3797,10 +3839,24 @@ async fn refresh_camera_feed(state: MutableState<'_, App>) -> Result<(), String>
     let camera_ws_sender = app.camera_ws_sender.clone();
 
     let camera_preview_sender = app.camera_preview.sender();
+    let use_ws_preview = app.camera_preview.is_paused() || camera_preview_sender.is_none();
 
     drop(app);
 
-    if let Some(sender) = camera_preview_sender {
+    if use_ws_preview {
+        if let Some(sender) = camera_preview_sender {
+            camera_feed
+                .ask(feeds::camera::RemoveSender(sender))
+                .await
+                .map_err(|err| format!("error removing native preview sender: {err}"))?;
+        }
+
+        #[allow(deprecated)]
+        camera_feed
+            .ask(feeds::camera::AddSender(camera_ws_sender))
+            .await
+            .map_err(|err| format!("error re-adding camera ws sender: {err}"))?;
+    } else if let Some(sender) = camera_preview_sender {
         #[allow(deprecated)]
         camera_feed
             .ask(feeds::camera::RemoveSender(camera_ws_sender))
@@ -3998,6 +4054,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             get_display_frame_for_cropping,
             windows::position_traffic_lights,
             windows::set_theme,
+            windows::apply_macos_liquid_glass_background,
             global_message_dialog,
             show_window,
             write_clipboard_string,
@@ -4218,8 +4275,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(PendingScreenshots::default());
             app.manage(FinalizingRecordings::default());
 
-            gpu_context::prewarm_gpu();
-
             #[cfg(unix)]
             {
                 let app_for_signal = app.clone();
@@ -4349,6 +4404,21 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 let app = app.clone();
                 move |_| {
                     app.state::<MainWindowReadyState>().set_ready(true);
+                    gpu_context::prewarm_gpu();
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        let app = app.clone();
+                        tokio::spawn(async move {
+                            if let Some(prewarmer) =
+                                app.try_state::<crate::platform::ScreenCapturePrewarmer>()
+                            {
+                                prewarmer.request(false).await;
+                            } else {
+                                warn!("ScreenCapturePrewarmer state unavailable after main window ready");
+                            }
+                        });
+                    }
                 }
             });
 
@@ -4681,6 +4751,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                             }
                                             CapWindowId::Main => {
                                                 let _ = window.show();
+                                                restore_main_window_inputs(app);
                                             }
                                             _ => {}
                                         }
@@ -4706,6 +4777,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                             }
                                             CapWindowId::Main => {
                                                 let _ = window.show();
+                                                restore_main_window_inputs(app);
                                             }
                                             _ => {}
                                         }
@@ -5046,11 +5118,19 @@ fn restore_main_windows_if_no_editors(app: &AppHandle) {
                 let _ = main.show();
             }
 
+            restore_main_window_inputs(app);
             restore_camera_window(app);
         }
 
         spawn_on_runtime(captions::release_ml_models());
     }
+}
+
+fn restore_main_window_inputs(app: &AppHandle) {
+    let handle = app.clone();
+    spawn_on_runtime(async move {
+        windows::restore_main_window_inputs(&handle).await;
+    });
 }
 
 fn restore_camera_window(app: &AppHandle) {
@@ -5101,6 +5181,7 @@ fn reopen_main_window(app: &AppHandle) {
     if let Some(main) = CapWindowId::Main.get(app) {
         let _ = main.show();
         let _ = main.set_focus();
+        restore_main_window_inputs(app);
     } else {
         let handle = app.clone();
         tokio::spawn(async move {

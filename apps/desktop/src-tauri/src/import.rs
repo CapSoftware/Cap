@@ -718,7 +718,7 @@ fn copy_source_cursor_images(
                     CursorMeta {
                         image_path: target_relative_path,
                         hotspot: cursor.hotspot,
-                        shape: cursor.shape.clone(),
+                        shape: cursor.shape,
                     },
                 );
                 id_map.insert(source_id.clone(), new_id);

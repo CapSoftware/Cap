@@ -3,7 +3,19 @@ import config from "./vite.config";
 
 describe("storybook Vite config", () => {
 	it("loads Solid and Cap UI plugins", () => {
-		expect(Array.isArray(config.plugins)).toBe(true);
-		expect(config.plugins).toHaveLength(2);
+		const plugins = config.plugins ?? [];
+
+		expect(
+			plugins.some(
+				(plugin) => !Array.isArray(plugin) && plugin?.name === "solid",
+			),
+		).toBe(true);
+		expect(
+			plugins.some(
+				(plugin) =>
+					Array.isArray(plugin) &&
+					plugin.some((entry) => entry?.name === "unplugin-icons"),
+			),
+		).toBe(true);
 	});
 });

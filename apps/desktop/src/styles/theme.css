@@ -1,3 +1,5 @@
+@import "@cap/ui-solid/main.css";
+
 @import "@radix-ui/colors/red.css";
 @import "@radix-ui/colors/red-dark.css";
 @import "@radix-ui/colors/gray.css";
@@ -9,6 +11,9 @@
 @import "@radix-ui/colors/indigo-dark.css";
 @import "@radix-ui/colors/yellow.css";
 @import "@radix-ui/colors/yellow-dark.css";
+
+@plugin "@tailwindcss/typography";
+@plugin "tailwind-scrollbar";
 
 @tailwind utilities;
 
@@ -77,24 +82,23 @@
 /* Dark theme variables */
 :root.dark {
 	color-scheme: dark;
-	/* Main background colors */
-	--gray-50: #141414; /* Main background - slightly darker */
-	--gray-100: #181818; /* Secondary background */
-	--gray-200: #222222; /* Borders and dividers */
-	--gray-300: #323232; /* Subtle highlights */
-	--gray-400: #868686; /* Secondary text - slightly softer */
-	--gray-450: #eaeaea; /* Adjusted to be more balanced */
-	--gray-500: #ffffff; /* Primary text - titles/headings */
+	--gray-50: #111111;
+	--gray-100: #1c1c1c;
+	--gray-200: #282828;
+	--gray-300: #323232;
+	--gray-400: #a1a1a1;
+	--gray-450: #eaeaea;
+	--gray-500: #ffffff;
 
-	--gray-50-transparent-50: rgba(20, 20, 20, 0.5);
-	--gray-100-transparent-50: rgba(24, 24, 24, 0.5);
-	--gray-200-transparent-50: rgba(34, 34, 34, 0.5);
+	--gray-50-transparent-50: rgba(17, 17, 17, 0.5);
+	--gray-100-transparent-50: rgba(28, 28, 28, 0.5);
+	--gray-200-transparent-50: rgba(40, 40, 40, 0.5);
 	--gray-300-transparent-50: rgba(50, 50, 50, 0.5);
-	--gray-400-transparent-50: rgba(134, 134, 134, 0.5);
+	--gray-400-transparent-50: rgba(161, 161, 161, 0.5);
 	--gray-450-transparent-50: rgba(234, 234, 234, 0.5);
 	--gray-500-transparent-50: rgba(255, 255, 255, 0.5);
 
-	--transparent-window: rgba(22, 22, 22, 0.7);
+	--transparent-window: rgba(28, 28, 28, 0.85);
 
 	/* Add new variables for text hierarchy */
 	--text-primary: rgba(255, 255, 255, 0.95); /* Section titles, headings */
@@ -125,6 +129,7 @@
 	--blue-200: #2e426b;
 	--blue-300: #4785ff;
 	--blue-400: #5c8fff;
+	--blue-500: #0a84ff;
 
 	--blue-transparent-10: rgba(71, 133, 255, 0.1);
 	--blue-transparent-20: rgba(71, 133, 255, 0.2);
@@ -138,6 +143,14 @@
 	--red-transparent-20: rgba(255, 71, 102, 0.2);
 
 	--shadow-s: 0px 8px 16px 0px rgba(0, 0, 0, 0.4);
+
+	--gray-1: #111111;
+	--gray-2: #1c1c1c;
+	--gray-3: #282828;
+	--gray-4: #323232;
+	--gray-5: #3a3a3a;
+	--gray-6: #444444;
+	--gray-11: #a1a1a1;
 }
 
 .dark .dark-button-shadow {
@@ -214,6 +227,780 @@
 	display: none;
 }
 
+:root {
+	--macos-settings-sidebar-width: 227px;
+	--macos-settings-sidebar-padding-x: 10px;
+	--macos-settings-content-padding-x: 16px;
+	--macos-settings-window-header-height: 52px;
+	--macos-settings-sidebar-wrapper-padding: 8px;
+	--macos-settings-window-radius: 16px;
+	--macos-settings-sidebar-radius: 0px;
+	--macos-settings-blur-2: 12px;
+	--macos-settings-blur-3: 24px;
+	--macos-settings-blur-4: 36px;
+	--macos-settings-window: rgba(244, 244, 243, 0.84);
+	--macos-settings-sidebar: rgba(250, 250, 249, 0.74);
+	--macos-settings-content: rgba(244, 244, 243, 0.84);
+	--macos-settings-card: rgba(249, 249, 248, 0.94);
+	--macos-settings-fill: rgba(0, 0, 0, 0.055);
+	--macos-settings-control-fill: rgba(255, 255, 255, 0.78);
+	--macos-settings-control-hover: rgba(255, 255, 255, 0.96);
+	--macos-settings-control-active: rgba(0, 0, 0, 0.08);
+	--macos-settings-selection: rgba(0, 0, 0, 0.1);
+	--macos-settings-hover: rgba(0, 0, 0, 0.055);
+	--macos-settings-border: rgba(0, 0, 0, 0.08);
+	--macos-settings-text: rgba(0, 0, 0, 0.88);
+	--macos-settings-muted: rgba(0, 0, 0, 0.48);
+	--macos-settings-accent: AccentColor;
+	--macos-settings-accent-text: AccentColorText;
+	--macos-settings-shadow:
+		0 28px 80px rgba(0, 0, 0, 0.26), 0 4px 18px rgba(0, 0, 0, 0.1);
+	--macos-settings-tahoe-shadow:
+		0 1px 1px -1px rgba(0, 0, 0, 0.05),
+		0 4px 2px -3px rgba(0, 0, 0, 0.05),
+		0 8px 4px -6px rgba(0, 0, 0, 0.05),
+		0 12px 40px -12px rgba(0, 0, 0, 0.1),
+		0 24px 64px -24px rgba(0, 0, 0, 0.2);
+	--macos-settings-dimmed-bg: rgba(230, 230, 230, 0.5);
+}
+
+:root.dark {
+	--macos-settings-window: rgba(17, 17, 17, 0.94);
+	--macos-settings-sidebar: rgba(22, 22, 22, 0.9);
+	--macos-settings-content: rgba(17, 17, 17, 0.94);
+	--macos-settings-card: rgba(28, 28, 28, 0.96);
+	--macos-settings-fill: rgba(255, 255, 255, 0.05);
+	--macos-settings-control-fill: rgba(255, 255, 255, 0.08);
+	--macos-settings-control-hover: rgba(255, 255, 255, 0.12);
+	--macos-settings-control-active: rgba(255, 255, 255, 0.06);
+	--macos-settings-selection: #2c2c2c;
+	--macos-settings-hover: rgba(255, 255, 255, 0.05);
+	--macos-settings-border: rgba(255, 255, 255, 0.07);
+	--macos-settings-text: rgba(255, 255, 255, 0.95);
+	--macos-settings-muted: #a1a1a1;
+	--macos-settings-shadow:
+		0 28px 80px rgba(0, 0, 0, 0.55), 0 4px 18px rgba(0, 0, 0, 0.32);
+	--macos-settings-dimmed-bg: rgba(17, 17, 17, 0.7);
+}
+
+[data-macos-visual-system="liquid-glass"] {
+	--macos-settings-window-radius: 26px;
+	--macos-settings-sidebar-radius: 18px;
+	--macos-settings-shadow: var(--macos-settings-tahoe-shadow);
+	--macos-settings-window: transparent;
+	--macos-settings-sidebar: rgba(255, 255, 255, 0.58);
+	--macos-settings-content: #f6f6f5;
+	--macos-settings-card: rgba(255, 255, 255, 0.92);
+	--macos-settings-fill: rgba(0, 0, 0, 0.045);
+	--macos-settings-hover: rgba(0, 0, 0, 0.065);
+	--macos-settings-selection: rgba(0, 0, 0, 0.1);
+	--macos-settings-border: rgba(0, 0, 0, 0.14);
+}
+
+:root.dark[data-macos-visual-system="liquid-glass"] {
+	--macos-settings-sidebar: rgba(28, 28, 28, 0.88);
+	--macos-settings-content: rgba(17, 17, 17, 0.92);
+	--macos-settings-card: rgba(28, 28, 28, 0.94);
+	--macos-settings-fill: rgba(255, 255, 255, 0.05);
+	--macos-settings-control-fill: rgba(255, 255, 255, 0.08);
+	--macos-settings-control-hover: rgba(255, 255, 255, 0.12);
+	--macos-settings-control-active: rgba(255, 255, 255, 0.06);
+	--macos-settings-hover: rgba(255, 255, 255, 0.05);
+	--macos-settings-selection: #2c2c2c;
+	--macos-settings-border: rgba(255, 255, 255, 0.07);
+	--macos-settings-text: rgba(255, 255, 255, 0.95);
+	--macos-settings-muted: #a1a1a1;
+}
+
+[data-macos-native-material],
+[data-macos-native-material] body {
+	background: transparent;
+}
+
+[data-macos-native-material] .cap-window-shell {
+	background: var(--macos-settings-window);
+	border: 1px solid var(--macos-settings-border);
+	border-radius: var(--macos-settings-window-radius);
+	box-shadow: var(--macos-settings-shadow);
+}
+
+[data-macos-native-material] .cap-window-header {
+	background: rgba(250, 250, 249, 0.72);
+	border-bottom: 1px solid var(--macos-settings-border);
+	-webkit-backdrop-filter: blur(28px) saturate(1.45);
+	backdrop-filter: blur(28px) saturate(1.45);
+}
+
+:root.dark[data-macos-native-material] .cap-window-header {
+	background: rgba(28, 28, 28, 0.88);
+}
+
+[data-macos-visual-system="liquid-glass"] .cap-window-shell {
+	background: transparent;
+	border: 0;
+	box-shadow: none;
+}
+
+[data-macos-native-material="panel"] .cap-window-shell {
+	border-radius: 16px;
+}
+
+/* Tone down the see-through on the main panel under Liquid Glass: layer a
+   translucent white (or dark in dark mode) wash over the NSGlassEffectView
+   backdrop so the window reads as a "more white" surface overall instead of
+   showing too much of whatever is behind us. The NSGlassEffectView still
+   provides the live backdrop blur underneath; this is just a tint on top. */
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-shell {
+	background: rgba(255, 255, 255, 0.55);
+}
+
+.dark[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-shell {
+	background: rgba(17, 17, 17, 0.88);
+}
+
+[data-macos-visual-system="liquid-glass"] .cap-window-shell > * + * {
+	border-color: transparent;
+}
+
+[data-macos-visual-system="liquid-glass"] .cap-window-header {
+	background: transparent;
+	border-bottom-color: transparent;
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body {
+	color: var(--macos-settings-text);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.bg-gray-2,
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.bg-gray-3 {
+	background-color: var(--macos-settings-control-fill);
+}
+
+.dark[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.dark\:bg-gray-3,
+.dark[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.dark\:bg-gray-4 {
+	background-color: var(--macos-settings-control-fill);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.bg-gray-4 {
+	background-color: var(--macos-settings-control-hover);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.bg-gray-5 {
+	background-color: var(--macos-settings-control-active);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.border-gray-4,
+.dark[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.dark\:border-gray-5 {
+	border-color: var(--macos-settings-border);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	[class*="hover:bg-gray-4"]:hover:not(:disabled),
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	[class*="hover:bg-gray-5"]:hover:not(:disabled) {
+	background-color: var(--macos-settings-control-hover);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	[class*="hover:bg-gray-6"]:hover:not(:disabled),
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	[class*="hover:bg-gray-7"]:hover:not(:disabled) {
+	background-color: var(--macos-settings-selection);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.border-gray-5,
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.border-gray-6 {
+	border-color: var(--macos-settings-border);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	[class*="hover:border-gray-6"]:hover:not(:disabled) {
+	border-color: var(--macos-settings-selection);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.ring-offset-gray-1 {
+	--tw-ring-offset-color: transparent;
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	button[data-variant="gray"],
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	button[data-variant="outline"],
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	button[data-variant="white"] {
+	color: var(--macos-settings-text);
+	background: var(--macos-settings-control-fill);
+	border-color: transparent;
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	button[data-variant="gray"]:hover:not(:disabled),
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	button[data-variant="outline"]:hover:not(:disabled),
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	button[data-variant="white"]:hover:not(:disabled) {
+	background: var(--macos-settings-control-hover);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.custom-scroll::-webkit-scrollbar-thumb {
+	background-color: rgba(125, 125, 125, 0.38);
+}
+
+/* Panel buttons under Liquid Glass: no inner highlight, no drop shadow. The
+   translucent material itself is what reads as "raised" — Tahoe controls
+   rely on the glass material + a fill change for state, not on explicit
+   bevels/shadows. Keep transition-property so hover/press fill changes
+   animate smoothly. */
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	:is(button, [role="button"], div):not(
+		.rounded-full,
+		.rounded-none,
+		:focus-visible
+	):is(.bg-gray-3, .bg-gray-4, .bg-gray-5) {
+	transition-property: background-color, border-color, color;
+}
+
+/* Composed controls (Display/Window pairs) have a parent container with bg-gray-3
+   and child buttons that also carry bg-gray-3/4 via their component defaults but
+   use rounded-none to indicate they're parts of a composed control. Strip the
+   child's fill so we don't get a double-layered ~83% white tile next to the
+   single-layer ~58% Area / Camera-Only / device-row tiles. */
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.rounded-none.bg-gray-3,
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	.rounded-none.bg-gray-4 {
+	background-color: transparent;
+}
+
+/* Press feedback: just darken the fill — Apple's Tahoe press state is a fill
+   change, not an inset bevel. */
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	button:not(.rounded-full, .rounded-none, :focus-visible, :disabled):is(
+		.bg-gray-3,
+		.bg-gray-4,
+		.bg-gray-5
+	):active {
+	background-color: var(--macos-settings-control-active);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	:is(button, [role="button"], div):not(
+		.rounded-full,
+		.rounded-none
+	).rounded-lg:is(.bg-gray-3, .bg-gray-4, .bg-gray-5) {
+	border-radius: 10px;
+}
+
+/* Thumbnail/recording/screenshot cards: keep a visible border so they read as
+   cards on a white/bright backdrop where the white-frosted fill (~58% alpha)
+   is otherwise indistinguishable from the backdrop. No drop shadow and no
+   inner highlight — Apple's Tahoe cards rely on the material + a 1px
+   hairline border, nothing more. */
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	[data-variant="display"],
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	[data-variant="window"],
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	[data-variant="recording"],
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="panel"]
+	.cap-window-body
+	[data-variant="screenshot"] {
+	border-color: var(--macos-settings-border);
+}
+
+[data-macos-native-material="settings"] .cap-window-shell {
+	background: var(--macos-settings-window);
+	border-color: var(--macos-settings-border);
+	border-radius: var(--macos-settings-window-radius);
+	box-shadow: var(--macos-settings-shadow);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="settings"]
+	.cap-window-shell {
+	background: transparent;
+	border: 0;
+	overflow: hidden;
+}
+
+[data-macos-native-material="settings"] .cap-window-header {
+	display: none;
+}
+
+[data-macos-native-material="settings"] .cap-settings-shell {
+	background: transparent;
+	border-color: transparent;
+}
+
+/* Use the Tahoe System Settings layout: sidebar and content fill the window
+   edge-to-edge with a single vertical divider between them, NOT a floating-
+   pane look with an 8px gap. The window's own border-radius + overflow:hidden
+   clips the outer corners, so we don't need inner rounded corners on the
+   panes (which would otherwise show as a visible "second border" inside the
+   outer rounded edge). */
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="settings"]
+	.cap-settings-shell {
+	gap: 0;
+	padding: 0;
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="settings"]
+	.cap-settings-shell
+	> *
+	+ * {
+	border-color: var(--macos-settings-border);
+}
+
+[data-macos-native-material="settings"] .cap-settings-sidebar {
+	position: relative;
+	overflow: hidden;
+	width: var(--macos-settings-sidebar-width);
+	min-width: var(--macos-settings-sidebar-width);
+	max-width: var(--macos-settings-sidebar-width);
+	background: var(--macos-settings-sidebar);
+	border-radius: var(--macos-settings-sidebar-radius);
+	-webkit-backdrop-filter: blur(var(--macos-settings-blur-4)) saturate(1.8);
+	backdrop-filter: blur(var(--macos-settings-blur-4)) saturate(1.8);
+	border-right: 1px solid var(--macos-settings-border);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="settings"]
+	.cap-settings-sidebar {
+	height: 100%;
+	background: var(--macos-settings-sidebar);
+	border-right-color: transparent;
+	border-radius: 0;
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+[data-macos-visual-system="liquid-glass"] .cap-settings-sidebar::before {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	content: "";
+	background:
+		linear-gradient(
+			100deg,
+			rgba(255, 255, 255, 0.36),
+			rgba(255, 255, 255, 0) 42%
+		),
+		linear-gradient(
+			180deg,
+			rgba(255, 255, 255, 0.18),
+			rgba(255, 255, 255, 0) 18%
+		);
+	opacity: 0.66;
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="settings"]
+	.cap-settings-sidebar::before {
+	display: none;
+}
+
+[data-macos-native-material="settings"] .cap-settings-sidebar > * {
+	position: relative;
+	z-index: 1;
+}
+
+[data-macos-native-material="settings"] .cap-settings-content {
+	background: var(--macos-settings-content);
+	-webkit-backdrop-filter: blur(var(--macos-settings-blur-3)) saturate(1.35);
+	backdrop-filter: blur(var(--macos-settings-blur-3)) saturate(1.35);
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="settings"]
+	.cap-settings-content {
+	overflow: hidden;
+	background: var(--macos-settings-content);
+	border-radius: 0;
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+[data-macos-native-material="settings"] .cap-settings-page {
+	color: var(--macos-settings-text);
+	background: transparent;
+}
+
+[data-macos-native-material="settings"] .cap-settings-window-spacer {
+	height: calc(
+		var(--macos-settings-window-header-height) -
+		var(--macos-settings-sidebar-wrapper-padding)
+	);
+	flex: 0 0
+		calc(
+			var(--macos-settings-window-header-height) -
+			var(--macos-settings-sidebar-wrapper-padding)
+		);
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	width: calc(100% - var(--macos-settings-sidebar-padding-x) * 2);
+	min-height: 44px;
+	margin: 0 var(--macos-settings-sidebar-padding-x) 16px;
+	padding: 6px 4px;
+	color: inherit;
+	text-align: left;
+	background: transparent;
+	border: 0;
+	border-radius: 8px;
+	transition-property: background-color;
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile:hover {
+	background: var(--macos-settings-hover);
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile:active {
+	background: var(--macos-settings-selection);
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile:focus-visible {
+	outline: 2px solid rgba(0, 122, 255, 0.58);
+	outline-offset: 1px;
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	color: var(--macos-settings-muted);
+	background: var(--macos-settings-fill);
+	border-radius: 999px;
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile-image {
+	width: 32px;
+	height: 32px;
+	flex: 0 0 32px;
+	object-fit: cover;
+	background: var(--macos-settings-fill);
+	border-radius: 999px;
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile-copy {
+	display: flex;
+	min-width: 0;
+	flex-direction: column;
+	gap: 2px;
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile-skeleton {
+	display: block;
+	background: linear-gradient(
+		90deg,
+		var(--macos-settings-fill),
+		var(--macos-settings-selection),
+		var(--macos-settings-fill)
+	);
+	background-size: 200% 100%;
+	border-radius: 999px;
+	animation: cap-settings-skeleton 1.2s ease-in-out infinite;
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile-skeleton-avatar {
+	width: 32px;
+	height: 32px;
+	flex: 0 0 32px;
+	padding: 0;
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile-skeleton-title {
+	width: 96px;
+	height: 12px;
+}
+
+[data-macos-native-material="settings"]
+	.cap-settings-profile-skeleton-subtitle {
+	width: 52px;
+	height: 9px;
+	opacity: 0.72;
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile p,
+[data-macos-native-material="settings"] .cap-settings-page p,
+[data-macos-native-material="settings"] .cap-settings-page h2,
+[data-macos-native-material="settings"] .cap-settings-page h3 {
+	color: inherit;
+}
+
+[data-macos-native-material="settings"] .cap-settings-profile p {
+	margin: 0;
+	line-height: 1.15;
+}
+
+[data-macos-native-material="settings"] .cap-settings-page .text-gray-10,
+[data-macos-native-material="settings"] .cap-settings-page .text-gray-11,
+[data-macos-native-material="settings"] .cap-settings-profile .text-gray-10,
+[data-macos-native-material="settings"] .cap-settings-account .text-gray-11 {
+	color: var(--macos-settings-muted);
+}
+
+/* Hover state on text buttons (e.g. "View previous versions", "Check for
+   updates") — Tailwind's `.hover:text-gray-12` is too low-specificity to win
+   against the muted override above, so re-assert the brighter colour here
+   under :hover with the same selector prefix. */
+[data-macos-native-material="settings"]
+	.cap-settings-account
+	button:hover:not(:disabled),
+[data-macos-native-material="settings"]
+	.cap-settings-account
+	a:hover:not(:disabled),
+[data-macos-native-material="settings"]
+	.cap-settings-page
+	button[class*="hover:text-gray-12"]:hover:not(:disabled),
+[data-macos-native-material="settings"]
+	.cap-settings-page
+	a[class*="hover:text-gray-12"]:hover:not(:disabled) {
+	color: var(--macos-settings-text);
+}
+
+[data-macos-native-material="settings"] .cap-settings-nav {
+	width: 100%;
+	min-width: 0;
+	min-height: 0;
+	padding: 0 var(--macos-settings-sidebar-padding-x)
+		var(--macos-settings-sidebar-padding-x);
+	overflow-y: auto;
+}
+
+[data-macos-native-material="settings"] .cap-settings-nav-item {
+	height: 32px;
+	padding: 6px;
+	border: 1px solid transparent;
+	color: var(--macos-settings-text);
+	border-radius: 8px;
+	transition-property: background-color, color;
+}
+
+[data-macos-native-material="settings"] .cap-settings-nav-item:hover {
+	background: var(--macos-settings-hover);
+}
+
+[data-macos-native-material="settings"] .cap-settings-nav-item.bg-gray-5 {
+	background: var(--macos-settings-selection);
+	border-color: transparent;
+	box-shadow: none;
+}
+
+[data-macos-native-material="settings"] .cap-settings-nav-item svg {
+	box-sizing: border-box;
+	flex: 0 0 16px;
+	padding: 0;
+	width: 16px;
+	height: 16px;
+	color: var(--macos-settings-muted);
+	background: transparent;
+	border-radius: 0;
+	opacity: 1;
+}
+
+[data-macos-native-material="settings"] .cap-settings-nav-item.bg-gray-5 svg {
+	color: var(--macos-settings-accent);
+}
+
+[data-macos-native-material="settings"] .cap-settings-account {
+	padding: 8px var(--macos-settings-sidebar-padding-x)
+		var(--macos-settings-sidebar-padding-x);
+	border-top: 1px solid var(--macos-settings-border);
+}
+
+[data-macos-native-material="settings"] .cap-settings-account .underline {
+	text-decoration: none;
+}
+
+[data-macos-native-material="settings"] .cap-settings-page > .px-6 {
+	max-width: none;
+	padding: 18px var(--macos-settings-content-padding-x) 28px;
+}
+
+[data-macos-native-material="settings"] .cap-settings-page > .p-4,
+[data-macos-native-material="settings"] .cap-settings-page.p-4 {
+	padding: 18px var(--macos-settings-content-padding-x)
+		var(--macos-settings-content-padding-x);
+}
+
+[data-macos-native-material="settings"] .cap-settings-card,
+[data-macos-native-material="settings"] .cap-settings-content .bg-gray-2 {
+	background-color: var(--macos-settings-card);
+	border-color: transparent;
+	box-shadow: none;
+}
+
+[data-macos-native-material="settings"] .cap-settings-content .bg-gray-3,
+[data-macos-native-material="settings"] .cap-settings-content .bg-gray-4,
+[data-macos-native-material="settings"] .cap-settings-content .bg-gray-5 {
+	background-color: var(--macos-settings-fill);
+}
+
+[data-macos-native-material="settings"] .cap-settings-content .border-gray-2,
+[data-macos-native-material="settings"] .cap-settings-content .border-gray-3,
+[data-macos-native-material="settings"] .cap-settings-content .border-gray-4,
+[data-macos-native-material="settings"] .cap-settings-content .border-gray-5,
+[data-macos-native-material="settings"] .cap-setting-row {
+	border-color: var(--macos-settings-border);
+}
+
+[data-macos-native-material="settings"] .cap-setting-row {
+	min-height: 46px;
+	padding: 12px;
+}
+
+[data-macos-native-material="settings"] .cap-settings-content .rounded-xl {
+	border-radius: 10px;
+}
+
+[data-macos-native-material="settings"] .cap-settings-content button {
+	border-radius: 8px;
+}
+
+[data-macos-native-material="settings"] button[data-variant] {
+	border-color: transparent;
+}
+
+[data-macos-native-material="settings"] button[data-variant="gray"],
+[data-macos-native-material="settings"] button[data-variant="outline"],
+[data-macos-native-material="settings"] button[data-variant="white"] {
+	color: var(--macos-settings-text);
+	background: var(--macos-settings-control-fill);
+	/* Override the skeuomorphic `gray-button-shadow` (inset top bevel) and
+	   `gray-button-border` (heavy `border-gray-8`) utility classes baked into
+	   Cap UI's gray/white/outline variants — Tahoe surfaces are flat and use
+	   the standard --macos-settings-border hairline, not a bevel + dark line. */
+	box-shadow: none;
+	border-color: var(--macos-settings-border);
+}
+
+[data-macos-native-material="settings"] button[data-variant="gray"]:hover,
+[data-macos-native-material="settings"] button[data-variant="outline"]:hover,
+[data-macos-native-material="settings"] button[data-variant="white"]:hover {
+	background: var(--macos-settings-control-hover);
+}
+
+[data-macos-native-material="settings"] button[data-variant="gray"]:active,
+[data-macos-native-material="settings"] button[data-variant="outline"]:active,
+[data-macos-native-material="settings"] button[data-variant="white"]:active {
+	background: var(--macos-settings-control-active);
+}
+
+/* Blue/primary/dark buttons need an explicit white text color. WebKit doesn't
+   reliably resolve `AccentColorText` to a contrasting colour inside a
+   WKWebView (we've seen it fall back to black on top of a blue background).
+   Cap UI's `blue` variant ships with `text-white` anyway, so hardcoding here
+   matches that intent and keeps text legible regardless of the user's
+   system accent. */
+[data-macos-native-material="settings"] button[data-variant="primary"],
+[data-macos-native-material="settings"] button[data-variant="blue"],
+[data-macos-native-material="settings"] button[data-variant="dark"] {
+	color: #ffffff;
+	background: var(--macos-settings-accent);
+}
+
+[data-macos-native-material="settings"] button[data-variant="primary"]:hover,
+[data-macos-native-material="settings"] button[data-variant="blue"]:hover,
+[data-macos-native-material="settings"] button[data-variant="dark"]:hover {
+	filter: brightness(1.04);
+}
+
+[data-macos-native-material="settings"] button[data-variant="destructive"] {
+	background: #ff3b30;
+}
+
+[data-macos-native-material="settings"] button[data-variant]:disabled {
+	color: var(--macos-settings-muted);
+	background: var(--macos-settings-fill);
+	box-shadow: none;
+	filter: none;
+	transform: none;
+}
+
+[data-macos-native-material="settings"] .cap-settings-content .rounded-full {
+	border-radius: 999px;
+}
+
+[data-macos-native-material="settings"] .cap-toggle {
+	background: var(--macos-settings-control-fill);
+	box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.16);
+}
+
+[data-macos-native-material="settings"] .cap-toggle[data-checked] {
+	background: var(--macos-settings-accent);
+}
+
+[data-macos-native-material="settings"] .cap-toggle-thumb {
+	box-shadow:
+		0 1px 2px rgba(0, 0, 0, 0.22),
+		0 0 0 0.5px rgba(0, 0, 0, 0.08);
+}
+
+[data-macos-native-material="settings"]
+	.custom-scroll::-webkit-scrollbar-thumb {
+	background-color: rgba(125, 125, 125, 0.38);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-macos-native-material="settings"] .cap-settings-nav-item {
+		transition: none;
+	}
+
+	[data-macos-native-material="settings"] .cap-settings-profile-skeleton {
+		animation: none;
+	}
+}
+
 .custom-scroll::-webkit-scrollbar-thumb {
 	background-color: var(--gray-300);
 	width: 4px;
@@ -235,6 +1022,15 @@
 .bounce {
 	animation: bounce 1s ease-in-out forwards;
 	animation-iteration-count: infinite;
+}
+
+@keyframes cap-settings-skeleton {
+	0% {
+		background-position: 100% 0;
+	}
+	100% {
+		background-position: -100% 0;
+	}
 }
 
 @keyframes settings-section-pulse {
@@ -412,5 +1208,28 @@
 @layer utilities {
 	.platform-windows .overflow-y-auto {
 		@apply scrollbar-thin scrollbar-track-transparent scrollbar-thumb-black-transparent-40;
+	}
+}
+
+:root.platform-macos button:not(:disabled),
+:root.platform-windows button:not(:disabled),
+:root.platform-macos [role="button"]:not([aria-disabled="true"]),
+:root.platform-windows [role="button"]:not([aria-disabled="true"]) {
+	cursor: default;
+}
+
+:root.platform-macos a:not([href]),
+:root.platform-windows a:not([href]) {
+	cursor: default;
+}
+
+/* Preserve the same default border color from Tailwind 3 */
+@layer base {
+	*,
+	::after,
+	::before,
+	::backdrop,
+	::file-selector-button {
+		border-color: var(--color-gray-200, currentColor);
 	}
 }
