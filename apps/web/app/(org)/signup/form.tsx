@@ -6,6 +6,7 @@ import {
 	faArrowLeft,
 	faEnvelope,
 	faExclamationCircle,
+	faRightToBracket,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence, motion } from "framer-motion";
@@ -111,6 +112,17 @@ export function SignupForm() {
 			auth_surface: "signup",
 		});
 		signIn("google", {
+			...(next && next.length > 0 ? { callbackUrl: next } : {}),
+		});
+	};
+
+	const handleAuthentikSignIn = () => {
+		trackEvent("auth_started", {
+			method: "authentik",
+			is_signup: true,
+			auth_surface: "signup",
+		});
+		signIn("authentik", {
 			...(next && next.length > 0 ? { callbackUrl: next } : {}),
 		});
 	};
@@ -326,6 +338,7 @@ export function SignupForm() {
 											loading={loading}
 											oauthError={oauthError}
 											handleGoogleSignIn={handleGoogleSignIn}
+											handleAuthentikSignIn={handleAuthentikSignIn}
 										/>
 									</motion.form>
 								)}
@@ -419,6 +432,7 @@ const NormalSignup = ({
 	loading,
 	oauthError,
 	handleGoogleSignIn,
+	handleAuthentikSignIn,
 }: {
 	setShowOrgInput: (show: boolean) => void;
 	email: string;
@@ -427,6 +441,7 @@ const NormalSignup = ({
 	loading: boolean;
 	oauthError: boolean;
 	handleGoogleSignIn: () => void;
+	handleAuthentikSignIn: () => void;
 }) => {
 	const publicEnv = usePublicEnv();
 
@@ -456,7 +471,9 @@ const NormalSignup = ({
 					Sign up with email
 				</MotionButton>
 			</motion.div>
-			{(publicEnv.googleAuthAvailable || publicEnv.workosAuthAvailable) && (
+			{(publicEnv.googleAuthAvailable ||
+				publicEnv.workosAuthAvailable ||
+				publicEnv.authentikAuthAvailable) && (
 				<>
 					<div className="flex gap-4 items-center my-4">
 						<span className="flex-1 h-px bg-gray-5" />
@@ -467,7 +484,19 @@ const NormalSignup = ({
 						layout
 						className="flex flex-col gap-3 justify-center items-center"
 					>
-						{!oauthError && (
+						{publicEnv.authentikAuthAvailable && !oauthError && (
+							<MotionButton
+								variant="gray"
+								type="button"
+								className="flex gap-2 justify-center items-center w-full text-sm"
+								onClick={handleAuthentikSignIn}
+								disabled={loading}
+							>
+								<FontAwesomeIcon className="size-4" icon={faRightToBracket} />
+								Sign up with Authentik
+							</MotionButton>
+						)}
+						{publicEnv.googleAuthAvailable && !oauthError && (
 							<MotionButton
 								variant="gray"
 								type="button"
