@@ -154,6 +154,19 @@ const StepOne = ({
 			callbackUrl: `${window.location.origin}/s/${videoId}`,
 		});
 	};
+	const handleAuthentikSignIn = () => {
+		trackEvent("auth_started", {
+			method: "authentik",
+			is_signup: false,
+			auth_surface: "share_overlay",
+			video_id: videoId,
+		});
+		setLoading(true);
+		signIn("authentik", {
+			redirect: false,
+			callbackUrl: `${window.location.origin}/s/${videoId}`,
+		});
+	};
 	const publicEnv = usePublicEnv();
 
 	return (
@@ -247,7 +260,7 @@ const StepOne = ({
 							variant="gray"
 							type="button"
 							className="flex gap-2 justify-center items-center my-1 w-full text-sm"
-							onClick={() => signIn("authentik")}
+							onClick={handleAuthentikSignIn}
 							disabled={loading}
 						>
 							<FontAwesomeIcon className="size-4" icon={faRightToBracket} />
