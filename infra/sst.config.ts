@@ -1,5 +1,7 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
+import { parseStageName } from "./stage";
+
 const GITHUB_ORG = "CapSoftware";
 const _GITHUB_REPO = "Cap";
 const _GITHUB_APP_ID = "1196731";
@@ -12,16 +14,7 @@ const _CLOUDFLARE_ACCOUNT_ID = "3de2dd633194481d80f68f55257bdbaa";
 const AXIOM_API_TOKEN = "xaat-c0704be6-e942-4935-b068-3b491d7cc00f";
 const AXIOM_DATASET = "cap-otel";
 
-const parsedStage = () => {
-	if ($app.stage === "staging") return { variant: "staging" } as const;
-	if ($app.stage === "production") return { variant: "production" } as const;
-	if ($app.stage.startsWith("git-branch-"))
-		return {
-			variant: "git-branch",
-			branch: $app.stage.slice("git-branch-".length),
-		} as const;
-	throw new Error("Unsupported stage");
-};
+const parsedStage = () => parseStageName($app.stage);
 
 export default $config({
 	app(input) {

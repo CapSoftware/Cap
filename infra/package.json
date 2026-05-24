@@ -1,10 +1,13 @@
 {
 	"name": "@cap/infra",
+	"type": "module",
 	"devDependencies": {
-		"sst": "3.17.14"
+		"sst": "3.17.14",
+		"vitest": "~2.1.9"
 	},
 	"scripts": {
-		"sst": "sst"
+		"sst": "sst",
+		"test": "vitest run"
 	},
 	"dependencies": {
 		"@pulumi/github": "^6.7.0",
