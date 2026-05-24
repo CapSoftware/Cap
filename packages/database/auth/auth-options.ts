@@ -6,6 +6,7 @@ import type { NextAuthOptions } from "next-auth";
 import { getServerSession as _getServerSession } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
 import { decode, type JWT, type JWTDecodeParams } from "next-auth/jwt";
+import AuthentikProvider from "next-auth/providers/authentik";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers/index";
@@ -69,6 +70,15 @@ export const authOptions = (): NextAuthOptions => {
 		get providers() {
 			if (_providers) return _providers;
 			_providers = [
+				...(serverEnv().AUTHENTIK_ISSUER
+					? [
+							AuthentikProvider({
+								clientId: serverEnv().AUTHENTIK_CLIENT_ID as string,
+								clientSecret: serverEnv().AUTHENTIK_CLIENT_SECRET as string,
+								issuer: serverEnv().AUTHENTIK_ISSUER as string,
+							}),
+						]
+					: []),
 				GoogleProvider({
 					clientId: serverEnv().GOOGLE_CLIENT_ID as string,
 					clientSecret: serverEnv().GOOGLE_CLIENT_SECRET as string,
