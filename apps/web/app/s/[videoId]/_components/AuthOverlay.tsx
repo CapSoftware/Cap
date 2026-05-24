@@ -200,34 +200,38 @@ const StepOne = ({
 			}}
 			className="flex flex-col gap-3"
 		>
-			<div>
-				<Input
-					id={emailId}
-					name="email"
-					autoFocus
-					type="email"
-					placeholder={emailSent ? "" : "tim@apple.com"}
-					autoComplete="email"
-					required
-					value={email}
-					disabled={emailSent || loading}
-					onChange={(e) => {
-						setEmail(e.target.value.toLowerCase());
-					}}
-				/>
-			</div>
-			<Button
-				variant="dark"
-				type="submit"
-				icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
-				disabled={loading || emailSent}
-			>
-				{emailSent
-					? NODE_ENV === "development"
-						? "Email sent to your terminal"
-						: "Email sent to your inbox"
-					: "Continue with Email"}
-			</Button>
+			{!publicEnv.disableEmailAuth && (
+				<>
+					<div>
+						<Input
+							id={emailId}
+							name="email"
+							autoFocus
+							type="email"
+							placeholder={emailSent ? "" : "tim@apple.com"}
+							autoComplete="email"
+							required
+							value={email}
+							disabled={emailSent || loading}
+							onChange={(e) => {
+								setEmail(e.target.value.toLowerCase());
+							}}
+						/>
+					</div>
+					<Button
+						variant="dark"
+						type="submit"
+						icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
+						disabled={loading || emailSent}
+					>
+						{emailSent
+							? NODE_ENV === "development"
+								? "Email sent to your terminal"
+								: "Email sent to your inbox"
+							: "Continue with Email"}
+					</Button>
+				</>
+			)}
 			{(publicEnv.googleAuthAvailable ||
 				publicEnv.authentikAuthAvailable) && (
 				<>

@@ -447,30 +447,32 @@ const NormalSignup = ({
 
 	return (
 		<motion.div>
-			<motion.div layout className="flex flex-col space-y-3">
-				<MotionInput
-					id="email"
-					name="email"
-					autoFocus
-					type="email"
-					placeholder={emailSent ? "" : "tim@apple.com"}
-					autoComplete="email"
-					required
-					value={email}
-					disabled={emailSent || loading}
-					onChange={(e) => {
-						setEmail(e.target.value.toLowerCase());
-					}}
-				/>
-				<MotionButton
-					variant="dark"
-					type="submit"
-					disabled={loading || emailSent}
-					icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
-				>
-					Sign up with email
-				</MotionButton>
-			</motion.div>
+			{!publicEnv.disableEmailAuth && (
+				<motion.div layout className="flex flex-col space-y-3">
+					<MotionInput
+						id="email"
+						name="email"
+						autoFocus
+						type="email"
+						placeholder={emailSent ? "" : "tim@apple.com"}
+						autoComplete="email"
+						required
+						value={email}
+						disabled={emailSent || loading}
+						onChange={(e) => {
+							setEmail(e.target.value.toLowerCase());
+						}}
+					/>
+					<MotionButton
+						variant="dark"
+						type="submit"
+						disabled={loading || emailSent}
+						icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
+					>
+						Sign up with email
+					</MotionButton>
+				</motion.div>
+			)}
 			{(publicEnv.googleAuthAvailable ||
 				publicEnv.workosAuthAvailable ||
 				publicEnv.authentikAuthAvailable) && (

@@ -88,6 +88,10 @@ function createServerEnv() {
 				.string()
 				.optional()
 				.describe("Comma-separated list of permitted signup domains"),
+			CAP_DISABLE_EMAIL_AUTH: boolString(false).describe(
+				"Hide the email magic-link UI on login/signup/share pages. "
+				+ "The provider stays wired server-side as break-glass.",
+			),
 
 			/// AI providers
 			DEEPGRAM_API_KEY: z.string().optional().describe("Audio transcription"),

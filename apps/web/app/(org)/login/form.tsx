@@ -433,29 +433,30 @@ const NormalLogin = ({
 
 	return (
 		<motion.div>
-			<motion.div layout className="flex flex-col space-y-3">
-				<MotionInput
-					id="email"
-					name="email"
-					autoFocus
-					type="email"
-					placeholder={emailSent ? "" : "tim@apple.com"}
-					autoComplete="email"
-					required
-					value={email}
-					disabled={emailSent || loading}
-					onChange={(e) => {
-						setEmail(e.target.value.toLowerCase());
-					}}
-				/>
-				<MotionButton
-					variant="dark"
-					type="submit"
-					disabled={loading || emailSent}
-					icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
-				>
-					Login with email
-				</MotionButton>
+			{!publicEnv.disableEmailAuth && (
+				<motion.div layout className="flex flex-col space-y-3">
+					<MotionInput
+						id="email"
+						name="email"
+						autoFocus
+						type="email"
+						placeholder={emailSent ? "" : "tim@apple.com"}
+						autoComplete="email"
+						required
+						value={email}
+						disabled={emailSent || loading}
+						onChange={(e) => {
+							setEmail(e.target.value.toLowerCase());
+						}}
+					/>
+					<MotionButton
+						variant="dark"
+						type="submit"
+						disabled={loading || emailSent}
+						icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
+					>
+						Login with email
+					</MotionButton>
 				{/* {NODE_ENV === "development" && (
                   <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
                     <p className="text-lg text-white">
@@ -466,19 +467,22 @@ const NormalLogin = ({
                     </p>
                   </div>
                 )} */}
-			</motion.div>
-			<motion.p
-				layout="position"
-				className="mt-3 mb-2 text-xs text-center text-gray-9"
-			>
-				Don't have an account?{" "}
-				<Link
-					href="/signup"
-					className="text-xs font-semibold text-blue-9 hover:text-blue-8"
+				</motion.div>
+			)}
+			{!publicEnv.disableEmailAuth && (
+				<motion.p
+					layout="position"
+					className="mt-3 mb-2 text-xs text-center text-gray-9"
 				>
-					Sign up here
-				</Link>
-			</motion.p>
+					Don't have an account?{" "}
+					<Link
+						href="/signup"
+						className="text-xs font-semibold text-blue-9 hover:text-blue-8"
+					>
+						Sign up here
+					</Link>
+				</motion.p>
+			)}
 
 			{(publicEnv.googleAuthAvailable ||
 				publicEnv.workosAuthAvailable ||
