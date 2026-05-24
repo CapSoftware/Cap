@@ -235,11 +235,13 @@ const StepOne = ({
 			{(publicEnv.googleAuthAvailable ||
 				publicEnv.authentikAuthAvailable) && (
 				<>
-					<div className="flex gap-4 items-center">
-						<span className="flex-1 h-px bg-gray-5" />
-						<p className="text-sm text-center text-gray-10">OR</p>
-						<span className="flex-1 h-px bg-gray-5" />
-					</div>
+					{!publicEnv.disableEmailAuth && (
+						<div className="flex gap-4 items-center">
+							<span className="flex-1 h-px bg-gray-5" />
+							<p className="text-sm text-center text-gray-10">OR</p>
+							<span className="flex-1 h-px bg-gray-5" />
+						</div>
+					)}
 					{publicEnv.authentikAuthAvailable && (
 						<Button
 							variant="gray"

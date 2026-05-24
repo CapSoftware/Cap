@@ -488,11 +488,13 @@ const NormalLogin = ({
 				publicEnv.workosAuthAvailable ||
 				publicEnv.authentikAuthAvailable) && (
 				<>
-					<div className="flex gap-4 items-center mt-4 mb-4">
-						<span className="flex-1 h-px bg-gray-5" />
-						<p className="text-sm text-center text-gray-10">OR</p>
-						<span className="flex-1 h-px bg-gray-5" />
-					</div>
+					{!publicEnv.disableEmailAuth && (
+						<div className="flex gap-4 items-center mt-4 mb-4">
+							<span className="flex-1 h-px bg-gray-5" />
+							<p className="text-sm text-center text-gray-10">OR</p>
+							<span className="flex-1 h-px bg-gray-5" />
+						</div>
+					)}
 					<motion.div
 						layout
 						className="flex flex-col gap-3 justify-center items-center"
