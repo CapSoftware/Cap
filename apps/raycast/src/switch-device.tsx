@@ -24,12 +24,12 @@ export default function Command() {
 				if (!cancelled) {
 					setItems([]);
 					setError(message);
+					await showToast({
+						style: Toast.Style.Failure,
+						title: "Failed to enumerate devices",
+						message,
+					});
 				}
-				await showToast({
-					style: Toast.Style.Failure,
-					title: "Failed to enumerate devices",
-					message,
-				});
 			} finally {
 				if (!cancelled) {
 					setIsLoading(false);

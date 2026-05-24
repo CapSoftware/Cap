@@ -340,12 +340,12 @@ fn resolve_camera_selector(
     }
 }
 
-async fn pause_for_input_change(app: &AppHandle) -> Result<(), String> {
+async fn pause_for_input_change(app: &AppHandle) -> Result<bool, String> {
     let should_pause = {
         let state = app.state::<ArcLock<App>>();
         let state = state.read().await;
         let Some(recording) = state.current_recording() else {
-            return Ok(());
+            return Ok(false);
         };
 
         !recording.is_paused().await.map_err(|e| e.to_string())?
@@ -355,7 +355,29 @@ async fn pause_for_input_change(app: &AppHandle) -> Result<(), String> {
         crate::recording::pause_recording(app.clone(), app.state()).await?;
     }
 
-    Ok(())
+    Ok(should_pause)
+}
+
+async fn resume_input_change_on_error(
+    app: &AppHandle,
+    paused_recording: bool,
+    result: Result<(), String>,
+) -> Result<(), String> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if paused_recording
+                && let Err(resume_err) =
+                    crate::recording::resume_recording(app.clone(), app.state()).await
+            {
+                return Err(format!(
+                    "{err}; failed to resume recording after input change error: {resume_err}"
+                ));
+            }
+
+            Err(err)
+        }
+    }
 }
 
 impl DeepLinkAction {
@@ -425,16 +447,23 @@ impl DeepLinkAction {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::SetMicrophone { label } => {
-                pause_for_input_change(app).await?;
-                crate::set_mic_input(app.state(), label).await
+                let paused_recording = pause_for_input_change(app).await?;
+                let result = crate::set_mic_input(app.state(), label).await;
+                resume_input_change_on_error(app, paused_recording, result).await
             }
             DeepLinkAction::SetCamera { selector } => {
-                pause_for_input_change(app).await?;
-                let camera_id = selector
-                    .as_ref()
-                    .map(|selector| resolve_camera_selector(selector, &CameraIdentity::current()))
-                    .transpose()?;
-                crate::set_camera_input(app.clone(), app.state(), camera_id, None).await
+                let paused_recording = pause_for_input_change(app).await?;
+                let result = async {
+                    let camera_id = selector
+                        .as_ref()
+                        .map(|selector| {
+                            resolve_camera_selector(selector, &CameraIdentity::current())
+                        })
+                        .transpose()?;
+                    crate::set_camera_input(app.clone(), app.state(), camera_id, None).await
+                }
+                .await;
+                resume_input_change_on_error(app, paused_recording, result).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
