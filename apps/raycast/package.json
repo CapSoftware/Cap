@@ -31,7 +31,7 @@
 	],
 	"scripts": {
 		"typecheck": "tsc --noEmit",
-		"lint": "npx @raycast/api@latest lint"
+		"lint": "ray lint"
 	},
 	"dependencies": {
 		"@raycast/api": "1.104.17",
