@@ -143,6 +143,17 @@ const protectedContract = c.router(
 				}),
 			},
 		},
+		getUserProfile: {
+			method: "GET",
+			path: "/desktop/user/profile",
+			responses: {
+				200: z.object({
+					name: z.string().nullable(),
+					email: z.string().nullable(),
+					imageUrl: z.string().nullable(),
+				}),
+			},
+		},
 		getS3Config: {
 			method: "GET",
 			path: "/desktop/s3/config/get",

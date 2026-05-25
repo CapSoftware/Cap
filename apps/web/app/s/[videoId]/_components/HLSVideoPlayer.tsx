@@ -90,6 +90,7 @@ interface Props {
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
 	isLiveSegments?: boolean;
+	allowSegmentProbeDuringUpload?: boolean;
 	enhancedAudioUrl?: string | null;
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
 	captionLanguage?: string;
@@ -111,6 +112,7 @@ export function HLSVideoPlayer({
 	autoplay = false,
 	hasActiveUpload,
 	isLiveSegments = false,
+	allowSegmentProbeDuringUpload = false,
 	disableCaptions,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
@@ -166,6 +168,7 @@ export function HLSVideoPlayer({
 		hasActiveUpload || false,
 	);
 	const shouldDelayPlaybackSource =
+		!allowSegmentProbeDuringUpload &&
 		shouldDeferPlaybackSource(uploadProgressRaw);
 	const liveProbeSrc = isLiveSegments ? getLiveProbeSrc(playbackSrc) : null;
 

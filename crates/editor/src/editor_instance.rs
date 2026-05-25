@@ -272,9 +272,9 @@ impl EditorInstance {
             Arc::new(rc)
         };
 
-        let segments = create_segments(&recording_meta, meta.as_ref(), false).await?;
-
         let layers_rx = editor::start_renderer_layers_creation(&render_constants);
+
+        let segments = create_segments(&recording_meta, meta.as_ref(), false).await?;
 
         let renderer = Arc::new(editor::Renderer::spawn(
             render_constants.clone(),
@@ -358,6 +358,7 @@ impl EditorInstance {
                 render_constants: self.render_constants.clone(),
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
+                telemetry: None,
             })
             .start(fps, resolution_base)
             .await

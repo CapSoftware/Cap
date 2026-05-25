@@ -1,6 +1,7 @@
 "use client";
 
 import type { comments as commentsSchema } from "@cap/database/schema";
+import type { ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
@@ -150,6 +151,7 @@ interface ShareProps {
 	userOrganizations?: { id: string; name: string }[];
 	viewerId?: string | null;
 	isEditProcessing: boolean;
+	recordingStopped?: boolean;
 	initialAiData?: {
 		title?: string | null;
 		summary?: string | null;
@@ -263,6 +265,7 @@ export const Share = ({
 	videoSettings,
 	viewerId,
 	isEditProcessing,
+	recordingStopped = false,
 }: ShareProps) => {
 	const effectiveDate: Date = data.metadata?.customCreatedAt
 		? new Date(data.metadata.customCreatedAt)
@@ -448,7 +451,7 @@ export const Share = ({
 		}, 100);
 	}, []);
 
-	const isDisabled = (setting: keyof NonNullable<OrganizationSettings>) =>
+	const isDisabled = (setting: ViewerSettingKey) =>
 		videoSettings?.[setting] ?? data.orgSettings?.[setting] ?? false;
 
 	const areChaptersDisabled = isDisabled("disableChapters");
@@ -483,6 +486,7 @@ export const Share = ({
 									canRetryProcessing={viewerId === data.owner.id}
 									showPlaybackStatusBadge={viewerId === data.owner.id}
 									isEditProcessing={isEditProcessing}
+									recordingStopped={recordingStopped}
 									ref={playerRef}
 								/>
 							</div>
@@ -491,6 +495,8 @@ export const Share = ({
 							<Toolbar
 								onOptimisticComment={handleOptimisticComment}
 								onCommentSuccess={handleCommentSuccess}
+								disableComments={areCommentStampsDisabled}
+								disableReactions={areReactionStampsDisabled}
 								data={data}
 							/>
 						</div>
@@ -526,10 +532,8 @@ export const Share = ({
 						<Toolbar
 							onOptimisticComment={handleOptimisticComment}
 							onCommentSuccess={handleCommentSuccess}
-							disableReactions={
-								videoSettings?.disableReactions ??
-								data.orgSettings?.disableReactions
-							}
+							disableComments={areCommentStampsDisabled}
+							disableReactions={areReactionStampsDisabled}
 							data={data}
 						/>
 					</div>

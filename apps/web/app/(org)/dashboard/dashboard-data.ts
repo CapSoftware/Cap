@@ -16,6 +16,7 @@ import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import {
 	canManageOrganizationMembers,
+	canManageOrganizationProSeats,
 	canManageSpace,
 	getEffectiveOrganizationRole,
 	getEffectiveSpaceRole,
@@ -23,6 +24,7 @@ import {
 	type SpaceRole,
 } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
+import { selectProSeatProvider } from "@/utils/organization";
 
 export type Organization = {
 	organization: Omit<
@@ -314,15 +316,39 @@ export async function getDashboardData(user: typeof userSelectProps) {
 							.where(eq(organizationMembers.organizationId, organization.id)),
 					);
 
-					const owner = yield* db.use((db) =>
+					const managerIds = Array.from(
+						new Set([organization.ownerId, user.id]),
+					);
+					const managers = yield* db.use((db) =>
 						db
 							.select({
+								id: users.id,
 								inviteQuota: users.inviteQuota,
+								stripeSubscriptionId: users.stripeSubscriptionId,
+								stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 							})
 							.from(users)
-							.where(eq(users.id, organization.ownerId))
-							.then((result) => result[0]),
+							.where(inArray(users.id, managerIds)),
 					);
+					const owner = managers.find(
+						(manager) => manager.id === organization.ownerId,
+					);
+					const currentManager = managers.find(
+						(manager) => manager.id === user.id,
+					);
+					const currentMember = allMembers.find(
+						(member) => member.member.userId === user.id,
+					);
+					const currentRole = getEffectiveOrganizationRole({
+						userId: user.id,
+						ownerId: organization.ownerId,
+						memberRole: currentMember?.member.role,
+					});
+					const proSeatProvider = selectProSeatProvider({
+						actor: currentManager,
+						owner,
+						actorCanManageProSeats: canManageOrganizationProSeats(currentRole),
+					});
 
 					const ownedOrgIds = db.use((db) =>
 						db
@@ -395,7 +421,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						invites: organizationInvitesData.filter(
 							(invite) => invite.organizationId === organization.id,
 						),
-						inviteQuota: owner?.inviteQuota || 1,
+						inviteQuota: proSeatProvider?.inviteQuota || 1,
 						totalInvites,
 					};
 				}),

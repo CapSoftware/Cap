@@ -16,7 +16,9 @@ export function IntegrationConfigHeader(props: { title: string }) {
 				<IconLucideArrowLeft class="size-3.5" />
 				Back
 			</Button>
-			<p class="text-sm font-medium text-gray-12">{props.title}</p>
+			<h3 class="text-sm font-semibold tracking-tight text-gray-12">
+				{props.title}
+			</h3>
 		</div>
 	);
 }

@@ -369,7 +369,7 @@ async function processVideoOnMediaServer(
 ): Promise<MediaServerProcessResult> {
 	"use step";
 
-	const { videoId, userId, rawFileKey } = payload;
+	const { videoId, userId, rawFileKey, loomVideoId } = payload;
 
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 	if (!mediaServerUrl) {
@@ -443,9 +443,25 @@ async function processVideoOnMediaServer(
 		};
 	}).pipe(runPromise);
 
-	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
+	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
-	const sourceVideoUrl = processingInput.sourceVideoUrl ?? rawVideoUrl;
+	const sourceVideoUrl = processingInput.sourceVideoUrl
+		? await fetchFreshLoomDownloadUrl(loomVideoId)
+		: rawVideoUrl;
+	const inputExtension = processingInput.sourceVideoUrl
+		? getInputExtension(sourceVideoUrl)
+		: processingInput.inputExtension;
+
+	await db()
+		.update(videoUploads)
+		.set({
+			phase: "processing",
+			processingProgress: 0,
+			processingMessage: "Starting video processing...",
+			processingError: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
 	await startMediaServerProcessJob(mediaServerUrl, {
 		videoId,
@@ -456,7 +472,7 @@ async function processVideoOnMediaServer(
 		previewGifPresignedUrl,
 		webhookUrl,
 		webhookSecret: webhookSecret || undefined,
-		inputExtension: processingInput.inputExtension,
+		inputExtension,
 	});
 
 	return await waitForProcessingCompletion(videoId);
@@ -536,12 +552,12 @@ async function waitForProcessingCompletion(
 			return { metadata };
 		}
 
+		if (upload.processingError) {
+			throw new Error(upload.processingError);
+		}
+
 		if (upload.phase === "error") {
-			throw new Error(
-				upload.processingError ||
-					upload.processingMessage ||
-					"Loom import failed",
-			);
+			throw new Error(upload.processingMessage || "Loom import failed");
 		}
 
 		lastStatus = [
