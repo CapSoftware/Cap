@@ -179,20 +179,20 @@ pub(crate) fn sync_macos_dock_visibility(app: &tauri::AppHandle) {
         return;
     }
 
+    let should_hide_dock = GeneralSettingsStore::get(app)
+        .ok()
+        .flatten()
+        .is_some_and(|settings| settings.hide_dock_icon);
+
     let has_visible_panel_window = app.webview_windows().iter().any(|(label, window)| {
         CapWindowId::from_str(label)
             .map(|id| !id.activates_dock() && window.is_visible().unwrap_or(false))
             .unwrap_or(false)
     });
 
-    if has_visible_panel_window {
+    if has_visible_panel_window && should_hide_dock {
         return;
     }
-
-    let should_hide_dock = GeneralSettingsStore::get(app)
-        .ok()
-        .flatten()
-        .is_some_and(|settings| settings.hide_dock_icon);
 
     let has_visible_dock_window = app.webview_windows().iter().any(|(label, window)| {
         CapWindowId::from_str(label)
