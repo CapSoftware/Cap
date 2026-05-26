@@ -234,6 +234,25 @@ function Inner() {
 		CropBounds | undefined
 	>(undefined);
 
+	const effectiveInitialBounds = createMemo<CropBounds | undefined>(() => {
+		const explicit = initialAreaBounds();
+		if (explicit !== undefined) return explicit;
+		const target = options.captureTarget;
+		if (
+			target.variant === "area" &&
+			params.displayId &&
+			target.screen === params.displayId
+		) {
+			return {
+				x: target.bounds.position.x,
+				y: target.bounds.position.y,
+				width: target.bounds.size.width,
+				height: target.bounds.size.height,
+			};
+		}
+		return undefined;
+	});
+
 	createEffect(() => {
 		const target = options.captureTarget;
 		if (
@@ -725,7 +744,7 @@ function Inner() {
 						() => isInteracting() || isActiveDisplay(),
 					);
 					const shouldShowSelectionHint = createMemo(() => {
-						if (initialAreaBounds() !== undefined) return false;
+						if (effectiveInitialBounds() !== undefined) return false;
 						if (!isActiveDisplay()) return false;
 						const bounds = crop();
 						return bounds.width <= 1 && bounds.height <= 1 && !isInteracting();
@@ -1146,7 +1165,7 @@ function Inner() {
 								ref={cropperRef}
 								onInteraction={setIsInteracting}
 								onCropChange={setCrop}
-								initialCrop={() => initialAreaBounds() ?? CROP_ZERO}
+								initialCrop={() => effectiveInitialBounds() ?? CROP_ZERO}
 								showBounds={isValid()}
 								aspectRatio={aspect() ?? undefined}
 								snapToRatioEnabled={snapToRatioEnabled()}

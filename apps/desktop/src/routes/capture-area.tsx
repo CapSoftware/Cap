@@ -8,7 +8,15 @@ import {
 	WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	onCleanup,
+	onMount,
+	Show,
+	untrack,
+} from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import {
@@ -79,12 +87,21 @@ export default function CaptureArea() {
 		return null;
 	});
 
+	// Frozen on first non-null value (from synchronous localStorage load) so that
+	// later async Tauri-store updates carrying stale data cannot reset it.
+	const [screenId, setScreenId] = createSignal<string | null>(
+		untrack(activeScreenId),
+	);
+	createEffect(() => {
+		const id = activeScreenId();
+		if (id && !screenId()) setScreenId(id);
+	});
+
 	const hasStoredSelection = createMemo(() => {
-		const screenId = activeScreenId();
-		if (!screenId) return false;
+		const id = screenId();
+		if (!id) return false;
 		return (
-			state.lastSelectedBounds?.some((entry) => entry.screenId === screenId) ??
-			false
+			state.lastSelectedBounds?.some((entry) => entry.screenId === id) ?? false
 		);
 	});
 
@@ -97,22 +114,22 @@ export default function CaptureArea() {
 		)
 			return;
 
-		const screenId = activeScreenId();
-		if (!screenId) return;
+		const id = screenId();
+		if (!id) return;
 
 		const existingIndex = state.lastSelectedBounds?.findIndex(
-			(item) => item.screenId === screenId,
+			(item) => item.screenId === id,
 		);
 
 		if (existingIndex >= 0) {
 			setState("lastSelectedBounds", existingIndex, {
-				screenId,
+				screenId: id,
 				bounds: currentBounds,
 			});
 		} else {
 			setState("lastSelectedBounds", [
 				...state.lastSelectedBounds,
-				{ screenId, bounds: currentBounds },
+				{ screenId: id, bounds: currentBounds },
 			]);
 		}
 
@@ -121,7 +138,7 @@ export default function CaptureArea() {
 			"captureTarget",
 			reconcile({
 				variant: "area",
-				screen: screenId,
+				screen: id,
 				bounds: {
 					position: { x: b.x, y: b.y },
 					size: { width: b.width, height: b.height },
@@ -155,10 +172,10 @@ export default function CaptureArea() {
 		cropperRef?.reset();
 		setAspect(null);
 
-		const screenId = activeScreenId();
-		if (!screenId) return;
+		const id = screenId();
+		if (!id) return;
 		setState("lastSelectedBounds", (values) =>
-			values?.filter((v) => v.screenId !== screenId),
+			values?.filter((v) => v.screenId !== id),
 		);
 	}
 
@@ -294,10 +311,10 @@ export default function CaptureArea() {
 						onCropChange={setCrop}
 						snapToRatioEnabled={state.snapToRatio}
 						initialCrop={() => {
-							const screenId = activeScreenId();
-							if (screenId)
+							const id = screenId();
+							if (id)
 								return (
-									state.lastSelectedBounds?.find((m) => m.screenId === screenId)
+									state.lastSelectedBounds?.find((m) => m.screenId === id)
 										?.bounds ?? CROP_ZERO
 								);
 							return CROP_ZERO;
