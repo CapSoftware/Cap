@@ -1,6 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { A, type RouteSectionProps, useNavigate } from "@solidjs/router";
-import { createQuery } from "@tanstack/solid-query";
+import { createQuery, useQueryClient } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as shell from "@tauri-apps/plugin-shell";
@@ -17,26 +17,33 @@ import {
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 
-import { authStore } from "~/store";
+import { authStore, userProfileStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
+import { createSignInMutation } from "~/utils/auth";
 import { clientEnv } from "~/utils/env";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 import IconLucideUserRound from "~icons/lucide/user-round";
 
-function SettingsProfileSkeleton() {
-	return (
-		<>
-			<div class="cap-settings-profile-icon cap-settings-profile-skeleton cap-settings-profile-skeleton-avatar size-8 shrink-0 rounded-full bg-gray-4 animate-pulse" />
-			<div class="cap-settings-profile-copy flex h-8 flex-col flex-1 justify-center gap-0.5 min-w-0">
-				<span class="block h-[15px] leading-[15px]">
-					<span class="cap-settings-profile-skeleton cap-settings-profile-skeleton-title block h-3 w-24 rounded-full bg-gray-4 animate-pulse" />
-				</span>
-				<span class="block h-[13px] leading-[13px]">
-					<span class="cap-settings-profile-skeleton cap-settings-profile-skeleton-subtitle block h-2.5 w-12 rounded-full bg-gray-4 animate-pulse" />
-				</span>
-			</div>
-		</>
-	);
+const USER_PROFILE_CACHE_GC_MS = 2 * 60 * 60 * 1000;
+const USER_PROFILE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+
+type AuthState = Awaited<ReturnType<typeof authStore.get>>;
+type CachedUserProfile = Awaited<ReturnType<typeof userProfileStore.get>>;
+
+function profileQueryKey(userId: string | null | undefined) {
+	return ["settings-user-profile", userId ?? null] as const;
+}
+
+function isAuthExpired(auth: AuthState) {
+	const secret = auth?.secret;
+	return !!secret && "expires" in secret && secret.expires * 1000 <= Date.now();
+}
+
+function isCachedProfileForUser(
+	cachedProfile: CachedUserProfile,
+	userId: string | null | undefined,
+) {
+	return cachedProfile?.userId === (userId ?? null);
 }
 
 function SettingsContentSkeleton() {
@@ -86,26 +93,55 @@ function SettingsContentSkeleton() {
 
 export default function Settings(props: RouteSectionProps) {
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
+	const signIn = createSignInMutation();
 	const [auth, setAuth] =
 		createSignal<Awaited<ReturnType<typeof authStore.get>>>();
 	const [authLoaded, setAuthLoaded] = createSignal(false);
 	const [version, setVersion] = createSignal<string | null>(null);
 	const [isCheckingForUpdates, setIsCheckingForUpdates] = createSignal(false);
+	const clearLocalAuth = async () => {
+		setAuth(undefined);
+		queryClient.removeQueries({ queryKey: ["settings-user-profile"] });
+		await Promise.all([
+			authStore.set(undefined),
+			userProfileStore.set(undefined),
+		]);
+	};
 	const userProfile = createQuery(() => ({
-		queryKey: ["settings-user-profile", auth()?.user_id ?? null],
+		queryKey: profileQueryKey(auth()?.user_id),
 		enabled: !!auth(),
-		staleTime: 30 * 60 * 1000,
-		gcTime: 2 * 60 * 60 * 1000,
-		refetchOnMount: false,
+		staleTime: USER_PROFILE_REFRESH_INTERVAL_MS,
+		gcTime: USER_PROFILE_CACHE_GC_MS,
+		refetchOnMount: true,
 		refetchOnWindowFocus: false,
 		refetchOnReconnect: false,
 		queryFn: async () => {
+			const currentAuth = auth();
+			if (!currentAuth) return null;
+
+			if (isAuthExpired(currentAuth)) {
+				await clearLocalAuth();
+				return null;
+			}
+
 			const response = await apiClient.desktop.getUserProfile({
 				headers: await protectedHeaders(),
 			});
 
+			if (response.status === 401) {
+				await clearLocalAuth();
+				return null;
+			}
+
 			if (response.status !== 200)
 				throw new Error("Failed to load account profile");
+
+			await userProfileStore.set({
+				userId: currentAuth.user_id,
+				profile: response.body,
+				updatedAt: Date.now(),
+			});
 
 			return response.body;
 		},
@@ -162,12 +198,9 @@ export default function Settings(props: RouteSectionProps) {
 			icon: IconLucideBell,
 		},
 	];
-	const accountLoading = createMemo(
-		() => !authLoaded() || (!!auth() && userProfile.isLoading),
-	);
 	const accountName = createMemo(() => {
-		if (accountLoading()) return "";
-		if (!auth()) return "Signed Out";
+		if (!auth()) return "Click to sign in";
+		if (!userProfile.isSuccess) return "Signed in";
 
 		const name = userProfile.data?.name?.trim();
 		if (name) return name;
@@ -175,10 +208,10 @@ export default function Settings(props: RouteSectionProps) {
 		const email = userProfile.data?.email?.trim();
 		if (email) return email;
 
-		return "Signed In";
+		return "Signed in";
 	});
 	const accountImageUrl = createMemo(() => {
-		if (accountLoading()) return null;
+		if (!userProfile.isSuccess) return null;
 
 		const imageUrl = userProfile.data?.imageUrl?.trim();
 		return imageUrl || null;
@@ -187,6 +220,20 @@ export default function Settings(props: RouteSectionProps) {
 		void shell.open(
 			new URL("/dashboard", clientEnv.VITE_SERVER_URL).toString(),
 		);
+	};
+	const handleProfileClick = () => {
+		if (auth()) {
+			openDashboard();
+			return;
+		}
+
+		if (signIn.isPending) {
+			signIn.variables.abort();
+			signIn.reset();
+			return;
+		}
+
+		signIn.mutate(new AbortController());
 	};
 
 	onMount(() => {
@@ -197,12 +244,39 @@ export default function Settings(props: RouteSectionProps) {
 
 	let disposed = false;
 	let stopAuthListening: (() => void) | undefined;
+	const applyAuth = (value: AuthState) => {
+		if (isAuthExpired(value)) {
+			void clearLocalAuth();
+			setAuthLoaded(true);
+			return;
+		}
+
+		setAuth(() => value);
+		setAuthLoaded(true);
+	};
 
 	onMount(() => {
-		void authStore
-			.get()
-			.then((value) => {
+		void Promise.all([authStore.get(), userProfileStore.get()])
+			.then(([value, cachedProfile]) => {
 				if (disposed) return;
+
+				if (
+					value &&
+					cachedProfile &&
+					isCachedProfileForUser(cachedProfile, value.user_id)
+				) {
+					queryClient.setQueryData(
+						profileQueryKey(value.user_id),
+						cachedProfile.profile,
+						{ updatedAt: cachedProfile.updatedAt },
+					);
+				}
+
+				if (isAuthExpired(value)) {
+					void clearLocalAuth();
+					return;
+				}
+
 				setAuth(() => value);
 			})
 			.catch((error) => console.error("Failed to load auth store:", error))
@@ -211,10 +285,7 @@ export default function Settings(props: RouteSectionProps) {
 			});
 
 		void authStore
-			.listen((value) => {
-				setAuth(() => value);
-				setAuthLoaded(true);
-			})
+			.listen(applyAuth)
 			.then((unlisten) => {
 				if (disposed) {
 					unlisten();
@@ -235,8 +306,7 @@ export default function Settings(props: RouteSectionProps) {
 	const handleAuth = async () => {
 		if (auth()) {
 			trackEvent("user_signed_out", { platform: "desktop" });
-			setAuth(undefined);
-			await authStore.set(undefined);
+			await clearLocalAuth();
 		}
 	};
 
@@ -285,35 +355,33 @@ export default function Settings(props: RouteSectionProps) {
 					type="button"
 					class="cap-settings-profile flex h-11 gap-2 items-center mx-2 mt-2 mb-3 px-2 py-1.5 rounded-lg text-left transition-colors hover:bg-gray-3"
 					data-tauri-drag-region="false"
-					onClick={openDashboard}
+					onClick={handleProfileClick}
 				>
-					<Show when={!accountLoading()} fallback={<SettingsProfileSkeleton />}>
-						<Show
-							when={accountImageUrl()}
-							fallback={
-								<div class="cap-settings-profile-icon flex justify-center items-center size-8 shrink-0 rounded-full bg-gray-3 text-gray-11">
-									<IconLucideUserRound class="size-4" aria-hidden="true" />
-								</div>
-							}
-						>
-							{(imageUrl) => (
-								<img
-									class="cap-settings-profile-image size-8 shrink-0 rounded-full object-cover bg-gray-3"
-									src={imageUrl()}
-									alt=""
-									draggable={false}
-								/>
-							)}
-						</Show>
-						<div class="cap-settings-profile-copy flex h-8 flex-col flex-1 justify-center gap-0.5 min-w-0">
-							<p class="h-[15px] truncate text-[13px] leading-[15px] text-gray-12">
-								{accountName()}
-							</p>
-							<p class="h-[13px] truncate text-[11px] leading-[13px] text-gray-10">
-								Account
-							</p>
-						</div>
+					<Show
+						when={accountImageUrl()}
+						fallback={
+							<div class="cap-settings-profile-icon flex justify-center items-center size-8 shrink-0 rounded-full bg-gray-3 text-gray-11">
+								<IconLucideUserRound class="size-4" aria-hidden="true" />
+							</div>
+						}
+					>
+						{(imageUrl) => (
+							<img
+								class="cap-settings-profile-image size-8 shrink-0 rounded-full object-cover bg-gray-3"
+								src={imageUrl()}
+								alt=""
+								draggable={false}
+							/>
+						)}
 					</Show>
+					<div class="cap-settings-profile-copy flex h-8 flex-col flex-1 justify-center gap-0.5 min-w-0">
+						<p class="h-[15px] truncate text-[13px] leading-[15px] text-gray-12">
+							{accountName()}
+						</p>
+						<p class="h-[13px] truncate text-[11px] leading-[13px] text-gray-10">
+							Account
+						</p>
+					</div>
 				</button>
 				<ul class="cap-settings-nav min-w-48 h-full p-2.5 space-y-1 text-gray-12">
 					<For each={settingsItems}>

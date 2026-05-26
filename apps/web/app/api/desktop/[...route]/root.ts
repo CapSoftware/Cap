@@ -1,7 +1,9 @@
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import { sendEmail } from "@cap/database/emails/config";
 import { Feedback } from "@cap/database/emails/feedback";
 import {
+	authApiKeys,
 	organizationMembers,
 	organizations,
 	users,
@@ -14,7 +16,7 @@ import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq, isNull, or } from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
 import { z } from "zod";
@@ -53,6 +55,43 @@ async function resolveUserImageUrl(imageUrl: string | null) {
 			imageUrl as ImageUpload.ImageUrlOrKey,
 		);
 	}).pipe(runPromise);
+}
+
+type DesktopProfileUser = {
+	name: string | null;
+	lastName: string | null;
+	email: string | null;
+	image: string | null;
+};
+
+async function getDesktopProfileUser(c: Context) {
+	const authHeader = c.req.header("authorization")?.split(" ")[1];
+
+	if (authHeader?.length === 36) {
+		const [user] = await db()
+			.select({
+				name: users.name,
+				lastName: users.lastName,
+				email: users.email,
+				image: users.image,
+			})
+			.from(users)
+			.innerJoin(authApiKeys, eq(users.id, authApiKeys.userId))
+			.where(eq(authApiKeys.id, authHeader))
+			.limit(1);
+
+		return user ?? null;
+	}
+
+	const user = await getCurrentUser();
+	if (!user) return null;
+
+	return {
+		name: user.name,
+		lastName: user.lastName,
+		email: user.email,
+		image: user.image,
+	} satisfies DesktopProfileUser;
 }
 
 async function toDesktopOrganizations(
@@ -434,8 +473,10 @@ app.get("/plan", withAuth, async (c) => {
 	});
 });
 
-app.get("/user/profile", withAuth, async (c) => {
-	const user = c.get("user");
+app.get("/user/profile", async (c) => {
+	const user = await getDesktopProfileUser(c);
+	if (!user) return c.text("User not authenticated", 401);
+
 	const name = [user.name, user.lastName].filter(Boolean).join(" ").trim();
 
 	return c.json({
