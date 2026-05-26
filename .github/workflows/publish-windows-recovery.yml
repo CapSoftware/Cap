@@ -16,19 +16,8 @@ on:
         description: "Optional GitHub artifact digest, e.g. sha256:..."
         required: false
         type: string
-      upload_to_crabnebula:
-        description: "Upload signed Windows assets to the existing CrabNebula release"
-        default: "true"
-        options:
-          - "true"
-          - "false"
-        required: true
-        type: choice
-
-run-name: "recover Windows release from run ${{ inputs.source_run_id }}"
-
 concurrency:
-  group: publish-windows-recovery-${{ inputs.source_run_id }}
+  group: publish-windows-recovery
   cancel-in-progress: false
 
 env:
@@ -211,7 +200,6 @@ jobs:
           if-no-files-found: error
 
       - name: Upload assets
-        if: ${{ inputs.upload_to_crabnebula == 'true' }}
         uses: crabnebula-dev/cloud-release@v0
         with:
           working-directory: apps/desktop
