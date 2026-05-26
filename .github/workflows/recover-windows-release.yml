@@ -1,4 +1,4 @@
-name: "publish-windows-recovery"
+name: "recover-windows-release"
 
 on:
   workflow_dispatch:
