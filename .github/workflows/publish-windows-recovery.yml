@@ -18,9 +18,12 @@ on:
         type: string
       upload_to_crabnebula:
         description: "Upload signed Windows assets to the existing CrabNebula release"
-        default: true
+        default: "true"
+        options:
+          - "true"
+          - "false"
         required: true
-        type: boolean
+        type: choice
 
 run-name: "recover Windows release from run ${{ inputs.source_run_id }}"
 
@@ -208,7 +211,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload assets
-        if: ${{ inputs.upload_to_crabnebula }}
+        if: ${{ inputs.upload_to_crabnebula == 'true' }}
         uses: crabnebula-dev/cloud-release@v0
         with:
           working-directory: apps/desktop
