@@ -296,7 +296,7 @@ jobs:
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
     outputs:
       unsigned_windows_installer_artifact_id: ${{ steps.upload_unsigned_windows_installer.outputs.artifact-id }}
-    runs-on: ${{ inputs.windowsBuildRunner || vars.PUBLISH_WINDOWS_BUILD_RUNNER || 'windows-2022-8core' }}
+    runs-on: ${{ inputs.windowsBuildRunner || vars.PUBLISH_WINDOWS_BUILD_RUNNER || 'windows-latest-l' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
