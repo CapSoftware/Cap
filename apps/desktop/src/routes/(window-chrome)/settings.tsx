@@ -7,9 +7,10 @@ import * as shell from "@tauri-apps/plugin-shell";
 import { check } from "@tauri-apps/plugin-updater";
 import {
 	createMemo,
-	createResource,
 	createSignal,
 	For,
+	onCleanup,
+	onMount,
 	Show,
 	Suspense,
 } from "solid-js";
@@ -22,14 +23,77 @@ import { clientEnv } from "~/utils/env";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 import IconLucideUserRound from "~icons/lucide/user-round";
 
+function SettingsProfileSkeleton() {
+	return (
+		<>
+			<div class="cap-settings-profile-icon cap-settings-profile-skeleton cap-settings-profile-skeleton-avatar size-8 shrink-0 rounded-full bg-gray-4 animate-pulse" />
+			<div class="cap-settings-profile-copy flex h-8 flex-col flex-1 justify-center gap-0.5 min-w-0">
+				<span class="block h-[15px] leading-[15px]">
+					<span class="cap-settings-profile-skeleton cap-settings-profile-skeleton-title block h-3 w-24 rounded-full bg-gray-4 animate-pulse" />
+				</span>
+				<span class="block h-[13px] leading-[13px]">
+					<span class="cap-settings-profile-skeleton cap-settings-profile-skeleton-subtitle block h-2.5 w-12 rounded-full bg-gray-4 animate-pulse" />
+				</span>
+			</div>
+		</>
+	);
+}
+
+function SettingsContentSkeleton() {
+	return (
+		<div class="cap-settings-page flex flex-col h-full custom-scroll">
+			<div class="px-6 py-6 space-y-7 max-w-[42rem]" aria-hidden="true">
+				<div class="space-y-2.5">
+					<div class="px-1 space-y-1.5">
+						<div class="h-4 w-28 rounded-full bg-gray-4 animate-pulse" />
+						<div class="h-3 w-72 max-w-full rounded-full bg-gray-4 animate-pulse" />
+					</div>
+					<div class="cap-settings-card overflow-hidden rounded-xl border border-gray-3 bg-gray-2 divide-y divide-gray-3">
+						<div class="px-4 py-3.5 space-y-2">
+							<div class="h-[15px] w-40 rounded-full bg-gray-4 animate-pulse" />
+							<div class="h-3 w-64 max-w-full rounded-full bg-gray-4 animate-pulse" />
+						</div>
+						<div class="px-4 py-3.5 space-y-2">
+							<div class="h-[15px] w-36 rounded-full bg-gray-4 animate-pulse" />
+							<div class="h-3 w-56 max-w-full rounded-full bg-gray-4 animate-pulse" />
+						</div>
+						<div class="px-4 py-3.5 space-y-2">
+							<div class="h-[15px] w-44 rounded-full bg-gray-4 animate-pulse" />
+							<div class="h-3 w-60 max-w-full rounded-full bg-gray-4 animate-pulse" />
+						</div>
+					</div>
+				</div>
+				<div class="space-y-2.5">
+					<div class="px-1 space-y-1.5">
+						<div class="h-4 w-36 rounded-full bg-gray-4 animate-pulse" />
+						<div class="h-3 w-64 max-w-full rounded-full bg-gray-4 animate-pulse" />
+					</div>
+					<div class="cap-settings-card overflow-hidden rounded-xl border border-gray-3 bg-gray-2 divide-y divide-gray-3">
+						<div class="px-4 py-3.5 space-y-2">
+							<div class="h-[15px] w-48 rounded-full bg-gray-4 animate-pulse" />
+							<div class="h-3 w-52 max-w-full rounded-full bg-gray-4 animate-pulse" />
+						</div>
+						<div class="px-4 py-3.5 space-y-2">
+							<div class="h-[15px] w-32 rounded-full bg-gray-4 animate-pulse" />
+							<div class="h-3 w-72 max-w-full rounded-full bg-gray-4 animate-pulse" />
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	);
+}
+
 export default function Settings(props: RouteSectionProps) {
 	const navigate = useNavigate();
-	const auth = authStore.createQuery();
-	const [version] = createResource(() => getVersion());
+	const [auth, setAuth] =
+		createSignal<Awaited<ReturnType<typeof authStore.get>>>();
+	const [authLoaded, setAuthLoaded] = createSignal(false);
+	const [version, setVersion] = createSignal<string | null>(null);
 	const [isCheckingForUpdates, setIsCheckingForUpdates] = createSignal(false);
 	const userProfile = createQuery(() => ({
-		queryKey: ["settings-user-profile", auth.data?.user_id],
-		enabled: !!auth.data,
+		queryKey: ["settings-user-profile", auth()?.user_id ?? null],
+		enabled: !!auth(),
 		staleTime: 30 * 60 * 1000,
 		gcTime: 2 * 60 * 60 * 1000,
 		refetchOnMount: false,
@@ -98,8 +162,12 @@ export default function Settings(props: RouteSectionProps) {
 			icon: IconLucideBell,
 		},
 	];
+	const accountLoading = createMemo(
+		() => !authLoaded() || (!!auth() && userProfile.isLoading),
+	);
 	const accountName = createMemo(() => {
-		if (!auth.data) return "Signed Out";
+		if (accountLoading()) return "";
+		if (!auth()) return "Signed Out";
 
 		const name = userProfile.data?.name?.trim();
 		if (name) return name;
@@ -110,24 +178,65 @@ export default function Settings(props: RouteSectionProps) {
 		return "Signed In";
 	});
 	const accountImageUrl = createMemo(() => {
+		if (accountLoading()) return null;
+
 		const imageUrl = userProfile.data?.imageUrl?.trim();
 		return imageUrl || null;
 	});
-	const accountLoading = createMemo(
-		() =>
-			auth.isLoading ||
-			(!!auth.data && userProfile.isLoading && !userProfile.data),
-	);
 	const openDashboard = () => {
 		void shell.open(
 			new URL("/dashboard", clientEnv.VITE_SERVER_URL).toString(),
 		);
 	};
 
+	onMount(() => {
+		void getVersion()
+			.then(setVersion)
+			.catch((error) => console.error("Failed to load app version:", error));
+	});
+
+	let disposed = false;
+	let stopAuthListening: (() => void) | undefined;
+
+	onMount(() => {
+		void authStore
+			.get()
+			.then((value) => {
+				if (disposed) return;
+				setAuth(() => value);
+			})
+			.catch((error) => console.error("Failed to load auth store:", error))
+			.finally(() => {
+				if (!disposed) setAuthLoaded(true);
+			});
+
+		void authStore
+			.listen((value) => {
+				setAuth(() => value);
+				setAuthLoaded(true);
+			})
+			.then((unlisten) => {
+				if (disposed) {
+					unlisten();
+					return;
+				}
+				stopAuthListening = unlisten;
+			})
+			.catch((error) =>
+				console.error("Failed to listen to auth store:", error),
+			);
+	});
+
+	onCleanup(() => {
+		disposed = true;
+		stopAuthListening?.();
+	});
+
 	const handleAuth = async () => {
-		if (auth.data) {
+		if (auth()) {
 			trackEvent("user_signed_out", { platform: "desktop" });
-			authStore.set(undefined);
+			setAuth(undefined);
+			await authStore.set(undefined);
 		}
 	};
 
@@ -174,22 +283,11 @@ export default function Settings(props: RouteSectionProps) {
 				<div class="cap-settings-window-spacer" data-tauri-drag-region />
 				<button
 					type="button"
-					class="cap-settings-profile flex gap-2 items-center mx-2 mt-2 mb-3 px-2 py-1.5 rounded-lg text-left transition-colors hover:bg-gray-3"
+					class="cap-settings-profile flex h-11 gap-2 items-center mx-2 mt-2 mb-3 px-2 py-1.5 rounded-lg text-left transition-colors hover:bg-gray-3"
 					data-tauri-drag-region="false"
 					onClick={openDashboard}
 				>
-					<Show
-						when={!accountLoading()}
-						fallback={
-							<>
-								<div class="cap-settings-profile-icon cap-settings-profile-skeleton cap-settings-profile-skeleton-avatar size-8 shrink-0 rounded-full bg-gray-4 animate-pulse" />
-								<div class="cap-settings-profile-copy flex flex-col flex-1 gap-1.5 min-w-0">
-									<span class="cap-settings-profile-skeleton cap-settings-profile-skeleton-title block h-3 w-24 rounded-full bg-gray-4 animate-pulse" />
-									<span class="cap-settings-profile-skeleton cap-settings-profile-skeleton-subtitle block h-2.5 w-12 rounded-full bg-gray-4 animate-pulse" />
-								</div>
-							</>
-						}
-					>
+					<Show when={!accountLoading()} fallback={<SettingsProfileSkeleton />}>
 						<Show
 							when={accountImageUrl()}
 							fallback={
@@ -207,9 +305,13 @@ export default function Settings(props: RouteSectionProps) {
 								/>
 							)}
 						</Show>
-						<div class="cap-settings-profile-copy flex flex-col flex-1 gap-0.5 min-w-0">
-							<p class="truncate text-[13px] text-gray-12">{accountName()}</p>
-							<p class="truncate text-[11px] text-gray-10">Account</p>
+						<div class="cap-settings-profile-copy flex h-8 flex-col flex-1 justify-center gap-0.5 min-w-0">
+							<p class="h-[15px] truncate text-[13px] leading-[15px] text-gray-12">
+								{accountName()}
+							</p>
+							<p class="h-[13px] truncate text-[11px] leading-[13px] text-gray-10">
+								Account
+							</p>
 						</div>
 					</Show>
 				</button>
@@ -258,22 +360,27 @@ export default function Settings(props: RouteSectionProps) {
 							</div>
 						)}
 					</Show>
-					{auth.data ? (
-						<Button
-							onClick={handleAuth}
-							variant={auth.data ? "gray" : "dark"}
-							class="w-full"
-						>
-							Sign Out
-						</Button>
-					) : (
-						<SignInButton>Sign In</SignInButton>
-					)}
+					<Show
+						when={authLoaded()}
+						fallback={
+							<div class="h-9 w-full rounded-lg bg-gray-4 animate-pulse" />
+						}
+					>
+						{auth() ? (
+							<Button onClick={handleAuth} variant="gray" class="w-full">
+								Sign Out
+							</Button>
+						) : (
+							<SignInButton>Sign In</SignInButton>
+						)}
+					</Show>
 				</div>
 			</div>
 			<div class="cap-settings-content overflow-y-hidden flex-1 animate-in min-w-0">
 				<CapErrorBoundary>
-					<Suspense>{props.children}</Suspense>
+					<Suspense fallback={<SettingsContentSkeleton />}>
+						{props.children}
+					</Suspense>
 				</CapErrorBoundary>
 			</div>
 		</div>

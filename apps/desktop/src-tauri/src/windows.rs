@@ -1681,8 +1681,6 @@ impl ShowCapWindow {
                     }
                 }
 
-                window.show().ok();
-                window.set_focus().ok();
                 ensure_settings_window_bounds(&window);
 
                 window
