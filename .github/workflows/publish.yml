@@ -8,12 +8,17 @@ on:
         description: "Discord Interaction ID"
         required: false
         type: string
+      windowsBuildRunner:
+        description: "Optional Windows build runner label"
+        required: false
+        type: string
 
 env:
   CN_APPLICATION: cap/cap
   APP_CARGO_TOML: apps/desktop/src-tauri/Cargo.toml
   SENTRY_ORG: cap-s2
   SENTRY_PROJECT: cap-desktop
+  WINDOWS_TARGET: x86_64-pc-windows-msvc
 
 jobs:
   draft:
@@ -182,8 +187,6 @@ jobs:
             runner: macos-latest-xlarge
           - target: aarch64-apple-darwin
             runner: macos-latest-xlarge
-          - target: x86_64-pc-windows-msvc
-            runner: windows-2022
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
@@ -219,16 +222,19 @@ jobs:
       - uses: ./.github/actions/setup-js
 
       - name: Create .env file in root
+        shell: bash
         run: |
-          echo "appVersion=${{ needs.draft.outputs.version }}" >> .env
-          echo "VITE_ENVIRONMENT=production" >> .env
-          echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568" >> .env
-          echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}" >> .env
-          echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
-          echo 'VITE_POSTHOG_KEY=${{ secrets.VITE_POSTHOG_KEY }}' >> .env
-          echo 'VITE_POSTHOG_HOST=${{ secrets.VITE_POSTHOG_HOST }}' >> .env
-          echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
-          echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}' >> .env
+          {
+            echo "appVersion=${{ needs.draft.outputs.version }}"
+            echo "VITE_ENVIRONMENT=production"
+            echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568"
+            echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}"
+            echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
+            echo 'VITE_POSTHOG_KEY=${{ secrets.VITE_POSTHOG_KEY }}'
+            echo 'VITE_POSTHOG_HOST=${{ secrets.VITE_POSTHOG_HOST }}'
+            echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
+            echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}'
+          } >> .env
 
       - name: Run cap-setup
         shell: bash
@@ -262,17 +268,132 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
+      - name: Upload assets
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          working-directory: apps/desktop
+          command: release upload ${{ env.CN_APPLICATION }} "${{ needs.draft.outputs.version }}" --framework tauri
+          api-key: ${{ secrets.CN_API_KEY }}
+        env:
+          TAURI_BUNDLE_PATH: ../..
+
+      - uses: matbour/setup-sentry-cli@8ef22a4ff03bcd1ebbcaa3a36a81482ca8e3872e
+
+      - name: Upload debug symbols to Sentry
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/Cap.dSYM
+
+  windows_build:
+    needs: draft
+    if: ${{ needs.draft.outputs.needs_release == 'true' }}
+    permissions:
+      contents: read
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+    outputs:
+      unsigned_windows_installer_artifact_id: ${{ steps.upload_unsigned_windows_installer.outputs.artifact-id }}
+    runs-on: ${{ inputs.windowsBuildRunner || vars.PUBLISH_WINDOWS_BUILD_RUNNER || 'windows-latest-l' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.draft.outputs.tag_name }}
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ env.WINDOWS_TARGET }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ env.WINDOWS_TARGET }}
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Create .env file in root
+        shell: bash
+        run: |
+          {
+            echo "appVersion=${{ needs.draft.outputs.version }}"
+            echo "VITE_ENVIRONMENT=production"
+            echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568"
+            echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}"
+            echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
+            echo 'VITE_POSTHOG_KEY=${{ secrets.VITE_POSTHOG_KEY }}'
+            echo 'VITE_POSTHOG_HOST=${{ secrets.VITE_POSTHOG_HOST }}'
+            echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
+            echo 'RUST_TARGET_TRIPLE=${{ env.WINDOWS_TARGET }}'
+          } >> .env
+
+      - name: Run cap-setup
+        shell: bash
+        run: pnpm -w cap-setup
+        env:
+          RUST_TARGET_TRIPLE: ${{ env.WINDOWS_TARGET }}
+
+      - name: Build cap-muxer sidecar
+        shell: bash
+        run: ./scripts/build-cap-muxer.sh ${{ env.WINDOWS_TARGET }}
+
+      - name: Build app
+        working-directory: apps/desktop
+        run: pnpm build:tauri --target ${{ env.WINDOWS_TARGET }} --config src-tauri/tauri.prod.conf.json
+        env:
+          CI: false
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RUST_TARGET_TRIPLE: ${{ env.WINDOWS_TARGET }}
+
       - name: Upload unsigned Windows installer
-        if: ${{ runner.os == 'Windows' }}
         id: upload_unsigned_windows_installer
         uses: actions/upload-artifact@v4
         with:
           name: unsigned-windows-installer
-          path: target/${{ matrix.settings.target }}/release/bundle/nsis/*.exe
+          path: target/${{ env.WINDOWS_TARGET }}/release/bundle/nsis/*.exe
           if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload Windows release output
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-output
+          path: |
+            target/${{ env.WINDOWS_TARGET }}/release/bundle
+            !target/${{ env.WINDOWS_TARGET }}/release/bundle/nsis/*.exe
+            target/${{ env.WINDOWS_TARGET }}/release/cap_desktop.pdb
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  windows_sign:
+    needs: [draft, windows_build]
+    if: ${{ needs.draft.outputs.needs_release == 'true' }}
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.draft.outputs.tag_name }}
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Download Windows release output
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release-output
+          path: target/${{ env.WINDOWS_TARGET }}/release
 
       - name: Submit SignPath signing request
-        if: ${{ runner.os == 'Windows' }}
         id: submit_signpath_signing_request
         uses: signpath/github-action-submit-signing-request@v1
         with:
@@ -281,16 +402,17 @@ jobs:
           project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
           signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
           artifact-configuration-slug: ${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.upload_unsigned_windows_installer.outputs.artifact-id }}
+          github-artifact-id: ${{ needs.windows_build.outputs.unsigned_windows_installer_artifact_id }}
           wait-for-completion: true
           output-artifact-directory: signed-windows-installer
 
       - name: Restore signed Windows installer
-        if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: |
           $signedDir = "signed-windows-installer"
-          $bundleDir = "target/${{ matrix.settings.target }}/release/bundle/nsis"
+          $bundleDir = "target/${{ env.WINDOWS_TARGET }}/release/bundle/nsis"
+
+          New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
 
           if (-not (Test-Path $signedDir)) {
             throw "Signed artifact directory '$signedDir' not found."
@@ -308,11 +430,10 @@ jobs:
           Get-ChildItem -Path $bundleDir -Filter *.exe | ForEach-Object { Write-Host "  - $($_.Name)" }
 
       - name: Re-sign Windows installer for Tauri updater
-        if: ${{ runner.os == 'Windows' }}
         shell: bash
         working-directory: apps/desktop
         run: |
-          BUNDLE_DIR="../../target/${{ matrix.settings.target }}/release/bundle/nsis"
+          BUNDLE_DIR="../../target/${{ env.WINDOWS_TARGET }}/release/bundle/nsis"
           for exe in "$BUNDLE_DIR"/*.exe; do
             echo "Re-signing $(basename "$exe") for Tauri updater..."
             rm -f "${exe}.sig"
@@ -336,23 +457,14 @@ jobs:
       - uses: matbour/setup-sentry-cli@8ef22a4ff03bcd1ebbcaa3a36a81482ca8e3872e
 
       - name: Upload debug symbols to Sentry
-        if: ${{ runner.os == 'macOS' }}
         shell: bash
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
-          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/Cap.dSYM
-
-      - name: Upload debug symbols to Sentry
-        if: ${{ runner.os == 'Windows' }}
-        shell: bash
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: |
-          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/${{ matrix.settings.target }}/release/cap_desktop.pdb
+          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/${{ env.WINDOWS_TARGET }}/release/cap_desktop.pdb
 
   done:
-    needs: [draft, build]
+    needs: [draft, build, windows_sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write

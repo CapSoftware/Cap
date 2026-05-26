@@ -358,6 +358,18 @@ export const Share = ({
 	const searchParams = useSearchParams();
 	const initialSeekDone = useRef(false);
 
+	useEffect(() => {
+		if (!searchParams.has("recordingStopped")) return;
+
+		const url = new URL(window.location.href);
+		url.searchParams.delete("recordingStopped");
+		window.history.replaceState(
+			window.history.state,
+			"",
+			`${url.pathname}${url.search}${url.hash}`,
+		);
+	}, [searchParams]);
+
 	const handleSeek = useCallback((time: number) => {
 		const v =
 			playerRef.current ??

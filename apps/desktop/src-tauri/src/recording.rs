@@ -2320,14 +2320,10 @@ async fn handle_recording_end(
     let _ = app.camera_feed.ask(camera::RemoveInput).await;
 
     let main_window = CapWindowId::Main.get(&handle);
-    let should_restore_mic_preview = main_window
-        .as_ref()
-        .and_then(|window| window.is_visible().ok())
-        .unwrap_or(false);
 
     if let Some(window) = main_window {
         window.unminimize().ok();
-        if should_restore_mic_preview && let Err(err) = app.ensure_selected_mic_ready().await {
+        if let Err(err) = app.ensure_selected_mic_ready().await {
             warn!("Failed to restore microphone preview after recording: {err}");
         }
     } else {

@@ -9,6 +9,7 @@ import { message } from "@tauri-apps/plugin-dialog";
 import {
 	children,
 	createEffect,
+	type JSX,
 	lazy,
 	onMount,
 	type ParentProps,
@@ -23,12 +24,13 @@ import "./styles/theme.css";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
+import WindowChromeLayout from "./routes/(window-chrome)";
+import SettingsLayout from "./routes/(window-chrome)/settings";
+import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
 import titlebar from "./utils/titlebar-state";
 
-const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
 const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
-const SettingsLayout = lazy(() => import("./routes/(window-chrome)/settings"));
 const SettingsGeneralPage = lazy(
 	() => import("./routes/(window-chrome)/settings/general"),
 );
@@ -245,7 +247,9 @@ function AutoRevealWindowOnReady() {
 	return null;
 }
 
-export function RevealWindowWithSuspense(props: ParentProps) {
+export function RevealWindowWithSuspense(
+	props: ParentProps<{ fallback?: JSX.Element }>,
+) {
 	const resolved = children(() => props.children);
 	const isRouting = useIsRouting();
 
