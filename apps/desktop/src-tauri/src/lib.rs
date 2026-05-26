@@ -2836,11 +2836,11 @@ async fn set_project_config(
     editor_instance: WindowEditorInstance,
     config: ProjectConfiguration,
 ) -> Result<(), String> {
+    editor_instance.project_config.0.send(config.clone()).ok();
+
     config
         .write(&editor_instance.project_path)
         .map_err(|error| format!("Failed to write project config: {error}"))?;
-
-    editor_instance.project_config.0.send(config).ok();
 
     Ok(())
 }

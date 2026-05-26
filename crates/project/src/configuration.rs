@@ -1,5 +1,4 @@
 use std::{
-    env::temp_dir,
     fmt,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
@@ -1298,15 +1297,17 @@ impl ProjectConfiguration {
         self.validate()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 
-        let temp_path = temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let project_path = project_path.as_ref();
+        let config_path = project_path.join("project-config.json");
+        let temp_path =
+            project_path.join(format!(".project-config-{}.json.tmp", uuid::Uuid::new_v4()));
 
-        // Write to temporary file first to ensure readers don't see partial files
         std::fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
 
-        std::fs::rename(
-            &temp_path,
-            project_path.as_ref().join("project-config.json"),
-        )?;
+        if let Err(error) = std::fs::rename(&temp_path, &config_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(error);
+        }
 
         Ok(())
     }
