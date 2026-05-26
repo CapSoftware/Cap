@@ -41,6 +41,7 @@ import {
 	type StudioRecordingQuality,
 	type WindowExclusion,
 } from "~/utils/tauri";
+import IconLucideAlertTriangle from "~icons/lucide/alert-triangle";
 import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideX from "~icons/lucide/x";
 import {
@@ -73,6 +74,34 @@ const getWindowOptionLabel = (window: CaptureWindow) => {
 		parts.push(window.name);
 	}
 	return parts.join(" • ");
+};
+
+const isSameExclusion = (a: WindowExclusion, b: WindowExclusion) =>
+	(a.bundleIdentifier ?? null) === (b.bundleIdentifier ?? null) &&
+	(a.ownerName ?? null) === (b.ownerName ?? null) &&
+	(a.windowTitle ?? null) === (b.windowTitle ?? null);
+
+const coversDefaultExclusion = (
+	entry: WindowExclusion,
+	defaultEntry: WindowExclusion,
+) => {
+	if (isSameExclusion(entry, defaultEntry)) return true;
+	if (
+		defaultEntry.windowTitle &&
+		entry.windowTitle === defaultEntry.windowTitle
+	) {
+		return true;
+	}
+	if (
+		defaultEntry.bundleIdentifier &&
+		entry.bundleIdentifier === defaultEntry.bundleIdentifier
+	) {
+		return true;
+	}
+	if (defaultEntry.ownerName && entry.ownerName === defaultEntry.ownerName) {
+		return !entry.windowTitle || entry.windowTitle === defaultEntry.windowTitle;
+	}
+	return false;
 };
 
 type ExtendedGeneralSettingsStore = GeneralSettingsStore;
@@ -237,6 +266,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			initialValue: [] as CaptureWindow[],
 		},
 	);
+	const [defaultExcludedWindows] = createResource(
+		() => commands.getDefaultExcludedWindows(),
+		{
+			initialValue: [] as WindowExclusion[],
+		},
+	);
 
 	const handleChange = async <K extends keyof typeof settings>(
 		key: K,
@@ -257,6 +292,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
+	const missingDefaultExclusions = createMemo(() =>
+		defaultExcludedWindows().filter(
+			(defaultEntry) =>
+				!excludedWindows().some((entry) =>
+					coversDefaultExclusion(entry, defaultEntry),
+				),
+		),
+	);
 
 	const matchesExclusion = (
 		exclusion: WindowExclusion,
@@ -593,6 +636,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 				<ExcludedWindowsCard
 					excludedWindows={excludedWindows()}
+					missingDefaultExclusions={missingDefaultExclusions()}
 					availableWindows={availableWindows()}
 					onRequestAvailableWindows={refreshAvailableWindows}
 					onRemove={handleRemoveExclusion}
@@ -1056,6 +1100,7 @@ function DefaultProjectNameCard(props: {
 
 function ExcludedWindowsCard(props: {
 	excludedWindows: WindowExclusion[];
+	missingDefaultExclusions: WindowExclusion[];
 	availableWindows: CaptureWindow[];
 	onRequestAvailableWindows: () => Promise<CaptureWindow[]>;
 	onRemove: (index: number) => Promise<void>;
@@ -1065,7 +1110,15 @@ function ExcludedWindowsCard(props: {
 	isWindows: boolean;
 }) {
 	const hasExclusions = () => props.excludedWindows.length > 0;
+	const hasMissingDefaultExclusions = () =>
+		props.missingDefaultExclusions.length > 0;
+	const missingDefaultLabels = () =>
+		props.missingDefaultExclusions.map(getExclusionPrimaryLabel).join(", ");
 	const canAdd = () => !props.isLoading;
+	const handleResetClick = () => {
+		if (props.isLoading) return;
+		void props.onReset();
+	};
 
 	const handleAddClick = async (event: MouseEvent) => {
 		event.preventDefault();
@@ -1134,10 +1187,7 @@ function ExcludedWindowsCard(props: {
 						variant="gray"
 						size="sm"
 						disabled={props.isLoading}
-						onClick={() => {
-							if (props.isLoading) return;
-							void props.onReset();
-						}}
+						onClick={handleResetClick}
 					>
 						Reset
 					</Button>
@@ -1155,6 +1205,31 @@ function ExcludedWindowsCard(props: {
 			}
 		>
 			<SectionCard padded>
+				<Show when={hasMissingDefaultExclusions()}>
+					<div class="mb-3 rounded-lg border border-amber-6 bg-amber-3/30 px-3 py-2.5">
+						<div class="flex items-start gap-2">
+							<IconLucideAlertTriangle class="mt-0.5 size-4 shrink-0 text-amber-11" />
+							<div class="min-w-0 flex-1 space-y-1">
+								<p class="text-xs font-medium text-amber-11">
+									Recommended Cap windows are not excluded
+								</p>
+								<p class="text-[10px] leading-snug text-amber-11">
+									Camera, settings, or recording windows can appear as black
+									boxes in screen recordings. Missing: {missingDefaultLabels()}.
+								</p>
+							</div>
+							<Button
+								variant="gray"
+								size="sm"
+								disabled={props.isLoading}
+								onClick={handleResetClick}
+								class="shrink-0"
+							>
+								Restore
+							</Button>
+						</div>
+					</div>
+				</Show>
 				<Show when={!props.isLoading} fallback={<ExcludedWindowsSkeleton />}>
 					<Show
 						when={hasExclusions()}
