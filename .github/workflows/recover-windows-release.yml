@@ -1,8 +1,6 @@
 name: "recover-windows-release"
 
 on:
-  repository_dispatch:
-    types: [recover-windows-release]
   workflow_call:
   workflow_dispatch:
 concurrency:
