@@ -5,15 +5,17 @@ on:
     inputs:
       source_run_id:
         description: "Workflow run ID that uploaded the unsigned Windows installer"
-        required: true
+        default: "26446941158"
+        required: false
         type: string
       source_artifact_name:
         description: "Unsigned Windows installer artifact name"
         default: "unsigned-windows-installer"
-        required: true
+        required: false
         type: string
       expected_artifact_digest:
         description: "Optional GitHub artifact digest, e.g. sha256:..."
+        default: "sha256:23574b4812ba9c62f2f6e17219d180640a2411a6a8863cad22d0196ca6e9b798"
         required: false
         type: string
 concurrency:
