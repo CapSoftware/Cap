@@ -2,6 +2,8 @@ name: "publish"
 
 # change this when ready to release if you want CI/CD
 on:
+  repository_dispatch:
+    types: [recover-windows-release]
   workflow_dispatch:
     inputs:
       interactionId:
@@ -25,7 +27,7 @@ env:
 
 jobs:
   draft:
-    if: ${{ inputs.recoverWindowsRelease != 'true' }}
+    if: ${{ github.event_name != 'repository_dispatch' && inputs.recoverWindowsRelease != 'true' }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.read_version.outputs.value }}
@@ -363,7 +365,7 @@ jobs:
           sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/${{ matrix.settings.target }}/release/cap_desktop.pdb
 
   recover-windows-release:
-    if: ${{ inputs.recoverWindowsRelease == 'true' }}
+    if: ${{ github.event_name == 'repository_dispatch' || inputs.recoverWindowsRelease == 'true' }}
     uses: ./.github/workflows/recover-windows-release.yml
     permissions:
       actions: read
