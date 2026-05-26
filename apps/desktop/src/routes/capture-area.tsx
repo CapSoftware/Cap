@@ -72,11 +72,18 @@ export default function CaptureArea() {
 
 	const { rawOptions, setOptions } = createOptionsQuery();
 
-	const hasStoredSelection = createMemo(() => {
+	const activeScreenId = createMemo(() => {
 		const target = rawOptions.captureTarget;
-		if (target.variant !== "display") return false;
+		if (target.variant === "display") return target.id;
+		if (target.variant === "area") return target.screen;
+		return null;
+	});
+
+	const hasStoredSelection = createMemo(() => {
+		const screenId = activeScreenId();
+		if (!screenId) return false;
 		return (
-			state.lastSelectedBounds?.some((entry) => entry.screenId === target.id) ??
+			state.lastSelectedBounds?.some((entry) => entry.screenId === screenId) ??
 			false
 		);
 	});
@@ -90,22 +97,22 @@ export default function CaptureArea() {
 		)
 			return;
 
-		const target = rawOptions.captureTarget;
-		if (target.variant !== "display") return;
+		const screenId = activeScreenId();
+		if (!screenId) return;
 
 		const existingIndex = state.lastSelectedBounds?.findIndex(
-			(item) => item.screenId === target.id,
+			(item) => item.screenId === screenId,
 		);
 
 		if (existingIndex >= 0) {
 			setState("lastSelectedBounds", existingIndex, {
-				screenId: target.id,
+				screenId,
 				bounds: currentBounds,
 			});
 		} else {
 			setState("lastSelectedBounds", [
 				...state.lastSelectedBounds,
-				{ screenId: target.id, bounds: currentBounds },
+				{ screenId, bounds: currentBounds },
 			]);
 		}
 
@@ -114,7 +121,7 @@ export default function CaptureArea() {
 			"captureTarget",
 			reconcile({
 				variant: "area",
-				screen: target.id,
+				screen: screenId,
 				bounds: {
 					position: { x: b.x, y: b.y },
 					size: { width: b.width, height: b.height },
@@ -148,10 +155,10 @@ export default function CaptureArea() {
 		cropperRef?.reset();
 		setAspect(null);
 
-		const target = rawOptions.captureTarget;
-		if (target.variant !== "display") return;
+		const screenId = activeScreenId();
+		if (!screenId) return;
 		setState("lastSelectedBounds", (values) =>
-			values?.filter((v) => v.screenId !== target.id),
+			values?.filter((v) => v.screenId !== screenId),
 		);
 	}
 
@@ -287,12 +294,11 @@ export default function CaptureArea() {
 						onCropChange={setCrop}
 						snapToRatioEnabled={state.snapToRatio}
 						initialCrop={() => {
-							const target = rawOptions.captureTarget;
-							if (target.variant === "display")
+							const screenId = activeScreenId();
+							if (screenId)
 								return (
-									state.lastSelectedBounds?.find(
-										(m) => m.screenId === target.id,
-									)?.bounds ?? CROP_ZERO
+									state.lastSelectedBounds?.find((m) => m.screenId === screenId)
+										?.bounds ?? CROP_ZERO
 								);
 							return CROP_ZERO;
 						}}
