@@ -35,6 +35,8 @@ import {
 
 export const app = new Hono();
 
+const MAX_DESKTOP_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
+
 async function resolveOrganizationIconUrl(iconUrl: string | null) {
 	if (!iconUrl) return null;
 
@@ -55,6 +57,22 @@ async function resolveUserImageUrl(imageUrl: string | null) {
 			imageUrl as ImageUpload.ImageUrlOrKey,
 		);
 	}).pipe(runPromise);
+}
+
+async function fetchDesktopProfileImage(imageUrl: string) {
+	const response = await fetch(imageUrl);
+	if (!response.ok) return null;
+
+	const contentType = response.headers.get("content-type");
+	if (!contentType?.toLowerCase().startsWith("image/")) return null;
+
+	const contentLength = Number(response.headers.get("content-length"));
+	if (contentLength > MAX_DESKTOP_PROFILE_IMAGE_BYTES) return null;
+
+	const bytes = await response.arrayBuffer();
+	if (bytes.byteLength > MAX_DESKTOP_PROFILE_IMAGE_BYTES) return null;
+
+	return { bytes, contentType };
 }
 
 type DesktopProfileUser = {
@@ -483,6 +501,25 @@ app.get("/user/profile", async (c) => {
 		name: name || null,
 		email: user.email,
 		imageUrl: await resolveUserImageUrl(user.image ?? null),
+	});
+});
+
+app.get("/user/profile/image", async (c) => {
+	const user = await getDesktopProfileUser(c);
+	if (!user) return c.text("User not authenticated", 401);
+	if (!user.image) return c.body(null, 404);
+
+	const imageUrl = await resolveUserImageUrl(user.image);
+	if (!imageUrl) return c.body(null, 404);
+
+	const image = await fetchDesktopProfileImage(imageUrl);
+	if (!image) return c.body(null, 404);
+
+	return new Response(image.bytes, {
+		headers: {
+			"Cache-Control": "private, max-age=300",
+			"Content-Type": image.contentType,
+		},
 	});
 });
 

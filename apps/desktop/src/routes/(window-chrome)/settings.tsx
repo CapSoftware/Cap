@@ -3,12 +3,15 @@ import { A, type RouteSectionProps, useNavigate } from "@solidjs/router";
 import { createQuery, useQueryClient } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import * as dialog from "@tauri-apps/plugin-dialog";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import * as shell from "@tauri-apps/plugin-shell";
 import { check } from "@tauri-apps/plugin-updater";
 import {
+	createEffect,
 	createMemo,
 	createSignal,
 	For,
+	on,
 	onCleanup,
 	onMount,
 	Show,
@@ -26,6 +29,7 @@ import IconLucideUserRound from "~icons/lucide/user-round";
 
 const USER_PROFILE_CACHE_GC_MS = 2 * 60 * 60 * 1000;
 const USER_PROFILE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
 
 type AuthState = Awaited<ReturnType<typeof authStore.get>>;
 type CachedUserProfile = Awaited<ReturnType<typeof userProfileStore.get>>;
@@ -44,6 +48,36 @@ function isCachedProfileForUser(
 	userId: string | null | undefined,
 ) {
 	return cachedProfile?.userId === (userId ?? null);
+}
+
+async function loadProfileImageObjectUrl(signal: AbortSignal) {
+	const imageUrl = new URL(
+		"/api/desktop/user/profile/image",
+		clientEnv.VITE_SERVER_URL,
+	).toString();
+
+	const response = await tauriFetch(imageUrl, {
+		headers: await protectedHeaders(),
+		signal,
+	});
+	if (!response.ok) throw new Error("Failed to load profile image");
+
+	const contentType = response.headers.get("content-type");
+	if (contentType && !contentType.toLowerCase().startsWith("image/")) {
+		throw new Error("Invalid profile image response");
+	}
+
+	const contentLength = Number(response.headers.get("content-length"));
+	if (contentLength > MAX_PROFILE_IMAGE_BYTES) {
+		throw new Error("Profile image is too large");
+	}
+
+	const blob = await response.blob();
+	if (blob.size > MAX_PROFILE_IMAGE_BYTES) {
+		throw new Error("Profile image is too large");
+	}
+
+	return URL.createObjectURL(blob);
 }
 
 function SettingsContentSkeleton() {
@@ -100,6 +134,12 @@ export default function Settings(props: RouteSectionProps) {
 	const [authLoaded, setAuthLoaded] = createSignal(false);
 	const [version, setVersion] = createSignal<string | null>(null);
 	const [isCheckingForUpdates, setIsCheckingForUpdates] = createSignal(false);
+	const [failedProfileImageUrl, setFailedProfileImageUrl] = createSignal<
+		string | null
+	>(null);
+	const [profileImageObjectUrl, setProfileImageObjectUrl] = createSignal<
+		string | null
+	>(null);
 	const clearLocalAuth = async () => {
 		setAuth(undefined);
 		queryClient.removeQueries({ queryKey: ["settings-user-profile"] });
@@ -210,12 +250,15 @@ export default function Settings(props: RouteSectionProps) {
 
 		return "Signed in";
 	});
-	const accountImageUrl = createMemo(() => {
+	const accountRemoteImageUrl = createMemo(() => {
 		if (!userProfile.isSuccess) return null;
 
 		const imageUrl = userProfile.data?.imageUrl?.trim();
+		if (imageUrl && imageUrl === failedProfileImageUrl()) return null;
+
 		return imageUrl || null;
 	});
+	const accountImageUrl = createMemo(() => profileImageObjectUrl());
 	const openDashboard = () => {
 		void shell.open(
 			new URL("/dashboard", clientEnv.VITE_SERVER_URL).toString(),
@@ -235,6 +278,44 @@ export default function Settings(props: RouteSectionProps) {
 
 		signIn.mutate(new AbortController());
 	};
+	const handleProfileImageError = (imageUrl: string) => {
+		setFailedProfileImageUrl(imageUrl);
+		void userProfile.refetch();
+	};
+
+	createEffect(
+		on(accountRemoteImageUrl, (imageUrl) => {
+			setProfileImageObjectUrl(null);
+
+			if (!imageUrl) return;
+
+			const abort = new AbortController();
+			let disposed = false;
+			let objectUrl: string | null = null;
+
+			void loadProfileImageObjectUrl(abort.signal)
+				.then((url) => {
+					if (disposed) {
+						URL.revokeObjectURL(url);
+						return;
+					}
+
+					objectUrl = url;
+					setProfileImageObjectUrl(url);
+				})
+				.catch(() => {
+					if (!disposed && !abort.signal.aborted) {
+						handleProfileImageError(imageUrl);
+					}
+				});
+
+			onCleanup(() => {
+				disposed = true;
+				abort.abort();
+				if (objectUrl) URL.revokeObjectURL(objectUrl);
+			});
+		}),
+	);
 
 	onMount(() => {
 		void getVersion()
@@ -371,6 +452,11 @@ export default function Settings(props: RouteSectionProps) {
 								src={imageUrl()}
 								alt=""
 								draggable={false}
+								onError={() => {
+									const remoteUrl = accountRemoteImageUrl();
+									if (remoteUrl) handleProfileImageError(remoteUrl);
+									setProfileImageObjectUrl(null);
+								}}
 							/>
 						)}
 					</Show>
