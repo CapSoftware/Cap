@@ -94,7 +94,7 @@ export default function CaptureArea() {
 	);
 	createEffect(() => {
 		const id = activeScreenId();
-		if (id && !screenId()) setScreenId(id);
+		if (id && !untrack(screenId)) setScreenId(id);
 	});
 
 	const hasStoredSelection = createMemo(() => {
@@ -312,11 +312,21 @@ export default function CaptureArea() {
 						snapToRatioEnabled={state.snapToRatio}
 						initialCrop={() => {
 							const id = screenId();
-							if (id)
-								return (
-									state.lastSelectedBounds?.find((m) => m.screenId === id)
-										?.bounds ?? CROP_ZERO
-								);
+							if (id) {
+								const stored = state.lastSelectedBounds?.find(
+									(m) => m.screenId === id,
+								)?.bounds;
+								if (stored) return stored;
+								const target = rawOptions.captureTarget;
+								if (target.variant === "area" && target.screen === id) {
+									return {
+										x: target.bounds.position.x,
+										y: target.bounds.position.y,
+										width: target.bounds.size.width,
+										height: target.bounds.size.height,
+									};
+								}
+							}
 							return CROP_ZERO;
 						}}
 						onContextMenu={(e) => showCropOptionsMenu(e, true)}
