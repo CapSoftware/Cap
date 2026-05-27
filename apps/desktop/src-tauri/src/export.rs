@@ -13,15 +13,17 @@ use specta::Type;
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        Arc,
+        Arc, LazyLock, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use tauri_plugin_dialog::DialogExt;
 use tokio::io::AsyncBufReadExt;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument, warn};
 
 fn panic_message(panic: Box<dyn Any + Send>) -> String {
@@ -53,10 +55,17 @@ async fn run_protected_export(
     settings: &ExportSettings,
     progress: ExportProgress,
     force_ffmpeg: bool,
+    cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
-    match AssertUnwindSafe(do_export(project_path, settings, progress, force_ffmpeg))
-        .catch_unwind()
-        .await
+    match AssertUnwindSafe(do_export(
+        project_path,
+        settings,
+        progress,
+        force_ffmpeg,
+        cancel_token,
+    ))
+    .catch_unwind()
+    .await
     {
         Ok(result) => result,
         Err(panic) => {
@@ -78,6 +87,8 @@ async fn run_protected_export(
 const EXPORTER_STDERR_TAIL_LIMIT: usize = 80;
 const EXPORT_PROGRESS_FORWARD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 static ACTIVE_EXPORT_SESSIONS: AtomicUsize = AtomicUsize::new(0);
+static ACTIVE_EXPORT_CANCELLATIONS: LazyLock<Mutex<HashMap<String, ActiveExportCancellation>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -150,6 +161,84 @@ impl ExportProgressForwarder {
             total_frames,
         })
     }
+}
+
+struct ActiveExportCancellation {
+    token: CancellationToken,
+    window_label: Option<String>,
+}
+
+struct ExportCancellationGuard {
+    export_id: String,
+    token: CancellationToken,
+}
+
+impl ExportCancellationGuard {
+    fn new(export_id: String, window_label: Option<String>) -> Self {
+        let token = CancellationToken::new();
+        active_export_cancellations().insert(
+            export_id.clone(),
+            ActiveExportCancellation {
+                token: token.clone(),
+                window_label,
+            },
+        );
+
+        Self { export_id, token }
+    }
+
+    fn token(&self) -> CancellationToken {
+        self.token.clone()
+    }
+}
+
+impl Drop for ExportCancellationGuard {
+    fn drop(&mut self) {
+        active_export_cancellations().remove(&self.export_id);
+    }
+}
+
+fn active_export_cancellations() -> MutexGuard<'static, HashMap<String, ActiveExportCancellation>> {
+    match ACTIVE_EXPORT_CANCELLATIONS.lock() {
+        Ok(guard) => guard,
+        Err(err) => err.into_inner(),
+    }
+}
+
+fn cancel_export_by_id(export_id: &str) -> bool {
+    let cancellations = active_export_cancellations();
+    if let Some(active_export) = cancellations.get(export_id) {
+        active_export.token.cancel();
+        return true;
+    }
+
+    false
+}
+
+pub fn cancel_exports_for_window(window_label: &str) {
+    let cancellations = active_export_cancellations();
+    let mut cancelled_count = 0;
+
+    for active_export in cancellations.values() {
+        if active_export.window_label.as_deref() == Some(window_label) {
+            active_export.token.cancel();
+            cancelled_count += 1;
+        }
+    }
+
+    if cancelled_count > 0 {
+        info!(
+            window = window_label,
+            cancelled_count, "Cancelled window exports"
+        );
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument]
+pub fn cancel_export(export_id: String) -> bool {
+    cancel_export_by_id(&export_id)
 }
 
 fn retain_export_session() {
@@ -227,6 +316,7 @@ async fn run_out_of_process_export(
     settings: &ExportSettings,
     progress: ExportProgress,
     force_ffmpeg: bool,
+    cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
     let mode = ExportWorkerMode::HardwareOptimized;
     // Windows GPU drivers, MediaFoundation, and encoder DLLs can abort the process on failure.
@@ -238,6 +328,7 @@ async fn run_out_of_process_export(
         progress.clone(),
         force_ffmpeg,
         mode,
+        cancel_token.clone(),
     )
     .await
     {
@@ -253,6 +344,7 @@ async fn run_out_of_process_export(
                 progress,
                 force_ffmpeg,
                 ExportWorkerMode::SoftwareSafe,
+                cancel_token,
             )
             .await
         }
@@ -266,7 +358,12 @@ async fn run_out_of_process_export_attempt(
     progress: ExportProgress,
     force_ffmpeg: bool,
     mode: ExportWorkerMode,
+    cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
+    if cancel_token.is_cancelled() {
+        return Err("Export cancelled".to_string());
+    }
+
     let bin_path = resolve_exporter_binary()?;
     let settings_json = serde_json::to_string(settings)
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
@@ -325,11 +422,17 @@ async fn run_out_of_process_export_attempt(
     let mut completed_path = None;
     let mut stdout_lines = tokio::io::BufReader::new(stdout).lines();
 
-    while let Some(line) = stdout_lines
-        .next_line()
-        .await
-        .map_err(|e| format!("Failed reading export worker stdout: {e}"))?
-    {
+    while let Some(line) = tokio::select! {
+        line = stdout_lines.next_line() => {
+            line.map_err(|e| format!("Failed reading export worker stdout: {e}"))?
+        }
+        _ = cancel_token.cancelled() => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let _ = stderr_task.await;
+            return Err("Export cancelled".to_string());
+        }
+    } {
         match serde_json::from_str::<ExportSidecarMessage>(&line) {
             Ok(ExportSidecarMessage::Progress {
                 rendered_count,
@@ -353,10 +456,17 @@ async fn run_out_of_process_export_attempt(
         }
     }
 
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("Failed waiting for export worker: {e}"))?;
+    let status = tokio::select! {
+        status = child.wait() => {
+            status.map_err(|e| format!("Failed waiting for export worker: {e}"))?
+        }
+        _ = cancel_token.cancelled() => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let _ = stderr_task.await;
+            return Err("Export cancelled".to_string());
+        }
+    };
     let stderr_tail = stderr_task.await.unwrap_or_default();
 
     if !status.success() {
@@ -539,10 +649,18 @@ impl Drop for ExportPreviewActiveGuard<'_> {
     }
 }
 
-async fn wait_for_export_preview_idle(flag: &AtomicBool) {
+async fn wait_for_export_preview_idle_or_cancel(
+    flag: &AtomicBool,
+    cancel_token: &CancellationToken,
+) -> Result<(), String> {
     while flag.load(Ordering::Acquire) {
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+            _ = cancel_token.cancelled() => return Err("Export cancelled".to_string()),
+        }
     }
+
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Type)]
@@ -593,7 +711,12 @@ async fn do_export(
     settings: &ExportSettings,
     progress: ExportProgress,
     force_ffmpeg: bool,
+    cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
+    if cancel_token.is_cancelled() {
+        return Err("Export cancelled".to_string());
+    }
+
     let mut exporter_builder =
         ExporterBase::builder(project_path.to_path_buf()).with_force_ffmpeg_decoder(force_ffmpeg);
 
@@ -607,16 +730,23 @@ async fn do_export(
 
     let total_frames = exporter_base.total_frames(settings.fps());
 
-    progress.send(FramesRendered {
+    if !progress.send(FramesRendered {
         rendered_count: 0,
         total_frames,
-    });
+    }) {
+        return Err("Export cancelled".to_string());
+    }
 
     match settings {
         ExportSettings::Mp4(mp4_settings) => {
             let progress = progress.clone();
+            let cancel_token = cancel_token.clone();
             mp4_settings
                 .export(exporter_base, move |frame_index| {
+                    if cancel_token.is_cancelled() {
+                        return false;
+                    }
+
                     progress.send(FramesRendered {
                         rendered_count: (frame_index + 1).min(total_frames),
                         total_frames,
@@ -626,8 +756,13 @@ async fn do_export(
         }
         ExportSettings::Gif(gif_settings) => {
             let progress = progress.clone();
+            let cancel_token = cancel_token.clone();
             gif_settings
                 .export(exporter_base, move |frame_index| {
+                    if cancel_token.is_cancelled() {
+                        return false;
+                    }
+
                     progress.send(FramesRendered {
                         rendered_count: (frame_index + 1).min(total_frames),
                         total_frames,
@@ -637,8 +772,13 @@ async fn do_export(
         }
         ExportSettings::Mov(mov_settings) => {
             let progress = progress.clone();
+            let cancel_token = cancel_token.clone();
             mov_settings
                 .export(exporter_base, move |frame_index| {
+                    if cancel_token.is_cancelled() {
+                        return false;
+                    }
+
                     progress.send(FramesRendered {
                         rendered_count: (frame_index + 1).min(total_frames),
                         total_frames,
@@ -677,7 +817,39 @@ pub async fn export_video(
         settings,
         editor,
         ExportProgress(progress),
+        CancellationToken::new(),
     ))
+    .catch_unwind()
+    .await
+    {
+        Ok(result) => result,
+        Err(panic) => Err(export_panic_error(panic)),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(window, progress, editor))]
+pub async fn export_video_with_id(
+    window: tauri::Window,
+    project_path: PathBuf,
+    progress: tauri::ipc::Channel<FramesRendered>,
+    settings: ExportSettings,
+    export_id: String,
+    editor: OptionalWindowEditorInstance,
+) -> Result<PathBuf, String> {
+    let window_label = window.label().to_string();
+    match AssertUnwindSafe(async move {
+        let cancellation_guard = ExportCancellationGuard::new(export_id, Some(window_label));
+        export_video_inner(
+            project_path,
+            settings,
+            editor,
+            ExportProgress(progress),
+            cancellation_guard.token(),
+        )
+        .await
+    })
     .catch_unwind()
     .await
     {
@@ -731,8 +903,14 @@ async fn export_video_to_file_inner(
 
     info!(path = %save_path.display(), "Export save path selected");
 
-    let output_path =
-        export_video_inner(project_path, settings, editor, ExportProgress(progress)).await?;
+    let output_path = export_video_inner(
+        project_path,
+        settings,
+        editor,
+        ExportProgress(progress),
+        CancellationToken::new(),
+    )
+    .await?;
     copy_export_to_path(&output_path, &save_path).await?;
     Ok(save_path)
 }
@@ -742,6 +920,7 @@ async fn export_video_inner(
     settings: ExportSettings,
     editor: OptionalWindowEditorInstance,
     progress: ExportProgress,
+    cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
     let _session_guard = ExportSessionGuard::new();
     let force_ffmpeg = should_force_ffmpeg_export(&project_path, &settings);
@@ -761,13 +940,27 @@ async fn export_video_inner(
     };
 
     if let Some(ref ed) = *editor {
-        wait_for_export_preview_idle(&ed.export_preview_active).await;
+        wait_for_export_preview_idle_or_cancel(&ed.export_preview_active, &cancel_token).await?;
     }
 
     let result = if should_use_out_of_process_export() {
-        run_out_of_process_export(&project_path, &settings, progress.clone(), force_ffmpeg).await
+        run_out_of_process_export(
+            &project_path,
+            &settings,
+            progress.clone(),
+            force_ffmpeg,
+            cancel_token.clone(),
+        )
+        .await
     } else {
-        run_protected_export(&project_path, &settings, progress.clone(), force_ffmpeg).await
+        run_protected_export(
+            &project_path,
+            &settings,
+            progress.clone(),
+            force_ffmpeg,
+            cancel_token.clone(),
+        )
+        .await
     };
 
     match result {
@@ -776,15 +969,33 @@ async fn export_video_inner(
             Ok(path)
         }
         Err(e) if !force_ffmpeg && is_frame_decode_error(&e) => {
+            if cancel_token.is_cancelled() {
+                return Err("Export cancelled".to_string());
+            }
+
             info!(
                 "Export failed with frame decode error, retrying with FFmpeg decoder: {}",
                 e
             );
 
             let retry_result = if should_use_out_of_process_export() {
-                run_out_of_process_export(&project_path, &settings, progress, true).await
+                run_out_of_process_export(
+                    &project_path,
+                    &settings,
+                    progress,
+                    true,
+                    cancel_token.clone(),
+                )
+                .await
             } else {
-                run_protected_export(&project_path, &settings, progress, true).await
+                run_protected_export(
+                    &project_path,
+                    &settings,
+                    progress,
+                    true,
+                    cancel_token.clone(),
+                )
+                .await
             };
 
             match retry_result {
@@ -796,10 +1007,17 @@ async fn export_video_inner(
                     Ok(path)
                 }
                 Err(retry_e) => {
+                    if cancel_token.is_cancelled() || retry_e == "Export cancelled" {
+                        return Err("Export cancelled".to_string());
+                    }
+
                     sentry::capture_message(&retry_e, sentry::Level::Error);
                     Err(retry_e)
                 }
             }
+        }
+        Err(e) if cancel_token.is_cancelled() || e == "Export cancelled" => {
+            Err("Export cancelled".to_string())
         }
         Err(e) => {
             sentry::capture_message(&e, sentry::Level::Error);
