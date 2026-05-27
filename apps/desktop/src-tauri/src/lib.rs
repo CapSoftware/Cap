@@ -123,6 +123,10 @@ use exit_shutdown::{
 };
 use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
+#[cfg(target_os = "macos")]
+use tauri::menu::{
+    AboutMetadata, HELP_SUBMENU_ID, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID,
+};
 
 type FinalizingRecordingsMap =
     std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>;
@@ -192,6 +196,10 @@ const APP_EXIT_STEP_TIMEOUT: Duration = Duration::from_millis(750);
 const APP_EXIT_CAMERA_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(1200);
 const APP_EXIT_TOTAL_TIMEOUT: Duration = Duration::from_secs(3);
 const APP_EXIT_FORCE_TIMEOUT: Duration = Duration::from_secs(8);
+#[cfg(target_os = "macos")]
+const APP_MENU_QUIT_ID: &str = "app_quit";
+#[cfg(target_os = "macos")]
+static MACOS_NATIVE_TERMINATE_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
 async fn await_exit_step<T, E, F>(name: &'static str, timeout: Duration, fut: F) -> Option<T>
 where
@@ -302,6 +310,152 @@ fn should_show_onboarding(app: &AppHandle) -> bool {
     !startup_completed
         || !onboarding_completed
         || !permissions::do_permissions_check(false).necessary_granted()
+}
+
+#[cfg(target_os = "macos")]
+fn build_macos_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let pkg_info = app_handle.package_info();
+    let config = app_handle.config();
+    let about_metadata = AboutMetadata {
+        name: Some(pkg_info.name.clone()),
+        version: Some(pkg_info.version.to_string()),
+        copyright: config.bundle.copyright.clone(),
+        authors: config
+            .bundle
+            .publisher
+            .clone()
+            .map(|publisher| vec![publisher]),
+        ..Default::default()
+    };
+    let quit_label = config
+        .product_name
+        .as_ref()
+        .map(|name| format!("Quit {name}"))
+        .unwrap_or_else(|| "Quit Cap".to_string());
+
+    let window_menu = Submenu::with_id_and_items(
+        app_handle,
+        WINDOW_SUBMENU_ID,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app_handle, None)?,
+            &PredefinedMenuItem::maximize(app_handle, None)?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::close_window(app_handle, None)?,
+        ],
+    )?;
+
+    let help_menu = Submenu::with_id_and_items(app_handle, HELP_SUBMENU_ID, "Help", true, &[])?;
+
+    Menu::with_items(
+        app_handle,
+        &[
+            &Submenu::with_items(
+                app_handle,
+                pkg_info.name.clone(),
+                true,
+                &[
+                    &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &PredefinedMenuItem::services(app_handle, None)?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &PredefinedMenuItem::hide(app_handle, None)?,
+                    &PredefinedMenuItem::hide_others(app_handle, None)?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &MenuItem::with_id(
+                        app_handle,
+                        APP_MENU_QUIT_ID,
+                        quit_label,
+                        true,
+                        Some("Cmd+Q"),
+                    )?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "File",
+                true,
+                &[&PredefinedMenuItem::close_window(app_handle, None)?],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app_handle, None)?,
+                    &PredefinedMenuItem::redo(app_handle, None)?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &PredefinedMenuItem::cut(app_handle, None)?,
+                    &PredefinedMenuItem::copy(app_handle, None)?,
+                    &PredefinedMenuItem::paste(app_handle, None)?,
+                    &PredefinedMenuItem::select_all(app_handle, None)?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "View",
+                true,
+                &[&PredefinedMenuItem::fullscreen(app_handle, None)?],
+            )?,
+            &window_menu,
+            &help_menu,
+        ],
+    )
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn macos_application_should_terminate(
+    _: &objc::runtime::Object,
+    _: objc::runtime::Sel,
+    _: cocoa::base::id,
+) -> isize {
+    if let Some(app) = MACOS_NATIVE_TERMINATE_APP.get() {
+        let app = app.clone();
+        tokio::spawn(async move {
+            request_app_exit(app).await;
+        });
+    } else {
+        warn!("macOS native termination requested before app exit handler was installed");
+    }
+
+    0
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos_native_terminate_handler(app: &AppHandle) {
+    use cocoa::base::{id, nil};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    let _ = MACOS_NATIVE_TERMINATE_APP.set(app.clone());
+
+    unsafe {
+        let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
+        let delegate: id = msg_send![ns_app, delegate];
+
+        if delegate == nil {
+            warn!("Unable to install macOS native termination handler without app delegate");
+            return;
+        }
+
+        let delegate_class = (*delegate).class() as *const _ as *mut objc::runtime::Class;
+        let imp = std::mem::transmute::<
+            unsafe extern "C" fn(&objc::runtime::Object, objc::runtime::Sel, id) -> isize,
+            objc::runtime::Imp,
+        >(macos_application_should_terminate);
+        let added = objc::runtime::class_addMethod(
+            delegate_class,
+            sel!(applicationShouldTerminate:),
+            imp,
+            c"q@:@".as_ptr(),
+        );
+
+        if added == objc::runtime::YES {
+            info!("Installed macOS native termination handler");
+        } else {
+            warn!("macOS native termination handler was already installed");
+        }
+    }
 }
 
 fn now_millis() -> u64 {
@@ -4202,7 +4356,17 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
     #[cfg(target_os = "macos")]
     {
-        builder = builder.plugin(tauri_nspanel::init());
+        builder = builder
+            .menu(build_macos_app_menu)
+            .on_menu_event(|app, event| {
+                if event.id() == APP_MENU_QUIT_ID {
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        request_app_exit(app).await;
+                    });
+                }
+            })
+            .plugin(tauri_nspanel::init());
     }
 
     builder
@@ -4396,6 +4560,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 app.manage(CameraWindowOperationLock::default());
                 app.manage(AppExitState::default());
                 app.manage(MainWindowReadyState::default());
+                #[cfg(target_os = "macos")]
+                install_macos_native_terminate_handler(&app);
                 spawn_process_memory_sampler(app.clone());
 
                 app.manage(Arc::new(RwLock::new(
