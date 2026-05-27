@@ -4224,7 +4224,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 .with_denylist(&[
                     CapWindowId::Onboarding.label().as_str(),
                     "window-capture-occluder",
-                    
                     "target-select-overlay",
                     CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
