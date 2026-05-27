@@ -600,7 +600,7 @@ fn center_camera_window(app: &AppHandle, window: &WebviewWindow) {
     let toolbar_height = 56.0;
     let size = camera_state.size as f64;
     let is_full = camera_state.shape == crate::camera::CameraPreviewShape::Full;
-    let aspect_ratio = 16.0 / 9.0;
+    let aspect_ratio = crate::camera::WIDE_CAMERA_ASPECT_RATIO as f64;
 
     let window_width = if is_full { size * aspect_ratio } else { size };
     let window_height = size + toolbar_height;
@@ -2044,7 +2044,7 @@ impl ShowCapWindow {
                     let (camera_pos_x, camera_pos_y) = if let Some(pos) = saved_position {
                         (pos.x, pos.y)
                     } else if *centered {
-                        let aspect_ratio = 16.0 / 9.0;
+                        let aspect_ratio = crate::camera::WIDE_CAMERA_ASPECT_RATIO as f64;
                         let toolbar_height = 56.0;
                         let window_width = CENTERED_WINDOW_SIZE * aspect_ratio;
                         let window_height = CENTERED_WINDOW_SIZE + toolbar_height;
