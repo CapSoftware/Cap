@@ -259,5 +259,5 @@ export function RevealWindowWithSuspense(
 		getCurrentWindow().show();
 	});
 
-	return <Suspense fallback={null}>{resolved()}</Suspense>;
+	return <Suspense fallback={props.fallback}>{resolved()}</Suspense>;
 }
