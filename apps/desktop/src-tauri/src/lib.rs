@@ -121,6 +121,10 @@ use exit_shutdown::{
 };
 use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
+#[cfg(target_os = "macos")]
+use tauri::menu::{
+    AboutMetadata, HELP_SUBMENU_ID, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID,
+};
 
 type FinalizingRecordingsMap =
     std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>;
@@ -190,6 +194,10 @@ const APP_EXIT_STEP_TIMEOUT: Duration = Duration::from_millis(750);
 const APP_EXIT_CAMERA_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(1200);
 const APP_EXIT_TOTAL_TIMEOUT: Duration = Duration::from_secs(3);
 const APP_EXIT_FORCE_TIMEOUT: Duration = Duration::from_secs(8);
+#[cfg(target_os = "macos")]
+const APP_MENU_QUIT_ID: &str = "app_quit";
+#[cfg(target_os = "macos")]
+static MACOS_NATIVE_TERMINATE_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
 async fn await_exit_step<T, E, F>(name: &'static str, timeout: Duration, fut: F) -> Option<T>
 where
@@ -300,6 +308,152 @@ fn should_show_onboarding(app: &AppHandle) -> bool {
     !startup_completed
         || !onboarding_completed
         || !permissions::do_permissions_check(false).necessary_granted()
+}
+
+#[cfg(target_os = "macos")]
+fn build_macos_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let pkg_info = app_handle.package_info();
+    let config = app_handle.config();
+    let about_metadata = AboutMetadata {
+        name: Some(pkg_info.name.clone()),
+        version: Some(pkg_info.version.to_string()),
+        copyright: config.bundle.copyright.clone(),
+        authors: config
+            .bundle
+            .publisher
+            .clone()
+            .map(|publisher| vec![publisher]),
+        ..Default::default()
+    };
+    let quit_label = config
+        .product_name
+        .as_ref()
+        .map(|name| format!("Quit {name}"))
+        .unwrap_or_else(|| "Quit Cap".to_string());
+
+    let window_menu = Submenu::with_id_and_items(
+        app_handle,
+        WINDOW_SUBMENU_ID,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app_handle, None)?,
+            &PredefinedMenuItem::maximize(app_handle, None)?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::close_window(app_handle, None)?,
+        ],
+    )?;
+
+    let help_menu = Submenu::with_id_and_items(app_handle, HELP_SUBMENU_ID, "Help", true, &[])?;
+
+    Menu::with_items(
+        app_handle,
+        &[
+            &Submenu::with_items(
+                app_handle,
+                pkg_info.name.clone(),
+                true,
+                &[
+                    &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &PredefinedMenuItem::services(app_handle, None)?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &PredefinedMenuItem::hide(app_handle, None)?,
+                    &PredefinedMenuItem::hide_others(app_handle, None)?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &MenuItem::with_id(
+                        app_handle,
+                        APP_MENU_QUIT_ID,
+                        quit_label,
+                        true,
+                        Some("Cmd+Q"),
+                    )?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "File",
+                true,
+                &[&PredefinedMenuItem::close_window(app_handle, None)?],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app_handle, None)?,
+                    &PredefinedMenuItem::redo(app_handle, None)?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &PredefinedMenuItem::cut(app_handle, None)?,
+                    &PredefinedMenuItem::copy(app_handle, None)?,
+                    &PredefinedMenuItem::paste(app_handle, None)?,
+                    &PredefinedMenuItem::select_all(app_handle, None)?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app_handle,
+                "View",
+                true,
+                &[&PredefinedMenuItem::fullscreen(app_handle, None)?],
+            )?,
+            &window_menu,
+            &help_menu,
+        ],
+    )
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn macos_application_should_terminate(
+    _: &objc::runtime::Object,
+    _: objc::runtime::Sel,
+    _: cocoa::base::id,
+) -> isize {
+    if let Some(app) = MACOS_NATIVE_TERMINATE_APP.get() {
+        let app = app.clone();
+        tokio::spawn(async move {
+            request_app_exit(app).await;
+        });
+    } else {
+        warn!("macOS native termination requested before app exit handler was installed");
+    }
+
+    0
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos_native_terminate_handler(app: &AppHandle) {
+    use cocoa::base::{id, nil};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    let _ = MACOS_NATIVE_TERMINATE_APP.set(app.clone());
+
+    unsafe {
+        let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
+        let delegate: id = msg_send![ns_app, delegate];
+
+        if delegate == nil {
+            warn!("Unable to install macOS native termination handler without app delegate");
+            return;
+        }
+
+        let delegate_class = (*delegate).class() as *const _ as *mut objc::runtime::Class;
+        let imp = std::mem::transmute::<
+            unsafe extern "C" fn(&objc::runtime::Object, objc::runtime::Sel, id) -> isize,
+            objc::runtime::Imp,
+        >(macos_application_should_terminate);
+        let added = objc::runtime::class_addMethod(
+            delegate_class,
+            sel!(applicationShouldTerminate:),
+            imp,
+            c"q@:@".as_ptr(),
+        );
+
+        if added == objc::runtime::YES {
+            info!("Installed macOS native termination handler");
+        } else {
+            warn!("macOS native termination handler was already installed");
+        }
+    }
 }
 
 fn now_millis() -> u64 {
@@ -4004,7 +4158,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             get_current_recording,
             export::begin_export_session,
             export::end_export_session,
+            export::cancel_export,
             export::export_video,
+            export::export_video_with_id,
             export::export_video_to_file,
             export::get_export_estimates,
             export::generate_export_preview,
@@ -4199,7 +4355,17 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
     #[cfg(target_os = "macos")]
     {
-        builder = builder.plugin(tauri_nspanel::init());
+        builder = builder
+            .menu(build_macos_app_menu)
+            .on_menu_event(|app, event| {
+                if event.id() == APP_MENU_QUIT_ID {
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        request_app_exit(app).await;
+                    });
+                }
+            })
+            .plugin(tauri_nspanel::init());
     }
 
     builder
@@ -4388,6 +4554,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 app.manage(CameraWindowOperationLock::default());
                 app.manage(AppExitState::default());
                 app.manage(MainWindowReadyState::default());
+                #[cfg(target_os = "macos")]
+                install_macos_native_terminate_handler(&app);
                 spawn_process_memory_sampler(app.clone());
 
                 app.manage(Arc::new(RwLock::new(
@@ -4541,7 +4709,14 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
-                        if export::export_session_active() {
+                        let window_id = CapWindowId::from_str(label).ok();
+                        if matches!(
+                            window_id,
+                            Some(CapWindowId::Editor { .. })
+                                | Some(CapWindowId::ScreenshotEditor { .. })
+                        ) {
+                            export::cancel_exports_for_window(label);
+                        } else if export::export_session_active() {
                             api.prevent_close();
                             warn!(
                                 window = label,
@@ -4550,7 +4725,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             return;
                         }
 
-                        if let Ok(window_id) = CapWindowId::from_str(label) {
+                        if let Some(window_id) = window_id {
                             match window_id {
                                 CapWindowId::Camera => {
                                     if app
@@ -4560,19 +4735,19 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                         return;
                                     }
 
-                                api.prevent_close();
-                                let _ = window.hide();
-                                tracing::warn!("Camera window CloseRequested event received!");
-                                let session_id = app
-                                    .try_state::<Arc<AtomicU64>>()
-                                    .map(|state| state.load(Ordering::Acquire))
-                                    .unwrap_or(0);
-                                let app = app.clone();
-                                spawn_on_runtime(async move {
-                                    cleanup_camera_window(app, session_id).await;
-                                });
-                            }
-                            CapWindowId::Main => {
+                                    api.prevent_close();
+                                    let _ = window.hide();
+                                    tracing::warn!("Camera window CloseRequested event received!");
+                                    let session_id = app
+                                        .try_state::<Arc<AtomicU64>>()
+                                        .map(|state| state.load(Ordering::Acquire))
+                                        .unwrap_or(0);
+                                    let app = app.clone();
+                                    spawn_on_runtime(async move {
+                                        cleanup_camera_window(app, session_id).await;
+                                    });
+                                }
+                                CapWindowId::Main => {
                                 api.prevent_close();
                                 let _ = window.hide();
 
@@ -4637,20 +4812,23 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     if app_is_exiting(app) {
                         return;
                     }
-                    // If a webview crashes mid-export (memory pressure, GPU teardown, etc.) we
-                    // get a Destroyed event for the editor window. Tearing down camera/mic
-                    // feeds and editor registry entries here would race the running export
-                    // sidecar and could trigger Tauri's "last window closed" exit path. Skip
-                    // cleanup entirely while an export is active — the regular Destroyed flow
-                    // will run again when the export completes if the window is still gone.
-                    if export::export_session_active() {
+                    let window_id = CapWindowId::from_str(label).ok();
+                    let is_editor_window = matches!(
+                        window_id,
+                        Some(CapWindowId::Editor { .. })
+                            | Some(CapWindowId::ScreenshotEditor { .. })
+                    );
+                    if is_editor_window {
+                        export::cancel_exports_for_window(label);
+                    }
+                    if export::export_session_active() && !is_editor_window {
                         warn!(
                             window = label,
                             "Skipping Destroyed cleanup during active export"
                         );
                         return;
                     }
-                    if let Ok(window_id) = CapWindowId::from_str(label) {
+                    if let Some(window_id) = window_id {
                         if matches!(window_id, CapWindowId::Camera) {
                             tracing::warn!("Camera window Destroyed event received!");
                         }

@@ -173,11 +173,6 @@ async function completeWithoutMediaServerIfUnavailable(
 		.where(eq(videos.id, Video.VideoId.make(videoId)));
 
 	await db()
-		.update(videos)
-		.set({ source: { type: "desktopMP4" as const } })
-		.where(eq(videos.id, Video.VideoId.make(videoId)));
-
-	await db()
 		.delete(videoUploads)
 		.where(eq(videoUploads.videoId, Video.VideoId.make(videoId)));
 

@@ -218,34 +218,6 @@ export const ShareVideo = forwardRef<
 			!isActivelyRecording &&
 			shouldDeferPlaybackSource(segmentUploadProgress);
 
-		const prevProgressRef = useRef<typeof segmentUploadProgress>(
-			segmentUploadProgress,
-		);
-		const [awaitingSourceRefresh, setAwaitingSourceRefresh] = useState(false);
-		const refreshTriggeredRef = useRef(false);
-
-		useEffect(() => {
-			const prev = prevProgressRef.current;
-			prevProgressRef.current = segmentUploadProgress;
-
-			if (refreshTriggeredRef.current || !isSegmentsSource) return;
-
-			const prevWasActive = prev !== null;
-			const isNowComplete = segmentUploadProgress === null;
-
-			if (prevWasActive && isNowComplete) {
-				refreshTriggeredRef.current = true;
-				setAwaitingSourceRefresh(true);
-				router.refresh();
-			}
-		}, [segmentUploadProgress, router, isSegmentsSource]);
-
-		useEffect(() => {
-			if (awaitingSourceRefresh && !isSegmentsSource) {
-				setAwaitingSourceRefresh(false);
-			}
-		}, [awaitingSourceRefresh, isSegmentsSource]);
-
 		let videoSrc: string;
 		const rawFallbackSrc =
 			data.source.type === "webMP4"
@@ -282,7 +254,7 @@ export const ShareVideo = forwardRef<
 							onConfirmStopped={() => setUserConfirmedStopped(true)}
 							className="h-full"
 						/>
-					) : isProcessingInProgress || awaitingSourceRefresh ? (
+					) : isProcessingInProgress ? (
 						<PreparingVideoOverlay className="h-full" />
 					) : isMp4Source ? (
 						<CapVideoPlayer

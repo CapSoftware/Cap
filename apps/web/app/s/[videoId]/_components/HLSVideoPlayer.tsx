@@ -331,11 +331,9 @@ export function HLSVideoPlayer({
 
 			hls.on(Hls.Events.MANIFEST_PARSED, () => {
 				console.log("HLSVideoPlayer: HLS manifest parsed successfully");
-				if (!isLiveSegments) {
-					setVideoLoaded(true);
-					if (!hasPlayedOnceRef.current) {
-						setShowPlayButton(true);
-					}
+				setVideoLoaded(true);
+				if (!hasPlayedOnceRef.current) {
+					setShowPlayButton(true);
 				}
 			});
 
@@ -573,19 +571,21 @@ export function HLSVideoPlayer({
 		}
 	};
 
-	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
+	const prevUploadProgress =
+		useRef<typeof uploadProgressRaw>(uploadProgressRaw);
 	useEffect(() => {
 		if (
 			shouldReloadPlaybackAfterUploadCompletes(
 				prevUploadProgress.current,
-				uploadProgress,
-			)
+				uploadProgressRaw,
+			) &&
+			(!isLiveSegments || !videoLoadedRef.current)
 		) {
 			reloadPlayback();
 			setTimeout(reloadPlayback, 1000);
 		}
-		prevUploadProgress.current = uploadProgress;
-	}, [uploadProgress, reloadPlayback]);
+		prevUploadProgress.current = uploadProgressRaw;
+	}, [isLiveSegments, uploadProgressRaw, reloadPlayback]);
 
 	return (
 		<MediaPlayer

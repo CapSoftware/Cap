@@ -32,6 +32,7 @@ import {
 	CameraResizeHandles,
 	type CameraWindowState,
 	cameraBorderRadius,
+	cameraPreviewDimensions,
 	cameraToolbarScale,
 	getDefaultCameraWindowState,
 	normalizeBackgroundBlurMode,
@@ -739,12 +740,12 @@ function LegacyCameraPreviewPage(props: {
 				frameDimensions()?.height,
 			] as const,
 		async ([size, shape, frameWidth, frameHeight]) => {
-			const base = Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, size));
-			const aspect = frameWidth && frameHeight ? frameWidth / frameHeight : 1;
-			const windowWidth =
-				shape === "full" ? (aspect >= 1 ? base * aspect : base) : base;
-			const windowHeight =
-				shape === "full" ? (aspect >= 1 ? base : base / aspect) : base;
+			const { width: windowWidth, height: windowHeight } =
+				cameraPreviewDimensions(
+					size,
+					shape,
+					frameWidth && frameHeight ? frameWidth / frameHeight : undefined,
+				);
 			const totalHeight = windowHeight + CAMERA_TOOLBAR_HEIGHT;
 
 			const currentWindow = getCurrentWindow();
@@ -754,7 +755,11 @@ function LegacyCameraPreviewPage(props: {
 			const monitors = await availableMonitors();
 			const activeMonitor = monitor ?? monitors[0];
 			if (!activeMonitor) {
-				return { size: base, windowWidth, windowHeight };
+				return {
+					size: Math.min(windowWidth, windowHeight),
+					windowWidth,
+					windowHeight,
+				};
 			}
 
 			const scalingFactor = activeMonitor.scaleFactor;
@@ -840,7 +845,7 @@ function LegacyCameraPreviewPage(props: {
 				}
 			}
 
-			return { width, height, size: base, windowWidth, windowHeight };
+			return { width, height, size, windowWidth, windowHeight };
 		},
 	);
 
@@ -912,48 +917,23 @@ function Canvas(props: {
 
 		const aspectRatio = frame.data.width / frame.data.height;
 
-		// Use container size if available (for external resize), otherwise use state.size
-		const base = props.containerSize
-			? Math.min(props.containerSize.width, props.containerSize.height)
-			: props.state.size;
+		const targetSize =
+			props.containerSize ??
+			cameraPreviewDimensions(props.state.size, props.state.shape, aspectRatio);
+		const targetAspectRatio = targetSize.width / targetSize.height;
+		const size =
+			aspectRatio > targetAspectRatio
+				? {
+						height: targetSize.height,
+						width: targetSize.height * aspectRatio,
+					}
+				: {
+						height: targetSize.width / aspectRatio,
+						width: targetSize.width,
+					};
 
-		// Replicate window size logic synchronously for the canvas
-		const winWidth =
-			props.state.shape === "full"
-				? aspectRatio >= 1
-					? base * aspectRatio
-					: base
-				: base;
-		const winHeight =
-			props.state.shape === "full"
-				? aspectRatio >= 1
-					? base
-					: base / aspectRatio
-				: base;
-
-		if (props.state.shape === "full") {
-			return {
-				width: `${winWidth}px`,
-				height: `${winHeight}px`,
-				transform: props.state.mirrored ? "scaleX(-1)" : "scaleX(1)",
-			};
-		}
-
-		const size = (() => {
-			if (aspectRatio > 1)
-				return {
-					width: base * aspectRatio,
-					height: base,
-				};
-			else
-				return {
-					width: base,
-					height: base / aspectRatio,
-				};
-		})();
-
-		const left = aspectRatio > 1 ? (size.width - base) / 2 : 0;
-		const top = aspectRatio > 1 ? 0 : (base - size.height) / 2;
+		const left = (size.width - targetSize.width) / 2;
+		const top = (size.height - targetSize.height) / 2;
 
 		return {
 			width: `${size.width}px`,

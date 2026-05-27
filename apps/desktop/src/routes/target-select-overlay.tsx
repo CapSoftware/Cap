@@ -41,6 +41,7 @@ import {
 	CameraResizeHandles,
 	type CameraWindowState,
 	cameraBorderRadius,
+	cameraPreviewDimensions,
 	cameraToolbarScale,
 	clampCameraSize,
 	getDefaultCameraWindowState,
@@ -1500,11 +1501,11 @@ function CameraPreviewInline() {
 
 	const previewDimensions = () => {
 		const f = frame();
-		const aspect = f ? f.width / f.height : 16 / 9;
-		const size = clampCameraSize(state.size);
-		const width = state.shape === "full" && aspect >= 1 ? size * aspect : size;
-		const height =
-			state.shape === "full" ? (aspect >= 1 ? size : size / aspect) : size;
+		const { width, height } = cameraPreviewDimensions(
+			state.size,
+			state.shape,
+			f ? f.width / f.height : undefined,
+		);
 		const viewport = viewportSize();
 		const maxWidth = Math.max(160, viewport.width - 48);
 		const maxHeight = Math.max(160, viewport.height - 320);
