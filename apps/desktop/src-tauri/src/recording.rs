@@ -932,8 +932,11 @@ pub async fn start_recording(
         .add_recording_logging_handle(&project_file_path.join("recording-logs.log"))
         .await?;
 
-    if let Some(window) = CapWindowId::Camera.get(&app) {
-        let _ = window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio));
+    if let Some(window) = CapWindowId::Camera.get(&app)
+        && let Err(error) =
+            window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio))
+    {
+        warn!(%error, "Failed to update camera window content protection");
     }
 
     let video_upload_info = match inputs.mode {
