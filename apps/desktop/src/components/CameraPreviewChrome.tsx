@@ -24,6 +24,7 @@ export const CAMERA_PRESET_SMALL = 230;
 export const CAMERA_PRESET_LARGE = 400;
 export const CAMERA_TOOLBAR_HEIGHT = 56;
 export const CAMERA_WINDOW_STATE_STORAGE_KEY = "cameraWindowState";
+export const CAMERA_WIDE_ASPECT_RATIO = 16 / 9;
 
 const BLUR_MODES: BackgroundBlurMode[] = ["off", "light", "heavy"];
 const RESIZE_CORNERS = ["nw", "ne", "sw", "se"] as const;
@@ -39,6 +40,34 @@ export const getDefaultCameraWindowState = (): CameraWindowState => ({
 
 export const clampCameraSize = (size: number) =>
 	Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, size));
+
+export const cameraPreviewAspectRatio = (
+	shape: CameraPreviewShape,
+	frameAspectRatio?: number | null,
+) => {
+	if (shape !== "full") return 1;
+	if (
+		typeof frameAspectRatio === "number" &&
+		Number.isFinite(frameAspectRatio) &&
+		frameAspectRatio > 0
+	) {
+		return Math.max(frameAspectRatio, CAMERA_WIDE_ASPECT_RATIO);
+	}
+	return CAMERA_WIDE_ASPECT_RATIO;
+};
+
+export const cameraPreviewDimensions = (
+	size: number,
+	shape: CameraPreviewShape,
+	frameAspectRatio?: number | null,
+) => {
+	const base = clampCameraSize(size);
+	const aspectRatio = cameraPreviewAspectRatio(shape, frameAspectRatio);
+	return {
+		height: base,
+		width: base * aspectRatio,
+	};
+};
 
 export const normalizeBackgroundBlurMode = (
 	mode: BackgroundBlurMode | boolean | undefined,
