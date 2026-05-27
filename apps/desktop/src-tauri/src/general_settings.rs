@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
+#[cfg(target_os = "macos")]
+use tauri::Listener;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
 use tracing::{error, instrument};
@@ -105,6 +107,19 @@ pub fn default_excluded_windows() -> Vec<WindowExclusion> {
             window_title: Some((*title).to_string()),
         })
         .collect()
+}
+
+fn append_missing_default_excluded_windows(excluded_windows: &mut Vec<WindowExclusion>) -> bool {
+    let mut changed = false;
+
+    for default in default_excluded_windows() {
+        if !excluded_windows.contains(&default) {
+            excluded_windows.push(default);
+            changed = true;
+        }
+    }
+
+    changed
 }
 
 // When adding fields here, #[serde(default)] defines the value to use for existing configurations,
@@ -335,10 +350,30 @@ impl GeneralSettingsStore {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Deserialize)]
+struct StoreChangePayload {
+    key: String,
+}
+
+#[cfg(target_os = "macos")]
+fn sync_dock_visibility_on_general_settings_change(app: &AppHandle) {
+    let app_for_listener = app.clone();
+    app.listen("store://change", move |event| {
+        let Ok(payload) = serde_json::from_str::<StoreChangePayload>(event.payload()) else {
+            return;
+        };
+
+        if payload.key == "general_settings" {
+            crate::permissions::schedule_macos_dock_visibility_sync(&app_for_listener);
+        }
+    });
+}
+
 pub fn init(app: &AppHandle) {
     println!("Initializing GeneralSettingsStore");
 
-    let store = match GeneralSettingsStore::get(app) {
+    let mut store = match GeneralSettingsStore::get(app) {
         Ok(Some(store)) => store,
         Ok(None) => GeneralSettingsStore::default(),
         Err(e) => {
@@ -347,12 +382,16 @@ pub fn init(app: &AppHandle) {
         }
     };
 
+    append_missing_default_excluded_windows(&mut store.excluded_windows);
     crate::posthog::set_telemetry_enabled(store.enable_telemetry);
     register_bundled_muxer_binary(app);
 
     if let Err(e) = store.save(app) {
         error!("Failed to save general settings: {}", e);
     }
+
+    #[cfg(target_os = "macos")]
+    sync_dock_visibility_on_general_settings_change(app);
 
     #[cfg(target_os = "macos")]
     crate::permissions::sync_macos_dock_visibility(app);
@@ -402,4 +441,53 @@ fn bundled_muxer_bin_name() -> &'static str {
 #[instrument]
 pub fn get_default_excluded_windows() -> Vec<WindowExclusion> {
     default_excluded_windows()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn title_exclusion(title: &str) -> WindowExclusion {
+        WindowExclusion {
+            bundle_identifier: None,
+            owner_name: None,
+            window_title: Some(title.to_string()),
+        }
+    }
+
+    #[test]
+    fn appends_missing_default_excluded_windows() {
+        let mut excluded_windows = vec![
+            title_exclusion("Cap"),
+            WindowExclusion {
+                bundle_identifier: None,
+                owner_name: Some("Preview".to_string()),
+                window_title: Some("Private Preview".to_string()),
+            },
+        ];
+
+        let changed = append_missing_default_excluded_windows(&mut excluded_windows);
+
+        assert!(changed);
+        assert!(
+            default_excluded_windows()
+                .iter()
+                .all(|default| excluded_windows.contains(default))
+        );
+        assert!(excluded_windows.iter().any(|entry| {
+            entry.owner_name.as_deref() == Some("Preview")
+                && entry.window_title.as_deref() == Some("Private Preview")
+        }));
+    }
+
+    #[test]
+    fn does_not_duplicate_default_excluded_windows() {
+        let mut excluded_windows = default_excluded_windows();
+        let len = excluded_windows.len();
+
+        let changed = append_missing_default_excluded_windows(&mut excluded_windows);
+
+        assert!(!changed);
+        assert_eq!(excluded_windows.len(), len);
+    }
 }

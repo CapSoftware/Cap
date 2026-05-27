@@ -123,6 +123,7 @@ export const users = mysqlTable(
 		inviteQuota: int("inviteQuota").notNull().default(1),
 		defaultOrgId:
 			nanoIdNullable("defaultOrgId").$type<Organisation.OrganisationId>(),
+		authSessionVersion: int("authSessionVersion").notNull().default(0),
 	},
 	(table) => ({
 		emailIndex: uniqueIndex("email_idx").on(table.email),

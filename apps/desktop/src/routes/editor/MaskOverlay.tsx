@@ -351,7 +351,7 @@ function ResizeHandle(props: {
 	return (
 		<div
 			class={cx(
-				"absolute w-3 h-3 bg-gray-12 border border-white rounded-full shadow-sm transition-transform hover:scale-125",
+				"absolute w-3 h-3 bg-gray-12 border border-white rounded-full shadow-xs transition-transform hover:scale-125",
 				props.class,
 			)}
 			onMouseDown={props.onMouseDown}

@@ -1,6 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
 import { open, showHUD, showToast, Toast } from "@raycast/api";
 
 export type CapControlAction = {
@@ -82,7 +82,9 @@ async function readCapDeeplinkToken(): Promise<string> {
 	);
 	const token = (await readFile(tokenPath, "utf8")).trim();
 	if (!token) {
-		throw new Error("Cap deeplink token is empty. Open Cap once and try again.");
+		throw new Error(
+			"Cap deeplink token is empty. Open Cap once and try again.",
+		);
 	}
 	return token;
 }

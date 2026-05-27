@@ -8,7 +8,12 @@ import {
 	deriveGeneralSettings,
 	type GeneralSettingsStore,
 } from "~/utils/general-settings";
-import { ToggleSettingItem } from "./Setting";
+import {
+	Section,
+	SectionRows,
+	SettingsPageContent,
+	ToggleSettingItem,
+} from "./Setting";
 
 export default function ExperimentalSettings() {
 	const [store] = createResource(() => generalSettingsStore.get());
@@ -51,32 +56,18 @@ function Inner(props: {
 	};
 
 	return (
-		<div class="flex flex-col h-full custom-scroll">
-			<div class="px-6 py-6 space-y-7 max-w-[42rem]">
-				<div class="flex flex-col gap-1 px-1">
-					<h2 class="text-base font-semibold tracking-tight text-gray-12">
-						Experimental
-					</h2>
-					<p class="text-xs leading-relaxed text-gray-10">
-						In-development features that may not work as expected.
-					</p>
-				</div>
-
+		<div class="cap-settings-page flex flex-col h-full custom-scroll">
+			<SettingsPageContent>
 				<Show
 					when={props.osType !== "windows"}
 					fallback={
-						<p class="text-xs text-gray-10 px-1">
+						<p class="text-xs leading-relaxed text-gray-10 px-1">
 							No experimental features are currently available on this platform.
 						</p>
 					}
 				>
-					<section class="space-y-2.5">
-						<header class="px-1">
-							<h3 class="text-sm font-semibold tracking-tight text-gray-12">
-								Preview
-							</h3>
-						</header>
-						<div class="overflow-hidden rounded-xl border border-gray-3 bg-gray-2">
+					<Section title="Preview">
+						<SectionRows>
 							<ToggleSettingItem
 								label="Native camera preview"
 								description="Render the camera preview using a native GPU surface instead of through the webview. Not stable on certain Windows systems."
@@ -85,26 +76,21 @@ function Inner(props: {
 									handleChange("enableNativeCameraPreview", value)
 								}
 							/>
-						</div>
-					</section>
+						</SectionRows>
+					</Section>
 				</Show>
 
-				<section class="space-y-2.5">
-					<header class="px-1">
-						<h3 class="text-sm font-semibold tracking-tight text-gray-12">
-							Reliability
-						</h3>
-					</header>
-					<div class="overflow-hidden rounded-xl border border-gray-3 bg-gray-2">
+				<Section title="Reliability">
+					<SectionRows>
 						<ToggleSettingItem
 							label="Out-of-process muxer"
 							description="Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary."
 							value={!!settings.outOfProcessMuxer}
 							onChange={(value) => handleChange("outOfProcessMuxer", value)}
 						/>
-					</div>
-				</section>
-			</div>
+					</SectionRows>
+				</Section>
+			</SettingsPageContent>
 		</div>
 	);
 }

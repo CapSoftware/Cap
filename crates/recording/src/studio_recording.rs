@@ -44,10 +44,25 @@ use std::{
 use tokio::{sync::watch, task::JoinHandle};
 use tracing::{Instrument, debug, error_span, info, trace, warn};
 
-const CAMERA_ACTIVE_MAX_SCREEN_WIDTH: u32 = 1920;
-const CAMERA_ACTIVE_MAX_SCREEN_HEIGHT: u32 = 1200;
 const COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH: u32 = 1600;
 const COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT: u32 = 1000;
+
+fn camera_active_max_capture_size(
+    quality: crate::StudioQuality,
+    camera_active: bool,
+) -> Option<(u32, u32)> {
+    if !camera_active {
+        return None;
+    }
+
+    match quality {
+        crate::StudioQuality::Compatibility => Some((
+            COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH,
+            COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT,
+        )),
+        crate::StudioQuality::Balanced | crate::StudioQuality::Ultra => None,
+    }
+}
 
 #[allow(clippy::large_enum_variant)]
 enum ActorState {
@@ -1354,21 +1369,7 @@ async fn create_segment_pipeline(
         let (display, crop) =
             target_to_display_and_crop(&capture_target).context("target_display_crop")?;
         let compatibility_quality = matches!(quality, crate::StudioQuality::Compatibility);
-        let max_capture_size = if camera_active {
-            if compatibility_quality {
-                Some((
-                    COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH,
-                    COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT,
-                ))
-            } else {
-                Some((
-                    CAMERA_ACTIVE_MAX_SCREEN_WIDTH,
-                    CAMERA_ACTIVE_MAX_SCREEN_HEIGHT,
-                ))
-            }
-        } else {
-            None
-        };
+        let max_capture_size = camera_active_max_capture_size(quality, camera_active);
         let effective_max_fps = if compatibility_quality && camera_active {
             max_fps.min(24)
         } else {
@@ -1801,6 +1802,35 @@ mod tests {
             48_000,
             2,
         )
+    }
+
+    #[test]
+    fn camera_active_capture_size_leaves_non_compatibility_native() {
+        for quality in [crate::StudioQuality::Balanced, crate::StudioQuality::Ultra] {
+            assert!(camera_active_max_capture_size(quality, true).is_none());
+        }
+    }
+
+    #[test]
+    fn camera_active_capture_size_keeps_guardrail_for_compatibility() {
+        assert_eq!(
+            camera_active_max_capture_size(crate::StudioQuality::Compatibility, true),
+            Some((
+                COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH,
+                COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT,
+            ))
+        );
+    }
+
+    #[test]
+    fn inactive_camera_capture_size_is_unbounded() {
+        for quality in [
+            crate::StudioQuality::Compatibility,
+            crate::StudioQuality::Balanced,
+            crate::StudioQuality::Ultra,
+        ] {
+            assert!(camera_active_max_capture_size(quality, false).is_none());
+        }
     }
 
     #[test]

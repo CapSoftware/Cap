@@ -31,7 +31,7 @@ impl DiscoveredDisplay {
             (2880, 1800) => "Retina".to_string(),
             (3024, 1964) => "MBP-14".to_string(),
             (3456, 2234) => "MBP-16".to_string(),
-            _ => format!("{}x{}", w, h),
+            _ => format!("{w}x{h}"),
         }
     }
 }

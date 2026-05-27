@@ -196,7 +196,6 @@ module.exports = (__app, _options) => {
 		plugins: [
 			require("tailwindcss-animate"),
 			require("@tailwindcss/typography"),
-			require("@kobalte/tailwindcss"),
 			require("tailwind-scrollbar"),
 		],
 	};

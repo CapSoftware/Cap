@@ -4,6 +4,7 @@ import {
 	canChangeSpaceMemberRole,
 	canManageOrganizationBilling,
 	canManageOrganizationMembers,
+	canManageOrganizationProSeats,
 	canManageSpace,
 	canRemoveOrganizationMember,
 	canRemoveSpaceMember,
@@ -59,6 +60,9 @@ describe("organization role permissions", () => {
 		expect(canManageOrganizationMembers("member")).toBe(false);
 		expect(canManageOrganizationBilling("owner")).toBe(true);
 		expect(canManageOrganizationBilling("admin")).toBe(false);
+		expect(canManageOrganizationProSeats("owner")).toBe(true);
+		expect(canManageOrganizationProSeats("admin")).toBe(true);
+		expect(canManageOrganizationProSeats("member")).toBe(false);
 	});
 
 	it("lets owners and admins assign admin/member roles to non-owner members", () => {

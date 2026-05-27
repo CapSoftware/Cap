@@ -8,6 +8,7 @@ import toast from "solid-toast";
 
 import { commands, type SystemDiagnostics } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
+import { Section, SettingsPageContent } from "./Setting";
 
 const getFeedbackOs = (): Extract<OsType, "macos" | "windows"> => {
 	const os = ostype();
@@ -56,16 +57,12 @@ export default function FeedbackTab() {
 	};
 
 	return (
-		<div class="flex flex-col w-full h-full">
-			<div class="flex-1 custom-scroll">
-				<div class="p-4 space-y-4">
-					<div class="flex flex-col pb-4 border-b border-gray-2">
-						<h2 class="text-lg font-medium text-gray-12">Send Feedback</h2>
-						<p class="text-sm text-gray-10">
-							Help us improve Cap by submitting feedback or reporting bugs.
-							We'll get right on it.
-						</p>
-					</div>
+		<div class="cap-settings-page flex flex-col w-full h-full custom-scroll">
+			<SettingsPageContent>
+				<Section
+					title="Feedback"
+					description="Help us improve Cap by submitting feedback or reporting bugs. We'll get right on it."
+				>
 					<form
 						class="space-y-4"
 						onSubmit={(e) => {
@@ -81,7 +78,7 @@ export default function FeedbackTab() {
 									placeholder="Tell us what you think about Cap..."
 									required
 									minLength={10}
-									class="p-2 w-full h-32 text-[13px] rounded-md border transition-colors duration-200 resize-none bg-gray-2 placeholder:text-gray-10 border-gray-3 text-primary focus:outline-none focus:ring-1 focus:ring-gray-8 hover:border-gray-6"
+									class="p-2 w-full h-32 text-[13px] rounded-md border transition-colors duration-200 resize-none bg-gray-2 placeholder:text-gray-10 border-gray-3 text-primary focus:outline-hidden focus:ring-1 focus:ring-gray-8 hover:border-gray-6"
 								/>
 							</div>
 
@@ -106,122 +103,107 @@ export default function FeedbackTab() {
 							</Button>
 						</fieldset>
 					</form>
+				</Section>
 
-					<div class="pt-6 border-t border-gray-2">
-						<h3 class="text-sm font-medium text-gray-12 mb-2">
-							Join the Community
-						</h3>
-						<p class="text-sm text-gray-10 mb-3">
-							Have questions, want to share ideas, or just hang out? Join the
-							Cap Discord community.
-						</p>
-						<Button
-							onClick={() => shell.open("https://cap.link/discord")}
-							size="md"
-							variant="gray"
-						>
-							Join Discord
-						</Button>
-					</div>
+				<Section
+					title="Join the Community"
+					description="Have questions, want to share ideas, or just hang out? Join the Cap Discord community."
+				>
+					<Button
+						onClick={() => shell.open("https://cap.link/discord")}
+						size="md"
+						variant="gray"
+					>
+						Join Discord
+					</Button>
+				</Section>
 
-					<div class="pt-6 border-t border-gray-2">
-						<h3 class="text-sm font-medium text-gray-12 mb-2">
-							Debug Information
-						</h3>
-						<p class="text-sm text-gray-10 mb-3">
-							Upload your logs to help us diagnose issues with Cap. No personal
-							information is included.
-						</p>
-						<Button
-							onClick={handleUploadLogs}
-							size="md"
-							variant="gray"
-							disabled={uploadingLogs()}
-						>
-							{uploadingLogs() ? "Uploading..." : "Upload Logs"}
-						</Button>
-					</div>
+				<Section
+					title="Debug Information"
+					description="Upload your logs to help us diagnose issues with Cap. No personal information is included."
+				>
+					<Button
+						onClick={handleUploadLogs}
+						size="md"
+						variant="gray"
+						disabled={uploadingLogs()}
+					>
+						{uploadingLogs() ? "Uploading..." : "Upload Logs"}
+					</Button>
+				</Section>
 
-					<div class="pt-6 border-t border-gray-2">
-						<h3 class="text-sm font-medium text-gray-12 mb-3">
-							System Information
-						</h3>
-						<Show
-							when={!diagnostics.loading && diagnostics()}
-							fallback={
-								<p class="text-sm text-gray-10">
-									Loading system information...
-								</p>
-							}
-						>
-							{(diag) => {
-								const d = diag() as Record<string, unknown>;
-								const osVersion =
-									"macosVersion" in d
-										? (d.macosVersion as { displayName: string } | null)
-										: "windowsVersion" in d
-											? (d.windowsVersion as { displayName: string } | null)
-											: null;
-								const captureSupported =
-									"screenCaptureSupported" in d
-										? (d.screenCaptureSupported as boolean)
-										: "graphicsCaptureSupported" in d
-											? (d.graphicsCaptureSupported as boolean)
-											: false;
-								return (
-									<div class="space-y-3 text-sm">
-										<Show when={osVersion}>
-											{(ver) => (
-												<div class="space-y-1">
-													<p class="text-gray-11 font-medium">
-														Operating System
-													</p>
-													<p class="text-gray-10 bg-gray-2 px-2 py-1.5 rounded font-mono text-xs">
-														{ver().displayName}
-													</p>
-												</div>
-											)}
-										</Show>
+				<Section title="System Information">
+					<Show
+						when={!diagnostics.loading && diagnostics()}
+						fallback={
+							<p class="text-xs leading-relaxed text-gray-10">
+								Loading system information...
+							</p>
+						}
+					>
+						{(diag) => {
+							const d = diag() as Record<string, unknown>;
+							const osVersion =
+								"macosVersion" in d
+									? (d.macosVersion as { displayName: string } | null)
+									: "windowsVersion" in d
+										? (d.windowsVersion as { displayName: string } | null)
+										: null;
+							const captureSupported =
+								"screenCaptureSupported" in d
+									? (d.screenCaptureSupported as boolean)
+									: "graphicsCaptureSupported" in d
+										? (d.graphicsCaptureSupported as boolean)
+										: false;
+							return (
+								<div class="space-y-3 text-sm">
+									<Show when={osVersion}>
+										{(ver) => (
+											<div class="space-y-1">
+												<p class="text-gray-11 font-medium">Operating System</p>
+												<p class="text-gray-10 bg-gray-2 px-2 py-1.5 rounded-sm font-mono text-xs">
+													{ver().displayName}
+												</p>
+											</div>
+										)}
+									</Show>
 
+									<div class="space-y-1">
+										<p class="text-gray-11 font-medium">Capture Support</p>
+										<div class="flex gap-2 flex-wrap">
+											<span
+												class={`px-2 py-1 rounded text-xs ${
+													captureSupported
+														? "bg-green-500/20 text-green-400"
+														: "bg-red-500/20 text-red-400"
+												}`}
+											>
+												Screen Capture:{" "}
+												{captureSupported ? "Supported" : "Not Supported"}
+											</span>
+										</div>
+									</div>
+
+									<Show when={(d.availableEncoders as string[])?.length > 0}>
 										<div class="space-y-1">
-											<p class="text-gray-11 font-medium">Capture Support</p>
-											<div class="flex gap-2 flex-wrap">
-												<span
-													class={`px-2 py-1 rounded text-xs ${
-														captureSupported
-															? "bg-green-500/20 text-green-400"
-															: "bg-red-500/20 text-red-400"
-													}`}
-												>
-													Screen Capture:{" "}
-													{captureSupported ? "Supported" : "Not Supported"}
-												</span>
+											<p class="text-gray-11 font-medium">Available Encoders</p>
+											<div class="flex gap-1.5 flex-wrap">
+												<For each={d.availableEncoders as string[]}>
+													{(encoder) => (
+														<span class="px-2 py-1 bg-gray-2 rounded-sm text-xs text-gray-10 font-mono">
+															{encoder}
+														</span>
+													)}
+												</For>
 											</div>
 										</div>
-
-										<Show when={(d.availableEncoders as string[])?.length > 0}>
-											<div class="space-y-1">
-												<p class="text-gray-11 font-medium">
-													Available Encoders
-												</p>
-												<div class="flex gap-1.5 flex-wrap">
-													<For each={d.availableEncoders as string[]}>
-														{(encoder) => (
-															<span class="px-2 py-1 bg-gray-2 rounded text-xs text-gray-10 font-mono">
-																{encoder}
-															</span>
-														)}
-													</For>
-												</div>
-											</div>
-										</Show>
-									</div>
-								);
-							}}
-						</Show>
-					</div>
-				</div>
-			</div>
+									</Show>
+								</div>
+							);
+						}}
+					</Show>
+				</Section>
+			</SettingsPageContent>
 		</div>
 	);
 }

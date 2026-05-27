@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { nanoIdLength } from "@cap/database/helpers";
 import {
 	comments,
 	organizationMembers,
@@ -60,11 +61,28 @@ import {
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
+import { PendingRecordingShare } from "./_components/PendingRecordingShare";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
 import type { SharePageBranding } from "./types";
 
 const VIEW_NOTIFICATION_DELAY_MS = 2 * 60 * 1000;
+const VIDEO_ID_PATTERN = /^[0-9abcdefghjkmnpqrstvwxyz]+$/;
+
+type ShareVideoSearchParams = {
+	[key: string]: string | string[] | undefined;
+};
+
+const isValidVideoIdParam = (videoId: string) =>
+	videoId.length === nanoIdLength && VIDEO_ID_PATTERN.test(videoId);
+
+const hasRecordingStoppedParam = (searchParams: ShareVideoSearchParams) => {
+	const recordingStoppedParam = Array.isArray(searchParams.recordingStopped)
+		? searchParams.recordingStopped[0]
+		: searchParams.recordingStopped;
+
+	return recordingStoppedParam === "1" || recordingStoppedParam === "true";
+};
 
 // Helper function to fetch shared spaces data for a video
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
@@ -167,7 +185,10 @@ function PolicyDeniedView({ reason }: { reason?: string }) {
 const renderPolicyDenied = (videoId: Video.VideoId, reason?: string) =>
 	Effect.succeed(<PolicyDeniedView key={videoId} reason={reason} />);
 
-const renderNoSuchElement = () => Effect.sync(() => notFound());
+const renderNoSuchElement = (awaitRecording: boolean) =>
+	awaitRecording
+		? Effect.succeed(<PendingRecordingShare />)
+		: Effect.sync(() => notFound());
 
 function getSharePageBranding(data: {
 	owner: { isPro: boolean };
@@ -199,17 +220,23 @@ function getSharePageBranding(data: {
 	return { type: "cap" };
 }
 
-const getShareVideoPageCatchers = (videoId: Video.VideoId) => ({
+const getShareVideoPageCatchers = (
+	videoId: Video.VideoId,
+	awaitRecording: boolean,
+) => ({
 	PolicyDenied: (e: Policy.PolicyDeniedError) =>
 		renderPolicyDenied(videoId, e.reason),
-	NoSuchElementException: renderNoSuchElement,
+	NoSuchElementException: () => renderNoSuchElement(awaitRecording),
 });
 
 export async function generateMetadata(
 	props: PageProps<"/s/[videoId]">,
 ): Promise<Metadata> {
 	const params = await props.params;
+	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
+	const awaitRecording =
+		isValidVideoIdParam(videoId) && hasRecordingStoppedParam(searchParams);
 
 	const headersList = await headers();
 	const referrer =
@@ -224,7 +251,14 @@ export async function generateMetadata(
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
-				onNone: () => notFound(),
+				onNone: () =>
+					awaitRecording
+						? {
+								title: "Cap: Preparing Video",
+								description: "This recording is being made available.",
+								robots: "noindex, nofollow",
+							}
+						: notFound(),
 				onSome: ([video]) => {
 					const previewImageUrl = new URL(
 						`/api/video/preview?videoId=${videoId}&fallback=og`,
@@ -368,6 +402,8 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const params = await props.params;
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
+	const awaitRecording =
+		isValidVideoIdParam(videoId) && hasRecordingStoppedParam(searchParams);
 
 	await reconcileStaleEditUpload(videoId);
 
@@ -441,7 +477,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				)}
 			</div>
 		)),
-		Effect.catchTags(getShareVideoPageCatchers(videoId)),
+		Effect.catchTags(getShareVideoPageCatchers(videoId, awaitRecording)),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
 	);
@@ -466,7 +502,7 @@ async function AuthorizedContent({
 		organizationIconUrl?: ImageUpload.ImageUrlOrKey | null;
 		shareableLinkIconUrl?: ImageUpload.ImageUrlOrKey | null;
 	};
-	searchParams: { [key: string]: string | string[] | undefined };
+	searchParams: ShareVideoSearchParams;
 }) {
 	// will have already been fetched if auth is required
 	const user = await getCurrentUser();
@@ -494,6 +530,7 @@ async function AuthorizedContent({
 	const replyId = optionFromTOrFirst(searchParams.reply).pipe(
 		Option.map(Comment.CommentId.make),
 	);
+	const recordingStopped = hasRecordingStoppedParam(searchParams);
 
 	// Fetch spaces data for the sharing dialog
 	let spacesData = null;
@@ -824,6 +861,7 @@ async function AuthorizedContent({
 				userOrganizations={userOrganizations}
 				viewerId={user?.id ?? null}
 				isEditProcessing={isEditProcessing}
+				recordingStopped={recordingStopped}
 				initialAiData={initialAiData}
 				aiGenerationEnabled={aiGenerationEnabled}
 			/>

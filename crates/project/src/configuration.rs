@@ -1,5 +1,4 @@
 use std::{
-    env::temp_dir,
     fmt,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
@@ -490,9 +489,9 @@ pub struct ScreenMovementSpring {
 impl Default for ScreenMovementSpring {
     fn default() -> Self {
         Self {
-            stiffness: 120.0,
-            damping: 14.0,
-            mass: 1.0,
+            stiffness: 200.0,
+            damping: 40.0,
+            mass: 2.25,
         }
     }
 }
@@ -557,14 +556,14 @@ impl Default for CursorConfiguration {
             hide: false,
             hide_when_idle: false,
             hide_when_idle_delay: Self::default_hide_when_idle_delay(),
-            size: 150,
+            size: 64,
             r#type: CursorType::default(),
             animation_style,
             tension: 470.0,
             mass: 3.0,
             friction: 70.0,
             raw: false,
-            motion_blur: 0.3,
+            motion_blur: 1.0,
             use_svg: true,
             rotation_amount: Self::default_rotation_amount(),
             base_rotation: 0.0,
@@ -1236,7 +1235,7 @@ fn camera_config_needs_migration(value: &Value) -> bool {
 
 impl ProjectConfiguration {
     fn default_screen_motion_blur() -> f32 {
-        0.3
+        1.0
     }
 
     pub fn validate(&self) -> Result<(), AnnotationValidationError> {
@@ -1252,20 +1251,38 @@ impl ProjectConfiguration {
         let config_path = project_path.join("project-config.json");
         let config_str = std::fs::read_to_string(&config_path)?;
         let parsed_value = serde_json::from_str::<Value>(&config_str).ok();
-        let config: Self = serde_json::from_str(&config_str)
+        let missing_screen_motion_blur = parsed_value.as_ref().is_some_and(|value| {
+            value
+                .as_object()
+                .is_some_and(|object| !object.contains_key("screenMotionBlur"))
+        });
+        let needs_camera_migration = parsed_value
+            .as_ref()
+            .map(camera_config_needs_migration)
+            .unwrap_or(false);
+        let mut config: Self = serde_json::from_str(&config_str)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let cursor_motion_blur = config.cursor.motion_blur.clamp(0.0, 1.0);
+        let screen_motion_blur = config.screen_motion_blur.clamp(0.0, 1.0);
+        let needs_motion_blur_clamp = (config.cursor.motion_blur - cursor_motion_blur).abs()
+            > f32::EPSILON
+            || (config.screen_motion_blur - screen_motion_blur).abs() > f32::EPSILON;
+        let needs_screen_motion_blur_migration = missing_screen_motion_blur
+            || (screen_motion_blur - cursor_motion_blur).abs() > f32::EPSILON;
+        config.cursor.motion_blur = cursor_motion_blur;
+        if needs_screen_motion_blur_migration {
+            config.screen_motion_blur = config.cursor.motion_blur;
+        } else {
+            config.screen_motion_blur = screen_motion_blur;
+        }
         config
             .validate()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 
-        if parsed_value
-            .as_ref()
-            .map(camera_config_needs_migration)
-            .unwrap_or(false)
-        {
+        if needs_camera_migration || needs_motion_blur_clamp || needs_screen_motion_blur_migration {
             match config.write(project_path) {
                 Ok(_) => {
-                    eprintln!("Updated project-config.json camera keys to camelCase");
+                    eprintln!("Updated project-config.json migrated settings");
                 }
                 Err(error) => {
                     eprintln!("Failed to migrate project-config.json: {error}");
@@ -1280,15 +1297,17 @@ impl ProjectConfiguration {
         self.validate()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 
-        let temp_path = temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let project_path = project_path.as_ref();
+        let config_path = project_path.join("project-config.json");
+        let temp_path =
+            project_path.join(format!(".project-config-{}.json.tmp", uuid::Uuid::new_v4()));
 
-        // Write to temporary file first to ensure readers don't see partial files
         std::fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
 
-        std::fs::rename(
-            &temp_path,
-            project_path.as_ref().join("project-config.json"),
-        )?;
+        if let Err(error) = std::fs::rename(&temp_path, &config_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(error);
+        }
 
         Ok(())
     }
@@ -1307,3 +1326,70 @@ pub const FAST_SMOOTHING_SAMPLES: usize = 10;
 pub const SLOW_VELOCITY_THRESHOLD: f64 = 0.003;
 pub const REGULAR_VELOCITY_THRESHOLD: f64 = 0.008;
 pub const FAST_VELOCITY_THRESHOLD: f64 = 0.015;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_config_with_motion_blur_values(
+        project_path: &std::path::Path,
+        cursor_motion_blur: f64,
+        screen_motion_blur: Option<f64>,
+    ) {
+        let mut value = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        match screen_motion_blur {
+            Some(value) => {
+                object.insert("screenMotionBlur".to_string(), Value::from(value));
+            }
+            None => {
+                object.remove("screenMotionBlur");
+            }
+        }
+        object
+            .get_mut("cursor")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("motionBlur".to_string(), Value::from(cursor_motion_blur));
+
+        std::fs::write(
+            project_path.join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn load_uses_cursor_motion_blur_when_screen_motion_blur_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_motion_blur_values(dir.path(), 0.0, None);
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        assert_eq!(config.cursor.motion_blur, 0.0);
+        assert_eq!(config.screen_motion_blur, 0.0);
+    }
+
+    #[test]
+    fn load_uses_cursor_motion_blur_when_screen_motion_blur_is_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_motion_blur_values(dir.path(), 0.0, Some(1.0));
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        assert_eq!(config.cursor.motion_blur, 0.0);
+        assert_eq!(config.screen_motion_blur, 0.0);
+    }
+
+    #[test]
+    fn load_caps_motion_blur_to_slider_range() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_motion_blur_values(dir.path(), 2.0, Some(2.0));
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        assert_eq!(config.cursor.motion_blur, 1.0);
+        assert_eq!(config.screen_motion_blur, 1.0);
+    }
+}
