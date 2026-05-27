@@ -64,19 +64,23 @@ pub enum CameraSelector {
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
-    trace!("Handling deep actions for: {:?}", &urls);
+    trace!(
+        "Handling deep actions for: {:?}",
+        urls.iter().map(redacted_deeplink_url).collect::<Vec<_>>()
+    );
 
     let requests: Vec<_> = urls
         .into_iter()
         .filter(|url| !url.as_str().is_empty())
         .filter_map(|url| {
+            let redacted_url = redacted_deeplink_url(&url);
             parse_deeplink_request(url.as_str())
                 .map_err(|e| match e {
                     ActionParseFromUrlError::ParseFailed(msg) => {
-                        eprintln!("Failed to parse deep link \"{}\": {}", &url, msg)
+                        eprintln!("Failed to parse deep link \"{}\": {}", redacted_url, msg)
                     }
                     ActionParseFromUrlError::Invalid => {
-                        eprintln!("Invalid deep link format \"{}\"", &url)
+                        eprintln!("Invalid deep link format \"{}\"", redacted_url)
                     }
                     // Likely login action, not handled here.
                     ActionParseFromUrlError::NotAction => {}
@@ -281,6 +285,32 @@ fn query_param(url: &Url, name: &str) -> Option<String> {
         .map(|(_, value)| value.into_owned())
 }
 
+fn redacted_deeplink_url(url: &Url) -> String {
+    if !url.query_pairs().any(|(key, _)| key == "token") {
+        return url.to_string();
+    }
+
+    let mut redacted = url.clone();
+    let params: Vec<_> = url
+        .query_pairs()
+        .map(|(key, value)| {
+            let value = if key == "token" {
+                "[REDACTED]".to_string()
+            } else {
+                value.into_owned()
+            };
+            (key.into_owned(), value)
+        })
+        .collect();
+
+    redacted.query_pairs_mut().clear().extend_pairs(
+        params
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+    redacted.to_string()
+}
+
 fn raycast_deeplink_token_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
@@ -386,6 +416,10 @@ impl DeepLinkAction {
             self,
             DeepLinkAction::StartRecording { .. }
                 | DeepLinkAction::StartSavedRecording { .. }
+                | DeepLinkAction::StopRecording
+                | DeepLinkAction::PauseRecording
+                | DeepLinkAction::ResumeRecording
+                | DeepLinkAction::TogglePauseRecording
                 | DeepLinkAction::SetMicrophone { .. }
                 | DeepLinkAction::SetCamera { .. }
         )
@@ -582,9 +616,37 @@ mod tests {
 
     #[test]
     fn recording_and_device_actions_require_auth_token() {
+        assert!(
+            DeepLinkAction::StartRecording {
+                capture_mode: CaptureMode::Screen("Display".to_string()),
+                camera: None,
+                mic_label: None,
+                capture_system_audio: false,
+                mode: RecordingMode::Studio,
+            }
+            .requires_auth_token()
+        );
         assert!(DeepLinkAction::StartSavedRecording { mode: None }.requires_auth_token());
+        assert!(DeepLinkAction::StopRecording.requires_auth_token());
+        assert!(DeepLinkAction::PauseRecording.requires_auth_token());
+        assert!(DeepLinkAction::ResumeRecording.requires_auth_token());
+        assert!(DeepLinkAction::TogglePauseRecording.requires_auth_token());
         assert!(DeepLinkAction::SetMicrophone { label: None }.requires_auth_token());
+        assert!(DeepLinkAction::SetCamera { selector: None }.requires_auth_token());
         assert!(!DeepLinkAction::OpenSettings { page: None }.requires_auth_token());
+    }
+
+    #[test]
+    fn redacts_deeplink_token_values() {
+        let url = Url::parse(
+            "cap-desktop://record/start?mode=studio&token=local-secret&next=token-value",
+        )
+        .unwrap();
+
+        assert_eq!(
+            redacted_deeplink_url(&url),
+            "cap-desktop://record/start?mode=studio&token=%5BREDACTED%5D&next=token-value"
+        );
     }
 
     #[test]
