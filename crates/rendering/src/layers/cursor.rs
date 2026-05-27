@@ -453,21 +453,21 @@ impl CursorLayer {
         };
 
         let size = {
-            let base_size_px = STANDARD_CURSOR_HEIGHT / constants.options.screen_size.y as f32
-                * uniforms.output_size.1 as f32;
-
-            let cursor_size_factor = if uniforms.cursor_size <= 0.0 {
-                100.0
-            } else {
-                uniforms.cursor_size / 100.0
-            };
-
-            // 0 -> 1 indicating how much to shrink from click
             let click_t = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0);
-            // lerp shrink size
             let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
-
-            let size = base_size_px * cursor_size_factor * click_scale_factor;
+            let crop = ProjectUniforms::get_crop(&constants.options, &uniforms.project);
+            let display_size = ProjectUniforms::display_size(
+                &constants.options,
+                &uniforms.project,
+                resolution_base,
+            );
+            let size = cursor_height_px(
+                constants.options.screen_size.y as f32,
+                crop.size.y as f32,
+                display_size.y as f32,
+                uniforms.cursor_size,
+                click_scale_factor,
+            );
 
             let texture_size_aspect = {
                 let texture_size = cursor_texture.texture.size();
@@ -555,6 +555,37 @@ impl CursorLayer {
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..4, 0..1);
         }
+    }
+}
+
+fn cursor_height_px(
+    source_screen_height: f32,
+    crop_height: f32,
+    display_frame_height: f32,
+    cursor_size: f32,
+    click_scale_factor: f32,
+) -> f32 {
+    let source_screen_height = finite_positive_or(source_screen_height, 1080.0);
+    let crop_height = finite_positive_or(crop_height, source_screen_height);
+    let display_frame_height = finite_positive_or(display_frame_height, source_screen_height);
+    let cursor_size_factor = if cursor_size <= 0.0 {
+        1.0
+    } else {
+        cursor_size / 100.0
+    };
+
+    STANDARD_CURSOR_HEIGHT
+        * (source_screen_height / 1080.0)
+        * (display_frame_height / crop_height)
+        * cursor_size_factor
+        * click_scale_factor
+}
+
+fn finite_positive_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        fallback
     }
 }
 
@@ -833,6 +864,65 @@ mod tests {
                 .collect(),
             clicks: vec![],
         }
+    }
+
+    #[test]
+    fn cursor_height_uses_source_relative_default() {
+        let height = cursor_height_px(1964.0, 1964.0, 864.0, 100.0, 1.0);
+        let expected = STANDARD_CURSOR_HEIGHT * (864.0 / 1080.0);
+
+        assert!((height - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn cursor_height_scales_with_source_crop() {
+        let height = cursor_height_px(2160.0, 1080.0, 1080.0, 100.0, 1.0);
+        let expected = STANDARD_CURSOR_HEIGHT * 2.0;
+
+        assert!((height - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn cursor_height_is_zoomed_once_by_frame_transform() {
+        let options = crate::RenderOptions {
+            camera_size: None,
+            screen_size: XY::new(1080, 1080),
+        };
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 0.0;
+        let resolution_base = XY::new(1080, 1080);
+        let zoom = InterpolatedZoom {
+            t: 1.0,
+            bounds: crate::zoom::SegmentBounds::new(XY::new(0.0, 0.0), XY::new(2.0, 2.0)),
+        };
+        let position = Coord::<FrameSpace>::new(XY::new(0.0, 0.0));
+        let size = Coord::<FrameSpace>::new(XY::new(
+            0.0,
+            cursor_height_px(1080.0, 1080.0, 1080.0, 100.0, 1.0) as f64,
+        ));
+
+        let zoomed_position =
+            position.to_zoomed_frame_space(&options, &project, resolution_base, &zoom);
+        let zoomed_size =
+            (position + size).to_zoomed_frame_space(&options, &project, resolution_base, &zoom)
+                - zoomed_position;
+
+        assert!((zoomed_size.y as f32 - STANDARD_CURSOR_HEIGHT * 2.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn cursor_height_applies_project_size_as_percent() {
+        let height = cursor_height_px(1080.0, 1080.0, 1080.0, 142.0, 1.0);
+
+        assert!((height - STANDARD_CURSOR_HEIGHT * 1.42).abs() < 0.001);
+    }
+
+    #[test]
+    fn cursor_height_falls_back_for_invalid_dimensions() {
+        let height = cursor_height_px(0.0, 0.0, 720.0, 100.0, 1.0);
+        let expected = STANDARD_CURSOR_HEIGHT * (720.0 / 1080.0);
+
+        assert!((height - expected).abs() < 0.001);
     }
 
     #[test]
