@@ -31,7 +31,7 @@ import { createSignInMutation } from "~/utils/auth";
 import {
 	beginExportSessionGuard,
 	createExportTask,
-	exportVideoToFile,
+	createExportToFileTask,
 } from "~/utils/export";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import {
@@ -477,6 +477,11 @@ export function ExportPage() {
 
 	let cancelCurrentExport: (() => void) | null = null;
 
+	onCleanup(() => {
+		cancelCurrentExport?.();
+		cancelCurrentExport = null;
+	});
+
 	const exportWithSettings = (
 		onProgress: (progress: FramesRendered) => void,
 	) => {
@@ -588,22 +593,26 @@ export function ExportPage() {
 				customBpp,
 				forceFfmpegDecoder(),
 			);
-			const savePath = await exportVideoToFile(
+			const task = createExportToFileTask(
 				projectPath,
 				exportSettings,
 				`${meta().prettyName}.${extension}`,
 				extension,
+				(progress) => {
+					if (isCancelled()) throw new SilentError("Cancelled");
+					setExportState({ type: "rendering", progress });
+				},
 				() => {
 					setExportState(reconcile({ action: "save", type: "starting" }));
 				},
 				() => {
 					setExportState({ action: "save", type: "copying" });
 				},
-				(progress) => {
-					if (isCancelled()) throw new SilentError("Cancelled");
-					setExportState({ type: "rendering", progress });
-				},
 			);
+			cancelCurrentExport = task.cancel;
+			const savePath = await task.promise.finally(() => {
+				if (cancelCurrentExport === task.cancel) cancelCurrentExport = null;
+			});
 
 			if (isCancelled()) throw new SilentError("Cancelled");
 
