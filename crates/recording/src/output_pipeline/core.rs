@@ -2391,15 +2391,17 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
         let _ = first_tx.send(frame.timestamp);
     }
 
-    state.gap_tracker.mark_started(frame.timestamp);
+    let observed_at = Instant::now();
+    state.gap_tracker.mark_started(frame.timestamp, observed_at);
 
     let sample_based_before = state.timestamp_generator.next_timestamp(0);
 
-    if let Some(gap_duration) =
-        state
-            .gap_tracker
-            .detect_gap(frame.timestamp, sample_based_before, total_pause_duration)
-    {
+    if let Some(gap_duration) = state.gap_tracker.detect_gap(
+        frame.timestamp,
+        sample_based_before,
+        total_pause_duration,
+        observed_at,
+    ) {
         let silence_samples = state.timestamp_generator.advance_by_duration(gap_duration);
 
         if silence_samples > 0 {
@@ -3042,6 +3044,91 @@ mod tests {
                 generator.total_samples,
                 total_frames * samples_per_frame,
                 "Total samples should equal total_frames * samples_per_frame"
+            );
+        }
+    }
+
+    mod audio_gap_tracker {
+        use super::*;
+
+        #[test]
+        fn clamps_spurious_timestamp_jump_to_wall_clock_elapsed() {
+            let timestamps = Timestamps::now();
+            let first_ts = Timestamp::Instant(timestamps.instant());
+            let first_wall_clock = Instant::now();
+            let mut tracker = AudioGapTracker::new(false, timestamps);
+
+            tracker.mark_started(first_ts, first_wall_clock);
+
+            let gap = tracker
+                .detect_gap(
+                    Timestamp::Instant(timestamps.instant() + Duration::from_secs(2)),
+                    Duration::from_millis(40),
+                    Duration::ZERO,
+                    first_wall_clock + Duration::from_millis(140),
+                )
+                .expect("wall-clock-bounded drift should still exceed wired gap threshold");
+
+            assert!(
+                gap < Duration::from_millis(250),
+                "spurious 2s device timestamp jump should not insert a full capped gap"
+            );
+            assert!(gap >= Duration::from_millis(190));
+        }
+
+        #[test]
+        fn allows_wall_clock_confirmed_stall_up_to_cap() {
+            let timestamps = Timestamps::now();
+            let first_ts = Timestamp::Instant(timestamps.instant());
+            let first_wall_clock = Instant::now();
+            let mut tracker = AudioGapTracker::new(false, timestamps);
+
+            tracker.mark_started(first_ts, first_wall_clock);
+
+            let gap = tracker
+                .detect_gap(
+                    Timestamp::Instant(timestamps.instant() + Duration::from_millis(1500)),
+                    Duration::from_millis(40),
+                    Duration::ZERO,
+                    first_wall_clock + Duration::from_millis(1500),
+                )
+                .expect("wall-clock-confirmed stall should insert silence");
+
+            assert_eq!(gap, MAX_SILENCE_INSERTION);
+        }
+    }
+
+    mod audio_tail_padding {
+        use super::*;
+
+        #[test]
+        fn no_padding_when_audio_reaches_target() {
+            assert_eq!(
+                audio_tail_padding_duration(Duration::from_millis(500), Duration::from_millis(500)),
+                Duration::ZERO
+            );
+            assert_eq!(
+                audio_tail_padding_duration(Duration::from_millis(600), Duration::from_millis(500)),
+                Duration::ZERO
+            );
+        }
+
+        #[test]
+        fn pads_short_tail_gap() {
+            assert_eq!(
+                audio_tail_padding_duration(
+                    Duration::from_millis(20_621),
+                    Duration::from_millis(20_758),
+                ),
+                Duration::from_millis(137)
+            );
+        }
+
+        #[test]
+        fn caps_tail_padding() {
+            assert_eq!(
+                audio_tail_padding_duration(Duration::from_millis(100), Duration::from_secs(2)),
+                MAX_AUDIO_TAIL_PADDING
             );
         }
     }
