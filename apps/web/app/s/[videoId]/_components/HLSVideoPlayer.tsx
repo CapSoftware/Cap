@@ -331,11 +331,9 @@ export function HLSVideoPlayer({
 
 			hls.on(Hls.Events.MANIFEST_PARSED, () => {
 				console.log("HLSVideoPlayer: HLS manifest parsed successfully");
-				if (!isLiveSegments) {
-					setVideoLoaded(true);
-					if (!hasPlayedOnceRef.current) {
-						setShowPlayButton(true);
-					}
+				setVideoLoaded(true);
+				if (!hasPlayedOnceRef.current) {
+					setShowPlayButton(true);
 				}
 			});
 
