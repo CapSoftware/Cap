@@ -2,8 +2,8 @@
 mod exit_shutdown;
 
 use exit_shutdown::{
-    AppExitAction, abort_join_handles, app_exit_action, collect_device_inventory,
-    read_target_under_cursor, run_while_active,
+    AppExitAction, ExitRequestDecision, abort_join_handles, app_exit_action,
+    collect_device_inventory, handle_exit_requested, read_target_under_cursor, run_while_active,
 };
 use std::sync::{
     Arc,
@@ -203,4 +203,43 @@ fn app_exit_action_matches_current_platform() {
 
     #[cfg(not(target_os = "macos"))]
     assert_eq!(app_exit_action(7), AppExitAction::Runtime(7));
+}
+
+#[test]
+fn exit_requested_prevents_user_exit_when_already_exiting() {
+    let prevented = Arc::new(AtomicBool::new(false));
+    let prevented_flag = prevented.clone();
+
+    let decision = handle_exit_requested(true, false, false, move || {
+        prevented_flag.store(true, Ordering::Release);
+    });
+
+    assert_eq!(decision, ExitRequestDecision::AlreadyExiting);
+    assert!(prevented.load(Ordering::Acquire));
+}
+
+#[test]
+fn exit_requested_allows_runtime_exit_when_already_exiting() {
+    let prevented = Arc::new(AtomicBool::new(false));
+    let prevented_flag = prevented.clone();
+
+    let decision = handle_exit_requested(true, false, true, move || {
+        prevented_flag.store(true, Ordering::Release);
+    });
+
+    assert_eq!(decision, ExitRequestDecision::AllowRuntimeExit);
+    assert!(!prevented.load(Ordering::Acquire));
+}
+
+#[test]
+fn exit_requested_prevents_runtime_exit_during_export() {
+    let prevented = Arc::new(AtomicBool::new(false));
+    let prevented_flag = prevented.clone();
+
+    let decision = handle_exit_requested(false, true, true, move || {
+        prevented_flag.store(true, Ordering::Release);
+    });
+
+    assert_eq!(decision, ExitRequestDecision::ExportActive);
+    assert!(prevented.load(Ordering::Acquire));
 }
