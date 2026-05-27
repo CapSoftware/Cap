@@ -1154,7 +1154,19 @@ pub async fn start_recording(
                     window_exclusions
                 };
 
-                crate::window_exclusion::resolve_window_ids(&window_exclusions)
+                let mut excluded_window_ids =
+                    crate::window_exclusion::resolve_window_ids(&window_exclusions);
+                crate::window_exclusion::append_matching_webview_window_ids(
+                    &mut excluded_window_ids,
+                    &app_handle,
+                    &window_exclusions,
+                );
+                info!(
+                    configured_exclusions = window_exclusions.len(),
+                    resolved_window_ids = excluded_window_ids.len(),
+                    "Resolved macOS recording window exclusions"
+                );
+                excluded_window_ids
             };
 
             let mut mic_restart_attempts = 0;
