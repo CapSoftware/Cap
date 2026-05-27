@@ -40,6 +40,7 @@ const CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(1
 pub const MIN_CAMERA_SIZE: f32 = 150.0;
 pub const MAX_CAMERA_SIZE: f32 = 600.0;
 pub const DEFAULT_CAMERA_SIZE: f32 = 230.0;
+pub const WIDE_CAMERA_ASPECT_RATIO: f32 = 16.0 / 9.0;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -347,7 +348,7 @@ impl InitializedCameraPreview {
         instance: wgpu::Instance,
     ) -> anyhow::Result<Renderer> {
         let aspect = if default_state.shape == CameraPreviewShape::Full {
-            16.0 / 9.0
+            WIDE_CAMERA_ASPECT_RATIO
         } else {
             1.0
         };
@@ -732,7 +733,7 @@ impl Renderer {
                 last_render_at = None;
                 let aspect_ratio = self.aspect_ratio.get_latest_key().copied().unwrap_or(
                     if state.shape == CameraPreviewShape::Full {
-                        16.0 / 9.0
+                        WIDE_CAMERA_ASPECT_RATIO
                     } else {
                         1.0
                     },
@@ -922,7 +923,7 @@ impl Renderer {
 
                     let aspect_ratio = self.aspect_ratio.get_latest_key().copied().unwrap_or(
                         if state.shape == CameraPreviewShape::Full {
-                            16.0 / 9.0
+                            WIDE_CAMERA_ASPECT_RATIO
                         } else {
                             1.0
                         },
