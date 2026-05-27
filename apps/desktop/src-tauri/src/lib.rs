@@ -4159,7 +4159,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             get_current_recording,
             export::begin_export_session,
             export::end_export_session,
+            export::cancel_export,
             export::export_video,
+            export::export_video_with_id,
             export::export_video_to_file,
             export::get_export_estimates,
             export::generate_export_preview,
@@ -4715,7 +4717,14 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
-                        if export::export_session_active() {
+                        let window_id = CapWindowId::from_str(label).ok();
+                        if matches!(
+                            window_id,
+                            Some(CapWindowId::Editor { .. })
+                                | Some(CapWindowId::ScreenshotEditor { .. })
+                        ) {
+                            export::cancel_exports_for_window(label);
+                        } else if export::export_session_active() {
                             api.prevent_close();
                             warn!(
                                 window = label,
@@ -4724,7 +4733,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             return;
                         }
 
-                        if let Ok(window_id) = CapWindowId::from_str(label) {
+                        if let Some(window_id) = window_id {
                             match window_id {
                                 CapWindowId::Camera => {
                                     if app
@@ -4734,19 +4743,19 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                         return;
                                     }
 
-                                api.prevent_close();
-                                let _ = window.hide();
-                                tracing::warn!("Camera window CloseRequested event received!");
-                                let session_id = app
-                                    .try_state::<Arc<AtomicU64>>()
-                                    .map(|state| state.load(Ordering::Acquire))
-                                    .unwrap_or(0);
-                                let app = app.clone();
-                                spawn_on_runtime(async move {
-                                    cleanup_camera_window(app, session_id).await;
-                                });
-                            }
-                            CapWindowId::Main => {
+                                    api.prevent_close();
+                                    let _ = window.hide();
+                                    tracing::warn!("Camera window CloseRequested event received!");
+                                    let session_id = app
+                                        .try_state::<Arc<AtomicU64>>()
+                                        .map(|state| state.load(Ordering::Acquire))
+                                        .unwrap_or(0);
+                                    let app = app.clone();
+                                    spawn_on_runtime(async move {
+                                        cleanup_camera_window(app, session_id).await;
+                                    });
+                                }
+                                CapWindowId::Main => {
                                 api.prevent_close();
                                 let _ = window.hide();
 
@@ -4811,20 +4820,23 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     if app_is_exiting(app) {
                         return;
                     }
-                    // If a webview crashes mid-export (memory pressure, GPU teardown, etc.) we
-                    // get a Destroyed event for the editor window. Tearing down camera/mic
-                    // feeds and editor registry entries here would race the running export
-                    // sidecar and could trigger Tauri's "last window closed" exit path. Skip
-                    // cleanup entirely while an export is active — the regular Destroyed flow
-                    // will run again when the export completes if the window is still gone.
-                    if export::export_session_active() {
+                    let window_id = CapWindowId::from_str(label).ok();
+                    let is_editor_window = matches!(
+                        window_id,
+                        Some(CapWindowId::Editor { .. })
+                            | Some(CapWindowId::ScreenshotEditor { .. })
+                    );
+                    if is_editor_window {
+                        export::cancel_exports_for_window(label);
+                    }
+                    if export::export_session_active() && !is_editor_window {
                         warn!(
                             window = label,
                             "Skipping Destroyed cleanup during active export"
                         );
                         return;
                     }
-                    if let Ok(window_id) = CapWindowId::from_str(label) {
+                    if let Some(window_id) = window_id {
                         if matches!(window_id, CapWindowId::Camera) {
                             tracing::warn!("Camera window Destroyed event received!");
                         }
