@@ -656,10 +656,19 @@ fn samples_to_nanos(samples: u64, sample_rate: u32) -> u64 {
 
 const WIRED_GAP_THRESHOLD: Duration = Duration::from_millis(70);
 const WIRELESS_GAP_THRESHOLD: Duration = Duration::from_millis(160);
+const AUDIO_WALL_CLOCK_TOLERANCE: Duration = Duration::from_millis(100);
 const MAX_SILENCE_INSERTION: Duration = Duration::from_secs(1);
+const MAX_AUDIO_TAIL_PADDING: Duration = Duration::from_millis(300);
+
+fn audio_tail_padding_duration(audio_elapsed: Duration, target_elapsed: Duration) -> Duration {
+    target_elapsed
+        .saturating_sub(audio_elapsed)
+        .min(MAX_AUDIO_TAIL_PADDING)
+}
 
 struct AudioGapTracker {
     first_frame_ts: Option<Timestamp>,
+    first_frame_wall_clock: Option<Instant>,
     reference: Timestamps,
     gap_threshold: Duration,
     total_silence_inserted: Duration,
@@ -671,6 +680,7 @@ impl AudioGapTracker {
     fn new(has_wireless_source: bool, reference: Timestamps) -> Self {
         Self {
             first_frame_ts: None,
+            first_frame_wall_clock: None,
             reference,
             gap_threshold: if has_wireless_source {
                 WIRELESS_GAP_THRESHOLD
@@ -683,9 +693,10 @@ impl AudioGapTracker {
         }
     }
 
-    fn mark_started(&mut self, frame_ts: Timestamp) {
+    fn mark_started(&mut self, frame_ts: Timestamp, wall_clock: Instant) {
         if self.first_frame_ts.is_none() {
             self.first_frame_ts = Some(frame_ts);
+            self.first_frame_wall_clock = Some(wall_clock);
         }
     }
 
@@ -693,14 +704,23 @@ impl AudioGapTracker {
         &self,
         current_frame_ts: Timestamp,
         total_pause_duration: Duration,
+        wall_clock: Instant,
     ) -> Option<Duration> {
         let first_ts = self.first_frame_ts?;
+        let first_wall_clock = self.first_frame_wall_clock?;
         let delta_secs = current_frame_ts.signed_duration_since_secs(self.reference)
             - first_ts.signed_duration_since_secs(self.reference);
         if !delta_secs.is_finite() || delta_secs <= 0.0 {
             return Some(Duration::ZERO);
         }
-        Some(Duration::from_secs_f64(delta_secs).saturating_sub(total_pause_duration))
+        let capture_elapsed =
+            Duration::from_secs_f64(delta_secs).saturating_sub(total_pause_duration);
+        let wall_clock_elapsed = wall_clock
+            .saturating_duration_since(first_wall_clock)
+            .saturating_sub(total_pause_duration)
+            .saturating_add(AUDIO_WALL_CLOCK_TOLERANCE);
+
+        Some(capture_elapsed.min(wall_clock_elapsed))
     }
 
     fn detect_gap(
@@ -708,8 +728,10 @@ impl AudioGapTracker {
         current_frame_ts: Timestamp,
         sample_based_elapsed: Duration,
         total_pause_duration: Duration,
+        wall_clock: Instant,
     ) -> Option<Duration> {
-        let capture_elapsed = self.capture_elapsed(current_frame_ts, total_pause_duration)?;
+        let capture_elapsed =
+            self.capture_elapsed(current_frame_ts, total_pause_duration, wall_clock)?;
 
         if capture_elapsed <= sample_based_elapsed {
             return None;
@@ -2120,6 +2142,16 @@ impl PreparedAudioSources {
                     .await;
 
                 let was_cancelled = res.is_none();
+                let cancellation_target_elapsed = if was_cancelled && !audio_degraded {
+                    Some(
+                        timestamps
+                            .instant()
+                            .elapsed()
+                            .saturating_sub(shared_pause.total_pause_duration()),
+                    )
+                } else {
+                    None
+                };
 
                 if was_cancelled && !audio_degraded {
                     let drain_start = std::time::Instant::now();
@@ -2181,9 +2213,65 @@ impl PreparedAudioSources {
                             "mux-audio drain complete"
                         );
                     }
+
+                    if degraded_during_drain {
+                        audio_degraded = true;
+                    }
                 }
 
                 let final_pause_duration = shared_pause.total_pause_duration();
+
+                if let Some(target_elapsed) = cancellation_target_elapsed
+                    && !audio_degraded
+                {
+                    let audio_elapsed = timestamp_generator.next_timestamp(0);
+                    let tail_padding = audio_tail_padding_duration(audio_elapsed, target_elapsed);
+                    let tail_samples = timestamp_generator.advance_by_duration(tail_padding);
+
+                    if tail_samples > 0 {
+                        let silence = create_silence_frame(&audio_info, tail_samples as usize);
+                        let silence_frame = AudioFrame::new(
+                            silence,
+                            Timestamp::Instant(timestamps.instant() + audio_elapsed),
+                        );
+
+                        if let Err(e) = muxer
+                            .lock()
+                            .await
+                            .send_audio_frame(silence_frame, audio_elapsed)
+                        {
+                            if has_video {
+                                warn!(
+                                    padding_ms = tail_padding.as_millis() as u64,
+                                    samples = tail_samples,
+                                    "Audio muxer rejected tail padding, \
+                                     continuing video-only: {e}"
+                                );
+                                emit_health(
+                                    &health_tx,
+                                    PipelineHealthEvent::AudioDegradedToVideoOnly {
+                                        reason: format!(
+                                            "Tail padding rejected after frame {frame_count}: {e}"
+                                        ),
+                                    },
+                                );
+                            } else {
+                                return Err(anyhow!(
+                                    "Audio muxer stopped accepting tail padding \
+                                     after frame {frame_count}: {e}"
+                                ));
+                            }
+                        } else {
+                            info!(
+                                padding_ms = tail_padding.as_millis() as u64,
+                                samples = tail_samples,
+                                audio_end_ms = audio_elapsed.as_millis() as u64,
+                                target_ms = target_elapsed.as_millis() as u64,
+                                "Padded audio tail with silence"
+                            );
+                        }
+                    }
+                }
 
                 if dropped_during_pause > 0 {
                     debug!(
@@ -2302,15 +2390,17 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
         let _ = first_tx.send(frame.timestamp);
     }
 
-    state.gap_tracker.mark_started(frame.timestamp);
+    let observed_at = Instant::now();
+    state.gap_tracker.mark_started(frame.timestamp, observed_at);
 
     let sample_based_before = state.timestamp_generator.next_timestamp(0);
 
-    if let Some(gap_duration) =
-        state
-            .gap_tracker
-            .detect_gap(frame.timestamp, sample_based_before, total_pause_duration)
-    {
+    if let Some(gap_duration) = state.gap_tracker.detect_gap(
+        frame.timestamp,
+        sample_based_before,
+        total_pause_duration,
+        observed_at,
+    ) {
         let silence_samples = state.timestamp_generator.advance_by_duration(gap_duration);
 
         if silence_samples > 0 {
@@ -2953,6 +3043,91 @@ mod tests {
                 generator.total_samples,
                 total_frames * samples_per_frame,
                 "Total samples should equal total_frames * samples_per_frame"
+            );
+        }
+    }
+
+    mod audio_gap_tracker {
+        use super::*;
+
+        #[test]
+        fn clamps_spurious_timestamp_jump_to_wall_clock_elapsed() {
+            let timestamps = Timestamps::now();
+            let first_ts = Timestamp::Instant(timestamps.instant());
+            let first_wall_clock = Instant::now();
+            let mut tracker = AudioGapTracker::new(false, timestamps);
+
+            tracker.mark_started(first_ts, first_wall_clock);
+
+            let gap = tracker
+                .detect_gap(
+                    Timestamp::Instant(timestamps.instant() + Duration::from_secs(2)),
+                    Duration::from_millis(40),
+                    Duration::ZERO,
+                    first_wall_clock + Duration::from_millis(140),
+                )
+                .expect("wall-clock-bounded drift should still exceed wired gap threshold");
+
+            assert!(
+                gap < Duration::from_millis(250),
+                "spurious 2s device timestamp jump should not insert a full capped gap"
+            );
+            assert!(gap >= Duration::from_millis(190));
+        }
+
+        #[test]
+        fn allows_wall_clock_confirmed_stall_up_to_cap() {
+            let timestamps = Timestamps::now();
+            let first_ts = Timestamp::Instant(timestamps.instant());
+            let first_wall_clock = Instant::now();
+            let mut tracker = AudioGapTracker::new(false, timestamps);
+
+            tracker.mark_started(first_ts, first_wall_clock);
+
+            let gap = tracker
+                .detect_gap(
+                    Timestamp::Instant(timestamps.instant() + Duration::from_millis(1500)),
+                    Duration::from_millis(40),
+                    Duration::ZERO,
+                    first_wall_clock + Duration::from_millis(1500),
+                )
+                .expect("wall-clock-confirmed stall should insert silence");
+
+            assert_eq!(gap, MAX_SILENCE_INSERTION);
+        }
+    }
+
+    mod audio_tail_padding {
+        use super::*;
+
+        #[test]
+        fn no_padding_when_audio_reaches_target() {
+            assert_eq!(
+                audio_tail_padding_duration(Duration::from_millis(500), Duration::from_millis(500)),
+                Duration::ZERO
+            );
+            assert_eq!(
+                audio_tail_padding_duration(Duration::from_millis(600), Duration::from_millis(500)),
+                Duration::ZERO
+            );
+        }
+
+        #[test]
+        fn pads_short_tail_gap() {
+            assert_eq!(
+                audio_tail_padding_duration(
+                    Duration::from_millis(20_621),
+                    Duration::from_millis(20_758),
+                ),
+                Duration::from_millis(137)
+            );
+        }
+
+        #[test]
+        fn caps_tail_padding() {
+            assert_eq!(
+                audio_tail_padding_duration(Duration::from_millis(100), Duration::from_secs(2)),
+                MAX_AUDIO_TAIL_PADDING
             );
         }
     }

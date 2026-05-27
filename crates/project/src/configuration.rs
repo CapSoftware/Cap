@@ -556,7 +556,7 @@ impl Default for CursorConfiguration {
             hide: false,
             hide_when_idle: false,
             hide_when_idle_delay: Self::default_hide_when_idle_delay(),
-            size: 64,
+            size: 100,
             r#type: CursorType::default(),
             animation_style,
             tension: 470.0,

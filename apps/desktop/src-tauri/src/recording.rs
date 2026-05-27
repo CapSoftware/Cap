@@ -26,7 +26,7 @@ use cap_recording::{
     },
     studio_recording,
 };
-use cap_rendering::{ProjectRecordingsMeta, STANDARD_CURSOR_HEIGHT};
+use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, moment_format_to_chrono, spawn_actor};
 use cpal::traits::DeviceTrait;
 use futures::{FutureExt, stream};
@@ -114,8 +114,11 @@ pub enum InProgressRecording {
 async fn acquire_shareable_content_for_target(
     capture_target: &ScreenCaptureTarget,
 ) -> anyhow::Result<SendableShareableContent> {
-    let mut refreshed = false;
+    crate::platform::refresh_shareable_content()
+        .await
+        .map_err(|e| anyhow!(format!("RefreshShareableContent: {e}")))?;
 
+    let mut retried = false;
     loop {
         let shareable_content = SendableShareableContent::from(
             crate::platform::get_shareable_content()
@@ -128,14 +131,14 @@ async fn acquire_shareable_content_for_target(
             return Ok(shareable_content);
         }
 
-        if refreshed {
+        if retried {
             return Err(anyhow!("GetShareableContent/DisplayMissing"));
         }
 
         crate::platform::refresh_shareable_content()
             .await
             .map_err(|e| anyhow!(format!("RefreshShareableContent: {e}")))?;
-        refreshed = true;
+        retried = true;
     }
 }
 
@@ -929,8 +932,11 @@ pub async fn start_recording(
         .add_recording_logging_handle(&project_file_path.join("recording-logs.log"))
         .await?;
 
-    if let Some(window) = CapWindowId::Camera.get(&app) {
-        let _ = window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio));
+    if let Some(window) = CapWindowId::Camera.get(&app)
+        && let Err(error) =
+            window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio))
+    {
+        warn!(%error, "Failed to update camera window content protection");
     }
 
     let video_upload_info = match inputs.mode {
@@ -1148,7 +1154,19 @@ pub async fn start_recording(
                     window_exclusions
                 };
 
-                crate::window_exclusion::resolve_window_ids(&window_exclusions)
+                let mut excluded_window_ids =
+                    crate::window_exclusion::resolve_window_ids(&window_exclusions);
+                crate::window_exclusion::append_matching_webview_window_ids(
+                    &mut excluded_window_ids,
+                    &app_handle,
+                    &window_exclusions,
+                );
+                info!(
+                    configured_exclusions = window_exclusions.len(),
+                    resolved_window_ids = excluded_window_ids.len(),
+                    "Resolved macOS recording window exclusions"
+                );
+                excluded_window_ids
             };
 
             let mut mic_restart_attempts = 0;
@@ -2895,7 +2913,7 @@ fn project_config_from_recording(
 
     let using_default_config = default_config.is_none();
     let mut config = default_config.unwrap_or_default();
-    config.cursor.size = default_cursor_size_for_recording(recordings);
+    config.cursor.size = cap_project::CursorConfiguration::default().size;
     apply_recording_presentation_defaults(app, &mut config, capture_target, using_default_config);
 
     let camera_preview_manager = CameraPreviewManager::new(app);
@@ -3015,23 +3033,6 @@ fn apply_screen_recording_presentation_defaults(
     {
         config.screen_movement_spring = ScreenMovementSpring::default();
     }
-}
-
-fn default_cursor_size_for_recording(recordings: &ProjectRecordingsMeta) -> u32 {
-    const REGULAR_CURSOR_HEIGHT: f32 = 24.0;
-    const DEFAULT_CURSOR_SCALE: f32 = 2.0;
-    const MAX_RECORDING_HEIGHT_RATIO: f32 = 0.075;
-
-    let Some(first_segment) = recordings.segments.first() else {
-        return cap_project::CursorConfiguration::default().size;
-    };
-
-    let desired_height = (REGULAR_CURSOR_HEIGHT * DEFAULT_CURSOR_SCALE)
-        .min(first_segment.display.height as f32 * MAX_RECORDING_HEIGHT_RATIO);
-
-    (desired_height / STANDARD_CURSOR_HEIGHT * 100.0)
-        .round()
-        .clamp(45.0, 85.0) as u32
 }
 
 pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) -> bool {

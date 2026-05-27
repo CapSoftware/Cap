@@ -115,7 +115,10 @@ use crate::{
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
     upload::InstantMultipartUpload,
 };
-use exit_shutdown::{AppExitAction, app_exit_action, collect_device_inventory, run_while_active};
+use exit_shutdown::{
+    AppExitAction, ExitRequestDecision, app_exit_action, collect_device_inventory,
+    handle_exit_requested, run_while_active,
+};
 use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
 
@@ -5000,43 +5003,54 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
         tauri::RunEvent::ExitRequested { code, api, .. } => {
             info!(?code, "App exit requested");
 
-            if _handle
-                .try_state::<AppExitState>()
-                .is_some_and(|state| state.is_exiting())
-            {
-                return;
+            match handle_exit_requested(
+                _handle
+                    .try_state::<AppExitState>()
+                    .is_some_and(|state| state.is_exiting()),
+                export::export_session_active(),
+                code.is_some(),
+                || api.prevent_exit(),
+            ) {
+                ExitRequestDecision::StartCleanup => {
+                    let _ = code;
+                    let handle = _handle.clone();
+                    spawn_on_runtime(async move {
+                        request_app_exit(handle).await;
+                    });
+                }
+                ExitRequestDecision::AlreadyExiting => {}
+                ExitRequestDecision::ExportActive => {
+                    warn!("Preventing app exit request during active export");
+                }
+                ExitRequestDecision::AllowRuntimeExit => {}
             }
-
-            api.prevent_exit();
-
-            if export::export_session_active() {
-                warn!("Preventing app exit request during active export");
-                return;
-            }
-
-            let _ = code;
-            let handle = _handle.clone();
-            spawn_on_runtime(async move {
-                request_app_exit(handle).await;
-            });
         }
         tauri::RunEvent::Exit => {
-            let already_exiting = match _handle.try_state::<AppExitState>() {
-                Some(state) => !state.begin(),
-                None => false,
-            };
-            if already_exiting {
-                return;
+            #[cfg(target_os = "macos")]
+            {
+                warn!("macOS runtime exit reached; forcing process exit");
+                force_exit(0);
             }
 
-            let handle = _handle.clone();
-            spawn_on_runtime(async move {
-                let _ = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    cleanup_app_resources_for_exit(&handle),
-                )
-                .await;
-            });
+            #[cfg(not(target_os = "macos"))]
+            {
+                let already_exiting = match _handle.try_state::<AppExitState>() {
+                    Some(state) => !state.begin(),
+                    None => false,
+                };
+                if already_exiting {
+                    return;
+                }
+
+                let handle = _handle.clone();
+                spawn_on_runtime(async move {
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        cleanup_app_resources_for_exit(&handle),
+                    )
+                    .await;
+                });
+            }
         }
         _ => {}
     }

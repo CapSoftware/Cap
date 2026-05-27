@@ -187,7 +187,7 @@ pub async fn probe_software_adapter() -> Option<(bool, String)> {
     Some((is_software_wgpu_adapter(&info), info.name))
 }
 
-pub const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
+pub const STANDARD_CURSOR_HEIGHT: f32 = 60.0;
 
 fn rounding_type_value(style: CornerStyle) -> f32 {
     match style {
