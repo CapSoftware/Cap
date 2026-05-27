@@ -1,4 +1,4 @@
-import { Channel } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { commands, type ExportSettings, type FramesRendered } from "./tauri";
 
 export async function beginExportSessionGuard() {
@@ -18,11 +18,12 @@ export function createExportTask(
 	settings: ExportSettings,
 	onProgress: (progress: FramesRendered) => void,
 ) {
+	const exportId = createExportId();
 	const progress = new Channel<FramesRendered>((e) => {
 		onProgress(e);
 	});
 	let closed = false;
-	const cancel = () => {
+	const closeProgress = () => {
 		if (closed) return;
 		closed = true;
 		const internals = (
@@ -32,10 +33,28 @@ export function createExportTask(
 		).__TAURI_INTERNALS__;
 		internals?.unregisterCallback?.(progress.id);
 	};
-	const promise = commands
-		.exportVideo(projectPath, progress, settings)
-		.finally(cancel);
+	const cancel = () => {
+		if (closed) return;
+		void cancelExport(exportId);
+		closeProgress();
+	};
+	const promise = invoke<string>("export_video_with_id", {
+		projectPath,
+		progress,
+		settings,
+		exportId,
+	}).finally(closeProgress);
 	return { promise, cancel };
+}
+
+function createExportId() {
+	return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+}
+
+async function cancelExport(exportId: string) {
+	await invoke<boolean>("cancel_export", { exportId }).catch((error) => {
+		console.error("Failed to cancel export", error);
+	});
 }
 
 export function createExportToFileTask(
