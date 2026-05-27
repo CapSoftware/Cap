@@ -198,9 +198,10 @@ const getPlaylistResponse = (
 				const requireCompleteSuffix = requireComplete
 					? "&requireComplete=1"
 					: "";
-				const audioPlaylistUrl = manifest.audio_init_uploaded
-					? `/api/playlist?videoId=${video.id}&videoType=segments-audio${requireCompleteSuffix}`
-					: null;
+				const audioPlaylistUrl =
+					manifest.audio_init_uploaded && manifest.audio_segments.length > 0
+						? `/api/playlist?videoId=${video.id}&videoType=segments-audio${requireCompleteSuffix}`
+						: null;
 
 				let playlist =
 					"#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n";
