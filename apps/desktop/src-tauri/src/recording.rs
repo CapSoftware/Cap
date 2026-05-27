@@ -114,8 +114,11 @@ pub enum InProgressRecording {
 async fn acquire_shareable_content_for_target(
     capture_target: &ScreenCaptureTarget,
 ) -> anyhow::Result<SendableShareableContent> {
-    let mut refreshed = false;
+    crate::platform::refresh_shareable_content()
+        .await
+        .map_err(|e| anyhow!(format!("RefreshShareableContent: {e}")))?;
 
+    let mut retried = false;
     loop {
         let shareable_content = SendableShareableContent::from(
             crate::platform::get_shareable_content()
@@ -128,14 +131,14 @@ async fn acquire_shareable_content_for_target(
             return Ok(shareable_content);
         }
 
-        if refreshed {
+        if retried {
             return Err(anyhow!("GetShareableContent/DisplayMissing"));
         }
 
         crate::platform::refresh_shareable_content()
             .await
             .map_err(|e| anyhow!(format!("RefreshShareableContent: {e}")))?;
-        refreshed = true;
+        retried = true;
     }
 }
 
