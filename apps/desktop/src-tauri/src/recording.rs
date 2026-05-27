@@ -1154,18 +1154,18 @@ pub async fn start_recording(
             let mut mic_restart_attempts = 0;
 
             let (done_fut, health_rx) = loop {
-                let selected_mic_label = state.selected_mic_label.clone();
-                let selected_mic_settings = selected_mic_label
-                    .as_ref()
-                    .and_then(|label| state.microphone_settings_for_label(label));
-                let mic_feed = lock_selected_microphone(
-                    &state.mic_feed,
-                    selected_mic_label,
-                    selected_mic_settings,
-                )
-                .await?;
-
                 let actor_result: Result<InProgressRecording, anyhow::Error> = async {
+                    let selected_mic_label = state.selected_mic_label.clone();
+                    let selected_mic_settings = selected_mic_label
+                        .as_ref()
+                        .and_then(|label| state.microphone_settings_for_label(label));
+                    let mic_feed = lock_selected_microphone(
+                        &state.mic_feed,
+                        selected_mic_label,
+                        selected_mic_settings,
+                    )
+                    .await?;
+
                     match inputs.mode {
                         RecordingMode::Studio => {
                             let max_fps =
@@ -1349,8 +1349,16 @@ pub async fn start_recording(
                         );
                         continue;
                     }
-                    Err(err) if mic_restart_attempts < 3 && mic_actor_not_running(&err) => {
+                    Err(err)
+                        if mic_restart_attempts < 3
+                            && (mic_actor_not_running(&err) || mic_feed_locked(&err)) =>
+                    {
                         mic_restart_attempts += 1;
+                        warn!(
+                            attempt = mic_restart_attempts,
+                            error = %err,
+                            "Recovering microphone feed before retrying recording start"
+                        );
                         state
                             .restart_mic_feed()
                             .await
@@ -1783,6 +1791,20 @@ fn mic_actor_not_running(err: &anyhow::Error) -> bool {
             false
         }
     })
+}
+
+fn mic_feed_locked(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<microphone::FeedLockedError>()
+            .is_some()
+            || cause
+                .downcast_ref::<microphone::LockFeedError>()
+                .is_some_and(|err| matches!(err, microphone::LockFeedError::Locked(_)))
+            || cause
+                .downcast_ref::<microphone::SetInputError>()
+                .is_some_and(|err| matches!(err, microphone::SetInputError::Locked(_)))
+    }) || err.to_string().contains("FeedLocked")
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2261,12 +2283,14 @@ async fn handle_recording_end(
             segment_upload,
             video_upload_info,
             ..
-        }) = cleared
+        }) = cleared.as_ref()
     {
         info!("Aborting segment upload due to recording failure");
         segment_upload.handle.abort();
         crate::upload::emit_upload_complete(&handle, &video_upload_info.id);
     }
+
+    drop(cleared);
 
     if app.was_camera_only_recording {
         app.was_camera_only_recording = false;
@@ -3230,6 +3254,24 @@ mod tests {
             x,
             y,
         }
+    }
+
+    #[test]
+    fn mic_feed_locked_detects_feed_lock_errors() {
+        assert!(mic_feed_locked(&anyhow::Error::new(
+            microphone::FeedLockedError
+        )));
+        assert!(mic_feed_locked(&anyhow::Error::new(
+            microphone::LockFeedError::Locked(microphone::FeedLockedError)
+        )));
+        assert!(mic_feed_locked(&anyhow::Error::new(
+            microphone::SetInputError::Locked(microphone::FeedLockedError)
+        )));
+    }
+
+    #[test]
+    fn mic_feed_locked_ignores_unrelated_errors() {
+        assert!(!mic_feed_locked(&anyhow!("different failure")));
     }
 
     #[test]

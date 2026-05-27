@@ -524,7 +524,10 @@ pub async fn spawn_instant_recording_actor(
             #[cfg(target_os = "macos")]
             let cam_pipeline = builder
                 .build::<output_pipeline::AVFoundationCameraMuxer>(
-                    output_pipeline::AVFoundationCameraMuxerConfig::default(),
+                    output_pipeline::AVFoundationCameraMuxerConfig {
+                        instant_mode: true,
+                        ..Default::default()
+                    },
                 )
                 .await
                 .context("camera-only pipeline setup")?;

@@ -395,24 +395,50 @@ function Inner() {
 		return editorState.playbackTime;
 	});
 
-	const doConfigUpdate = async (time: number) => {
-		const config = getPreviewProjectConfig(project, editorState);
-		const frameNumber = Math.max(Math.floor(time * FPS), 0);
-		const resBase = previewResolutionBase();
+	type PreviewConfigUpdate = {
+		config: ReturnType<typeof getPreviewProjectConfig>;
+		frameNumber: number;
+		resolutionBase: ReturnType<typeof previewResolutionBase>;
+	};
+
+	let previewConfigUpdateInFlight = false;
+	let pendingPreviewConfigUpdate: PreviewConfigUpdate | null = null;
+
+	const flushPreviewConfigUpdate = async () => {
+		if (previewConfigUpdateInFlight) return;
+		const next = pendingPreviewConfigUpdate;
+		if (!next) return;
+
+		pendingPreviewConfigUpdate = null;
+		previewConfigUpdateInFlight = true;
+
 		try {
 			await commands.updateProjectConfigInMemory(
-				config,
-				frameNumber,
+				next.config,
+				next.frameNumber,
 				FPS,
-				resBase,
+				next.resolutionBase,
 			);
 		} catch (e) {
 			console.error(
 				"[Editor] doConfigUpdate - ERROR sending config to Rust:",
 				e,
 			);
+		} finally {
+			previewConfigUpdateInFlight = false;
+			if (pendingPreviewConfigUpdate) void flushPreviewConfigUpdate();
 		}
 	};
+
+	const doConfigUpdate = (time: number) => {
+		pendingPreviewConfigUpdate = {
+			config: getPreviewProjectConfig(project, editorState),
+			frameNumber: Math.max(Math.floor(time * FPS), 0),
+			resolutionBase: previewResolutionBase(),
+		};
+		void flushPreviewConfigUpdate();
+	};
+
 	const throttledConfigUpdate = throttle(doConfigUpdate, 1000 / FPS);
 	const trailingConfigUpdate = debounce(doConfigUpdate, 1000 / FPS + 16);
 	const updateConfigAndRender = (time: number) => {
