@@ -2,6 +2,8 @@
 use scap_targets::{Window, WindowId};
 use serde::{Deserialize, Serialize};
 use specta::Type;
+#[cfg(target_os = "macos")]
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +73,13 @@ pub fn filter_for_instant_mode(
     exclusions
 }
 
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn matches_window_title(exclusions: &[WindowExclusion], title: &str) -> bool {
+    exclusions
+        .iter()
+        .any(|entry| entry.matches(None, None, Some(title)))
+}
+
 #[cfg(target_os = "macos")]
 pub fn resolve_window_ids(exclusions: &[WindowExclusion]) -> Vec<WindowId> {
     if exclusions.is_empty() {
@@ -83,19 +92,95 @@ pub fn resolve_window_ids(exclusions: &[WindowExclusion]) -> Vec<WindowId> {
             let owner_name = window.owner_name();
             let window_title = window.name();
             let bundle_identifier = window.raw_handle().bundle_identifier();
+            let matches = exclusions.iter().any(|entry| {
+                entry.matches(
+                    bundle_identifier.as_deref(),
+                    owner_name.as_deref(),
+                    window_title.as_deref(),
+                )
+            });
 
-            exclusions
-                .iter()
-                .find(|entry| {
-                    entry.matches(
-                        bundle_identifier.as_deref(),
-                        owner_name.as_deref(),
-                        window_title.as_deref(),
-                    )
-                })
-                .map(|_| window.id())
+            if !matches {
+                return None;
+            }
+
+            let window_id = window.id();
+            info!(
+                %window_id,
+                owner_name = ?owner_name,
+                window_title = ?window_title,
+                bundle_identifier = ?bundle_identifier,
+                "Resolved excluded macOS window"
+            );
+            Some(window_id)
         })
         .collect()
+}
+
+#[cfg(target_os = "macos")]
+pub fn append_matching_webview_window_ids(
+    ids: &mut Vec<WindowId>,
+    app: &tauri::AppHandle,
+    exclusions: &[WindowExclusion],
+) {
+    use crate::windows::CapWindowId;
+    use std::str::FromStr;
+    use tauri::Manager;
+
+    for (label, window) in app.webview_windows() {
+        let Ok(window_id) = CapWindowId::from_str(&label) else {
+            continue;
+        };
+        let title = window_id.title();
+        if !matches_window_title(exclusions, &title) {
+            continue;
+        }
+        let Some(native_id) = webview_window_id(&window) else {
+            warn!(
+                label = %label,
+                title = %title,
+                "Excluded Tauri webview window has no native window id"
+            );
+            continue;
+        };
+        if Window::from_id(&native_id).is_none() {
+            warn!(
+                window_id = %native_id,
+                label = %label,
+                title = %title,
+                "Excluded Tauri webview window id is not visible to CGWindowList"
+            );
+            continue;
+        }
+        if ids.contains(&native_id) {
+            debug!(
+                window_id = %native_id,
+                label = %label,
+                title = %title,
+                "Excluded Tauri webview window id already resolved"
+            );
+            continue;
+        }
+        info!(
+            window_id = %native_id,
+            label = %label,
+            title = %title,
+            "Resolved excluded Tauri webview window"
+        );
+        ids.push(native_id);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn webview_window_id(window: &tauri::WebviewWindow) -> Option<WindowId> {
+    let ns_window = window.ns_window().ok()? as *const objc2_app_kit::NSWindow;
+    let number = unsafe { (*ns_window).windowNumber() };
+
+    if number <= 0 {
+        return None;
+    }
+
+    number.to_string().parse().ok()
 }
 
 #[cfg(test)]
@@ -231,6 +316,14 @@ mod tests {
     fn instant_mode_handles_empty_list() {
         let filtered = filter_for_instant_mode(vec![], "Cap Camera");
         assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn matches_webview_title_using_exclusion_rules() {
+        let exclusions = vec![title_exclusion("Cap Camera")];
+
+        assert!(matches_window_title(&exclusions, "Cap Camera"));
+        assert!(!matches_window_title(&exclusions, "Cap Recording Controls"));
     }
 
     #[test]
