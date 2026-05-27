@@ -1222,16 +1222,13 @@ async fn resize_window(
     trace!("CameraPreview/resize_window");
 
     let base = clamp_size(state.size);
-    let window_width = if state.shape == CameraPreviewShape::Full {
-        if aspect >= 1.0 { base * aspect } else { base }
+    let aspect = if state.shape == CameraPreviewShape::Full {
+        aspect.max(WIDE_CAMERA_ASPECT_RATIO)
     } else {
-        base
+        1.0
     };
-    let window_height = if state.shape == CameraPreviewShape::Full {
-        if aspect >= 1.0 { base } else { base / aspect }
-    } else {
-        base
-    } + TOOLBAR_HEIGHT;
+    let window_width = base * aspect;
+    let window_height = base + TOOLBAR_HEIGHT;
 
     let window_width = window_width as u32;
     let window_height = window_height as u32;
