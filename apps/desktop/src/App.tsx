@@ -290,3 +290,9 @@ export function RevealWindowWithSuspense(
 
 	return <Suspense fallback={props.fallback}>{resolved()}</Suspense>;
 }
+
+export function maybeShowWindow() {
+	if (windowShown) return;
+	windowShown = true;
+	getCurrentWindow().show();
+}
