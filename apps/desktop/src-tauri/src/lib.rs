@@ -68,8 +68,6 @@ use ffmpeg::ffi::AV_TIME_BASE;
 use general_settings::GeneralSettingsStore;
 use kameo::{Actor, actor::ActorRef};
 use notifications::NotificationType;
-#[cfg(target_os = "macos")]
-use objc2::MainThreadOnly;
 use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use screenshot_editor::{
@@ -123,10 +121,6 @@ use exit_shutdown::{
 };
 use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
-#[cfg(target_os = "macos")]
-use tauri::menu::{
-    AboutMetadata, HELP_SUBMENU_ID, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID,
-};
 
 type FinalizingRecordingsMap =
     std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>;
@@ -196,10 +190,6 @@ const APP_EXIT_STEP_TIMEOUT: Duration = Duration::from_millis(750);
 const APP_EXIT_CAMERA_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(1200);
 const APP_EXIT_TOTAL_TIMEOUT: Duration = Duration::from_secs(3);
 const APP_EXIT_FORCE_TIMEOUT: Duration = Duration::from_secs(8);
-#[cfg(target_os = "macos")]
-const APP_MENU_QUIT_ID: &str = "app_quit";
-#[cfg(target_os = "macos")]
-static MACOS_NATIVE_TERMINATE_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
 async fn await_exit_step<T, E, F>(name: &'static str, timeout: Duration, fut: F) -> Option<T>
 where
@@ -310,194 +300,6 @@ fn should_show_onboarding(app: &AppHandle) -> bool {
     !startup_completed
         || !onboarding_completed
         || !permissions::do_permissions_check(false).necessary_granted()
-}
-
-#[cfg(target_os = "macos")]
-fn build_macos_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let pkg_info = app_handle.package_info();
-    let config = app_handle.config();
-    let about_metadata = AboutMetadata {
-        name: Some(pkg_info.name.clone()),
-        version: Some(pkg_info.version.to_string()),
-        copyright: config.bundle.copyright.clone(),
-        authors: config
-            .bundle
-            .publisher
-            .clone()
-            .map(|publisher| vec![publisher]),
-        ..Default::default()
-    };
-    let quit_label = config
-        .product_name
-        .as_ref()
-        .map(|name| format!("Quit {name}"))
-        .unwrap_or_else(|| "Quit Cap".to_string());
-
-    let window_menu = Submenu::with_id_and_items(
-        app_handle,
-        WINDOW_SUBMENU_ID,
-        "Window",
-        true,
-        &[
-            &PredefinedMenuItem::minimize(app_handle, None)?,
-            &PredefinedMenuItem::maximize(app_handle, None)?,
-            &PredefinedMenuItem::separator(app_handle)?,
-            &PredefinedMenuItem::close_window(app_handle, None)?,
-        ],
-    )?;
-
-    let help_menu = Submenu::with_id_and_items(
-        app_handle,
-        HELP_SUBMENU_ID,
-        "Help",
-        true,
-        &[
-            &MenuItem::with_id(
-                app_handle,
-                "help.changelog",
-                "Changelog",
-                true,
-                None::<&str>,
-            )?,
-            &PredefinedMenuItem::separator(app_handle)?,
-            &MenuItem::with_id(
-                app_handle,
-                "help.dashboard",
-                "Dashboard",
-                true,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(app_handle, "help.docs", "Documentation", true, None::<&str>)?,
-            &MenuItem::with_id(app_handle, "help.faq", "FAQ", true, None::<&str>)?,
-            &MenuItem::with_id(
-                app_handle,
-                "help.self_hosting",
-                "Self-hosting",
-                true,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(
-                app_handle,
-                "help.help_center",
-                "Help Center",
-                true,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(
-                app_handle,
-                "help.status",
-                "System Status",
-                true,
-                None::<&str>,
-            )?,
-            &PredefinedMenuItem::separator(app_handle)?,
-            &MenuItem::with_id(
-                app_handle,
-                "help.discord",
-                "Join Discord Community",
-                true,
-                None::<&str>,
-            )?,
-        ],
-    )?;
-
-    Menu::with_items(
-        app_handle,
-        &[
-            &Submenu::with_items(
-                app_handle,
-                pkg_info.name.clone(),
-                true,
-                &[
-                    &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
-                    &PredefinedMenuItem::separator(app_handle)?,
-                    &MenuItem::with_id(
-                        app_handle,
-                        "settings",
-                        "Preferences…",
-                        true,
-                        Some("Cmd+,"),
-                    )?,
-                    &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::services(app_handle, None)?,
-                    &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::hide(app_handle, None)?,
-                    &PredefinedMenuItem::hide_others(app_handle, None)?,
-                    &PredefinedMenuItem::separator(app_handle)?,
-                    &MenuItem::with_id(
-                        app_handle,
-                        APP_MENU_QUIT_ID,
-                        quit_label,
-                        true,
-                        Some("Cmd+Q"),
-                    )?,
-                ],
-            )?,
-            &Submenu::with_items(
-                app_handle,
-                "File",
-                true,
-                &[&PredefinedMenuItem::close_window(app_handle, None)?],
-            )?,
-            &Submenu::with_items(
-                app_handle,
-                "Edit",
-                true,
-                &[
-                    &PredefinedMenuItem::undo(app_handle, None)?,
-                    &PredefinedMenuItem::redo(app_handle, None)?,
-                    &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::cut(app_handle, None)?,
-                    &PredefinedMenuItem::copy(app_handle, None)?,
-                    &PredefinedMenuItem::paste(app_handle, None)?,
-                    &PredefinedMenuItem::select_all(app_handle, None)?,
-                ],
-            )?,
-            &Submenu::with_items(
-                app_handle,
-                "View",
-                true,
-                &[&PredefinedMenuItem::fullscreen(app_handle, None)?],
-            )?,
-            &window_menu,
-            &help_menu,
-        ],
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn patch_native_app_menu(app: &AppHandle) -> tauri::Result<()> {
-    use objc2::{MainThreadMarker, MainThreadOnly, sel};
-    use objc2_app_kit::{NSApplication, NSMenuItem};
-    use objc2_foundation::ns_string;
-
-    app.run_on_main_thread(move || {
-        let mtm = MainThreadMarker::new().expect("Running on main");
-        let app = NSApplication::sharedApplication(mtm);
-
-        let Some(main_menu) = app.mainMenu() else {
-            return;
-        };
-
-        // First item in the menu bar is always the app menu on macOS
-        let Some(app_menu_item) = main_menu.itemAtIndex(0) else {
-            return;
-        };
-        let Some(app_submenu) = app_menu_item.submenu() else {
-            return;
-        };
-
-        // Index 0: About — replace Tauri's internal action with the real one.
-        // This is what triggers the system About panel, including the app icon
-        // display introduced in macOS 15.
-        if let Some(about_item) = app_submenu.itemAtIndex(0) {
-            unsafe {
-                about_item.setAction(Some(sel!(orderFrontStandardAboutPanel:)));
-                // nil target means the action travels up the responder chain to NSApp
-                about_item.setTarget(None);
-            }
-        }
-    })
 }
 
 fn now_millis() -> u64 {
@@ -4400,46 +4202,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     #[cfg(target_os = "macos")]
     {
         builder = builder
-            .menu(build_macos_app_menu)
-            .on_menu_event(|app, event| {
-                let url = match event.id().as_ref() {
-                    APP_MENU_QUIT_ID => {
-                        let app = app.clone();
-                        tokio::spawn(async move {
-                            request_app_exit(app).await;
-                        });
-                        return;
-                    }
-                    "settings" => {
-                        let app = app.clone();
-                        spawn_on_runtime(async move {
-                            let _ = CapWindow::Settings { page: None }.show(&app).await;
-                        });
-                        return;
-                    }
-                    "help.changelog" => {
-                        let app = app.clone();
-                        spawn_on_runtime(async move {
-                            let _ = CapWindow::Settings {
-                                page: Some("/changelog".to_string()),
-                            }
-                            .show(&app)
-                            .await;
-                        });
-                        return;
-                    }
-                    "help.dashboard" => "https://cap.so/dashboard",
-                    "help.docs" => "https://cap.so/docs",
-                    "help.faq" => "https://cap.so/faq",
-                    "help.self_hosting" => "https://cap.so/self-hosting",
-                    "help.help_center" => "https://help.cap.so/",
-                    "help.status" => "https://cap.openstatus.dev/",
-                    "help.discord" => "https://discord.gg/y8gdQ3WRN3",
-                    _ => return,
-                };
-
-                let _ = app.opener().open_url(url, None::<&str>);
-            })
+            .menu(platform::menu::build_app_menu)
+            .on_menu_event(platform::menu::on_event)
             .plugin(tauri_nspanel::init());
     }
 
@@ -4492,7 +4256,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             let app = app.handle().clone();
 
             #[cfg(target_os = "macos")]
-            patch_native_app_menu(&app)?;
+            platform::menu::init(&app)?;
 
             if let Err(err) = update_project_names::migrate_if_needed(&app) {
                 tracing::error!("Failed to migrate project file names: {}", err);
