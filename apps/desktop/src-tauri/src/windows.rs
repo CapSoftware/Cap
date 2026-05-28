@@ -1417,7 +1417,6 @@ impl CapWindow {
                         format!("/settings/{}", page.clone().unwrap_or_default()),
                     )
                     .inner_size(782.0, 775.0)
-                    .min_inner_size(780.0, 560.0)
                     .focused(true);
 
                 #[cfg(target_os = "macos")]
@@ -1433,8 +1432,6 @@ impl CapWindow {
                 let window = self
                     .window_builder(app, "/editor")
                     .maximizable(true)
-                    .inner_size(1275.0, 800.0)
-                    .min_inner_size(1275.0, 800.0)
                     .focused(true)
                     .build()?;
 
@@ -1464,7 +1461,6 @@ impl CapWindow {
                     .window_builder(app, "/screenshot-editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
-                    .min_inner_size(800.0, 600.0)
                     .focused(true)
                     .build()
                 {
@@ -1501,8 +1497,6 @@ impl CapWindow {
 
                 let window = self
                     .window_builder(app, "/upgrade")
-                    .inner_size(950.0, 850.0)
-                    .min_inner_size(950.0, 850.0)
                     .focused(true)
                     .always_on_top(true)
                     .shadow(true)
@@ -1531,8 +1525,6 @@ impl CapWindow {
 
                 let window = self
                     .window_builder(app, "/mode-select")
-                    .inner_size(580.0, 340.0)
-                    .min_inner_size(580.0, 340.0)
                     .maximizable(false)
                     .focused(true)
                     .shadow(true)
@@ -1565,7 +1557,6 @@ impl CapWindow {
                 let window = self
                     .window_builder(app, "/onboarding")
                     .inner_size(width, height)
-                    .min_inner_size(860.0, 690.0)
                     .maximizable(false)
                     .transparent(true)
                     .focused(true)
