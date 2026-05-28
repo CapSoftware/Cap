@@ -4558,5 +4558,404 @@ mod tests {
                 ),
             }
         }
+
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        struct SentAudioFrame {
+            samples: usize,
+            timestamp: Duration,
+        }
+
+        struct RecordingAudioMuxer {
+            sent: Arc<std::sync::Mutex<Vec<SentAudioFrame>>>,
+        }
+
+        impl Muxer for RecordingAudioMuxer {
+            type Config = Arc<std::sync::Mutex<Vec<SentAudioFrame>>>;
+
+            async fn setup(
+                config: Self::Config,
+                _output_path: PathBuf,
+                _video_config: Option<VideoInfo>,
+                _audio_config: Option<AudioInfo>,
+                _pause_flag: Arc<AtomicBool>,
+                _tasks: &mut TaskPool,
+            ) -> anyhow::Result<Self>
+            where
+                Self: Sized,
+            {
+                Ok(Self { sent: config })
+            }
+
+            fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+                Ok(Ok(()))
+            }
+        }
+
+        impl AudioMuxer for RecordingAudioMuxer {
+            fn send_audio_frame(
+                &mut self,
+                frame: AudioFrame,
+                timestamp: Duration,
+            ) -> anyhow::Result<()> {
+                self.sent.lock().unwrap().push(SentAudioFrame {
+                    samples: frame.inner.samples(),
+                    timestamp,
+                });
+                Ok(())
+            }
+        }
+
+        struct AudioTimelineHarness {
+            info: AudioInfo,
+            timestamps: Timestamps,
+            master_clock: Arc<MasterClock>,
+            muxer: Arc<Mutex<RecordingAudioMuxer>>,
+            sent: Arc<std::sync::Mutex<Vec<SentAudioFrame>>>,
+            health_tx: HealthSender,
+            shared_pause: SharedWallClockPause,
+            timestamp_generator: AudioTimestampGenerator,
+            gap_tracker: AudioGapTracker,
+            gate_applied: bool,
+            first_tx: Option<oneshot::Sender<Timestamp>>,
+            frame_count: u64,
+            dropped_during_pause: u64,
+        }
+
+        impl AudioTimelineHarness {
+            fn new() -> Self {
+                let info = test_audio_info();
+                let timestamps = Timestamps::now();
+                let master_clock = MasterClock::new(timestamps, TEST_SAMPLE_RATE);
+                let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let muxer = Arc::new(Mutex::new(RecordingAudioMuxer { sent: sent.clone() }));
+                let (health_tx, _) = new_health_channel();
+                let shared_pause = SharedWallClockPause::new(Arc::new(AtomicBool::new(false)));
+
+                Self {
+                    info,
+                    timestamps,
+                    master_clock: master_clock.clone(),
+                    muxer,
+                    sent,
+                    health_tx,
+                    shared_pause,
+                    timestamp_generator: AudioTimestampGenerator::from_master_clock(master_clock),
+                    gap_tracker: AudioGapTracker::new(false, timestamps),
+                    gate_applied: true,
+                    first_tx: None,
+                    frame_count: 0,
+                    dropped_during_pause: 0,
+                }
+            }
+
+            async fn process(
+                &mut self,
+                timestamp_offset: Duration,
+                samples: usize,
+            ) -> AudioFrameOutcome {
+                self.process_at(timestamp_offset, timestamp_offset, samples)
+                    .await
+            }
+
+            // `process_audio_frame` reads the wall clock (`observed_at`) which caps
+            // `capture_elapsed` at wall + AUDIO_WALL_CLOCK_TOLERANCE. Driving a multi-minute
+            // simulation synchronously would otherwise pin the cap near zero, so the harness
+            // injects both the capture timestamp and the observed wall clock explicitly.
+            async fn process_at(
+                &mut self,
+                capture_offset: Duration,
+                wall_offset: Duration,
+                samples: usize,
+            ) -> AudioFrameOutcome {
+                let timestamp = Timestamp::Instant(self.timestamps.instant() + capture_offset);
+                let observed_at = self.timestamps.instant() + wall_offset;
+                let frame = AudioFrame::new(make_test_frame(&self.info, samples, 0.0), timestamp);
+
+                process_audio_frame(
+                    AudioFrameProcessContext {
+                        audio_info: &self.info,
+                        sample_rate: self.info.sample_rate,
+                        master_clock: &self.master_clock,
+                        muxer: &self.muxer,
+                        health_tx: &self.health_tx,
+                        shared_pause: &self.shared_pause,
+                        video_start_gate: None,
+                        has_video: true,
+                        origin: FrameProcessOrigin::Live,
+                        observed_at,
+                    },
+                    AudioFrameProcessState {
+                        timestamp_generator: &mut self.timestamp_generator,
+                        gap_tracker: &mut self.gap_tracker,
+                        gate_applied: &mut self.gate_applied,
+                        first_tx: &mut self.first_tx,
+                        frame_count: &mut self.frame_count,
+                        dropped_during_pause: &mut self.dropped_during_pause,
+                    },
+                    frame,
+                )
+                .await
+                .unwrap()
+            }
+
+            fn committed_audio(&mut self) -> Duration {
+                self.timestamp_generator.next_timestamp(0)
+            }
+
+            fn total_silence(&self) -> Duration {
+                self.gap_tracker.total_silence_inserted
+            }
+
+            fn overlap_dropped_frames(&self) -> u64 {
+                self.gap_tracker.overlap_dropped_frames
+            }
+
+            fn sent(&self) -> Vec<SentAudioFrame> {
+                self.sent.lock().unwrap().clone()
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn overlapping_delayed_mic_frame_is_trimmed() {
+            let mut harness = AudioTimelineHarness::new();
+
+            assert!(matches!(
+                harness.process(Duration::ZERO, 1_680).await,
+                AudioFrameOutcome::Sent
+            ));
+            assert!(matches!(
+                harness.process(Duration::from_millis(35), 960).await,
+                AudioFrameOutcome::Sent
+            ));
+            assert!(matches!(
+                harness.process(Duration::from_millis(35), 1_680).await,
+                AudioFrameOutcome::Sent
+            ));
+
+            assert_eq!(
+                harness.sent(),
+                vec![
+                    SentAudioFrame {
+                        samples: 1_680,
+                        timestamp: Duration::ZERO,
+                    },
+                    SentAudioFrame {
+                        samples: 960,
+                        timestamp: Duration::from_millis(35),
+                    },
+                    SentAudioFrame {
+                        samples: 720,
+                        timestamp: Duration::from_millis(55),
+                    },
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn fully_overlapping_delayed_mic_frame_is_dropped() {
+            let mut harness = AudioTimelineHarness::new();
+
+            assert!(matches!(
+                harness.process(Duration::ZERO, 1_680).await,
+                AudioFrameOutcome::Sent
+            ));
+            assert!(matches!(
+                harness.process(Duration::from_millis(35), 960).await,
+                AudioFrameOutcome::Sent
+            ));
+            assert!(matches!(
+                harness.process(Duration::from_millis(55), 960).await,
+                AudioFrameOutcome::Sent
+            ));
+            assert!(matches!(
+                harness.process(Duration::from_millis(35), 1_680).await,
+                AudioFrameOutcome::DropFrame
+            ));
+
+            assert_eq!(harness.sent().len(), 3);
+        }
+
+        #[test]
+        fn real_capture_gap_still_requests_silence() {
+            let timestamps = Timestamps::now();
+            let mut tracker = AudioGapTracker::new(false, timestamps);
+            let wall_clock_start = Instant::now();
+
+            tracker.mark_started(Timestamp::Instant(timestamps.instant()), wall_clock_start);
+
+            let gap = tracker
+                .detect_gap(
+                    Timestamp::Instant(timestamps.instant() + Duration::from_millis(300)),
+                    Duration::from_millis(20),
+                    Duration::ZERO,
+                    wall_clock_start + Duration::from_millis(300),
+                )
+                .expect("300ms capture gap after 20ms of samples must insert silence");
+
+            assert_eq!(gap, Duration::from_millis(280));
+        }
+
+        fn abs_skew(a: Duration, b: Duration) -> Duration {
+            a.saturating_sub(b).max(b.saturating_sub(a))
+        }
+
+        // With the mic source no longer fabricating silence for transient stalls, a stall
+        // where the device keeps capturing and later delivers its backlog in order (with the
+        // true, continuous capture timestamps) must reconcile cleanly: the committed audio
+        // timeline tracks the capture span, no silence is inserted, and no real frame is
+        // dropped. This is the post-fix shape of the original 399ms-overrun repro.
+        #[tokio::test(flavor = "current_thread")]
+        async fn transient_stall_in_order_backlog_no_overrun_no_drop() {
+            let mut harness = AudioTimelineHarness::new();
+            let frame = Duration::from_millis(20);
+            let samples = 960usize;
+
+            for k in 0..5u64 {
+                let t = frame * k as u32;
+                assert!(matches!(
+                    harness.process_at(t, t, samples).await,
+                    AudioFrameOutcome::Sent
+                ));
+            }
+
+            // Frames 5..=10 were captured during a ~120ms delivery stall and arrive together
+            // at the resume wall clock, but keep their true continuous capture timestamps.
+            let resume_wall = frame * 11;
+            for k in 5..=10u64 {
+                let capture = frame * k as u32;
+                assert!(
+                    matches!(
+                        harness.process_at(capture, resume_wall, samples).await,
+                        AudioFrameOutcome::Sent
+                    ),
+                    "backlog frame {k} must be kept, not dropped"
+                );
+            }
+
+            for k in 11..16u64 {
+                let t = frame * k as u32;
+                assert!(matches!(
+                    harness.process_at(t, t, samples).await,
+                    AudioFrameOutcome::Sent
+                ));
+            }
+
+            let committed = harness.committed_audio();
+            let capture_span = frame * 16;
+            assert!(
+                abs_skew(committed, capture_span) <= Duration::from_millis(5),
+                "committed audio {committed:?} drifted from capture span {capture_span:?}"
+            );
+            assert_eq!(
+                harness.total_silence(),
+                Duration::ZERO,
+                "late-but-present audio must not trigger silence insertion"
+            );
+            assert_eq!(
+                harness.overlap_dropped_frames(),
+                0,
+                "no real audio frame may be discarded for late-but-present delivery"
+            );
+        }
+
+        // 5m30s simulated recording at 48kHz with a 0.1% slow mic clock and eight stalls
+        // (5-293ms) that later fill. The sample-count audio timeline must keep tracking the
+        // device capture clock within a bounded window (gap-corrected, never runaway), and
+        // a slow-clock drift must be absorbed by bounded silence rather than by discarding
+        // captured audio.
+        #[tokio::test(flavor = "current_thread")]
+        async fn five_minute_recording_audio_stays_bounded_under_drift_and_stalls() {
+            let mut harness = AudioTimelineHarness::new();
+            let rate = TEST_SAMPLE_RATE as f64;
+            let samples = 960usize;
+            let audio_content = samples as f64 / rate; // 20ms of audio per frame
+            let mic_drift = 1.001; // 960 samples take 0.1% longer than 20ms of system time
+            let total_frames = 16_500u64; // ~330s
+
+            let stalls: [(u64, u64); 8] = [
+                (1_000, 120),
+                (3_000, 40),
+                (5_000, 80),
+                (7_000, 293),
+                (9_000, 114),
+                (11_000, 43),
+                (13_000, 160),
+                (15_000, 200),
+            ];
+
+            let mut backlog_lag = Duration::ZERO;
+            let mut max_skew = Duration::ZERO;
+
+            for k in 0..total_frames {
+                if let Some((_, stall_ms)) = stalls.iter().find(|(idx, _)| *idx == k) {
+                    backlog_lag = Duration::from_millis(*stall_ms);
+                }
+
+                let capture = Duration::from_secs_f64(k as f64 * audio_content * mic_drift);
+                let wall = capture + backlog_lag;
+                backlog_lag = backlog_lag.saturating_sub(Duration::from_secs_f64(audio_content));
+
+                assert!(
+                    matches!(
+                        harness.process_at(capture, wall, samples).await,
+                        AudioFrameOutcome::Sent
+                    ),
+                    "frame {k} unexpectedly not sent"
+                );
+
+                let committed = harness.committed_audio();
+                max_skew = max_skew.max(abs_skew(committed, capture));
+            }
+
+            assert!(
+                max_skew < Duration::from_millis(100),
+                "audio drifted from the capture clock by {max_skew:?} over the recording"
+            );
+            assert_eq!(
+                harness.overlap_dropped_frames(),
+                0,
+                "slow-clock drift must be corrected with silence, never by dropping real audio"
+            );
+            let silence = harness.total_silence();
+            assert!(
+                silence < Duration::from_secs(1),
+                "drift correction silence {silence:?} is not bounded"
+            );
+
+            for pair in harness.sent().windows(2) {
+                assert!(
+                    pair[1].timestamp >= pair[0].timestamp,
+                    "muxed audio timestamps must be monotonic"
+                );
+            }
+        }
+
+        // The video leg is wall-clock pinned via VideoDriftTracker. Over a long recording a
+        // camera whose real rate differs from nominal (here ~26.44fps with 0.1% drift) must
+        // stay within a bounded window of the wall clock, so it cannot accumulate unbounded
+        // skew against the capture-clock-tracked audio leg.
+        #[test]
+        fn video_timeline_stays_bounded_to_wall_clock_over_long_recording() {
+            let mut video = VideoDriftTracker::new();
+            let fps = 26.44f64;
+            let interval = 1.0 / fps;
+            let total_frames = (330.0 * fps) as u64;
+
+            let mut max_skew = Duration::ZERO;
+            let mut last = Duration::ZERO;
+            for v in 0..total_frames {
+                let wall = Duration::from_secs_f64(v as f64 * interval * 1.001);
+                let camera_dur = Duration::from_secs_f64(v as f64 * interval);
+                let out = video.calculate_timestamp(camera_dur, wall);
+                assert!(out >= last, "video timeline must be monotonic");
+                last = out;
+                max_skew = max_skew.max(abs_skew(out, wall));
+            }
+
+            assert!(
+                max_skew < Duration::from_millis(250),
+                "video drifted from the wall clock by {max_skew:?} (correction failed)"
+            );
+        }
     }
 }
