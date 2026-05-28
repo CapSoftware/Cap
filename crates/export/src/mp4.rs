@@ -249,13 +249,9 @@ impl Mp4ExportSettings {
 
                 let audio_frame = audio_renderer.as_mut().and_then(|audio| {
                     let n = u64::from(input.frame_number);
-                    let end = ((n + 1) * sample_rate) / fps_u64;
-                    if end <= audio_sample_cursor {
-                        return None;
-                    }
-                    let pts = audio_sample_cursor as i64;
-                    let samples = (end - audio_sample_cursor) as usize;
-                    audio_sample_cursor = end;
+                    let (pts, samples) =
+                        audio_frame_budget(n, sample_rate, fps_u64, audio_sample_cursor)?;
+                    audio_sample_cursor = pts as u64 + samples as u64;
                     audio
                         .render_frame(samples, &project_for_audio)
                         .map(|mut frame| {
@@ -455,6 +451,25 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
         y_stride: width,
         frame_number: frame.frame_number,
     }
+}
+
+/// Per-output-frame audio budget for the encoder loop: the AAC frame PTS (the
+/// running sample cursor) and the sample count to render for `frame_number`.
+/// Returns `None` when the frame falls entirely within already-emitted audio, so
+/// the stream stays gapless and strictly monotonic. The caller advances the
+/// cursor to `pts + samples`. Shared with the tests so they exercise this exact
+/// arithmetic rather than a re-implementation.
+fn audio_frame_budget(
+    frame_number: u64,
+    sample_rate: u64,
+    fps: u64,
+    cursor: u64,
+) -> Option<(i64, usize)> {
+    let end = ((frame_number + 1) * sample_rate) / fps;
+    if end <= cursor {
+        return None;
+    }
+    Some((cursor as i64, (end - cursor) as usize))
 }
 
 fn fill_nv12_frame_direct(
