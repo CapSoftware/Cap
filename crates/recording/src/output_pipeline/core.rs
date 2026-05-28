@@ -3576,6 +3576,109 @@ mod tests {
             assert_eq!(tracker.anomaly_count, 0);
             assert!(tracker.total_forward_skew_secs > 2.0);
         }
+
+        // Mirrors the mux-video task (core.rs ~1916-1936): a trusted/direct frame's remapped
+        // timestamp tracks real source time, the anomaly tracker collapses large source-clock
+        // jumps, and the drift tracker then re-pins the output to the real wall clock. The two
+        // stages must compose so that the muxed video PTS tracks the wall clock the audio leg
+        // is also reconciled against.
+        fn run_video_frame(
+            anomaly: &mut TimestampAnomalyTracker,
+            drift: &mut VideoDriftTracker,
+            timestamps: Timestamps,
+            source_secs: f64,
+            wall_secs: f64,
+        ) -> f64 {
+            let remapped =
+                Timestamp::Instant(timestamps.instant() + Duration::from_secs_f64(source_secs));
+            let raw = anomaly.process_timestamp(remapped, timestamps).unwrap();
+            if anomaly.take_resync_flag() {
+                drift.reset_baseline();
+            }
+            drift
+                .calculate_timestamp(raw, Duration::from_secs_f64(wall_secs))
+                .as_secs_f64()
+        }
+
+        // WGC / ScreenCaptureKit deliver no frames while the screen is static, so an idle
+        // period longer than LARGE_FORWARD_JUMP_SECS arrives as a single forward jump once the
+        // screen changes again. The anomaly tracker collapses that jump (and flags a resync);
+        // the drift tracker re-baselines against the real wall clock. Because audio keeps
+        // recording through the gap, the resumed video frame MUST land at wall-clock time, not
+        // behind it — otherwise the held frame would under-cover the static period and every
+        // subsequent action would appear ahead of its audio. Regression guard against the
+        // anomaly-collapse and drift-rebaseline coupling being broken.
+        #[test]
+        fn static_screen_gap_keeps_video_pinned_to_wall_clock() {
+            let mut anomaly = TimestampAnomalyTracker::new("video");
+            let mut drift = VideoDriftTracker::new();
+            let timestamps = make_timestamps();
+            let frame = 1.0 / 30.0;
+
+            let mut t = 0.0;
+            while t < 3.0 {
+                let out = run_video_frame(&mut anomaly, &mut drift, timestamps, t, t);
+                assert!(
+                    (out - t).abs() < 0.15,
+                    "active frame at {t:.3}s drifted to {out:.3}s"
+                );
+                t += frame;
+            }
+
+            anomaly.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(5));
+            t += 5.0;
+            let resume = run_video_frame(&mut anomaly, &mut drift, timestamps, t, t);
+            assert!(
+                (resume - t).abs() < 0.15,
+                "resume frame after a 5s static gap landed at {resume:.3}s but wall clock is \
+                 {t:.3}s — a {:.3}s video-behind-audio desync",
+                (resume - t).abs()
+            );
+
+            for _ in 0..90 {
+                t += frame;
+                let out = run_video_frame(&mut anomaly, &mut drift, timestamps, t, t);
+                assert!(
+                    (out - t).abs() < 0.15,
+                    "post-gap frame at {t:.3}s drifted to {out:.3}s (residual catch-up ramp)"
+                );
+            }
+        }
+
+        // A slideshow / tutorial with repeated static slides must not accumulate
+        // video-vs-wall-clock skew cycle over cycle.
+        #[test]
+        fn repeated_static_gaps_do_not_accumulate_desync() {
+            let mut anomaly = TimestampAnomalyTracker::new("video");
+            let mut drift = VideoDriftTracker::new();
+            let timestamps = make_timestamps();
+            let frame = 1.0 / 30.0;
+            let mut t = 0.0;
+            let mut max_skew = 0.0f64;
+
+            for _ in 0..90 {
+                let out = run_video_frame(&mut anomaly, &mut drift, timestamps, t, t);
+                max_skew = max_skew.max((out - t).abs());
+                t += frame;
+            }
+
+            for _ in 0..5 {
+                anomaly.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(5));
+                t += 5.0;
+                let out = run_video_frame(&mut anomaly, &mut drift, timestamps, t, t);
+                max_skew = max_skew.max((out - t).abs());
+                for _ in 0..60 {
+                    t += frame;
+                    let out = run_video_frame(&mut anomaly, &mut drift, timestamps, t, t);
+                    max_skew = max_skew.max((out - t).abs());
+                }
+            }
+
+            assert!(
+                max_skew < 0.2,
+                "repeated static gaps accumulated {max_skew:.3}s of video-vs-wall-clock skew"
+            );
+        }
     }
 
     mod finish_build {
