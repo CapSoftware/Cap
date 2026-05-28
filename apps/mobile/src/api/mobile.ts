@@ -86,7 +86,11 @@ const appendQuery = (
 const parseJson = async (response: Response) => {
 	const text = await response.text();
 	if (text.length === 0) return null;
-	return JSON.parse(text) as unknown;
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		return text;
+	}
 };
 
 export const createSessionRequestUrl = (

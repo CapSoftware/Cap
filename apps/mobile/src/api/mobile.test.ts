@@ -87,6 +87,28 @@ describe("createMobileApiClient", () => {
 		}
 	});
 
+	it("keeps non-JSON error responses in the API error payload", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () =>
+			new Response("<html>bad gateway</html>", {
+				status: 502,
+			})) as typeof fetch;
+
+		try {
+			const client = createMobileApiClient({
+				baseUrl: "https://cap.so/",
+				getToken: () => "api-key",
+			});
+
+			await expect(client.bootstrap()).rejects.toMatchObject({
+				status: 502,
+				payload: "<html>bad gateway</html>",
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	it("builds Google session request URLs", () => {
 		expect(
 			createSessionRequestUrl("https://cap.so/", "cap://auth", "google"),

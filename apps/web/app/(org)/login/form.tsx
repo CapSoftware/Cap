@@ -15,7 +15,14 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Suspense, useCallback, useEffect, useId, useState } from "react";
+import {
+	Suspense,
+	useCallback,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
@@ -40,6 +47,7 @@ export function LoginForm() {
 	const [lastEmailSentTime, setLastEmailSentTime] = useState<number | null>(
 		null,
 	);
+	const mobileGoogleSignInStarted = useRef(false);
 	const theme = Cookies.get("theme") || "light";
 
 	useEffect(() => {
@@ -133,7 +141,10 @@ export function LoginForm() {
 
 	useEffect(() => {
 		if (searchParams?.get("mobileProvider") === "google") {
+			if (mobileGoogleSignInStarted.current) return;
+			mobileGoogleSignInStarted.current = true;
 			handleGoogleSignIn();
+			return;
 		}
 
 		if (searchParams?.get("mobileProvider") !== "workos") return;

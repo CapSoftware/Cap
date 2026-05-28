@@ -76,10 +76,21 @@ type MobileUploadCreateInput = (typeof Mobile.MobileUploadCreateInput)["Type"];
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const emailCodePattern = /^\d{6}$/;
 const emailCodeTtlMs = 10 * 60 * 1000;
+const mobileRedirectProtocols = new Set(["cap:", "exp+cap:"]);
 
 const toIsoString = (value: Date) => value.toISOString();
 
 const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+const getAffectedRows = (result: unknown) => {
+	if (Array.isArray(result)) {
+		return (
+			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+		);
+	}
+
+	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
+};
 
 const hashEmailCode = (code: string) =>
 	crypto
@@ -89,6 +100,9 @@ const hashEmailCode = (code: string) =>
 
 const sendMobileEmailCode = async (email: string, code: string) => {
 	if (!serverEnv().RESEND_API_KEY) {
+		if (process.env.NODE_ENV === "production") {
+			throw new Error("RESEND_API_KEY is required to send mobile email codes");
+		}
 		console.log("");
 		console.log("Cap mobile verification code");
 		console.log(`Email: ${email}`);
@@ -103,6 +117,16 @@ const sendMobileEmailCode = async (email: string, code: string) => {
 		subject: "Your Cap Verification Code",
 		react: OTPEmail({ code, email }),
 	});
+};
+
+const getMobileRedirectUrl = (redirectUri: string) => {
+	try {
+		const redirectUrl = new URL(redirectUri);
+		if (!mobileRedirectProtocols.has(redirectUrl.protocol)) return null;
+		return redirectUrl;
+	} catch {
+		return null;
+	}
 };
 
 const getEmailAuthAdapter = () => {
@@ -361,35 +385,44 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* ({
 
 	const database = yield* Database;
 	const token = hashEmailCode(code);
-	const [verificationToken] = yield* database.use((db) =>
-		db
+	const verificationStatus = yield* database.use(async (db) => {
+		const [verificationToken] = await db
 			.select()
 			.from(Db.verificationTokens)
-			.where(
-				and(
-					eq(Db.verificationTokens.identifier, email),
-					eq(Db.verificationTokens.token, token),
-				),
-			)
-			.limit(1),
-	);
+			.where(eq(Db.verificationTokens.identifier, email))
+			.limit(1);
 
-	if (!verificationToken) {
-		return yield* Effect.fail(new HttpApiError.Forbidden());
-	}
+		if (!verificationToken) return "missing" as const;
 
-	yield* database.use((db) =>
-		db
+		if (verificationToken.expires.valueOf() < Date.now()) {
+			await db
+				.delete(Db.verificationTokens)
+				.where(eq(Db.verificationTokens.identifier, email));
+			return "expired" as const;
+		}
+
+		if (verificationToken.token !== token) {
+			await db
+				.delete(Db.verificationTokens)
+				.where(eq(Db.verificationTokens.identifier, email));
+			return "invalid" as const;
+		}
+
+		const result = await db
 			.delete(Db.verificationTokens)
 			.where(
 				and(
 					eq(Db.verificationTokens.identifier, email),
 					eq(Db.verificationTokens.token, token),
 				),
-			),
-	);
+			);
 
-	if (verificationToken.expires.valueOf() < Date.now()) {
+		return getAffectedRows(result) === 1
+			? ("verified" as const)
+			: ("used" as const);
+	});
+
+	if (verificationStatus !== "verified") {
 		return yield* Effect.fail(new HttpApiError.Forbidden());
 	}
 
@@ -938,12 +971,18 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 	videoId: Video.VideoId,
 ) {
+	const user = yield* CurrentUser;
 	const videos = yield* Videos;
 	const storage = yield* Storage;
 	const [video] = yield* videos.getByIdForViewing(videoId).pipe(
 		Effect.flatten,
 		Effect.catchTag("NoSuchElementException", () => new Video.NotFoundError()),
 	);
+
+	if (video.ownerId !== user.id) {
+		return yield* Effect.fail(new HttpApiError.NotFound());
+	}
+
 	const [bucket] = yield* storage.getAccessForVideo(video);
 	const source = Video.Video.getSource(video);
 
@@ -1109,7 +1148,13 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								const session = yield* createMobileApiKey(user.value.id);
 
 								if (urlParams.redirectUri) {
-									const redirectUrl = new URL(urlParams.redirectUri);
+									const redirectUrl = getMobileRedirectUrl(
+										urlParams.redirectUri,
+									);
+									if (!redirectUrl) {
+										return yield* Effect.fail(new HttpApiError.BadRequest());
+									}
+
 									redirectUrl.searchParams.set("api_key", session.apiKey);
 									redirectUrl.searchParams.set("user_id", user.value.id);
 									return HttpServerResponse.redirect(redirectUrl.toString());
@@ -1295,9 +1340,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											),
 										),
 								);
-								const affectedRows = Array.isArray(result)
-									? (result[0]?.affectedRows ?? 0)
-									: 0;
+								const affectedRows = getAffectedRows(result);
 								if (affectedRows === 0) {
 									return yield* Effect.fail(new HttpApiError.NotFound());
 								}
