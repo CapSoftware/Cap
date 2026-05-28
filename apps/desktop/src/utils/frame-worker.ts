@@ -37,6 +37,10 @@ interface ResetFrameStateMessage {
 	type: "reset-frame-state";
 }
 
+interface WakeMessage {
+	type: "wake";
+}
+
 interface ReadyMessage {
 	type: "ready";
 }
@@ -90,7 +94,8 @@ type IncomingMessage =
 	| ResizeMessage
 	| InitSharedBufferMessage
 	| CleanupMessage
-	| ResetFrameStateMessage;
+	| ResetFrameStateMessage
+	| WakeMessage;
 
 interface FrameTiming {
 	frameNumber: number;
@@ -307,23 +312,21 @@ function convertNv12ToRgba(
 
 	for (let row = 0; row < height; row++) {
 		const yRowOffset = row * yStride;
-		const uvRowOffset = Math.floor(row / 2) * uvStride;
+		const uvRowOffset = (row >> 1) * uvStride;
 		const rgbaRowOffset = row * width * 4;
 
-		for (let col = 0; col < width; col++) {
-			const y = yPlane[yRowOffset + col] - 16;
-
-			const uvCol = Math.floor(col / 2) * 2;
+		for (let col = 0; col < width; col += 2) {
+			const uvCol = (col >> 1) * 2;
 			const u = uvPlane[uvRowOffset + uvCol] - 128;
 			const v = uvPlane[uvRowOffset + uvCol + 1] - 128;
-
-			const c = 298 * y;
 			const d = u;
 			const e = v;
 
-			let r = (c + 409 * e + 128) >> 8;
-			let g = (c - 100 * d - 208 * e + 128) >> 8;
-			let b = (c + 516 * d + 128) >> 8;
+			const y0 = yPlane[yRowOffset + col] - 16;
+			const c0 = 298 * y0;
+			let r = (c0 + 409 * e + 128) >> 8;
+			let g = (c0 - 100 * d - 208 * e + 128) >> 8;
+			let b = (c0 + 516 * d + 128) >> 8;
 
 			r = r < 0 ? 0 : r > 255 ? 255 : r;
 			g = g < 0 ? 0 : g > 255 ? 255 : g;
@@ -334,6 +337,25 @@ function convertNv12ToRgba(
 			rgba[rgbaOffset + 1] = g;
 			rgba[rgbaOffset + 2] = b;
 			rgba[rgbaOffset + 3] = 255;
+
+			const nextCol = col + 1;
+			if (nextCol < width) {
+				const y1 = yPlane[yRowOffset + nextCol] - 16;
+				const c1 = 298 * y1;
+				let nextR = (c1 + 409 * e + 128) >> 8;
+				let nextG = (c1 - 100 * d - 208 * e + 128) >> 8;
+				let nextB = (c1 + 516 * d + 128) >> 8;
+
+				nextR = nextR < 0 ? 0 : nextR > 255 ? 255 : nextR;
+				nextG = nextG < 0 ? 0 : nextG > 255 ? 255 : nextG;
+				nextB = nextB < 0 ? 0 : nextB > 255 ? 255 : nextB;
+
+				const nextRgbaOffset = rgbaOffset + 4;
+				rgba[nextRgbaOffset] = nextR;
+				rgba[nextRgbaOffset + 1] = nextG;
+				rgba[nextRgbaOffset + 2] = nextB;
+				rgba[nextRgbaOffset + 3] = 255;
+			}
 		}
 	}
 
@@ -1092,6 +1114,11 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 			}
 		}
 		frameQueue = [];
+		return;
+	}
+
+	if (e.data.type === "wake") {
+		startRenderLoop();
 		return;
 	}
 

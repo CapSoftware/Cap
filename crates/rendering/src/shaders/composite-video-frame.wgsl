@@ -159,7 +159,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         }
 
         let velocity_uv = motion_vec;
-        let offset_base = -0.5;
+        let offset_base = 0.0;
         let k = 20;
 
         for (var i = 0; i < 20; i = i + 1) {
@@ -184,15 +184,13 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             return mix(shadow_color, base_color, base_color.a);
         }
 
-        let max_zoom_offset = 0.12;
+        let max_zoom_offset = 0.035;
         let zoom_scale = min(zoom_amount, 1.0);
         let scaled_dir = dir / dist * min(dist * zoom_scale, max_zoom_offset);
         let max_kernel = 13.0;
 
-        let offset_rand = rand(vec2<f32>(target_uv.x * 7.37, target_uv.y * 11.23));
-
         for (var i = 0; i < 13; i = i + 1) {
-            let percent = (f32(i) + offset_rand) / max_kernel;
+            let percent = (f32(i) + 0.5) / max_kernel;
             let weight = 4.0 * (percent - percent * percent);
             let sample_uv = target_uv + scaled_dir * percent;
 
@@ -210,7 +208,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     let final_color = accum / weight_sum;
     let blurred = vec4(final_color.rgb, base_color.a);
-    return mix(shadow_color, blurred, blurred.a);
+    let blur_mix = clamp(blur_strength, 0.0, 1.0);
+    let blended = mix(base_color, blurred, blur_mix);
+    return mix(shadow_color, blended, blended.a);
 }
 
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
@@ -232,6 +232,8 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
         let target_size = uniforms.target_size;
         let scale_ratio = source_size / target_size;
         let is_downscaling = max(scale_ratio.x, scale_ratio.y) > 1.1;
+        let upscale_ratio = max(target_size.x / source_size.x, target_size.y / source_size.y);
+        let is_upscaling = upscale_ratio > 1.05;
 
         let center_color = textureSample(frame_texture, frame_sampler, cropped_uv).rgb;
 
@@ -254,6 +256,40 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
         }
 
+        if is_upscaling {
+            let texel_size = 1.0 / uniforms.frame_size;
+
+            let offset_x = vec2<f32>(texel_size.x, 0.0);
+            let offset_y = vec2<f32>(0.0, texel_size.y);
+
+            let left = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv - offset_x, safe_min, safe_max)
+            ).rgb;
+            let right = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv + offset_x, safe_min, safe_max)
+            ).rgb;
+            let top = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv - offset_y, safe_min, safe_max)
+            ).rgb;
+            let bottom = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv + offset_y, safe_min, safe_max)
+            ).rgb;
+
+            let blurred = (left + right + top + bottom) * 0.25;
+            let sharpness = min((upscale_ratio - 1.0) * 0.25, 0.45);
+            let sharpened = center_color + (center_color - blurred) * sharpness;
+
+            return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+        }
+
         return vec4(center_color, 1.0);
     }
 
@@ -269,10 +305,6 @@ fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4
     let coverage = clamp(1.0 - smoothstep(0.0, anti_alias_width, distance), 0.0, 1.0);
 
     return vec4(current_color.rgb, current_color.a * coverage);
-}
-
-fn rand(co: vec2<f32>) -> f32 {
-    return fract(sin(dot(co, vec2<f32>(12.9898, 78.233))) * 43758.5453);
 }
 
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {

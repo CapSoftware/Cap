@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
+import { makePersisted } from "@solid-primitives/storage";
 import { useSearchParams } from "@solidjs/router";
 import { createMutation, useQuery } from "@tanstack/solid-query";
 import { invoke } from "@tauri-apps/api/core";
@@ -32,6 +33,20 @@ import {
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import toast from "solid-toast";
+import {
+	CAMERA_DEFAULT_SIZE,
+	CAMERA_PRESET_LARGE,
+	CAMERA_WINDOW_STATE_STORAGE_KEY,
+	CameraPreviewToolbar,
+	CameraResizeHandles,
+	type CameraWindowState,
+	cameraBorderRadius,
+	cameraPreviewDimensions,
+	cameraToolbarScale,
+	clampCameraSize,
+	getDefaultCameraWindowState,
+	normalizeBackgroundBlurMode,
+} from "~/components/CameraPreviewChrome";
 import {
 	CROP_ZERO,
 	type CropBounds,
@@ -315,10 +330,8 @@ function Inner() {
 							Record using only your camera and microphone
 						</span>
 					</div>
-					<div class="w-full max-w-[480px] px-6 mb-4">
-						<div class="w-full aspect-video rounded-2xl border border-gray-6 bg-black overflow-hidden">
-							<CameraPreviewInline />
-						</div>
+					<div class="flex justify-center w-full px-6 mb-4">
+						<CameraPreviewInline />
 					</div>
 					<RecordingControls
 						target={{ variant: "cameraOnly" } as ScreenCaptureTarget}
@@ -1108,7 +1121,7 @@ function Inner() {
 										/>
 									</Show>
 									<Show when={!isValid()}>
-										<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
+										<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-xs border-red-4 text-sm">
 											<p>
 												Minimum size is {minSize().width} x {minSize().height}
 											</p>
@@ -1169,10 +1182,18 @@ const WS_STALL_TIMEOUT_MS = 2000;
 
 function CameraPreviewInline() {
 	const { rawOptions } = useRecordingOptions();
+	const [state, setState] = makePersisted(
+		createStore<CameraWindowState>(getDefaultCameraWindowState()),
+		{ name: CAMERA_WINDOW_STATE_STORAGE_KEY },
+	);
 	const [frame, setFrame] = createSignal<ImageData | null>(null);
 	const [connectionFailed, setConnectionFailed] = createSignal(false);
+	const [chromeVisible, setChromeVisible] = createSignal(false);
+	const [viewportSize, setViewportSize] = createSignal({
+		width: window.innerWidth,
+		height: window.innerHeight,
+	});
 	let canvasRef: HTMLCanvasElement | undefined;
-	let containerRef: HTMLDivElement | undefined;
 	let ws: WebSocket | undefined;
 	let retryCount = 0;
 	let reconnectTimeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -1185,6 +1206,36 @@ function CameraPreviewInline() {
 
 	const cameraWsPort = window.__CAP__?.cameraWsPort;
 	const hasCameraSelected = () => rawOptions.cameraID !== null;
+
+	createEventListener(window, "resize", () => {
+		setViewportSize({
+			width: window.innerWidth,
+			height: window.innerHeight,
+		});
+	});
+
+	createEffect(() => {
+		let currentSize = state.size as number | string;
+		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
+			currentSize =
+				currentSize === "lg" ? CAMERA_PRESET_LARGE : CAMERA_DEFAULT_SIZE;
+			setState("size", currentSize);
+			return;
+		}
+
+		const clampedSize = clampCameraSize(currentSize);
+		if (clampedSize !== currentSize) {
+			setState("size", clampedSize);
+			return;
+		}
+
+		commands.setCameraPreviewState({
+			size: state.size,
+			shape: state.shape,
+			mirrored: state.mirrored,
+			background_blur: normalizeBackgroundBlurMode(state.backgroundBlur),
+		});
+	});
 
 	const getReusableFrame = (width: number, height: number) => {
 		if (
@@ -1236,7 +1287,7 @@ function CameraPreviewInline() {
 	};
 
 	const scheduleReconnect = () => {
-		if (isCleanedUp) return;
+		if (isCleanedUp || reconnectTimeoutId !== undefined || ws) return;
 
 		if (retryCount >= WS_MAX_RETRIES) {
 			setConnectionFailed(true);
@@ -1251,7 +1302,8 @@ function CameraPreviewInline() {
 		);
 
 		reconnectTimeoutId = setTimeout(() => {
-			if (isCleanedUp) return;
+			reconnectTimeoutId = undefined;
+			if (isCleanedUp || ws || !hasCameraSelected()) return;
 			retryCount += 1;
 			ws = createSocket();
 		}, backoffMs);
@@ -1266,6 +1318,13 @@ function CameraPreviewInline() {
 		}
 	};
 
+	const cleanupSocket = (socket: WebSocket) => {
+		socket.onopen = null;
+		socket.onclose = null;
+		socket.onerror = null;
+		socket.onmessage = null;
+	};
+
 	const createSocket = () => {
 		if (!cameraWsPort) return undefined;
 
@@ -1273,14 +1332,14 @@ function CameraPreviewInline() {
 		socket.binaryType = "arraybuffer";
 
 		socket.onopen = () => {
-			resetBackoff();
+			setConnectionFailed(false);
 			lastFrameTime = Date.now();
 		};
 
 		socket.onclose = () => {
-			if (!isCleanedUp) {
-				scheduleReconnect();
-			}
+			cleanupSocket(socket);
+			if (ws === socket) ws = undefined;
+			if (!isCleanedUp && hasCameraSelected()) scheduleReconnect();
 		};
 
 		socket.onerror = () => {
@@ -1288,6 +1347,7 @@ function CameraPreviewInline() {
 		};
 
 		socket.onmessage = (event) => {
+			resetBackoff();
 			lastFrameTime = Date.now();
 			if (pendingRender) return;
 
@@ -1393,8 +1453,6 @@ function CameraPreviewInline() {
 					lastFrameTime = Date.now();
 					commands.refreshCameraFeed().catch(() => {});
 					ws?.close();
-					resetBackoff();
-					ws = createSocket();
 				}
 			}, WS_STALL_TIMEOUT_MS);
 		} else {
@@ -1403,6 +1461,7 @@ function CameraPreviewInline() {
 				ws.readyState !== WebSocket.CLOSING &&
 				ws.readyState !== WebSocket.CLOSED
 			) {
+				cleanupSocket(ws);
 				ws.close();
 			}
 			ws = undefined;
@@ -1424,54 +1483,55 @@ function CameraPreviewInline() {
 		latestImageData = null;
 		if (reconnectTimeoutId !== undefined) {
 			clearTimeout(reconnectTimeoutId);
+			reconnectTimeoutId = undefined;
 		}
 		if (stallCheckInterval !== undefined) {
 			clearInterval(stallCheckInterval);
+			stallCheckInterval = undefined;
 		}
 		reusableFrame = null;
 		reusableFrameWidth = 0;
 		reusableFrameHeight = 0;
-		ws?.close();
-	});
-
-	const [containerSize, setContainerSize] = createSignal<{
-		width: number;
-		height: number;
-	} | null>(null);
-
-	onMount(() => {
-		if (!containerRef) return;
-		const observer = new ResizeObserver(() => {
-			if (!containerRef) return;
-			const rect = containerRef.getBoundingClientRect();
-			setContainerSize({ width: rect.width, height: rect.height });
-		});
-		observer.observe(containerRef);
-		onCleanup(() => observer.disconnect());
-	});
-
-	const canvasStyle = () => {
-		const f = frame();
-		const cs = containerSize();
-		if (!f || !cs || cs.width === 0 || cs.height === 0) return {};
-
-		const frameAspect = f.width / f.height;
-		const containerAspect = cs.width / cs.height;
-
-		let displayWidth: number;
-		let displayHeight: number;
-
-		if (frameAspect > containerAspect) {
-			displayWidth = cs.width;
-			displayHeight = cs.width / frameAspect;
-		} else {
-			displayHeight = cs.height;
-			displayWidth = cs.height * frameAspect;
+		if (ws) {
+			cleanupSocket(ws);
+			ws.close();
+			ws = undefined;
 		}
+	});
+
+	const previewDimensions = () => {
+		const f = frame();
+		const { width, height } = cameraPreviewDimensions(
+			state.size,
+			state.shape,
+			f ? f.width / f.height : undefined,
+		);
+		const viewport = viewportSize();
+		const maxWidth = Math.max(160, viewport.width - 48);
+		const maxHeight = Math.max(160, viewport.height - 320);
+		const scale = Math.min(1, maxWidth / width, maxHeight / height);
 
 		return {
-			width: `${Math.round(displayWidth)}px`,
-			height: `${Math.round(displayHeight)}px`,
+			height: Math.round(height * scale),
+			width: Math.round(width * scale),
+		};
+	};
+
+	const previewFrameStyle = () => {
+		const dimensions = previewDimensions();
+		return {
+			"border-radius": cameraBorderRadius(state),
+			height: `${dimensions.height}px`,
+			width: `${dimensions.width}px`,
+		};
+	};
+
+	const canvasStyle = () => {
+		return {
+			height: "100%",
+			"object-fit": "cover" as const,
+			transform: state.mirrored ? "scaleX(-1)" : "scaleX(1)",
+			width: "100%",
 		};
 	};
 
@@ -1496,41 +1556,68 @@ function CameraPreviewInline() {
 
 	return (
 		<div
-			ref={containerRef}
-			class="flex items-center justify-center w-full h-full bg-black"
+			class="flex flex-col items-center max-w-full"
+			onPointerMove={() => setChromeVisible(true)}
+			onPointerLeave={() => setChromeVisible(false)}
+			onPointerCancel={() => setChromeVisible(false)}
 		>
-			<Show
-				when={hasCameraSelected()}
-				fallback={
-					<div class="flex flex-col items-center gap-2 text-center px-4">
-						<IconCapCamera class="size-8 text-gray-9 mb-2" />
-						<div class="text-sm text-gray-11">Please select a camera</div>
-					</div>
-				}
-			>
-				<Show
-					when={!connectionFailed()}
-					fallback={
-						<div class="flex flex-col items-center gap-2 text-center px-4">
-							<div class="text-sm text-red-400">Camera connection failed</div>
-							<button
-								type="button"
-								onClick={handleRetryConnection}
-								class="text-xs text-blue-400 hover:text-blue-300 underline"
-							>
-								Try again
-							</button>
-						</div>
-					}
+			<div class="h-14 flex items-center justify-center">
+				<CameraPreviewToolbar
+					state={state}
+					setState={setState}
+					visible={chromeVisible()}
+					scale={cameraToolbarScale(state.size)}
+				/>
+			</div>
+			<div class="relative shadow-lg" style={previewFrameStyle()}>
+				<div
+					class="flex items-center justify-center w-full h-full overflow-hidden border border-gray-6 bg-black text-gray-11"
+					style={{ "border-radius": "inherit" }}
 				>
 					<Show
-						when={frame()}
-						fallback={<div class="text-sm text-gray-11">Loading camera...</div>}
+						when={hasCameraSelected()}
+						fallback={
+							<div class="flex flex-col items-center gap-2 text-center px-4">
+								<IconCapCamera class="size-8 text-gray-9 mb-2" />
+								<div class="text-sm text-gray-11">Please select a camera</div>
+							</div>
+						}
 					>
-						<canvas ref={canvasRef} style={canvasStyle()} />
+						<Show
+							when={!connectionFailed()}
+							fallback={
+								<div class="flex flex-col items-center gap-2 text-center px-4">
+									<div class="text-sm text-red-400">
+										Camera connection failed
+									</div>
+									<button
+										type="button"
+										onClick={handleRetryConnection}
+										class="text-xs text-blue-400 hover:text-blue-300 underline"
+									>
+										Try again
+									</button>
+								</div>
+							}
+						>
+							<Show
+								when={frame()}
+								fallback={
+									<div class="text-sm text-gray-11">Loading camera...</div>
+								}
+							>
+								<canvas ref={canvasRef} style={canvasStyle()} />
+							</Show>
+						</Show>
 					</Show>
-				</Show>
-			</Show>
+				</div>
+				<CameraResizeHandles
+					state={state}
+					setState={setState}
+					toolbarHeight={0}
+					visible={chromeVisible()}
+				/>
+			</div>
 		</div>
 	);
 }
@@ -1677,7 +1764,7 @@ function RecordingControls(props: {
 
 	return (
 		<>
-			<div class="flex flex-col gap-2.5 items-stretch my-2.5 w-[26rem] max-w-[90vw]">
+			<div class="flex flex-col gap-2.5 items-stretch my-2.5 w-104 max-w-[90vw]">
 				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
 					<div class="flex gap-2.5 items-center">
 						<div
@@ -1696,7 +1783,7 @@ function RecordingControls(props: {
 						<div
 							data-inactive={rawOptions.mode === "instant" && !auth.data}
 							data-disabled={startDisabled()}
-							class="flex flex-1 min-w-0 max-w-[18rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 dark:from-blue-9 dark:via-blue-9 dark:to-blue-10 group"
+							class="flex flex-1 min-w-0 max-w-[18rem] overflow-hidden flex-row h-11 rounded-full text-white bg-linear-to-r from-blue-10 via-blue-10 to-blue-11 dark:from-blue-9 dark:via-blue-9 dark:to-blue-10 group"
 							onClick={async () => {
 								if (rawOptions.mode === "instant" && !auth.data) {
 									emit("start-sign-in");
@@ -1765,13 +1852,13 @@ function RecordingControls(props: {
 							>
 								<Switch>
 									<Match when={rawOptions.mode === "studio"}>
-										<IconCapFilmCut class="size-4 flex-shrink-0" />
+										<IconCapFilmCut class="size-4 shrink-0" />
 									</Match>
 									<Match when={rawOptions.mode === "instant"}>
-										<IconCapInstant class="size-4 flex-shrink-0" />
+										<IconCapInstant class="size-4 shrink-0" />
 									</Match>
 									<Match when={(rawOptions.mode as string) === "screenshot"}>
-										<IconCapCamera class="size-4 flex-shrink-0" />
+										<IconCapCamera class="size-4 shrink-0" />
 									</Match>
 								</Switch>
 								<div class="flex flex-col mr-2 ml-3 min-w-0">

@@ -3333,7 +3333,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 				<DropdownMenuSub>
 					<DropdownMenuSubTrigger>
 						<span className="flex-1">Speed</span>
-						<Badge variant="outline" className="rounded-sm">
+						<Badge variant="outline" className="rounded">
 							{mediaPlaybackRate}x
 						</Badge>
 					</DropdownMenuSubTrigger>
@@ -3365,7 +3365,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 					<DropdownMenuSub>
 						<DropdownMenuSubTrigger>
 							<span className="flex-1">Quality</span>
-							<Badge variant="outline" className="rounded-sm">
+							<Badge variant="outline" className="rounded">
 								{selectedRenditionLabel}
 							</Badge>
 						</DropdownMenuSubTrigger>
@@ -3414,7 +3414,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 								<GlobeIcon className="size-4" />
 								Captions
 							</span>
-							<Badge variant="outline" className="rounded-sm">
+							<Badge variant="outline" className="rounded">
 								{isCaptionLoading
 									? "..."
 									: captionLanguage === "off"

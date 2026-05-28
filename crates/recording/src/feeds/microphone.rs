@@ -13,6 +13,7 @@ use indexmap::IndexMap;
 use kameo::prelude::*;
 use replace_with::replace_with_or_abort;
 use std::{
+    collections::VecDeque,
     ops::Deref,
     sync::{
         Arc, Weak,
@@ -26,6 +27,17 @@ use tracing::{debug, error, info, trace, warn};
 pub type MicrophonesMap = IndexMap<String, (Device, SupportedStreamConfig)>;
 type StreamReadyFuture =
     BoxFuture<'static, Result<(SupportedStreamConfig, Option<u32>), SetInputError>>;
+
+const SAMPLE_RATE_ESTIMATE_MIN_INTERVALS: u32 = 4;
+const SAMPLE_RATE_ESTIMATE_MIN_DELTA: Duration = Duration::from_millis(2);
+const SAMPLE_RATE_ESTIMATE_MAX_DELTA: Duration = Duration::from_millis(250);
+const SAMPLE_RATE_ESTIMATE_MAX_PENDING: usize = 32;
+const SAMPLE_RATE_CONFIGURED_TOLERANCE: f64 = 0.05;
+const SAMPLE_RATE_DOUBLE_TOLERANCE: f64 = 0.08;
+const STANDARD_SAMPLE_RATES: [u32; 13] = [
+    8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000, 176_400,
+    192_000,
+];
 
 #[derive(
     serde::Serialize, serde::Deserialize, specta::Type, Clone, Copy, Debug, PartialEq, Eq, Default,
@@ -44,6 +56,175 @@ pub struct MicrophoneSamples {
     pub channels: u16,
     pub info: InputCallbackInfo,
     pub timestamp: Timestamp,
+}
+
+struct CallbackSampleRateEstimator {
+    configured_rate: u32,
+    current_rate: u32,
+    settled: bool,
+    previous_capture: Option<cpal::StreamInstant>,
+    previous_frame_count: Option<usize>,
+    observation: SampleRateObservation,
+}
+
+struct SampleRateEstimate {
+    sample_rate: u32,
+    settled: bool,
+}
+
+impl CallbackSampleRateEstimator {
+    fn new(configured_rate: u32) -> Self {
+        Self {
+            configured_rate,
+            current_rate: configured_rate,
+            settled: false,
+            previous_capture: None,
+            previous_frame_count: None,
+            observation: SampleRateObservation::new(configured_rate),
+        }
+    }
+
+    fn sample_rate_for(
+        &mut self,
+        timestamp: cpal::InputStreamTimestamp,
+        frame_count: usize,
+    ) -> SampleRateEstimate {
+        if let (Some(previous_capture), Some(previous_frame_count)) =
+            (self.previous_capture, self.previous_frame_count)
+        {
+            match timestamp.capture.duration_since(&previous_capture) {
+                Some(delta) => {
+                    if let Some(sample_rate) = self.observation.push(previous_frame_count, delta) {
+                        if sample_rate != self.current_rate {
+                            info!(
+                                configured_rate = self.configured_rate,
+                                previous_rate = self.current_rate,
+                                inferred_rate = sample_rate,
+                                "Microphone callback sample rate adjusted"
+                            );
+                        }
+                        self.current_rate = sample_rate;
+                        self.settled = true;
+                        self.observation.reset();
+                    }
+                }
+                None => self.observation.reset(),
+            }
+        }
+
+        self.previous_capture = Some(timestamp.capture);
+        self.previous_frame_count = Some(frame_count);
+        SampleRateEstimate {
+            sample_rate: self.current_rate,
+            settled: self.settled,
+        }
+    }
+
+    fn force_current(&mut self) -> u32 {
+        self.settled = true;
+        self.observation.reset();
+        self.current_rate
+    }
+}
+
+struct SampleRateObservation {
+    configured_rate: u32,
+    frame_count: u64,
+    duration: Duration,
+    intervals: u32,
+}
+
+impl SampleRateObservation {
+    fn new(configured_rate: u32) -> Self {
+        Self {
+            configured_rate,
+            frame_count: 0,
+            duration: Duration::ZERO,
+            intervals: 0,
+        }
+    }
+
+    fn push(&mut self, frame_count: usize, delta: Duration) -> Option<u32> {
+        if frame_count == 0
+            || !(SAMPLE_RATE_ESTIMATE_MIN_DELTA..=SAMPLE_RATE_ESTIMATE_MAX_DELTA).contains(&delta)
+        {
+            self.reset();
+            return None;
+        }
+
+        self.frame_count = self.frame_count.saturating_add(frame_count as u64);
+        self.duration = self.duration.saturating_add(delta);
+        self.intervals = self.intervals.saturating_add(1);
+
+        if self.intervals < SAMPLE_RATE_ESTIMATE_MIN_INTERVALS {
+            return None;
+        }
+
+        self.inferred_rate()
+    }
+
+    fn reset(&mut self) {
+        self.frame_count = 0;
+        self.duration = Duration::ZERO;
+        self.intervals = 0;
+    }
+
+    fn inferred_rate(&self) -> Option<u32> {
+        let duration_secs = self.duration.as_secs_f64();
+        if duration_secs <= 0.0 {
+            return None;
+        }
+
+        let observed_rate = self.frame_count as f64 / duration_secs;
+        if relative_delta(self.configured_rate as f64, observed_rate)
+            <= SAMPLE_RATE_CONFIGURED_TOLERANCE
+        {
+            return Some(self.configured_rate);
+        }
+
+        doubled_standard_sample_rate(self.configured_rate, observed_rate)
+    }
+}
+
+fn doubled_standard_sample_rate(configured_rate: u32, observed_rate: f64) -> Option<u32> {
+    let doubled_rate = configured_rate.checked_mul(2)?;
+    if !STANDARD_SAMPLE_RATES.contains(&doubled_rate) {
+        return None;
+    }
+
+    (relative_delta(doubled_rate as f64, observed_rate) <= SAMPLE_RATE_DOUBLE_TOLERANCE)
+        .then_some(doubled_rate)
+}
+
+fn relative_delta(a: f64, b: f64) -> f64 {
+    if b <= f64::EPSILON {
+        return f64::INFINITY;
+    }
+
+    ((a - b) / b).abs()
+}
+
+fn callback_frame_count(data_len: usize, sample_format: SampleFormat, channels: u16) -> usize {
+    let bytes_per_frame = sample_format
+        .sample_size()
+        .saturating_mul(usize::from(channels.max(1)));
+
+    if bytes_per_frame == 0 {
+        return 0;
+    }
+
+    data_len / bytes_per_frame
+}
+
+fn enqueue_microphone_samples(
+    actor_ref: &ActorRef<MicrophoneFeed>,
+    dropped_message_count: &AtomicU64,
+    samples: MicrophoneSamples,
+) {
+    if let Err(error) = actor_ref.tell(samples).try_send() {
+        dropped_message_count.fetch_add(1, Ordering::Relaxed);
+        warn!("Failed to enqueue microphone samples: {error}");
+    }
 }
 
 #[derive(Actor)]
@@ -291,6 +472,9 @@ impl MicrophoneFeed {
 
                 let callback_sample_rate = config.sample_rate().0;
                 let callback_channels = config.channels();
+                let mut sample_rate_estimator =
+                    CallbackSampleRateEstimator::new(callback_sample_rate);
+                let mut pending_samples = VecDeque::new();
 
                 let stream = match device.build_input_stream_raw(
                     &stream_config,
@@ -299,29 +483,65 @@ impl MicrophoneFeed {
                         let actor_ref = actor_ref.clone();
                         let mut callback_count = 0u64;
                         move |data, info| {
+                            let frame_count = callback_frame_count(
+                                data.bytes().len(),
+                                data.sample_format(),
+                                callback_channels,
+                            );
+                            let input_timestamp = info.timestamp();
+                            let effective_sample_rate =
+                                sample_rate_estimator.sample_rate_for(input_timestamp, frame_count);
+
                             if callback_count == 0 {
                                 info!(
-                                    "🎤 First audio callback - data size: {} bytes, format: {:?}",
+                                    "🎤 First audio callback - data size: {} bytes, frames: {}, format: {:?}, rate: {}",
                                     data.bytes().len(),
-                                    data.sample_format()
+                                    frame_count,
+                                    data.sample_format(),
+                                    effective_sample_rate.sample_rate
                                 );
                             }
                             callback_count += 1;
 
-                            if let Err(error) = actor_ref
-                                .tell(MicrophoneSamples {
-                                    data: data.bytes().to_vec(),
-                                    format: data.sample_format(),
-                                    sample_rate: callback_sample_rate,
-                                    channels: callback_channels,
-                                    info: info.clone(),
-                                    timestamp: Timestamp::from_cpal(info.timestamp().capture),
-                                })
-                                .try_send()
-                            {
-                                dropped_message_count.fetch_add(1, Ordering::Relaxed);
-                                warn!("Failed to enqueue microphone samples: {error}");
+                            let samples = MicrophoneSamples {
+                                data: data.bytes().to_vec(),
+                                format: data.sample_format(),
+                                sample_rate: effective_sample_rate.sample_rate,
+                                channels: callback_channels,
+                                info: info.clone(),
+                                timestamp: Timestamp::from_cpal(input_timestamp.capture),
+                            };
+
+                            if !effective_sample_rate.settled {
+                                pending_samples.push_back(samples);
+                                if pending_samples.len() >= SAMPLE_RATE_ESTIMATE_MAX_PENDING {
+                                    let sample_rate = sample_rate_estimator.force_current();
+                                    while let Some(mut pending) = pending_samples.pop_front() {
+                                        pending.sample_rate = sample_rate;
+                                        enqueue_microphone_samples(
+                                            &actor_ref,
+                                            &dropped_message_count,
+                                            pending,
+                                        );
+                                    }
+                                }
+                                return;
                             }
+
+                            while let Some(mut pending) = pending_samples.pop_front() {
+                                pending.sample_rate = effective_sample_rate.sample_rate;
+                                enqueue_microphone_samples(
+                                    &actor_ref,
+                                    &dropped_message_count,
+                                    pending,
+                                );
+                            }
+
+                            enqueue_microphone_samples(
+                                &actor_ref,
+                                &dropped_message_count,
+                                samples,
+                            );
                         }
                     },
                     move |e| {
@@ -433,8 +653,15 @@ fn select_preferred_config(
                 .channels
                 .and_then(|channels| find_config(Some(channels), None))
         })?;
+    let sample_rate = rate
+        .filter(|rate| supports_sample_rate(config, *rate))
+        .unwrap_or_else(|| select_sample_rate(config));
 
-    Some(config.with_sample_rate(rate.unwrap_or_else(|| select_sample_rate(config))))
+    config.try_with_sample_rate(sample_rate)
+}
+
+fn supports_sample_rate(config: &SupportedStreamConfigRange, rate: cpal::SampleRate) -> bool {
+    config.min_sample_rate().0 <= rate.0 && rate.0 <= config.max_sample_rate().0
 }
 
 fn select_sample_rate(config: &SupportedStreamConfigRange) -> cpal::SampleRate {
@@ -579,6 +806,8 @@ pub struct SetInput {
 pub struct RemoveInput;
 
 pub struct AddSender(pub flume::Sender<MicrophoneSamples>);
+
+pub struct RemoveSender(pub flume::Sender<MicrophoneSamples>);
 
 pub struct AddRecordingSender {
     pub sender: flume::Sender<MicrophoneSamples>,
@@ -851,6 +1080,19 @@ impl Message<AddSender> for MicrophoneFeed {
     }
 }
 
+impl Message<RemoveSender> for MicrophoneFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: RemoveSender,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.senders
+            .retain(|sender| !sender.sender.same_channel(&msg.0));
+    }
+}
+
 impl Message<AddRecordingSender> for MicrophoneFeed {
     type Reply = ();
 
@@ -1083,5 +1325,159 @@ impl Message<Unlock> for MicrophoneFeed {
                 state
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_range(rate: u32, channels: u16) -> SupportedStreamConfigRange {
+        SupportedStreamConfigRange::new(
+            channels,
+            cpal::SampleRate(rate),
+            cpal::SampleRate(rate),
+            cpal::SupportedBufferSize::Unknown,
+            SampleFormat::F32,
+        )
+    }
+
+    fn estimate_rate(
+        configured_rate: u32,
+        frames_per_interval: usize,
+        interval: Duration,
+    ) -> Option<u32> {
+        let mut observation = SampleRateObservation::new(configured_rate);
+        let mut result = None;
+
+        for _ in 0..SAMPLE_RATE_ESTIMATE_MIN_INTERVALS {
+            result = observation.push(frames_per_interval, interval);
+        }
+
+        result
+    }
+
+    #[test]
+    fn sample_rate_observation_keeps_configured_rate() {
+        assert_eq!(
+            estimate_rate(48_000, 480, Duration::from_millis(10)),
+            Some(48_000)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_keeps_configured_rate_for_small_jitter() {
+        assert_eq!(
+            estimate_rate(48_000, 458, Duration::from_millis(10)),
+            Some(48_000)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_detects_double_rate() {
+        assert_eq!(
+            estimate_rate(48_000, 960, Duration::from_millis(10)),
+            Some(96_000)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_detects_double_44100_rate() {
+        assert_eq!(
+            estimate_rate(44_100, 882, Duration::from_millis(10)),
+            Some(88_200)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_ignores_non_double_standard_rate() {
+        assert_eq!(estimate_rate(48_000, 441, Duration::from_millis(10)), None);
+    }
+
+    #[test]
+    fn callback_frame_count_uses_channel_count() {
+        let frames =
+            callback_frame_count(960 * 2 * std::mem::size_of::<f32>(), SampleFormat::F32, 2);
+
+        assert_eq!(frames, 960);
+    }
+
+    #[test]
+    fn preferred_config_uses_requested_rate_when_supported() {
+        let configs = [config_range(48_000, 1), config_range(96_000, 1)];
+
+        let selected = select_preferred_config(
+            &configs,
+            &MicrophoneDeviceSettings {
+                sample_rate: Some(96_000),
+                channels: Some(1),
+            },
+        )
+        .expect("config");
+
+        assert_eq!(selected.sample_rate().0, 96_000);
+        assert_eq!(selected.channels(), 1);
+    }
+
+    #[test]
+    fn preferred_config_falls_back_when_requested_rate_is_unsupported() {
+        let configs = [config_range(44_100, 1)];
+
+        let selected = select_preferred_config(
+            &configs,
+            &MicrophoneDeviceSettings {
+                sample_rate: Some(96_000),
+                channels: Some(1),
+            },
+        )
+        .expect("config");
+
+        assert_eq!(selected.sample_rate().0, 44_100);
+        assert_eq!(selected.channels(), 1);
+    }
+
+    #[test]
+    fn preferred_config_never_panics_for_stale_settings_matrix() {
+        let configs = [
+            config_range(44_100, 1),
+            config_range(48_000, 1),
+            config_range(96_000, 1),
+            config_range(48_000, 2),
+        ];
+        let sample_rates = [
+            None,
+            Some(8_000),
+            Some(44_100),
+            Some(48_000),
+            Some(96_000),
+            Some(192_000),
+        ];
+        let channels = [None, Some(1), Some(2), Some(8)];
+
+        for sample_rate in sample_rates {
+            for channels in channels {
+                let settings = MicrophoneDeviceSettings {
+                    sample_rate,
+                    channels,
+                };
+                let result =
+                    std::panic::catch_unwind(|| select_preferred_config(&configs, &settings));
+
+                assert!(
+                    result.is_ok(),
+                    "select_preferred_config panicked for settings={settings:?}"
+                );
+
+                if let Some(selected) = result.expect("panic checked") {
+                    assert!(
+                        configs.iter().any(|config| {
+                            config.channels() == selected.channels()
+                                && supports_sample_rate(config, selected.sample_rate())
+                        }),
+                        "selected unsupported config {selected:?} for settings={settings:?}"
+                    );
+                }
+            }
+        }
     }
 }

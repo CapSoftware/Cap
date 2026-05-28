@@ -1,15 +1,11 @@
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect } from "effect";
 import { type NextRequest, NextResponse } from "next/server";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
-import { runPromise } from "@/lib/server";
 import { isEditSourceKey } from "@/lib/video-edit-processing";
-import { decodeStorageVideo } from "@/lib/video-storage";
 
 interface ProgressWebhookPayload {
 	jobId: string;
@@ -76,6 +72,9 @@ export async function POST(request: NextRequest) {
 		}
 
 		const payload: ProgressWebhookPayload = await request.json();
+		const isRetryableWorkflowError =
+			request.nextUrl.searchParams.get("retryable") === "true" &&
+			payload.phase === "error";
 
 		console.log(
 			"[media-server-webhook] Received progress update for video %s: %s (%d%%)",
@@ -114,54 +113,6 @@ export async function POST(request: NextRequest) {
 					.update(videos)
 					.set({ source: { type: "desktopMP4" as const } })
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
-
-				const videoId = payload.videoId;
-				const ownerId = currentVideo.ownerId;
-
-				if (ownerId) {
-					const segmentsPrefix = `${ownerId}/${videoId}/segments/`;
-					Effect.gen(function* () {
-						const [bucket] = yield* Storage.getAccessForVideo(
-							decodeStorageVideo(currentVideo),
-						);
-						let totalDeleted = 0;
-						let continuationToken: string | undefined;
-
-						do {
-							const listed = yield* bucket.listObjects({
-								prefix: segmentsPrefix,
-								continuationToken,
-							});
-							if (listed.Contents && listed.Contents.length > 0) {
-								yield* bucket.deleteObjects(
-									listed.Contents.map((c: { Key?: string }) => ({
-										Key: c.Key,
-									})),
-								);
-								totalDeleted += listed.Contents.length;
-							}
-							continuationToken = listed.IsTruncated
-								? listed.NextContinuationToken
-								: undefined;
-						} while (continuationToken);
-
-						if (totalDeleted > 0) {
-							console.log(
-								"[media-server-webhook] Cleaned up %d segment objects for %s",
-								totalDeleted,
-								videoId,
-							);
-						}
-					})
-						.pipe(runPromise)
-						.catch((err) => {
-							console.warn(
-								"[media-server-webhook] Failed to clean up segments for %s:",
-								videoId,
-								err,
-							);
-						});
-				}
 			}
 
 			const isEditUpload =
@@ -192,15 +143,30 @@ export async function POST(request: NextRequest) {
 				currentVideo?.storageIntegrationId,
 			);
 		} else if (dbPhase === "error") {
-			await db()
-				.update(videoUploads)
-				.set({
-					phase: "error",
-					processingError: payload.error || payload.message || "Unknown error",
-					processingMessage: payload.message,
-					updatedAt: new Date(),
-				})
-				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+			const processingError =
+				payload.error || payload.message || "Unknown error";
+			if (isRetryableWorkflowError) {
+				await db()
+					.update(videoUploads)
+					.set({
+						phase: "processing",
+						processingProgress: Math.round(payload.progress),
+						processingError,
+						processingMessage: "Retrying video processing...",
+						updatedAt: new Date(),
+					})
+					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+			} else {
+				await db()
+					.update(videoUploads)
+					.set({
+						phase: "error",
+						processingError,
+						processingMessage: payload.message,
+						updatedAt: new Date(),
+					})
+					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+			}
 		} else {
 			await db()
 				.update(videoUploads)
@@ -208,6 +174,7 @@ export async function POST(request: NextRequest) {
 					phase: dbPhase,
 					processingProgress: Math.round(payload.progress),
 					processingMessage: payload.message,
+					processingError: null,
 					updatedAt: new Date(),
 				})
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));

@@ -5,7 +5,14 @@ import {
 	type WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { message } from "@tauri-apps/plugin-dialog";
-import { createEffect, lazy, onCleanup, onMount, Suspense } from "solid-js";
+import {
+	createEffect,
+	createSignal,
+	lazy,
+	onCleanup,
+	onMount,
+	Suspense,
+} from "solid-js";
 import { Toaster } from "solid-toast";
 
 import "@cap/ui-solid/main.css";
@@ -13,14 +20,14 @@ import "unfonts.css";
 import "./styles/theme.css";
 
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
+import WindowChromeLayout from "./routes/(window-chrome)";
+import SettingsLayout from "./routes/(window-chrome)/settings";
 import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
 import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
-const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
 const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
-const SettingsLayout = lazy(() => import("./routes/(window-chrome)/settings"));
 const SettingsGeneralPage = lazy(
 	() => import("./routes/(window-chrome)/settings/general"),
 );
@@ -145,8 +152,13 @@ function Inner() {
 								if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
 							}
 
-							if (location.pathname !== "/" && location.pathname !== "/camera")
-								currentWindow.show();
+							if (
+								location.pathname !== "/" &&
+								location.pathname !== "/camera"
+							) {
+								void currentWindow.show();
+								void currentWindow.setFocus();
+							}
 						});
 
 						return <Suspense fallback={null}>{props.children}</Suspense>;
@@ -215,17 +227,58 @@ function Inner() {
 }
 
 function createThemeListener(currentWindow: WebviewWindow) {
-	const generalSettings = generalSettingsStore.createQuery();
+	const [appTheme, setAppTheme] = createSignal<AppTheme | null | undefined>();
+	let disposed = false;
+	let stopSettingsListening: (() => void) | undefined;
+	let stopThemeListening: (() => void) | undefined;
 
 	createEffect(() => {
-		update(generalSettings.data?.theme ?? null);
+		update(appTheme());
 	});
 
-	onMount(async () => {
-		const unlisten = await currentWindow.onThemeChanged((_) =>
-			update(generalSettings.data?.theme),
-		);
-		onCleanup(() => unlisten?.());
+	onMount(() => {
+		void generalSettingsStore
+			.get()
+			.then((settings) => {
+				if (!disposed) setAppTheme(settings?.theme ?? null);
+			})
+			.catch((error) =>
+				console.error("Failed to load general settings:", error),
+			);
+
+		void generalSettingsStore
+			.listen((settings) => {
+				setAppTheme(settings?.theme ?? null);
+			})
+			.then((unlisten) => {
+				if (disposed) {
+					unlisten();
+					return;
+				}
+				stopSettingsListening = unlisten;
+			})
+			.catch((error) =>
+				console.error("Failed to listen to general settings:", error),
+			);
+
+		void currentWindow
+			.onThemeChanged(() => update(appTheme()))
+			.then((unlisten) => {
+				if (disposed) {
+					unlisten();
+					return;
+				}
+				stopThemeListening = unlisten;
+			})
+			.catch((error) =>
+				console.error("Failed to listen to window theme changes:", error),
+			);
+	});
+
+	onCleanup(() => {
+		disposed = true;
+		stopSettingsListening?.();
+		stopThemeListening?.();
 	});
 
 	function update(appTheme: AppTheme | null | undefined) {

@@ -4,6 +4,7 @@ import type { Organisation, User } from "@cap/web-domain";
 import { and, eq, isNull, or } from "drizzle-orm";
 import {
 	canManageOrganizationBilling,
+	canManageOrganizationProSeats,
 	canManageOrganizationSettings,
 	canViewOrganizationSettings,
 	getEffectiveOrganizationRole,
@@ -98,6 +99,20 @@ export async function requireOrganizationSettingsManager(
 	);
 	if (!canManageOrganizationSettings(access.role)) {
 		throw new Error("Only admins and owners can manage organization settings");
+	}
+	return access;
+}
+
+export async function requireOrganizationProSeatManager(
+	userId: User.UserId,
+	organizationId: Organisation.OrganisationId,
+) {
+	const access = await requireOrganizationSettingsAccess(
+		userId,
+		organizationId,
+	);
+	if (!canManageOrganizationProSeats(access.role)) {
+		throw new Error("Only admins and owners can manage Pro seats");
 	}
 	return access;
 }

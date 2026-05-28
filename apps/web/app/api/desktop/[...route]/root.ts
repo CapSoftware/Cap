@@ -1,7 +1,9 @@
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import { sendEmail } from "@cap/database/emails/config";
 import { Feedback } from "@cap/database/emails/feedback";
 import {
+	authApiKeys,
 	organizationMembers,
 	organizations,
 	users,
@@ -14,7 +16,7 @@ import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq, isNull, or } from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
 import { z } from "zod";
@@ -33,6 +35,8 @@ import {
 
 export const app = new Hono();
 
+const MAX_DESKTOP_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
+
 async function resolveOrganizationIconUrl(iconUrl: string | null) {
 	if (!iconUrl) return null;
 
@@ -42,6 +46,70 @@ async function resolveOrganizationIconUrl(iconUrl: string | null) {
 			iconUrl as ImageUpload.ImageUrlOrKey,
 		);
 	}).pipe(runPromise);
+}
+
+async function resolveUserImageUrl(imageUrl: string | null) {
+	if (!imageUrl) return null;
+
+	return Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+		return yield* imageUploads.resolveImageUrl(
+			imageUrl as ImageUpload.ImageUrlOrKey,
+		);
+	}).pipe(runPromise);
+}
+
+async function fetchDesktopProfileImage(imageUrl: string) {
+	const response = await fetch(imageUrl);
+	if (!response.ok) return null;
+
+	const contentType = response.headers.get("content-type");
+	if (!contentType?.toLowerCase().startsWith("image/")) return null;
+
+	const contentLength = Number(response.headers.get("content-length"));
+	if (contentLength > MAX_DESKTOP_PROFILE_IMAGE_BYTES) return null;
+
+	const bytes = await response.arrayBuffer();
+	if (bytes.byteLength > MAX_DESKTOP_PROFILE_IMAGE_BYTES) return null;
+
+	return { bytes, contentType };
+}
+
+type DesktopProfileUser = {
+	name: string | null;
+	lastName: string | null;
+	email: string | null;
+	image: string | null;
+};
+
+async function getDesktopProfileUser(c: Context) {
+	const authHeader = c.req.header("authorization")?.split(" ")[1];
+
+	if (authHeader?.length === 36) {
+		const [user] = await db()
+			.select({
+				name: users.name,
+				lastName: users.lastName,
+				email: users.email,
+				image: users.image,
+			})
+			.from(users)
+			.innerJoin(authApiKeys, eq(users.id, authApiKeys.userId))
+			.where(eq(authApiKeys.id, authHeader))
+			.limit(1);
+
+		return user ?? null;
+	}
+
+	const user = await getCurrentUser();
+	if (!user) return null;
+
+	return {
+		name: user.name,
+		lastName: user.lastName,
+		email: user.email,
+		image: user.image,
+	} satisfies DesktopProfileUser;
 }
 
 async function toDesktopOrganizations(
@@ -420,6 +488,38 @@ app.get("/plan", withAuth, async (c) => {
 	return c.json({
 		upgraded: isSubscribed,
 		stripeSubscriptionStatus: user.stripeSubscriptionStatus,
+	});
+});
+
+app.get("/user/profile", async (c) => {
+	const user = await getDesktopProfileUser(c);
+	if (!user) return c.text("User not authenticated", 401);
+
+	const name = [user.name, user.lastName].filter(Boolean).join(" ").trim();
+
+	return c.json({
+		name: name || null,
+		email: user.email,
+		imageUrl: await resolveUserImageUrl(user.image ?? null),
+	});
+});
+
+app.get("/user/profile/image", async (c) => {
+	const user = await getDesktopProfileUser(c);
+	if (!user) return c.text("User not authenticated", 401);
+	if (!user.image) return c.body(null, 404);
+
+	const imageUrl = await resolveUserImageUrl(user.image);
+	if (!imageUrl) return c.body(null, 404);
+
+	const image = await fetchDesktopProfileImage(imageUrl);
+	if (!image) return c.body(null, 404);
+
+	return new Response(image.bytes, {
+		headers: {
+			"Cache-Control": "private, max-age=300",
+			"Content-Type": image.contentType,
+		},
 	});
 });
 

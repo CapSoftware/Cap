@@ -40,7 +40,7 @@ const CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(1
 pub const MIN_CAMERA_SIZE: f32 = 150.0;
 pub const MAX_CAMERA_SIZE: f32 = 600.0;
 pub const DEFAULT_CAMERA_SIZE: f32 = 230.0;
-pub const CAMERA_PRESET_LARGE: f32 = 400.0;
+pub const WIDE_CAMERA_ASPECT_RATIO: f32 = 16.0 / 9.0;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -152,6 +152,12 @@ impl CameraPreviewManager {
 
     pub fn is_initialized(&self) -> bool {
         self.preview.is_some()
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.preview
+            .as_ref()
+            .is_some_and(|preview| preview.is_paused)
     }
 
     pub fn sender(&self) -> Option<flume::Sender<FFmpegVideoFrame>> {
@@ -342,7 +348,7 @@ impl InitializedCameraPreview {
         instance: wgpu::Instance,
     ) -> anyhow::Result<Renderer> {
         let aspect = if default_state.shape == CameraPreviewShape::Full {
-            16.0 / 9.0
+            WIDE_CAMERA_ASPECT_RATIO
         } else {
             1.0
         };
@@ -727,7 +733,7 @@ impl Renderer {
                 last_render_at = None;
                 let aspect_ratio = self.aspect_ratio.get_latest_key().copied().unwrap_or(
                     if state.shape == CameraPreviewShape::Full {
-                        16.0 / 9.0
+                        WIDE_CAMERA_ASPECT_RATIO
                     } else {
                         1.0
                     },
@@ -917,7 +923,7 @@ impl Renderer {
 
                     let aspect_ratio = self.aspect_ratio.get_latest_key().copied().unwrap_or(
                         if state.shape == CameraPreviewShape::Full {
-                            16.0 / 9.0
+                            WIDE_CAMERA_ASPECT_RATIO
                         } else {
                             1.0
                         },
@@ -1216,16 +1222,13 @@ async fn resize_window(
     trace!("CameraPreview/resize_window");
 
     let base = clamp_size(state.size);
-    let window_width = if state.shape == CameraPreviewShape::Full {
-        if aspect >= 1.0 { base * aspect } else { base }
+    let aspect = if state.shape == CameraPreviewShape::Full {
+        aspect.max(WIDE_CAMERA_ASPECT_RATIO)
     } else {
-        base
+        1.0
     };
-    let window_height = if state.shape == CameraPreviewShape::Full {
-        if aspect >= 1.0 { base } else { base / aspect }
-    } else {
-        base
-    } + TOOLBAR_HEIGHT;
+    let window_width = base * aspect;
+    let window_height = base + TOOLBAR_HEIGHT;
 
     let window_width = window_width as u32;
     let window_height = window_height as u32;

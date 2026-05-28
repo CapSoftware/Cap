@@ -280,9 +280,9 @@ export function TextTrack(props: {
 						when={!newSegmentDetails()}
 						fallback={<div class="w-full rounded-xl bg-transparent" />}
 					>
-						<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
+						<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
 							<div>Click to add text</div>
-							<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
+							<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
 								(Set a label over your video)
 							</div>
 						</div>
@@ -304,7 +304,7 @@ export function TextTrack(props: {
 							data-index={index}
 							class={cx(
 								"border duration-200 hover:border-blue-6 transition-colors group",
-								"bg-gradient-to-r from-[#111826] via-[#1c2232] to-[#111826]",
+								"bg-linear-to-r from-[#111826] via-[#1c2232] to-[#111826]",
 								isSelected() ? "border-blue-7" : "border-transparent",
 								!segment.enabled && "opacity-60",
 							)}
@@ -448,7 +448,7 @@ export function TextTrack(props: {
 						innerClass="ring-blue-300"
 						segment={details()}
 					>
-						<SegmentContent class="bg-gradient-to-r from-[#111826] via-[#1c2232] to-[#111826] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.16)]">
+						<SegmentContent class="bg-linear-to-r from-[#111826] via-[#1c2232] to-[#111826] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.16)]">
 							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md">
 								+
 							</p>
