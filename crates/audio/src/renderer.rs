@@ -100,3 +100,66 @@ fn gain_for_db(db: f32) -> f32 {
 fn db_to_linear(db: f32) -> f32 {
     10.0_f32.powf(db / 20.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(data: &AudioData, offset: isize) -> AudioRendererTrack<'_> {
+        AudioRendererTrack {
+            data,
+            gain: 0.0,
+            stereo_mode: StereoMode::Stereo,
+            offset,
+        }
+    }
+
+    // The mix read index is `offset + i + track.offset`, so the cursor and the
+    // per-track offset both move the source read position.
+    #[test]
+    fn reads_from_cursor_and_track_offset() {
+        // Stereo ramp: frame k carries L = R = (k + 1) / 100.
+        let mut samples = Vec::new();
+        for k in 0..10 {
+            let v = (k as f32 + 1.0) / 100.0;
+            samples.push(v);
+            samples.push(v);
+        }
+        let data = AudioData::from_raw_f32(samples, 2);
+
+        let mut out = vec![0.0; 4 * 2];
+        let rendered = render_audio(&[track(&data, 0)], 3, 4, 0, &mut out);
+        assert_eq!(rendered, 4);
+        // cursor 3 -> first output frame reads source frame 3 (value 0.04).
+        assert!((out[0] - 0.04).abs() < 1e-6);
+        assert!((out[2] - 0.05).abs() < 1e-6);
+
+        let mut out = vec![0.0; 4 * 2];
+        render_audio(&[track(&data, 2)], 3, 4, 0, &mut out);
+        // cursor 3 + track offset 2 -> source frame 5 (value 0.06).
+        assert!((out[0] - 0.06).abs() < 1e-6);
+    }
+
+    // Regression guard for commit 2a6dce7: render mixes up to the LONGEST track
+    // and pads shorter tracks with silence (the `.max()` in render_audio). A
+    // `.min()` here would truncate the mix to the shortest track.
+    #[test]
+    fn mixes_to_longest_track_padding_short_with_silence() {
+        let long = AudioData::from_raw_f32(vec![0.5; 20], 2); // 10 stereo frames
+        let short = AudioData::from_raw_f32(vec![0.25; 8], 2); // 4 stereo frames
+
+        let mut out = vec![0.0; 10 * 2];
+        let rendered = render_audio(&[track(&long, 0), track(&short, 0)], 0, 10, 0, &mut out);
+
+        assert_eq!(
+            rendered, 10,
+            "must render up to the longest track, not the shortest"
+        );
+        // Frames 0..4 mix both tracks.
+        assert!((out[0] - 0.75).abs() < 1e-6);
+        assert!((out[3 * 2] - 0.75).abs() < 1e-6);
+        // Frames 4..10: short track exhausted -> contributes silence, long track remains.
+        assert!((out[4 * 2] - 0.5).abs() < 1e-6);
+        assert!((out[9 * 2] - 0.5).abs() < 1e-6);
+    }
+}
