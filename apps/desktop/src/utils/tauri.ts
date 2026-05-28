@@ -98,8 +98,14 @@ async beginExportSession() : Promise<void> {
 async endExportSession() : Promise<void> {
     await TAURI_INVOKE("end_export_session");
 },
+async cancelExport(exportId: string) : Promise<boolean> {
+    return await TAURI_INVOKE("cancel_export", { exportId });
+},
 async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings) : Promise<string> {
     return await TAURI_INVOKE("export_video", { projectPath, progress, settings });
+},
+async exportVideoWithId(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings, exportId: string) : Promise<string> {
+    return await TAURI_INVOKE("export_video_with_id", { projectPath, progress, settings, exportId });
 },
 async exportVideoToFile(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings, fileName: string, fileType: string) : Promise<string> {
     return await TAURI_INVOKE("export_video_to_file", { projectPath, progress, settings, fileName, fileType });
