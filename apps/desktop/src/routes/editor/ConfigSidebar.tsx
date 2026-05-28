@@ -15,6 +15,7 @@ import { createWritableMemo } from "@solid-primitives/memo";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
 import { BaseDirectory, writeFile } from "@tauri-apps/plugin-fs";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	batch,
@@ -201,6 +202,22 @@ const WALLPAPER_NAMES = [
 	"orange/8",
 	"orange/9",
 ] as const;
+
+const CURRENT_DESKTOP_BACKGROUND_ID = "current-desktop-background";
+const CURRENT_DESKTOP_BACKGROUND_FILENAME = "current-desktop-background.jpg";
+const getCurrentDesktopBackgroundLabel = () => {
+	const os = ostype();
+	if (os === "macos") return "This Mac";
+	if (os === "windows") return "This PC";
+	return "This device";
+};
+
+type WallpaperOption = {
+	id: string;
+	url: string;
+	rawPath: string;
+	label?: string;
+};
 
 const STEREO_MODES = [
 	{ name: "Stereo", value: "stereo" },
@@ -1407,6 +1424,16 @@ function BackgroundConfig(props: {
 	brandColorSwatches: OrganizationBrandColorSwatch[];
 }) {
 	const { project, setProject, projectHistory } = useEditorContext();
+	const initialCurrentDesktopBackgroundPath = () => {
+		const source = project.background.source;
+		if (source.type !== "wallpaper" || !source.path) return null;
+		return source.path.endsWith(CURRENT_DESKTOP_BACKGROUND_FILENAME)
+			? source.path
+			: null;
+	};
+	const [currentDesktopBackgroundPath] = createSignal<string | null>(
+		initialCurrentDesktopBackgroundPath(),
+	);
 
 	// Background tabs
 	const [backgroundTab, setBackgroundTab] =
@@ -1432,8 +1459,37 @@ function BackgroundConfig(props: {
 				id,
 				url: convertFileSrc(path),
 				rawPath: path,
-			};
+			} satisfies WallpaperOption;
 		});
+	});
+
+	const currentDesktopBackground = createMemo<WallpaperOption | null>(() => {
+		const path = currentDesktopBackgroundPath();
+		if (!path) return null;
+
+		return {
+			id: CURRENT_DESKTOP_BACKGROUND_ID,
+			url: convertFileSrc(path),
+			rawPath: path,
+			label: getCurrentDesktopBackgroundLabel(),
+		};
+	});
+
+	const wallpaperOptions = createMemo(() => {
+		const current = currentDesktopBackground();
+		return current ? [current, ...(wallpapers() ?? [])] : (wallpapers() ?? []);
+	});
+
+	const selectedWallpaper = createMemo(() => {
+		if (project.background.source.type !== "wallpaper") return null;
+
+		const path = project.background.source.path;
+		if (!path) return null;
+
+		const current = currentDesktopBackground();
+		if (current && path === current.rawPath) return current;
+
+		return wallpapers()?.find((w) => path.includes(w.id)) ?? null;
 	});
 
 	// set padding if background is selected
@@ -1735,14 +1791,9 @@ function BackgroundConfig(props: {
 														project.background.source.type === "wallpaper" &&
 														project.background.source.path
 													) {
-														const selectedWallpaper = wallpapers()?.find((w) =>
-															(
-																project.background.source as { path?: string }
-															).path?.includes(w.id),
-														);
-														// Only use wallpaper URL if it exists
-														if (selectedWallpaper?.url) {
-															imageSrc = selectedWallpaper.url;
+														const selected = selectedWallpaper();
+														if (selected?.url) {
+															imageSrc = selected.url;
 														}
 													}
 
@@ -1822,16 +1873,12 @@ function BackgroundConfig(props: {
 						<KRadioGroup
 							value={
 								project.background.source.type === "wallpaper"
-									? (wallpapers()?.find((w) =>
-											(
-												project.background.source as { path?: string }
-											).path?.includes(w.id),
-										)?.url ?? undefined)
+									? (selectedWallpaper()?.url ?? undefined)
 									: undefined
 							}
 							onChange={(photoUrl) => {
 								try {
-									const wallpaper = wallpapers()?.find(
+									const wallpaper = wallpaperOptions().find(
 										(w) => w.url === photoUrl,
 									);
 									if (!wallpaper) return;
@@ -1847,6 +1894,30 @@ function BackgroundConfig(props: {
 							}}
 							class="grid grid-cols-7 gap-2 h-auto"
 						>
+							<Show when={currentDesktopBackground()}>
+								{(photo) => (
+									<KRadioGroup.Item
+										value={photo().url}
+										class="relative aspect-square group"
+										title={photo().label ?? getCurrentDesktopBackgroundLabel()}
+									>
+										<KRadioGroup.ItemInput class="peer" />
+										<KRadioGroup.ItemControl class="overflow-hidden relative w-full h-full rounded-lg transition cursor-pointer not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
+											<img
+												src={photo().url}
+												loading="eager"
+												class="object-cover w-full h-full"
+												alt={
+													photo().label ?? getCurrentDesktopBackgroundLabel()
+												}
+											/>
+											<span class="flex absolute right-1 bottom-1 justify-center items-center w-4 h-4 rounded-full text-white/95 bg-black/55 backdrop-blur-sm">
+												<IconLucideMonitor class="size-2.5" />
+											</span>
+										</KRadioGroup.ItemControl>
+									</KRadioGroup.Item>
+								)}
+							</Show>
 							<Show
 								when={!wallpapers.loading}
 								fallback={
