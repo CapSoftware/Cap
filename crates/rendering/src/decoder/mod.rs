@@ -855,3 +855,54 @@ pub async fn spawn_decoder(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pts_to_frame_maps_real_presentation_time_to_index() {
+        let tb = Rational::new(1, 600);
+        assert_eq!(pts_to_frame(0, tb, 30), 0);
+        assert_eq!(pts_to_frame(300, tb, 30), 15); // 0.5s
+        assert_eq!(pts_to_frame(600, tb, 30), 30); // 1.0s
+    }
+
+    // The frame index is `round(fps * real_pts_seconds)` — a function of the
+    // frame's real presentation time, independent of the stream time_base and of
+    // the frame's ordinal position. This is why selection on the nominal-fps grid
+    // does not accumulate A/V drift: a request for output time T (`floor(T*fps)`)
+    // resolves to the source frame whose real PTS is nearest T.
+    #[test]
+    fn pts_to_frame_is_anchored_to_time_not_timebase() {
+        // Same real time (1.0s) in two different time bases -> same index...
+        assert_eq!(
+            pts_to_frame(600, Rational::new(1, 600), 30),
+            pts_to_frame(1000, Rational::new(1, 1000), 30),
+        );
+        // ...and that index is the real one (round(30 * 1.0)), not a constant.
+        assert_eq!(pts_to_frame(600, Rational::new(1, 600), 30), 30);
+        assert_ne!(
+            pts_to_frame(600, Rational::new(1, 600), 30),
+            pts_to_frame(900, Rational::new(1, 600), 30),
+        );
+    }
+
+    // A source whose real rate (26.44fps) differs from the nominal grid (30fps):
+    // each source frame's index tracks its real time, so frames are held/dropped
+    // to the grid (a cadence artifact) but never drift out of time alignment.
+    #[test]
+    fn pts_to_frame_follows_real_time_for_off_nominal_source() {
+        let real_fps = 26.44_f64;
+        let tb = Rational::new(1, 1_000_000); // microseconds
+        let mut prev = 0u32;
+        for ordinal in 0..200u32 {
+            let t = ordinal as f64 / real_fps;
+            let pts = (t * 1_000_000.0).round() as i64;
+            let idx = pts_to_frame(pts, tb, 30);
+            assert_eq!(idx, (30.0 * t).round() as u32, "ordinal {ordinal}");
+            assert!(idx >= prev, "index must be monotonic non-decreasing");
+            prev = idx;
+        }
+    }
+}
