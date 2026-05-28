@@ -271,7 +271,7 @@ impl InterpolatedZoom {
                 let cursor_for_bounds = if is_auto_zoom_out {
                     segment_end_cursor.or(actual_cursor)
                 } else {
-                    actual_cursor
+                    None
                 };
 
                 if is_auto_zoom_out {
@@ -1085,6 +1085,43 @@ mod test {
         assert!(
             max_jump < 1e-4,
             "Bounds jumped {max_jump} at segment boundary; expected near-zero"
+        );
+    }
+
+    #[test]
+    fn manual_zoom_out_boundary_ignores_cursor_position() {
+        let segments = vec![test_segment(2.0, 4.0, 4.0, 0.9, 0.1)];
+        let cursor = Coord::<RawDisplayUVSpace>::new(XY::new(0.5, 0.5));
+
+        let at_boundary = InterpolatedZoom::new_with_easing_and_cursor(
+            c(4.0, &segments),
+            Default::default(),
+            Some(cursor),
+            None,
+            None,
+            |t| t,
+            |t| t,
+        );
+
+        let just_after = InterpolatedZoom::new_with_easing_and_cursor(
+            c(4.0 + 1e-9, &segments),
+            Default::default(),
+            Some(cursor),
+            None,
+            None,
+            |t| t,
+            |t| t,
+        );
+
+        let dx_tl = (just_after.bounds.top_left.x - at_boundary.bounds.top_left.x).abs();
+        let dy_tl = (just_after.bounds.top_left.y - at_boundary.bounds.top_left.y).abs();
+        let dx_br = (just_after.bounds.bottom_right.x - at_boundary.bounds.bottom_right.x).abs();
+        let dy_br = (just_after.bounds.bottom_right.y - at_boundary.bounds.bottom_right.y).abs();
+
+        let max_jump = dx_tl.max(dy_tl).max(dx_br).max(dy_br);
+        assert!(
+            max_jump < 1e-4,
+            "Manual zoom-out jumped {max_jump} toward cursor at segment boundary"
         );
     }
 
