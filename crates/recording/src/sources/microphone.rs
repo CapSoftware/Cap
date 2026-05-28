@@ -26,6 +26,20 @@ const SILENCE_CHUNK_DURATION: Duration = Duration::from_millis(20);
 const MIC_RECONNECT_AFTER: Duration = Duration::from_secs(2);
 const MIC_RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
+// A stalled callback usually means CoreAudio/cpal is delivering buffers late, not that
+// audio was lost: the real samples arrive with their original capture timestamps once the
+// thread resumes. Fabricating forward-timestamped silence for those transient stalls
+// double-counts the interval (synthetic silence *and* the late real samples both land on
+// the muxer timeline), which is what progressively pushed audio past video in long
+// recordings. Below this threshold we emit nothing and let the muxer's gap/overlap
+// reconciliation be the single owner of timeline length; only a sustained outage gets
+// keepalive silence so a genuinely dead device doesn't freeze the audio track.
+const STALL_SILENCE_KEEPALIVE_AFTER: Duration = Duration::from_secs(1);
+
+fn should_fabricate_stall_silence(stall_duration: Duration, keepalive_after: Duration) -> bool {
+    stall_duration >= keepalive_after
+}
+
 pub struct Microphone {
     info: AudioInfo,
     _lock: Arc<MicrophoneFeedLock>,
@@ -344,7 +358,9 @@ impl AudioSource for Microphone {
                                     warn!(
                                         is_wireless,
                                         timeout_ms = silence_timeout.as_millis(),
-                                        "Microphone data timeout, generating silence"
+                                        keepalive_after_ms =
+                                            STALL_SILENCE_KEEPALIVE_AFTER.as_millis(),
+                                        "Microphone data timeout, awaiting delivery before keepalive silence"
                                     );
                                     silence_mode = true;
                                 }
@@ -394,6 +410,13 @@ impl AudioSource for Microphone {
                                     next_reconnect_after =
                                         (next_reconnect_after * 2).min(MIC_RECONNECT_BACKOFF_MAX);
                                     silence_start = Some(Instant::now());
+                                }
+
+                                if !should_fabricate_stall_silence(
+                                    stall_duration,
+                                    STALL_SILENCE_KEEPALIVE_AFTER,
+                                ) {
+                                    continue;
                                 }
 
                                 let timestamp = match last_timestamp {
@@ -528,6 +551,41 @@ fn create_silence_frame(info: &AudioInfo, sample_count: usize) -> ffmpeg::frame:
 mod tests {
     use super::*;
     use cap_media_info::{Sample, Type};
+
+    #[test]
+    fn transient_stall_does_not_fabricate_silence() {
+        // The repro's worst mic stall was 293ms; none of its sub-second late-delivery
+        // stalls should produce synthetic silence (the muxer reconciles them instead).
+        for stall_ms in [0, 5, 54, 86, 100, 114, 200, 293, 500, 999] {
+            assert!(
+                !should_fabricate_stall_silence(
+                    Duration::from_millis(stall_ms),
+                    STALL_SILENCE_KEEPALIVE_AFTER,
+                ),
+                "{stall_ms}ms transient stall must not fabricate silence"
+            );
+        }
+    }
+
+    #[test]
+    fn sustained_stall_fabricates_keepalive_silence() {
+        for stall_ms in [1000, 1500, 2000, 5000] {
+            assert!(
+                should_fabricate_stall_silence(
+                    Duration::from_millis(stall_ms),
+                    STALL_SILENCE_KEEPALIVE_AFTER,
+                ),
+                "{stall_ms}ms sustained outage must emit keepalive silence"
+            );
+        }
+    }
+
+    #[test]
+    fn keepalive_threshold_exceeds_reconnect_free_window() {
+        // Keepalive must engage before the first reconnect attempt so a frozen device
+        // never leaves the audio track without forward progress.
+        assert!(STALL_SILENCE_KEEPALIVE_AFTER < MIC_RECONNECT_AFTER);
+    }
 
     #[test]
     fn target_info_uses_output_rate_and_mono() {
