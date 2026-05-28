@@ -122,7 +122,7 @@ impl AudioRenderer {
     }
 
     fn playhead_to_samples(&self, playhead: f64) -> usize {
-        (playhead * AudioData::SAMPLE_RATE as f64) as usize
+        (playhead * AudioData::SAMPLE_RATE as f64).round() as usize
     }
 
     pub fn elapsed_samples_to_playhead(&self) -> f64 {
@@ -287,7 +287,8 @@ impl AudioRenderer {
         let max_samples = tracks
             .iter()
             .map(|t| {
-                let track_offset_samples = (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize;
+                let track_offset_samples =
+                    (t.offset(&offsets) * Self::SAMPLE_RATE as f32).round() as isize;
                 let available = t.data().sample_count() as isize - track_offset_samples;
                 available.max(0) as usize
             })
@@ -311,7 +312,7 @@ impl AudioRenderer {
                     if g < -30.0 { f32::NEG_INFINITY } else { g }
                 },
                 stereo_mode: t.stereo_mode(&project.audio),
-                offset: (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize,
+                offset: (t.offset(&offsets) * Self::SAMPLE_RATE as f32).round() as isize,
             })
             .collect::<Vec<_>>();
 
