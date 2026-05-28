@@ -68,6 +68,8 @@ use ffmpeg::ffi::AV_TIME_BASE;
 use general_settings::GeneralSettingsStore;
 use kameo::{Actor, actor::ActorRef};
 use notifications::NotificationType;
+#[cfg(target_os = "macos")]
+use objc2::MainThreadOnly;
 use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use screenshot_editor::{
@@ -344,7 +346,60 @@ fn build_macos_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry
         ],
     )?;
 
-    let help_menu = Submenu::with_id_and_items(app_handle, HELP_SUBMENU_ID, "Help", true, &[])?;
+    let help_menu = Submenu::with_id_and_items(
+        app_handle,
+        HELP_SUBMENU_ID,
+        "Help",
+        true,
+        &[
+            &MenuItem::with_id(
+                app_handle,
+                "help.changelog",
+                "Changelog",
+                true,
+                None::<&str>,
+            )?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &MenuItem::with_id(
+                app_handle,
+                "help.dashboard",
+                "Dashboard",
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(app_handle, "help.docs", "Documentation", true, None::<&str>)?,
+            &MenuItem::with_id(app_handle, "help.faq", "FAQ", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app_handle,
+                "help.self_hosting",
+                "Self-hosting",
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(
+                app_handle,
+                "help.help_center",
+                "Help Center",
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(
+                app_handle,
+                "help.status",
+                "System Status",
+                true,
+                None::<&str>,
+            )?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &MenuItem::with_id(
+                app_handle,
+                "help.discord",
+                "Join Discord Community",
+                true,
+                None::<&str>,
+            )?,
+        ],
+    )?;
 
     Menu::with_items(
         app_handle,
@@ -355,6 +410,14 @@ fn build_macos_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry
                 true,
                 &[
                     &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &MenuItem::with_id(
+                        app_handle,
+                        "settings",
+                        "Preferences…",
+                        true,
+                        Some("Cmd+,"),
+                    )?,
                     &PredefinedMenuItem::separator(app_handle)?,
                     &PredefinedMenuItem::services(app_handle, None)?,
                     &PredefinedMenuItem::separator(app_handle)?,
@@ -403,57 +466,38 @@ fn build_macos_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry
 }
 
 #[cfg(target_os = "macos")]
-unsafe extern "C" fn macos_application_should_terminate(
-    _: &objc::runtime::Object,
-    _: objc::runtime::Sel,
-    _: cocoa::base::id,
-) -> isize {
-    if let Some(app) = MACOS_NATIVE_TERMINATE_APP.get() {
-        let app = app.clone();
-        tokio::spawn(async move {
-            request_app_exit(app).await;
-        });
-    } else {
-        warn!("macOS native termination requested before app exit handler was installed");
-    }
+fn patch_native_app_menu(app: &AppHandle) -> tauri::Result<()> {
+    use objc2::{MainThreadMarker, MainThreadOnly, sel};
+    use objc2_app_kit::{NSApplication, NSMenuItem};
+    use objc2_foundation::ns_string;
 
-    0
-}
+    app.run_on_main_thread(move || {
+        let mtm = MainThreadMarker::new().expect("Running on main");
+        let app = NSApplication::sharedApplication(mtm);
 
-#[cfg(target_os = "macos")]
-fn install_macos_native_terminate_handler(app: &AppHandle) {
-    use cocoa::base::{id, nil};
-    use objc::{class, msg_send, sel, sel_impl};
-
-    let _ = MACOS_NATIVE_TERMINATE_APP.set(app.clone());
-
-    unsafe {
-        let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
-        let delegate: id = msg_send![ns_app, delegate];
-
-        if delegate == nil {
-            warn!("Unable to install macOS native termination handler without app delegate");
+        let Some(main_menu) = app.mainMenu() else {
             return;
-        }
+        };
 
-        let delegate_class = (*delegate).class() as *const _ as *mut objc::runtime::Class;
-        let imp = std::mem::transmute::<
-            unsafe extern "C" fn(&objc::runtime::Object, objc::runtime::Sel, id) -> isize,
-            objc::runtime::Imp,
-        >(macos_application_should_terminate);
-        let added = objc::runtime::class_addMethod(
-            delegate_class,
-            sel!(applicationShouldTerminate:),
-            imp,
-            c"q@:@".as_ptr(),
-        );
+        // First item in the menu bar is always the app menu on macOS
+        let Some(app_menu_item) = main_menu.itemAtIndex(0) else {
+            return;
+        };
+        let Some(app_submenu) = app_menu_item.submenu() else {
+            return;
+        };
 
-        if added == objc::runtime::YES {
-            info!("Installed macOS native termination handler");
-        } else {
-            warn!("macOS native termination handler was already installed");
+        // Index 0: About — replace Tauri's internal action with the real one.
+        // This is what triggers the system About panel, including the app icon
+        // display introduced in macOS 15.
+        if let Some(about_item) = app_submenu.itemAtIndex(0) {
+            unsafe {
+                about_item.setAction(Some(sel!(orderFrontStandardAboutPanel:)));
+                // nil target means the action travels up the responder chain to NSApp
+                about_item.setTarget(None);
+            }
         }
-    }
+    })
 }
 
 fn now_millis() -> u64 {
@@ -4358,12 +4402,43 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         builder = builder
             .menu(build_macos_app_menu)
             .on_menu_event(|app, event| {
-                if event.id() == APP_MENU_QUIT_ID {
-                    let app = app.clone();
-                    tokio::spawn(async move {
-                        request_app_exit(app).await;
-                    });
-                }
+                let url = match event.id().as_ref() {
+                    APP_MENU_QUIT_ID => {
+                        let app = app.clone();
+                        tokio::spawn(async move {
+                            request_app_exit(app).await;
+                        });
+                        return;
+                    }
+                    "settings" => {
+                        let app = app.clone();
+                        spawn_on_runtime(async move {
+                            let _ = CapWindow::Settings { page: None }.show(&app).await;
+                        });
+                        return;
+                    }
+                    "help.changelog" => {
+                        let app = app.clone();
+                        spawn_on_runtime(async move {
+                            let _ = CapWindow::Settings {
+                                page: Some("/changelog".to_string()),
+                            }
+                            .show(&app)
+                            .await;
+                        });
+                        return;
+                    }
+                    "help.dashboard" => "https://cap.so/dashboard",
+                    "help.docs" => "https://cap.so/docs",
+                    "help.faq" => "https://cap.so/faq",
+                    "help.self_hosting" => "https://cap.so/self-hosting",
+                    "help.help_center" => "https://help.cap.so/",
+                    "help.status" => "https://cap.openstatus.dev/",
+                    "help.discord" => "https://discord.gg/y8gdQ3WRN3",
+                    _ => return,
+                };
+
+                let _ = app.opener().open_url(url, None::<&str>);
             })
             .plugin(tauri_nspanel::init());
     }
@@ -4415,6 +4490,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             let app = app.handle().clone();
+
+            #[cfg(target_os = "macos")]
+            patch_native_app_menu(&app)?;
 
             if let Err(err) = update_project_names::migrate_if_needed(&app) {
                 tracing::error!("Failed to migrate project file names: {}", err);
@@ -4554,8 +4632,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 app.manage(CameraWindowOperationLock::default());
                 app.manage(AppExitState::default());
                 app.manage(MainWindowReadyState::default());
-                #[cfg(target_os = "macos")]
-                install_macos_native_terminate_handler(&app);
                 spawn_process_memory_sampler(app.clone());
 
                 app.manage(Arc::new(RwLock::new(
