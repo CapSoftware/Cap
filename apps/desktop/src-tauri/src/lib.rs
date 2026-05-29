@@ -4253,6 +4253,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::RecordingControls.label().as_str(),
                     CapWindowId::Upgrade.label().as_str(),
+                    #[cfg(target_os = "macos")]
+                    CapWindowId::Main.label().as_str(),
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("camera-") => "camera",

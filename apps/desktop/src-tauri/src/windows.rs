@@ -728,6 +728,11 @@ impl CapWindowId {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn frame_autosaves(&self) -> bool {
+        matches!(self, Self::Main)
+    }
+
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
             Self::Main => (330.0, 395.0),
@@ -1281,7 +1286,6 @@ impl CapWindow {
                         );
 
                         panel.set_level(100);
-
 
                         crate::permissions::schedule_macos_dock_visibility_sync(&app);
                     }
@@ -2192,8 +2196,19 @@ impl CapWindow {
         let id = self.id(app);
 
         #[cfg(target_os = "macos")]
-        if id.activates_dock() {
-            crate::permissions::sync_macos_dock_visibility(app);
+        {
+            if id.activates_dock() {
+                crate::permissions::sync_macos_dock_visibility(app);
+            }
+
+            if id.frame_autosaves() {
+                let label = id.label();
+                window.with_nswindow_on_main(move |_, nswindow| {
+                    let autosave_name = objc2_foundation::NSString::from_str(&label);
+                    nswindow.setFrameAutosaveName(&autosave_name);
+                    nswindow.setFrameUsingName_force(&autosave_name, true);
+                })?;
+            }
         }
 
         if let Some(min) = id.min_size() {
@@ -2205,7 +2220,7 @@ impl CapWindow {
 
                 // macOS center considers the height of menubar and dock
                 #[cfg(target_os = "macos")]
-                window.with_nswindow_on_main(|_mtm, nswindow| nswindow.center())?;
+                window.with_nswindow_on_main(|_, nswindow| nswindow.center())?;
 
                 #[cfg(not(target_os = "macos"))]
                 {

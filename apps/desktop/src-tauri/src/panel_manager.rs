@@ -6,12 +6,8 @@ use tauri_nspanel::tauri_panel;
 use tokio::sync::RwLock;
 use tracing::{debug, info, trace, warn};
 
-// tauri_nspanel::panel!(DefaultPanel {});
-
 tauri_panel! {
-    panel!(DefaultPanel {
-
-    })
+    panel!(DefaultPanel {})
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
