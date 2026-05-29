@@ -249,13 +249,9 @@ impl Mp4ExportSettings {
 
                 let audio_frame = audio_renderer.as_mut().and_then(|audio| {
                     let n = u64::from(input.frame_number);
-                    let end = ((n + 1) * sample_rate) / fps_u64;
-                    if end <= audio_sample_cursor {
-                        return None;
-                    }
-                    let pts = audio_sample_cursor as i64;
-                    let samples = (end - audio_sample_cursor) as usize;
-                    audio_sample_cursor = end;
+                    let (pts, samples) =
+                        audio_frame_budget(n, sample_rate, fps_u64, audio_sample_cursor)?;
+                    audio_sample_cursor = pts as u64 + samples as u64;
                     audio
                         .render_frame(samples, &project_for_audio)
                         .map(|mut frame| {
@@ -455,6 +451,25 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
         y_stride: width,
         frame_number: frame.frame_number,
     }
+}
+
+/// Per-output-frame audio budget for the encoder loop: the AAC frame PTS (the
+/// running sample cursor) and the sample count to render for `frame_number`.
+/// Returns `None` when the frame falls entirely within already-emitted audio, so
+/// the stream stays gapless and strictly monotonic. The caller advances the
+/// cursor to `pts + samples`. Shared with the tests so they exercise this exact
+/// arithmetic rather than a re-implementation.
+fn audio_frame_budget(
+    frame_number: u64,
+    sample_rate: u64,
+    fps: u64,
+    cursor: u64,
+) -> Option<(i64, usize)> {
+    let end = ((frame_number + 1) * sample_rate) / fps;
+    if end <= cursor {
+        return None;
+    }
+    Some((cursor as i64, (end - cursor) as usize))
 }
 
 fn fill_nv12_frame_direct(
@@ -737,6 +752,30 @@ mod tests {
             let frames = fps * 10;
             let expected = (frames * sample_rate) / fps;
             assert_eq!(sum_samples(sample_rate, fps, frames), expected);
+        }
+    }
+
+    // Drives the SAME `audio_frame_budget` the encoder loop uses, so it guards the
+    // real arithmetic: each frame's PTS equals the previous frame's end (gapless,
+    // non-overlapping) and the cursor advances exactly to the duration budget — i.e.
+    // audio length stays anchored to the video frame grid with no drift. Read
+    // alignment of the source PCM to presentation time is covered by the
+    // export_audio_* tests in crates/editor/src/audio.rs.
+    #[test]
+    fn audio_frame_budget_is_monotonic_and_contiguous() {
+        let sample_rate = u64::from(AudioRenderer::SAMPLE_RATE);
+
+        for fps in [24u64, 30, 60] {
+            let frames = fps * 3;
+            let mut cursor = 0u64;
+            for n in 0..frames {
+                let (pts, samples) = audio_frame_budget(n, sample_rate, fps, cursor)
+                    .expect("a normal-rate frame always has a budget");
+                assert_eq!(pts as u64, cursor, "fps {fps} frame {n}: pts == prior end");
+                assert!(samples > 0, "fps {fps} frame {n}: frame must carry samples");
+                cursor = pts as u64 + samples as u64;
+            }
+            assert_eq!(cursor, (frames * sample_rate) / fps);
         }
     }
 

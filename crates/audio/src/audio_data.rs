@@ -170,4 +170,9 @@ impl AudioData {
     pub fn sample_count(&self) -> usize {
         self.samples.len() / self.channels as usize
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_raw_f32(samples: Vec<f32>, channels: u16) -> Self {
+        Self { samples, channels }
+    }
 }
