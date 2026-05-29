@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use objc2::runtime::{AnyClass, AnyObject, Sel};
+use objc2::runtime::{AnyObject, Sel};
 use objc2::{MainThreadMarker, sel};
 use objc2_app_kit::NSApplication;
 use tauri::AppHandle;
@@ -94,7 +94,7 @@ unsafe fn setup_terminate_handler(nsapp: &NSApplication) {
 
     let added = unsafe {
         objc2::ffi::class_addMethod(
-            delegate_class as *mut AnyClass,
+            delegate_class,
             sel!(applicationShouldTerminate:),
             std::mem::transmute::<
                 unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> isize,

@@ -1,11 +1,19 @@
-#[cfg(target_os = "macos")]
+// objc2 traits are brought in by the `tauri_panel!` macro below; avoid
+// redundant imports that cause duplicate symbol errors.
 use std::collections::HashMap;
-#[cfg(target_os = "macos")]
+use tauri::{Manager, Wry};
+use tauri_nspanel::tauri_panel;
 use tokio::sync::RwLock;
-#[cfg(target_os = "macos")]
 use tracing::{debug, info, trace, warn};
 
-#[cfg(target_os = "macos")]
+// tauri_nspanel::panel!(DefaultPanel {});
+
+tauri_panel! {
+    panel!(DefaultPanel {
+
+    })
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PanelState {
     #[default]
@@ -15,13 +23,11 @@ pub enum PanelState {
     Destroying,
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelWindowType {
     Camera,
 }
 
-#[cfg(target_os = "macos")]
 impl std::fmt::Display for PanelWindowType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -30,13 +36,11 @@ impl std::fmt::Display for PanelWindowType {
     }
 }
 
-#[cfg(target_os = "macos")]
 struct PanelEntry {
     state: PanelState,
     operation_id: u64,
 }
 
-#[cfg(target_os = "macos")]
 impl Default for PanelEntry {
     fn default() -> Self {
         Self {
@@ -46,20 +50,17 @@ impl Default for PanelEntry {
     }
 }
 
-#[cfg(target_os = "macos")]
 pub struct PanelManager {
     panels: RwLock<HashMap<PanelWindowType, PanelEntry>>,
     operation_counter: std::sync::atomic::AtomicU64,
 }
 
-#[cfg(target_os = "macos")]
 impl Default for PanelManager {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(target_os = "macos")]
 impl PanelManager {
     pub fn new() -> Self {
         Self {
@@ -179,20 +180,17 @@ impl PanelManager {
     }
 }
 
-#[cfg(target_os = "macos")]
 pub struct PanelOperationGuard {
     pub operation_id: u64,
     completed: bool,
 }
 
-#[cfg(target_os = "macos")]
 impl PanelOperationGuard {
     pub fn mark_completed(&mut self) {
         self.completed = true;
     }
 }
 
-#[cfg(target_os = "macos")]
 pub fn is_window_handle_valid(window: &tauri::WebviewWindow) -> bool {
     match window.inner_size() {
         Ok(_) => true,
@@ -203,14 +201,9 @@ pub fn is_window_handle_valid(window: &tauri::WebviewWindow) -> bool {
     }
 }
 
-#[cfg(target_os = "macos")]
-pub type NSPanel = tauri_nspanel::objc_id::Id<
-    tauri_nspanel::raw_nspanel::RawNSPanel,
-    tauri_nspanel::objc_id::Shared,
->;
-
-#[cfg(target_os = "macos")]
-pub fn try_to_panel(window: &tauri::WebviewWindow) -> Result<NSPanel, PanelConversionError> {
+pub fn try_to_panel(
+    window: &tauri::WebviewWindow,
+) -> Result<tauri_nspanel::PanelHandle<Wry>, PanelConversionError> {
     use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
     if !is_window_handle_valid(window) {
@@ -218,18 +211,16 @@ pub fn try_to_panel(window: &tauri::WebviewWindow) -> Result<NSPanel, PanelConve
     }
 
     window
-        .to_panel()
+        .to_panel::<DefaultPanel>()
         .map_err(|e| PanelConversionError::ConversionFailed(format!("{e:?}")))
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Debug)]
 pub enum PanelConversionError {
     InvalidHandle,
     ConversionFailed(String),
 }
 
-#[cfg(target_os = "macos")]
 impl std::fmt::Display for PanelConversionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -239,5 +230,4 @@ impl std::fmt::Display for PanelConversionError {
     }
 }
 
-#[cfg(target_os = "macos")]
 impl std::error::Error for PanelConversionError {}

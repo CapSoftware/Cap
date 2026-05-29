@@ -143,7 +143,7 @@ objc2-app-kit = { version = "0.3.2", features = [
 ] }
 objc2-web-kit = "0.3.2"
 swift-rs = "1.0.6"
-tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
 cidre = { workspace = true }
 objc = "0.2.7"
 cocoa = "0.26.0"

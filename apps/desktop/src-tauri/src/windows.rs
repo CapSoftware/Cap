@@ -26,7 +26,9 @@ use tracing::{debug, error, instrument, warn};
 
 #[cfg(target_os = "macos")]
 use crate::{
-    panel_manager::{PanelManager, PanelState, PanelWindowType, is_window_handle_valid},
+    panel_manager::{
+        DefaultPanel, PanelManager, PanelState, PanelWindowType, is_window_handle_valid,
+    },
     platform::WebviewWindowExt,
 };
 
@@ -430,8 +432,10 @@ pub(crate) async fn cleanup_camera_window(
             use tauri_nspanel::ManagerExt;
             for label in panel_labels {
                 if let Ok(panel) = app_for_close.get_webview_panel(&label) {
-                    panel.released_when_closed(false);
-                    panel.close();
+                    panel.set_released_when_closed(false);
+                    if let Some(window) = panel.to_window() {
+                        let _ = window.close();
+                    }
                 }
             }
             let _ = panel_close_tx.send(());
@@ -1218,6 +1222,9 @@ impl CapWindow {
                     return Box::pin(Self::Onboarding.show(app)).await;
                 }
 
+                #[cfg(target_os = "macos")]
+                let panel_activation_guard = permissions::prepare_macos_panel_window(app);
+
                 let title = CapWindowId::Main.title();
                 let should_protect = should_protect_window(app, &title);
 
@@ -1225,6 +1232,7 @@ impl CapWindow {
                     .window_builder(app, "/")
                     .maximizable(false)
                     .minimizable(false)
+                    .resizable(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
@@ -1244,7 +1252,40 @@ impl CapWindow {
                 }
 
                 #[cfg(target_os = "macos")]
-                crate::permissions::schedule_macos_dock_visibility_sync(app);
+                window.with_nswindow_on_main({
+                    let window = window.clone();
+                    let app = app.clone();
+                    let panel_activation_guard = panel_activation_guard;
+                    move |_, nswindow| {
+                        use crate::panel_manager::try_to_panel;
+                        use objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
+                        use objc2_foundation::ns_string;
+                        use tauri_nspanel::{Panel, tauri_panel};
+
+                        let _panel_activation_guard = panel_activation_guard;
+
+                        let panel = match DefaultPanel::from_window(&window) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                tracing::error!("Failed to convert main window to panel: {}", e);
+                                crate::permissions::sync_macos_dock_visibility(&app);
+                                return;
+                            }
+                        };
+
+                        panel.set_collection_behavior(
+                            NSWindowCollectionBehavior::CanJoinAllSpaces
+                                | NSWindowCollectionBehavior::FullScreenAuxiliary
+                                | NSWindowCollectionBehavior::Primary
+                                | NSWindowCollectionBehavior::FullScreenDisallowsTiling,
+                        );
+
+                        panel.set_level(100);
+
+
+                        crate::permissions::schedule_macos_dock_visibility_sync(&app);
+                    }
+                })?;
 
                 window
             }
@@ -1351,9 +1392,8 @@ impl CapWindow {
                         let panel_activation_guard = panel_activation_guard;
                         move || {
                             let _panel_activation_guard = panel_activation_guard;
-                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::panel_delegate;
-                            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
+                            use objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
+                            use tauri_nspanel::Panel;
 
                             #[link(name = "CoreGraphics", kind = "framework")]
                             unsafe extern "C" {
@@ -1363,36 +1403,27 @@ impl CapWindow {
                             #[allow(non_upper_case_globals)]
                             const kCGMaximumWindowLevelKey: i32 = 10;
 
-                            let delegate = panel_delegate!(TargetSelectOverlayPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
-
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
-
-                            let panel = match window.to_panel() {
+                            let panel = match DefaultPanel::from_window(&window) {
                                 Ok(p) => p,
                                 Err(e) => {
-                                    tracing::error!("Failed to convert target select overlay to panel: {:?}", e);
+                                    tracing::error!(
+                                        "Failed to convert target select overlay to panel: {:?}",
+                                        e
+                                    );
                                     crate::permissions::sync_macos_dock_visibility(&app);
                                     return;
                                 }
                             };
 
-                            panel.set_collection_behaviour(
-                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                            panel.set_collection_behavior(
+                                NSWindowCollectionBehavior::FullScreenPrimary
+                                    | NSWindowCollectionBehavior::CanJoinAllSpaces,
                             );
 
-                            panel.set_delegate(delegate);
-
-                            #[allow(non_upper_case_globals)]
-                            const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
-                            panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
-
-                            let max_level = unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
-                            panel.set_level(max_level - 1);
-                            panel.set_style_mask(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel.0 as i32);
+                            let max_level =
+                                unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
+                            panel.set_level(i64::from(max_level - 1));
+                            panel.set_style_mask(NSWindowStyleMask::NonactivatingPanel);
 
                             panel.order_front_regardless();
                             panel.show();
@@ -1777,9 +1808,9 @@ impl CapWindow {
                             let panel_activation_guard = panel_activation_guard;
                             move || {
                                 let _panel_activation_guard = panel_activation_guard;
-                                use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                                use tauri_nspanel::panel_delegate;
                                 use crate::panel_manager::try_to_panel;
+                                use objc2_app_kit::NSWindowCollectionBehavior;
+                                use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
                                 #[link(name = "CoreGraphics", kind = "framework")]
                                 unsafe extern "C" {
@@ -1788,13 +1819,6 @@ impl CapWindow {
 
                                 #[allow(non_upper_case_globals)]
                                 const kCGMaximumWindowLevelKey: i32 = 10;
-
-                                let delegate = panel_delegate!(CameraPanelDelegate {
-                                    window_did_become_key,
-                                    window_did_resign_key
-                                });
-
-                                delegate.set_listener(Box::new(|_delegate_name: String| {}));
 
                                 let panel = match try_to_panel(&window) {
                                     Ok(p) => p,
@@ -1806,16 +1830,14 @@ impl CapWindow {
                                     }
                                 };
 
-                                panel.set_collection_behaviour(
-                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                                        | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                                panel.set_collection_behavior(
+                                    NSWindowCollectionBehavior::CanJoinAllSpaces
+                                        | NSWindowCollectionBehavior::FullScreenPrimary,
                                 );
-
-                                panel.set_delegate(delegate);
 
                                 let max_level =
                                     unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
-                                panel.set_level(max_level);
+                                panel.set_level(i64::from(max_level));
 
                                 if let Some(guard) = app.try_state::<CameraWindowPositionGuard>() {
                                     guard.ignore_for(1000);
@@ -1903,9 +1925,16 @@ impl CapWindow {
                 window.set_ignore_cursor_events(true).unwrap();
 
                 #[cfg(target_os = "macos")]
-                {
-                    crate::platform::set_window_level(window.as_ref().window(), 900);
-                }
+                window.with_nswindow_on_main(|_, nswindow| {
+                    use objc2_app_kit::NSWindowCollectionBehavior;
+
+                    nswindow.setLevel(900);
+                    nswindow.setCollectionBehavior(
+                        NSWindowCollectionBehavior::CanJoinAllSpaces
+                            | NSWindowCollectionBehavior::FullScreenAuxiliary
+                            | NSWindowCollectionBehavior::IgnoresCycle,
+                    );
+                })?;
 
                 window
             }
@@ -1945,10 +1974,9 @@ impl CapWindow {
                 let window = window_builder.build()?;
 
                 #[cfg(target_os = "macos")]
-                crate::platform::set_window_level(
-                    window.as_ref().window(),
-                    objc2_app_kit::NSPopUpMenuWindowLevel,
-                );
+                window.with_nswindow_on_main(|_, nswindow| {
+                    nswindow.setLevel(objc2_app_kit::NSPopUpMenuWindowLevel)
+                })?;
 
                 // Hide the main window if the target monitor is the same
                 if let Some(main_window) = CapWindowId::Main.get(app)
@@ -2040,9 +2068,8 @@ impl CapWindow {
                         let app = app.clone();
                         let _panel_activation_guard = panel_activation_guard;
                         move || {
-                            use tauri_nspanel::cocoa::appkit::{NSWindowCollectionBehavior, NSWindowStyleMask};
-                            use tauri_nspanel::panel_delegate;
-                            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
+                            use objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
+                            use tauri_nspanel::{CollectionBehavior, Panel, StyleMask};
 
                             #[link(name = "CoreGraphics", kind = "framework")]
                             unsafe extern "C" {
@@ -2052,32 +2079,28 @@ impl CapWindow {
                             #[allow(non_upper_case_globals)]
                             const kCGMaximumWindowLevelKey: i32 = 10;
 
-                            let delegate = panel_delegate!(RecordingControlsPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
-
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
-
-                            let panel = match window.to_panel() {
+                            let panel = match DefaultPanel::from_window(&window) {
                                 Ok(p) => p,
                                 Err(e) => {
-                                    tracing::error!("Failed to convert recording controls to panel: {:?}", e);
+                                    tracing::error!(
+                                        "Failed to convert recording controls to panel: {:?}",
+                                        e
+                                    );
                                     crate::permissions::sync_macos_dock_visibility(&app);
                                     return;
                                 }
                             };
 
-                            panel.set_collection_behaviour(
-                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                            panel.set_collection_behavior(
+                                NSWindowCollectionBehavior::CanJoinAllSpaces
+                                    | NSWindowCollectionBehavior::FullScreenPrimary,
                             );
 
-                            panel.set_delegate(delegate);
-                            panel.set_style_mask(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel.0 as i32);
+                            panel.set_style_mask(NSWindowStyleMask::NonactivatingPanel);
 
-                            let max_level = unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
-                            panel.set_level(max_level);
+                            let max_level =
+                                unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
+                            panel.set_level(i64::from(max_level));
 
                             panel.order_front_regardless();
                             panel.show();
@@ -2131,29 +2154,30 @@ impl CapWindow {
                     app.run_on_main_thread({
                         let window = window.clone();
                         move || {
-                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                             use crate::panel_manager::try_to_panel;
+                            use objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
 
                             let panel = match try_to_panel(&window) {
                                 Ok(p) => p,
                                 Err(e) => {
-                                    tracing::error!("Failed to convert recordings overlay to panel: {}", e);
+                                    tracing::error!(
+                                        "Failed to convert recordings overlay to panel: {}",
+                                        e
+                                    );
                                     return;
                                 }
                             };
 
-                            panel.set_level(objc2_app_kit::NSMainMenuWindowLevel as i32);
-                            panel.set_style_mask(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel.0 as i32);
+                            panel.set_level(i64::from(objc2_app_kit::NSMainMenuWindowLevel as i32));
+                            panel.set_style_mask(NSWindowStyleMask::NonactivatingPanel);
 
-                            panel.set_collection_behaviour(
-                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
+                            panel.set_collection_behavior(
+                                NSWindowCollectionBehavior::Transient
+                                    | NSWindowCollectionBehavior::MoveToActiveSpace
+                                    | NSWindowCollectionBehavior::FullScreenAuxiliary
+                                    | NSWindowCollectionBehavior::IgnoresCycle
+                                    | NSWindowCollectionBehavior::FullScreenDisallowsTiling,
                             );
-
-                            #[allow(non_upper_case_globals)]
-                            panel.set_style_mask(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel.0 as i32);
                         }
                     })
                     .ok();
@@ -2181,9 +2205,7 @@ impl CapWindow {
 
                 // macOS center considers the height of menubar and dock
                 #[cfg(target_os = "macos")]
-                {
-                    _ = window.with_nswindow_on_main(|_mtm, nswindow| nswindow.center())?;
-                }
+                window.with_nswindow_on_main(|_mtm, nswindow| nswindow.center())?;
 
                 #[cfg(not(target_os = "macos"))]
                 {
@@ -2480,23 +2502,6 @@ pub async fn apply_macos_liquid_glass_background(
     #[cfg(not(target_os = "macos"))]
     {
         Ok(false)
-    }
-}
-
-#[specta::specta]
-#[tauri::command(async)]
-#[instrument(skip(_window))]
-pub fn set_window_transparent(_window: tauri::Window, _value: bool) {
-    #[cfg(target_os = "macos")]
-    {
-        let ns_win = _window
-            .ns_window()
-            .expect("Failed to get native window handle")
-            as *const objc2_app_kit::NSWindow;
-
-        unsafe {
-            (*ns_win).setOpaque(!_value);
-        }
     }
 }
 
