@@ -328,6 +328,9 @@ export function HLSVideoPlayer({
 
 			hls.loadSource(playbackSrc);
 			hls.attachMedia(video);
+			if (isLiveSegments) {
+				hls.startLoad(0);
+			}
 
 			hls.on(Hls.Events.MANIFEST_PARSED, () => {
 				console.log("HLSVideoPlayer: HLS manifest parsed successfully");
