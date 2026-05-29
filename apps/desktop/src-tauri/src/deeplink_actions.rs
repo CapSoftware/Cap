@@ -42,6 +42,16 @@ pub enum DeepLinkAction {
     },
     StartRecordingWithCurrentSettings {
         mode: RecordingMode,
+        #[serde(default)]
+        mic_label: Option<String>,
+        #[serde(default)]
+        use_mic: Option<bool>,
+        #[serde(default)]
+        camera_label: Option<String>,
+        #[serde(default)]
+        use_camera: Option<bool>,
+        #[serde(default)]
+        capture_system_audio: Option<bool>,
     },
     RunHotkeyAction {
         action: HotkeyAction,
@@ -177,6 +187,66 @@ mod tests {
             Err(ActionParseFromUrlError::NotAction)
         ));
     }
+
+    #[test]
+    fn parses_current_settings_recording_without_overrides() {
+        let mut url = Url::parse("cap-desktop://action").unwrap();
+        url.query_pairs_mut().append_pair(
+            "value",
+            r#"{"start_recording_with_current_settings":{"mode":"studio"}}"#,
+        );
+
+        let action = DeepLinkAction::try_from(&url).unwrap();
+
+        match action {
+            DeepLinkAction::StartRecordingWithCurrentSettings {
+                mode,
+                mic_label,
+                use_mic,
+                camera_label,
+                use_camera,
+                capture_system_audio,
+            } => {
+                assert_eq!(mode, RecordingMode::Studio);
+                assert_eq!(mic_label, None);
+                assert_eq!(use_mic, None);
+                assert_eq!(camera_label, None);
+                assert_eq!(use_camera, None);
+                assert_eq!(capture_system_audio, None);
+            }
+            _ => panic!("expected StartRecordingWithCurrentSettings"),
+        }
+    }
+
+    #[test]
+    fn parses_current_settings_recording_overrides() {
+        let mut url = Url::parse("cap-desktop://action").unwrap();
+        url.query_pairs_mut().append_pair(
+            "value",
+            r#"{"start_recording_with_current_settings":{"mode":"instant","mic_label":"Studio Mic","use_mic":true,"camera_label":"Desk Camera","use_camera":true,"capture_system_audio":false}}"#,
+        );
+
+        let action = DeepLinkAction::try_from(&url).unwrap();
+
+        match action {
+            DeepLinkAction::StartRecordingWithCurrentSettings {
+                mode,
+                mic_label,
+                use_mic,
+                camera_label,
+                use_camera,
+                capture_system_audio,
+            } => {
+                assert_eq!(mode, RecordingMode::Instant);
+                assert_eq!(mic_label, Some("Studio Mic".to_string()));
+                assert_eq!(use_mic, Some(true));
+                assert_eq!(camera_label, Some("Desk Camera".to_string()));
+                assert_eq!(use_camera, Some(true));
+                assert_eq!(capture_system_audio, Some(false));
+            }
+            _ => panic!("expected StartRecordingWithCurrentSettings"),
+        }
+    }
 }
 
 impl DeepLinkAction {
@@ -218,8 +288,26 @@ impl DeepLinkAction {
                     .await
                     .map(|_| ())
             }
-            DeepLinkAction::StartRecordingWithCurrentSettings { mode } => {
-                start_recording_with_current_settings(app, mode).await
+            DeepLinkAction::StartRecordingWithCurrentSettings {
+                mode,
+                mic_label,
+                use_mic,
+                camera_label,
+                use_camera,
+                capture_system_audio,
+            } => {
+                start_recording_with_current_settings(
+                    app,
+                    mode,
+                    StartRecordingOverrides {
+                        mic_label,
+                        use_mic,
+                        camera_label,
+                        use_camera,
+                        capture_system_audio,
+                    },
+                )
+                .await
             }
             DeepLinkAction::RunHotkeyAction { action } => {
                 hotkeys::handle_action(app.clone(), action).await
@@ -269,6 +357,7 @@ impl DeepLinkAction {
 async fn start_recording_with_current_settings(
     app: &AppHandle,
     mode: RecordingMode,
+    overrides: StartRecordingOverrides,
 ) -> Result<(), String> {
     let settings = RecordingSettingsStore::get(app)
         .ok()
@@ -276,8 +365,21 @@ async fn start_recording_with_current_settings(
         .unwrap_or_default();
     let state = app.state::<ArcLock<App>>();
 
-    crate::set_mic_input(state.clone(), settings.mic_name).await?;
-    crate::set_camera_input(app.clone(), state.clone(), settings.camera_id, None).await?;
+    let mic_label = match overrides.use_mic {
+        Some(false) => None,
+        _ => overrides.mic_label.or(settings.mic_name),
+    };
+
+    let camera_id = match overrides.use_camera {
+        Some(false) => None,
+        _ => match overrides.camera_label {
+            Some(label) => Some(camera_id_for_label(&label)?),
+            None => settings.camera_id,
+        },
+    };
+
+    crate::set_mic_input(state.clone(), mic_label).await?;
+    crate::set_camera_input(app.clone(), state.clone(), camera_id, None).await?;
 
     let capture_target = settings.target.unwrap_or_else(|| {
         use scap_targets::Display;
@@ -293,12 +395,30 @@ async fn start_recording_with_current_settings(
         StartRecordingInputs {
             capture_target,
             mode,
-            capture_system_audio: settings.system_audio,
+            capture_system_audio: overrides
+                .capture_system_audio
+                .unwrap_or(settings.system_audio),
             organization_id: settings.organization_id,
         },
     )
     .await
     .map(|_| ())
+}
+
+#[derive(Debug, Default)]
+struct StartRecordingOverrides {
+    mic_label: Option<String>,
+    use_mic: Option<bool>,
+    camera_label: Option<String>,
+    use_camera: Option<bool>,
+    capture_system_audio: Option<bool>,
+}
+
+fn camera_id_for_label(label: &str) -> Result<DeviceOrModelID, String> {
+    cap_camera::list_cameras()
+        .find(|camera| camera.display_name() == label)
+        .map(|camera| DeviceOrModelID::from_info(&camera))
+        .ok_or_else(|| format!("No camera with label \"{}\"", label))
 }
 
 async fn open_recording_picker(
