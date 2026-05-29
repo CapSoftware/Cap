@@ -1,6 +1,10 @@
 import { NODE_ENV } from "@cap/env";
 import { Button, Dialog, DialogContent, Input, LogoBadge } from "@cap/ui";
-import { faArrowLeft, faEnvelope } from "@fortawesome/free-solid-svg-icons";
+import {
+	faArrowLeft,
+	faEnvelope,
+	faRightToBracket,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Image from "next/image";
 import Link from "next/link";
@@ -150,6 +154,19 @@ const StepOne = ({
 			callbackUrl: `${window.location.origin}/s/${videoId}`,
 		});
 	};
+	const handleAuthentikSignIn = () => {
+		trackEvent("auth_started", {
+			method: "authentik",
+			is_signup: false,
+			auth_surface: "share_overlay",
+			video_id: videoId,
+		});
+		setLoading(true);
+		signIn("authentik", {
+			redirect: false,
+			callbackUrl: `${window.location.origin}/s/${videoId}`,
+		});
+	};
 	const publicEnv = usePublicEnv();
 
 	return (
@@ -196,51 +213,72 @@ const StepOne = ({
 			}}
 			className="flex flex-col gap-3"
 		>
-			<div>
-				<Input
-					id={emailId}
-					name="email"
-					autoFocus
-					type="email"
-					placeholder={emailSent ? "" : "tim@apple.com"}
-					autoComplete="email"
-					required
-					value={email}
-					disabled={emailSent || loading}
-					onChange={(e) => {
-						setEmail(e.target.value.toLowerCase());
-					}}
-				/>
-			</div>
-			<Button
-				variant="dark"
-				type="submit"
-				icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
-				disabled={loading || emailSent}
-			>
-				{emailSent
-					? NODE_ENV === "development"
-						? "Email sent to your terminal"
-						: "Email sent to your inbox"
-					: "Continue with Email"}
-			</Button>
-			{publicEnv.googleAuthAvailable && (
+			{!publicEnv.disableEmailAuth && (
 				<>
-					<div className="flex gap-4 items-center">
-						<span className="flex-1 h-px bg-gray-5" />
-						<p className="text-sm text-center text-gray-10">OR</p>
-						<span className="flex-1 h-px bg-gray-5" />
+					<div>
+						<Input
+							id={emailId}
+							name="email"
+							autoFocus
+							type="email"
+							placeholder={emailSent ? "" : "tim@apple.com"}
+							autoComplete="email"
+							required
+							value={email}
+							disabled={emailSent || loading}
+							onChange={(e) => {
+								setEmail(e.target.value.toLowerCase());
+							}}
+						/>
 					</div>
 					<Button
-						variant="gray"
-						type="button"
-						className="flex gap-2 justify-center items-center my-1 w-full text-sm"
-						onClick={handleGoogleSignIn}
-						disabled={loading}
+						variant="dark"
+						type="submit"
+						icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
+						disabled={loading || emailSent}
 					>
-						<Image src="/google.svg" alt="Google" width={16} height={16} />
-						Login with Google
+						{emailSent
+							? NODE_ENV === "development"
+								? "Email sent to your terminal"
+								: "Email sent to your inbox"
+							: "Continue with Email"}
 					</Button>
+				</>
+			)}
+			{(publicEnv.googleAuthAvailable ||
+				publicEnv.authentikAuthAvailable) && (
+				<>
+					{!publicEnv.disableEmailAuth && (
+						<div className="flex gap-4 items-center">
+							<span className="flex-1 h-px bg-gray-5" />
+							<p className="text-sm text-center text-gray-10">OR</p>
+							<span className="flex-1 h-px bg-gray-5" />
+						</div>
+					)}
+					{publicEnv.authentikAuthAvailable && (
+						<Button
+							variant="gray"
+							type="button"
+							className="flex gap-2 justify-center items-center my-1 w-full text-sm"
+							onClick={handleAuthentikSignIn}
+							disabled={loading}
+						>
+							<FontAwesomeIcon className="size-4" icon={faRightToBracket} />
+							Login with Authentik
+						</Button>
+					)}
+					{publicEnv.googleAuthAvailable && (
+						<Button
+							variant="gray"
+							type="button"
+							className="flex gap-2 justify-center items-center my-1 w-full text-sm"
+							onClick={handleGoogleSignIn}
+							disabled={loading}
+						>
+							<Image src="/google.svg" alt="Google" width={16} height={16} />
+							Login with Google
+						</Button>
+					)}
 				</>
 			)}
 		</form>

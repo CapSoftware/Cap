@@ -6,6 +6,7 @@ import type { NextAuthOptions } from "next-auth";
 import { getServerSession as _getServerSession } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
 import { decode, type JWT, type JWTDecodeParams } from "next-auth/jwt";
+import AuthentikProvider from "next-auth/providers/authentik";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers/index";
@@ -68,7 +69,30 @@ export const authOptions = (): NextAuthOptions => {
 		},
 		get providers() {
 			if (_providers) return _providers;
+			const authentikIssuer = serverEnv().AUTHENTIK_ISSUER;
+			const authentikClientId = serverEnv().AUTHENTIK_CLIENT_ID;
+			const authentikClientSecret = serverEnv().AUTHENTIK_CLIENT_SECRET;
+			if (
+				authentikIssuer &&
+				(!authentikClientId || !authentikClientSecret)
+			) {
+				throw new Error(
+					"AUTHENTIK_ISSUER is set but AUTHENTIK_CLIENT_ID and/or " +
+						"AUTHENTIK_CLIENT_SECRET is missing. All three must be " +
+						"provided together to enable the Authentik OIDC provider.",
+				);
+			}
+
 			_providers = [
+				...(authentikIssuer && authentikClientId && authentikClientSecret
+					? [
+							AuthentikProvider({
+								clientId: authentikClientId,
+								clientSecret: authentikClientSecret,
+								issuer: authentikIssuer,
+							}),
+						]
+					: []),
 				GoogleProvider({
 					clientId: serverEnv().GOOGLE_CLIENT_ID as string,
 					clientSecret: serverEnv().GOOGLE_CLIENT_SECRET as string,

@@ -72,6 +72,14 @@ function createServerEnv() {
 			WORKOS_CLIENT_ID: z.string().optional(),
 			WORKOS_API_KEY: z.string().optional(),
 
+			/// Authentik OIDC (self-hosted SSO)
+			// Provide these to enable a "Sign in with Authentik" provider.
+			// AUTHENTIK_ISSUER must include the application slug; no trailing slash:
+			//   https://auth.example.com/application/o/<slug>
+			AUTHENTIK_CLIENT_ID: z.string().optional(),
+			AUTHENTIK_CLIENT_SECRET: z.string().optional(),
+			AUTHENTIK_ISSUER: z.string().optional(),
+
 			/// Settings
 			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true).describe(
 				"Should videos be public or private by default",
@@ -80,6 +88,10 @@ function createServerEnv() {
 				.string()
 				.optional()
 				.describe("Comma-separated list of permitted signup domains"),
+			CAP_DISABLE_EMAIL_AUTH: boolString(false).describe(
+				"Hide the email magic-link UI on login/signup/share pages. "
+				+ "The provider stays wired server-side as break-glass.",
+			),
 
 			/// AI providers
 			DEEPGRAM_API_KEY: z.string().optional().describe("Audio transcription"),

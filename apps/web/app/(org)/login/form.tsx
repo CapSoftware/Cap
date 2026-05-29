@@ -6,6 +6,7 @@ import {
 	faArrowLeft,
 	faEnvelope,
 	faExclamationCircle,
+	faRightToBracket,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence, motion } from "framer-motion";
@@ -27,6 +28,7 @@ const MotionLink = motion(Link);
 const MotionButton = motion(Button);
 
 export function LoginForm() {
+	const publicEnv = usePublicEnv();
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const next = searchParams?.get("next");
@@ -111,6 +113,17 @@ export function LoginForm() {
 			auth_surface: "login",
 		});
 		signIn("google", {
+			...(next && next.length > 0 ? { callbackUrl: next } : {}),
+		});
+	};
+
+	const handleAuthentikSignIn = () => {
+		trackEvent("auth_started", {
+			method: "authentik",
+			is_signup: false,
+			auth_surface: "login",
+		});
+		signIn("authentik", {
 			...(next && next.length > 0 ? { callbackUrl: next } : {}),
 		});
 	};
@@ -326,34 +339,37 @@ export function LoginForm() {
 											loading={loading}
 											oauthError={oauthError}
 											handleGoogleSignIn={handleGoogleSignIn}
+											handleAuthentikSignIn={handleAuthentikSignIn}
 										/>
 									</motion.form>
 								)}
 							</motion.div>
 						</AnimatePresence>
-						<motion.p
-							layout="position"
-							className="pt-3 text-xs text-center text-gray-9"
-						>
-							By typing your email and clicking continue, you acknowledge that
-							you have both read and agree to Cap's{" "}
-							<Link
-								href="/terms"
-								target="_blank"
-								className="text-xs font-semibold text-gray-12 hover:text-blue-300"
+						{!publicEnv.disableEmailAuth && (
+							<motion.p
+								layout="position"
+								className="pt-3 text-xs text-center text-gray-9"
 							>
-								Terms of Service
-							</Link>{" "}
-							and{" "}
-							<Link
-								href="/privacy"
-								target="_blank"
-								className="text-xs font-semibold text-gray-12 hover:text-blue-300"
-							>
-								Privacy Policy
-							</Link>
-							.
-						</motion.p>
+								By typing your email and clicking continue, you acknowledge that
+								you have both read and agree to Cap's{" "}
+								<Link
+									href="/terms"
+									target="_blank"
+									className="text-xs font-semibold text-gray-12 hover:text-blue-300"
+								>
+									Terms of Service
+								</Link>{" "}
+								and{" "}
+								<Link
+									href="/privacy"
+									target="_blank"
+									className="text-xs font-semibold text-gray-12 hover:text-blue-300"
+								>
+									Privacy Policy
+								</Link>
+								.
+							</motion.p>
+						)}
 					</motion.div>
 				</Suspense>
 			</motion.div>
@@ -405,6 +421,7 @@ const NormalLogin = ({
 	loading,
 	oauthError,
 	handleGoogleSignIn,
+	handleAuthentikSignIn,
 }: {
 	setShowOrgInput: (show: boolean) => void;
 	email: string;
@@ -413,34 +430,36 @@ const NormalLogin = ({
 	loading: boolean;
 	oauthError: boolean;
 	handleGoogleSignIn: () => void;
+	handleAuthentikSignIn: () => void;
 }) => {
 	const publicEnv = usePublicEnv();
 
 	return (
 		<motion.div>
-			<motion.div layout className="flex flex-col space-y-3">
-				<MotionInput
-					id="email"
-					name="email"
-					autoFocus
-					type="email"
-					placeholder={emailSent ? "" : "tim@apple.com"}
-					autoComplete="email"
-					required
-					value={email}
-					disabled={emailSent || loading}
-					onChange={(e) => {
-						setEmail(e.target.value.toLowerCase());
-					}}
-				/>
-				<MotionButton
-					variant="dark"
-					type="submit"
-					disabled={loading || emailSent}
-					icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
-				>
-					Login with email
-				</MotionButton>
+			{!publicEnv.disableEmailAuth && (
+				<motion.div layout className="flex flex-col space-y-3">
+					<MotionInput
+						id="email"
+						name="email"
+						autoFocus
+						type="email"
+						placeholder={emailSent ? "" : "tim@apple.com"}
+						autoComplete="email"
+						required
+						value={email}
+						disabled={emailSent || loading}
+						onChange={(e) => {
+							setEmail(e.target.value.toLowerCase());
+						}}
+					/>
+					<MotionButton
+						variant="dark"
+						type="submit"
+						disabled={loading || emailSent}
+						icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
+					>
+						Login with email
+					</MotionButton>
 				{/* {NODE_ENV === "development" && (
                   <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
                     <p className="text-lg text-white">
@@ -451,31 +470,50 @@ const NormalLogin = ({
                     </p>
                   </div>
                 )} */}
-			</motion.div>
-			<motion.p
-				layout="position"
-				className="mt-3 mb-2 text-xs text-center text-gray-9"
-			>
-				Don't have an account?{" "}
-				<Link
-					href="/signup"
-					className="text-xs font-semibold text-blue-9 hover:text-blue-8"
+				</motion.div>
+			)}
+			{!publicEnv.disableEmailAuth && (
+				<motion.p
+					layout="position"
+					className="mt-3 mb-2 text-xs text-center text-gray-9"
 				>
-					Sign up here
-				</Link>
-			</motion.p>
+					Don't have an account?{" "}
+					<Link
+						href="/signup"
+						className="text-xs font-semibold text-blue-9 hover:text-blue-8"
+					>
+						Sign up here
+					</Link>
+				</motion.p>
+			)}
 
-			{(publicEnv.googleAuthAvailable || publicEnv.workosAuthAvailable) && (
+			{(publicEnv.googleAuthAvailable ||
+				publicEnv.workosAuthAvailable ||
+				publicEnv.authentikAuthAvailable) && (
 				<>
-					<div className="flex gap-4 items-center mt-4 mb-4">
-						<span className="flex-1 h-px bg-gray-5" />
-						<p className="text-sm text-center text-gray-10">OR</p>
-						<span className="flex-1 h-px bg-gray-5" />
-					</div>
+					{!publicEnv.disableEmailAuth && (
+						<div className="flex gap-4 items-center mt-4 mb-4">
+							<span className="flex-1 h-px bg-gray-5" />
+							<p className="text-sm text-center text-gray-10">OR</p>
+							<span className="flex-1 h-px bg-gray-5" />
+						</div>
+					)}
 					<motion.div
 						layout
 						className="flex flex-col gap-3 justify-center items-center"
 					>
+						{publicEnv.authentikAuthAvailable && !oauthError && (
+							<MotionButton
+								variant="gray"
+								type="button"
+								className="flex gap-2 justify-center items-center w-full text-sm"
+								onClick={handleAuthentikSignIn}
+								disabled={loading || emailSent}
+							>
+								<FontAwesomeIcon className="size-4" icon={faRightToBracket} />
+								Login with Authentik
+							</MotionButton>
+						)}
 						{publicEnv.googleAuthAvailable && !oauthError && (
 							<MotionButton
 								variant="gray"

@@ -1,3 +1,4 @@
+import { serverEnv } from "@cap/env";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -8,6 +9,9 @@ import { SignupForm } from "./form";
 export const dynamic = "force-dynamic";
 
 export default async function SignupPage() {
+	if (serverEnv().CAP_DISABLE_EMAIL_AUTH) {
+		redirect("/login");
+	}
 	const session = await getCurrentUser();
 	if (session) {
 		redirect("/dashboard");
