@@ -86,6 +86,37 @@ function createServerEnv() {
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),
+			AI_BASE_URL: z
+				.string()
+				.optional()
+				.describe(
+					"OpenAI-compatible chat completions base URL (e.g. http://host.docker.internal:11434/v1 for Ollama). Overrides GROQ/OPENAI defaults when set.",
+				),
+			AI_API_KEY: z
+				.string()
+				.optional()
+				.describe(
+					"API key for AI_BASE_URL. Falls back to GROQ_API_KEY or OPENAI_API_KEY when unset.",
+				),
+			AI_MODEL: z
+				.string()
+				.optional()
+				.describe(
+					"Chat model for AI_BASE_URL (e.g. gemma3:12b). Falls back to provider defaults when unset.",
+				),
+			STT_BASE_URL: z
+				.string()
+				.optional()
+				.describe(
+					"OpenAI-compatible audio transcription base URL (e.g. faster-whisper-server). When set, replaces the Deepgram path.",
+				),
+			STT_API_KEY: z.string().optional().describe("API key for STT_BASE_URL."),
+			STT_MODEL: z
+				.string()
+				.optional()
+				.describe(
+					"Transcription model for STT_BASE_URL (e.g. Systran/faster-whisper-large-v3-turbo). Required when STT_BASE_URL is set.",
+				),
 			REPLICATE_API_TOKEN: z
 				.string()
 				.optional()
