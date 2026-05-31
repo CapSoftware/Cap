@@ -60,7 +60,10 @@ export async function getVideoStatus(
 
 	const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
 
-	if (!video.transcriptionStatus && serverEnv().DEEPGRAM_API_KEY) {
+	if (
+		!video.transcriptionStatus &&
+		(serverEnv().DEEPGRAM_API_KEY || serverEnv().STT_BASE_URL)
+	) {
 		const activeUpload = await db()
 			.select({
 				videoId: videoUploads.videoId,
@@ -151,7 +154,9 @@ export async function getVideoStatus(
 		video.transcriptionStatus === "COMPLETE" &&
 		!metadata.aiGenerationStatus &&
 		!metadata.summary &&
-		(serverEnv().GROQ_API_KEY || serverEnv().OPENAI_API_KEY);
+		(serverEnv().GROQ_API_KEY ||
+			serverEnv().OPENAI_API_KEY ||
+			serverEnv().AI_BASE_URL);
 
 	if (shouldTriggerAiGeneration) {
 		try {

@@ -17,7 +17,7 @@ export async function transcribeVideo(
 	aiGenerationEnabled = false,
 	_isRetry = false,
 ): Promise<TranscribeResult> {
-	if (!serverEnv().DEEPGRAM_API_KEY) {
+	if (!serverEnv().DEEPGRAM_API_KEY && !serverEnv().STT_BASE_URL) {
 		return {
 			success: false,
 			message: "Missing necessary environment variables",

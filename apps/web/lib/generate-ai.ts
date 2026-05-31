@@ -16,10 +16,15 @@ export async function startAiGeneration(
 	videoId: Video.VideoId,
 	userId: string,
 ): Promise<GenerateAiResult> {
-	if (!serverEnv().GROQ_API_KEY && !serverEnv().OPENAI_API_KEY) {
+	if (
+		!serverEnv().GROQ_API_KEY &&
+		!serverEnv().OPENAI_API_KEY &&
+		!serverEnv().AI_BASE_URL
+	) {
 		return {
 			success: false,
-			message: "Missing AI API keys (Groq or OpenAI)",
+			message:
+				"Missing AI API keys (set GROQ_API_KEY, OPENAI_API_KEY, or AI_BASE_URL)",
 		};
 	}
 
