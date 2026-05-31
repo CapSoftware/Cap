@@ -2,7 +2,7 @@ import "server-only";
 
 import type { MessengerMessageRole } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
+import { getAiClient, getAiModel } from "@/lib/ai-provider";
 import { CAP_REFERENCE_GUIDE, MESSENGER_AGENT_PROMPT } from "./constants";
 import { getKnowledgeTag, searchSupermemory } from "./supermemory";
 
@@ -165,18 +165,18 @@ const callOpenAi = async ({
 	return parseOpenAiContent(payload);
 };
 
-const callGroq = async ({
+const callAiProvider = async ({
 	systemPrompt,
 	history,
 }: {
 	systemPrompt: string;
 	history: ConversationMessage[];
 }) => {
-	const client = getGroqClient();
+	const client = getAiClient();
 	if (!client) return null;
 
 	const completion = await client.chat.completions.create({
-		model: GROQ_MODEL,
+		model: getAiModel(),
 		temperature: 0.65,
 		max_tokens: 500,
 		messages: [
@@ -227,8 +227,10 @@ export const generateMessengerAgentReply = async ({
 	);
 	if (fromOpenAi) return fromOpenAi;
 
-	const fromGroq = await callGroq({ systemPrompt, history }).catch(() => null);
-	if (fromGroq) return fromGroq;
+	const fromAi = await callAiProvider({ systemPrompt, history }).catch(
+		() => null,
+	);
+	if (fromAi) return fromAi;
 
 	return "Oh no, I'm so sorry about this! I'm having a little technical hiccup on my end. Someone from the team will jump in here shortly to help you out though!";
 };
