@@ -213,21 +213,7 @@ export function TranscriptPanel() {
 	const activeWordIndex = createMemo(() => {
 		const time = editorState.playbackTime;
 		const words = allWords();
-		if (words.length === 0) return -1;
-
-		let lo = 0;
-		let hi = words.length - 1;
-		while (lo <= hi) {
-			const mid = (lo + hi) >>> 1;
-			if (time >= words[mid].end) {
-				lo = mid + 1;
-			} else if (time < words[mid].start) {
-				hi = mid - 1;
-			} else {
-				return mid;
-			}
-		}
-		return -1;
+		return words.findIndex((w) => !w.deleted && time >= w.start && time < w.end);
 	});
 
 	const handleWordClick = async (word: FlatWord) => {
@@ -1302,10 +1288,7 @@ function TranscriptEditor(props: {
 								const cw = s.words[j] as CaptionWordExtended;
 
 								cw.start -= newDuration;
-								if (cw.start < newCutStart) cw.start = newCutStart;
-
 								cw.end -= newDuration;
-								if (cw.end < cw.start) cw.end = cw.start;
 							}
 						}
 
