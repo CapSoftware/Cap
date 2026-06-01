@@ -589,14 +589,20 @@ export function HLSVideoPlayer({
 			shouldReloadPlaybackAfterUploadCompletes(
 				prevUploadProgress.current,
 				uploadProgressRaw,
-			) &&
-			(!isLiveSegments || !videoLoadedRef.current)
+				{ includeFetching: isLiveSegments },
+			)
 		) {
-			reloadPlayback();
-			setTimeout(reloadPlayback, 1000);
+			if (isLiveSegments) {
+				router.refresh();
+			}
+
+			if (!isLiveSegments || !videoLoadedRef.current) {
+				reloadPlayback();
+				setTimeout(reloadPlayback, 1000);
+			}
 		}
 		prevUploadProgress.current = uploadProgressRaw;
-	}, [isLiveSegments, uploadProgressRaw, reloadPlayback]);
+	}, [isLiveSegments, router, uploadProgressRaw, reloadPlayback]);
 
 	return (
 		<MediaPlayer
