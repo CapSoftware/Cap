@@ -117,7 +117,7 @@ export function TranscriptPanel() {
 					segmentIndex: segIdx,
 					wordIndex: wordIdx,
 					deleted: w.deleted ?? false,
-					isFiller: w.isFiller ?? isFillerWord(w.text),
+					isFiller: w.isFiller || isFillerWord(w.text),
 					isPause: w.isPause ?? false,
 					bufferStart: w.bufferStart ?? 0,
 					bufferEnd: w.bufferEnd ?? 0,
