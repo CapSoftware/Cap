@@ -14,7 +14,7 @@ import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
-import { BaseDirectory, writeFile } from "@tauri-apps/plugin-fs";
+import { BaseDirectory, exists, mkdir, writeFile } from "@tauri-apps/plugin-fs";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
@@ -101,12 +101,15 @@ import {
 } from "./ui";
 import { formatTime } from "./utils";
 
+type BackgroundSourceTab = BackgroundSource["type"] | "desktop";
+
 const BACKGROUND_SOURCES = {
+	desktop: "Desktop BG",
 	wallpaper: "Wallpaper",
 	image: "Image",
 	color: "Color",
 	gradient: "Gradient",
-} satisfies Record<BackgroundSource["type"], string>;
+} satisfies Record<BackgroundSourceTab, string>;
 
 const BACKGROUND_ICONS = {
 	wallpaper: imageBg,
@@ -116,11 +119,23 @@ const BACKGROUND_ICONS = {
 } satisfies Record<BackgroundSource["type"], string>;
 
 const BACKGROUND_SOURCES_LIST = [
+	"desktop",
 	"wallpaper",
 	"image",
 	"color",
 	"gradient",
-] satisfies Array<BackgroundSource["type"]>;
+] satisfies Array<BackgroundSourceTab>;
+
+const BACKGROUND_IMAGE_ACCEPT =
+	"image/apng, image/avif, image/jpeg, image/png, image/webp";
+const BACKGROUND_IMAGE_EXTENSIONS = [
+	"jpg",
+	"jpeg",
+	"png",
+	"gif",
+	"webp",
+	"bmp",
+] as const;
 
 const BACKGROUND_COLORS = [
 	"#FF0000", // Red
@@ -204,7 +219,7 @@ const WALLPAPER_NAMES = [
 ] as const;
 
 const CURRENT_DESKTOP_BACKGROUND_ID = "current-desktop-background";
-const CURRENT_DESKTOP_BACKGROUND_FILENAME = "current-desktop-background.jpg";
+const CURRENT_DESKTOP_BACKGROUND_BASENAME = "current-desktop-background";
 const getCurrentDesktopBackgroundLabel = () => {
 	const os = ostype();
 	if (os === "macos") return "This Mac";
@@ -217,6 +232,14 @@ type WallpaperOption = {
 	url: string;
 	rawPath: string;
 	label?: string;
+};
+
+const isCurrentDesktopBackgroundPath = (path: string | null | undefined) => {
+	if (!path) return false;
+	const filename = path.split(/[\\/]/).pop();
+	return (
+		filename?.startsWith(`${CURRENT_DESKTOP_BACKGROUND_BASENAME}.`) ?? false
+	);
 };
 
 const STEREO_MODES = [
@@ -1423,21 +1446,37 @@ function BackgroundConfig(props: {
 	scrollRef: HTMLDivElement;
 	brandColorSwatches: OrganizationBrandColorSwatch[];
 }) {
-	const { project, setProject, projectHistory } = useEditorContext();
+	const { project, setProject, editorInstance, projectHistory } =
+		useEditorContext();
 	const initialCurrentDesktopBackgroundPath = () => {
 		const source = project.background.source;
 		if (source.type !== "wallpaper" || !source.path) return null;
-		return source.path.endsWith(CURRENT_DESKTOP_BACKGROUND_FILENAME)
-			? source.path
-			: null;
+		return isCurrentDesktopBackgroundPath(source.path) ? source.path : null;
 	};
-	const [currentDesktopBackgroundPath] = createSignal<string | null>(
-		initialCurrentDesktopBackgroundPath(),
-	);
+	const [currentDesktopBackgroundPath, setCurrentDesktopBackgroundPath] =
+		createSignal<string | null>(initialCurrentDesktopBackgroundPath());
 
-	// Background tabs
 	const [backgroundTab, setBackgroundTab] =
 		createSignal<keyof typeof BACKGROUND_THEMES>("macOS");
+	const projectBackgroundSourceTab = createMemo<BackgroundSourceTab>(() => {
+		const source = project.background.source;
+		if (
+			source.type === "wallpaper" &&
+			isCurrentDesktopBackgroundPath(source.path)
+		) {
+			return "desktop";
+		}
+
+		return source.type;
+	});
+	const [backgroundSourceTab, setBackgroundSourceTab] =
+		createSignal<BackgroundSourceTab>(projectBackgroundSourceTab());
+
+	createEffect(
+		on(projectBackgroundSourceTab, (tab) => {
+			setBackgroundSourceTab(tab);
+		}),
+	);
 
 	const [wallpapers] = createResource(async () => {
 		// Only load visible wallpapers initially
@@ -1475,31 +1514,42 @@ function BackgroundConfig(props: {
 		};
 	});
 
-	const wallpaperOptions = createMemo(() => {
-		const current = currentDesktopBackground();
-		return current ? [current, ...(wallpapers() ?? [])] : (wallpapers() ?? []);
-	});
+	const findStoredCurrentDesktopBackgroundPath = async () => {
+		if (currentDesktopBackgroundPath()) return currentDesktopBackgroundPath();
+
+		const assetsDir = `${editorInstance.path}/assets`;
+		for (const extension of BACKGROUND_IMAGE_EXTENSIONS) {
+			const path = `${assetsDir}/${CURRENT_DESKTOP_BACKGROUND_BASENAME}.${extension}`;
+			if (await exists(path)) return path;
+		}
+
+		return null;
+	};
+
+	const wallpaperOptions = createMemo(() => wallpapers() ?? []);
 
 	const selectedWallpaper = createMemo(() => {
 		if (project.background.source.type !== "wallpaper") return null;
 
 		const path = project.background.source.path;
 		if (!path) return null;
-
-		const current = currentDesktopBackground();
-		if (current && path === current.rawPath) return current;
+		if (isCurrentDesktopBackgroundPath(path)) return null;
 
 		return wallpapers()?.find((w) => path.includes(w.id)) ?? null;
 	});
 
-	// set padding if background is selected
 	const ensurePaddingForBackground = () => {
 		if (project.background.padding === 0)
 			setProject("background", "padding", 10);
 	};
 
-	// Validate background source path on mount
 	onMount(async () => {
+		const storedCurrentDesktopBackgroundPath =
+			await findStoredCurrentDesktopBackgroundPath();
+		if (storedCurrentDesktopBackgroundPath) {
+			setCurrentDesktopBackgroundPath(storedCurrentDesktopBackgroundPath);
+		}
+
 		if (
 			project.background.source.type === "wallpaper" ||
 			project.background.source.type === "image"
@@ -1508,25 +1558,20 @@ function BackgroundConfig(props: {
 
 			if (path) {
 				if (project.background.source.type === "wallpaper") {
-					// If the path is just the wallpaper ID (e.g. "sequoia-dark"), get the full path
 					if (
 						WALLPAPER_NAMES.includes(path as (typeof WALLPAPER_NAMES)[number])
 					) {
-						// Wait for wallpapers to load
 						const loadedWallpapers = wallpapers();
 						if (!loadedWallpapers) return;
 
-						// Find the wallpaper with matching ID
 						const wallpaper = loadedWallpapers.find((w) => w.id === path);
 						if (!wallpaper?.url) return;
 
-						// Directly trigger the radio group's onChange handler
 						const radioGroupOnChange = async (photoUrl: string) => {
 							try {
 								const wallpaper = wallpapers()?.find((w) => w.url === photoUrl);
 								if (!wallpaper) return;
 
-								// Get the raw path without any URL prefixes
 								const rawPath = decodeURIComponent(
 									photoUrl.replace("file://", ""),
 								);
@@ -1592,6 +1637,7 @@ function BackgroundConfig(props: {
 	);
 
 	let fileInput!: HTMLInputElement;
+	let desktopBackgroundInput!: HTMLInputElement;
 
 	const setWallpaperSource = (wallpaperPath: string) => {
 		const resumeHistory = projectHistory.pause();
@@ -1602,6 +1648,38 @@ function BackgroundConfig(props: {
 			} as const);
 			resumeHistory();
 		});
+	};
+
+	const getValidBackgroundImageExtension = (file: File) => {
+		const extension = file.name.split(".").pop()?.toLowerCase();
+		return (
+			BACKGROUND_IMAGE_EXTENSIONS.find((value) => value === extension) ?? null
+		);
+	};
+
+	const setDesktopBackgroundFile = async (file: File) => {
+		const extension = getValidBackgroundImageExtension(file);
+		if (!extension) {
+			toast.error("Invalid image file type");
+			return;
+		}
+
+		try {
+			const arrayBuffer = await file.arrayBuffer();
+			const uint8Array = new Uint8Array(arrayBuffer);
+			const assetsDir = `${editorInstance.path}/assets`;
+			const outputPath = `${assetsDir}/${CURRENT_DESKTOP_BACKGROUND_BASENAME}.${extension}`;
+
+			await mkdir(assetsDir, { recursive: true });
+			await writeFile(outputPath, uint8Array);
+
+			setCurrentDesktopBackgroundPath(outputPath);
+			setBackgroundSourceTab("desktop");
+			setWallpaperSource(outputPath);
+			ensurePaddingForBackground();
+		} catch (_err) {
+			toast.error("Failed to save desktop background");
+		}
 	};
 
 	const backgrounds: {
@@ -1660,11 +1738,19 @@ function BackgroundConfig(props: {
 		<KTabs.Content value={TAB_IDS.background} class="flex flex-col gap-6 p-4">
 			<Field icon={<IconCapImage class="size-4" />} name="Background Image">
 				<KTabs
-					value={project.background.source.type}
+					value={backgroundSourceTab()}
 					onChange={(v) => {
-						const tab = v as BackgroundSource["type"];
+						const tab = v as BackgroundSourceTab;
+						setBackgroundSourceTab(tab);
 						ensurePaddingForBackground();
 						switch (tab) {
+							case "desktop": {
+								const desktopBackground = currentDesktopBackground();
+								if (desktopBackground) {
+									setWallpaperSource(desktopBackground.rawPath);
+								}
+								break;
+							}
 							case "image": {
 								setProject("background", "source", {
 									type: "image",
@@ -1704,12 +1790,16 @@ function BackgroundConfig(props: {
 								break;
 							}
 							case "wallpaper": {
+								const path =
+									project.background.source.type === "wallpaper" &&
+									!isCurrentDesktopBackgroundPath(
+										project.background.source.path,
+									)
+										? project.background.source.path
+										: null;
 								setProject("background", "source", {
 									type: "wallpaper",
-									path:
-										project.background.source.type === "wallpaper"
-											? project.background.source.path
-											: null,
+									path,
 								});
 								break;
 							}
@@ -1768,10 +1858,11 @@ function BackgroundConfig(props: {
 												};
 
 												const getImageBackground = () => {
-													// Always start with the default icon
-													let imageSrc: string = BACKGROUND_ICONS[item];
+													let imageSrc: string =
+														item === "desktop"
+															? imageBg
+															: BACKGROUND_ICONS[item];
 
-													// Only override for "image" if a valid path exists
 													if (
 														item === "image" &&
 														project.background.source.type === "image" &&
@@ -1780,13 +1871,16 @@ function BackgroundConfig(props: {
 														const convertedPath = convertFileSrc(
 															project.background.source.path,
 														);
-														// Only use converted path if it's valid
 														if (convertedPath) {
 															imageSrc = convertedPath;
 														}
-													}
-													// Only override for "wallpaper" if a valid wallpaper is found
-													else if (
+													} else if (item === "desktop") {
+														const desktopBackground =
+															currentDesktopBackground();
+														if (desktopBackground) {
+															imageSrc = desktopBackground.url;
+														}
+													} else if (
 														item === "wallpaper" &&
 														project.background.source.type === "wallpaper" &&
 														project.background.source.path
@@ -1812,6 +1906,7 @@ function BackgroundConfig(props: {
 														return getGradientBackground();
 													case "color":
 														return getColorBackground();
+													case "desktop":
 													case "image":
 													case "wallpaper":
 														return getImageBackground();
@@ -1830,6 +1925,74 @@ function BackgroundConfig(props: {
 					</KTabs.List>
 					{/** Dashed divider */}
 					<div class="my-5 w-full border-t border-dashed border-gray-5" />
+					<KTabs.Content value="desktop">
+						<Show
+							when={currentDesktopBackground()}
+							fallback={
+								<div class="flex flex-col gap-3 items-center justify-center p-6 w-full rounded-lg border border-dashed bg-gray-2 border-gray-5">
+									<IconLucideMonitor class="size-6 text-gray-11" />
+									<span class="text-[13px] text-gray-12">
+										No desktop background saved
+									</span>
+									<EditorButton
+										onClick={() => desktopBackgroundInput.click()}
+										leftIcon={<IconCapImage />}
+									>
+										Select Image
+									</EditorButton>
+								</div>
+							}
+						>
+							{(photo) => (
+								<div class="flex flex-col gap-3">
+									<button
+										type="button"
+										onClick={() => {
+											setWallpaperSource(photo().rawPath);
+											ensurePaddingForBackground();
+										}}
+										class={cx(
+											"overflow-hidden relative w-full h-48 rounded-lg border transition cursor-pointer group",
+											project.background.source.type === "wallpaper" &&
+												project.background.source.path === photo().rawPath
+												? "border-blue-9 ring-2 ring-blue-9"
+												: "border-gray-5 hover:border-gray-7",
+										)}
+									>
+										<img
+											src={photo().url}
+											loading="eager"
+											class="object-cover w-full h-full"
+											alt={photo().label ?? getCurrentDesktopBackgroundLabel()}
+										/>
+										<span class="flex absolute right-2 bottom-2 justify-center items-center w-7 h-7 rounded-full text-white/95 bg-black/55 backdrop-blur-sm">
+											<IconLucideMonitor class="size-4" />
+										</span>
+									</button>
+									<div class="flex justify-end">
+										<EditorButton
+											onClick={() => desktopBackgroundInput.click()}
+											leftIcon={<IconCapImage />}
+										>
+											Replace
+										</EditorButton>
+									</div>
+								</div>
+							)}
+						</Show>
+						<input
+							type="file"
+							ref={desktopBackgroundInput}
+							class="hidden"
+							accept={BACKGROUND_IMAGE_ACCEPT}
+							onChange={async (e) => {
+								const file = e.currentTarget.files?.[0];
+								e.currentTarget.value = "";
+								if (!file) return;
+								await setDesktopBackgroundFile(file);
+							}}
+						/>
+					</KTabs.Content>
 					<KTabs.Content value="wallpaper">
 						{/** Background Tabs */}
 						<KTabs class="overflow-hidden relative" value={backgroundTab()}>
@@ -1894,30 +2057,6 @@ function BackgroundConfig(props: {
 							}}
 							class="grid grid-cols-7 gap-2 h-auto"
 						>
-							<Show when={currentDesktopBackground()}>
-								{(photo) => (
-									<KRadioGroup.Item
-										value={photo().url}
-										class="relative aspect-square group"
-										title={photo().label ?? getCurrentDesktopBackgroundLabel()}
-									>
-										<KRadioGroup.ItemInput class="peer" />
-										<KRadioGroup.ItemControl class="overflow-hidden relative w-full h-full rounded-lg transition cursor-pointer not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
-											<img
-												src={photo().url}
-												loading="eager"
-												class="object-cover w-full h-full"
-												alt={
-													photo().label ?? getCurrentDesktopBackgroundLabel()
-												}
-											/>
-											<span class="flex absolute right-1 bottom-1 justify-center items-center w-4 h-4 rounded-full text-white/95 bg-black/55 backdrop-blur-sm">
-												<IconLucideMonitor class="size-2.5" />
-											</span>
-										</KRadioGroup.ItemControl>
-									</KRadioGroup.Item>
-								)}
-							</Show>
 							<Show
 								when={!wallpapers.loading}
 								fallback={
@@ -2021,25 +2160,13 @@ function BackgroundConfig(props: {
 							type="file"
 							ref={fileInput}
 							class="hidden"
-							accept="image/apng, image/avif, image/jpeg, image/png, image/webp"
+							accept={BACKGROUND_IMAGE_ACCEPT}
 							onChange={async (e) => {
 								const file = e.currentTarget.files?.[0];
 								if (!file) return;
 
-								/*
-					this is a Tauri bug in WebKit so we need to validate the file type manually
-					https://github.com/tauri-apps/tauri/issues/9158
-					*/
-								const validExtensions = [
-									"jpg",
-									"jpeg",
-									"png",
-									"gif",
-									"webp",
-									"bmp",
-								];
-								const extension = file.name.split(".").pop()?.toLowerCase();
-								if (!extension || !validExtensions.includes(extension)) {
+								const extension = getValidBackgroundImageExtension(file);
+								if (!extension) {
 									toast.error("Invalid image file type");
 									return;
 								}
