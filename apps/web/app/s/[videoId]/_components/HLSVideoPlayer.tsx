@@ -315,6 +315,7 @@ export function HLSVideoPlayer({
 				enableWorker: true,
 				lowLatencyMode: false,
 				backBufferLength: 90,
+				startFragPrefetch: true,
 				...(isLiveSegments
 					? {
 							liveSyncDurationCount: 3,
@@ -323,6 +324,8 @@ export function HLSVideoPlayer({
 							manifestLoadingMaxRetry: 30,
 							levelLoadingRetryDelay: 2000,
 							levelLoadingMaxRetry: 30,
+							fragLoadingRetryDelay: 2000,
+							fragLoadingMaxRetry: 30,
 						}
 					: {}),
 			});
