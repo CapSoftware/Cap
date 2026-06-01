@@ -12,7 +12,12 @@ import {
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
-import { getAiClient, getAiModel, isAiConfigured } from "@/lib/ai-provider";
+import {
+	getAiClient,
+	getAiFallbackClient,
+	getAiModel,
+	isAiConfigured,
+} from "@/lib/ai-provider";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
@@ -377,6 +382,26 @@ async function callAiApi(
 	prompt: string,
 	client: NonNullable<ReturnType<typeof getAiClient>>,
 	model: string,
+): Promise<string> {
+	try {
+		return await invokeChat(client, model, prompt);
+	} catch (primaryError) {
+		const fallback = getAiFallbackClient();
+		if (!fallback) throw primaryError;
+		const message = String(
+			(primaryError as { message?: unknown })?.message ?? primaryError,
+		).slice(0, 200);
+		console.warn(
+			`[generate-ai] primary AI provider failed, falling back to OpenAI: ${message}`,
+		);
+		return await invokeChat(fallback.client, fallback.model, prompt);
+	}
+}
+
+async function invokeChat(
+	client: NonNullable<ReturnType<typeof getAiClient>>,
+	model: string,
+	prompt: string,
 ): Promise<string> {
 	try {
 		const completion = await client.chat.completions.create({

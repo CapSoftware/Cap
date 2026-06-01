@@ -62,6 +62,23 @@ export function getAiClient(): OpenAI | null {
 	return null;
 }
 
+export function getAiFallbackClient(): {
+	client: OpenAI;
+	model: string;
+} | null {
+	const env = serverEnv();
+	if (env.AI_BASE_URL) return null;
+	if (!env.GROQ_API_KEY || !env.OPENAI_API_KEY) return null;
+	return {
+		client: new OpenAI({
+			apiKey: env.OPENAI_API_KEY,
+			timeout: AI_TIMEOUT_MS,
+			maxRetries: MAX_RETRIES,
+		}),
+		model: OPENAI_DEFAULT_MODEL,
+	};
+}
+
 export function getAiModel(): string {
 	const env = serverEnv();
 	if (env.AI_BASE_URL) {
