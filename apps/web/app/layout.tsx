@@ -5,6 +5,7 @@ import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import Script from "next/script";
 import type { PropsWithChildren } from "react";
 import { SonnerToaster } from "@/components/SonnerToastProvider";
 import { runPromise } from "@/lib/server";
@@ -22,8 +23,6 @@ import {
 	SessionProvider,
 } from "./Layout/providers";
 import { StripeContextProvider } from "./Layout/StripeContext";
-//@ts-expect-error
-import { script } from "./themeScript";
 
 const defaultFont = localFont({
 	src: [
@@ -107,9 +106,7 @@ export default ({ children }: PropsWithChildren) =>
 					<meta name="theme-color" content="#ffffff" />
 				</head>
 				<body suppressHydrationWarning>
-					<script
-						dangerouslySetInnerHTML={{ __html: `(${script.toString()})()` }}
-					/>
+					<Script src="/theme-script.js" strategy="beforeInteractive" />
 					<TooltipPrimitive.Provider>
 						<PostHogProvider bootstrapData={bootstrapData}>
 							<AuthContextProvider user={runPromise(resolveCurrentUser)}>
