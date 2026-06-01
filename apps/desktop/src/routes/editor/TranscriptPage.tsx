@@ -362,7 +362,7 @@ export function TranscriptPanel() {
 					const w = seg.words[word.wordIndex] as CaptionWordExtended;
 
 					const insertDuration =
-						w.storedEnd +
+						w.end +
 						(w.bufferEnd || 0) -
 						Math.max(0, w.start - (w.bufferStart || 0));
 					if (insertDuration <= 0.001) continue;
