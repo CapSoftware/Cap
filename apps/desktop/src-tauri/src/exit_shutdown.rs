@@ -83,12 +83,13 @@ pub(crate) fn app_exit_action(exit_code: i32) -> AppExitAction {
 pub(crate) enum ExitRequestDecision {
     StartCleanup,
     AlreadyExiting,
+    ExportActive,
     AllowRuntimeExit,
 }
 
 pub(crate) fn handle_exit_requested<FPrevent>(
     is_exiting: bool,
-    _export_active: bool,
+    export_active: bool,
     runtime_exit_requested: bool,
     prevent_exit: FPrevent,
 ) -> ExitRequestDecision
@@ -97,6 +98,9 @@ where
 {
     if is_exiting && runtime_exit_requested {
         ExitRequestDecision::AllowRuntimeExit
+    } else if export_active {
+        prevent_exit();
+        ExitRequestDecision::ExportActive
     } else if is_exiting {
         prevent_exit();
         ExitRequestDecision::AlreadyExiting

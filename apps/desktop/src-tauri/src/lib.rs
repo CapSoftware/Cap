@@ -4830,6 +4830,13 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     if app_is_exiting(app) {
                         return;
                     }
+                    if export::export_session_active() {
+                        warn!(
+                            window = label,
+                            "Skipping Destroyed cleanup during active export"
+                        );
+                        return;
+                    }
                     let window_id = CapWindowId::from_str(label).ok();
                     let is_editor_window = matches!(
                         window_id,
@@ -4838,13 +4845,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     );
                     if is_editor_window {
                         export::cancel_exports_for_window(label);
-                    }
-                    if export::export_session_active() && !is_editor_window {
-                        warn!(
-                            window = label,
-                            "Skipping Destroyed cleanup during active export"
-                        );
-                        return;
                     }
                     if let Some(window_id) = window_id {
                         if matches!(window_id, CapWindowId::Camera) {
@@ -5244,6 +5244,9 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
                     });
                 }
                 ExitRequestDecision::AlreadyExiting => {}
+                ExitRequestDecision::ExportActive => {
+                    warn!("Preventing app exit request during active export");
+                }
                 ExitRequestDecision::AllowRuntimeExit => {}
             }
         }
