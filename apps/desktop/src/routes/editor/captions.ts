@@ -12,6 +12,7 @@ import {
 	type TimelineSegment,
 } from "~/utils/tauri";
 import type { CaptionWordExtended } from "./caption-types";
+import { isFillerWord } from "./filler-detection";
 export const DEFAULT_CAPTION_MODEL = "best";
 export const DEFAULT_WHISPER_CAPTION_MODEL = "small";
 export const DEFAULT_CAPTION_LANGUAGE = "auto";
@@ -149,7 +150,7 @@ export function mapCaptionsToEditedTimeline(
 									start: wordMapped.start,
 									end: wordMapped.end,
 									deleted: w.deleted ?? false,
-									isFiller: w.isFiller ?? false,
+									isFiller: w.isFiller ?? isFillerWord(w.text),
 									isPause: w.isPause ?? false,
 									bufferStart: w.bufferStart ?? 0,
 									bufferEnd: w.bufferEnd ?? 0,
