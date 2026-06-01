@@ -176,7 +176,7 @@ export const homepageCopy: HomePageCopy = {
 			seeOtherOptionsText: "More download options",
 		},
 	},
-	textReveal: "Record. Edit. Share. — On Your Terms.",
+	textReveal: "Record. Edit. Share.",
 	recordingModes: {
 		title: "Three Modes, Zero Compromise",
 		subtitle:
