@@ -822,6 +822,7 @@ fn process_with_whisper(
                             text: current_word.trim().to_string(),
                             start: ws,
                             end: word_end,
+                            ..Default::default()
                         });
                     }
                     current_word = token_text.trim().to_string();
@@ -854,6 +855,7 @@ fn process_with_whisper(
                 text: current_word.trim().to_string(),
                 start: ws,
                 end: word_end,
+                ..Default::default()
             });
         }
 
@@ -1000,6 +1002,7 @@ fn process_with_parakeet(
             text: t.text.trim().to_string(),
             start: t.start,
             end: t.end,
+            ..Default::default()
         })
         .collect();
 
@@ -1393,6 +1396,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                                         text: w_text.to_string(),
                                         start: w_start as f32,
                                         end: w_end as f32,
+                                        ..Default::default()
                                     });
                                 }
                             }
