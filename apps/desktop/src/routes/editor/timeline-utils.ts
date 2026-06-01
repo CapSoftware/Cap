@@ -16,12 +16,27 @@ export function shiftCaptionTimesAfterCut(
 	}>,
 	cutStart: number,
 	cutDuration: number,
+	ignoreWords?: { segmentIndex: number; wordIndex: number }[],
 ) {
-	for (const seg of segments) {
+	for (let i = 0; i < segments.length; i++) {
+		const seg = segments[i];
 		if (seg.words) {
-			for (const w of seg.words) {
+			for (let j = 0; j < seg.words.length; j++) {
+				const w = seg.words[j];
+
+				if (
+					ignoreWords?.some(
+						(ignore) => ignore.segmentIndex === i && ignore.wordIndex === j,
+					)
+				) {
+					continue;
+				}
+
 				if (w.deleted) {
-					if (w.start >= cutStart && w.end <= cutStart + cutDuration) {
+					if (
+						w.start >= cutStart - 0.001 &&
+						w.end <= cutStart + cutDuration + 0.001
+					) {
 						continue;
 					}
 					const duration = w.end - w.start;
@@ -184,10 +199,22 @@ export function shiftCaptionTimesAfterInsert(
 	}>,
 	insertPoint: number,
 	duration_arg: number,
+	ignoreWords?: { segmentIndex: number; wordIndex: number }[],
 ) {
-	for (const seg of segments) {
+	for (let i = 0; i < segments.length; i++) {
+		const seg = segments[i];
 		if (seg.words) {
-			for (const w of seg.words) {
+			for (let j = 0; j < seg.words.length; j++) {
+				const w = seg.words[j];
+
+				if (
+					ignoreWords?.some(
+						(ignore) => ignore.segmentIndex === i && ignore.wordIndex === j,
+					)
+				) {
+					continue;
+				}
+
 				if (w.deleted) {
 					if (
 						w.start >= insertPoint - 0.001 &&

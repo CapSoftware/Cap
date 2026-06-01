@@ -439,7 +439,8 @@ export function TranscriptPanel() {
 		const threshold = silenceThreshold();
 
 		const fillerWords = words.filter((w) => !w.deleted && w.isFiller);
-		const pausesToClean = ps.filter((p) => p.duration >= threshold);
+		const wordsWithoutFillers = words.filter((w) => !w.deleted && !w.isFiller);
+		const pausesToClean = detectPauses(wordsWithoutFillers, threshold);
 
 		if (fillerWords.length === 0 && pausesToClean.length === 0) return;
 
@@ -527,10 +528,6 @@ export function TranscriptPanel() {
 						p.captions.segments,
 						range.start,
 						cutDuration,
-						fillerWords.map((w) => ({
-							segmentIndex: w.segmentIndex,
-							wordIndex: w.wordIndex,
-						})),
 					);
 
 					if (p.timeline) {
