@@ -97,19 +97,23 @@ export function TranscriptPanel() {
 			for (let wordIdx = 0; wordIdx < words.length; wordIdx++) {
 				const w = words[wordIdx];
 
-				let start = w.start;
+				const start = w.start;
+				let end = w.end;
 				if (!w.isPause) {
 					const duration = w.end - w.start;
 					const maxDuration = Math.max(0.5, Math.min(1.5, w.text.length * 0.1));
 					if (duration > maxDuration + 0.3) {
-						start = w.end - maxDuration;
+						// Parakeet TDT attaches trailing silence to the END of the word.
+						// We must cap w.end so the spoken word is preserved at the beginning of the timestamp block,
+						// exposing the silence AFTER the word.
+						end = w.start + maxDuration;
 					}
 				}
 
 				result.push({
 					text: w.text,
 					start,
-					end: w.end,
+					end,
 					segmentIndex: segIdx,
 					wordIndex: wordIdx,
 					deleted: w.deleted ?? false,
@@ -771,6 +775,9 @@ function BufferPopover(props: {
 							step="0.01"
 							value={bufStart()}
 							onInput={(e) =>
+								setBufStart(Number.parseFloat(e.currentTarget.value))
+							}
+							onChange={(e) =>
 								updateBuffer(Number.parseFloat(e.currentTarget.value), bufEnd())
 							}
 							class="w-full h-1 accent-blue-9"
@@ -790,6 +797,9 @@ function BufferPopover(props: {
 							step="0.01"
 							value={bufEnd()}
 							onInput={(e) =>
+								setBufEnd(Number.parseFloat(e.currentTarget.value))
+							}
+							onChange={(e) =>
 								updateBuffer(
 									bufStart(),
 									Number.parseFloat(e.currentTarget.value),

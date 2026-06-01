@@ -12,7 +12,7 @@ export function shiftCaptionTimesAfterCut(
 	segments: Array<{
 		start: number;
 		end: number;
-		words?: Array<{ start: number; end: number }>;
+		words?: Array<{ start: number; end: number; deleted?: boolean }>;
 	}>,
 	cutStart: number,
 	cutDuration: number,
@@ -20,8 +20,17 @@ export function shiftCaptionTimesAfterCut(
 	for (const seg of segments) {
 		if (seg.words) {
 			for (const w of seg.words) {
-				w.start = shiftTimeAfterCut(w.start, cutStart, cutDuration);
-				w.end = shiftTimeAfterCut(w.end, cutStart, cutDuration);
+				if (w.deleted) {
+					if (w.start >= cutStart && w.end <= cutStart + cutDuration) {
+						continue;
+					}
+					const duration = w.end - w.start;
+					w.start = shiftTimeAfterCut(w.start, cutStart, cutDuration);
+					w.end = w.start + duration;
+				} else {
+					w.start = shiftTimeAfterCut(w.start, cutStart, cutDuration);
+					w.end = shiftTimeAfterCut(w.end, cutStart, cutDuration);
+				}
 			}
 			if (seg.words.length > 0) {
 				seg.start = seg.words[0].start;
@@ -171,7 +180,7 @@ export function shiftCaptionTimesAfterInsert(
 	segments: Array<{
 		start: number;
 		end: number;
-		words?: Array<{ start: number; end: number }>;
+		words?: Array<{ start: number; end: number; deleted?: boolean }>;
 	}>,
 	insertPoint: number,
 	duration_arg: number,
@@ -179,8 +188,17 @@ export function shiftCaptionTimesAfterInsert(
 	for (const seg of segments) {
 		if (seg.words) {
 			for (const w of seg.words) {
-				w.start = shiftTimeAfterInsert(w.start, insertPoint, duration_arg);
-				w.end = shiftTimeAfterInsert(w.end, insertPoint, duration_arg);
+				if (w.deleted) {
+					if (w.start >= insertPoint && w.end <= insertPoint + duration_arg) {
+						continue;
+					}
+					const duration = w.end - w.start;
+					w.start = shiftTimeAfterInsert(w.start, insertPoint, duration_arg);
+					w.end = w.start + duration;
+				} else {
+					w.start = shiftTimeAfterInsert(w.start, insertPoint, duration_arg);
+					w.end = shiftTimeAfterInsert(w.end, insertPoint, duration_arg);
+				}
 			}
 			if (seg.words.length > 0) {
 				seg.start = seg.words[0].start;
