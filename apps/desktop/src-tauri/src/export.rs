@@ -418,10 +418,7 @@ async fn run_out_of_process_export(
     force_ffmpeg: bool,
     cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
-    let mode = ExportWorkerMode::HardwareOptimized;
-    // Windows GPU drivers, MediaFoundation, and encoder DLLs can abort the process on failure.
-    // Keep the first fast hardware attempt in the worker, then retry in software-safe mode so
-    // the desktop process never owns the crash-prone export pipeline.
+    let mode = initial_export_worker_mode();
     match run_out_of_process_export_attempt(
         project_path,
         settings,
@@ -433,7 +430,7 @@ async fn run_out_of_process_export(
     .await
     {
         Ok(path) => Ok(path),
-        Err(e) if e != "Export cancelled" => {
+        Err(e) if e != "Export cancelled" && !mode.is_software_safe() => {
             error!(
                 error = %e,
                 "Export worker failed, retrying with software rendering and encoding"
@@ -449,6 +446,14 @@ async fn run_out_of_process_export(
             .await
         }
         Err(e) => Err(e),
+    }
+}
+
+fn initial_export_worker_mode() -> ExportWorkerMode {
+    if should_start_export_worker_in_software_safe_mode() {
+        ExportWorkerMode::SoftwareSafe
+    } else {
+        ExportWorkerMode::HardwareOptimized
     }
 }
 
@@ -896,7 +901,19 @@ fn is_frame_decode_error(error: &str) -> bool {
 }
 
 fn should_force_ffmpeg_export(_project_path: &Path, settings: &ExportSettings) -> bool {
-    settings.force_ffmpeg_decoder()
+    settings.force_ffmpeg_decoder() || should_use_windows_release_export_workaround()
+}
+
+fn should_force_ffmpeg_preview() -> bool {
+    should_use_windows_release_export_workaround()
+}
+
+fn should_start_export_worker_in_software_safe_mode() -> bool {
+    should_use_windows_release_export_workaround()
+}
+
+fn should_use_windows_release_export_workaround() -> bool {
+    cfg!(all(target_os = "windows", not(debug_assertions)))
 }
 
 fn should_use_out_of_process_export() -> bool {
@@ -1394,7 +1411,7 @@ async fn generate_export_preview_inner(
         .map_err(|e| format!("Failed to create render constants: {e}"))?,
     );
 
-    let force_ffmpeg = false;
+    let force_ffmpeg = should_force_ffmpeg_preview();
     info!(
         project_path = %project_path.display(),
         force_ffmpeg,
@@ -1608,7 +1625,7 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn windows_exports_do_not_force_ffmpeg_without_explicit_setting() {
+    fn windows_exports_force_ffmpeg_in_release_builds_without_explicit_setting() {
         let dir = tempdir().unwrap();
 
         let gif_settings = ExportSettings::Gif(cap_export::gif::GifExportSettings {
@@ -1617,7 +1634,18 @@ mod tests {
             quality: None,
         });
 
-        assert!(!should_force_ffmpeg_export(dir.path(), &gif_settings));
+        assert_eq!(
+            should_force_ffmpeg_export(dir.path(), &gif_settings),
+            !cfg!(debug_assertions)
+        );
+    }
+
+    #[test]
+    fn windows_release_safe_mode_gate_matches_target() {
+        assert_eq!(
+            should_start_export_worker_in_software_safe_mode(),
+            cfg!(all(target_os = "windows", not(debug_assertions)))
+        );
     }
 }
 
