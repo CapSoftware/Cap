@@ -425,7 +425,18 @@ if (import.meta.vitest) {
 				start: 0.4,
 				end: 0.6,
 				text: "hello",
-				words: [{ text: "hello", start: 0.4, end: 0.6 }],
+				words: [
+					{
+						text: "hello",
+						start: 0.4,
+						end: 0.6,
+						deleted: false,
+						isFiller: false,
+						isPause: false,
+						bufferStart: 0,
+						bufferEnd: 0,
+					},
+				],
 			});
 			expect(result[1]?.id).toBe("caption-1");
 			expect(result[1]?.text).toBe("world");

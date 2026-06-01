@@ -18,17 +18,17 @@ export function shiftCaptionTimesAfterCut(
 	cutDuration: number,
 	ignoreWords?: { segmentIndex: number; wordIndex: number }[],
 ) {
+	const ignoreSet = new Set(
+		ignoreWords?.map((iw) => `${iw.segmentIndex}:${iw.wordIndex}`),
+	);
+
 	for (let i = 0; i < segments.length; i++) {
 		const seg = segments[i];
 		if (seg.words) {
 			for (let j = 0; j < seg.words.length; j++) {
 				const w = seg.words[j];
 
-				if (
-					ignoreWords?.some(
-						(ignore) => ignore.segmentIndex === i && ignore.wordIndex === j,
-					)
-				) {
+				if (ignoreSet.has(`${i}:${j}`)) {
 					continue;
 				}
 
@@ -48,8 +48,11 @@ export function shiftCaptionTimesAfterCut(
 				}
 			}
 			if (seg.words.length > 0) {
-				seg.start = seg.words[0].start;
-				seg.end = seg.words[seg.words.length - 1].end;
+				const visible = seg.words.filter((w) => !w.deleted);
+				if (visible.length > 0) {
+					seg.start = visible[0].start;
+					seg.end = visible[visible.length - 1].end;
+				}
 			}
 		}
 	}
@@ -201,17 +204,17 @@ export function shiftCaptionTimesAfterInsert(
 	duration_arg: number,
 	ignoreWords?: { segmentIndex: number; wordIndex: number }[],
 ) {
+	const ignoreSet = new Set(
+		ignoreWords?.map((iw) => `${iw.segmentIndex}:${iw.wordIndex}`),
+	);
+
 	for (let i = 0; i < segments.length; i++) {
 		const seg = segments[i];
 		if (seg.words) {
 			for (let j = 0; j < seg.words.length; j++) {
 				const w = seg.words[j];
 
-				if (
-					ignoreWords?.some(
-						(ignore) => ignore.segmentIndex === i && ignore.wordIndex === j,
-					)
-				) {
+				if (ignoreSet.has(`${i}:${j}`)) {
 					continue;
 				}
 
@@ -228,8 +231,11 @@ export function shiftCaptionTimesAfterInsert(
 				w.end = w.start + duration;
 			}
 			if (seg.words.length > 0) {
-				seg.start = seg.words[0].start;
-				seg.end = seg.words[seg.words.length - 1].end;
+				const visible = seg.words.filter((w) => !w.deleted);
+				if (visible.length > 0) {
+					seg.start = visible[0].start;
+					seg.end = visible[visible.length - 1].end;
+				}
 			}
 		}
 	}
