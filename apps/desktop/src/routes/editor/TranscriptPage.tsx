@@ -427,21 +427,26 @@ export function TranscriptPanel() {
 		{ name: "editorAutoCleanThreshold" },
 	);
 
-	const [lastAutoCleanIndices, setLastAutoCleanIndices] = createSignal<
-		number[] | null
-	>(null);
-
 	const autoClean = () => {
 		const words = allWords();
 		const threshold = silenceThreshold();
 
-		const fillerWords = words.filter((w) => !w.deleted && w.isFiller);
-		const wordsWithoutFillers = words.filter((w) => !w.deleted && !w.isFiller);
-		const pausesToClean = detectPauses(wordsWithoutFillers, threshold);
+		const keeperWords = words.filter(
+			(w) => !w.deleted && !w.isFiller && !w.isPause,
+		);
 
-		if (fillerWords.length === 0 && pausesToClean.length === 0) return;
+		if (keeperWords.length === 0) return;
 
-		const affectedFlatIndices = fillerWords.map((fw) => words.indexOf(fw));
+		const fillerSet = new Set(
+			words
+				.filter((w) => !w.deleted && w.isFiller)
+				.map((w) => `${w.segmentIndex}:${w.wordIndex}`),
+		);
+
+		if (fillerSet.size === 0) {
+			const pauseGaps = detectPauses(keeperWords, threshold);
+			if (pauseGaps.length === 0) return;
+		}
 
 		setProject(
 			produce((p) => {
@@ -451,55 +456,95 @@ export function TranscriptPanel() {
 				const allIgnoreWords: { segmentIndex: number; wordIndex: number }[] =
 					[];
 
-				for (const fw of fillerWords) {
-					const seg = p.captions.segments[fw.segmentIndex];
-					if (seg?.words) {
-						const w = seg.words[fw.wordIndex] as CaptionWordExtended;
-						if (w) {
-							seg.words[fw.wordIndex] = { ...w, deleted: true };
+				for (let segIdx = 0; segIdx < p.captions.segments.length; segIdx++) {
+					const seg = p.captions.segments[segIdx];
+					if (!seg.words) continue;
+					for (let wIdx = 0; wIdx < seg.words.length; wIdx++) {
+						const w = seg.words[wIdx] as CaptionWordExtended;
+						if (w && !w.deleted && (w.isFiller || isFillerWord(w.text))) {
+							seg.words[wIdx] = { ...w, deleted: true };
+							allIgnoreWords.push({ segmentIndex: segIdx, wordIndex: wIdx });
 						}
 					}
-					allIgnoreWords.push({
-						segmentIndex: fw.segmentIndex,
-						wordIndex: fw.wordIndex,
-					});
-					timeRanges.push({
-						start: Math.max(0, fw.start - (fw.bufferStart || 0)),
-						end: fw.end + (fw.bufferEnd || 0),
-					});
 				}
 
-				const sortedPauses = [...pausesToClean].sort((a, b) => {
-					if (a.afterSegmentIndex !== b.afterSegmentIndex) {
-						return b.afterSegmentIndex - a.afterSegmentIndex;
-					}
-					return b.afterWordIndex - a.afterWordIndex;
-				});
+				for (let i = 0; i < keeperWords.length; i++) {
+					const curr = keeperWords[i];
+					const seg = p.captions.segments[curr.segmentIndex];
+					if (!seg?.words) continue;
+					const rawWord = seg.words[curr.wordIndex];
+					const rawEnd = rawWord ? rawWord.end : curr.end;
 
-				for (const pInfo of sortedPauses) {
-					const seg = p.captions.segments[pInfo.afterSegmentIndex];
-					if (seg?.words) {
-						const pauseWord: CaptionWordExtended = {
-							text: `[Pause ${pInfo.duration.toFixed(1)}s]`,
-							start: pInfo.start,
-							end: pInfo.end,
-							deleted: true,
-							isPause: true,
-							isFiller: false,
-							bufferStart: DEFAULT_PAUSE_BUFFER,
-							bufferEnd: DEFAULT_PAUSE_BUFFER,
-						};
-						const insertIdx = pInfo.afterWordIndex + 1;
-						seg.words.splice(insertIdx, 0, pauseWord);
-						allIgnoreWords.push({
-							segmentIndex: pInfo.afterSegmentIndex,
-							wordIndex: insertIdx,
-						});
+					const next = keeperWords[i + 1];
+					if (!next) continue;
+
+					const nextSeg = p.captions.segments[next.segmentIndex];
+					const rawNextStart =
+						nextSeg?.words?.[next.wordIndex]?.start ?? next.start;
+
+					const gapStart = rawEnd;
+					const gapEnd = rawNextStart;
+					const gap = gapEnd - gapStart;
+
+					if (gap < 0.001) continue;
+
+					let hasFillerInGap = false;
+					for (const w of words) {
+						if (w.deleted || w.isPause) continue;
+						if (!w.isFiller) continue;
+						if (w.start >= gapStart - 0.01 && w.end <= gapEnd + 0.01) {
+							hasFillerInGap = true;
+							break;
+						}
 					}
-					timeRanges.push({
-						start: Math.max(0, pInfo.start - DEFAULT_PAUSE_BUFFER),
-						end: pInfo.end + DEFAULT_PAUSE_BUFFER,
-					});
+
+					const shouldCut = hasFillerInGap || gap >= threshold;
+
+					if (shouldCut) {
+						timeRanges.push({ start: gapStart, end: gapEnd });
+
+						if (gap >= threshold) {
+							const pauseWord: CaptionWordExtended = {
+								text: `[Pause ${gap.toFixed(1)}s]`,
+								start: gapStart,
+								end: gapEnd,
+								deleted: true,
+								isPause: true,
+								isFiller: false,
+								bufferStart: DEFAULT_PAUSE_BUFFER,
+								bufferEnd: DEFAULT_PAUSE_BUFFER,
+							};
+							const insertIdx = curr.wordIndex + 1;
+							seg.words.splice(insertIdx, 0, pauseWord);
+							allIgnoreWords.push({
+								segmentIndex: curr.segmentIndex,
+								wordIndex: insertIdx,
+							});
+
+							for (let k = i + 1; k < keeperWords.length; k++) {
+								if (
+									keeperWords[k].segmentIndex === curr.segmentIndex &&
+									keeperWords[k].wordIndex >= insertIdx
+								) {
+									keeperWords[k] = {
+										...keeperWords[k],
+										wordIndex: keeperWords[k].wordIndex + 1,
+									};
+								}
+							}
+							for (let k = 0; k < allIgnoreWords.length - 1; k++) {
+								if (
+									allIgnoreWords[k].segmentIndex === curr.segmentIndex &&
+									allIgnoreWords[k].wordIndex >= insertIdx
+								) {
+									allIgnoreWords[k] = {
+										...allIgnoreWords[k],
+										wordIndex: allIgnoreWords[k].wordIndex + 1,
+									};
+								}
+							}
+						}
+					}
 				}
 
 				for (const seg of p.captions.segments) {
@@ -549,17 +594,7 @@ export function TranscriptPanel() {
 				}
 			}),
 		);
-		setLastAutoCleanIndices(affectedFlatIndices);
 		setEditorState("captions", "isStale", false);
-	};
-
-	const undoAutoClean = () => {
-		const indices = lastAutoCleanIndices();
-		if (!indices || indices.length === 0) return;
-		const words = allWords();
-		const deletedIndices = indices.filter((i) => words[i]?.deleted);
-		restoreWords(deletedIndices);
-		setLastAutoCleanIndices(null);
 	};
 
 	const isAtEnd = () => {
@@ -631,16 +666,7 @@ export function TranscriptPanel() {
 								`${pauseCount()} pause${pauseCount() > 1 ? "s" : ""}`}
 						</span>
 					</Show>
-					<Show when={lastAutoCleanIndices() !== null}>
-						<button
-							type="button"
-							class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-gray-4 text-gray-11 hover:bg-gray-5 transition-colors mr-1"
-							onClick={() => undoAutoClean()}
-						>
-							<IconLucideRotateCcw class="size-3" />
-							Undo
-						</button>
-					</Show>
+
 					<div class="relative">
 						<div class="flex">
 							<button
