@@ -345,97 +345,26 @@ export function TranscriptPanel() {
 
 		if (wordsToRestore.length === 0) return;
 
+		const timeRanges = wordsToRestore
+			.map((w) => ({
+				start: Math.max(0, w.start - (w.bufferStart || 0)),
+				end: w.storedEnd + (w.bufferEnd || 0),
+			}))
+			.sort((a, b) => a.start - b.start);
+
+		const mergedRanges: { start: number; end: number }[] = [];
+		for (const range of timeRanges) {
+			const last = mergedRanges[mergedRanges.length - 1];
+			if (last && range.start <= last.end) {
+				last.end = Math.max(last.end, range.end);
+			} else {
+				mergedRanges.push({ ...range });
+			}
+		}
+
 		setProject(
 			produce((p) => {
 				if (!p.captions?.segments) return;
-
-				const sortedByIndex = [...wordsToRestore].sort(
-					(a, b) =>
-						b.segmentIndex - a.segmentIndex || b.wordIndex - a.wordIndex,
-				);
-
-				for (const word of sortedByIndex) {
-					const seg = p.captions.segments[word.segmentIndex];
-					if (!seg?.words) continue;
-					const w = seg.words[word.wordIndex] as CaptionWordExtended;
-
-					const bufferStart = w.bufferStart || 0;
-					const bufferEnd = w.bufferEnd || 0;
-					if (bufferStart === 0 && bufferEnd === 0) continue;
-
-					const oldCutStart = Math.max(0, w.start - bufferStart);
-					const oldCutEnd = w.storedEnd + bufferEnd;
-					const oldDuration = Math.max(0, oldCutEnd - oldCutStart);
-
-					const newCutStart = w.start;
-					const newCutEnd = w.storedEnd;
-					const newDuration = Math.max(0, newCutEnd - newCutStart);
-
-					if (oldDuration > 0.001) {
-						for (let i = 0; i < p.captions.segments.length; i++) {
-							const s = p.captions.segments[i];
-							if (!s.words) continue;
-							for (let j = 0; j < s.words.length; j++) {
-								if (
-									i < word.segmentIndex ||
-									(i === word.segmentIndex && j <= word.wordIndex)
-								)
-									continue;
-								const cw = s.words[j] as CaptionWordExtended;
-								cw.start += oldDuration;
-								cw.end += oldDuration;
-							}
-						}
-						if (p.timeline)
-							rippleInsertAllTracks(p.timeline, oldCutStart, oldDuration);
-					}
-
-					if (newDuration > 0.001) {
-						for (let i = 0; i < p.captions.segments.length; i++) {
-							const s = p.captions.segments[i];
-							if (!s.words) continue;
-							for (let j = 0; j < s.words.length; j++) {
-								if (
-									i < word.segmentIndex ||
-									(i === word.segmentIndex && j <= word.wordIndex)
-								)
-									continue;
-								const cw = s.words[j] as CaptionWordExtended;
-								cw.start -= newDuration;
-								if (cw.start < newCutStart) cw.start = newCutStart;
-								cw.end -= newDuration;
-								if (cw.end < cw.start) cw.end = cw.start;
-							}
-						}
-						if (p.timeline)
-							rippleDeleteAllTracks(p.timeline, newCutStart, newCutEnd);
-					}
-
-					w.bufferStart = 0;
-					w.bufferEnd = 0;
-				}
-
-				const timeRanges = sortedByIndex
-					.map((word) => {
-						const w = p.captions!.segments[word.segmentIndex].words![
-							word.wordIndex
-						] as CaptionWordExtended;
-						return {
-							start: w.start,
-							end: w.storedEnd,
-						};
-					})
-					.sort((a, b) => a.start - b.start);
-
-				const mergedRanges: { start: number; end: number }[] = [];
-				for (const range of timeRanges) {
-					const last = mergedRanges[mergedRanges.length - 1];
-					if (last && range.start <= last.end) {
-						last.end = Math.max(last.end, range.end);
-					} else {
-						mergedRanges.push({ ...range });
-					}
-				}
 
 				for (const range of mergedRanges) {
 					const insertDuration = range.end - range.start;
@@ -451,6 +380,11 @@ export function TranscriptPanel() {
 						rippleInsertAllTracks(p.timeline, range.start, insertDuration);
 					}
 				}
+
+				const sortedByIndex = [...wordsToRestore].sort(
+					(a, b) =>
+						b.segmentIndex - a.segmentIndex || b.wordIndex - a.wordIndex,
+				);
 
 				for (const word of sortedByIndex) {
 					const seg = p.captions.segments[word.segmentIndex];
@@ -1359,7 +1293,10 @@ function TranscriptEditor(props: {
 								const cw = s.words[j] as CaptionWordExtended;
 
 								cw.start -= newDuration;
+								if (cw.start < newCutStart) cw.start = newCutStart;
+
 								cw.end -= newDuration;
+								if (cw.end < cw.start) cw.end = cw.start;
 							}
 						}
 
