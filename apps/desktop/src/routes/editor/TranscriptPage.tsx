@@ -21,7 +21,6 @@ import { FPS, useEditorContext } from "./context";
 import {
 	AUTO_CLEAN_SILENCE_THRESHOLD,
 	DEFAULT_PAUSE_BUFFER,
-	detectPauses,
 	isFillerWord,
 	PAUSE_DETECTION_THRESHOLD,
 } from "./filler-detection";
@@ -437,17 +436,6 @@ export function TranscriptPanel() {
 
 		if (keeperWords.length === 0) return;
 
-		const fillerSet = new Set(
-			words
-				.filter((w) => !w.deleted && w.isFiller)
-				.map((w) => `${w.segmentIndex}:${w.wordIndex}`),
-		);
-
-		if (fillerSet.size === 0) {
-			const pauseGaps = detectPauses(keeperWords, threshold);
-			if (pauseGaps.length === 0) return;
-		}
-
 		setProject(
 			produce((p) => {
 				if (!p.captions?.segments) return;
@@ -468,22 +456,35 @@ export function TranscriptPanel() {
 					}
 				}
 
-				for (let i = 0; i < keeperWords.length; i++) {
-					const curr = keeperWords[i];
-					const seg = p.captions.segments[curr.segmentIndex];
+				for (const kw of keeperWords) {
+					const seg = p.captions.segments[kw.segmentIndex];
 					if (!seg?.words) continue;
-					const rawWord = seg.words[curr.wordIndex];
-					const rawEnd = rawWord ? rawWord.end : curr.end;
+					const w = seg.words[kw.wordIndex];
+					if (w && !w.deleted) {
+						const duration = w.end - w.start;
+						const maxDuration = Math.max(
+							0.5,
+							Math.min(1.5, w.text.length * 0.1),
+						);
+						if (duration > maxDuration + 0.3) {
+							w.end = w.start + maxDuration;
+						}
+					}
+				}
 
+				for (let i = -1; i < keeperWords.length - 1; i++) {
+					const curr = i >= 0 ? keeperWords[i] : null;
 					const next = keeperWords[i + 1];
-					if (!next) continue;
+
+					const currSeg = curr ? p.captions.segments[curr.segmentIndex] : null;
+					const currWord =
+						currSeg?.words && curr ? currSeg.words[curr.wordIndex] : null;
 
 					const nextSeg = p.captions.segments[next.segmentIndex];
-					const rawNextStart =
-						nextSeg?.words?.[next.wordIndex]?.start ?? next.start;
+					const nextWord = nextSeg?.words?.[next.wordIndex];
 
-					const gapStart = rawEnd;
-					const gapEnd = rawNextStart;
+					const gapStart = currWord ? currWord.end : curr ? curr.end : 0;
+					const gapEnd = nextWord ? nextWord.start : next.start;
 					const gap = gapEnd - gapStart;
 
 					if (gap < 0.001) continue;
@@ -514,33 +515,38 @@ export function TranscriptPanel() {
 								bufferStart: DEFAULT_PAUSE_BUFFER,
 								bufferEnd: DEFAULT_PAUSE_BUFFER,
 							};
-							const insertIdx = curr.wordIndex + 1;
-							seg.words.splice(insertIdx, 0, pauseWord);
-							allIgnoreWords.push({
-								segmentIndex: curr.segmentIndex,
-								wordIndex: insertIdx,
-							});
+							const insertIdx = curr ? curr.wordIndex + 1 : 0;
+							const targetSegIdx = curr ? curr.segmentIndex : next.segmentIndex;
+							const targetSeg = p.captions.segments[targetSegIdx];
 
-							for (let k = i + 1; k < keeperWords.length; k++) {
-								if (
-									keeperWords[k].segmentIndex === curr.segmentIndex &&
-									keeperWords[k].wordIndex >= insertIdx
-								) {
-									keeperWords[k] = {
-										...keeperWords[k],
-										wordIndex: keeperWords[k].wordIndex + 1,
-									};
+							if (targetSeg?.words) {
+								targetSeg.words.splice(insertIdx, 0, pauseWord);
+								allIgnoreWords.push({
+									segmentIndex: targetSegIdx,
+									wordIndex: insertIdx,
+								});
+
+								for (let k = Math.max(0, i + 1); k < keeperWords.length; k++) {
+									if (
+										keeperWords[k].segmentIndex === targetSegIdx &&
+										keeperWords[k].wordIndex >= insertIdx
+									) {
+										keeperWords[k] = {
+											...keeperWords[k],
+											wordIndex: keeperWords[k].wordIndex + 1,
+										};
+									}
 								}
-							}
-							for (let k = 0; k < allIgnoreWords.length - 1; k++) {
-								if (
-									allIgnoreWords[k].segmentIndex === curr.segmentIndex &&
-									allIgnoreWords[k].wordIndex >= insertIdx
-								) {
-									allIgnoreWords[k] = {
-										...allIgnoreWords[k],
-										wordIndex: allIgnoreWords[k].wordIndex + 1,
-									};
+								for (let k = 0; k < allIgnoreWords.length - 1; k++) {
+									if (
+										allIgnoreWords[k].segmentIndex === targetSegIdx &&
+										allIgnoreWords[k].wordIndex >= insertIdx
+									) {
+										allIgnoreWords[k] = {
+											...allIgnoreWords[k],
+											wordIndex: allIgnoreWords[k].wordIndex + 1,
+										};
+									}
 								}
 							}
 						}
