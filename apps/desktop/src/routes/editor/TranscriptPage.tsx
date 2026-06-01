@@ -854,7 +854,7 @@ function BufferPopover(props: {
 						<input
 							type="range"
 							min="-0.5"
-							max="0.0"
+							max="1.0"
 							step="0.01"
 							value={bufStart()}
 							onInput={(e) =>
@@ -876,7 +876,7 @@ function BufferPopover(props: {
 						<input
 							type="range"
 							min="-0.5"
-							max="0.0"
+							max="1.0"
 							step="0.01"
 							value={bufEnd()}
 							onInput={(e) =>
@@ -1254,13 +1254,23 @@ function TranscriptEditor(props: {
 
 					w.bufferStart = bufferStart;
 					w.bufferEnd = bufferEnd;
-
 					if (oldDuration > 0.001) {
-						shiftCaptionTimesAfterInsert(
-							p.captions.segments,
-							oldCutStart,
-							oldDuration,
-						);
+						for (let i = 0; i < p.captions.segments.length; i++) {
+							const s = p.captions.segments[i];
+							if (!s.words) continue;
+							for (let j = 0; j < s.words.length; j++) {
+								if (
+									i < segmentIndex ||
+									(i === segmentIndex && j <= wordIndex)
+								) {
+									continue; // Do not shift words before or equal to the anchor
+								}
+								const cw = s.words[j] as CaptionWordExtended;
+								cw.start += oldDuration;
+								cw.end += oldDuration;
+							}
+						}
+
 						if (p.timeline) {
 							rippleInsertAllTracks(p.timeline, oldCutStart, oldDuration);
 						}
@@ -1270,11 +1280,26 @@ function TranscriptEditor(props: {
 					}
 
 					if (newDuration > 0.001) {
-						shiftCaptionTimesAfterCut(
-							p.captions.segments,
-							newCutStart,
-							newDuration,
-						);
+						for (let i = 0; i < p.captions.segments.length; i++) {
+							const s = p.captions.segments[i];
+							if (!s.words) continue;
+							for (let j = 0; j < s.words.length; j++) {
+								if (
+									i < segmentIndex ||
+									(i === segmentIndex && j <= wordIndex)
+								) {
+									continue; // Do not shift words before or equal to the anchor
+								}
+								const cw = s.words[j] as CaptionWordExtended;
+
+								cw.start -= newDuration;
+								if (cw.start < newCutStart) cw.start = newCutStart;
+
+								cw.end -= newDuration;
+								if (cw.end < cw.start) cw.end = cw.start;
+							}
+						}
+
 						if (p.timeline) {
 							rippleDeleteAllTracks(p.timeline, newCutStart, newCutEnd);
 						}
