@@ -14,7 +14,12 @@ import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
-import { BaseDirectory, exists, mkdir, writeFile } from "@tauri-apps/plugin-fs";
+import {
+	BaseDirectory,
+	exists,
+	readDir,
+	writeFile,
+} from "@tauri-apps/plugin-fs";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
@@ -47,21 +52,22 @@ import {
 	getOrganizationBrandColorSwatches,
 	type OrganizationBrandColorSwatch,
 } from "~/utils/organization-branding";
-import type {
-	BackgroundBlurMode,
-	BackgroundSource,
-	CameraShape,
-	CameraXPosition,
-	CameraYPosition,
-	CaptionTrackSegment,
-	ClipOffsets,
-	CursorAnimationStyle,
-	CursorType,
-	KeyboardTrackSegment,
-	SceneSegment,
-	StereoMode,
-	TimelineSegment,
-	ZoomSegment,
+import {
+	type BackgroundBlurMode,
+	type BackgroundSource,
+	type CameraShape,
+	type CameraXPosition,
+	type CameraYPosition,
+	type CaptionTrackSegment,
+	type ClipOffsets,
+	type CursorAnimationStyle,
+	type CursorType,
+	commands,
+	type KeyboardTrackSegment,
+	type SceneSegment,
+	type StereoMode,
+	type TimelineSegment,
+	type ZoomSegment,
 } from "~/utils/tauri";
 import IconLucideBoxSelect from "~icons/lucide/box-select";
 import IconLucideGauge from "~icons/lucide/gauge";
@@ -104,7 +110,7 @@ import { formatTime } from "./utils";
 type BackgroundSourceTab = BackgroundSource["type"] | "desktop";
 
 const BACKGROUND_SOURCES = {
-	desktop: "Desktop BG",
+	desktop: "Desktop",
 	wallpaper: "Wallpaper",
 	image: "Image",
 	color: "Color",
@@ -118,10 +124,13 @@ const BACKGROUND_ICONS = {
 	gradient: gradientBg,
 } satisfies Record<BackgroundSource["type"], string>;
 
-const BACKGROUND_SOURCES_LIST = [
+const BACKGROUND_SOURCES_ROW_ONE = [
 	"desktop",
 	"wallpaper",
 	"image",
+] satisfies Array<BackgroundSourceTab>;
+
+const BACKGROUND_SOURCES_ROW_TWO = [
 	"color",
 	"gradient",
 ] satisfies Array<BackgroundSourceTab>;
@@ -1654,7 +1663,6 @@ function BackgroundConfig(props: {
 	);
 
 	let fileInput!: HTMLInputElement;
-	let desktopBackgroundInput!: HTMLInputElement;
 
 	const setWallpaperSource = (wallpaperPath: string) => {
 		const resumeHistory = projectHistory.pause();
@@ -1674,30 +1682,102 @@ function BackgroundConfig(props: {
 		);
 	};
 
-	const setDesktopBackgroundFile = async (file: File) => {
-		const extension = getValidBackgroundImageExtension(file);
-		if (!extension) {
-			toast.error("Invalid image file type");
-			return;
-		}
+	const [importingDesktopBackground, setImportingDesktopBackground] =
+		createSignal(false);
 
+	const importDesktopBackground = async () => {
+		if (importingDesktopBackground()) return;
+		setImportingDesktopBackground(true);
 		try {
-			const arrayBuffer = await file.arrayBuffer();
-			const uint8Array = new Uint8Array(arrayBuffer);
-			const assetsDir = `${editorInstance.path}/assets`;
-			const outputPath = `${assetsDir}/${CURRENT_DESKTOP_BACKGROUND_BASENAME}.${extension}`;
-
-			await mkdir(assetsDir, { recursive: true });
-			await writeFile(outputPath, uint8Array);
-
-			setCurrentDesktopBackgroundPath(outputPath);
-			setBackgroundSourceTab("desktop");
-			setWallpaperSource(outputPath);
-			ensurePaddingForBackground();
+			const path = await commands.importCurrentDesktopBackground(
+				editorInstance.path,
+			);
+			batch(() => {
+				setCurrentDesktopBackgroundPath(path);
+				setBackgroundSourceTab("desktop");
+				setWallpaperSource(path);
+				ensurePaddingForBackground();
+			});
 		} catch (_err) {
-			toast.error("Failed to save desktop background");
+			toast.error("Couldn't import your desktop wallpaper");
+		} finally {
+			setImportingDesktopBackground(false);
 		}
 	};
+
+	const renderBackgroundSourceIcon = (item: BackgroundSourceTab) => {
+		if (item === "gradient") {
+			const source = project.background.source;
+			const angle = source.type === "gradient" ? source.angle : 90;
+			const fromColor =
+				source.type === "gradient" ? source.from : DEFAULT_GRADIENT_FROM;
+			const toColor =
+				source.type === "gradient" ? source.to : DEFAULT_GRADIENT_TO;
+			return (
+				<div
+					class="size-3.5 rounded-sm"
+					style={{
+						background: `linear-gradient(${angle}deg, rgb(${fromColor}), rgb(${toColor}))`,
+					}}
+				/>
+			);
+		}
+
+		if (item === "color") {
+			const source = project.background.source;
+			const backgroundColor =
+				source.type === "color" ? source.value : hexToRgb(BACKGROUND_COLORS[9]);
+			return (
+				<div
+					class="size-3.5 rounded-[5px]"
+					style={{ "background-color": `rgb(${backgroundColor})` }}
+				/>
+			);
+		}
+
+		let imageSrc: string =
+			item === "desktop" ? imageBg : BACKGROUND_ICONS[item];
+		const source = project.background.source;
+		if (item === "image" && source.type === "image" && source.path) {
+			const convertedPath = convertFileSrc(source.path);
+			if (convertedPath) imageSrc = convertedPath;
+		} else if (item === "desktop") {
+			const desktopBackground = currentDesktopBackground();
+			if (desktopBackground) imageSrc = desktopBackground.url;
+		} else if (
+			item === "wallpaper" &&
+			source.type === "wallpaper" &&
+			source.path
+		) {
+			const selected = selectedWallpaper();
+			if (selected?.url) imageSrc = selected.url;
+		}
+
+		return (
+			<img
+				loading="eager"
+				alt={BACKGROUND_SOURCES[item]}
+				class="size-3.5 rounded-sm"
+				src={imageSrc}
+			/>
+		);
+	};
+
+	const BackgroundSourceTrigger = (props: {
+		item: BackgroundSourceTab;
+		class?: string;
+	}) => (
+		<KTabs.Trigger
+			value={props.item}
+			class={cx(
+				"z-10 flex justify-center items-center gap-1.5 py-2.5 px-2 text-xs whitespace-nowrap text-gray-11 rounded-[10px] border transition-colors duration-200 outline-hidden data-selected:border-gray-3 data-selected:bg-gray-3 data-selected:text-gray-12 not-data-selected:hover:border-gray-7 peer",
+				props.class,
+			)}
+		>
+			{renderBackgroundSourceIcon(props.item)}
+			{BACKGROUND_SOURCES[props.item]}
+		</KTabs.Trigger>
+	);
 
 	const backgrounds: {
 		[K in BackgroundSource["type"]]: Extract<BackgroundSource, { type: K }>;
@@ -1823,122 +1903,21 @@ function BackgroundConfig(props: {
 						}
 					}}
 				>
-					<KTabs.List class="flex flex-row gap-2 items-center rounded-lg relative">
-						<For each={BACKGROUND_SOURCES_LIST}>
-							{(item) => {
-								const el = (props?: object) => (
-									<KTabs.Trigger
-										class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-11  data-selected:border-gray-3 data-selected:bg-gray-3 not-data-selected:hover:border-gray-7 rounded-[10px] transition-colors duration-200 outline-hidden border data-selected:text-gray-12 peer"
-										value={item}
-										{...props}
-									>
-										<div class="flex gap-1.5 justify-center items-center">
-											{(() => {
-												const getGradientBackground = () => {
-													const angle =
-														project.background.source.type === "gradient"
-															? project.background.source.angle
-															: 90;
-													const fromColor =
-														project.background.source.type === "gradient"
-															? project.background.source.from
-															: DEFAULT_GRADIENT_FROM;
-													const toColor =
-														project.background.source.type === "gradient"
-															? project.background.source.to
-															: DEFAULT_GRADIENT_TO;
-
-													return (
-														<div
-															class="size-3.5 rounded-sm"
-															style={{
-																background: `linear-gradient(${angle}deg, rgb(${fromColor}), rgb(${toColor}))`,
-															}}
-														/>
-													);
-												};
-
-												const getColorBackground = () => {
-													const backgroundColor =
-														project.background.source.type === "color"
-															? project.background.source.value
-															: hexToRgb(BACKGROUND_COLORS[9]);
-
-													return (
-														<div
-															class="size-3.5 rounded-[5px]"
-															style={{
-																"background-color": `rgb(${backgroundColor})`,
-															}}
-														/>
-													);
-												};
-
-												const getImageBackground = () => {
-													let imageSrc: string =
-														item === "desktop"
-															? imageBg
-															: BACKGROUND_ICONS[item];
-
-													if (
-														item === "image" &&
-														project.background.source.type === "image" &&
-														project.background.source.path
-													) {
-														const convertedPath = convertFileSrc(
-															project.background.source.path,
-														);
-														if (convertedPath) {
-															imageSrc = convertedPath;
-														}
-													} else if (item === "desktop") {
-														const desktopBackground =
-															currentDesktopBackground();
-														if (desktopBackground) {
-															imageSrc = desktopBackground.url;
-														}
-													} else if (
-														item === "wallpaper" &&
-														project.background.source.type === "wallpaper" &&
-														project.background.source.path
-													) {
-														const selected = selectedWallpaper();
-														if (selected?.url) {
-															imageSrc = selected.url;
-														}
-													}
-
-													return (
-														<img
-															loading="eager"
-															alt={BACKGROUND_SOURCES[item]}
-															class="size-3.5 rounded-sm"
-															src={imageSrc}
-														/>
-													);
-												};
-
-												switch (item) {
-													case "gradient":
-														return getGradientBackground();
-													case "color":
-														return getColorBackground();
-													case "desktop":
-													case "image":
-													case "wallpaper":
-														return getImageBackground();
-													default:
-														return null;
-												}
-											})()}
-											{BACKGROUND_SOURCES[item]}
-										</div>
-									</KTabs.Trigger>
-								);
-
-								return el({});
-							}}
-						</For>
+					<KTabs.List class="flex relative flex-col gap-2">
+						<div class="flex flex-row gap-2 items-center">
+							<For each={BACKGROUND_SOURCES_ROW_ONE}>
+								{(item) => (
+									<BackgroundSourceTrigger item={item} class="flex-1" />
+								)}
+							</For>
+						</div>
+						<div class="flex flex-row gap-2 items-center">
+							<For each={BACKGROUND_SOURCES_ROW_TWO}>
+								{(item) => (
+									<BackgroundSourceTrigger item={item} class="flex-1" />
+								)}
+							</For>
+						</div>
 					</KTabs.List>
 					{/** Dashed divider */}
 					<div class="my-5 w-full border-t border-dashed border-gray-5" />
@@ -1948,14 +1927,17 @@ function BackgroundConfig(props: {
 							fallback={
 								<div class="flex flex-col gap-3 items-center justify-center p-6 w-full rounded-lg border border-dashed bg-gray-2 border-gray-5">
 									<IconLucideMonitor class="size-6 text-gray-11" />
-									<span class="text-[13px] text-gray-12">
-										No desktop background saved
+									<span class="text-[13px] text-center text-gray-12">
+										Use the wallpaper from your desktop
 									</span>
 									<EditorButton
-										onClick={() => desktopBackgroundInput.click()}
-										leftIcon={<IconCapImage />}
+										onClick={importDesktopBackground}
+										disabled={importingDesktopBackground()}
+										leftIcon={<IconLucideMonitor />}
 									>
-										Select Image
+										{importingDesktopBackground()
+											? "Importing..."
+											: "Import desktop background"}
 									</EditorButton>
 								</div>
 							}
@@ -1988,27 +1970,18 @@ function BackgroundConfig(props: {
 									</button>
 									<div class="flex justify-end">
 										<EditorButton
-											onClick={() => desktopBackgroundInput.click()}
-											leftIcon={<IconCapImage />}
+											onClick={importDesktopBackground}
+											disabled={importingDesktopBackground()}
+											leftIcon={<IconLucideMonitor />}
 										>
-											Replace
+											{importingDesktopBackground()
+												? "Importing..."
+												: "Re-import"}
 										</EditorButton>
 									</div>
 								</div>
 							)}
 						</Show>
-						<input
-							type="file"
-							ref={desktopBackgroundInput}
-							class="hidden"
-							accept={BACKGROUND_IMAGE_ACCEPT}
-							onChange={async (e) => {
-								const file = e.currentTarget.files?.[0];
-								e.currentTarget.value = "";
-								if (!file) return;
-								await setDesktopBackgroundFile(file);
-							}}
-						/>
 					</KTabs.Content>
 					<KTabs.Content value="wallpaper">
 						{/** Background Tabs */}
