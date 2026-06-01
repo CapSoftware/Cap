@@ -17,7 +17,11 @@ import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
-import { shouldDeferPlaybackSource, useUploadProgress } from "./ProgressCircle";
+import {
+	shouldDeferPlaybackSource,
+	shouldReloadPlaybackAfterUploadCompletes,
+	useUploadProgress,
+} from "./ProgressCircle";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
@@ -205,11 +209,13 @@ export const ShareVideo = forwardRef<
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		const isSegmentsSource = data.source.type === "desktopSegments";
+		const previousSegmentUploadProgressRef = useRef(segmentUploadProgress);
 		const isActivelyRecording =
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&
 			!userConfirmedStopped &&
-			segmentUploadProgress?.status === "uploading";
+			(segmentUploadProgress?.status === "fetching" ||
+				segmentUploadProgress?.status === "uploading");
 
 		const isProcessingInProgress =
 			isSegmentsSource &&
@@ -217,6 +223,30 @@ export const ShareVideo = forwardRef<
 			!userConfirmedStopped &&
 			!isActivelyRecording &&
 			shouldDeferPlaybackSource(segmentUploadProgress);
+		useEffect(() => {
+			if (!isSegmentsSource || !data.hasActiveUpload || !userConfirmedStopped) {
+				previousSegmentUploadProgressRef.current = segmentUploadProgress;
+				return;
+			}
+
+			if (
+				shouldReloadPlaybackAfterUploadCompletes(
+					previousSegmentUploadProgressRef.current,
+					segmentUploadProgress,
+					{ includeFetching: true },
+				)
+			) {
+				router.refresh();
+			}
+
+			previousSegmentUploadProgressRef.current = segmentUploadProgress;
+		}, [
+			data.hasActiveUpload,
+			isSegmentsSource,
+			router,
+			segmentUploadProgress,
+			userConfirmedStopped,
+		]);
 
 		let videoSrc: string;
 		const rawFallbackSrc =
@@ -250,10 +280,30 @@ export const ShareVideo = forwardRef<
 					style={{ viewTransitionName: "cap-edit-video" }}
 				>
 					{isActivelyRecording ? (
-						<RecordingInProgressOverlay
-							onConfirmStopped={() => setUserConfirmedStopped(true)}
-							className="h-full"
-						/>
+						<div className="relative h-full overflow-hidden rounded-xl bg-black">
+							<HLSVideoPlayer
+								videoId={data.id}
+								mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
+								videoSrc={videoSrc}
+								duration={data.duration}
+								disableCaptions={true}
+								chaptersSrc=""
+								captionsSrc=""
+								videoRef={videoRef}
+								hasActiveUpload={data.hasActiveUpload}
+								isLiveSegments={isSegmentsSource}
+								allowSegmentProbeDuringUpload={true}
+								autoplay={true}
+								previewMode="background"
+							/>
+							<div className="absolute inset-0 z-20">
+								<RecordingInProgressOverlay
+									onConfirmStopped={() => setUserConfirmedStopped(true)}
+									className="h-full"
+									variant="overlay"
+								/>
+							</div>
+						</div>
 					) : isProcessingInProgress ? (
 						<PreparingVideoOverlay className="h-full" />
 					) : isMp4Source ? (
