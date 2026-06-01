@@ -216,7 +216,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						className="hidden md:block mt-6 mb-10"
 						initial="hidden"
 						animate="visible"
-						custom={5}
+						custom={6}
 						variants={fadeIn}
 					>
 						<PlatformIcons source="home_header" />

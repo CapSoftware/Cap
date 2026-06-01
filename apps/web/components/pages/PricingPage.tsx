@@ -91,7 +91,7 @@ export const PricingPage = () => {
 								icon={faHeart}
 							/>
 							<p className="font-medium text-gray-12">
-								Trusted by 30,000+ teams, builders and creators
+								Trusted by 40,000+ teams, builders and creators
 							</p>
 						</motion.div>
 					</motion.div>
