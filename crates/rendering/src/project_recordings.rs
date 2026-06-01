@@ -125,8 +125,14 @@ impl ProjectRecordingsMeta {
     pub fn new(recording_path: &PathBuf, meta: &StudioRecordingMeta) -> Result<Self, String> {
         let segments = match &meta {
             StudioRecordingMeta::SingleSegment { segment: s } => {
-                let display = Video::new(s.display.path.to_path(recording_path), 0.0)
-                    .expect("Failed to read display video");
+                let display = s
+                    .display
+                    .as_ref()
+                    .map(|d| {
+                        Video::new(d.path.to_path(recording_path), 0.0)
+                            .expect("Failed to read display video")
+                    })
+                    .expect("SingleSegment missing display");
                 let camera = s.camera.as_ref().map(|camera| {
                     Video::new(camera.path.to_path(recording_path), 0.0)
                         .expect("Failed to read camera video")
@@ -195,7 +201,12 @@ impl ProjectRecordingsMeta {
                     };
 
                     Ok::<_, String>(SegmentRecordings {
-                        display: load_video(&s.display).map_err(|e| format!("video / {e}"))?,
+                        display: s
+                            .display
+                            .as_ref()
+                            .map(|d| load_video(d).map_err(|e| format!("video / {e}")))
+                            .transpose()?
+                            .expect("MultipleSegment missing display"),
                         camera: Option::map(s.camera.as_ref(), load_video)
                             .transpose()
                             .map_err(|e| format!("camera / {e}"))?,

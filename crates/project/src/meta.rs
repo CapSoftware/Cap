@@ -75,6 +75,8 @@ pub struct RecordingMeta {
     pub inner: RecordingMetaInner,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upload: Option<UploadMeta>,
+    #[serde(default)]
+    pub audio_only: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
@@ -235,7 +237,9 @@ impl RecordingMeta {
         match &mut self.inner {
             RecordingMetaInner::Studio(meta) => match meta.as_mut() {
                 StudioRecordingMeta::SingleSegment { segment } => {
-                    normalize_video(&mut segment.display);
+                    if let Some(display) = &mut segment.display {
+                        normalize_video(display);
+                    }
                     if let Some(camera) = &mut segment.camera {
                         normalize_video(camera);
                     }
@@ -246,7 +250,9 @@ impl RecordingMeta {
                 }
                 StudioRecordingMeta::MultipleSegments { inner } => {
                     for segment in &mut inner.segments {
-                        normalize_video(&mut segment.display);
+                        if let Some(display) = &mut segment.display {
+                            normalize_video(display);
+                        }
                         if let Some(camera) = &mut segment.camera {
                             normalize_video(camera);
                         }
@@ -335,19 +341,29 @@ impl StudioRecordingMeta {
 
     pub fn min_fps(&self) -> u32 {
         match self {
-            Self::SingleSegment { segment } => segment.display.fps,
-            Self::MultipleSegments { inner, .. } => {
-                inner.segments.iter().map(|s| s.display.fps).min().unwrap()
+            Self::SingleSegment { segment } => {
+                segment.display.as_ref().map(|d| d.fps).unwrap_or(0)
             }
+            Self::MultipleSegments { inner, .. } => inner
+                .segments
+                .iter()
+                .filter_map(|s| s.display.as_ref().map(|d| d.fps))
+                .min()
+                .unwrap_or(0),
         }
     }
 
     pub fn max_fps(&self) -> u32 {
         match self {
-            Self::SingleSegment { segment } => segment.display.fps,
-            Self::MultipleSegments { inner, .. } => {
-                inner.segments.iter().map(|s| s.display.fps).max().unwrap()
+            Self::SingleSegment { segment } => {
+                segment.display.as_ref().map(|d| d.fps).unwrap_or(0)
             }
+            Self::MultipleSegments { inner, .. } => inner
+                .segments
+                .iter()
+                .filter_map(|s| s.display.as_ref().map(|d| d.fps))
+                .max()
+                .unwrap_or(0),
         }
     }
 }
@@ -355,7 +371,8 @@ impl StudioRecordingMeta {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SingleSegment {
-    pub display: VideoMeta,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<VideoMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<VideoMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -455,7 +472,8 @@ impl MultipleSegments {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct MultipleSegment {
-    pub display: VideoMeta,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<VideoMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<VideoMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "audio")]
@@ -504,7 +522,7 @@ impl MultipleSegment {
 
     pub fn keyboard_events(&self, meta: &RecordingMeta) -> KeyboardEvents {
         let keyboard_path = self.keyboard.clone().or_else(|| {
-            let display_dir = self.display.path.parent()?;
+            let display_dir = self.display.as_ref()?.path.parent()?;
             let binary = display_dir.join(crate::KEYBOARD_EVENTS_FILE_NAME);
             let binary_full = meta.path(&binary);
             if binary_full.exists() {
@@ -532,7 +550,7 @@ impl MultipleSegment {
     }
 
     pub fn latest_start_time(&self) -> Option<f64> {
-        let mut value = self.display.start_time?;
+        let mut value = self.display.as_ref()?.start_time?;
 
         if let Some(camera) = &self.camera {
             value = value.max(camera.start_time?);

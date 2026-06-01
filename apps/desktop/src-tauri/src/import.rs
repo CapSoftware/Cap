@@ -315,7 +315,7 @@ fn full_timeline_for_segments(
         .iter()
         .enumerate()
         .map(|(index, segment)| {
-            let duration = get_video_duration_secs(&segment.display.path.to_path(project_path))?;
+            let duration = get_video_duration_secs(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(project_path))?;
             Ok(TimelineSegment {
                 recording_clip: index as u32,
                 timescale: 1.0,
@@ -347,7 +347,10 @@ fn full_timeline_for_source_segments(
         .iter()
         .enumerate()
         .map(|(index, segment)| {
-            let duration = get_source_video_duration_secs(source_meta, &segment.display)?;
+            let duration = get_source_video_duration_secs(
+                source_meta,
+                segment.display.as_ref().ok_or("Missing display video")?,
+            )?;
             Ok(TimelineSegment {
                 recording_clip: index as u32,
                 timescale: 1.0,
@@ -593,7 +596,7 @@ fn copy_keyboard_path(
         return Ok(Some(target_relative_path));
     };
 
-    let Some(display_dir) = source_segment.display.path.parent() else {
+    let Some(display_dir) = source_segment.display.as_ref().and_then(|d| d.path.parent()) else {
         return Ok(None);
     };
 
@@ -870,7 +873,10 @@ fn source_timeline_segments_for_import(
         let max_duration = if let Some(duration) = duration_cache.get(&source_index) {
             *duration
         } else {
-            let duration = get_source_video_duration_secs(source_meta, &source_segment.display)?;
+            let duration = get_source_video_duration_secs(
+                source_meta,
+                source_segment.display.as_ref().ok_or("Missing display video")?,
+            )?;
             duration_cache.insert(source_index, duration);
             duration
         };
@@ -921,15 +927,21 @@ fn copy_source_segment(
     target_relative_dir: &str,
     cursor_id_map: &HashMap<String, String>,
 ) -> Result<MultipleSegment, String> {
-    let display = copy_video_meta(
-        &source_meta.project_path,
-        target_project_path,
-        &source_segment.display,
-        target_relative_dir,
-        "display",
-        true,
-    )?
-    .ok_or_else(|| "Missing display video".to_string())?;
+    let display = source_segment
+        .display
+        .as_ref()
+        .map(|d| {
+            copy_video_meta(
+                &source_meta.project_path,
+                target_project_path,
+                d,
+                target_relative_dir,
+                "display",
+                true,
+            )
+        })
+        .transpose()?
+        .flatten();
 
     let camera = source_segment
         .camera
@@ -1405,12 +1417,12 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
         inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
             inner: MultipleSegments {
                 segments: vec![MultipleSegment {
-                    display: VideoMeta {
+                    display: Some(VideoMeta {
                         path: RelativePathBuf::from("content/segments/segment-0/display.mp4"),
                         fps: 30,
                         start_time: Some(0.0),
                         device_id: None,
-                    },
+                    }),
                     camera: None,
                     mic: None,
                     system_audio: None,
@@ -1422,6 +1434,7 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
             },
         })),
         upload: None,
+        audio_only: false,
     };
 
     initial_meta
@@ -1497,14 +1510,14 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                         StudioRecordingMeta::MultipleSegments {
                             inner: MultipleSegments {
                                 segments: vec![MultipleSegment {
-                                    display: VideoMeta {
+                                    display: Some(VideoMeta {
                                         path: RelativePathBuf::from(
                                             "content/segments/segment-0/display.mp4",
                                         ),
                                         fps,
                                         start_time: Some(0.0),
                                         device_id: None,
-                                    },
+                                    }),
                                     camera: None,
                                     mic: None,
                                     system_audio,
@@ -1517,6 +1530,7 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                         },
                     )),
                     upload: None,
+                                audio_only: false,
                 };
 
                 if let Err(e) = meta.save_for_project() {
@@ -1672,12 +1686,12 @@ async fn append_mp4_to_editor_project(
     };
 
     let imported_segment = MultipleSegment {
-        display: VideoMeta {
+        display: Some(VideoMeta {
             path: output_video_relative_path,
             fps,
             start_time: Some(0.0),
             device_id: None,
-        },
+        }),
         camera: None,
         mic: None,
         system_audio,
@@ -1963,7 +1977,7 @@ pub async fn start_image_import(app: AppHandle, source_path: PathBuf) -> Result<
     };
 
     let segment = SingleSegment {
-        display: video_meta,
+        display: Some(video_meta),
         camera: None,
         audio: None,
         cursor: None,
@@ -1976,6 +1990,7 @@ pub async fn start_image_import(app: AppHandle, source_path: PathBuf) -> Result<
         sharing: None,
         inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::SingleSegment { segment })),
         upload: None,
+        audio_only: false,
     };
 
     meta.save_for_project()

@@ -228,7 +228,7 @@ impl ScreenshotEditorInstances {
                 device_id: None,
             };
             let segment = SingleSegment {
-                display: video_meta.clone(),
+                display: Some(video_meta.clone()),
                 camera: None,
                 audio: None,
                 cursor: None,
@@ -241,6 +241,7 @@ impl ScreenshotEditorInstances {
                 sharing: None,
                 inner: RecordingMetaInner::Studio(Box::new(studio_meta.clone())),
                 upload: None,
+                audio_only: false,
             }
         };
 
@@ -1252,7 +1253,7 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
             device_id: None,
         };
         let segment = SingleSegment {
-            display: video_meta.clone(),
+            display: Some(video_meta.clone()),
             camera: None,
             audio: None,
             cursor: None,
@@ -1265,6 +1266,7 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
             sharing: None,
             inner: RecordingMetaInner::Studio(Box::new(studio_meta)),
             upload: None,
+            audio_only: false,
         }
     };
 

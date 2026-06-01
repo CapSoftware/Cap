@@ -349,10 +349,10 @@ async fn test_playback(
 
     let display_path = match meta {
         StudioRecordingMeta::SingleSegment { segment } => {
-            recording_meta.path(&segment.display.path)
+            recording_meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default())
         }
         StudioRecordingMeta::MultipleSegments { inner } => {
-            recording_meta.path(&inner.segments[segment_index].display.path)
+            recording_meta.path(&inner.segments[segment_index].display.as_ref().map(|d| d.path.clone()).unwrap_or_default())
         }
     };
 
@@ -461,14 +461,14 @@ async fn test_audio_sync(
 
     let (display_path, mic_path, system_audio_path) = match meta {
         StudioRecordingMeta::SingleSegment { segment } => (
-            recording_meta.path(&segment.display.path),
+            recording_meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default()),
             segment.audio.as_ref().map(|a| recording_meta.path(&a.path)),
             None,
         ),
         StudioRecordingMeta::MultipleSegments { inner } => {
             let seg = &inner.segments[segment_index];
             (
-                recording_meta.path(&seg.display.path),
+                recording_meta.path(&seg.display.as_ref().map(|d| d.path.clone()).unwrap_or_default()),
                 seg.mic.as_ref().map(|m| recording_meta.path(&m.path)),
                 seg.system_audio
                     .as_ref()
@@ -547,20 +547,20 @@ async fn test_camera_sync(
 
     let (display_path, camera_path, display_start_time, camera_start_time) = match meta {
         StudioRecordingMeta::SingleSegment { segment } => (
-            recording_meta.path(&segment.display.path),
+            recording_meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default()),
             segment
                 .camera
                 .as_ref()
                 .map(|c| recording_meta.path(&c.path)),
-            segment.display.start_time,
+            segment.display.as_ref().and_then(|d| d.start_time),
             segment.camera.as_ref().and_then(|c| c.start_time),
         ),
         StudioRecordingMeta::MultipleSegments { inner } => {
             let seg = &inner.segments[segment_index];
             (
-                recording_meta.path(&seg.display.path),
+                recording_meta.path(&seg.display.as_ref().map(|d| d.path.clone()).unwrap_or_default()),
                 seg.camera.as_ref().map(|c| recording_meta.path(&c.path)),
-                seg.display.start_time,
+                seg.display.as_ref().and_then(|d| d.start_time),
                 seg.camera.as_ref().and_then(|c| c.start_time),
             )
         }
@@ -754,9 +754,9 @@ async fn run_tests_on_recording(
     };
 
     let is_fragmented = match studio_meta.as_ref() {
-        StudioRecordingMeta::SingleSegment { segment } => meta.path(&segment.display.path).is_dir(),
+        StudioRecordingMeta::SingleSegment { segment } => meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default()).is_dir(),
         StudioRecordingMeta::MultipleSegments { inner } => {
-            !inner.segments.is_empty() && meta.path(&inner.segments[0].display.path).is_dir()
+            !inner.segments.is_empty() && meta.path(&inner.segments[0].display.as_ref().map(|d| d.path.clone()).unwrap_or_default()).is_dir()
         }
     };
 
@@ -786,9 +786,9 @@ async fn run_tests_on_recording(
     for segment_idx in 0..segment_count {
         if run_decoder {
             let display_path = match studio_meta.as_ref() {
-                StudioRecordingMeta::SingleSegment { segment } => meta.path(&segment.display.path),
+                StudioRecordingMeta::SingleSegment { segment } => meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default()),
                 StudioRecordingMeta::MultipleSegments { inner } => {
-                    meta.path(&inner.segments[segment_idx].display.path)
+                    meta.path(&inner.segments[segment_idx].display.as_ref().map(|d| d.path.clone()).unwrap_or_default())
                 }
             };
 

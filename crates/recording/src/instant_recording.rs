@@ -26,7 +26,7 @@ use tracing::*;
 struct Pipeline {
     video: OutputPipeline,
     audio: Option<OutputPipeline>,
-    video_info: VideoInfo,
+    video_info: Option<VideoInfo>,
     segments_dir: PathBuf,
     segment_rx:
         Option<std::sync::mpsc::Receiver<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
@@ -113,7 +113,7 @@ pub struct Actor {
     recording_dir: PathBuf,
     output_dir: PathBuf,
     capture_target: ScreenCaptureTarget,
-    video_info: VideoInfo,
+    video_info: Option<VideoInfo>,
     state: ActorState,
     total_pause_duration: std::time::Duration,
     pause_started_at: Option<f64>,
@@ -207,7 +207,7 @@ impl Message<Stop> for Actor {
         Ok(CompletedRecording {
             project_path: self.recording_dir.clone(),
             meta: InstantRecordingMeta::Complete {
-                fps: self.video_info.fps(),
+                fps: self.video_info.map(|v| v.fps()).unwrap_or(0),
                 sample_rate: None,
             },
             display_source: self.capture_target.clone(),
@@ -390,12 +390,12 @@ async fn create_pipeline(
     Ok(Pipeline {
         video,
         audio,
-        video_info: VideoInfo::from_raw_ffmpeg(
+        video_info: Some(VideoInfo::from_raw_ffmpeg(
             screen_info.pixel_format,
             output_resolution.0,
             output_resolution.1,
             screen_info.fps(),
-        ),
+        )),
         segments_dir,
         segment_rx,
     })
@@ -548,11 +548,43 @@ pub async fn spawn_instant_recording_actor(
                 Pipeline {
                     video: cam_pipeline,
                     audio: None,
-                    video_info,
+                    video_info: Some(video_info),
                     segments_dir: content_dir.clone(),
                     segment_rx: None,
                 },
-                video_info,
+                Some(video_info),
+            )
+        }
+
+        ScreenCaptureTarget::AudioOnly => {
+            let output_path = content_dir.join("output.mp4");
+            let mut builder = OutputPipeline::builder(output_path.clone())
+                .with_timestamps(timestamps);
+
+            if let Some(mic_feed) = inputs.mic_feed.clone() {
+                builder = builder.with_audio_source::<crate::sources::Microphone>(mic_feed);
+            }
+
+            let audio_pipeline = builder
+                .build::<output_pipeline::DashSegmentedAudioMuxer>(
+                    output_pipeline::DashSegmentedAudioMuxerConfig {
+                        shared_pause_state: None,
+                        segment_tx: None,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .context("audio-only pipeline setup")?;
+
+            (
+                Pipeline {
+                    video: audio_pipeline,
+                    audio: None,
+                    video_info: None,
+                    segments_dir: content_dir.clone(),
+                    segment_rx: None,
+                },
+                None,
             )
         }
         _ => {

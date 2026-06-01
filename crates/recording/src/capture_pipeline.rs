@@ -446,7 +446,7 @@ pub fn target_to_display_and_crop(
                 ))
             }
         }
-        ScreenCaptureTarget::CameraOnly => {
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
             return Err(anyhow!("Camera-only target has no display"));
         }
     };
