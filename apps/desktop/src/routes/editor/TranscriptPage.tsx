@@ -12,14 +12,22 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import { commands } from "~/utils/tauri";
+import type { CaptionWordExtended } from "./caption-types";
 import {
 	createCaptionTrackSegments,
 	getCaptionTextFromWords,
 } from "./captions";
 import { FPS, useEditorContext } from "./context";
 import {
+	AUTO_CLEAN_SILENCE_THRESHOLD,
+	isFillerWord,
+	PAUSE_DETECTION_THRESHOLD,
+} from "./filler-detection";
+import {
 	rippleDeleteAllTracks,
+	rippleInsertAllTracks,
 	shiftCaptionTimesAfterCut,
+	shiftCaptionTimesAfterInsert,
 } from "./timeline-utils";
 
 function formatTimePrecise(secs: number) {
@@ -35,6 +43,20 @@ interface FlatWord {
 	end: number;
 	segmentIndex: number;
 	wordIndex: number;
+	deleted: boolean;
+	isFiller: boolean;
+	isPause: boolean;
+	bufferStart: number;
+	bufferEnd: number;
+}
+
+interface PauseIndicator {
+	type: "pause";
+	start: number;
+	end: number;
+	duration: number;
+	afterSegmentIndex: number;
+	afterWordIndex: number;
 }
 
 interface TranscriptSegmentGroup {
@@ -69,7 +91,7 @@ export function TranscriptPanel() {
 		const result: FlatWord[] = [];
 		for (let segIdx = 0; segIdx < segments.length; segIdx++) {
 			const seg = segments[segIdx];
-			const words = seg.words ?? [];
+			const words = (seg.words ?? []) as CaptionWordExtended[];
 			for (let wordIdx = 0; wordIdx < words.length; wordIdx++) {
 				const w = words[wordIdx];
 				result.push({
@@ -78,11 +100,44 @@ export function TranscriptPanel() {
 					end: w.end,
 					segmentIndex: segIdx,
 					wordIndex: wordIdx,
+					deleted: w.deleted ?? false,
+					isFiller: w.isFiller ?? isFillerWord(w.text),
+					isPause: w.isPause ?? false,
+					bufferStart: w.bufferStart ?? 0,
+					bufferEnd: w.bufferEnd ?? 0,
 				});
 			}
 		}
 		return result;
 	});
+
+	const pauses = createMemo((): PauseIndicator[] => {
+		const words = allWords();
+		const result: PauseIndicator[] = [];
+		for (let i = 1; i < words.length; i++) {
+			const prev = words[i - 1];
+			const curr = words[i];
+			if (prev.deleted || curr.deleted) continue;
+			const gap = curr.start - prev.end;
+			if (gap >= PAUSE_DETECTION_THRESHOLD) {
+				result.push({
+					type: "pause",
+					start: prev.end,
+					end: curr.start,
+					duration: gap,
+					afterSegmentIndex: prev.segmentIndex,
+					afterWordIndex: prev.wordIndex,
+				});
+			}
+		}
+		return result;
+	});
+
+	const fillerCount = createMemo(
+		() => allWords().filter((w) => w.isFiller && !w.deleted).length,
+	);
+
+	const pauseCount = createMemo(() => pauses().length);
 
 	const segmentGroups = createMemo((): TranscriptSegmentGroup[] => {
 		const words = allWords();
@@ -148,18 +203,15 @@ export function TranscriptPanel() {
 		const words = allWords();
 		const wordsToDelete = flatIndices
 			.map((idx) => words[idx])
-			.filter((w): w is FlatWord => !!w);
+			.filter((w): w is FlatWord => !!w && !w.deleted);
 
 		if (wordsToDelete.length === 0) return;
 
-		const sorted = [...wordsToDelete].sort((a, b) => {
-			if (a.segmentIndex !== b.segmentIndex)
-				return b.segmentIndex - a.segmentIndex;
-			return b.wordIndex - a.wordIndex;
-		});
-
 		const timeRanges = wordsToDelete
-			.map((w) => ({ start: w.start, end: w.end }))
+			.map((w) => ({
+				start: Math.max(0, w.start - (w.bufferStart || 0)),
+				end: w.end + (w.bufferEnd || 0),
+			}))
 			.sort((a, b) => a.start - b.start);
 
 		const mergedRanges: { start: number; end: number }[] = [];
@@ -176,22 +228,24 @@ export function TranscriptPanel() {
 			produce((p) => {
 				if (!p.captions?.segments) return;
 
-				for (const word of sorted) {
+				for (const word of wordsToDelete) {
 					const seg = p.captions.segments[word.segmentIndex];
 					if (!seg?.words) continue;
-					if (word.wordIndex < seg.words.length) {
-						seg.words.splice(word.wordIndex, 1);
+					const w = seg.words[word.wordIndex] as CaptionWordExtended;
+					if (w) {
+						w.deleted = true;
 					}
 				}
 
-				for (let i = p.captions.segments.length - 1; i >= 0; i--) {
-					const seg = p.captions.segments[i];
-					if (!seg.words || seg.words.length === 0) {
-						p.captions.segments.splice(i, 1);
-					} else {
-						seg.text = getCaptionTextFromWords(seg.words);
-						seg.start = seg.words[0].start;
-						seg.end = seg.words[seg.words.length - 1].end;
+				for (const seg of p.captions.segments) {
+					const extWords = (seg.words ?? []) as CaptionWordExtended[];
+					seg.text = getCaptionTextFromWords(extWords);
+					if (seg.words && seg.words.length > 0) {
+						const visible = extWords.filter((w) => !w.deleted);
+						if (visible.length > 0) {
+							seg.start = visible[0].start;
+							seg.end = visible[visible.length - 1].end;
+						}
 					}
 				}
 
@@ -230,12 +284,135 @@ export function TranscriptPanel() {
 		}
 	};
 
+	const restoreWords = (flatIndices: number[]) => {
+		const words = allWords();
+		const wordsToRestore = flatIndices
+			.map((idx) => words[idx])
+			.filter((w): w is FlatWord => !!w && w.deleted);
+
+		if (wordsToRestore.length === 0) return;
+
+		const timeRanges = wordsToRestore
+			.map((w) => ({
+				start: Math.max(0, w.start - (w.bufferStart || 0)),
+				end: w.end + (w.bufferEnd || 0),
+			}))
+			.sort((a, b) => a.start - b.start);
+
+		const mergedRanges: { start: number; end: number }[] = [];
+		for (const range of timeRanges) {
+			const last = mergedRanges[mergedRanges.length - 1];
+			if (last && range.start <= last.end) {
+				last.end = Math.max(last.end, range.end);
+			} else {
+				mergedRanges.push({ ...range });
+			}
+		}
+
+		setProject(
+			produce((p) => {
+				if (!p.captions?.segments) return;
+
+				for (const range of mergedRanges) {
+					const insertDuration = range.end - range.start;
+					if (insertDuration <= 0.001) continue;
+
+					shiftCaptionTimesAfterInsert(
+						p.captions.segments,
+						range.start,
+						insertDuration,
+					);
+
+					if (p.timeline) {
+						rippleInsertAllTracks(p.timeline, range.start, insertDuration);
+					}
+				}
+
+				for (const word of wordsToRestore) {
+					const seg = p.captions.segments[word.segmentIndex];
+					if (!seg?.words) continue;
+					const w = seg.words[word.wordIndex] as CaptionWordExtended;
+					if (w) {
+						w.deleted = false;
+					}
+				}
+
+				for (const seg of p.captions.segments) {
+					const extWords = (seg.words ?? []) as CaptionWordExtended[];
+					seg.text = getCaptionTextFromWords(extWords);
+					if (seg.words && seg.words.length > 0) {
+						const visible = extWords.filter((w) => !w.deleted);
+						if (visible.length > 0) {
+							seg.start = visible[0].start;
+							seg.end = visible[visible.length - 1].end;
+						}
+					}
+				}
+
+				if (p.timeline && p.captions) {
+					p.timeline.captionSegments = createCaptionTrackSegments(
+						p.captions.segments,
+					);
+				}
+			}),
+		);
+
+		setEditorState("captions", "isStale", false);
+	};
+
 	const handleDeleteWord = (flatIndex: number) => {
 		applyWordDeletions([flatIndex]);
 	};
 
 	const handleDeleteWords = (flatIndices: number[]) => {
 		applyWordDeletions(flatIndices);
+	};
+
+	const handleRestoreWord = (flatIndex: number) => {
+		restoreWords([flatIndex]);
+	};
+
+	const handleRestoreWords = (flatIndices: number[]) => {
+		restoreWords(flatIndices);
+	};
+
+	const [silenceThreshold, setSilenceThreshold] = makePersisted(
+		createSignal(AUTO_CLEAN_SILENCE_THRESHOLD),
+		{ name: "editorAutoCleanThreshold" },
+	);
+
+	const autoClean = () => {
+		const words = allWords();
+		const ps = pauses();
+		const threshold = silenceThreshold();
+
+		const fillerIndices: number[] = [];
+		for (let i = 0; i < words.length; i++) {
+			if (!words[i].deleted && words[i].isFiller) {
+				fillerIndices.push(i);
+			}
+		}
+
+		const pauseWordIndices: number[] = [];
+		for (const p of ps) {
+			if (p.duration >= threshold) {
+				for (let i = 0; i < words.length; i++) {
+					const w = words[i];
+					if (
+						!w.deleted &&
+						w.start >= p.start - 0.01 &&
+						w.end <= p.end + 0.01
+					) {
+						pauseWordIndices.push(i);
+					}
+				}
+			}
+		}
+
+		const allIndices = [...new Set([...fillerIndices, ...pauseWordIndices])];
+		if (allIndices.length > 0) {
+			applyWordDeletions(allIndices);
+		}
 	};
 
 	const isAtEnd = () => {
@@ -291,11 +468,80 @@ export function TranscriptPanel() {
 		handlePlayPause();
 	});
 
+	const [showAutoCleanDropdown, setShowAutoCleanDropdown] = createSignal(false);
+
 	return (
 		<div class="flex flex-col min-h-0 h-full">
 			<div class="px-3 py-2 border-b border-gray-3 flex items-center justify-between shrink-0">
 				<span class="text-xs font-medium text-gray-12">Transcript</span>
 				<div class="flex items-center gap-1">
+					<Show when={fillerCount() > 0 || pauseCount() > 0}>
+						<span class="text-[10px] text-gray-9 mr-1">
+							{fillerCount() > 0 &&
+								`${fillerCount()} filler${fillerCount() > 1 ? "s" : ""}`}
+							{fillerCount() > 0 && pauseCount() > 0 && ", "}
+							{pauseCount() > 0 &&
+								`${pauseCount()} pause${pauseCount() > 1 ? "s" : ""}`}
+						</span>
+					</Show>
+					<div class="relative">
+						<div class="flex">
+							<button
+								type="button"
+								class="flex items-center gap-1 px-2 py-1 rounded-l-md text-[10px] font-medium bg-blue-9 text-white hover:bg-blue-10 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+								disabled={fillerCount() === 0 && pauseCount() === 0}
+								onClick={() => autoClean()}
+							>
+								<IconLucideSparkles class="size-3" />
+								Auto Clean
+							</button>
+							<button
+								type="button"
+								class="flex items-center justify-center px-1 py-1 rounded-r-md bg-blue-9 text-white hover:bg-blue-10 transition-colors border-l border-blue-8 disabled:opacity-30 disabled:pointer-events-none"
+								disabled={fillerCount() === 0 && pauseCount() === 0}
+								onClick={() =>
+									setShowAutoCleanDropdown(!showAutoCleanDropdown())
+								}
+							>
+								<IconLucideChevronDown class="size-3" />
+							</button>
+						</div>
+						<Show when={showAutoCleanDropdown()}>
+							<div class="absolute right-0 top-full mt-1 z-50 bg-gray-2 border border-gray-4 rounded-lg shadow-lg p-3 w-48">
+								<div class="text-[10px] font-medium text-gray-11 mb-2">
+									Silence Threshold
+								</div>
+								<div class="flex items-center gap-2">
+									<input
+										type="range"
+										min="0.5"
+										max="5.0"
+										step="0.1"
+										value={silenceThreshold()}
+										onInput={(e) =>
+											setSilenceThreshold(
+												Number.parseFloat(e.currentTarget.value),
+											)
+										}
+										class="flex-1 h-1 accent-blue-9"
+									/>
+									<span class="text-[10px] tabular-nums text-gray-11 w-8 text-right">
+										{silenceThreshold().toFixed(1)}s
+									</span>
+								</div>
+								<button
+									type="button"
+									class="mt-2 w-full px-2 py-1 rounded-md text-[10px] font-medium bg-blue-9 text-white hover:bg-blue-10 transition-colors"
+									onClick={() => {
+										autoClean();
+										setShowAutoCleanDropdown(false);
+									}}
+								>
+									Clean Now
+								</button>
+							</div>
+						</Show>
+					</div>
 					<button
 						type="button"
 						class="flex items-center justify-center size-5 rounded-sm hover:bg-gray-3 text-gray-9 hover:text-gray-12 transition-colors disabled:opacity-30 disabled:pointer-events-none"
@@ -321,6 +567,7 @@ export function TranscriptPanel() {
 			<TranscriptEditor
 				segmentGroups={segmentGroups()}
 				allWords={allWords()}
+				pauses={pauses()}
 				activeWordIndex={activeWordIndex()}
 				textSizeClass={
 					TEXT_SIZES[textSizeIndex()]?.value ?? TEXT_SIZES[1].value
@@ -328,7 +575,138 @@ export function TranscriptPanel() {
 				onWordClick={handleWordClick}
 				onDeleteWord={handleDeleteWord}
 				onDeleteWords={handleDeleteWords}
+				onRestoreWord={handleRestoreWord}
+				onRestoreWords={handleRestoreWords}
 			/>
+		</div>
+	);
+}
+
+function BufferPopover(props: {
+	word: FlatWord;
+	position: { x: number; y: number };
+	onClose: () => void;
+	onBufferChange: (
+		segmentIndex: number,
+		wordIndex: number,
+		bufferStart: number,
+		bufferEnd: number,
+	) => void;
+	onRestore: () => void;
+}) {
+	const [bufStart, setBufStart] = createSignal(props.word.bufferStart);
+	const [bufEnd, setBufEnd] = createSignal(props.word.bufferEnd);
+	let popoverRef: HTMLDivElement | undefined;
+
+	const handleClickOutside = (e: MouseEvent) => {
+		if (popoverRef && !popoverRef.contains(e.target as Node)) {
+			props.onClose();
+		}
+	};
+
+	const handleEscape = (e: KeyboardEvent) => {
+		if (e.key === "Escape") props.onClose();
+	};
+
+	createEventListener(document, "mousedown", handleClickOutside);
+	createEventListener(window, "keydown", handleEscape);
+
+	const updateBuffer = (start: number, end: number) => {
+		setBufStart(start);
+		setBufEnd(end);
+		props.onBufferChange(
+			props.word.segmentIndex,
+			props.word.wordIndex,
+			start,
+			end,
+		);
+	};
+
+	const popoverStyle = () => {
+		const x = Math.min(props.position.x, window.innerWidth - 220);
+		const y = Math.min(props.position.y, window.innerHeight - 200);
+		return {
+			position: "fixed" as const,
+			left: `${x}px`,
+			top: `${y}px`,
+			"z-index": "9999",
+		};
+	};
+
+	return (
+		<div ref={popoverRef} style={popoverStyle()}>
+			<div class="bg-gray-2 border border-gray-4 rounded-lg shadow-xl p-3 w-52 animate-in fade-in zoom-in-95 duration-100">
+				<div class="flex items-center justify-between mb-2">
+					<span class="text-[11px] font-medium text-gray-12">
+						Adjust Buffer
+					</span>
+					<button
+						type="button"
+						class="size-4 flex items-center justify-center rounded hover:bg-gray-4 text-gray-9"
+						onClick={props.onClose}
+					>
+						<IconLucideX class="size-3" />
+					</button>
+				</div>
+				<p class="text-[9px] text-gray-9 mb-3">
+					Buffer around deleted word to preserve pronunciations.
+				</p>
+
+				<div class="space-y-2">
+					<div>
+						<div class="flex items-center justify-between mb-1">
+							<span class="text-[10px] text-gray-11">Start Buffer</span>
+							<span class="text-[10px] tabular-nums text-gray-11">
+								{bufStart().toFixed(2)}s
+							</span>
+						</div>
+						<input
+							type="range"
+							min="-0.5"
+							max="1.0"
+							step="0.01"
+							value={bufStart()}
+							onInput={(e) =>
+								updateBuffer(Number.parseFloat(e.currentTarget.value), bufEnd())
+							}
+							class="w-full h-1 accent-blue-9"
+						/>
+					</div>
+					<div>
+						<div class="flex items-center justify-between mb-1">
+							<span class="text-[10px] text-gray-11">End Buffer</span>
+							<span class="text-[10px] tabular-nums text-gray-11">
+								{bufEnd().toFixed(2)}s
+							</span>
+						</div>
+						<input
+							type="range"
+							min="-0.5"
+							max="1.0"
+							step="0.01"
+							value={bufEnd()}
+							onInput={(e) =>
+								updateBuffer(
+									bufStart(),
+									Number.parseFloat(e.currentTarget.value),
+								)
+							}
+							class="w-full h-1 accent-blue-9"
+						/>
+					</div>
+				</div>
+
+				<Show when={props.word.deleted}>
+					<button
+						type="button"
+						class="mt-3 w-full px-2 py-1.5 rounded-md text-[10px] font-medium bg-green-9 text-white hover:bg-green-10 transition-colors flex items-center justify-center gap-1"
+						onClick={props.onRestore}
+					>
+						<IconLucideRotateCcw class="size-3" />
+						Restore Word
+					</button>
+				</Show>
+			</div>
 		</div>
 	);
 }
@@ -341,6 +719,8 @@ function WordWithTooltip(props: {
 	ref: (el: HTMLSpanElement) => void;
 	onClick: (e: MouseEvent) => void;
 	onDelete: () => void;
+	onRestore: () => void;
+	onContextMenu: (e: MouseEvent) => void;
 }) {
 	const [hovering, setHovering] = createSignal(false);
 	let hoverTimer: number | undefined;
@@ -361,14 +741,25 @@ function WordWithTooltip(props: {
 			ref={props.ref}
 			class={cx(
 				"cursor-pointer transition-colors duration-100 rounded-xs relative",
-				props.isSelected && "bg-blue-4/50",
-				props.isActive
-					? "text-blue-11"
-					: props.isSelected
+				props.word.deleted
+					? "line-through opacity-40 text-red-9 bg-red-3/30"
+					: props.word.isFiller
+						? "border-b-2 border-dotted border-amber-8/80 bg-amber-3/15"
+						: "",
+				!props.word.deleted && props.isSelected && "bg-blue-4/50",
+				props.word.deleted
+					? "hover:opacity-60"
+					: props.isActive
 						? "text-blue-11"
-						: "text-gray-9 hover:text-gray-12",
+						: props.isSelected
+							? "text-blue-11"
+							: "text-gray-9 hover:text-gray-12",
 			)}
 			onClick={(e) => props.onClick(e)}
+			onContextMenu={(e) => {
+				e.preventDefault();
+				props.onContextMenu(e);
+			}}
 			onMouseEnter={onEnter}
 			onMouseLeave={onLeave}
 		>
@@ -382,16 +773,32 @@ function WordWithTooltip(props: {
 						{formatTimePrecise(props.word.start)}
 					</span>
 					<Show when={props.isSelected}>
-						<button
-							type="button"
-							class="flex items-center justify-center size-6 rounded-md bg-red-9 text-white hover:bg-red-10 transition-colors"
-							onClick={(e) => {
-								e.stopPropagation();
-								props.onDelete();
-							}}
+						<Show
+							when={props.word.deleted}
+							fallback={
+								<button
+									type="button"
+									class="flex items-center justify-center size-6 rounded-md bg-red-9 text-white hover:bg-red-10 transition-colors"
+									onClick={(e) => {
+										e.stopPropagation();
+										props.onDelete();
+									}}
+								>
+									<IconCapTrash class="size-3.5" />
+								</button>
+							}
 						>
-							<IconCapTrash class="size-3.5" />
-						</button>
+							<button
+								type="button"
+								class="flex items-center justify-center size-6 rounded-md bg-green-9 text-white hover:bg-green-10 transition-colors"
+								onClick={(e) => {
+									e.stopPropagation();
+									props.onRestore();
+								}}
+							>
+								<IconLucideRotateCcw class="size-3.5" />
+							</button>
+						</Show>
 					</Show>
 				</span>
 			</Show>
@@ -399,19 +806,36 @@ function WordWithTooltip(props: {
 	);
 }
 
+function PauseBadge(props: { pause: PauseIndicator }) {
+	return (
+		<span class="inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded border border-dashed border-gray-6 text-[10px] text-gray-8 bg-gray-3/30 select-none">
+			⏸ {props.pause.duration.toFixed(1)}s
+		</span>
+	);
+}
+
 function TranscriptEditor(props: {
 	segmentGroups: TranscriptSegmentGroup[];
 	allWords: FlatWord[];
+	pauses: PauseIndicator[];
 	activeWordIndex: number;
 	textSizeClass: string;
 	onWordClick: (word: FlatWord) => void;
 	onDeleteWord: (flatIndex: number) => void;
 	onDeleteWords: (flatIndices: number[]) => void;
+	onRestoreWord: (flatIndex: number) => void;
+	onRestoreWords: (flatIndices: number[]) => void;
 }) {
+	const { setProject } = useEditorContext();
 	const [selectedIndices, setSelectedIndices] = createSignal<Set<number>>(
 		new Set(),
 	);
 	const [anchorIndex, setAnchorIndex] = createSignal<number>(-1);
+	const [bufferPopover, setBufferPopover] = createSignal<{
+		word: FlatWord;
+		flatIndex: number;
+		position: { x: number; y: number };
+	} | null>(null);
 	let scrollContainerRef: HTMLDivElement | undefined;
 	let activeWordRef: HTMLSpanElement | undefined;
 
@@ -428,6 +852,14 @@ function TranscriptEditor(props: {
 		flatIndexMap().get(`${word.segmentIndex}:${word.wordIndex}`) ?? -1;
 
 	const selectedCount = () => selectedIndices().size;
+
+	const pauseAfterWord = createMemo(() => {
+		const map = new Map<string, PauseIndicator>();
+		for (const p of props.pauses) {
+			map.set(`${p.afterSegmentIndex}:${p.afterWordIndex}`, p);
+		}
+		return map;
+	});
 
 	createEffect(
 		on(
@@ -460,10 +892,19 @@ function TranscriptEditor(props: {
 		if (e.key === "Backspace" || e.key === "Delete") {
 			e.preventDefault();
 			const indices = [...selected];
-			if (indices.length === 1) {
-				props.onDeleteWord(indices[0]);
+			const firstWord = props.allWords[indices[0]];
+			if (firstWord?.deleted) {
+				if (indices.length === 1) {
+					props.onRestoreWord(indices[0]);
+				} else {
+					props.onRestoreWords(indices);
+				}
 			} else {
-				props.onDeleteWords(indices);
+				if (indices.length === 1) {
+					props.onDeleteWord(indices[0]);
+				} else {
+					props.onDeleteWords(indices);
+				}
 			}
 			setSelectedIndices(new Set<number>());
 			setAnchorIndex(-1);
@@ -548,6 +989,47 @@ function TranscriptEditor(props: {
 		setAnchorIndex(-1);
 	};
 
+	const handleWordRestore = (word: FlatWord) => {
+		const selected = selectedIndices();
+		if (selected.size > 1) {
+			props.onRestoreWords([...selected]);
+		} else {
+			props.onRestoreWord(flatIndexOf(word));
+		}
+		setSelectedIndices(new Set<number>());
+		setAnchorIndex(-1);
+	};
+
+	const handleContextMenu = (word: FlatWord, e: MouseEvent) => {
+		if (word.deleted) {
+			setBufferPopover({
+				word,
+				flatIndex: flatIndexOf(word),
+				position: { x: e.clientX, y: e.clientY },
+			});
+		}
+	};
+
+	const handleBufferChange = (
+		segmentIndex: number,
+		wordIndex: number,
+		bufferStart: number,
+		bufferEnd: number,
+	) => {
+		setProject(
+			produce((p) => {
+				if (!p.captions?.segments) return;
+				const seg = p.captions.segments[segmentIndex];
+				if (!seg?.words) return;
+				const w = seg.words[wordIndex] as CaptionWordExtended;
+				if (w) {
+					w.bufferStart = bufferStart;
+					w.bufferEnd = bufferEnd;
+				}
+			}),
+		);
+	};
+
 	return (
 		<div
 			ref={scrollContainerRef}
@@ -578,25 +1060,52 @@ function TranscriptEditor(props: {
 									const flatIdx = () => flatIndexOf(word);
 									const isActive = () => props.activeWordIndex === flatIdx();
 									const isSelected = () => selectedIndices().has(flatIdx());
+									const pause = () =>
+										pauseAfterWord().get(
+											`${word.segmentIndex}:${word.wordIndex}`,
+										);
 
 									return (
-										<WordWithTooltip
-											word={word}
-											isActive={isActive()}
-											isSelected={isSelected()}
-											selectedCount={selectedCount()}
-											ref={(el: HTMLSpanElement) => {
-												if (isActive()) activeWordRef = el;
-											}}
-											onClick={(e: MouseEvent) => handleWordSelect(word, e)}
-											onDelete={() => handleWordDelete(word)}
-										/>
+										<>
+											<WordWithTooltip
+												word={word}
+												isActive={isActive()}
+												isSelected={isSelected()}
+												selectedCount={selectedCount()}
+												ref={(el: HTMLSpanElement) => {
+													if (isActive()) activeWordRef = el;
+												}}
+												onClick={(e: MouseEvent) => handleWordSelect(word, e)}
+												onDelete={() => handleWordDelete(word)}
+												onRestore={() => handleWordRestore(word)}
+												onContextMenu={(e: MouseEvent) =>
+													handleContextMenu(word, e)
+												}
+											/>
+											<Show when={pause()}>
+												{(p) => <PauseBadge pause={p()} />}
+											</Show>
+										</>
 									);
 								}}
 							</For>
 						)}
 					</For>
 				</div>
+			</Show>
+			<Show when={bufferPopover()}>
+				{(popover) => (
+					<BufferPopover
+						word={popover().word}
+						position={popover().position}
+						onClose={() => setBufferPopover(null)}
+						onBufferChange={handleBufferChange}
+						onRestore={() => {
+							handleWordRestore(popover().word);
+							setBufferPopover(null);
+						}}
+					/>
+				)}
 			</Show>
 		</div>
 	);

@@ -11,6 +11,7 @@ import {
 	type SegmentRecordings,
 	type TimelineSegment,
 } from "~/utils/tauri";
+import type { CaptionWordExtended } from "./caption-types";
 export const DEFAULT_CAPTION_MODEL = "best";
 export const DEFAULT_WHISPER_CAPTION_MODEL = "small";
 export const DEFAULT_CAPTION_LANGUAGE = "auto";
@@ -138,18 +139,20 @@ export function mapCaptionsToEditedTimeline(
 		const mappedCaptionSegments = mappings.flatMap((mapping) => {
 			if (caption.words && caption.words.length > 0) {
 				const mappedWords = caption.words.flatMap((word) => {
-					const wordMapped = mapTimeRangeWithinMapping(
-						word.start,
-						word.end,
-						mapping,
-					);
+					const w = word as CaptionWordExtended;
+					const wordMapped = mapTimeRangeWithinMapping(w.start, w.end, mapping);
 
 					return wordMapped
 						? [
 								{
-									text: word.text,
+									text: w.text,
 									start: wordMapped.start,
 									end: wordMapped.end,
+									deleted: w.deleted ?? false,
+									isFiller: w.isFiller ?? false,
+									isPause: w.isPause ?? false,
+									bufferStart: w.bufferStart ?? 0,
+									bufferEnd: w.bufferEnd ?? 0,
 								},
 							]
 						: [];
@@ -209,19 +212,29 @@ export function mapCaptionsToEditedTimeline(
 export function createCaptionTrackSegments(
 	segments: CaptionSegment[],
 ): CaptionTrackSegment[] {
-	return segments.map((segment) => ({
-		id: segment.id,
-		start: segment.start,
-		end: segment.end,
-		text: segment.text,
-		words: segment.words ?? [],
-		fadeDurationOverride: null,
-		lingerDurationOverride: null,
-		positionOverride: null,
-		colorOverride: null,
-		backgroundColorOverride: null,
-		fontSizeOverride: null,
-	}));
+	return segments.map((segment) => {
+		const words = (segment.words ?? []) as CaptionWordExtended[];
+		const visibleText = words.some((w) => w.deleted)
+			? words
+					.filter((w) => !w.deleted)
+					.map((w) => w.text.trim())
+					.filter((t) => t.length > 0)
+					.join(" ")
+			: segment.text;
+		return {
+			id: segment.id,
+			start: segment.start,
+			end: segment.end,
+			text: visibleText,
+			words,
+			fadeDurationOverride: null,
+			lingerDurationOverride: null,
+			positionOverride: null,
+			colorOverride: null,
+			backgroundColorOverride: null,
+			fontSizeOverride: null,
+		};
+	});
 }
 
 export function applyCaptionResultToProject<
@@ -301,8 +314,9 @@ export async function transcribeEditorCaptions(
 	return await commands.transcribeAudio(videoPath, modelPath, language, engine);
 }
 
-export function getCaptionTextFromWords(words: CaptionWord[]) {
+export function getCaptionTextFromWords(words: CaptionWordExtended[]) {
 	return words
+		.filter((word) => !word.deleted)
 		.map((word) => word.text.trim())
 		.filter((word) => word.length > 0)
 		.join(" ");

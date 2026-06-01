@@ -151,3 +151,124 @@ export function rippleDeleteAllTracks(
 	if (timeline.keyboardSegments)
 		rippleDeleteFromTrack(timeline.keyboardSegments, cutStart, cutEnd);
 }
+
+export function shiftTimeAfterInsert(
+	time: number,
+	insertPoint: number,
+	duration: number,
+): number {
+	if (time <= insertPoint) return time;
+	return time + duration;
+}
+
+export function shiftCaptionTimesAfterInsert(
+	segments: Array<{
+		start: number;
+		end: number;
+		words?: Array<{ start: number; end: number }>;
+	}>,
+	insertPoint: number,
+	duration: number,
+) {
+	for (const seg of segments) {
+		if (seg.words) {
+			for (const w of seg.words) {
+				w.start = shiftTimeAfterInsert(w.start, insertPoint, duration);
+				w.end = shiftTimeAfterInsert(w.end, insertPoint, duration);
+			}
+			if (seg.words.length > 0) {
+				seg.start = seg.words[0].start;
+				seg.end = seg.words[seg.words.length - 1].end;
+			}
+		}
+	}
+}
+
+export function rippleInsertIntoTrack(
+	segments: Array<{ start: number; end: number }>,
+	insertPoint: number,
+	duration: number,
+) {
+	for (const seg of segments) {
+		if (seg.start >= insertPoint) {
+			seg.start += duration;
+			seg.end += duration;
+		} else if (seg.end > insertPoint) {
+			seg.end += duration;
+		}
+	}
+}
+
+export function insertClipSegmentForRange(
+	segments: Array<{ timescale: number; start: number; end: number }>,
+	insertPoint: number,
+	duration: number,
+) {
+	let editedOffset = 0;
+	for (let i = 0; i < segments.length; i++) {
+		const seg = segments[i];
+		const segDuration = (seg.end - seg.start) / seg.timescale;
+		const segEditedEnd = editedOffset + segDuration;
+
+		if (insertPoint <= segEditedEnd) {
+			const relativeInSeg = (insertPoint - editedOffset) * seg.timescale;
+			const splitPoint = seg.start + relativeInSeg;
+			const insertAmount = duration * seg.timescale;
+
+			if (splitPoint <= seg.start + 0.001) {
+				seg.start -= insertAmount;
+			} else if (splitPoint >= seg.end - 0.001) {
+				seg.end += insertAmount;
+			} else {
+				const originalEnd = seg.end;
+				seg.end = splitPoint;
+				const insertedSeg = {
+					timescale: seg.timescale,
+					start: splitPoint,
+					end: splitPoint + insertAmount,
+				};
+				const afterSeg = {
+					timescale: seg.timescale,
+					start: splitPoint + insertAmount,
+					end: originalEnd + insertAmount,
+				};
+				segments.splice(i + 1, 0, insertedSeg, afterSeg);
+			}
+			return;
+		}
+		editedOffset += segDuration;
+	}
+
+	if (segments.length > 0) {
+		const lastSeg = segments[segments.length - 1];
+		lastSeg.end += duration * lastSeg.timescale;
+	}
+}
+
+export function rippleInsertAllTracks(
+	timeline: {
+		segments: Array<{ timescale: number; start: number; end: number }>;
+		zoomSegments?: Array<{ start: number; end: number }> | null;
+		sceneSegments?: Array<{ start: number; end: number }> | null;
+		maskSegments?: Array<{ start: number; end: number }> | null;
+		textSegments?: Array<{ start: number; end: number }> | null;
+		captionSegments?: Array<{ start: number; end: number }> | null;
+		keyboardSegments?: Array<{ start: number; end: number }> | null;
+	},
+	insertPoint: number,
+	duration: number,
+) {
+	insertClipSegmentForRange(timeline.segments, insertPoint, duration);
+	if (timeline.zoomSegments)
+		rippleInsertIntoTrack(timeline.zoomSegments, insertPoint, duration);
+	if (timeline.sceneSegments)
+		rippleInsertIntoTrack(timeline.sceneSegments, insertPoint, duration);
+	if (timeline.maskSegments)
+		rippleInsertIntoTrack(timeline.maskSegments, insertPoint, duration);
+	if (timeline.textSegments)
+		rippleInsertIntoTrack(timeline.textSegments, insertPoint, duration);
+	if (timeline.captionSegments)
+		rippleInsertIntoTrack(timeline.captionSegments, insertPoint, duration);
+	if (timeline.keyboardSegments)
+		rippleInsertIntoTrack(timeline.keyboardSegments, insertPoint, duration);
+}

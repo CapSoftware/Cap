@@ -902,6 +902,16 @@ pub struct CaptionWord {
     pub text: String,
     pub start: f32,
     pub end: f32,
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
+    pub is_filler: bool,
+    #[serde(default)]
+    pub is_pause: bool,
+    #[serde(default)]
+    pub buffer_start: f32,
+    #[serde(default)]
+    pub buffer_end: f32,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
