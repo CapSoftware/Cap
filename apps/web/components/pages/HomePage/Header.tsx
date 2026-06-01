@@ -4,11 +4,12 @@
 import { Button } from "@cap/ui";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Image from "next/image";
 import Link from "next/link";
-import { useRef, useState, useTransition } from "react";
+import { Fragment, useEffect, useRef, useState, useTransition } from "react";
 import { sendDownloadLink } from "@/actions/send-download-link";
 import { trackEvent } from "@/app/utils/analytics";
 import { LogoMarquee } from "@/components/ui/LogoMarquee";
@@ -20,8 +21,67 @@ import {
 } from "@/utils/platform";
 import { homepageCopy } from "../../../data/homepage-copy";
 import UpgradeToPro from "../_components/UpgradeToPro";
+import { InstantIcon, ScreenshotIcon, StudioIcon } from "./modeIcons";
 import type { ProArtRef } from "./Pricing/ProArt";
 import VideoModal from "./VideoModal";
+
+const HERO_MODE_ICONS = {
+	instant: InstantIcon,
+	studio: StudioIcon,
+	screenshot: ScreenshotIcon,
+} as const;
+
+const MODE_CYCLE_INTERVAL = 3500;
+
+const HERO_MODE_COLORS = {
+	instant: "text-amber-600",
+	studio: "text-blue-11",
+	screenshot: "text-violet-600",
+} as const;
+
+const TITLE_LEADING = "leading-[2.25rem] md:leading-[3.5rem]";
+
+const HeroTitle = ({ text }: { text: string }) => {
+	let letterIndex = -1;
+	const wordCounts: Record<string, number> = {};
+	const charCounts: Record<string, number> = {};
+
+	return (
+		<>
+			{text.split(" ").map((word) => {
+				wordCounts[word] = (wordCounts[word] ?? 0) + 1;
+				return (
+					<Fragment key={`${word}:${wordCounts[word]}`}>
+						{" "}
+						<span
+							className={clsx("inline-block whitespace-nowrap", TITLE_LEADING)}
+						>
+							{Array.from(word).map((char) => {
+								letterIndex += 1;
+								charCounts[char] = (charCounts[char] ?? 0) + 1;
+								return (
+									<motion.span
+										key={`${char}:${charCounts[char]}`}
+										className={clsx("inline-block", TITLE_LEADING)}
+										initial={{ opacity: 0, y: "0.4em", filter: "blur(6px)" }}
+										animate={{ opacity: 1, y: "0em", filter: "blur(0px)" }}
+										transition={{
+											duration: 0.34,
+											delay: letterIndex * 0.028,
+											ease: "easeOut",
+										}}
+									>
+										{char}
+									</motion.span>
+								);
+							})}
+						</span>
+					</Fragment>
+				);
+			})}
+		</>
+	);
+};
 
 interface HeaderProps {
 	serverHomepageCopyVariant?: string;
@@ -99,23 +159,130 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 
 	const headerContent = getHeaderContent();
 
+	const heroModes = homepageCopy.header.modes;
+	const [activeModeIndex, setActiveModeIndex] = useState(0);
+	const [modePickerInteracted, setModePickerInteracted] = useState(false);
+	const activeMode = heroModes[activeModeIndex];
+
+	useEffect(() => {
+		if (modePickerInteracted) return;
+
+		const interval = setInterval(() => {
+			setActiveModeIndex((prev) => (prev + 1) % heroModes.length);
+		}, MODE_CYCLE_INTERVAL);
+
+		return () => clearInterval(interval);
+	}, [modePickerInteracted, heroModes.length]);
+
 	return (
 		<div className="mt-[90px] mb-[60px] sm:mb-[100px] md:mb-[160px] w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[140px] xl:min-h-[700px]">
 			<div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-0">
 				<div className="w-full max-w-2xl xl:max-w-[530px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
 					<div className="flex flex-col text-center md:text-left w-full max-w-[650px]">
-						<motion.h1
-							className="text-[2.25rem] font-medium leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4"
+						<motion.div
+							className="flex justify-center mb-5 md:justify-start"
+							initial="hidden"
+							animate="visible"
+							custom={0}
+							variants={fadeIn}
+						>
+							<div className="inline-flex gap-1 p-1 rounded-full border border-gray-4 bg-gray-2">
+								{heroModes.map((mode, index) => {
+									const isActive = index === activeModeIndex;
+									const Icon = HERO_MODE_ICONS[mode.id];
+									return (
+										<button
+											key={mode.id}
+											type="button"
+											onClick={() => {
+												setModePickerInteracted(true);
+												setActiveModeIndex(index);
+											}}
+											className="flex relative gap-1.5 items-center px-3 py-1.5 text-sm font-medium rounded-full cursor-pointer"
+										>
+											{isActive && (
+												<motion.span
+													layoutId="heroModeHighlight"
+													className="absolute inset-0 rounded-full border shadow-sm bg-gray-1 border-gray-5"
+													transition={{
+														type: "spring",
+														stiffness: 400,
+														damping: 32,
+													}}
+												/>
+											)}
+											<Icon
+												className={clsx(
+													"relative z-[1] size-3.5 transition-colors",
+													isActive ? HERO_MODE_COLORS[mode.id] : "text-gray-9",
+												)}
+											/>
+											<span
+												className={clsx(
+													"relative z-[1] whitespace-nowrap transition-colors",
+													isActive ? "text-gray-12" : "text-gray-10",
+												)}
+											>
+												{mode.label}
+												<span className="hidden sm:inline"> Mode</span>
+											</span>
+										</button>
+									);
+								})}
+							</div>
+						</motion.div>
+
+						<motion.div
+							className="mb-2 h-6"
 							initial="hidden"
 							animate="visible"
 							custom={1}
 							variants={fadeIn}
 						>
-							{headerContent.title}
+							<AnimatePresence mode="wait" initial={false}>
+								<motion.span
+									key={activeMode?.id ?? activeModeIndex}
+									className={clsx(
+										"block text-sm font-semibold italic",
+										activeMode
+											? HERO_MODE_COLORS[activeMode.id]
+											: "text-gray-10",
+									)}
+									initial={{ opacity: 0, y: 6 }}
+									animate={{ opacity: 1, y: 0 }}
+									exit={{ opacity: 0, y: -6 }}
+									transition={{ duration: 0.25, ease: "easeOut" }}
+								>
+									with {activeMode?.label ?? "Instant"} Mode...
+								</motion.span>
+							</AnimatePresence>
+						</motion.div>
+
+						<motion.h1
+							className="relative z-10 mb-6 flex h-[4.5rem] flex-col justify-center text-[2.25rem] font-medium leading-[2.25rem] text-black md:h-[7rem] md:text-[3.75rem] md:leading-[3.5rem]"
+							initial="hidden"
+							animate="visible"
+							custom={1}
+							variants={fadeIn}
+						>
+							<AnimatePresence mode="wait" initial={false}>
+								<motion.span
+									key={activeMode?.id ?? activeModeIndex}
+									className={clsx("block text-balance", TITLE_LEADING)}
+									exit={{
+										opacity: 0,
+										y: -16,
+										filter: "blur(4px)",
+										transition: { duration: 0.2, ease: "easeIn" },
+									}}
+								>
+									<HeroTitle text={activeMode?.title ?? headerContent.title} />
+								</motion.span>
+							</AnimatePresence>
 						</motion.h1>
 
 						<motion.p
-							className="mx-auto mb-8 max-w-3xl text-lg text-zinc-500"
+							className="mx-auto mb-4 max-w-3xl text-lg leading-7 text-zinc-500 md:mx-0"
 							initial="hidden"
 							animate="visible"
 							custom={2}
@@ -129,7 +296,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						className="hidden md:flex flex-wrap gap-4 items-center mb-5"
 						initial="hidden"
 						animate="visible"
-						custom={3}
+						custom={4}
 						variants={fadeIn}
 					>
 						<Button
@@ -206,7 +373,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						className="text-sm text-gray-10 text-center md:text-left"
 						initial="hidden"
 						animate="visible"
-						custom={4}
+						custom={5}
 						variants={fadeIn}
 					>
 						{homepageCopy.header.cta.freeVersionText}
@@ -242,11 +409,11 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						className="mt-14"
 						initial="hidden"
 						animate="visible"
-						custom={6}
+						custom={7}
 						variants={fadeIn}
 					>
 						<p className="mb-4 text-sm italic text-gray-10 text-center md:text-left">
-							Trusted by <strong>30,000+</strong> teams, builders and creators
+							Trusted by <strong>40,000+</strong> teams, builders and creators
 						</p>
 						<LogoMarquee />
 					</motion.div>
