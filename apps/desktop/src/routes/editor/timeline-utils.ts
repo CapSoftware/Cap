@@ -311,3 +311,81 @@ export function rippleInsertAllTracks(
 	if (timeline.keyboardSegments)
 		rippleInsertIntoTrack(timeline.keyboardSegments, insertPoint, duration);
 }
+
+if (import.meta.vitest) {
+	const { describe, expect, it } = import.meta.vitest;
+
+	describe("shiftTimeAfterCut", () => {
+		it("does not shift time before the cut", () => {
+			expect(shiftTimeAfterCut(1, 2, 1)).toBe(1);
+		});
+		it("snaps time inside the cut to the start of the cut", () => {
+			expect(shiftTimeAfterCut(2.5, 2, 1)).toBe(2);
+		});
+		it("shifts time after the cut by the cut duration", () => {
+			expect(shiftTimeAfterCut(4, 2, 1)).toBe(3);
+		});
+	});
+
+	describe("shiftCaptionTimesAfterCut", () => {
+		it("shifts regular words and adjusts segment bounds", () => {
+			const segments = [
+				{
+					start: 2,
+					end: 4,
+					words: [
+						{ start: 2, end: 3, deleted: false },
+						{ start: 3, end: 4, deleted: false },
+					],
+				},
+			];
+			// Cut from 1 to 2 (duration 1). Both words start at >= 2, so they shift by -1.
+			shiftCaptionTimesAfterCut(segments, 1, 1);
+			expect(segments[0].words?.[0].start).toBe(1);
+			expect(segments[0].words?.[0].end).toBe(2);
+			expect(segments[0].words?.[1].start).toBe(2);
+			expect(segments[0].words?.[1].end).toBe(3);
+			expect(segments[0].start).toBe(1);
+			expect(segments[0].end).toBe(3);
+		});
+
+		it("handles deleted words by keeping their timings if they fall strictly inside the cut", () => {
+			const segments = [
+				{
+					start: 0,
+					end: 4,
+					words: [
+						{ start: 1, end: 2, deleted: true },
+						{ start: 2, end: 3, deleted: true },
+						{ start: 3, end: 4, deleted: false },
+					],
+				},
+			];
+			// Cut from 1 to 3 (duration 2).
+			shiftCaptionTimesAfterCut(segments, 1, 2);
+
+			// Word 1: inside cut -> continues without shifting
+			expect(segments[0].words?.[0].start).toBe(1);
+			expect(segments[0].words?.[0].end).toBe(2);
+
+			// Word 2: inside cut -> continues without shifting
+			expect(segments[0].words?.[1].start).toBe(2);
+			expect(segments[0].words?.[1].end).toBe(3);
+
+			// Word 3: after cut -> shifts left by 2
+			expect(segments[0].words?.[2].start).toBe(1);
+			expect(segments[0].words?.[2].end).toBe(2);
+
+			// visible start/end based on undeleted words (Word 3 is the only one)
+			expect(segments[0].start).toBe(1);
+			expect(segments[0].end).toBe(2);
+		});
+	});
+
+	describe("shiftTimeAfterInsert", () => {
+		it("shifts time after insertion point", () => {
+			expect(shiftTimeAfterInsert(3, 2, 1)).toBe(4);
+			expect(shiftTimeAfterInsert(1, 2, 1)).toBe(1);
+		});
+	});
+}

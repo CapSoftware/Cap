@@ -55,3 +55,52 @@ export function detectPauses(
 	}
 	return pauses;
 }
+
+if (import.meta.vitest) {
+	const { describe, expect, it } = import.meta.vitest;
+
+	describe("isFillerWord", () => {
+		it("detects basic filler words", () => {
+			expect(isFillerWord("uh")).toBe(true);
+			expect(isFillerWord("um")).toBe(true);
+			expect(isFillerWord("hmm")).toBe(true);
+		});
+
+		it("ignores punctuation and capitalization", () => {
+			expect(isFillerWord("Uh,")).toBe(true);
+			expect(isFillerWord("UM...")).toBe(true);
+			expect(isFillerWord("er?")).toBe(true);
+		});
+
+		it("returns false for non-filler words", () => {
+			expect(isFillerWord("hello")).toBe(false);
+			expect(isFillerWord("the")).toBe(false);
+			expect(isFillerWord("under")).toBe(false);
+		});
+	});
+
+	describe("detectPauses", () => {
+		it("detects pauses above threshold", () => {
+			const words = [
+				{ start: 0, end: 1.0, segmentIndex: 0, wordIndex: 0 },
+				{ start: 1.6, end: 2.0, segmentIndex: 0, wordIndex: 1 },
+			];
+			const pauses = detectPauses(words, 0.5);
+			expect(pauses).toHaveLength(1);
+			expect(pauses[0].duration).toBeCloseTo(0.6);
+			expect(pauses[0].start).toBe(1.0);
+			expect(pauses[0].end).toBe(1.6);
+			expect(pauses[0].isPause).toBe(true);
+			expect(pauses[0].text).toBe("[Pause 0.6s]");
+		});
+
+		it("ignores pauses below threshold", () => {
+			const words = [
+				{ start: 0, end: 1.0, segmentIndex: 0, wordIndex: 0 },
+				{ start: 1.2, end: 2.0, segmentIndex: 0, wordIndex: 1 },
+			];
+			const pauses = detectPauses(words, 0.5);
+			expect(pauses).toHaveLength(0);
+		});
+	});
+}

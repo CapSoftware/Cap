@@ -820,10 +820,7 @@ fn process_with_whisper(
                         }
 
                         log::info!(
-                            "    -> Completing word: '{}' ({:.2}s - {:.2}s)",
-                            text,
-                            ws,
-                            word_end
+                            "    -> Completing word: '{text}' ({ws:.2}s - {word_end:.2}s)"
                         );
                         words.push(CaptionWord {
                             text,
@@ -859,10 +856,7 @@ fn process_with_whisper(
                 word_end = ws + max_duration;
             }
             log::info!(
-                "    -> Final word: '{}' ({:.2}s - {:.2}s)",
-                text,
-                ws,
-                word_end
+                "    -> Final word: '{text}' ({ws:.2}s - {word_end:.2}s)"
             );
             words.push(CaptionWord {
                 text,
