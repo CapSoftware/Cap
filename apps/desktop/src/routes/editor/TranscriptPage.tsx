@@ -20,6 +20,7 @@ import {
 import { FPS, useEditorContext } from "./context";
 import {
 	AUTO_CLEAN_SILENCE_THRESHOLD,
+	detectPauses,
 	isFillerWord,
 	PAUSE_DETECTION_THRESHOLD,
 } from "./filler-detection";
