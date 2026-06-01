@@ -1,10 +1,10 @@
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { start } from "workflow/api";
+import { isAiConfigured } from "@/lib/ai-provider";
 import { generateAiWorkflow } from "@/workflows/generate-ai";
 
 type GenerateAiResult = {
@@ -16,15 +16,11 @@ export async function startAiGeneration(
 	videoId: Video.VideoId,
 	userId: string,
 ): Promise<GenerateAiResult> {
-	if (
-		!serverEnv().GROQ_API_KEY &&
-		!serverEnv().OPENAI_API_KEY &&
-		!serverEnv().AI_BASE_URL
-	) {
+	if (!isAiConfigured()) {
 		return {
 			success: false,
 			message:
-				"Missing AI API keys (set GROQ_API_KEY, OPENAI_API_KEY, or AI_BASE_URL)",
+				"No AI provider configured (set AI_BASE_URL, GROQ_API_KEY, or OPENAI_API_KEY)",
 		};
 	}
 

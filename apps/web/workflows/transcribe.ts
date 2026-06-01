@@ -21,7 +21,7 @@ import { createClient } from "@deepgram/sdk";
 import { eq } from "drizzle-orm";
 import { toFile } from "openai";
 import { FatalError } from "workflow";
-import { getSttClient, getSttModel } from "@/lib/ai-provider";
+import { getSttClient, getSttModel, isSttConfigured } from "@/lib/ai-provider";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
@@ -100,7 +100,7 @@ export async function transcribeVideoWorkflow(
 async function validateVideo(videoId: string): Promise<VideoData> {
 	"use step";
 
-	if (!serverEnv().DEEPGRAM_API_KEY && !serverEnv().STT_BASE_URL) {
+	if (!isSttConfigured()) {
 		throw new FatalError(
 			"No transcription provider configured (set DEEPGRAM_API_KEY or STT_BASE_URL)",
 		);
@@ -382,16 +382,20 @@ async function transcribeViaSttProvider(
 		type: "audio/mpeg",
 	});
 
-	const response = (await client.audio.transcriptions.create({
+	const response = await client.audio.transcriptions.create({
 		file,
 		model: getSttModel(),
-		response_format: "vtt",
+		response_format: "vtt" as const,
 		language: language !== AI_GENERATION_LANGUAGE_AUTO ? language : undefined,
-	})) as unknown as string;
+	});
 
-	if (typeof response !== "string" || !response.includes("WEBVTT")) {
+	if (
+		typeof response !== "string" ||
+		!/^WEBVTT/m.test(response) ||
+		!response.includes("-->")
+	) {
 		throw new Error(
-			"STT provider did not return WebVTT (verify STT_MODEL supports response_format=vtt)",
+			"STT provider did not return valid WebVTT (verify STT_MODEL supports response_format=vtt)",
 		);
 	}
 

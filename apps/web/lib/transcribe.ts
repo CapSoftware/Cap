@@ -1,9 +1,9 @@
 import { db } from "@cap/database";
 import { organizations, videos, videoUploads } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { start } from "workflow/api";
+import { isSttConfigured } from "@/lib/ai-provider";
 import { transcribeVideoWorkflow } from "@/workflows/transcribe";
 
 type TranscribeResult = {
@@ -17,10 +17,11 @@ export async function transcribeVideo(
 	aiGenerationEnabled = false,
 	_isRetry = false,
 ): Promise<TranscribeResult> {
-	if (!serverEnv().DEEPGRAM_API_KEY && !serverEnv().STT_BASE_URL) {
+	if (!isSttConfigured()) {
 		return {
 			success: false,
-			message: "Missing necessary environment variables",
+			message:
+				"No transcription provider configured (set DEEPGRAM_API_KEY or STT_BASE_URL)",
 		};
 	}
 

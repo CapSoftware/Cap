@@ -12,7 +12,7 @@ import {
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
-import { getAiClient, getAiModel } from "@/lib/ai-provider";
+import { getAiClient, getAiModel, isAiConfigured } from "@/lib/ai-provider";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
@@ -95,7 +95,7 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 async function validateAndSetProcessing(videoId: string): Promise<VideoData> {
 	"use step";
 
-	if (!getAiClient()) {
+	if (!isAiConfigured()) {
 		throw new FatalError(
 			"No AI provider configured (set AI_BASE_URL, GROQ_API_KEY, or OPENAI_API_KEY)",
 		);
@@ -197,7 +197,9 @@ async function generateWithAi(
 
 	const aiClient = getAiClient();
 	if (!aiClient) {
-		throw new FatalError("AI client not configured");
+		throw new FatalError(
+			"No AI provider configured (set AI_BASE_URL, GROQ_API_KEY, or OPENAI_API_KEY)",
+		);
 	}
 	const model = getAiModel();
 	const chunks = chunkTranscriptWithTimestamps(transcript.segments);
@@ -376,11 +378,33 @@ async function callAiApi(
 	client: NonNullable<ReturnType<typeof getAiClient>>,
 	model: string,
 ): Promise<string> {
-	const completion = await client.chat.completions.create({
-		messages: [{ role: "user", content: prompt }],
-		model,
-	});
-	return completion.choices?.[0]?.message?.content || "{}";
+	try {
+		const completion = await client.chat.completions.create({
+			messages: [{ role: "user", content: prompt }],
+			model,
+			response_format: { type: "json_object" },
+		});
+		return completion.choices?.[0]?.message?.content || "{}";
+	} catch (error) {
+		if (!isUnsupportedJsonFormatError(error)) throw error;
+		const completion = await client.chat.completions.create({
+			messages: [{ role: "user", content: prompt }],
+			model,
+		});
+		return completion.choices?.[0]?.message?.content || "{}";
+	}
+}
+
+function isUnsupportedJsonFormatError(error: unknown): boolean {
+	if (!error || typeof error !== "object") return false;
+	const message = String(
+		(error as { message?: unknown }).message ?? "",
+	).toLowerCase();
+	return (
+		message.includes("response_format") ||
+		message.includes("json_object") ||
+		message.includes("json mode")
+	);
 }
 
 function cleanJsonResponse(content: string): string {
