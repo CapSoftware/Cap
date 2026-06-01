@@ -1,21 +1,16 @@
-"use client";
-
 import { Button, Logo, navigationMenuTriggerStyle } from "@cap/ui";
 import { classNames } from "@cap/utils";
 import { ChevronDown, Clapperboard, Zap } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import MobileMenu from "@/components/ui/MobileMenu";
-import { useCurrentUser } from "../Layout/AuthContext";
 
 interface NavDropdownItem {
 	label: string;
 	sub: string;
 	href: string;
-	icon?: React.ReactNode;
+	icon?: ReactNode;
 }
 
 interface NavItem {
@@ -122,348 +117,143 @@ interface NavbarProps {
 	stars?: string;
 }
 
-interface PanelPosition {
-	left: number;
-	width: number;
-	arrowLeft: number;
-}
-
-const menuTransition = {
-	type: "spring" as const,
-	stiffness: 350,
-	damping: 30,
-	mass: 0.8,
-	opacity: { duration: 0.15 },
-};
+const dropdownStyle = (width: number | undefined): CSSProperties => ({
+	width: width ?? 460,
+	maxWidth: "calc(100vw - 2rem)",
+});
 
 export const Navbar = ({ stars }: NavbarProps) => {
-	const pathname = usePathname();
-	const [showMobileMenu, setShowMobileMenu] = useState(false);
-	const auth = useCurrentUser();
-
-	const [hideLogoName, setHideLogoName] = useState(false);
-	const [activeMenu, setActiveMenu] = useState<string | null>(null);
-	const [panel, setPanel] = useState<PanelPosition | null>(null);
-
-	const navRef = useRef<HTMLElement>(null);
-	const triggerRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
-	const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-	const clearCloseTimer = useCallback(() => {
-		if (closeTimer.current) {
-			clearTimeout(closeTimer.current);
-			closeTimer.current = null;
-		}
-	}, []);
-
-	const closeMenu = useCallback(() => {
-		clearCloseTimer();
-		setActiveMenu(null);
-	}, [clearCloseTimer]);
-
-	const scheduleClose = useCallback(() => {
-		clearCloseTimer();
-		closeTimer.current = setTimeout(() => setActiveMenu(null), 120);
-	}, [clearCloseTimer]);
-
-	const openMenu = useCallback(
-		(label: string) => {
-			clearCloseTimer();
-			const nav = navRef.current;
-			const trigger = triggerRefs.current.get(label);
-			const item = Links.find((link) => link.label === label);
-			if (!nav || !trigger || !item?.dropdown) return;
-
-			const navRect = nav.getBoundingClientRect();
-			const triggerRect = trigger.getBoundingClientRect();
-			const width = item.width ?? 460;
-			const gutter = 12;
-			const center = triggerRect.left + triggerRect.width / 2;
-			const maxLeft = Math.max(gutter, window.innerWidth - width - gutter);
-			const viewportLeft = Math.min(
-				Math.max(center - width / 2, gutter),
-				maxLeft,
-			);
-
-			setPanel({
-				left: viewportLeft - navRect.left,
-				width,
-				arrowLeft: Math.min(Math.max(center - viewportLeft, 20), width - 20),
-			});
-			setActiveMenu(label);
-		},
-		[clearCloseTimer],
-	);
-
-	useEffect(() => {
-		const onScroll = () => {
-			setHideLogoName(window.scrollY > 10);
-			setActiveMenu(null);
-		};
-		document.addEventListener("scroll", onScroll, { passive: true });
-		return () => {
-			document.removeEventListener("scroll", onScroll);
-		};
-	}, []);
-
-	useEffect(() => {
-		if (!activeMenu) return;
-		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "Escape") setActiveMenu(null);
-		};
-		const onResize = () => setActiveMenu(null);
-		window.addEventListener("keydown", onKeyDown);
-		window.addEventListener("resize", onResize);
-		return () => {
-			window.removeEventListener("keydown", onKeyDown);
-			window.removeEventListener("resize", onResize);
-		};
-	}, [activeMenu]);
-
-	useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
-
-	const activeItem = Links.find((link) => link.label === activeMenu);
-
 	return (
-		<>
-			<header className="fixed left-0 right-0 z-[51] animate-in fade-in slide-in-from-top-4 duration-500 top-4 lg:top-6">
-				<nav
-					ref={navRef}
-					onMouseLeave={scheduleClose}
-					className="relative p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md lg:max-w-fit border-zinc-200 h-fit"
-				>
-					<div className="flex gap-12 justify-between items-center mx-auto max-w-5xl h-full transition-all">
-						<div className="flex items-center">
-							<Link passHref href="/home" onMouseEnter={closeMenu}>
-								<Logo
-									hideLogoName={hideLogoName}
-									className="transition-all duration-200 ease-out"
-									viewBoxDimensions={hideLogoName ? "0 0 60 40" : "0 0 120 40"}
-									style={{
-										width: hideLogoName ? 45.5 : 90,
-										height: 40,
-									}}
-								/>
-							</Link>
-							<div className="hidden lg:flex">
-								<nav aria-label="Main">
-									<ul className="flex items-center px-0 space-x-0 list-none">
-										{Links.map((link) => (
-											<li key={link.label}>
-												{link.dropdown ? (
+		<header className="fixed left-0 right-0 z-[51] animate-in fade-in slide-in-from-top-4 duration-500 top-4 lg:top-6">
+			<nav className="relative p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md lg:max-w-fit border-zinc-200 h-fit">
+				<div className="flex gap-12 justify-between items-center mx-auto max-w-5xl h-full transition-all">
+					<div className="flex items-center">
+						<Link passHref href="/home">
+							<Logo
+								className="transition-all duration-200 ease-out"
+								viewBoxDimensions="0 0 120 40"
+								style={{
+									width: 90,
+									height: 40,
+								}}
+							/>
+						</Link>
+						<div className="hidden lg:flex">
+							<nav aria-label="Main">
+								<ul className="flex items-center px-0 space-x-0 list-none">
+									{Links.map((link) => (
+										<li key={link.label} className="relative group">
+											{link.dropdown ? (
+												<>
 													<button
 														type="button"
-														ref={(el) => {
-															if (el) {
-																triggerRefs.current.set(link.label, el);
-															} else {
-																triggerRefs.current.delete(link.label);
-															}
-														}}
 														aria-haspopup="true"
-														aria-expanded={activeMenu === link.label}
-														onMouseEnter={() => openMenu(link.label)}
-														onFocus={() => openMenu(link.label)}
-														onClick={() =>
-															activeMenu === link.label
-																? closeMenu()
-																: openMenu(link.label)
-														}
 														className={classNames(
 															navigationMenuTriggerStyle(),
-															"flex gap-1 items-center px-2 py-0 text-sm font-medium transition-colors",
-															activeMenu === link.label
-																? "text-blue-9"
-																: "text-gray-10 hover:text-blue-9",
+															"flex gap-1 items-center px-2 py-0 text-sm font-medium text-gray-10 transition-colors hover:text-blue-9 focus:text-blue-9 group-hover:text-blue-9",
 														)}
 													>
 														{link.label}
 														<ChevronDown
-															className={classNames(
-																"size-3.5 transition-transform duration-200 ease-out",
-																activeMenu === link.label ? "rotate-180" : "",
-															)}
+															className="size-3.5 transition-transform duration-200 ease-out group-hover:rotate-180 group-focus-within:rotate-180"
 															strokeWidth={2.25}
 															aria-hidden="true"
 														/>
 													</button>
-												) : (
-													<Link
-														href={link.href ?? "#"}
-														onMouseEnter={closeMenu}
-														onFocus={closeMenu}
-														className={classNames(
-															navigationMenuTriggerStyle(),
-															pathname === link.href
-																? "text-blue-9"
-																: "text-gray-10",
-															"px-2 py-0 text-sm font-medium hover:text-blue-9 focus:text-8",
-														)}
-													>
-														{link.label}
-													</Link>
-												)}
-											</li>
-										))}
-									</ul>
-								</nav>
-							</div>
-						</div>
-						<div className="hidden items-center space-x-2 lg:flex">
-							<Button
-								variant="outline"
-								icon={
-									<Image
-										src="/github.svg"
-										alt="Github"
-										width={16}
-										height={16}
-									/>
-								}
-								target="_blank"
-								href="https://github.com/CapSoftware/Cap"
-								size="sm"
-								className="w-full font-medium sm:w-auto"
-							>
-								{`GitHub${stars ? ` (${stars})` : ""}`}
-							</Button>
-							<Suspense
-								fallback={
-									<Button
-										variant="dark"
-										disabled
-										size="sm"
-										className="w-full font-medium sm:w-auto"
-									>
-										Loading...
-									</Button>
-								}
-							>
-								{!auth && (
-									<Button
-										variant="gray"
-										href="/login"
-										size="sm"
-										className="w-full font-medium sm:w-auto"
-									>
-										Login
-									</Button>
-								)}
-								<LoginOrDashboard />
-							</Suspense>
-						</div>
-						<button
-							type="button"
-							className="flex lg:hidden"
-							onClick={() => setShowMobileMenu(!showMobileMenu)}
-						>
-							<div className="flex flex-col gap-[5px] mr-1">
-								<motion.div
-									initial={{ opacity: 1 }}
-									animate={{
-										rotate: showMobileMenu ? 45 : 0,
-										y: showMobileMenu ? 7 : 0,
-									}}
-									transition={{ duration: 0.2 }}
-									className="w-6 h-0.5 bg-black"
-								/>
-								<motion.div
-									initial={{ opacity: 1 }}
-									animate={{
-										opacity: showMobileMenu ? 0 : 1,
-										x: showMobileMenu ? -5 : 0,
-									}}
-									transition={{ duration: 0.2 }}
-									className="w-6 h-0.5 bg-black"
-								/>
-								<motion.div
-									initial={{ opacity: 1 }}
-									animate={{
-										rotate: showMobileMenu ? -45 : 0,
-										y: showMobileMenu ? -7 : 0,
-									}}
-									transition={{ duration: 0.2 }}
-									className="w-6 h-0.5 bg-black"
-								/>
-							</div>
-						</button>
-					</div>
-
-					<AnimatePresence>
-						{activeMenu && panel && activeItem?.dropdown && (
-							<motion.div
-								key={activeMenu}
-								className="hidden absolute top-full z-50 pt-3 lg:block"
-								style={{
-									left: panel.left,
-									transformOrigin: `${panel.arrowLeft}px top`,
-								}}
-								initial={{ opacity: 0, y: -8, scale: 0.96 }}
-								animate={{ opacity: 1, y: 0, scale: 1 }}
-								exit={{
-									opacity: 0,
-									y: -4,
-									scale: 0.98,
-									transition: { duration: 0.12, ease: "easeIn" },
-								}}
-								transition={menuTransition}
-								onMouseEnter={clearCloseTimer}
-							>
-								<div className="relative" style={{ width: panel.width }}>
-									<span
-										className="absolute -top-[7px] z-10 size-3.5 rotate-45 rounded-tl-[4px] border-t border-l border-zinc-200/70 bg-white"
-										style={{ left: panel.arrowLeft - 7 }}
-										aria-hidden="true"
-									/>
-									<div className="overflow-hidden relative bg-white rounded-2xl border shadow-xl border-zinc-200/70">
-										<ul className="grid grid-cols-2 gap-1.5 p-3 list-none">
-											{activeItem.dropdown.map((sublink) => (
-												<li key={sublink.href}>
-													<Link
-														href={sublink.href}
-														onClick={closeMenu}
-														className="block p-3 rounded-xl transition-colors duration-200 outline-none group hover:bg-gray-2 focus-visible:bg-gray-2"
-													>
-														<div className="flex gap-2 items-center mb-0.5 text-sm font-semibold text-gray-12">
-															{sublink.icon}
-															<span>{sublink.label}</span>
+													<div className="invisible absolute top-full left-1/2 z-50 hidden -translate-x-1/2 pt-3 opacity-0 transition duration-150 group-hover:visible group-hover:block group-hover:opacity-100 group-focus-within:visible group-focus-within:block group-focus-within:opacity-100">
+														<div
+															className="relative"
+															style={dropdownStyle(link.width)}
+														>
+															<span
+																className="absolute -top-[7px] left-1/2 z-10 size-3.5 -translate-x-1/2 rotate-45 rounded-tl-[4px] border-t border-l border-zinc-200/70 bg-white"
+																aria-hidden="true"
+															/>
+															<div className="overflow-hidden relative bg-white rounded-2xl border shadow-xl border-zinc-200/70">
+																<ul className="grid grid-cols-2 gap-1.5 p-3 list-none">
+																	{link.dropdown.map((sublink) => (
+																		<li key={sublink.href}>
+																			<Link
+																				href={sublink.href}
+																				className="block p-3 rounded-xl transition-colors duration-200 outline-none group/item hover:bg-gray-2 focus-visible:bg-gray-2"
+																			>
+																				<div className="flex gap-2 items-center mb-0.5 text-sm font-semibold text-gray-12">
+																					{sublink.icon}
+																					<span>{sublink.label}</span>
+																				</div>
+																				<p className="text-[13px] leading-snug text-zinc-500 line-clamp-2">
+																					{sublink.sub}
+																				</p>
+																			</Link>
+																		</li>
+																	))}
+																</ul>
+															</div>
 														</div>
-														<p className="text-[13px] leading-snug text-zinc-500 line-clamp-2">
-															{sublink.sub}
-														</p>
-													</Link>
-												</li>
-											))}
-										</ul>
-									</div>
-								</div>
-							</motion.div>
-						)}
-					</AnimatePresence>
-				</nav>
-			</header>
-			{showMobileMenu && (
-				<MobileMenu
-					setShowMobileMenu={setShowMobileMenu}
-					auth={auth}
-					stars={stars}
-				/>
-			)}
-		</>
+													</div>
+												</>
+											) : (
+												<Link
+													href={link.href ?? "#"}
+													className={classNames(
+														navigationMenuTriggerStyle(),
+														"px-2 py-0 text-sm font-medium text-gray-10 hover:text-blue-9 focus:text-blue-9",
+													)}
+												>
+													{link.label}
+												</Link>
+											)}
+										</li>
+									))}
+								</ul>
+							</nav>
+						</div>
+					</div>
+					<div className="hidden items-center space-x-2 lg:flex">
+						<Button
+							variant="outline"
+							icon={
+								<Image src="/github.svg" alt="Github" width={16} height={16} />
+							}
+							target="_blank"
+							href="https://github.com/CapSoftware/Cap"
+							size="sm"
+							className="w-full font-medium sm:w-auto"
+						>
+							{`GitHub${stars ? ` (${stars})` : ""}`}
+						</Button>
+						<Button
+							variant="gray"
+							href="/login"
+							size="sm"
+							className="w-full font-medium sm:w-auto"
+						>
+							Login
+						</Button>
+						<Button
+							variant="dark"
+							href="/signup"
+							size="sm"
+							className="w-full font-medium sm:w-auto"
+						>
+							Sign Up
+						</Button>
+					</div>
+					<details className="group lg:hidden">
+						<summary
+							className="flex cursor-pointer list-none marker:hidden [&::-webkit-details-marker]:hidden"
+							aria-label="Open menu"
+						>
+							<span className="flex flex-col gap-[5px] mr-1" aria-hidden="true">
+								<span className="block w-6 h-0.5 bg-black transition-transform duration-200 group-open:translate-y-[7px] group-open:rotate-45" />
+								<span className="block w-6 h-0.5 bg-black transition duration-200 group-open:-translate-x-1 group-open:opacity-0" />
+								<span className="block w-6 h-0.5 bg-black transition-transform duration-200 group-open:-translate-y-[7px] group-open:-rotate-45" />
+							</span>
+						</summary>
+						<MobileMenu stars={stars} />
+					</details>
+				</div>
+			</nav>
+		</header>
 	);
 };
-
-function LoginOrDashboard() {
-	const auth = useCurrentUser();
-
-	return (
-		<Button
-			variant="dark"
-			href={auth ? "/dashboard" : "/signup"}
-			size="sm"
-			className="w-full font-medium sm:w-auto"
-		>
-			{auth ? "Dashboard" : "Sign Up"}
-		</Button>
-	);
-}
