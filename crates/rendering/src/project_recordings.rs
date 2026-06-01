@@ -128,11 +128,11 @@ impl ProjectRecordingsMeta {
                 let display = s
                     .display
                     .as_ref()
-                    .map(|d| {
+                    .ok_or_else(|| "SingleSegment missing display".to_string())
+                    .and_then(|d| {
                         Video::new(d.path.to_path(recording_path), 0.0)
-                            .expect("Failed to read display video")
-                    })
-                    .expect("SingleSegment missing display");
+                            .map_err(|e| format!("Failed to read display video: {e}"))
+                    })?;
                 let camera = s.camera.as_ref().map(|camera| {
                     Video::new(camera.path.to_path(recording_path), 0.0)
                         .expect("Failed to read camera video")
@@ -204,9 +204,8 @@ impl ProjectRecordingsMeta {
                         display: s
                             .display
                             .as_ref()
-                            .map(|d| load_video(d).map_err(|e| format!("video / {e}")))
-                            .transpose()?
-                            .expect("MultipleSegment missing display"),
+                            .ok_or_else(|| "MultipleSegment missing display".to_string())
+                            .and_then(|d| load_video(d).map_err(|e| format!("video / {e}")))?,
                         camera: Option::map(s.camera.as_ref(), load_video)
                             .transpose()
                             .map_err(|e| format!("camera / {e}"))?,

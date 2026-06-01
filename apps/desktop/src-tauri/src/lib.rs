@@ -2194,6 +2194,7 @@ enum CurrentRecordingTarget {
         bounds: LogicalBounds,
     },
     Camera,
+    Audio,
 }
 
 #[derive(Serialize, Type)]
@@ -2246,7 +2247,7 @@ async fn get_current_recording(
             bounds: *bounds,
         },
         ScreenCaptureTarget::CameraOnly => CurrentRecordingTarget::Camera,
-        ScreenCaptureTarget::AudioOnly => CurrentRecordingTarget::Camera,
+        ScreenCaptureTarget::AudioOnly => CurrentRecordingTarget::Audio,
     };
 
     Ok(JsonValue::new(&Some(CurrentRecording {
