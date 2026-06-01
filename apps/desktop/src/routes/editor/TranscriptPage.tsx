@@ -435,7 +435,6 @@ export function TranscriptPanel() {
 
 	const autoClean = () => {
 		const words = allWords();
-		const ps = pauses();
 		const threshold = silenceThreshold();
 
 		const fillerWords = words.filter((w) => !w.deleted && w.isFiller);
