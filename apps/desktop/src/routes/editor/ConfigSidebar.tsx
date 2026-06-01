@@ -263,7 +263,7 @@ type CursorPresetValues = {
 	friction: number;
 };
 
-const DEFAULT_MOTION_BLUR = 1.0;
+const DEFAULT_MOTION_BLUR = 0.5;
 
 const CURSOR_TYPE_OPTIONS = [
 	{
