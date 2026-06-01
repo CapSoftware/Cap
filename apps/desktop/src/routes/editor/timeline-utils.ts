@@ -172,7 +172,7 @@ export function shiftTimeAfterInsert(
 	insertPoint: number,
 	duration: number,
 ): number {
-	if (time <= insertPoint) return time;
+	if (time < insertPoint - 0.001) return time;
 	return time + duration;
 }
 
@@ -189,16 +189,16 @@ export function shiftCaptionTimesAfterInsert(
 		if (seg.words) {
 			for (const w of seg.words) {
 				if (w.deleted) {
-					if (w.start >= insertPoint && w.end <= insertPoint + duration_arg) {
+					if (
+						w.start >= insertPoint - 0.001 &&
+						w.end <= insertPoint + duration_arg + 0.001
+					) {
 						continue;
 					}
-					const duration = w.end - w.start;
-					w.start = shiftTimeAfterInsert(w.start, insertPoint, duration_arg);
-					w.end = w.start + duration;
-				} else {
-					w.start = shiftTimeAfterInsert(w.start, insertPoint, duration_arg);
-					w.end = shiftTimeAfterInsert(w.end, insertPoint, duration_arg);
 				}
+				const duration = w.end - w.start;
+				w.start = shiftTimeAfterInsert(w.start, insertPoint, duration_arg);
+				w.end = w.start + duration;
 			}
 			if (seg.words.length > 0) {
 				seg.start = seg.words[0].start;
