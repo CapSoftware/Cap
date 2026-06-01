@@ -1,5 +1,3 @@
-import type { CaptionWordExtended } from "./caption-types";
-
 const FILLER_WORDS = new Set(["uh", "um", "ah", "er", "hmm", "mhm"]);
 
 export function isFillerWord(text: string): boolean {
@@ -9,16 +7,7 @@ export function isFillerWord(text: string): boolean {
 
 export const PAUSE_DETECTION_THRESHOLD = 0.5;
 export const AUTO_CLEAN_SILENCE_THRESHOLD = 1.5;
-export const DEFAULT_PAUSE_BUFFER = 0.15;
-
-export function detectAndAnnotateWords(
-	words: CaptionWordExtended[],
-): CaptionWordExtended[] {
-	return words.map((w) => ({
-		...w,
-		isFiller: isFillerWord(w.text),
-	}));
-}
+export const DEFAULT_PAUSE_BUFFER = 0.0;
 
 export interface PauseEntry {
 	text: string;

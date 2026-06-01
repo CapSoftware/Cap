@@ -267,7 +267,7 @@ export function insertClipSegmentForRange(
 			const insertAmount = duration * seg.timescale;
 
 			if (splitPoint <= seg.start + 0.001) {
-				seg.start -= insertAmount;
+				seg.start = Math.max(0, seg.start - insertAmount);
 			} else if (splitPoint >= seg.end - 0.001) {
 				seg.end += insertAmount;
 			} else {

@@ -6,5 +6,4 @@ export interface CaptionWordExtended extends BaseCaptionWord {
 	isPause?: boolean;
 	bufferStart?: number;
 	bufferEnd?: number;
-	_markForRemoval?: boolean;
 }

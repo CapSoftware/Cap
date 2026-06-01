@@ -20,6 +20,7 @@ import {
 import { FPS, useEditorContext } from "./context";
 import {
 	AUTO_CLEAN_SILENCE_THRESHOLD,
+	DEFAULT_PAUSE_BUFFER,
 	detectPauses,
 	isFillerWord,
 	PAUSE_DETECTION_THRESHOLD,
@@ -72,8 +73,6 @@ const TEXT_SIZES = [
 	{ label: "L", value: "text-base leading-snug" },
 	{ label: "XL", value: "text-lg leading-snug" },
 ] as const;
-
-const DEFAULT_PAUSE_BUFFER = 0.0;
 
 export function TranscriptPanel() {
 	const {
@@ -377,7 +376,7 @@ export function TranscriptPanel() {
 					const w = seg.words[word.wordIndex] as CaptionWordExtended;
 					if (w) {
 						if (w.isPause) {
-							w._markForRemoval = true;
+							seg.words.splice(word.wordIndex, 1);
 						} else {
 							w.deleted = false;
 						}
@@ -386,15 +385,9 @@ export function TranscriptPanel() {
 
 				for (const seg of p.captions.segments) {
 					const extWords = (seg.words ?? []) as CaptionWordExtended[];
-
-					const filteredWords = extWords.filter((w) => !w._markForRemoval);
-					if (filteredWords.length !== extWords.length) {
-						seg.words = filteredWords;
-					}
-
-					seg.text = getCaptionTextFromWords(filteredWords);
-					if (filteredWords && filteredWords.length > 0) {
-						const visible = filteredWords.filter((w) => !w.deleted);
+					seg.text = getCaptionTextFromWords(extWords);
+					if (extWords.length > 0) {
+						const visible = extWords.filter((w) => !w.deleted);
 						if (visible.length > 0) {
 							seg.start = visible[0].start;
 							seg.end = visible[visible.length - 1].end;
@@ -434,6 +427,10 @@ export function TranscriptPanel() {
 		{ name: "editorAutoCleanThreshold" },
 	);
 
+	const [lastAutoCleanIndices, setLastAutoCleanIndices] = createSignal<
+		number[] | null
+	>(null);
+
 	const autoClean = () => {
 		const words = allWords();
 		const threshold = silenceThreshold();
@@ -444,13 +441,16 @@ export function TranscriptPanel() {
 
 		if (fillerWords.length === 0 && pausesToClean.length === 0) return;
 
+		const affectedFlatIndices = fillerWords.map((fw) => words.indexOf(fw));
+
 		setProject(
 			produce((p) => {
 				if (!p.captions?.segments) return;
 
 				const timeRanges: Array<{ start: number; end: number }> = [];
+				const allIgnoreWords: { segmentIndex: number; wordIndex: number }[] =
+					[];
 
-				// 1. Mark fillers as deleted and collect their ranges
 				for (const fw of fillerWords) {
 					const seg = p.captions.segments[fw.segmentIndex];
 					if (seg?.words) {
@@ -459,13 +459,16 @@ export function TranscriptPanel() {
 							seg.words[fw.wordIndex] = { ...w, deleted: true };
 						}
 					}
+					allIgnoreWords.push({
+						segmentIndex: fw.segmentIndex,
+						wordIndex: fw.wordIndex,
+					});
 					timeRanges.push({
 						start: Math.max(0, fw.start - (fw.bufferStart || 0)),
 						end: fw.end + (fw.bufferEnd || 0),
 					});
 				}
 
-				// 2. Insert pause words and collect their ranges
 				const sortedPauses = [...pausesToClean].sort((a, b) => {
 					if (a.afterSegmentIndex !== b.afterSegmentIndex) {
 						return b.afterSegmentIndex - a.afterSegmentIndex;
@@ -486,7 +489,12 @@ export function TranscriptPanel() {
 							bufferStart: DEFAULT_PAUSE_BUFFER,
 							bufferEnd: DEFAULT_PAUSE_BUFFER,
 						};
-						seg.words.splice(pInfo.afterWordIndex + 1, 0, pauseWord);
+						const insertIdx = pInfo.afterWordIndex + 1;
+						seg.words.splice(insertIdx, 0, pauseWord);
+						allIgnoreWords.push({
+							segmentIndex: pInfo.afterSegmentIndex,
+							wordIndex: insertIdx,
+						});
 					}
 					timeRanges.push({
 						start: Math.max(0, pInfo.start - DEFAULT_PAUSE_BUFFER),
@@ -494,7 +502,6 @@ export function TranscriptPanel() {
 					});
 				}
 
-				// 3. Recalculate seg.start and seg.end
 				for (const seg of p.captions.segments) {
 					const extWords = (seg.words ?? []) as CaptionWordExtended[];
 					seg.text = getCaptionTextFromWords(extWords);
@@ -507,7 +514,6 @@ export function TranscriptPanel() {
 					}
 				}
 
-				// 4. Merge time ranges and apply cuts
 				timeRanges.sort((a, b) => a.start - b.start);
 				const mergedRanges: { start: number; end: number }[] = [];
 				for (const range of timeRanges) {
@@ -528,6 +534,7 @@ export function TranscriptPanel() {
 						p.captions.segments,
 						range.start,
 						cutDuration,
+						allIgnoreWords,
 					);
 
 					if (p.timeline) {
@@ -542,7 +549,17 @@ export function TranscriptPanel() {
 				}
 			}),
 		);
+		setLastAutoCleanIndices(affectedFlatIndices);
 		setEditorState("captions", "isStale", false);
+	};
+
+	const undoAutoClean = () => {
+		const indices = lastAutoCleanIndices();
+		if (!indices || indices.length === 0) return;
+		const words = allWords();
+		const deletedIndices = indices.filter((i) => words[i]?.deleted);
+		restoreWords(deletedIndices);
+		setLastAutoCleanIndices(null);
 	};
 
 	const isAtEnd = () => {
@@ -613,6 +630,16 @@ export function TranscriptPanel() {
 							{pauseCount() > 0 &&
 								`${pauseCount()} pause${pauseCount() > 1 ? "s" : ""}`}
 						</span>
+					</Show>
+					<Show when={lastAutoCleanIndices() !== null}>
+						<button
+							type="button"
+							class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-gray-4 text-gray-11 hover:bg-gray-5 transition-colors mr-1"
+							onClick={() => undoAutoClean()}
+						>
+							<IconLucideRotateCcw class="size-3" />
+							Undo
+						</button>
 					</Show>
 					<div class="relative">
 						<div class="flex">
@@ -1039,18 +1066,21 @@ function TranscriptEditor(props: {
 		if (e.key === "Backspace" || e.key === "Delete") {
 			e.preventDefault();
 			const indices = [...selected];
-			const firstWord = props.allWords[indices[0]];
-			if (firstWord?.deleted) {
-				if (indices.length === 1) {
-					props.onRestoreWord(indices[0]);
+			const toDelete = indices.filter((i) => !props.allWords[i]?.deleted);
+			const toRestore = indices.filter((i) => props.allWords[i]?.deleted);
+
+			if (toDelete.length > 0) {
+				if (toDelete.length === 1) {
+					props.onDeleteWord(toDelete[0]);
 				} else {
-					props.onRestoreWords(indices);
+					props.onDeleteWords(toDelete);
 				}
-			} else {
-				if (indices.length === 1) {
-					props.onDeleteWord(indices[0]);
+			}
+			if (toRestore.length > 0) {
+				if (toRestore.length === 1) {
+					props.onRestoreWord(toRestore[0]);
 				} else {
-					props.onDeleteWords(indices);
+					props.onRestoreWords(toRestore);
 				}
 			}
 			setSelectedIndices(new Set<number>());
