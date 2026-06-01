@@ -237,8 +237,10 @@ type WallpaperOption = {
 const isCurrentDesktopBackgroundPath = (path: string | null | undefined) => {
 	if (!path) return false;
 	const filename = path.split(/[\\/]/).pop();
+	if (!filename) return false;
 	return (
-		filename?.startsWith(`${CURRENT_DESKTOP_BACKGROUND_BASENAME}.`) ?? false
+		filename.startsWith(`${CURRENT_DESKTOP_BACKGROUND_BASENAME}.`) ||
+		filename.startsWith(`${CURRENT_DESKTOP_BACKGROUND_BASENAME}-`)
 	);
 };
 
@@ -1518,6 +1520,21 @@ function BackgroundConfig(props: {
 		if (currentDesktopBackgroundPath()) return currentDesktopBackgroundPath();
 
 		const assetsDir = `${editorInstance.path}/assets`;
+
+		try {
+			const importedPrefix = `${CURRENT_DESKTOP_BACKGROUND_BASENAME}-`;
+			let newest: { path: string; timestamp: number } | null = null;
+			for (const entry of await readDir(assetsDir)) {
+				if (!entry.isFile || entry.name.includes(".pending.")) continue;
+				if (!entry.name.startsWith(importedPrefix)) continue;
+				const timestamp = Number(entry.name.match(/-(\d+)\./)?.[1] ?? 0);
+				if (!newest || timestamp > newest.timestamp) {
+					newest = { path: `${assetsDir}/${entry.name}`, timestamp };
+				}
+			}
+			if (newest) return newest.path;
+		} catch {}
+
 		for (const extension of BACKGROUND_IMAGE_EXTENSIONS) {
 			const path = `${assetsDir}/${CURRENT_DESKTOP_BACKGROUND_BASENAME}.${extension}`;
 			if (await exists(path)) return path;
