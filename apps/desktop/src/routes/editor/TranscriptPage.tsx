@@ -133,36 +133,41 @@ export function TranscriptPanel() {
 		const result: PauseIndicator[] = [];
 		let lastVisible: (typeof words)[0] | null = null;
 		let hasPauseWordInGap = false;
+		let deletedDurationInGap = 0;
 
 		for (let i = 0; i < words.length; i++) {
 			const curr = words[i];
 			if (curr.deleted) {
 				if (curr.isPause) {
 					hasPauseWordInGap = true;
+				} else {
+					deletedDurationInGap += curr.end - curr.start;
 				}
 				continue;
 			}
 
 			if (!lastVisible) {
 				const gap = curr.start;
-				if (gap >= PAUSE_DETECTION_THRESHOLD && !hasPauseWordInGap) {
+				const silentGap = Math.max(0, gap - deletedDurationInGap);
+				if (silentGap >= PAUSE_DETECTION_THRESHOLD && !hasPauseWordInGap) {
 					result.push({
 						type: "pause",
 						start: 0,
 						end: curr.start,
-						duration: gap,
+						duration: silentGap,
 						afterSegmentIndex: curr.segmentIndex,
 						afterWordIndex: -1,
 					});
 				}
 			} else {
 				const gap = curr.start - lastVisible.end;
-				if (gap >= PAUSE_DETECTION_THRESHOLD && !hasPauseWordInGap) {
+				const silentGap = Math.max(0, gap - deletedDurationInGap);
+				if (silentGap >= PAUSE_DETECTION_THRESHOLD && !hasPauseWordInGap) {
 					result.push({
 						type: "pause",
 						start: lastVisible.end,
 						end: curr.start,
-						duration: gap,
+						duration: silentGap,
 						afterSegmentIndex: lastVisible.segmentIndex,
 						afterWordIndex: lastVisible.wordIndex,
 					});
@@ -170,6 +175,7 @@ export function TranscriptPanel() {
 			}
 			lastVisible = curr;
 			hasPauseWordInGap = false;
+			deletedDurationInGap = 0;
 		}
 		return result;
 	});
