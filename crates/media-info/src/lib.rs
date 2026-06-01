@@ -128,6 +128,36 @@ impl AudioInfo {
         Self::channel_layout_raw(clamped_channels).unwrap_or(ChannelLayout::STEREO)
     }
 
+    /// Channel count a packed frame from [`Self::wrap_frame_with_max_channels`] carries
+    /// for `max_channels`. The single source of truth for the wrapped count so a
+    /// resampler reading those frames cannot disagree on the channel count.
+    pub fn wrapped_frame_channels(&self, max_channels: usize) -> usize {
+        self.channels
+            .max(1)
+            .min(max_channels.max(1))
+            .min(Self::MAX_AUDIO_CHANNELS as usize)
+    }
+
+    /// Channel layout a packed frame from [`Self::wrap_frame_with_max_channels`] carries.
+    ///
+    /// A resampler that consumes those frames MUST be configured with this exact
+    /// layout. `swr_convert_frame` revalidates every input frame's channel layout
+    /// against the context and silently rejects it (→ the whole frame is dropped →
+    /// silent track) when the masks differ. The named [`Self::channel_layout`] masks
+    /// diverge from `ChannelLayout::default` for 3/4/5/6-channel sources, so the two
+    /// must never be mixed across a frame builder and the resampler reading it.
+    pub fn wrapped_frame_layout(&self, max_channels: usize) -> ChannelLayout {
+        ChannelLayout::default(self.wrapped_frame_channels(max_channels) as i32)
+    }
+
+    /// Channel layout for an un-clamped packed frame of this info's channel count,
+    /// matching frames built with `ChannelLayout::default(channels)` (e.g.
+    /// `scap_ffmpeg::DataExt::as_ffmpeg`). See [`Self::wrapped_frame_layout`] for why
+    /// a resampler's input layout must match its frame builder's exactly.
+    pub fn packed_channel_layout(&self) -> ChannelLayout {
+        ChannelLayout::default(self.channels.max(1) as i32)
+    }
+
     pub fn sample_size(&self) -> usize {
         self.sample_format.bytes()
     }
@@ -151,10 +181,10 @@ impl AudioInfo {
     ) -> frame::Audio {
         // Use actual channel count for parsing input data (at least 1 to avoid div by zero)
         let input_channels = self.channels.max(1);
-        // Clamp output channels to both max_channels and MAX_AUDIO_CHANNELS for FFmpeg compatibility
-        let out_channels = input_channels
-            .min(max_channels.max(1))
-            .min(Self::MAX_AUDIO_CHANNELS as usize);
+        // Clamp output channels to both max_channels and MAX_AUDIO_CHANNELS for FFmpeg
+        // compatibility. Shared with `wrapped_frame_layout` so a resampler configured
+        // for these frames is guaranteed the same channel count + layout.
+        let out_channels = self.wrapped_frame_channels(max_channels);
 
         let sample_size = self.sample_size();
         let packed_sample_size = sample_size * input_channels;
@@ -481,6 +511,27 @@ mod tests {
             let frame = info.wrap_frame(input);
             // With effective_channels = 1, all input should be copied as mono
             assert_eq!(&frame.data(0)[0..input.len()], input);
+        }
+
+        #[test]
+        fn wrapped_frame_layout_matches_actual_wrapped_frame() {
+            // Regression for the silent 3/4/5/6-channel mic/system bug: a resampler is
+            // configured from `wrapped_frame_layout`, while the frames it consumes come
+            // from `wrap_frame_with_max_channels`. If those two layouts ever diverge,
+            // `swr_convert_frame` rejects every frame and the track goes silent.
+            let max = AudioInfo::MAX_AUDIO_CHANNELS as usize;
+            for channels in 1..=8u16 {
+                let info = AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, channels);
+                let data = vec![0u8; 16 * usize::from(channels) * 4];
+                let frame = info.wrap_frame_with_max_channels(&data, max);
+
+                assert_eq!(
+                    frame.channel_layout(),
+                    info.wrapped_frame_layout(max),
+                    "wrapped frame layout must equal the resampler-config layout for {channels} channels"
+                );
+                assert_eq!(frame.channels() as usize, info.wrapped_frame_channels(max));
+            }
         }
     }
 }

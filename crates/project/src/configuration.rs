@@ -563,7 +563,7 @@ impl Default for CursorConfiguration {
             mass: 3.0,
             friction: 70.0,
             raw: false,
-            motion_blur: 1.0,
+            motion_blur: 0.5,
             use_svg: true,
             rotation_amount: Self::default_rotation_amount(),
             base_rotation: 0.0,
@@ -1200,7 +1200,7 @@ impl Annotation {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectConfiguration {
     pub aspect_ratio: Option<AspectRatio>,
@@ -1233,9 +1233,30 @@ fn camera_config_needs_migration(value: &Value) -> bool {
         })
 }
 
+impl Default for ProjectConfiguration {
+    fn default() -> Self {
+        Self {
+            aspect_ratio: Default::default(),
+            background: Default::default(),
+            camera: Default::default(),
+            audio: Default::default(),
+            cursor: Default::default(),
+            hotkeys: Default::default(),
+            timeline: Default::default(),
+            captions: Default::default(),
+            keyboard: Default::default(),
+            clips: Default::default(),
+            annotations: Default::default(),
+            hidden_text_segments: Default::default(),
+            screen_motion_blur: Self::default_screen_motion_blur(),
+            screen_movement_spring: Default::default(),
+        }
+    }
+}
+
 impl ProjectConfiguration {
     fn default_screen_motion_blur() -> f32 {
-        1.0
+        0.5
     }
 
     pub fn validate(&self) -> Result<(), AnnotationValidationError> {
@@ -1358,6 +1379,14 @@ mod tests {
             serde_json::to_string(&value).unwrap(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn default_motion_blur_is_half() {
+        let config = ProjectConfiguration::default();
+
+        assert_eq!(config.cursor.motion_blur, 0.5);
+        assert_eq!(config.screen_motion_blur, 0.5);
     }
 
     #[test]

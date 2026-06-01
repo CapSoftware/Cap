@@ -8,6 +8,8 @@ import { createMutation, createQuery, skipToken } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu } from "@tauri-apps/api/menu";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
 	createEffect,
 	createMemo,
@@ -269,6 +271,7 @@ function Inner() {
 		setEditorState,
 		previewResolutionBase,
 		dialog,
+		exportState,
 	} = useEditorContext();
 
 	const isExportMode = () => {
@@ -285,6 +288,47 @@ function Inner() {
 		const d = dialog();
 		return "type" in d && d.type === "crop" && d.open;
 	};
+
+	const currentWindow = getCurrentWindow();
+	let allowExportClose = false;
+	let closePromptOpen = false;
+
+	onMount(async () => {
+		const unlisten = await currentWindow.onCloseRequested(async (event) => {
+			if (
+				allowExportClose ||
+				exportState.type === "idle" ||
+				exportState.type === "done"
+			) {
+				return;
+			}
+
+			event.preventDefault();
+			if (closePromptOpen) return;
+
+			closePromptOpen = true;
+			try {
+				const resumeExport = await ask(
+					"An export is currently running. Keep this editor open to continue it, or quit the editor and cancel the export.",
+					{
+						title: "Export in Progress",
+						kind: "warning",
+						okLabel: "Resume Export",
+						cancelLabel: "Quit Editor",
+					},
+				);
+
+				if (!resumeExport) {
+					allowExportClose = true;
+					await currentWindow.close();
+				}
+			} finally {
+				closePromptOpen = false;
+			}
+		});
+
+		onCleanup(() => unlisten());
+	});
 
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
 	const layoutBounds = createElementBounds(layoutRef);

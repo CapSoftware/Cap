@@ -1,29 +1,34 @@
 "use client";
 
-import {
-	Button,
-	Logo,
-	NavigationMenu,
-	NavigationMenuContent,
-	NavigationMenuItem,
-	NavigationMenuLink,
-	NavigationMenuList,
-	NavigationMenuTrigger,
-	navigationMenuTriggerStyle,
-} from "@cap/ui";
+import { Button, Logo, navigationMenuTriggerStyle } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import { Clapperboard, Zap } from "lucide-react";
-import { motion } from "motion/react";
+import { ChevronDown, Clapperboard, Zap } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import MobileMenu from "@/components/ui/MobileMenu";
 import { useCurrentUser } from "../Layout/AuthContext";
 
-const Links = [
+interface NavDropdownItem {
+	label: string;
+	sub: string;
+	href: string;
+	icon?: React.ReactNode;
+}
+
+interface NavItem {
+	label: string;
+	href?: string;
+	width?: number;
+	dropdown?: NavDropdownItem[];
+}
+
+const Links: NavItem[] = [
 	{
 		label: "Product",
+		width: 600,
 		dropdown: [
 			{
 				label: "Instant Mode",
@@ -75,6 +80,7 @@ const Links = [
 	},
 	{
 		label: "Help",
+		width: 480,
 		dropdown: [
 			{
 				label: "Documentation",
@@ -116,16 +122,83 @@ interface NavbarProps {
 	stars?: string;
 }
 
+interface PanelPosition {
+	left: number;
+	width: number;
+	arrowLeft: number;
+}
+
+const menuTransition = {
+	type: "spring" as const,
+	stiffness: 350,
+	damping: 30,
+	mass: 0.8,
+	opacity: { duration: 0.15 },
+};
+
 export const Navbar = ({ stars }: NavbarProps) => {
 	const pathname = usePathname();
 	const [showMobileMenu, setShowMobileMenu] = useState(false);
 	const auth = useCurrentUser();
 
 	const [hideLogoName, setHideLogoName] = useState(false);
+	const [activeMenu, setActiveMenu] = useState<string | null>(null);
+	const [panel, setPanel] = useState<PanelPosition | null>(null);
+
+	const navRef = useRef<HTMLElement>(null);
+	const triggerRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+	const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const clearCloseTimer = useCallback(() => {
+		if (closeTimer.current) {
+			clearTimeout(closeTimer.current);
+			closeTimer.current = null;
+		}
+	}, []);
+
+	const closeMenu = useCallback(() => {
+		clearCloseTimer();
+		setActiveMenu(null);
+	}, [clearCloseTimer]);
+
+	const scheduleClose = useCallback(() => {
+		clearCloseTimer();
+		closeTimer.current = setTimeout(() => setActiveMenu(null), 120);
+	}, [clearCloseTimer]);
+
+	const openMenu = useCallback(
+		(label: string) => {
+			clearCloseTimer();
+			const nav = navRef.current;
+			const trigger = triggerRefs.current.get(label);
+			const item = Links.find((link) => link.label === label);
+			if (!nav || !trigger || !item?.dropdown) return;
+
+			const navRect = nav.getBoundingClientRect();
+			const triggerRect = trigger.getBoundingClientRect();
+			const width = item.width ?? 460;
+			const gutter = 12;
+			const center = triggerRect.left + triggerRect.width / 2;
+			const maxLeft = Math.max(gutter, window.innerWidth - width - gutter);
+			const viewportLeft = Math.min(
+				Math.max(center - width / 2, gutter),
+				maxLeft,
+			);
+
+			setPanel({
+				left: viewportLeft - navRect.left,
+				width,
+				arrowLeft: Math.min(Math.max(center - viewportLeft, 20), width - 20),
+			});
+			setActiveMenu(label);
+		},
+		[clearCloseTimer],
+	);
 
 	useEffect(() => {
 		const onScroll = () => {
 			setHideLogoName(window.scrollY > 10);
+			setActiveMenu(null);
 		};
 		document.addEventListener("scroll", onScroll, { passive: true });
 		return () => {
@@ -133,13 +206,35 @@ export const Navbar = ({ stars }: NavbarProps) => {
 		};
 	}, []);
 
+	useEffect(() => {
+		if (!activeMenu) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") setActiveMenu(null);
+		};
+		const onResize = () => setActiveMenu(null);
+		window.addEventListener("keydown", onKeyDown);
+		window.addEventListener("resize", onResize);
+		return () => {
+			window.removeEventListener("keydown", onKeyDown);
+			window.removeEventListener("resize", onResize);
+		};
+	}, [activeMenu]);
+
+	useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
+
+	const activeItem = Links.find((link) => link.label === activeMenu);
+
 	return (
 		<>
 			<header className="fixed left-0 right-0 z-[51] animate-in fade-in slide-in-from-top-4 duration-500 top-4 lg:top-6">
-				<nav className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md lg:max-w-fit border-zinc-200 h-fit">
+				<nav
+					ref={navRef}
+					onMouseLeave={scheduleClose}
+					className="relative p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md lg:max-w-fit border-zinc-200 h-fit"
+				>
 					<div className="flex gap-12 justify-between items-center mx-auto max-w-5xl h-full transition-all">
 						<div className="flex items-center">
-							<Link passHref href="/home">
+							<Link passHref href="/home" onMouseEnter={closeMenu}>
 								<Logo
 									hideLogoName={hideLogoName}
 									className="transition-all duration-200 ease-out"
@@ -151,64 +246,67 @@ export const Navbar = ({ stars }: NavbarProps) => {
 								/>
 							</Link>
 							<div className="hidden lg:flex">
-								<NavigationMenu>
-									<NavigationMenuList className="space-x-0">
+								<nav aria-label="Main">
+									<ul className="flex items-center px-0 space-x-0 list-none">
 										{Links.map((link) => (
-											<NavigationMenuItem key={link.label}>
+											<li key={link.label}>
 												{link.dropdown ? (
-													<>
-														<NavigationMenuTrigger
-															className={
-																"px-2 py-0 text-sm font-medium text-gray-10 active:text-gray-10 focus:text-gray-10 hover:text-blue-9"
+													<button
+														type="button"
+														ref={(el) => {
+															if (el) {
+																triggerRefs.current.set(link.label, el);
+															} else {
+																triggerRefs.current.delete(link.label);
 															}
-														>
-															{link.label}
-														</NavigationMenuTrigger>
-														<NavigationMenuContent>
-															<ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-2">
-																{link.dropdown.map((sublink) => (
-																	<li key={sublink.href}>
-																		<NavigationMenuLink asChild>
-																			<a
-																				href={sublink.href}
-																				className="block p-3 space-y-1 leading-none no-underline rounded-md transition-all duration-200 outline-none select-none hover:bg-gray-2 hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-																			>
-																				<div className="flex gap-2 items-center text-base font-medium leading-none transition-colors duration-200 text-zinc-700 group-hover:text-zinc-900">
-																					{sublink.icon && sublink.icon}
-																					<span className="font-semibold text-gray-12">
-																						{sublink.label}
-																					</span>
-																				</div>
-																				<p className="text-sm leading-snug transition-colors duration-200 line-clamp-2 text-zinc-500 group-hover:text-zinc-700">
-																					{sublink.sub}
-																				</p>
-																			</a>
-																		</NavigationMenuLink>
-																	</li>
-																))}
-															</ul>
-														</NavigationMenuContent>
-													</>
-												) : (
-													<NavigationMenuLink asChild>
-														<Link
-															href={link.href}
+														}}
+														aria-haspopup="true"
+														aria-expanded={activeMenu === link.label}
+														onMouseEnter={() => openMenu(link.label)}
+														onFocus={() => openMenu(link.label)}
+														onClick={() =>
+															activeMenu === link.label
+																? closeMenu()
+																: openMenu(link.label)
+														}
+														className={classNames(
+															navigationMenuTriggerStyle(),
+															"flex gap-1 items-center px-2 py-0 text-sm font-medium transition-colors",
+															activeMenu === link.label
+																? "text-blue-9"
+																: "text-gray-10 hover:text-blue-9",
+														)}
+													>
+														{link.label}
+														<ChevronDown
 															className={classNames(
-																navigationMenuTriggerStyle(),
-																pathname === link.href
-																	? "text-blue-9"
-																	: "text-gray-10",
-																"px-2 py-0 text-sm font-medium hover:text-blue-9 focus:text-8",
+																"size-3.5 transition-transform duration-200 ease-out",
+																activeMenu === link.label ? "rotate-180" : "",
 															)}
-														>
-															{link.label}
-														</Link>
-													</NavigationMenuLink>
+															strokeWidth={2.25}
+															aria-hidden="true"
+														/>
+													</button>
+												) : (
+													<Link
+														href={link.href ?? "#"}
+														onMouseEnter={closeMenu}
+														onFocus={closeMenu}
+														className={classNames(
+															navigationMenuTriggerStyle(),
+															pathname === link.href
+																? "text-blue-9"
+																: "text-gray-10",
+															"px-2 py-0 text-sm font-medium hover:text-blue-9 focus:text-8",
+														)}
+													>
+														{link.label}
+													</Link>
 												)}
-											</NavigationMenuItem>
+											</li>
 										))}
-									</NavigationMenuList>
-								</NavigationMenu>
+									</ul>
+								</nav>
 							</div>
 						</div>
 						<div className="hidden items-center space-x-2 lg:flex">
@@ -290,6 +388,58 @@ export const Navbar = ({ stars }: NavbarProps) => {
 							</div>
 						</button>
 					</div>
+
+					<AnimatePresence>
+						{activeMenu && panel && activeItem?.dropdown && (
+							<motion.div
+								key={activeMenu}
+								className="hidden absolute top-full z-50 pt-3 lg:block"
+								style={{
+									left: panel.left,
+									transformOrigin: `${panel.arrowLeft}px top`,
+								}}
+								initial={{ opacity: 0, y: -8, scale: 0.96 }}
+								animate={{ opacity: 1, y: 0, scale: 1 }}
+								exit={{
+									opacity: 0,
+									y: -4,
+									scale: 0.98,
+									transition: { duration: 0.12, ease: "easeIn" },
+								}}
+								transition={menuTransition}
+								onMouseEnter={clearCloseTimer}
+							>
+								<div className="relative" style={{ width: panel.width }}>
+									<span
+										className="absolute -top-[7px] z-10 size-3.5 rotate-45 rounded-tl-[4px] border-t border-l border-zinc-200/70 bg-white"
+										style={{ left: panel.arrowLeft - 7 }}
+										aria-hidden="true"
+									/>
+									<div className="overflow-hidden relative bg-white rounded-2xl border shadow-xl border-zinc-200/70">
+										<ul className="grid grid-cols-2 gap-1.5 p-3 list-none">
+											{activeItem.dropdown.map((sublink) => (
+												<li key={sublink.href}>
+													<Link
+														href={sublink.href}
+														onClick={closeMenu}
+														className="block p-3 rounded-xl transition-colors duration-200 outline-none group hover:bg-gray-2 focus-visible:bg-gray-2"
+													>
+														<div className="flex gap-2 items-center mb-0.5 text-sm font-semibold text-gray-12">
+															{sublink.icon}
+															<span>{sublink.label}</span>
+														</div>
+														<p className="text-[13px] leading-snug text-zinc-500 line-clamp-2">
+															{sublink.sub}
+														</p>
+													</Link>
+												</li>
+											))}
+										</ul>
+									</div>
+								</div>
+							</motion.div>
+						)}
+					</AnimatePresence>
 				</nav>
 			</header>
 			{showMobileMenu && (
