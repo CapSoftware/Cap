@@ -1771,6 +1771,7 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     let started = Instant::now();
     log_process_memory_snapshot("exit_cleanup_begin");
 
+    export::cancel_all_exports();
     power_observer::uninstall(app);
     fake_window::cancel_all_fake_window_listeners(app);
     close_target_select_overlays(app);
@@ -1887,13 +1888,9 @@ fn finalize_app_exit(app: &AppHandle, exit_code: i32) {
 }
 
 pub async fn request_app_exit(app: AppHandle) {
-    if export::export_session_active() {
-        warn!("Ignoring app exit request during active export");
-        return;
-    }
-
     let Some(exit_state) = app.try_state::<AppExitState>() else {
         warn!("Exit state unavailable while requesting app exit");
+        export::cancel_all_exports();
         finalize_app_exit(&app, 0);
         #[cfg(not(target_os = "macos"))]
         return;
@@ -1904,6 +1901,7 @@ pub async fn request_app_exit(app: AppHandle) {
     }
 
     spawn_exit_watchdog();
+    export::cancel_all_exports();
 
     if tokio::time::timeout(APP_EXIT_TOTAL_TIMEOUT, cleanup_app_resources_for_exit(&app))
         .await
@@ -4730,13 +4728,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
                         let window_id = CapWindowId::from_str(label).ok();
-                        if matches!(
+                        if !matches!(
                             window_id,
                             Some(CapWindowId::Editor { .. })
                                 | Some(CapWindowId::ScreenshotEditor { .. })
-                        ) {
-                            export::cancel_exports_for_window(label);
-                        } else if export::export_session_active() {
+                        ) && export::export_session_active()
+                        {
                             api.prevent_close();
                             warn!(
                                 window = label,
@@ -5246,9 +5243,6 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
                     });
                 }
                 ExitRequestDecision::AlreadyExiting => {}
-                ExitRequestDecision::ExportActive => {
-                    warn!("Preventing app exit request during active export");
-                }
                 ExitRequestDecision::AllowRuntimeExit => {}
             }
         }
