@@ -141,7 +141,12 @@ export function TranscriptPanel() {
 				if (curr.isPause) {
 					hasPauseWordInGap = true;
 				} else {
-					deletedDurationInGap += curr.end - curr.start;
+					const bufStart = curr.bufferStart || 0;
+					const bufEnd = curr.bufferEnd || 0;
+					const protectedStart = Math.max(0, -bufStart);
+					const protectedEnd = Math.max(0, -bufEnd);
+					deletedDurationInGap +=
+						curr.end - curr.start + protectedStart + protectedEnd;
 				}
 				continue;
 			}
@@ -849,7 +854,7 @@ function BufferPopover(props: {
 						<input
 							type="range"
 							min="-0.5"
-							max="1.0"
+							max="0.0"
 							step="0.01"
 							value={bufStart()}
 							onInput={(e) =>
@@ -871,7 +876,7 @@ function BufferPopover(props: {
 						<input
 							type="range"
 							min="-0.5"
-							max="1.0"
+							max="0.0"
 							step="0.01"
 							value={bufEnd()}
 							onInput={(e) =>
@@ -1251,22 +1256,11 @@ function TranscriptEditor(props: {
 					w.bufferEnd = bufferEnd;
 
 					if (oldDuration > 0.001) {
-						for (let i = 0; i < p.captions.segments.length; i++) {
-							const s = p.captions.segments[i];
-							if (!s.words) continue;
-							for (let j = 0; j < s.words.length; j++) {
-								if (
-									i < segmentIndex ||
-									(i === segmentIndex && j <= wordIndex)
-								) {
-									continue; // Do not shift words before or equal to the anchor
-								}
-								const cw = s.words[j] as CaptionWordExtended;
-								cw.start += oldDuration;
-								cw.end += oldDuration;
-							}
-						}
-
+						shiftCaptionTimesAfterInsert(
+							p.captions.segments,
+							oldCutStart,
+							oldDuration,
+						);
 						if (p.timeline) {
 							rippleInsertAllTracks(p.timeline, oldCutStart, oldDuration);
 						}
@@ -1276,33 +1270,11 @@ function TranscriptEditor(props: {
 					}
 
 					if (newDuration > 0.001) {
-						for (let i = 0; i < p.captions.segments.length; i++) {
-							const s = p.captions.segments[i];
-							if (!s.words) continue;
-							for (let j = 0; j < s.words.length; j++) {
-								if (
-									i < segmentIndex ||
-									(i === segmentIndex && j <= wordIndex)
-								) {
-									continue; // Do not shift words before or equal to the anchor
-								}
-								const cw = s.words[j] as CaptionWordExtended;
-								if (cw.start <= newCutStart + newDuration) {
-									cw.start = newCutStart;
-								} else {
-									cw.start -= newDuration;
-								}
-
-								if (cw.end <= newCutStart + newDuration) {
-									cw.end = newCutStart;
-								} else {
-									cw.end -= newDuration;
-								}
-
-								if (cw.end < cw.start) cw.end = cw.start;
-							}
-						}
-
+						shiftCaptionTimesAfterCut(
+							p.captions.segments,
+							newCutStart,
+							newDuration,
+						);
 						if (p.timeline) {
 							rippleDeleteAllTracks(p.timeline, newCutStart, newCutEnd);
 						}
