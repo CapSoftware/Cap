@@ -132,6 +132,13 @@ async fn store_current_desktop_background_snapshot(
         let source_path = current_desktop_background_source_path(display_id.as_deref())
             .ok_or_else(|| "Current desktop background path not found".to_string())?;
 
+        if desktop_background_source_requires_user_prompt(&source_path) {
+            return Err(format!(
+                "Skipping current desktop background from protected location: {}",
+                source_path.display()
+            ));
+        }
+
         if !source_path.exists() {
             return Err(format!(
                 "Current desktop background does not exist: {}",
@@ -266,6 +273,37 @@ fn current_desktop_background_source_path(_display_id: Option<&str>) -> Option<P
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn current_desktop_background_source_path(_display_id: Option<&str>) -> Option<PathBuf> {
     None
+}
+
+fn desktop_background_source_requires_user_prompt(source_path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        dirs::home_dir().is_some_and(|home_dir| {
+            desktop_background_source_requires_user_prompt_for_home(source_path, &home_dir)
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = source_path;
+        false
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn desktop_background_source_requires_user_prompt_for_home(
+    source_path: &Path,
+    home_dir: &Path,
+) -> bool {
+    [
+        home_dir.join("Desktop"),
+        home_dir.join("Documents"),
+        home_dir.join("Downloads"),
+        home_dir.join("Library/Mobile Documents"),
+        home_dir.join("Library/CloudStorage"),
+    ]
+    .iter()
+    .any(|protected_dir| source_path.starts_with(protected_dir))
 }
 
 #[cfg(target_os = "macos")]
@@ -3627,6 +3665,28 @@ mod tests {
         mark_fragmented_recording_for_ffmpeg_export(dir.path()).unwrap();
 
         assert!(fragmented_export_ffmpeg_marker_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn skips_desktop_background_paths_that_can_trigger_macos_prompts() {
+        let home = Path::new("/Users/test");
+
+        assert!(desktop_background_source_requires_user_prompt_for_home(
+            Path::new("/Users/test/Downloads/wallpaper.jpg"),
+            home
+        ));
+        assert!(desktop_background_source_requires_user_prompt_for_home(
+            Path::new("/Users/test/Library/CloudStorage/iCloud Drive/wallpaper.jpg"),
+            home
+        ));
+        assert!(!desktop_background_source_requires_user_prompt_for_home(
+            Path::new("/Users/test/Pictures/wallpaper.jpg"),
+            home
+        ));
+        assert!(!desktop_background_source_requires_user_prompt_for_home(
+            Path::new("/System/Library/Desktop Pictures/wallpaper.jpg"),
+            home
+        ));
     }
 
     #[test]
