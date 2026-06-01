@@ -4,6 +4,7 @@ export function shiftTimeAfterCut(
 	cutDuration: number,
 ): number {
 	if (time <= cutStart) return time;
+	if (time <= cutStart + cutDuration) return cutStart;
 	return time - cutDuration;
 }
 
@@ -19,12 +20,8 @@ export function shiftCaptionTimesAfterCut(
 	for (const seg of segments) {
 		if (seg.words) {
 			for (const w of seg.words) {
-				if (w.start >= cutStart && w.end <= cutStart + cutDuration) {
-					continue;
-				}
-				const duration = w.end - w.start;
 				w.start = shiftTimeAfterCut(w.start, cutStart, cutDuration);
-				w.end = w.start + duration;
+				w.end = shiftTimeAfterCut(w.end, cutStart, cutDuration);
 			}
 			if (seg.words.length > 0) {
 				seg.start = seg.words[0].start;
@@ -182,12 +179,8 @@ export function shiftCaptionTimesAfterInsert(
 	for (const seg of segments) {
 		if (seg.words) {
 			for (const w of seg.words) {
-				if (w.start >= insertPoint && w.end <= insertPoint + duration_arg) {
-					continue;
-				}
-				const duration = w.end - w.start;
 				w.start = shiftTimeAfterInsert(w.start, insertPoint, duration_arg);
-				w.end = w.start + duration;
+				w.end = shiftTimeAfterInsert(w.end, insertPoint, duration_arg);
 			}
 			if (seg.words.length > 0) {
 				seg.start = seg.words[0].start;

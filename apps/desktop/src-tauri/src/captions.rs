@@ -810,16 +810,23 @@ fn process_with_whisper(
 
                 if token_text.starts_with(' ') || token_text.starts_with('\n') {
                     if !current_word.is_empty()
-                        && let Some(ws) = word_start
+                        && let Some(mut ws) = word_start
                     {
+                        let text = current_word.trim().to_string();
+                        let duration = word_end - ws;
+                        let max_duration = (text.len() as f32 * 0.1).clamp(0.5, 1.5);
+                        if duration > max_duration + 0.3 {
+                            ws = word_end - max_duration;
+                        }
+
                         log::info!(
                             "    -> Completing word: '{}' ({:.2}s - {:.2}s)",
-                            current_word.trim(),
+                            text,
                             ws,
                             word_end
                         );
                         words.push(CaptionWord {
-                            text: current_word.trim().to_string(),
+                            text,
                             start: ws,
                             end: word_end,
                             ..Default::default()
@@ -843,16 +850,22 @@ fn process_with_whisper(
         }
 
         if !current_word.trim().is_empty()
-            && let Some(ws) = word_start
+            && let Some(mut ws) = word_start
         {
+            let text = current_word.trim().to_string();
+            let duration = word_end - ws;
+            let max_duration = (text.len() as f32 * 0.1).clamp(0.5, 1.5);
+            if duration > max_duration + 0.3 {
+                ws = word_end - max_duration;
+            }
             log::info!(
                 "    -> Final word: '{}' ({:.2}s - {:.2}s)",
-                current_word.trim(),
+                text,
                 ws,
                 word_end
             );
             words.push(CaptionWord {
-                text: current_word.trim().to_string(),
+                text,
                 start: ws,
                 end: word_end,
                 ..Default::default()

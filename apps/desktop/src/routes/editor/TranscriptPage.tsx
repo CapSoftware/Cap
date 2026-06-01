@@ -96,9 +96,19 @@ export function TranscriptPanel() {
 			const words = (seg.words ?? []) as CaptionWordExtended[];
 			for (let wordIdx = 0; wordIdx < words.length; wordIdx++) {
 				const w = words[wordIdx];
+
+				let start = w.start;
+				if (!w.isPause) {
+					const duration = w.end - w.start;
+					const maxDuration = Math.max(0.5, Math.min(1.5, w.text.length * 0.1));
+					if (duration > maxDuration + 0.3) {
+						start = w.end - maxDuration;
+					}
+				}
+
 				result.push({
 					text: w.text,
-					start: w.start,
+					start,
 					end: w.end,
 					segmentIndex: segIdx,
 					wordIndex: wordIdx,
@@ -122,7 +132,19 @@ export function TranscriptPanel() {
 			const curr = words[i];
 			if (curr.deleted) continue;
 
-			if (lastVisible) {
+			if (!lastVisible) {
+				const gap = curr.start;
+				if (gap >= PAUSE_DETECTION_THRESHOLD) {
+					result.push({
+						type: "pause",
+						start: 0,
+						end: curr.start,
+						duration: gap,
+						afterSegmentIndex: curr.segmentIndex,
+						afterWordIndex: -1,
+					});
+				}
+			} else {
 				const gap = curr.start - lastVisible.end;
 				if (gap >= PAUSE_DETECTION_THRESHOLD) {
 					result.push({
@@ -888,10 +910,21 @@ function WordWithTooltip(props: {
 	);
 }
 
-function PauseBadge(props: { pause: PauseIndicator }) {
+function PauseBadge(props: { pause: PauseIndicator; onDelete: () => void }) {
 	return (
-		<span class="inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded border border-dashed border-gray-6 text-[10px] text-gray-8 bg-gray-3/30 select-none">
+		<span class="group relative inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded border border-dashed border-gray-6 text-[10px] text-gray-8 bg-gray-3/30 select-none cursor-default">
 			⏸ {props.pause.duration.toFixed(1)}s
+			<button
+				type="button"
+				class="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center size-4 rounded-full bg-red-9 text-white hover:bg-red-10 transition-colors z-50 shadow-sm"
+				onClick={(e) => {
+					e.stopPropagation();
+					props.onDelete();
+				}}
+				title="Delete pause"
+			>
+				<IconCapTrash class="size-2.5" />
+			</button>
 		</span>
 	);
 }
@@ -1157,6 +1190,44 @@ function TranscriptEditor(props: {
 		setEditorState("captions", "isStale", false);
 	};
 
+	const handleDeletePause = (pause: PauseIndicator) => {
+		setProject(
+			produce((p) => {
+				if (!p.captions?.segments) return;
+				const seg = p.captions.segments[pause.afterSegmentIndex];
+				if (seg?.words) {
+					const pauseWord: CaptionWordExtended = {
+						text: `[Pause ${pause.duration.toFixed(1)}s]`,
+						start: pause.start,
+						end: pause.end,
+						deleted: true,
+						isPause: true,
+						isFiller: false,
+						bufferStart: DEFAULT_PAUSE_BUFFER,
+						bufferEnd: DEFAULT_PAUSE_BUFFER,
+					};
+					seg.words.splice(pause.afterWordIndex + 1, 0, pauseWord);
+				}
+
+				const cutStart = Math.max(0, pause.start - DEFAULT_PAUSE_BUFFER);
+				const cutEnd = pause.end + DEFAULT_PAUSE_BUFFER;
+				const cutDuration = cutEnd - cutStart;
+
+				if (cutDuration > 0.001) {
+					shiftCaptionTimesAfterCut(p.captions.segments, cutStart, cutDuration);
+				}
+
+				if (p.timeline) {
+					rippleDeleteAllTracks(p.timeline, cutStart, cutEnd);
+					p.timeline.captionSegments = createCaptionTrackSegments(
+						p.captions.segments,
+					);
+				}
+			}),
+		);
+		setEditorState("captions", "isStale", false);
+	};
+
 	return (
 		<div
 			ref={scrollContainerRef}
@@ -1187,6 +1258,11 @@ function TranscriptEditor(props: {
 									const flatIdx = () => flatIndexOf(word);
 									const isActive = () => props.activeWordIndex === flatIdx();
 									const isSelected = () => selectedIndices().has(flatIdx());
+									const pauseBefore = () =>
+										word.wordIndex === 0
+											? pauseAfterWord().get(`${word.segmentIndex}:-1`)
+											: undefined;
+
 									const pause = () =>
 										pauseAfterWord().get(
 											`${word.segmentIndex}:${word.wordIndex}`,
@@ -1194,6 +1270,14 @@ function TranscriptEditor(props: {
 
 									return (
 										<>
+											<Show when={pauseBefore()}>
+												{(p) => (
+													<PauseBadge
+														pause={p()}
+														onDelete={() => handleDeletePause(p())}
+													/>
+												)}
+											</Show>
 											<WordWithTooltip
 												word={word}
 												isActive={isActive()}
@@ -1210,7 +1294,12 @@ function TranscriptEditor(props: {
 												}
 											/>
 											<Show when={pause()}>
-												{(p) => <PauseBadge pause={p()} />}
+												{(p) => (
+													<PauseBadge
+														pause={p()}
+														onDelete={() => handleDeletePause(p())}
+													/>
+												)}
 											</Show>
 										</>
 									);
