@@ -80,6 +80,7 @@ fn recording_stopped_share_url(link: &str) -> String {
     }
 }
 
+const CURRENT_DESKTOP_BACKGROUND_BASENAME: &str = "current-desktop-background";
 const CURRENT_DESKTOP_BACKGROUND_FILENAME: &str = "current-desktop-background.jpg";
 const CURRENT_DESKTOP_BACKGROUND_PENDING_FILENAME: &str = "current-desktop-background.pending.jpg";
 
@@ -123,51 +124,111 @@ async fn store_current_desktop_background_snapshot(
     recording_dir: PathBuf,
     capture_target: ScreenCaptureTarget,
 ) -> Result<PathBuf, String> {
+    let display_id = capture_target
+        .display()
+        .map(|display| display.id().to_string());
+
     tokio::task::spawn_blocking(move || {
         let output_path = current_desktop_background_snapshot_path(&recording_dir);
         let pending_path = pending_current_desktop_background_snapshot_path(&recording_dir);
-        let display_id = capture_target
-            .display()
-            .map(|display| display.id().to_string());
-        let source_path = current_desktop_background_source_path(display_id.as_deref())
-            .ok_or_else(|| "Current desktop background path not found".to_string())?;
-
-        if desktop_background_source_requires_user_prompt(&source_path) {
-            return Err(format!(
-                "Skipping current desktop background from protected location: {}",
-                source_path.display()
-            ));
-        }
-
-        if !source_path.exists() {
-            return Err(format!(
-                "Current desktop background does not exist: {}",
-                source_path.display()
-            ));
-        }
-
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to create background assets directory: {err}"))?;
-        }
-
-        let _ = std::fs::remove_file(&pending_path);
-        if let Err(error) = write_desktop_background_snapshot(&source_path, &pending_path) {
-            let _ = std::fs::remove_file(&pending_path);
-            return Err(error);
-        }
-
-        if output_path.exists() {
-            std::fs::remove_file(&output_path)
-                .map_err(|err| format!("Failed to replace current desktop background: {err}"))?;
-        }
-
-        std::fs::rename(&pending_path, &output_path)
-            .map_err(|err| format!("Failed to store current desktop background: {err}"))?;
+        write_current_desktop_background_to(
+            &output_path,
+            &pending_path,
+            display_id.as_deref(),
+            true,
+        )?;
         Ok(output_path)
     })
     .await
     .map_err(|err| format!("Desktop background snapshot task failed: {err}"))?
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument]
+pub async fn import_current_desktop_background(project_path: String) -> Result<String, String> {
+    let project_dir = PathBuf::from(project_path);
+
+    tokio::task::spawn_blocking(move || {
+        let assets_dir = project_dir.join("assets");
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis())
+            .unwrap_or(0);
+        let output_name = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.jpg");
+        let output_path = assets_dir.join(&output_name);
+        let pending_path = assets_dir.join(format!(
+            "{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.pending.jpg"
+        ));
+
+        write_current_desktop_background_to(&output_path, &pending_path, None, false)?;
+        remove_imported_desktop_background_snapshots(&assets_dir, &output_name);
+
+        Ok(output_path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|err| format!("Desktop background snapshot task failed: {err}"))?
+}
+
+fn remove_imported_desktop_background_snapshots(assets_dir: &Path, keep_name: &str) {
+    let Ok(entries) = std::fs::read_dir(assets_dir) else {
+        return;
+    };
+
+    let prefix = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-");
+    for entry in entries.flatten() {
+        if let Some(name) = entry.file_name().to_str()
+            && name != keep_name
+            && name.starts_with(prefix.as_str())
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn write_current_desktop_background_to(
+    output_path: &Path,
+    pending_path: &Path,
+    display_id: Option<&str>,
+    enforce_protected_check: bool,
+) -> Result<(), String> {
+    let source_path = current_desktop_background_source_path(display_id)
+        .ok_or_else(|| "Current desktop background path not found".to_string())?;
+
+    if enforce_protected_check && desktop_background_source_requires_user_prompt(&source_path) {
+        return Err(format!(
+            "Skipping current desktop background from protected location: {}",
+            source_path.display()
+        ));
+    }
+
+    if !source_path.exists() {
+        return Err(format!(
+            "Current desktop background does not exist: {}",
+            source_path.display()
+        ));
+    }
+
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("Failed to create background assets directory: {err}"))?;
+    }
+
+    let _ = std::fs::remove_file(pending_path);
+    if let Err(error) = write_desktop_background_snapshot(&source_path, pending_path) {
+        let _ = std::fs::remove_file(pending_path);
+        return Err(error);
+    }
+
+    if output_path.exists() {
+        std::fs::remove_file(output_path)
+            .map_err(|err| format!("Failed to replace current desktop background: {err}"))?;
+    }
+
+    std::fs::rename(pending_path, output_path)
+        .map_err(|err| format!("Failed to store current desktop background: {err}"))?;
+
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
