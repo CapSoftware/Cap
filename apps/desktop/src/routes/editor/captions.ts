@@ -214,9 +214,9 @@ export function createCaptionTrackSegments(
 ): CaptionTrackSegment[] {
 	return segments.map((segment) => {
 		const words = (segment.words ?? []) as CaptionWordExtended[];
-		const visibleText = words.some((w) => w.deleted)
+		const visibleText = words.some((w) => w.deleted || w.isPause)
 			? words
-					.filter((w) => !w.deleted)
+					.filter((w) => !w.deleted && !w.isPause)
 					.map((w) => w.text.trim())
 					.filter((t) => t.length > 0)
 					.join(" ")
@@ -316,7 +316,7 @@ export async function transcribeEditorCaptions(
 
 export function getCaptionTextFromWords(words: CaptionWordExtended[]) {
 	return words
-		.filter((word) => !word.deleted)
+		.filter((word) => !word.deleted && !word.isPause)
 		.map((word) => word.text.trim())
 		.filter((word) => word.length > 0)
 		.join(" ");

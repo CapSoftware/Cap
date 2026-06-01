@@ -143,7 +143,7 @@ function WaveformCanvas(props: {
 		rafId = null;
 		if (!canvas) return;
 		const ctx = canvas.getContext("2d");
-		if (!ctx) return;
+		if (!ctx || !props.segment) return;
 
 		const segmentDuration = props.segment.end - props.segment.start;
 		const fullSegmentWidth = width();
@@ -262,8 +262,8 @@ function WaveformCanvas(props: {
 		timelineBounds.width;
 		editorState.timeline.transform.position;
 		editorState.timeline.transform.zoom;
-		props.segment.start;
-		props.segment.end;
+		props.segment?.start;
+		props.segment?.end;
 		props.micWaveform;
 		props.systemWaveform;
 		project.audio.micVolumeDb;
@@ -392,6 +392,8 @@ export function ClipTrack(
 				{(segmentIndex) => {
 					const i = segmentIndex;
 					const segment = () => segments()[i()];
+					if (!segment()) return null;
+
 					const [startHandleDrag, setStartHandleDrag] = createSignal<null | {
 						offset: number;
 						initialStart: number;
