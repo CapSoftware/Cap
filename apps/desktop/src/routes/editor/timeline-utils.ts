@@ -4,7 +4,6 @@ export function shiftTimeAfterCut(
 	cutDuration: number,
 ): number {
 	if (time <= cutStart) return time;
-	if (time <= cutStart + cutDuration) return cutStart;
 	return time - cutDuration;
 }
 

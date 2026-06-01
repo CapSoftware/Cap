@@ -28,7 +28,6 @@ import {
 	rippleDeleteAllTracks,
 	rippleInsertAllTracks,
 	shiftCaptionTimesAfterCut,
-	shiftCaptionTimesAfterInsert,
 } from "./timeline-utils";
 
 function formatTimePrecise(secs: number) {
@@ -345,46 +344,54 @@ export function TranscriptPanel() {
 
 		if (wordsToRestore.length === 0) return;
 
-		const timeRanges = wordsToRestore
-			.map((w) => ({
-				start: Math.max(0, w.start - (w.bufferStart || 0)),
-				end: w.storedEnd + (w.bufferEnd || 0),
-			}))
-			.sort((a, b) => a.start - b.start);
-
-		const mergedRanges: { start: number; end: number }[] = [];
-		for (const range of timeRanges) {
-			const last = mergedRanges[mergedRanges.length - 1];
-			if (last && range.start <= last.end) {
-				last.end = Math.max(last.end, range.end);
-			} else {
-				mergedRanges.push({ ...range });
-			}
-		}
-
 		setProject(
 			produce((p) => {
 				if (!p.captions?.segments) return;
-
-				for (const range of mergedRanges) {
-					const insertDuration = range.end - range.start;
-					if (insertDuration <= 0.001) continue;
-
-					shiftCaptionTimesAfterInsert(
-						p.captions.segments,
-						range.start,
-						insertDuration,
-					);
-
-					if (p.timeline) {
-						rippleInsertAllTracks(p.timeline, range.start, insertDuration);
-					}
-				}
 
 				const sortedByIndex = [...wordsToRestore].sort(
 					(a, b) =>
 						b.segmentIndex - a.segmentIndex || b.wordIndex - a.wordIndex,
 				);
+
+				// Process in reverse so that shifting words doesn't affect the indices/times of earlier words
+				const reversedWords = [...sortedByIndex].reverse();
+
+				for (const word of reversedWords) {
+					const seg = p.captions.segments[word.segmentIndex];
+					if (!seg?.words) continue;
+					const w = seg.words[word.wordIndex] as CaptionWordExtended;
+
+					const insertDuration =
+						w.storedEnd +
+						(w.bufferEnd || 0) -
+						Math.max(0, w.start - (w.bufferStart || 0));
+					if (insertDuration <= 0.001) continue;
+
+					// Shift all words AFTER this word
+					for (let i = 0; i < p.captions.segments.length; i++) {
+						const s = p.captions.segments[i];
+						if (!s.words) continue;
+						for (let j = 0; j < s.words.length; j++) {
+							if (
+								i < word.segmentIndex ||
+								(i === word.segmentIndex && j <= word.wordIndex)
+							) {
+								continue;
+							}
+							const cw = s.words[j] as CaptionWordExtended;
+							cw.start += insertDuration;
+							cw.end += insertDuration;
+						}
+					}
+
+					if (p.timeline) {
+						rippleInsertAllTracks(
+							p.timeline,
+							Math.max(0, w.start - (w.bufferStart || 0)),
+							insertDuration,
+						);
+					}
+				}
 
 				for (const word of sortedByIndex) {
 					const seg = p.captions.segments[word.segmentIndex];
@@ -395,6 +402,8 @@ export function TranscriptPanel() {
 							seg.words.splice(word.wordIndex, 1);
 						} else {
 							w.deleted = false;
+							w.bufferStart = 0;
+							w.bufferEnd = 0;
 						}
 					}
 				}
