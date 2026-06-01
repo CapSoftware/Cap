@@ -16,21 +16,12 @@ export function shiftCaptionTimesAfterCut(
 	}>,
 	cutStart: number,
 	cutDuration: number,
-	ignoreWords?: { segmentIndex: number; wordIndex: number }[],
 ) {
-	const ignoreSet = new Set(
-		ignoreWords?.map((iw) => `${iw.segmentIndex}:${iw.wordIndex}`),
-	);
-
 	for (let i = 0; i < segments.length; i++) {
 		const seg = segments[i];
 		if (seg.words) {
 			for (let j = 0; j < seg.words.length; j++) {
 				const w = seg.words[j];
-
-				if (ignoreSet.has(`${i}:${j}`)) {
-					continue;
-				}
 
 				if (w.deleted) {
 					if (
@@ -202,21 +193,12 @@ export function shiftCaptionTimesAfterInsert(
 	}>,
 	insertPoint: number,
 	duration_arg: number,
-	ignoreWords?: { segmentIndex: number; wordIndex: number }[],
 ) {
-	const ignoreSet = new Set(
-		ignoreWords?.map((iw) => `${iw.segmentIndex}:${iw.wordIndex}`),
-	);
-
 	for (let i = 0; i < segments.length; i++) {
 		const seg = segments[i];
 		if (seg.words) {
 			for (let j = 0; j < seg.words.length; j++) {
 				const w = seg.words[j];
-
-				if (ignoreSet.has(`${i}:${j}`)) {
-					continue;
-				}
 
 				if (w.deleted) {
 					if (
