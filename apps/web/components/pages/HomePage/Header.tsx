@@ -131,6 +131,14 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 		e.preventDefault();
 		setEmailStatus("sending");
 		setEmailError("");
+		trackEvent("download_cta_clicked", {
+			source_page: "home_header",
+			cta_location: "mobile_email_link",
+			target: "email_download_link",
+			target_url: "/download",
+			detected_platform: platform ?? "unknown",
+			is_intel: Boolean(isIntel),
+		});
 
 		startTransition(async () => {
 			const result = await sendDownloadLink(email);
@@ -317,14 +325,23 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 							{!loading && getPlatformIcon(platform)}
 							{getDownloadButtonText(platform, loading, isIntel)}
 						</Button>
-						<UpgradeToPro text={homepageCopy.header.cta.primaryButton} />
+						<UpgradeToPro
+							text={homepageCopy.header.cta.primaryButton}
+							onClick={() =>
+								trackEvent("pricing_cta_clicked", {
+									source_page: "home_header",
+									cta_location: "secondary",
+									target_url: "/pricing",
+								})
+							}
+						/>
 					</motion.div>
 
 					<motion.div
 						className="flex md:hidden flex-col gap-3 mb-5"
 						initial="hidden"
 						animate="visible"
-						custom={3}
+						custom={4}
 						variants={fadeIn}
 					>
 						{emailStatus === "sent" ? (
@@ -365,7 +382,16 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 							<div className="h-px flex-1 bg-gray-300" />
 						</div>
 						<div className="flex justify-center">
-							<UpgradeToPro text={homepageCopy.header.cta.primaryButton} />
+							<UpgradeToPro
+								text={homepageCopy.header.cta.primaryButton}
+								onClick={() =>
+									trackEvent("pricing_cta_clicked", {
+										source_page: "home_header",
+										cta_location: "mobile_secondary",
+										target_url: "/pricing",
+									})
+								}
+							/>
 						</div>
 					</motion.div>
 
