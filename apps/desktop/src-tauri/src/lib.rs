@@ -4171,6 +4171,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             export::begin_export_session,
             export::end_export_session,
             export::cancel_export,
+            export::cancel_current_window_exports,
             export::export_video,
             export::export_video_with_id,
             export::export_video_to_file,
@@ -4830,13 +4831,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     if app_is_exiting(app) {
                         return;
                     }
-                    if export::export_session_active() {
-                        warn!(
-                            window = label,
-                            "Skipping Destroyed cleanup during active export"
-                        );
-                        return;
-                    }
                     let window_id = CapWindowId::from_str(label).ok();
                     let is_editor_window = matches!(
                         window_id,
@@ -4845,6 +4839,13 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     );
                     if is_editor_window {
                         export::cancel_exports_for_window(label);
+                    }
+                    if export::export_session_active() {
+                        warn!(
+                            window = label,
+                            "Skipping Destroyed cleanup during active export"
+                        );
+                        return;
                     }
                     if let Some(window_id) = window_id {
                         if matches!(window_id, CapWindowId::Camera) {

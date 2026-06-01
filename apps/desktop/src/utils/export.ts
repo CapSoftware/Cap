@@ -18,7 +18,6 @@ export function createExportTask(
 	settings: ExportSettings,
 	onProgress: (progress: FramesRendered) => void,
 ) {
-	const exportId = createExportId();
 	const progress = new Channel<FramesRendered>((e) => {
 		onProgress(e);
 	});
@@ -35,24 +34,17 @@ export function createExportTask(
 	};
 	const cancel = () => {
 		if (closed) return;
-		void cancelExport(exportId);
+		void cancelCurrentWindowExports();
 		closeProgress();
 	};
-	const promise = invoke<string>("export_video_with_id", {
-		projectPath,
-		progress,
-		settings,
-		exportId,
-	}).finally(closeProgress);
+	const promise = commands
+		.exportVideo(projectPath, progress, settings)
+		.finally(closeProgress);
 	return { promise, cancel };
 }
 
-function createExportId() {
-	return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-}
-
-async function cancelExport(exportId: string) {
-	await invoke<boolean>("cancel_export", { exportId }).catch((error) => {
+async function cancelCurrentWindowExports() {
+	await invoke("cancel_current_window_exports").catch((error) => {
 		console.error("Failed to cancel export", error);
 	});
 }
