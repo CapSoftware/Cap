@@ -89,26 +89,29 @@ function AnimatedPacket({
 	}
 
 	return (
-		<motion.circle
+		<circle
 			r={4}
 			className={primary ? "fill-blue-500" : "fill-gray-400"}
-			initial={{ offsetDistance: "0%", opacity: 0 }}
-			animate={{
-				offsetDistance: ["0%", "100%"],
-				opacity: [0, 1, 1, 0],
-			}}
-			transition={{
-				duration: 3,
-				delay,
-				repeat: Number.POSITIVE_INFINITY,
-				ease: "easeInOut",
-				times: [0, 0.1, 0.85, 1],
-			}}
-			style={{
-				offsetPath: `path("${path}")`,
-				offsetRotate: "0deg",
-			}}
-		/>
+			opacity={0}
+		>
+			<animateMotion
+				dur="3s"
+				begin={`${delay}s`}
+				repeatCount="indefinite"
+				path={path}
+				calcMode="spline"
+				keyTimes="0;1"
+				keySplines="0.42 0 0.58 1"
+			/>
+			<animate
+				attributeName="opacity"
+				values="0;1;1;0"
+				keyTimes="0;0.1;0.85;1"
+				dur="3s"
+				begin={`${delay}s`}
+				repeatCount="indefinite"
+			/>
+		</circle>
 	);
 }
 
