@@ -3,13 +3,14 @@
 import { faHeart } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { motion } from "framer-motion";
+import { type MouseEvent, useId } from "react";
 import { Testimonials } from "../ui/Testimonials";
 import ComparePlans from "./_components/ComparePlans";
 import Faq from "./HomePage/Faq";
-import { CommercialCard, ProCard } from "./HomePage/Pricing";
+import { CommercialCard } from "./HomePage/Pricing/CommercialCard";
 import { EnterpriseCard } from "./HomePage/Pricing/EnterpriseCard";
+import { ProCard } from "./HomePage/Pricing/ProCard";
 
-// Animation variants
 const fadeIn = {
 	hidden: { opacity: 0, y: 20 },
 	visible: (custom: number = 0) => ({
@@ -48,9 +49,11 @@ const staggerContainer = {
 };
 
 export const PricingPage = () => {
-	const scrollToTestimonials = (e: React.MouseEvent) => {
+	const testimonialsId = useId();
+
+	const scrollToTestimonials = (e: MouseEvent) => {
 		e.preventDefault();
-		const testimonials = document.getElementById("testimonials");
+		const testimonials = document.getElementById(testimonialsId);
 		if (testimonials) {
 			const offset = 80;
 			const topPos =
@@ -109,7 +112,6 @@ export const PricingPage = () => {
 					</motion.div>
 				</div>
 
-				{/* Comparison Table (Cap Pro vs Desktop License) */}
 				<div>
 					<ComparePlans />
 				</div>
@@ -118,7 +120,7 @@ export const PricingPage = () => {
 					<Faq />
 				</div>
 
-				<div className="mb-32 wrapper" id="testimonials">
+				<div className="mb-32 wrapper" id={testimonialsId}>
 					<Testimonials
 						amount={24}
 						title="What our users say about Cap after hitting record"
