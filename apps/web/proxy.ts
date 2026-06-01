@@ -24,6 +24,10 @@ export async function proxy(request: NextRequest) {
 	const url = new URL(request.url);
 	const path = url.pathname;
 
+	if (path === "/" && request.cookies.has("next-auth.session-token")) {
+		return NextResponse.redirect(new URL("/dashboard/caps", url.origin));
+	}
+
 	if (path.startsWith("/login")) {
 		const response = NextResponse.next();
 		response.headers.set("X-Frame-Options", "SAMEORIGIN");
