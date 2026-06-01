@@ -5,13 +5,18 @@ import { LogoSpinner } from "@cap/ui";
 export function RecordingInProgressOverlay({
 	onConfirmStopped,
 	className,
+	variant = "solid",
 }: {
 	onConfirmStopped: () => void;
 	className?: string;
+	variant?: "solid" | "overlay";
 }) {
+	const backgroundClassName =
+		variant === "overlay" ? "bg-black/70 backdrop-blur-[1px]" : "bg-black";
+
 	return (
 		<div
-			className={`flex flex-col gap-3 justify-center items-center bg-black rounded-xl ${className ?? ""}`}
+			className={`flex flex-col gap-3 justify-center items-center rounded-xl ${backgroundClassName} ${className ?? ""}`}
 		>
 			<div className="flex gap-2.5 items-center">
 				<span className="relative flex size-3">
@@ -37,13 +42,19 @@ export function RecordingInProgressOverlay({
 	);
 }
 
-export function PreparingVideoOverlay({ className }: { className?: string }) {
+export function PreparingVideoOverlay({
+	className,
+	label = "Preparing video...",
+}: {
+	className?: string;
+	label?: string;
+}) {
 	return (
 		<div
 			className={`flex flex-col gap-3 justify-center items-center bg-black rounded-xl ${className ?? ""}`}
 		>
 			<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
-			<p className="text-white/50 text-sm">Preparing video...</p>
+			<p className="text-white/50 text-sm">{label}</p>
 		</div>
 	);
 }
