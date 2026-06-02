@@ -1120,8 +1120,7 @@ function TranscriptEditor(props: {
 				} else {
 					props.onDeleteWords(toDelete);
 				}
-			}
-			if (toRestore.length > 0) {
+			} else if (toRestore.length > 0) {
 				if (toRestore.length === 1) {
 					props.onRestoreWord(toRestore[0]);
 				} else {

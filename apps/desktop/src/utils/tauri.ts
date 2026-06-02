@@ -104,6 +104,9 @@ async endExportSession() : Promise<void> {
 async cancelExport(exportId: string) : Promise<boolean> {
     return await TAURI_INVOKE("cancel_export", { exportId });
 },
+async cancelCurrentWindowExports() : Promise<void> {
+    await TAURI_INVOKE("cancel_current_window_exports");
+},
 async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings) : Promise<string> {
     return await TAURI_INVOKE("export_video", { projectPath, progress, settings });
 },
