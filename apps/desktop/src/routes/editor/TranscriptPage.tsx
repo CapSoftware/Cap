@@ -438,6 +438,10 @@ export function TranscriptPanel() {
 		{ name: "editorAutoCleanThreshold" },
 	);
 
+	const cleanablePauseCount = createMemo(
+		() => pauses().filter((p) => p.duration >= silenceThreshold()).length,
+	);
+
 	const autoClean = () => {
 		const words = allWords();
 		const threshold = silenceThreshold();
@@ -686,7 +690,7 @@ export function TranscriptPanel() {
 							<button
 								type="button"
 								class="flex items-center gap-1 px-2 py-1 rounded-l-md text-[10px] font-medium bg-blue-9 text-white hover:bg-blue-10 transition-colors disabled:opacity-30 disabled:pointer-events-none"
-								disabled={fillerCount() === 0 && pauseCount() === 0}
+								disabled={fillerCount() === 0 && cleanablePauseCount() === 0}
 								onClick={() => autoClean()}
 							>
 								<IconLucideSparkles class="size-3" />
@@ -728,7 +732,8 @@ export function TranscriptPanel() {
 								</div>
 								<button
 									type="button"
-									class="mt-2 w-full px-2 py-1 rounded-md text-[10px] font-medium bg-blue-9 text-white hover:bg-blue-10 transition-colors"
+									class="mt-2 w-full px-2 py-1 rounded-md text-[10px] font-medium bg-blue-9 text-white hover:bg-blue-10 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+									disabled={fillerCount() === 0 && cleanablePauseCount() === 0}
 									onClick={() => {
 										autoClean();
 										setShowAutoCleanDropdown(false);
