@@ -796,8 +796,15 @@ function BufferPopover(props: {
 	) => void;
 	onRestore: () => void;
 }) {
-	const [bufStart, setBufStart] = createSignal(props.word.bufferStart);
-	const [bufEnd, setBufEnd] = createSignal(props.word.bufferEnd);
+	const wordDuration = Math.max(0, props.word.end - props.word.start);
+	const minBuffer = Number(Math.max(-0.5, -(wordDuration / 2)).toFixed(2));
+
+	const [bufStart, setBufStart] = createSignal(
+		Math.max(minBuffer, props.word.bufferStart),
+	);
+	const [bufEnd, setBufEnd] = createSignal(
+		Math.max(minBuffer, props.word.bufferEnd),
+	);
 	let popoverRef: HTMLDivElement | undefined;
 
 	const handleClickOutside = (e: MouseEvent) => {
@@ -864,7 +871,7 @@ function BufferPopover(props: {
 						</div>
 						<input
 							type="range"
-							min="-0.5"
+							min={minBuffer}
 							max="1.0"
 							step="0.01"
 							value={bufStart()}
@@ -886,7 +893,7 @@ function BufferPopover(props: {
 						</div>
 						<input
 							type="range"
-							min="-0.5"
+							min={minBuffer}
 							max="1.0"
 							step="0.01"
 							value={bufEnd()}
