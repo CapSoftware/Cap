@@ -782,6 +782,15 @@ fn process_with_whisper(
 
         log::info!("  Segment {i} has {num_tokens} tokens");
 
+        let cap_word_end = |text: &str, start: f32, end: f32| -> f32 {
+            let max_duration = (text.len() as f32 * 0.1).clamp(0.5, 1.5);
+            if end - start > max_duration + 0.3 {
+                start + max_duration
+            } else {
+                end
+            }
+        };
+
         let mut current_word = String::new();
         let mut word_start: Option<f32> = None;
         let mut word_end: f32 = start_time;
@@ -813,11 +822,7 @@ fn process_with_whisper(
                         && let Some(ws) = word_start
                     {
                         let text = current_word.trim().to_string();
-                        let duration = word_end - ws;
-                        let max_duration = (text.len() as f32 * 0.1).clamp(0.5, 1.5);
-                        if duration > max_duration + 0.3 {
-                            word_end = ws + max_duration;
-                        }
+                        word_end = cap_word_end(&text, ws, word_end);
 
                         log::info!(
                             "    -> Completing word: '{text}' ({ws:.2}s - {word_end:.2}s)"
@@ -850,11 +855,7 @@ fn process_with_whisper(
             && let Some(ws) = word_start
         {
             let text = current_word.trim().to_string();
-            let duration = word_end - ws;
-            let max_duration = (text.len() as f32 * 0.1).clamp(0.5, 1.5);
-            if duration > max_duration + 0.3 {
-                word_end = ws + max_duration;
-            }
+            word_end = cap_word_end(&text, ws, word_end);
             log::info!(
                 "    -> Final word: '{text}' ({ws:.2}s - {word_end:.2}s)"
             );
