@@ -126,7 +126,29 @@ describe("shouldDeferPlaybackSource", () => {
 					progress: 80,
 					message: "Finishing video...",
 				},
+				{
+					status: "processing",
+					lastUpdated: new Date(),
+					progress: 90,
+					message: "Still processing...",
+				},
+			),
+		).toBe(false);
+		expect(
+			shouldReloadPlaybackAfterUploadCompletes(
+				{
+					status: "fetching",
+				},
 				null,
+			),
+		).toBe(false);
+		expect(
+			shouldReloadPlaybackAfterUploadCompletes(
+				{
+					status: "fetching",
+				},
+				null,
+				{ includeFetching: true },
 			),
 		).toBe(true);
 		expect(

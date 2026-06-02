@@ -1,3 +1,5 @@
+"use client";
+
 import { classNames } from "@cap/utils";
 import type React from "react";
 
@@ -17,6 +19,7 @@ export const QuantityButton = ({
 }) => {
 	return (
 		<button
+			type="button"
 			onClick={onClick}
 			className={classNames(BaseQuantityButtonClasses, className)}
 			aria-label={ariaLabel}

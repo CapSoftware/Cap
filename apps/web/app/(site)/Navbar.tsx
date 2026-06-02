@@ -1,29 +1,29 @@
-"use client";
-
-import {
-	Button,
-	Logo,
-	NavigationMenu,
-	NavigationMenuContent,
-	NavigationMenuItem,
-	NavigationMenuLink,
-	NavigationMenuList,
-	NavigationMenuTrigger,
-	navigationMenuTriggerStyle,
-} from "@cap/ui";
+import { Button, Logo, navigationMenuTriggerStyle } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import { Clapperboard, Zap } from "lucide-react";
-import { motion } from "motion/react";
+import { ChevronDown, Clapperboard, Zap } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import MobileMenu from "@/components/ui/MobileMenu";
-import { useCurrentUser } from "../Layout/AuthContext";
 
-const Links = [
+interface NavDropdownItem {
+	label: string;
+	sub: string;
+	href: string;
+	icon?: ReactNode;
+}
+
+interface NavItem {
+	label: string;
+	href?: string;
+	width?: number;
+	dropdown?: NavDropdownItem[];
+}
+
+const Links: NavItem[] = [
 	{
 		label: "Product",
+		width: 600,
 		dropdown: [
 			{
 				label: "Instant Mode",
@@ -75,6 +75,7 @@ const Links = [
 	},
 	{
 		label: "Help",
+		width: 480,
 		dropdown: [
 			{
 				label: "Documentation",
@@ -116,204 +117,143 @@ interface NavbarProps {
 	stars?: string;
 }
 
+const dropdownStyle = (width: number | undefined): CSSProperties => ({
+	width: width ?? 460,
+	maxWidth: "calc(100vw - 2rem)",
+});
+
 export const Navbar = ({ stars }: NavbarProps) => {
-	const pathname = usePathname();
-	const [showMobileMenu, setShowMobileMenu] = useState(false);
-	const auth = useCurrentUser();
-
-	const [hideLogoName, setHideLogoName] = useState(false);
-
-	useEffect(() => {
-		const onScroll = () => {
-			setHideLogoName(window.scrollY > 10);
-		};
-		document.addEventListener("scroll", onScroll, { passive: true });
-		return () => {
-			document.removeEventListener("scroll", onScroll);
-		};
-	}, []);
-
 	return (
-		<>
-			<header className="fixed left-0 right-0 z-[51] animate-in fade-in slide-in-from-top-4 duration-500 top-4 lg:top-6">
-				<nav className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md lg:max-w-fit border-zinc-200 h-fit">
-					<div className="flex gap-12 justify-between items-center mx-auto max-w-5xl h-full transition-all">
-						<div className="flex items-center">
-							<Link passHref href="/home">
-								<Logo
-									hideLogoName={hideLogoName}
-									className="transition-all duration-200 ease-out"
-									viewBoxDimensions={hideLogoName ? "0 0 60 40" : "0 0 120 40"}
-									style={{
-										width: hideLogoName ? 45.5 : 90,
-										height: 40,
-									}}
-								/>
-							</Link>
-							<div className="hidden lg:flex">
-								<NavigationMenu>
-									<NavigationMenuList className="space-x-0">
-										{Links.map((link) => (
-											<NavigationMenuItem key={link.label}>
-												{link.dropdown ? (
-													<>
-														<NavigationMenuTrigger
-															className={
-																"px-2 py-0 text-sm font-medium text-gray-10 active:text-gray-10 focus:text-gray-10 hover:text-blue-9"
-															}
+		<header className="fixed left-0 right-0 z-[51] animate-in fade-in slide-in-from-top-4 duration-500 top-4 lg:top-6">
+			<nav className="relative p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md lg:max-w-fit border-zinc-200 h-fit">
+				<div className="flex gap-12 justify-between items-center mx-auto max-w-5xl h-full transition-all">
+					<div className="flex items-center">
+						<Link passHref href="/home">
+							<Logo
+								className="transition-all duration-200 ease-out"
+								viewBoxDimensions="0 0 120 40"
+								style={{
+									width: 90,
+									height: 40,
+								}}
+							/>
+						</Link>
+						<div className="hidden lg:flex">
+							<nav aria-label="Main">
+								<ul className="flex items-center px-0 space-x-0 list-none">
+									{Links.map((link) => (
+										<li key={link.label} className="relative group">
+											{link.dropdown ? (
+												<>
+													<button
+														type="button"
+														aria-haspopup="true"
+														className={classNames(
+															navigationMenuTriggerStyle(),
+															"flex gap-1 items-center px-2 py-0 text-sm font-medium text-gray-10 transition-colors hover:text-blue-9 focus:text-blue-9 group-hover:text-blue-9",
+														)}
+													>
+														{link.label}
+														<ChevronDown
+															className="size-3.5 transition-transform duration-200 ease-out group-hover:rotate-180 group-focus-within:rotate-180"
+															strokeWidth={2.25}
+															aria-hidden="true"
+														/>
+													</button>
+													<div className="invisible absolute top-full left-1/2 z-50 hidden -translate-x-1/2 pt-3 opacity-0 transition duration-150 group-hover:visible group-hover:block group-hover:opacity-100 group-focus-within:visible group-focus-within:block group-focus-within:opacity-100">
+														<div
+															className="relative"
+															style={dropdownStyle(link.width)}
 														>
-															{link.label}
-														</NavigationMenuTrigger>
-														<NavigationMenuContent>
-															<ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-2">
-																{link.dropdown.map((sublink) => (
-																	<li key={sublink.href}>
-																		<NavigationMenuLink asChild>
-																			<a
+															<span
+																className="absolute -top-[7px] left-1/2 z-10 size-3.5 -translate-x-1/2 rotate-45 rounded-tl-[4px] border-t border-l border-zinc-200/70 bg-white"
+																aria-hidden="true"
+															/>
+															<div className="overflow-hidden relative bg-white rounded-2xl border shadow-xl border-zinc-200/70">
+																<ul className="grid grid-cols-2 gap-1.5 p-3 list-none">
+																	{link.dropdown.map((sublink) => (
+																		<li key={sublink.href}>
+																			<Link
 																				href={sublink.href}
-																				className="block p-3 space-y-1 leading-none no-underline rounded-md transition-all duration-200 outline-none select-none hover:bg-gray-2 hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+																				className="block p-3 rounded-xl transition-colors duration-200 outline-none group/item hover:bg-gray-2 focus-visible:bg-gray-2"
 																			>
-																				<div className="flex gap-2 items-center text-base font-medium leading-none transition-colors duration-200 text-zinc-700 group-hover:text-zinc-900">
-																					{sublink.icon && sublink.icon}
-																					<span className="font-semibold text-gray-12">
-																						{sublink.label}
-																					</span>
+																				<div className="flex gap-2 items-center mb-0.5 text-sm font-semibold text-gray-12">
+																					{sublink.icon}
+																					<span>{sublink.label}</span>
 																				</div>
-																				<p className="text-sm leading-snug transition-colors duration-200 line-clamp-2 text-zinc-500 group-hover:text-zinc-700">
+																				<p className="text-[13px] leading-snug text-zinc-500 line-clamp-2">
 																					{sublink.sub}
 																				</p>
-																			</a>
-																		</NavigationMenuLink>
-																	</li>
-																))}
-															</ul>
-														</NavigationMenuContent>
-													</>
-												) : (
-													<NavigationMenuLink asChild>
-														<Link
-															href={link.href}
-															className={classNames(
-																navigationMenuTriggerStyle(),
-																pathname === link.href
-																	? "text-blue-9"
-																	: "text-gray-10",
-																"px-2 py-0 text-sm font-medium hover:text-blue-9 focus:text-8",
-															)}
-														>
-															{link.label}
-														</Link>
-													</NavigationMenuLink>
-												)}
-											</NavigationMenuItem>
-										))}
-									</NavigationMenuList>
-								</NavigationMenu>
-							</div>
+																			</Link>
+																		</li>
+																	))}
+																</ul>
+															</div>
+														</div>
+													</div>
+												</>
+											) : (
+												<Link
+													href={link.href ?? "#"}
+													className={classNames(
+														navigationMenuTriggerStyle(),
+														"px-2 py-0 text-sm font-medium text-gray-10 hover:text-blue-9 focus:text-blue-9",
+													)}
+												>
+													{link.label}
+												</Link>
+											)}
+										</li>
+									))}
+								</ul>
+							</nav>
 						</div>
-						<div className="hidden items-center space-x-2 lg:flex">
-							<Button
-								variant="outline"
-								icon={
-									<Image
-										src="/github.svg"
-										alt="Github"
-										width={16}
-										height={16}
-									/>
-								}
-								target="_blank"
-								href="https://github.com/CapSoftware/Cap"
-								size="sm"
-								className="w-full font-medium sm:w-auto"
-							>
-								{`GitHub${stars ? ` (${stars})` : ""}`}
-							</Button>
-							<Suspense
-								fallback={
-									<Button
-										variant="dark"
-										disabled
-										size="sm"
-										className="w-full font-medium sm:w-auto"
-									>
-										Loading...
-									</Button>
-								}
-							>
-								{!auth && (
-									<Button
-										variant="gray"
-										href="/login"
-										size="sm"
-										className="w-full font-medium sm:w-auto"
-									>
-										Login
-									</Button>
-								)}
-								<LoginOrDashboard />
-							</Suspense>
-						</div>
-						<button
-							type="button"
-							className="flex lg:hidden"
-							onClick={() => setShowMobileMenu(!showMobileMenu)}
-						>
-							<div className="flex flex-col gap-[5px] mr-1">
-								<motion.div
-									initial={{ opacity: 1 }}
-									animate={{
-										rotate: showMobileMenu ? 45 : 0,
-										y: showMobileMenu ? 7 : 0,
-									}}
-									transition={{ duration: 0.2 }}
-									className="w-6 h-0.5 bg-black"
-								/>
-								<motion.div
-									initial={{ opacity: 1 }}
-									animate={{
-										opacity: showMobileMenu ? 0 : 1,
-										x: showMobileMenu ? -5 : 0,
-									}}
-									transition={{ duration: 0.2 }}
-									className="w-6 h-0.5 bg-black"
-								/>
-								<motion.div
-									initial={{ opacity: 1 }}
-									animate={{
-										rotate: showMobileMenu ? -45 : 0,
-										y: showMobileMenu ? -7 : 0,
-									}}
-									transition={{ duration: 0.2 }}
-									className="w-6 h-0.5 bg-black"
-								/>
-							</div>
-						</button>
 					</div>
-				</nav>
-			</header>
-			{showMobileMenu && (
-				<MobileMenu
-					setShowMobileMenu={setShowMobileMenu}
-					auth={auth}
-					stars={stars}
-				/>
-			)}
-		</>
+					<div className="hidden items-center space-x-2 lg:flex">
+						<Button
+							variant="outline"
+							icon={
+								<Image src="/github.svg" alt="Github" width={16} height={16} />
+							}
+							target="_blank"
+							href="https://github.com/CapSoftware/Cap"
+							size="sm"
+							className="w-full font-medium sm:w-auto"
+						>
+							{`GitHub${stars ? ` (${stars})` : ""}`}
+						</Button>
+						<Button
+							variant="gray"
+							href="/login"
+							size="sm"
+							className="w-full font-medium sm:w-auto"
+						>
+							Login
+						</Button>
+						<Button
+							variant="dark"
+							href="/signup"
+							size="sm"
+							className="w-full font-medium sm:w-auto"
+						>
+							Sign Up
+						</Button>
+					</div>
+					<details className="group lg:hidden">
+						<summary
+							className="flex cursor-pointer list-none marker:hidden [&::-webkit-details-marker]:hidden"
+							aria-label="Open menu"
+						>
+							<span className="flex flex-col gap-[5px] mr-1" aria-hidden="true">
+								<span className="block w-6 h-0.5 bg-black transition-transform duration-200 group-open:translate-y-[7px] group-open:rotate-45" />
+								<span className="block w-6 h-0.5 bg-black transition duration-200 group-open:-translate-x-1 group-open:opacity-0" />
+								<span className="block w-6 h-0.5 bg-black transition-transform duration-200 group-open:-translate-y-[7px] group-open:-rotate-45" />
+							</span>
+						</summary>
+						<MobileMenu stars={stars} />
+					</details>
+				</div>
+			</nav>
+		</header>
 	);
 };
-
-function LoginOrDashboard() {
-	const auth = useCurrentUser();
-
-	return (
-		<Button
-			variant="dark"
-			href={auth ? "/dashboard" : "/signup"}
-			size="sm"
-			className="w-full font-medium sm:w-auto"
-		>
-			{auth ? "Dashboard" : "Sign Up"}
-		</Button>
-	);
-}

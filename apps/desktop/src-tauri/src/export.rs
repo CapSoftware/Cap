@@ -286,6 +286,13 @@ pub fn cancel_export(export_id: String) -> bool {
     cancel_export_by_id(&export_id)
 }
 
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(window))]
+pub fn cancel_current_window_exports(window: tauri::Window) {
+    cancel_exports_for_window(window.label());
+}
+
 fn retain_export_session() {
     let active_exports = ACTIVE_EXPORT_SESSIONS.fetch_add(1, Ordering::AcqRel) + 1;
     info!(active_exports, "Export session guard started");
@@ -419,9 +426,6 @@ async fn run_out_of_process_export(
     cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
     let mode = ExportWorkerMode::HardwareOptimized;
-    // Windows GPU drivers, MediaFoundation, and encoder DLLs can abort the process on failure.
-    // Keep the first fast hardware attempt in the worker, then retry in software-safe mode so
-    // the desktop process never owns the crash-prone export pipeline.
     match run_out_of_process_export_attempt(
         project_path,
         settings,

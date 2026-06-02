@@ -47,6 +47,9 @@ async deleteRecording() : Promise<null> {
 async takeScreenshot(target: ScreenCaptureTarget) : Promise<string> {
     return await TAURI_INVOKE("take_screenshot", { target });
 },
+async importCurrentDesktopBackground(projectPath: string) : Promise<string> {
+    return await TAURI_INVOKE("import_current_desktop_background", { projectPath });
+},
 async listCameras() : Promise<CameraInfo[]> {
     return await TAURI_INVOKE("list_cameras");
 },

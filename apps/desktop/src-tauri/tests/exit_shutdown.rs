@@ -245,7 +245,7 @@ fn exit_requested_allows_runtime_exit_when_export_cancel_is_draining() {
 }
 
 #[test]
-fn exit_requested_starts_cleanup_during_export() {
+fn exit_requested_prevents_runtime_exit_during_export() {
     let prevented = Arc::new(AtomicBool::new(false));
     let prevented_flag = prevented.clone();
 
@@ -253,6 +253,6 @@ fn exit_requested_starts_cleanup_during_export() {
         prevented_flag.store(true, Ordering::Release);
     });
 
-    assert_eq!(decision, ExitRequestDecision::StartCleanup);
+    assert_eq!(decision, ExitRequestDecision::ExportActive);
     assert!(prevented.load(Ordering::Acquire));
 }

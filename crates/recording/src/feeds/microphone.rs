@@ -33,7 +33,14 @@ const SAMPLE_RATE_ESTIMATE_MIN_DELTA: Duration = Duration::from_millis(2);
 const SAMPLE_RATE_ESTIMATE_MAX_DELTA: Duration = Duration::from_millis(250);
 const SAMPLE_RATE_ESTIMATE_MAX_PENDING: usize = 32;
 const SAMPLE_RATE_CONFIGURED_TOLERANCE: f64 = 0.05;
-const SAMPLE_RATE_DOUBLE_TOLERANCE: f64 = 0.08;
+const SAMPLE_RATE_STANDARD_TOLERANCE: f64 = 0.04;
+// A newly-inferred rate must be observed this many estimation windows in a row before
+// it replaces the active rate. Each window already averages
+// `SAMPLE_RATE_ESTIMATE_MIN_INTERVALS` callbacks, so a single slow/jittery callback
+// batch (e.g. one late buffer under CPU load) cannot mislabel a correctly-clocked
+// device — which would otherwise flip a true 48k mic to 44.1k and resample it at the
+// wrong ratio, pitch-/time-stretching the audio until the next clean window.
+const SAMPLE_RATE_CHANGE_AGREEMENTS: u32 = 3;
 const STANDARD_SAMPLE_RATES: [u32; 13] = [
     8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000, 176_400,
     192_000,
@@ -58,9 +65,54 @@ pub struct MicrophoneSamples {
     pub timestamp: Timestamp,
 }
 
+/// Debounces sample-rate changes: a freshly-inferred rate is only adopted after it is
+/// observed `SAMPLE_RATE_CHANGE_AGREEMENTS` windows in a row, so a lone divergent
+/// observation cannot flip a correctly-clocked device to the wrong standard rate.
+struct RateChangeGate {
+    current_rate: u32,
+    pending_rate: Option<u32>,
+    agreements: u32,
+}
+
+impl RateChangeGate {
+    fn new(rate: u32) -> Self {
+        Self {
+            current_rate: rate,
+            pending_rate: None,
+            agreements: 0,
+        }
+    }
+
+    /// Feed one window's inferred rate; returns the effective (debounced) rate.
+    fn observe(&mut self, inferred: u32) -> u32 {
+        if inferred == self.current_rate {
+            self.pending_rate = None;
+            self.agreements = 0;
+        } else if self.pending_rate == Some(inferred) {
+            self.agreements += 1;
+            if self.agreements >= SAMPLE_RATE_CHANGE_AGREEMENTS {
+                self.current_rate = inferred;
+                self.pending_rate = None;
+                self.agreements = 0;
+            }
+        } else {
+            self.pending_rate = Some(inferred);
+            self.agreements = 1;
+        }
+
+        self.current_rate
+    }
+
+    /// Drop any in-progress candidate without changing the active rate.
+    fn clear_pending(&mut self) {
+        self.pending_rate = None;
+        self.agreements = 0;
+    }
+}
+
 struct CallbackSampleRateEstimator {
     configured_rate: u32,
-    current_rate: u32,
+    gate: RateChangeGate,
     settled: bool,
     previous_capture: Option<cpal::StreamInstant>,
     previous_frame_count: Option<usize>,
@@ -76,7 +128,7 @@ impl CallbackSampleRateEstimator {
     fn new(configured_rate: u32) -> Self {
         Self {
             configured_rate,
-            current_rate: configured_rate,
+            gate: RateChangeGate::new(configured_rate),
             settled: false,
             previous_capture: None,
             previous_frame_count: None,
@@ -94,16 +146,22 @@ impl CallbackSampleRateEstimator {
         {
             match timestamp.capture.duration_since(&previous_capture) {
                 Some(delta) => {
-                    if let Some(sample_rate) = self.observation.push(previous_frame_count, delta) {
-                        if sample_rate != self.current_rate {
+                    if let Some(inferred) = self.observation.push(previous_frame_count, delta) {
+                        let previous_rate = self.gate.current_rate;
+                        let effective = self.gate.observe(inferred);
+                        if effective != previous_rate {
                             info!(
                                 configured_rate = self.configured_rate,
-                                previous_rate = self.current_rate,
-                                inferred_rate = sample_rate,
+                                previous_rate,
+                                inferred_rate = effective,
                                 "Microphone callback sample rate adjusted"
                             );
                         }
-                        self.current_rate = sample_rate;
+                        // Must stay unconditional: an inference means the rate is now
+                        // known, so buffered `pending_samples` can drain even when the
+                        // debounce gate withholds the change. Gating this on
+                        // `effective != previous_rate` would buffer audio until the
+                        // pending cap and then dump it late.
                         self.settled = true;
                         self.observation.reset();
                     }
@@ -115,7 +173,7 @@ impl CallbackSampleRateEstimator {
         self.previous_capture = Some(timestamp.capture);
         self.previous_frame_count = Some(frame_count);
         SampleRateEstimate {
-            sample_rate: self.current_rate,
+            sample_rate: self.gate.current_rate,
             settled: self.settled,
         }
     }
@@ -123,7 +181,8 @@ impl CallbackSampleRateEstimator {
     fn force_current(&mut self) -> u32 {
         self.settled = true;
         self.observation.reset();
-        self.current_rate
+        self.gate.clear_pending();
+        self.gate.current_rate
     }
 }
 
@@ -182,18 +241,21 @@ impl SampleRateObservation {
             return Some(self.configured_rate);
         }
 
-        doubled_standard_sample_rate(self.configured_rate, observed_rate)
+        nearest_standard_sample_rate(observed_rate)
     }
 }
 
-fn doubled_standard_sample_rate(configured_rate: u32, observed_rate: f64) -> Option<u32> {
-    let doubled_rate = configured_rate.checked_mul(2)?;
-    if !STANDARD_SAMPLE_RATES.contains(&doubled_rate) {
-        return None;
-    }
-
-    (relative_delta(doubled_rate as f64, observed_rate) <= SAMPLE_RATE_DOUBLE_TOLERANCE)
-        .then_some(doubled_rate)
+fn nearest_standard_sample_rate(observed_rate: f64) -> Option<u32> {
+    STANDARD_SAMPLE_RATES
+        .iter()
+        .copied()
+        .min_by(|a, b| {
+            relative_delta(*a as f64, observed_rate)
+                .total_cmp(&relative_delta(*b as f64, observed_rate))
+        })
+        .filter(|rate| {
+            relative_delta(*rate as f64, observed_rate) <= SAMPLE_RATE_STANDARD_TOLERANCE
+        })
 }
 
 fn relative_delta(a: f64, b: f64) -> f64 {
@@ -1390,8 +1452,64 @@ mod tests {
     }
 
     #[test]
-    fn sample_rate_observation_ignores_non_double_standard_rate() {
-        assert_eq!(estimate_rate(48_000, 441, Duration::from_millis(10)), None);
+    fn sample_rate_observation_detects_lower_standard_rate() {
+        assert_eq!(
+            estimate_rate(48_000, 441, Duration::from_millis(10)),
+            Some(44_100)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_detects_half_standard_rate() {
+        assert_eq!(
+            estimate_rate(48_000, 240, Duration::from_millis(10)),
+            Some(24_000)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_ignores_distant_nonstandard_rate() {
+        assert_eq!(estimate_rate(48_000, 550, Duration::from_millis(10)), None);
+    }
+
+    #[test]
+    fn rate_change_gate_debounces_single_window_flip() {
+        let mut gate = RateChangeGate::new(48_000);
+
+        // A lone divergent window must not change the active rate...
+        assert_eq!(gate.observe(44_100), 48_000);
+        // ...and a window back at the true rate clears the candidate.
+        assert_eq!(gate.observe(48_000), 48_000);
+        assert_eq!(gate.observe(44_100), 48_000);
+        assert_eq!(gate.observe(48_000), 48_000);
+
+        // Only SAMPLE_RATE_CHANGE_AGREEMENTS consecutive agreeing windows switch.
+        assert_eq!(gate.observe(44_100), 48_000);
+        assert_eq!(gate.observe(44_100), 48_000);
+        assert_eq!(gate.observe(44_100), 44_100);
+    }
+
+    #[test]
+    fn rate_change_gate_resets_candidate_on_disagreement() {
+        let mut gate = RateChangeGate::new(48_000);
+
+        assert_eq!(gate.observe(44_100), 48_000);
+        // A different candidate restarts the agreement count.
+        assert_eq!(gate.observe(24_000), 48_000);
+        assert_eq!(gate.observe(24_000), 48_000);
+        assert_eq!(gate.observe(24_000), 24_000);
+    }
+
+    #[test]
+    fn rate_change_gate_clear_pending_keeps_active_rate() {
+        let mut gate = RateChangeGate::new(48_000);
+
+        assert_eq!(gate.observe(44_100), 48_000);
+        gate.clear_pending();
+        // After clearing, the candidate must start over rather than flip early.
+        assert_eq!(gate.observe(44_100), 48_000);
+        assert_eq!(gate.observe(44_100), 48_000);
+        assert_eq!(gate.observe(44_100), 44_100);
     }
 
     #[test]

@@ -4152,6 +4152,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
+            recording::import_current_desktop_background,
             recording::list_cameras,
             recording::get_camera_formats,
             recording::get_microphone_info,
@@ -4170,6 +4171,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             export::begin_export_session,
             export::end_export_session,
             export::cancel_export,
+            export::cancel_current_window_exports,
             export::export_video,
             export::export_video_with_id,
             export::export_video_to_file,
@@ -4838,7 +4840,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     if is_editor_window {
                         export::cancel_exports_for_window(label);
                     }
-                    if export::export_session_active() && !is_editor_window {
+                    if export::export_session_active() {
                         warn!(
                             window = label,
                             "Skipping Destroyed cleanup during active export"
@@ -5243,6 +5245,9 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
                     });
                 }
                 ExitRequestDecision::AlreadyExiting => {}
+                ExitRequestDecision::ExportActive => {
+                    warn!("Preventing app exit request during active export");
+                }
                 ExitRequestDecision::AllowRuntimeExit => {}
             }
         }
