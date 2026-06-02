@@ -339,10 +339,10 @@ export function TranscriptPanel() {
 						b.segmentIndex - a.segmentIndex || b.wordIndex - a.wordIndex,
 				);
 
-				// Process in reverse so that shifting words doesn't affect the indices/times of earlier words
-				const reversedWords = [...sortedByIndex].reverse();
+				// Process earliest-to-latest so each word's stored position already reflects all prior restorations when we compute insertDuration.
+				const chronologicalWords = [...sortedByIndex].reverse();
 
-				for (const word of reversedWords) {
+				for (const word of chronologicalWords) {
 					const seg = p.captions.segments[word.segmentIndex];
 					if (!seg?.words) continue;
 					const w = seg.words[word.wordIndex] as CaptionWordExtended;
