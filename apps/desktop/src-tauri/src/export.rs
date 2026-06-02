@@ -11,6 +11,7 @@ use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::any::Any;
+use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::{
     collections::HashMap,
@@ -50,6 +51,54 @@ fn export_panic_error(panic: Box<dyn Any + Send>) -> String {
     "Export failed unexpectedly".to_string()
 }
 
+#[cfg(all(windows, not(debug_assertions)))]
+async fn run_export_command<T, F, Fut>(make_future: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = Result<T, String>> + 'static,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    // Windows release builds can stack-overflow in Tauri's IPC command entry before the save
+    // dialog or exporter sidecar starts. Keep the export future off that command-entry stack.
+    std::thread::Builder::new()
+        .name("cap-export-command".to_string())
+        .stack_size(EXPORT_COMMAND_THREAD_STACK_SIZE)
+        .spawn(move || {
+            let result = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime.block_on(async move {
+                    match AssertUnwindSafe(make_future()).catch_unwind().await {
+                        Ok(result) => result,
+                        Err(panic) => Err(export_panic_error(panic)),
+                    }
+                }),
+                Err(err) => Err(format!("Failed to build export command runtime: {err}")),
+            };
+
+            let _ = tx.send(result);
+        })
+        .map_err(|err| format!("Failed to spawn export command thread: {err}"))?;
+
+    rx.await
+        .map_err(|err| format!("Export command thread stopped: {err}"))?
+}
+
+#[cfg(not(all(windows, not(debug_assertions))))]
+async fn run_export_command<T, F, Fut>(make_future: F) -> Result<T, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<T, String>>,
+{
+    match AssertUnwindSafe(make_future()).catch_unwind().await {
+        Ok(result) => result,
+        Err(panic) => Err(export_panic_error(panic)),
+    }
+}
+
 async fn run_protected_export(
     project_path: &Path,
     settings: &ExportSettings,
@@ -86,6 +135,8 @@ async fn run_protected_export(
 
 const EXPORTER_STDERR_TAIL_LIMIT: usize = 80;
 const EXPORT_PROGRESS_FORWARD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+#[cfg(all(windows, not(debug_assertions)))]
+const EXPORT_COMMAND_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 static ACTIVE_EXPORT_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_EXPORT_CANCELLATIONS: LazyLock<Mutex<HashMap<String, ActiveExportCancellation>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -908,19 +959,15 @@ fn is_frame_decode_error(error: &str) -> bool {
 }
 
 fn should_force_ffmpeg_export(_project_path: &Path, settings: &ExportSettings) -> bool {
-    settings.force_ffmpeg_decoder() || should_use_windows_release_export_workaround()
+    settings.force_ffmpeg_decoder()
 }
 
 fn should_force_ffmpeg_preview() -> bool {
-    should_use_windows_release_export_workaround()
+    false
 }
 
 fn should_start_export_worker_in_software_safe_mode() -> bool {
-    should_use_windows_release_export_workaround()
-}
-
-fn should_use_windows_release_export_workaround() -> bool {
-    cfg!(all(target_os = "windows", not(debug_assertions)))
+    false
 }
 
 fn should_use_out_of_process_export() -> bool {
@@ -938,7 +985,7 @@ pub async fn export_video(
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
     let window_label = window.label().to_string();
-    match AssertUnwindSafe(async move {
+    Box::pin(run_export_command(move || async move {
         let cancellation_guard =
             ExportCancellationGuard::new(next_export_command_id("export"), Some(window_label));
         export_video_inner(
@@ -949,13 +996,8 @@ pub async fn export_video(
             cancellation_guard.token(),
         )
         .await
-    })
-    .catch_unwind()
+    }))
     .await
-    {
-        Ok(result) => result,
-        Err(panic) => Err(export_panic_error(panic)),
-    }
 }
 
 #[tauri::command]
@@ -970,7 +1012,7 @@ pub async fn export_video_with_id(
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
     let window_label = window.label().to_string();
-    match AssertUnwindSafe(async move {
+    Box::pin(run_export_command(move || async move {
         let cancellation_guard = ExportCancellationGuard::new(export_id, Some(window_label));
         export_video_inner(
             project_path,
@@ -980,13 +1022,8 @@ pub async fn export_video_with_id(
             cancellation_guard.token(),
         )
         .await
-    })
-    .catch_unwind()
+    }))
     .await
-    {
-        Ok(result) => result,
-        Err(panic) => Err(export_panic_error(panic)),
-    }
 }
 
 #[tauri::command]
@@ -1003,7 +1040,7 @@ pub async fn export_video_to_file(
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
     let window_label = window.label().to_string();
-    match AssertUnwindSafe(async move {
+    Box::pin(run_export_command(move || async move {
         let cancellation_guard = ExportCancellationGuard::new(
             next_export_command_id("export-to-file"),
             Some(window_label),
@@ -1019,13 +1056,8 @@ pub async fn export_video_to_file(
             cancellation_guard.token(),
         )
         .await
-    })
-    .catch_unwind()
+    }))
     .await
-    {
-        Ok(result) => result,
-        Err(panic) => Err(export_panic_error(panic)),
-    }
 }
 
 async fn export_video_to_file_inner(
@@ -1630,9 +1662,8 @@ mod tests {
         assert!(!should_force_ffmpeg_export(dir.path(), &gif_settings));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
-    fn windows_exports_force_ffmpeg_in_release_builds_without_explicit_setting() {
+    fn exports_do_not_force_ffmpeg_without_explicit_setting() {
         let dir = tempdir().unwrap();
 
         let gif_settings = ExportSettings::Gif(cap_export::gif::GifExportSettings {
@@ -1641,18 +1672,12 @@ mod tests {
             quality: None,
         });
 
-        assert_eq!(
-            should_force_ffmpeg_export(dir.path(), &gif_settings),
-            !cfg!(debug_assertions)
-        );
+        assert!(!should_force_ffmpeg_export(dir.path(), &gif_settings));
     }
 
     #[test]
-    fn windows_release_safe_mode_gate_matches_target() {
-        assert_eq!(
-            should_start_export_worker_in_software_safe_mode(),
-            cfg!(all(target_os = "windows", not(debug_assertions)))
-        );
+    fn export_worker_starts_in_hardware_mode() {
+        assert!(!should_start_export_worker_in_software_safe_mode());
     }
 }
 

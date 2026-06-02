@@ -9,7 +9,7 @@ use ffmpeg::{
     frame,
     threading::Config,
 };
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::base::EncoderBase;
 use crate::video::h264_packet::H264PacketEncoder;
@@ -174,7 +174,7 @@ impl H264EncoderBuilder {
                     let fps =
                         input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32;
                     if is_hardware {
-                        debug!(
+                        info!(
                             encoder = %codec_name,
                             width = input_config.width,
                             height = input_config.height,
