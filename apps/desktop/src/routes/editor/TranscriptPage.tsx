@@ -654,6 +654,17 @@ export function TranscriptPanel() {
 	});
 
 	const [showAutoCleanDropdown, setShowAutoCleanDropdown] = createSignal(false);
+	let autoCleanDropdownRef: HTMLDivElement | undefined;
+
+	createEventListener(document, "mousedown", (e: MouseEvent) => {
+		if (
+			showAutoCleanDropdown() &&
+			autoCleanDropdownRef &&
+			!autoCleanDropdownRef.contains(e.target as Node)
+		) {
+			setShowAutoCleanDropdown(false);
+		}
+	});
 
 	return (
 		<div class="flex flex-col min-h-0 h-full">
@@ -670,7 +681,7 @@ export function TranscriptPanel() {
 						</span>
 					</Show>
 
-					<div class="relative">
+					<div class="relative" ref={autoCleanDropdownRef}>
 						<div class="flex">
 							<button
 								type="button"
