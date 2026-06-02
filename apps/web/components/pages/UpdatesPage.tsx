@@ -8,10 +8,7 @@ import {
 } from "@/utils/blog-registry";
 import { generateGradientFromSlug } from "@/utils/gradients";
 
-const FEATURED_SLUGS = [
-	"handling-a-stripe-payment-attack",
-	"september-23-outage-deep-dive",
-];
+const FEATURED_SLUGS = ["cap-v05"];
 
 export const UpdatesPage = () => {
 	const allUpdates = getBlogPosts() as BlogPost[];
@@ -39,12 +36,20 @@ export const UpdatesPage = () => {
 			}
 			return 0;
 		});
+	const featuredGridClassName =
+		featuredPosts.length === 1
+			? "grid grid-cols-1 gap-6"
+			: "grid grid-cols-1 gap-6 md:grid-cols-2";
+	const featuredImageClassName =
+		featuredPosts.length === 1
+			? "object-cover w-full h-80 md:h-[460px]"
+			: "object-cover w-full h-48";
 
 	return (
 		<div className="pt-24 pb-32 md:py-40 wrapper wrapper-sm">
 			{featuredPosts.length > 0 && (
 				<div className="mb-6">
-					<div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+					<div className={featuredGridClassName}>
 						{featuredPosts.map((post) => (
 							<article
 								key={post.slug}
@@ -59,7 +64,7 @@ export const UpdatesPage = () => {
 												height={400}
 												objectFit="cover"
 												alt={post.metadata.title}
-												className="object-cover w-full h-48"
+												className={featuredImageClassName}
 											/>
 										</div>
 									) : isInteractiveBlogPost(post.slug) ? (
