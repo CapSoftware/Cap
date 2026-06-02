@@ -142,10 +142,8 @@ export function TranscriptPanel() {
 				} else {
 					const bufStart = curr.bufferStart || 0;
 					const bufEnd = curr.bufferEnd || 0;
-					const protectedStart = Math.max(0, -bufStart);
-					const protectedEnd = Math.max(0, -bufEnd);
 					deletedDurationInGap +=
-						curr.end - curr.start + protectedStart + protectedEnd;
+						curr.storedEnd + bufEnd - Math.max(0, curr.start - bufStart);
 				}
 				continue;
 			}
@@ -213,7 +211,9 @@ export function TranscriptPanel() {
 	const activeWordIndex = createMemo(() => {
 		const time = editorState.playbackTime;
 		const words = allWords();
-		return words.findIndex((w) => !w.deleted && time >= w.start && time < w.end);
+		return words.findIndex(
+			(w) => !w.deleted && time >= w.start && time < w.end,
+		);
 	});
 
 	const handleWordClick = async (word: FlatWord) => {
