@@ -9,9 +9,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Image from "next/image";
 import Link from "next/link";
-import { Fragment, useEffect, useRef, useState, useTransition } from "react";
+import { Fragment, useEffect, useState, useTransition } from "react";
 import { sendDownloadLink } from "@/actions/send-download-link";
-import { trackEvent } from "@/app/utils/analytics";
 import { LogoMarquee } from "@/components/ui/LogoMarquee";
 import {
 	getDownloadButtonText,
@@ -22,7 +21,6 @@ import {
 import { homepageCopy } from "../../../data/homepage-copy";
 import UpgradeToPro from "../_components/UpgradeToPro";
 import { InstantIcon, ScreenshotIcon, StudioIcon } from "./modeIcons";
-import type { ProArtRef } from "./Pricing/ProArt";
 import VideoModal from "./VideoModal";
 
 const HERO_MODE_ICONS = {
@@ -40,6 +38,15 @@ const HERO_MODE_COLORS = {
 } as const;
 
 const TITLE_LEADING = "leading-[2.25rem] md:leading-[3.5rem]";
+
+const trackHomepageEvent = (
+	eventName: string,
+	properties?: Record<string, unknown>,
+) => {
+	void import("@/app/utils/analytics").then(({ trackEvent }) => {
+		trackEvent(eventName, properties);
+	});
+};
 
 const HeroTitle = ({ text }: { text: string }) => {
 	let letterIndex = -1;
@@ -131,7 +138,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 		e.preventDefault();
 		setEmailStatus("sending");
 		setEmailError("");
-		trackEvent("download_cta_clicked", {
+		trackHomepageEvent("download_cta_clicked", {
 			source_page: "home_header",
 			cta_location: "mobile_email_link",
 			target: "email_download_link",
@@ -162,8 +169,6 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 			homepageCopy.header.variants.default
 		);
 	};
-
-	const _proArtRef = useRef<ProArtRef>(null);
 
 	const headerContent = getHeaderContent();
 
@@ -311,7 +316,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 							variant="dark"
 							href={primaryDownloadUrl}
 							onClick={() =>
-								trackEvent("download_cta_clicked", {
+								trackHomepageEvent("download_cta_clicked", {
 									source_page: "home_header",
 									cta_location: "primary",
 									target_url: primaryDownloadUrl,
@@ -328,7 +333,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						<UpgradeToPro
 							text={homepageCopy.header.cta.primaryButton}
 							onClick={() =>
-								trackEvent("pricing_cta_clicked", {
+								trackHomepageEvent("pricing_cta_clicked", {
 									source_page: "home_header",
 									cta_location: "secondary",
 									target_url: "/pricing",
@@ -385,7 +390,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 							<UpgradeToPro
 								text={homepageCopy.header.cta.primaryButton}
 								onClick={() =>
-									trackEvent("pricing_cta_clicked", {
+									trackHomepageEvent("pricing_cta_clicked", {
 										source_page: "home_header",
 										cta_location: "mobile_secondary",
 										target_url: "/pricing",
@@ -417,7 +422,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						<Link
 							href="/download"
 							onClick={() =>
-								trackEvent("download_cta_clicked", {
+								trackHomepageEvent("download_cta_clicked", {
 									source_page: "home_header",
 									cta_location: "see_other_options",
 									target_url: "/download",

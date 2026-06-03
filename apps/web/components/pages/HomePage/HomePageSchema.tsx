@@ -1,6 +1,3 @@
-"use client";
-
-import Script from "next/script";
 import { testimonials } from "@/data/testimonials";
 import {
 	createBreadcrumbSchema,
@@ -58,11 +55,5 @@ const createHomePageSchema = () => {
 };
 
 export const HomePageSchema = () => {
-	return (
-		<Script
-			id="homepage-structured-data"
-			type="application/ld+json"
-			dangerouslySetInnerHTML={{ __html: createHomePageSchema() }}
-		/>
-	);
+	return <script type="application/ld+json">{createHomePageSchema()}</script>;
 };
