@@ -654,10 +654,8 @@ fn select_camera_format(
             && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
         {
             2
-        } else if f.frame_rate() >= MIN_CAMERA_FRAME_RATE {
-            3
         } else {
-            4
+            3
         };
 
         let res_tier = if f.width() <= TARGET_CAMERA_WIDTH && f.height() <= TARGET_CAMERA_HEIGHT {
