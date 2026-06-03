@@ -641,104 +641,47 @@ fn select_camera_format(
         return Ok(format);
     }
 
-    let mut ideal_formats = formats
-        .clone()
-        .into_iter()
-        .filter(|f| {
-            f.frame_rate() >= PREFERRED_CAMERA_FRAME_RATE
-                && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
-                && f.width() <= TARGET_CAMERA_WIDTH
-                && f.height() <= TARGET_CAMERA_HEIGHT
-        })
-        .collect::<Vec<_>>();
+    let mut formats = formats;
 
-    if ideal_formats.is_empty() {
-        ideal_formats = formats
-            .clone()
-            .into_iter()
-            .filter(|f| {
-                f.frame_rate() >= PREFERRED_CAMERA_FRAME_RATE
-                    && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
-                    && f.width() < 2000
-                    && f.height() < 2000
-            })
-            .collect::<Vec<_>>();
-    }
+    formats.sort_by_key(|f| {
+        let fr_tier = if f.frame_rate() >= PREFERRED_CAMERA_FRAME_RATE
+            && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
+        {
+            0
+        } else if f.frame_rate() >= PREFERRED_CAMERA_FRAME_RATE {
+            1
+        } else if f.frame_rate() >= MIN_CAMERA_FRAME_RATE
+            && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
+        {
+            2
+        } else if f.frame_rate() >= MIN_CAMERA_FRAME_RATE {
+            3
+        } else {
+            4
+        };
 
-    if ideal_formats.is_empty() {
-        ideal_formats = formats
-            .clone()
-            .into_iter()
-            .filter(|f| {
-                f.frame_rate() >= PREFERRED_CAMERA_FRAME_RATE
-                    && f.width() < 2000
-                    && f.height() < 2000
-            })
-            .collect::<Vec<_>>();
-    }
+        let res_tier = if f.width() <= TARGET_CAMERA_WIDTH && f.height() <= TARGET_CAMERA_HEIGHT {
+            0
+        } else if f.width() < 2000 && f.height() < 2000 {
+            1
+        } else {
+            2
+        };
 
-    if ideal_formats.is_empty() {
-        ideal_formats = formats
-            .clone()
-            .into_iter()
-            .filter(|f| {
-                f.frame_rate() >= MIN_CAMERA_FRAME_RATE
-                    && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
-                    && f.width() <= TARGET_CAMERA_WIDTH
-                    && f.height() <= TARGET_CAMERA_HEIGHT
-            })
-            .collect::<Vec<_>>();
-    }
-
-    if ideal_formats.is_empty() {
-        ideal_formats = formats
-            .clone()
-            .into_iter()
-            .filter(|f| {
-                f.frame_rate() >= MIN_CAMERA_FRAME_RATE
-                    && f.frame_rate() <= TARGET_CAMERA_FRAME_RATE
-                    && f.width() < 2000
-                    && f.height() < 2000
-            })
-            .collect::<Vec<_>>();
-    }
-
-    if ideal_formats.is_empty() {
-        ideal_formats = formats
-            .clone()
-            .into_iter()
-            .filter(|f| {
-                f.frame_rate() >= MIN_CAMERA_FRAME_RATE && f.width() < 2000 && f.height() < 2000
-            })
-            .collect::<Vec<_>>();
-    }
-
-    if ideal_formats.is_empty() {
-        ideal_formats = formats;
-    };
-
-    ideal_formats.sort_by(|a, b| {
         let target_aspect_ratio = 16.0 / 9.0;
+        let aspect_ratio = f.width() as f32 / f.height() as f32;
+        let aspect_score = ((aspect_ratio - target_aspect_ratio).abs() * 100.0) as i32;
 
-        let aspect_ratio_a = a.width() as f32 / a.height() as f32;
-        let aspect_ratio_b = b.width() as f32 / b.height() as f32;
+        let target_res = TARGET_CAMERA_WIDTH * TARGET_CAMERA_HEIGHT;
+        let res_diff = ((f.width() * f.height()) as i32 - target_res as i32).abs();
 
-        let aspect_cmp_a = (aspect_ratio_a - target_aspect_ratio).abs();
-        let aspect_cmp_b = (aspect_ratio_b - target_aspect_ratio).abs();
+        let fr_diff = (f.frame_rate() - TARGET_CAMERA_FRAME_RATE).abs();
+        let fr_score = (fr_diff * 100.0) as i32;
 
-        let aspect_cmp = aspect_cmp_a.partial_cmp(&aspect_cmp_b);
-        let resolution_cmp = (a.width() * a.height()).cmp(&(b.width() * b.height()));
-        let fr_cmp_a = (a.frame_rate() - TARGET_CAMERA_FRAME_RATE).abs();
-        let fr_cmp_b = (b.frame_rate() - TARGET_CAMERA_FRAME_RATE).abs();
-        let fr_cmp = fr_cmp_a.partial_cmp(&fr_cmp_b);
-
-        aspect_cmp
-            .unwrap_or(Ordering::Equal)
-            .then(resolution_cmp.reverse())
-            .then(fr_cmp.unwrap_or(Ordering::Equal))
+        (fr_tier, res_tier, aspect_score, res_diff, fr_score)
     });
 
-    Ok(ideal_formats.swap_remove(0))
+    Ok(formats.remove(0))
 }
 
 #[cfg(target_os = "macos")]

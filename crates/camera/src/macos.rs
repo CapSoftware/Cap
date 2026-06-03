@@ -145,8 +145,16 @@ pub(super) fn start_capturing_impl(
     }
 
     let video_settings = ns::Dictionary::with_keys_values(
-        &[cv::pixel_buffer_keys::pixel_format().as_ns()],
-        &[ns::Number::with_u32(pixel_format).as_id_ref()],
+        &[
+            cv::pixel_buffer_keys::pixel_format().as_ns(),
+            cv::pixel_buffer_keys::width().as_ns(),
+            cv::pixel_buffer_keys::height().as_ns(),
+        ],
+        &[
+            ns::Number::with_u32(pixel_format).as_id_ref(),
+            ns::Number::with_u32(format.width()).as_id_ref(),
+            ns::Number::with_u32(format.height()).as_id_ref(),
+        ],
     );
     output
         .set_video_settings(Some(video_settings.as_ref()))
