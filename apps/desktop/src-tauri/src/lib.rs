@@ -7,6 +7,7 @@ mod auth;
 mod camera;
 mod camera_legacy;
 mod captions;
+mod crash_sentinel;
 mod deeplink_actions;
 mod editor_window;
 mod exit_shutdown;
@@ -1911,6 +1912,11 @@ pub async fn request_app_exit(app: AppHandle) {
             timeout_ms = APP_EXIT_TOTAL_TIMEOUT.as_millis(),
             "Timed out while cleaning up app resources for exit"
         );
+    } else {
+        // Cleanup finished within budget — disarm the sentinel so this graceful exit
+        // is not reported as an unexpected termination on next launch. A timed-out
+        // (hung) shutdown deliberately leaves it armed.
+        crash_sentinel::mark_clean_exit();
     }
 
     finalize_app_exit(&app, 0);
@@ -4126,6 +4132,10 @@ type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>,
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
+    // Arm the unexpected-termination sentinel before anything else can crash, and
+    // report any previous session that died without a clean shutdown.
+    crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
+
     ffmpeg::init()
         .map_err(|e| {
             error!("Failed to initialize ffmpeg: {e}");
