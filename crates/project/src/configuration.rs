@@ -821,6 +821,31 @@ pub enum SceneMode {
     Default,
     CameraOnly,
     HideCamera,
+    SplitScreen,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SplitLayout {
+    pub screen_zoom: f64,
+    pub screen_position: XY<f64>,
+    pub camera_zoom: f64,
+    pub camera_position: XY<f64>,
+}
+
+impl Default for SplitLayout {
+    fn default() -> Self {
+        Self {
+            screen_zoom: 1.0,
+            screen_position: XY::new(0.5, 0.5),
+            camera_zoom: 1.0,
+            camera_position: XY::new(0.5, 0.5),
+        }
+    }
+}
+
+fn default_scene_transition() -> f64 {
+    0.3
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
@@ -830,6 +855,12 @@ pub struct SceneSegment {
     pub end: f64,
     #[serde(default)]
     pub mode: SceneMode,
+    #[serde(default)]
+    pub split_layout: Option<SplitLayout>,
+    #[serde(default = "default_scene_transition")]
+    pub transition_in: f64,
+    #[serde(default = "default_scene_transition")]
+    pub transition_out: f64,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
