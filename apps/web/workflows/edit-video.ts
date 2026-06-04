@@ -144,6 +144,8 @@ async function startMediaServerEditJob(
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
 		previewGifPresignedUrl: string;
+		spriteSheetPresignedUrl: string;
+		spriteVttPresignedUrl: string;
 		webhookUrl: string;
 		webhookSecret?: string;
 		keepRanges: VideoEditRange[];
@@ -250,6 +252,8 @@ async function renderVideoEditOnMediaServer(
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
 	const previewGifKey = `${userId}/${videoId}/preview/animated-preview.gif`;
+	const spriteSheetKey = `${userId}/${videoId}/sprites/sprite.jpg`;
+	const spriteVttKey = `${userId}/${videoId}/sprites/thumbnails.vtt`;
 
 	const outputPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -282,6 +286,27 @@ async function renderVideoEditOnMediaServer(
 		)
 		.pipe(runPromise);
 
+	const spriteSheetPresignedUrl = await bucket
+		.getInternalPresignedPutUrl(
+			spriteSheetKey,
+			{
+				ContentType: "image/jpeg",
+				CacheControl: "public, max-age=31536000, immutable",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		)
+		.pipe(runPromise);
+
+	const spriteVttPresignedUrl = await bucket
+		.getInternalPresignedPutUrl(
+			spriteVttKey,
+			{
+				ContentType: "text/vtt",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		)
+		.pipe(runPromise);
+
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 
@@ -303,6 +328,8 @@ async function renderVideoEditOnMediaServer(
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		previewGifPresignedUrl,
+		spriteSheetPresignedUrl,
+		spriteVttPresignedUrl,
 		webhookUrl,
 		webhookSecret: webhookSecret || undefined,
 		keepRanges,
@@ -494,6 +521,8 @@ async function invalidateEditedVideoCache(
 		`${basePath}/result.mp4`,
 		`${basePath}/screenshot/screen-capture.jpg`,
 		`${basePath}/preview/animated-preview.gif`,
+		`${basePath}/sprites/sprite.jpg`,
+		`${basePath}/sprites/thumbnails.vtt`,
 	];
 
 	try {

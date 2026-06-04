@@ -23,6 +23,8 @@ const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const PREVIEW_GIF_TIMEOUT_MS = 30_000;
+const SPRITE_SHEET_TIMEOUT_MS = 120_000;
+const MAX_SPRITE_FRAMES = 300;
 const UPLOAD_MAX_RETRIES = 4;
 const UPLOAD_RETRY_BASE_MS = 250;
 const MAX_STDERR_BYTES = 64 * 1024;
@@ -54,6 +56,20 @@ export interface PreviewGifOptions {
 	colors?: number;
 	maxBytes?: number;
 	timeoutMs?: number;
+}
+
+export interface SpriteSheetOptions {
+	frameInterval?: number;
+	frameWidth?: number;
+	frameHeight?: number;
+	columns?: number;
+	quality?: number;
+}
+
+export interface SpriteSheetResult {
+	imageFile: TempFileHandle;
+	vttContent: string;
+	frameCount: number;
 }
 
 export interface ResilientInputFlags {
@@ -1364,6 +1380,94 @@ export async function generateThumbnail(
 		);
 	} finally {
 		await terminateProcess(proc);
+	}
+}
+
+function formatVttTimestamp(seconds: number): string {
+	const hrs = Math.floor(seconds / 3600);
+	const mins = Math.floor((seconds % 3600) / 60);
+	const secs = seconds % 60;
+	const wholeSecs = Math.floor(secs);
+	const ms = Math.round((secs - wholeSecs) * 1000);
+	return (
+		String(hrs).padStart(2, "0") +
+		":" +
+		String(mins).padStart(2, "0") +
+		":" +
+		String(wholeSecs).padStart(2, "0") +
+		"." +
+		String(ms).padStart(3, "0")
+	);
+}
+
+export async function generateSpriteSheet(
+	inputPath: string,
+	duration: number,
+	spriteImageHref: string,
+	options: SpriteSheetOptions = {},
+	abortSignal?: AbortSignal,
+): Promise<SpriteSheetResult> {
+	const frameWidth = options.frameWidth ?? 160;
+	const frameHeight = options.frameHeight ?? 90;
+	const columns = options.columns ?? 10;
+	const quality = options.quality ?? 5;
+
+	let frameInterval = options.frameInterval ?? 2;
+	let frameCount = Math.max(1, Math.floor(duration / frameInterval));
+	if (frameCount > MAX_SPRITE_FRAMES) {
+		frameInterval = duration / MAX_SPRITE_FRAMES;
+		frameCount = MAX_SPRITE_FRAMES;
+	}
+
+	const rows = Math.ceil(frameCount / columns);
+	const outputTempFile = await createTempFile(".jpg");
+
+	try {
+		await runFfmpegCommand(
+			[
+				"ffmpeg",
+				"-i",
+				inputPath,
+				"-vf",
+				`fps=1/${frameInterval},scale=${frameWidth}:${frameHeight},tile=${columns}x${rows}`,
+				"-q:v",
+				quality.toString(),
+				"-frames:v",
+				"1",
+				"-f",
+				"image2",
+				"-y",
+				outputTempFile.path,
+			],
+			SPRITE_SHEET_TIMEOUT_MS,
+			abortSignal,
+		);
+
+		if (file(outputTempFile.path).size === 0) {
+			throw new Error("FFmpeg produced empty sprite sheet");
+		}
+
+		const vttLines = ["WEBVTT", ""];
+		for (let i = 0; i < frameCount; i++) {
+			const startTime = i * frameInterval;
+			const endTime = Math.min((i + 1) * frameInterval, duration);
+			const col = i % columns;
+			const row = Math.floor(i / columns);
+			vttLines.push(
+				`${formatVttTimestamp(startTime)} --> ${formatVttTimestamp(endTime)}`,
+				`${spriteImageHref}#xywh=${col * frameWidth},${row * frameHeight},${frameWidth},${frameHeight}`,
+				"",
+			);
+		}
+
+		return {
+			imageFile: outputTempFile,
+			vttContent: vttLines.join("\n"),
+			frameCount,
+		};
+	} catch (err) {
+		await outputTempFile.cleanup();
+		throw err;
 	}
 }
 

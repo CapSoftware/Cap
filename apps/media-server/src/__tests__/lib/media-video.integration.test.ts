@@ -14,6 +14,7 @@ import { probeVideo } from "../../lib/media-probe";
 import {
 	copyFileToMp4,
 	generatePreviewGif,
+	generateSpriteSheet,
 	generateThumbnail,
 	materializeHlsPlaylist,
 	materializeMpdAsHlsPlaylist,
@@ -150,6 +151,67 @@ describe("generatePreviewGif integration tests", () => {
 		await expect(
 			generatePreviewGif(TEST_VIDEO_WITH_AUDIO, 10, {}, controller.signal),
 		).rejects.toThrow("Preview GIF generation aborted");
+	});
+});
+
+describe("generateSpriteSheet integration tests", () => {
+	const SPRITE_IMAGE_HREF =
+		"/api/playlist?videoId=test&videoType=mp4&fileType=sprite-sheet";
+
+	test("generates JPEG sprite sheet with matching VTT cues", async () => {
+		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+		const sprite = await generateSpriteSheet(
+			TEST_VIDEO_WITH_AUDIO,
+			metadata.duration,
+			SPRITE_IMAGE_HREF,
+		);
+
+		try {
+			const imageData = readFileSync(sprite.imageFile.path);
+
+			expect(imageData.length).toBeGreaterThan(0);
+			expect(imageData[0]).toBe(0xff);
+			expect(imageData[1]).toBe(0xd8);
+
+			expect(sprite.frameCount).toBe(
+				Math.max(1, Math.floor(metadata.duration / 2)),
+			);
+			expect(sprite.vttContent.startsWith("WEBVTT")).toBe(true);
+
+			const cueLines = sprite.vttContent
+				.split("\n")
+				.filter((line) => line.includes("#xywh="));
+			expect(cueLines.length).toBe(sprite.frameCount);
+			expect(cueLines[0]).toBe(`${SPRITE_IMAGE_HREF}#xywh=0,0,160,90`);
+		} finally {
+			await sprite.imageFile.cleanup();
+		}
+	});
+
+	test("uses custom frame dimensions in VTT coordinates", async () => {
+		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+		const sprite = await generateSpriteSheet(
+			TEST_VIDEO_WITH_AUDIO,
+			metadata.duration,
+			SPRITE_IMAGE_HREF,
+			{ frameWidth: 200, frameHeight: 112 },
+		);
+
+		try {
+			expect(sprite.vttContent).toContain("#xywh=0,0,200,112");
+		} finally {
+			await sprite.imageFile.cleanup();
+		}
+	});
+
+	test("throws error for non-existent video", async () => {
+		await expectRejected(
+			generateSpriteSheet(
+				"/nonexistent/path/to/video.mp4",
+				10,
+				SPRITE_IMAGE_HREF,
+			),
+		);
 	});
 });
 

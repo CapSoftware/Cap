@@ -53,7 +53,6 @@ import {
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
-import { captureVideoFrameDataUrl } from "./video-frame-thumbnail";
 
 const { circumference } = getProgressCircleConfig();
 
@@ -153,7 +152,6 @@ export function CapVideoPlayer({
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
-	const [isMobile, setIsMobile] = useState(false);
 	const [hasError, setHasError] = useState(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
@@ -163,17 +161,6 @@ export function CapVideoPlayer({
 		null,
 	);
 	const queryClient = useQueryClient();
-
-	useEffect(() => {
-		const checkMobile = () => {
-			setIsMobile(window.innerWidth < 640);
-		};
-
-		checkMobile();
-		window.addEventListener("resize", checkMobile);
-
-		return () => window.removeEventListener("resize", checkMobile);
-	}, []);
 
 	const uploadProgressRaw = useUploadProgress(
 		videoId,
@@ -490,11 +477,7 @@ export function CapVideoPlayer({
 		videoRef.current,
 	]);
 
-	const generateVideoFrameThumbnail = useCallback(
-		(_time: number): string | undefined =>
-			captureVideoFrameDataUrl({ video: videoRef.current }),
-		[videoRef.current],
-	);
+	const thumbnailsVttUrl = `/api/playlist?videoId=${videoId}&videoType=mp4&fileType=thumbnails-vtt`;
 
 	const isUploadFailed = uploadProgress?.status === "failed";
 	const isUploadError = uploadProgress?.status === "error";
@@ -716,6 +699,12 @@ export function CapVideoPlayer({
 							src={captionsSrc}
 						/>
 					)}
+					<track
+						default
+						kind="metadata"
+						label="thumbnails"
+						src={thumbnailsVttUrl}
+					/>
 				</MediaPlayerVideo>
 			)}
 			<AnimatePresence>
@@ -868,14 +857,7 @@ export function CapVideoPlayer({
 				isUploadingOrFailed={blockPlaybackControls}
 			>
 				<MediaPlayerControlsOverlay className="rounded-b-xl" />
-				<MediaPlayerSeek
-					fallbackDuration={playerDuration}
-					tooltipThumbnailSrc={
-						isMobile || !resolvedSrc.data?.supportsCrossOrigin
-							? undefined
-							: generateVideoFrameThumbnail
-					}
-				/>
+				<MediaPlayerSeek fallbackDuration={playerDuration} />
 				<div className="flex gap-2 items-center w-full">
 					<div className="flex flex-1 gap-2 items-center">
 						<MediaPlayerPlay />

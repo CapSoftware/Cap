@@ -550,6 +550,25 @@ app.post(
 								},
 								{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 							);
+						const spriteSheetKey = `${user.id}/${videoId}/sprites/sprite.jpg`;
+						const spriteSheetPresignedUrl =
+							yield* bucket.getInternalPresignedPutUrl(
+								spriteSheetKey,
+								{
+									ContentType: "image/jpeg",
+									CacheControl: "public, max-age=31536000, immutable",
+								},
+								{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+							);
+						const spriteVttKey = `${user.id}/${videoId}/sprites/thumbnails.vtt`;
+						const spriteVttPresignedUrl =
+							yield* bucket.getInternalPresignedPutUrl(
+								spriteVttKey,
+								{
+									ContentType: "text/vtt",
+								},
+								{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+							);
 
 						yield* Effect.tryPromise({
 							try: async () => {
@@ -569,6 +588,8 @@ app.post(
 											videoUrl: inputUrl,
 											outputPresignedUrl,
 											previewGifPresignedUrl,
+											spriteSheetPresignedUrl,
+											spriteVttPresignedUrl,
 											remuxOnly: true,
 										}),
 									},

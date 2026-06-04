@@ -26,10 +26,14 @@ import {
 	probeVideo,
 	probeVideoFile,
 } from "../lib/media-probe";
-import type { ResilientInputFlags } from "../lib/media-video";
+import type {
+	ResilientInputFlags,
+	SpriteSheetResult,
+} from "../lib/media-video";
 import {
 	downloadVideoToTemp,
 	generatePreviewGif,
+	generateSpriteSheet,
 	generateThumbnail,
 	muxMediaTracksToMp4,
 	processVideo,
@@ -69,6 +73,8 @@ const processSchema = z.object({
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
 	previewGifPresignedUrl: z.string().url().optional(),
+	spriteSheetPresignedUrl: z.string().url().optional(),
+	spriteVttPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
 	inputExtension: z.string().optional(),
@@ -95,6 +101,8 @@ const editSchema = z.object({
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
 	previewGifPresignedUrl: z.string().url().optional(),
+	spriteSheetPresignedUrl: z.string().url().optional(),
+	spriteVttPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
 	keepRanges: z.array(editRangeSchema).min(1),
@@ -861,6 +869,54 @@ async function generateAndUploadPreviewGif(
 	}
 }
 
+function getSpriteImageHref(videoId: string): string {
+	return `/api/playlist?videoId=${encodeURIComponent(videoId)}&videoType=mp4&fileType=sprite-sheet`;
+}
+
+async function generateAndUploadSpriteSheet(
+	inputPath: string,
+	duration: number,
+	videoId: string,
+	spriteSheetPresignedUrl: string | undefined,
+	spriteVttPresignedUrl: string | undefined,
+	abortSignal: AbortSignal | undefined,
+	logPrefix: string,
+): Promise<void> {
+	if (!spriteSheetPresignedUrl || !spriteVttPresignedUrl) return;
+	if (!Number.isFinite(duration) || duration <= 0) return;
+
+	let spriteSheet: SpriteSheetResult | null = null;
+
+	try {
+		spriteSheet = await generateSpriteSheet(
+			inputPath,
+			duration,
+			getSpriteImageHref(videoId),
+			{},
+			abortSignal,
+		);
+		await uploadFileToS3(
+			spriteSheet.imageFile.path,
+			spriteSheetPresignedUrl,
+			"image/jpeg",
+		);
+		await uploadToS3(
+			new TextEncoder().encode(spriteSheet.vttContent),
+			spriteVttPresignedUrl,
+			"text/vtt",
+		);
+	} catch (spriteErr) {
+		if (abortSignal?.aborted) {
+			throw spriteErr instanceof Error
+				? spriteErr
+				: new Error("Sprite sheet generation aborted");
+		}
+		console.warn(`[${logPrefix}] Sprite sheet generation failed:`, spriteErr);
+	} finally {
+		await spriteSheet?.imageFile.cleanup();
+	}
+}
+
 async function editVideoAsync(
 	jobId: string,
 	sourceUrl: string,
@@ -956,7 +1012,11 @@ async function editVideoAsync(
 
 		await uploadFileToS3(outputTempFile.path, outputPresignedUrl, "video/mp4");
 
-		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
+		if (
+			thumbnailPresignedUrl ||
+			previewGifPresignedUrl ||
+			options.spriteSheetPresignedUrl
+		) {
 			updateJob(jobId, {
 				phase: "generating_thumbnail",
 				progress: 90,
@@ -980,6 +1040,16 @@ async function editVideoAsync(
 			outputTempFile.path,
 			outputMetadata.duration,
 			previewGifPresignedUrl,
+			abortController.signal,
+			"video/edit",
+		);
+
+		await generateAndUploadSpriteSheet(
+			outputTempFile.path,
+			outputMetadata.duration,
+			options.videoId,
+			options.spriteSheetPresignedUrl,
+			options.spriteVttPresignedUrl,
 			abortController.signal,
 			"video/edit",
 		);
@@ -1111,7 +1181,11 @@ async function processVideoAsync(
 
 		await uploadFileToS3(outputTempFile.path, outputPresignedUrl, "video/mp4");
 
-		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
+		if (
+			thumbnailPresignedUrl ||
+			previewGifPresignedUrl ||
+			options.spriteSheetPresignedUrl
+		) {
 			updateJob(jobId, {
 				phase: "generating_thumbnail",
 				progress: 90,
@@ -1132,6 +1206,16 @@ async function processVideoAsync(
 			outputTempFile.path,
 			metadata.duration,
 			previewGifPresignedUrl,
+			abortController.signal,
+			"video/process",
+		);
+
+		await generateAndUploadSpriteSheet(
+			outputTempFile.path,
+			metadata.duration,
+			options.videoId,
+			options.spriteSheetPresignedUrl,
+			options.spriteVttPresignedUrl,
 			abortController.signal,
 			"video/process",
 		);
@@ -1335,6 +1419,8 @@ const muxSegmentsSchema = z.object({
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
 	previewGifPresignedUrl: z.string().url().optional(),
+	spriteSheetPresignedUrl: z.string().url().optional(),
+	spriteVttPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
 	videoInitUrl: z.string().url(),
@@ -1362,6 +1448,8 @@ video.post("/mux-segments", async (c) => {
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		previewGifPresignedUrl,
+		spriteSheetPresignedUrl,
+		spriteVttPresignedUrl,
 		webhookUrl,
 		webhookSecret,
 	} = body.data;
@@ -1392,6 +1480,8 @@ video.post("/mux-segments", async (c) => {
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		previewGifPresignedUrl,
+		spriteSheetPresignedUrl,
+		spriteVttPresignedUrl,
 		videoInitUrl,
 		videoSegUrls,
 		audioInitUrl ?? null,
@@ -1519,6 +1609,8 @@ async function muxSegmentsAsync(
 	outputPresignedUrl: string,
 	thumbnailPresignedUrl: string | undefined,
 	previewGifPresignedUrl: string | undefined,
+	spriteSheetPresignedUrl: string | undefined,
+	spriteVttPresignedUrl: string | undefined,
 	videoInitUrl: string,
 	videoSegmentUrls: string[],
 	audioInitUrl: string | null,
@@ -1667,7 +1759,11 @@ async function muxSegmentsAsync(
 			metadata = probeResult;
 		} catch {}
 
-		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
+		if (
+			thumbnailPresignedUrl ||
+			previewGifPresignedUrl ||
+			spriteSheetPresignedUrl
+		) {
 			updateJob(jobId, {
 				phase: "generating_thumbnail",
 				progress: 90,
@@ -1693,6 +1789,16 @@ async function muxSegmentsAsync(
 			resultPath,
 			metadata?.duration ?? 0,
 			previewGifPresignedUrl,
+			abortController.signal,
+			"mux-segments",
+		);
+
+		await generateAndUploadSpriteSheet(
+			resultPath,
+			metadata?.duration ?? 0,
+			videoId,
+			spriteSheetPresignedUrl,
+			spriteVttPresignedUrl,
 			abortController.signal,
 			"mux-segments",
 		);
