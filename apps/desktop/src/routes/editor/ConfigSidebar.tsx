@@ -4219,11 +4219,90 @@ function SourceOffsetField(props: {
 	);
 }
 
+const SCENE_MODE_TRIGGER_CLASS =
+	"z-10 flex justify-center items-center gap-1.5 py-2.5 px-2 text-xs whitespace-nowrap text-gray-11 rounded-[10px] border border-transparent transition-colors duration-200 outline-hidden data-selected:border-gray-3 data-selected:bg-gray-3 data-selected:text-gray-12 not-data-selected:hover:border-gray-7 disabled:opacity-40 disabled:cursor-not-allowed";
+
+// 2D drag pad for a normalized focal point (mirrors the manual-zoom position
+// picker): click/drag anywhere to set {x,y} in 0..1, pausing history so the
+// whole drag is one undo step.
+function PositionPad(props: {
+	value: () => XY<number>;
+	onChange: (pos: XY<number>) => void;
+}) {
+	const { projectHistory } = useEditorContext();
+
+	const onPick = (downEvent: MouseEvent) => {
+		downEvent.preventDefault();
+		const bounds = downEvent.currentTarget as HTMLElement;
+		const rect = bounds.getBoundingClientRect();
+		const resumeHistory = projectHistory.pause();
+		const apply = (e: MouseEvent) => {
+			props.onChange({
+				x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+				y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
+			});
+		};
+		apply(downEvent);
+		createRoot((dispose) =>
+			createEventListenerMap(window, {
+				mousemove: apply,
+				mouseup: () => {
+					resumeHistory();
+					dispose();
+				},
+			}),
+		);
+	};
+
+	return (
+		<div
+			class="overflow-hidden relative w-full h-28 rounded-lg border border-gray-3 bg-gray-2 cursor-crosshair"
+			onMouseDown={onPick}
+		>
+			<div class="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-gray-3 pointer-events-none" />
+			<div class="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-gray-3 pointer-events-none" />
+			<div
+				class="flex absolute z-10 justify-center items-center w-6 h-6 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2 bg-gray-1 pointer-events-none"
+				style={{
+					left: `${props.value().x * 100}%`,
+					top: `${props.value().y * 100}%`,
+				}}
+			>
+				<div class="rounded-full size-1.5 bg-gray-5" />
+			</div>
+		</div>
+	);
+}
+
 function SceneSegmentConfig(props: {
 	segmentIndex: number;
 	segment: SceneSegment;
 }) {
-	const { setProject, setEditorState, projectActions } = useEditorContext();
+	const { setProject, setEditorState, projectActions, editorInstance } =
+		useEditorContext();
+
+	const hasCamera = () =>
+		!editorInstance.recordings.segments.every((s) => s.camera === null);
+
+	const description = () => {
+		switch (props.segment.mode) {
+			case "cameraOnly":
+				return "Shows only the camera feed";
+			case "hideCamera":
+				return "Shows only the screen recording";
+			case "splitScreen":
+				return "Screen and camera side by side (auto-stacks in portrait)";
+			default:
+				return "Shows both screen and camera";
+		}
+	};
+
+	const split = () => props.segment.splitLayout ?? DEFAULT_SPLIT_LAYOUT;
+	const updateSplit = (patch: Partial<SplitLayout>) =>
+		setProject("timeline", "sceneSegments", props.segmentIndex, "splitLayout", {
+			...split(),
+			...patch,
+		});
 
 	return (
 		<>
