@@ -2798,6 +2798,21 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 					formatTooltip="%"
 				/>
 			</Field>
+			<Subfield name="Keep original size during zoom">
+				<Toggle
+					checked={
+						(project.camera.scaleDuringZoom ??
+							DEFAULT_CAMERA_SCALE_DURING_ZOOM) >= 1
+					}
+					onChange={(keep) =>
+						setProject(
+							"camera",
+							"scaleDuringZoom",
+							keep ? 1 : DEFAULT_CAMERA_SCALE_DURING_ZOOM,
+						)
+					}
+				/>
+			</Subfield>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
 				<div class="flex flex-col gap-3">
 					<Slider
