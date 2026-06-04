@@ -388,21 +388,28 @@ async fn pause_for_input_change(app: &AppHandle) -> Result<bool, String> {
     Ok(should_pause)
 }
 
-async fn resume_input_change_on_error(
+async fn finish_input_change(
     app: &AppHandle,
     paused_recording: bool,
     result: Result<(), String>,
 ) -> Result<(), String> {
     match result {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            if paused_recording {
+                crate::recording::resume_recording(app.clone(), app.state()).await?;
+            }
+
+            Ok(())
+        }
         Err(err) => {
-            if paused_recording
-                && let Err(resume_err) =
+            if paused_recording {
+                if let Err(resume_err) =
                     crate::recording::resume_recording(app.clone(), app.state()).await
-            {
-                return Err(format!(
-                    "{err}; failed to resume recording after input change error: {resume_err}"
-                ));
+                {
+                    return Err(format!(
+                        "{err}; failed to resume recording after input change error: {resume_err}"
+                    ));
+                }
             }
 
             Err(err)
@@ -483,7 +490,7 @@ impl DeepLinkAction {
             DeepLinkAction::SetMicrophone { label } => {
                 let paused_recording = pause_for_input_change(app).await?;
                 let result = crate::set_mic_input(app.state(), label).await;
-                resume_input_change_on_error(app, paused_recording, result).await
+                finish_input_change(app, paused_recording, result).await
             }
             DeepLinkAction::SetCamera { selector } => {
                 let paused_recording = pause_for_input_change(app).await?;
@@ -497,7 +504,7 @@ impl DeepLinkAction {
                     crate::set_camera_input(app.clone(), app.state(), camera_id, None).await
                 }
                 .await;
-                resume_input_change_on_error(app, paused_recording, result).await
+                finish_input_change(app, paused_recording, result).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
