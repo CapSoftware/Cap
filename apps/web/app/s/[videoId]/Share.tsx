@@ -166,6 +166,7 @@ const useVideoStatus = (
 	aiGenerationEnabled: boolean,
 	initialData?: {
 		transcriptionStatus?: string | null;
+		name?: string | null;
 		aiData?: {
 			title?: string | null;
 			summary?: string | null;
@@ -194,6 +195,7 @@ const useVideoStatus = (
 					aiGenerationStatus:
 						(initialData.aiData?.aiGenerationStatus as AiGenerationStatus) ||
 						null,
+					name: initialData.name ?? null,
 					aiTitle: initialData.aiData?.title || null,
 					summary: initialData.aiData?.summary || null,
 					chapters: initialData.aiData?.chapters || null,
@@ -286,6 +288,7 @@ export const Share = ({
 
 	const { data: videoStatus } = useVideoStatus(data.id, aiGenerationEnabled, {
 		transcriptionStatus: data.transcriptionStatus,
+		name: data.name,
 		aiData: initialAiData,
 	});
 
