@@ -80,6 +80,7 @@ import IconLucideRabbit from "~icons/lucide/rabbit";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
+import IconLucideVideo from "~icons/lucide/video";
 import IconLucideWind from "~icons/lucide/wind";
 import { BrandColorsDropdown } from "./BrandColorsDropdown";
 import { CaptionsTab } from "./CaptionsTab";
@@ -89,7 +90,15 @@ import { type CornerRoundingType, useEditorContext } from "./context";
 import { GradientEditor } from "./GradientEditor";
 import { KeyboardTab } from "./KeyboardTab";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
-import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
+import {
+	DEFAULT_BACKGROUND_PADDING,
+	DEFAULT_BACKGROUND_ROUNDING,
+	DEFAULT_CAMERA_SCALE_DURING_ZOOM,
+	DEFAULT_GRADIENT_FROM,
+	DEFAULT_GRADIENT_TO,
+	DEFAULT_SCENE_TRANSITION,
+	DEFAULT_SPLIT_LAYOUT,
+} from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
 import type { TextSegment } from "./text";
@@ -107,7 +116,7 @@ import {
 } from "./ui";
 import { formatTime } from "./utils";
 
-type BackgroundSourceTab = BackgroundSource["type"] | "desktop";
+type BackgroundSourceTab = BackgroundSource["type"] | "desktop" | "none";
 
 const BACKGROUND_SOURCES = {
 	desktop: "Desktop",
@@ -115,6 +124,7 @@ const BACKGROUND_SOURCES = {
 	image: "Image",
 	color: "Color",
 	gradient: "Gradient",
+	none: "None",
 } satisfies Record<BackgroundSourceTab, string>;
 
 const BACKGROUND_ICONS = {
@@ -133,6 +143,7 @@ const BACKGROUND_SOURCES_ROW_ONE = [
 const BACKGROUND_SOURCES_ROW_TWO = [
 	"color",
 	"gradient",
+	"none",
 ] satisfies Array<BackgroundSourceTab>;
 
 const BACKGROUND_IMAGE_ACCEPT =
@@ -1459,6 +1470,8 @@ function BackgroundConfig(props: {
 }) {
 	const { project, setProject, editorInstance, projectHistory } =
 		useEditorContext();
+	const isNoneBackground = () =>
+		project.background.padding === 0 && project.background.rounding === 0;
 	const initialCurrentDesktopBackgroundPath = () => {
 		const source = project.background.source;
 		if (source.type !== "wallpaper" || !source.path) return null;
@@ -1481,11 +1494,16 @@ function BackgroundConfig(props: {
 		return source.type;
 	});
 	const [backgroundSourceTab, setBackgroundSourceTab] =
-		createSignal<BackgroundSourceTab>(projectBackgroundSourceTab());
+		createSignal<BackgroundSourceTab>(
+			isNoneBackground() ? "none" : projectBackgroundSourceTab(),
+		);
 
+	// "None" is a sticky selection: nudging the padding/rounding sliders must not
+	// swap the panel back to the underlying source tab (that reflow moves the very
+	// slider being dragged), so only re-sync when the user isn't sitting on "None".
 	createEffect(
 		on(projectBackgroundSourceTab, (tab) => {
-			setBackgroundSourceTab(tab);
+			if (backgroundSourceTab() !== "none") setBackgroundSourceTab(tab);
 		}),
 	);
 
@@ -1564,9 +1582,33 @@ function BackgroundConfig(props: {
 		return wallpapers()?.find((w) => path.includes(w.id)) ?? null;
 	});
 
-	const ensurePaddingForBackground = () => {
-		if (project.background.padding === 0)
-			setProject("background", "padding", 10);
+	// Leaving "None" seeds default padding AND rounding; real→real switches only
+	// ensure padding so an intentionally-square background keeps rounding 0. Keyed
+	// off `fromNone` because rounding is already 0 once the slider has left None.
+	const ensureBackgroundPresentation = (fromNone = false) => {
+		batch(() => {
+			if (project.background.padding === 0)
+				setProject("background", "padding", DEFAULT_BACKGROUND_PADDING);
+			if (fromNone && project.background.rounding === 0)
+				setProject("background", "rounding", DEFAULT_BACKGROUND_ROUNDING);
+		});
+	};
+
+	const setBackgroundDimension = (
+		key: "padding" | "rounding",
+		value: number,
+	) => {
+		batch(() => {
+			// Revealing padding/rounding out of "None" shows a clean white canvas
+			// rather than resurrecting the hidden source. The tab stays on "None".
+			if (value > 0 && backgroundSourceTab() === "none" && isNoneBackground())
+				setProject("background", "source", {
+					type: "color",
+					value: [255, 255, 255],
+					alpha: 255,
+				});
+			setProject("background", key, value);
+		});
 	};
 
 	onMount(async () => {
@@ -1692,11 +1734,12 @@ function BackgroundConfig(props: {
 			const path = await commands.importCurrentDesktopBackground(
 				editorInstance.path,
 			);
+			const addingFromBlankBackground = isNoneBackground();
 			batch(() => {
 				setCurrentDesktopBackgroundPath(path);
 				setBackgroundSourceTab("desktop");
 				setWallpaperSource(path);
-				ensurePaddingForBackground();
+				ensureBackgroundPresentation(addingFromBlankBackground);
 			});
 		} catch (_err) {
 			toast.error("Couldn't import your desktop wallpaper");
@@ -1706,6 +1749,10 @@ function BackgroundConfig(props: {
 	};
 
 	const renderBackgroundSourceIcon = (item: BackgroundSourceTab) => {
+		if (item === "none") {
+			return <IconLucideImageOff class="size-3.5" />;
+		}
+
 		if (item === "gradient") {
 			const source = project.background.source;
 			const angle = source.type === "gradient" ? source.angle : 90;
@@ -1838,16 +1885,25 @@ function BackgroundConfig(props: {
 					value={backgroundSourceTab()}
 					onChange={(v) => {
 						const tab = v as BackgroundSourceTab;
+						const fromNone = backgroundSourceTab() === "none";
 						setBackgroundSourceTab(tab);
-						ensurePaddingForBackground();
-						switch (tab) {
-							case "desktop": {
-								const desktopBackground = currentDesktopBackground();
-								if (desktopBackground) {
-									setWallpaperSource(desktopBackground.rawPath);
-								}
-								break;
+						if (tab === "none") {
+							batch(() => {
+								setProject("background", "padding", 0);
+								setProject("background", "rounding", 0);
+							});
+							return;
+						}
+						if (tab === "desktop") {
+							const desktopBackground = currentDesktopBackground();
+							if (desktopBackground) {
+								ensureBackgroundPresentation(fromNone);
+								setWallpaperSource(desktopBackground.rawPath);
 							}
+							return;
+						}
+						ensureBackgroundPresentation(fromNone);
+						switch (tab) {
 							case "image": {
 								setProject("background", "source", {
 									type: "image",
@@ -1948,7 +2004,7 @@ function BackgroundConfig(props: {
 										type="button"
 										onClick={() => {
 											setWallpaperSource(photo().rawPath);
-											ensurePaddingForBackground();
+											ensureBackgroundPresentation();
 										}}
 										class={cx(
 											"overflow-hidden relative w-full h-48 rounded-lg border transition cursor-pointer group",
@@ -2040,7 +2096,7 @@ function BackgroundConfig(props: {
 
 									setWallpaperSource(wallpaper.rawPath);
 
-									ensurePaddingForBackground();
+									ensureBackgroundPresentation();
 								} catch (_err) {
 									toast.error("Failed to set wallpaper");
 								}
@@ -2288,7 +2344,7 @@ function BackgroundConfig(props: {
 			<Field name="Padding" icon={<IconCapPadding class="size-4" />}>
 				<Slider
 					value={[project.background.padding]}
-					onChange={(v) => setProject("background", "padding", v[0])}
+					onChange={(v) => setBackgroundDimension("padding", v[0])}
 					minValue={0}
 					maxValue={40}
 					step={0.1}
@@ -2299,7 +2355,7 @@ function BackgroundConfig(props: {
 				<div class="flex flex-col gap-3">
 					<Slider
 						value={[project.background.rounding]}
-						onChange={(v) => setProject("background", "rounding", v[0])}
+						onChange={(v) => setBackgroundDimension("rounding", v[0])}
 						minValue={0}
 						maxValue={100}
 						step={0.1}
