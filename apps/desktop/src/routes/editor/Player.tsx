@@ -20,6 +20,7 @@ import {
 } from "./context";
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
+import { SplitScreenOverlay } from "./SplitScreenOverlay";
 import { TextOverlay } from "./TextOverlay";
 import {
 	EditorButton,
@@ -662,6 +663,7 @@ function PreviewCanvas() {
 					<Show when={hasFrame()}>
 						<MaskOverlay size={size()} />
 						<TextOverlay size={size()} />
+						<SplitScreenOverlay size={size()} />
 						<PerformanceOverlay size={size()} />
 					</Show>
 				</div>
