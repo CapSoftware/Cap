@@ -19,6 +19,7 @@ export interface VideoMetadata {
 	 * AI generated title for the video
 	 */
 	aiTitle?: string;
+	titleManuallyEdited?: boolean;
 	/**
 	 * AI generated summary of the content
 	 */

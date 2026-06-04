@@ -10,6 +10,7 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
+import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
@@ -170,6 +171,9 @@ app.get(
 			const videoName =
 				name ??
 				`Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`;
+			const metadata: VideoMetadata | undefined = name
+				? { sourceName: name }
+				: undefined;
 			const clientSupportsGoogleDriveUpload = hasDesktopFeature(
 				c.req,
 				GOOGLE_DRIVE_UPLOAD_FEATURE,
@@ -217,6 +221,7 @@ app.get(
 					width,
 					height,
 					fps,
+					...(metadata ? { metadata } : {}),
 				});
 
 			const clientSupportsUploadProgress = isFromDesktopSemver(
