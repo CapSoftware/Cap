@@ -64,14 +64,20 @@ import {
 	type CursorType,
 	commands,
 	type KeyboardTrackSegment,
+	type SceneMode,
 	type SceneSegment,
+	type SplitLayout,
 	type StereoMode,
 	type TimelineSegment,
+	type XY,
 	type ZoomSegment,
 } from "~/utils/tauri";
 import IconLucideBoxSelect from "~icons/lucide/box-select";
+import IconLucideColumns2 from "~icons/lucide/columns-2";
+import IconLucideEyeOff from "~icons/lucide/eye-off";
 import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideGrid from "~icons/lucide/grid";
+import IconLucideImageOff from "~icons/lucide/image-off";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideMoon from "~icons/lucide/moon";
@@ -4242,79 +4248,138 @@ function SceneSegmentConfig(props: {
 			</div>
 			<Field name="Camera Layout" icon={<IconLucideLayout />}>
 				<KTabs
-					class="space-y-6"
+					class="space-y-3"
 					value={props.segment.mode || "default"}
 					onChange={(v) => {
-						setProject(
-							"timeline",
-							"sceneSegments",
-							props.segmentIndex,
-							"mode",
-							v as "default" | "cameraOnly" | "hideCamera",
-						);
+						const mode = v as SceneMode;
+						batch(() => {
+							setProject(
+								"timeline",
+								"sceneSegments",
+								props.segmentIndex,
+								"mode",
+								mode,
+							);
+							// Seed identity overrides so the new split segment renders
+							// correctly and the fine-tune controls have values to bind to.
+							if (mode === "splitScreen" && !props.segment.splitLayout)
+								setProject(
+									"timeline",
+									"sceneSegments",
+									props.segmentIndex,
+									"splitLayout",
+									{ ...DEFAULT_SPLIT_LAYOUT },
+								);
+						});
 					}}
 				>
-					<KTabs.List class="flex flex-col gap-3">
-						<div class="flex flex-row items-center rounded-lg relative border">
-							<KTabs.Trigger
-								value="default"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-hidden data-selected:text-gray-12 peer"
-							>
-								Default
-							</KTabs.Trigger>
-							<KTabs.Trigger
-								value="cameraOnly"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-hidden data-selected:text-gray-12 peer"
-							>
-								Camera Only
-							</KTabs.Trigger>
-							<KTabs.Trigger
-								value="hideCamera"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-hidden data-selected:text-gray-12 peer"
-							>
-								Hide Camera
-							</KTabs.Trigger>
-							<KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline-solid outline-2 outline-blue-9 outline-offset-2 rounded-[0.6rem] overflow-hidden">
-								<div class="flex-1 bg-gray-3" />
-							</KTabs.Indicator>
-						</div>
-
-						<div class="relative">
-							<div
-								class="absolute -top-3 w-px h-3 transition-all duration-200 bg-gray-3"
-								style={{
-									left:
-										props.segment.mode === "cameraOnly"
-											? "50%"
-											: props.segment.mode === "hideCamera"
-												? "83.33%"
-												: "16.67%",
-								}}
-							/>
-							<div
-								class="absolute -top-1 w-2 h-2 rounded-full transition-all duration-200 -translate-x-1/2 bg-gray-3"
-								style={{
-									left:
-										props.segment.mode === "cameraOnly"
-											? "50%"
-											: props.segment.mode === "hideCamera"
-												? "83.33%"
-												: "16.67%",
-								}}
-							/>
-							<div class="p-2.5 rounded-md bg-gray-2 border border-gray-3">
-								<div class="text-xs text-center text-gray-11">
-									{props.segment.mode === "cameraOnly"
-										? "Shows only the camera feed"
-										: props.segment.mode === "hideCamera"
-											? "Shows only the screen recording"
-											: "Shows both screen and camera"}
-								</div>
-							</div>
-						</div>
+					<KTabs.List class="grid grid-cols-2 gap-2">
+						<KTabs.Trigger value="default" class={SCENE_MODE_TRIGGER_CLASS}>
+							<IconLucideMonitor class="size-3.5" />
+							Default
+						</KTabs.Trigger>
+						<KTabs.Trigger value="cameraOnly" class={SCENE_MODE_TRIGGER_CLASS}>
+							<IconLucideVideo class="size-3.5" />
+							Camera Only
+						</KTabs.Trigger>
+						<KTabs.Trigger value="hideCamera" class={SCENE_MODE_TRIGGER_CLASS}>
+							<IconLucideEyeOff class="size-3.5" />
+							Hide Camera
+						</KTabs.Trigger>
+						<KTabs.Trigger
+							value="splitScreen"
+							disabled={!hasCamera()}
+							class={SCENE_MODE_TRIGGER_CLASS}
+						>
+							<IconLucideColumns2 class="size-3.5" />
+							Split Screen
+						</KTabs.Trigger>
 					</KTabs.List>
+					<div class="p-2.5 rounded-md bg-gray-2 border border-gray-3">
+						<div class="text-xs text-center text-gray-11">{description()}</div>
+					</div>
 				</KTabs>
 			</Field>
+
+			<Field name="Transition" icon={<IconLucideTimer class="size-4" />}>
+				<div class="flex flex-col gap-3">
+					<Subfield name="In">
+						<Slider
+							class="flex-1 ml-4"
+							value={[props.segment.transitionIn ?? DEFAULT_SCENE_TRANSITION]}
+							onChange={(v) =>
+								setProject(
+									"timeline",
+									"sceneSegments",
+									props.segmentIndex,
+									"transitionIn",
+									v[0],
+								)
+							}
+							minValue={0}
+							maxValue={2}
+							step={0.05}
+							formatTooltip={(v) => `${v.toFixed(2)}s`}
+						/>
+					</Subfield>
+					<Subfield name="Out">
+						<Slider
+							class="flex-1 ml-4"
+							value={[props.segment.transitionOut ?? DEFAULT_SCENE_TRANSITION]}
+							onChange={(v) =>
+								setProject(
+									"timeline",
+									"sceneSegments",
+									props.segmentIndex,
+									"transitionOut",
+									v[0],
+								)
+							}
+							minValue={0}
+							maxValue={2}
+							step={0.05}
+							formatTooltip={(v) => `${v.toFixed(2)}s`}
+						/>
+					</Subfield>
+				</div>
+			</Field>
+
+			<Show when={props.segment.mode === "splitScreen"}>
+				<div class="w-full border-t border-dashed border-gray-5" />
+				<Field name="Screen Zoom" icon={<IconCapEnlarge class="size-4" />}>
+					<Slider
+						value={[split().screenZoom * 100]}
+						onChange={(v) => updateSplit({ screenZoom: v[0] / 100 })}
+						minValue={100}
+						maxValue={300}
+						step={1}
+						formatTooltip="%"
+					/>
+				</Field>
+				<Field name="Screen Position" icon={<IconLucideMove class="size-4" />}>
+					<PositionPad
+						value={() => split().screenPosition}
+						onChange={(pos) => updateSplit({ screenPosition: pos })}
+					/>
+				</Field>
+				<div class="w-full border-t border-dashed border-gray-5" />
+				<Field name="Camera Zoom" icon={<IconCapEnlarge class="size-4" />}>
+					<Slider
+						value={[split().cameraZoom * 100]}
+						onChange={(v) => updateSplit({ cameraZoom: v[0] / 100 })}
+						minValue={100}
+						maxValue={300}
+						step={1}
+						formatTooltip="%"
+					/>
+				</Field>
+				<Field name="Camera Position" icon={<IconLucideMove class="size-4" />}>
+					<PositionPad
+						value={() => split().cameraPosition}
+						onChange={(pos) => updateSplit({ cameraPosition: pos })}
+					/>
+				</Field>
+			</Show>
 		</>
 	);
 }
