@@ -3,13 +3,24 @@ import { Hr, Tailwind, Text } from "@react-email/components";
 export default function Footer({
 	email,
 	marketing,
+	manageNotificationsUrl,
 }: {
 	email: string;
 	marketing?: boolean;
+	manageNotificationsUrl?: string;
 }) {
 	return (
 		<Tailwind>
 			<Hr className="mx-0 my-6 w-full border border-gray-200" />
+			{manageNotificationsUrl && (
+				<Text className="text-[12px] leading-6 text-gray-500">
+					Don't want to receive these notifications?{" "}
+					<a href={manageNotificationsUrl} className="text-gray-600 underline">
+						Disable this notification
+					</a>
+					.
+				</Text>
+			)}
 			{marketing ? (
 				<Text className="text-[12px] leading-6 text-gray-500">
 					This email was intended for{" "}
