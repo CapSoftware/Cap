@@ -509,13 +509,67 @@ impl CursorLayer {
             zoom,
         ) - zoomed_position;
 
-        let cursor_uniforms = CursorUniforms {
-            position_size: [
+        // In split-screen the screen only occupies a half-rect, so remap the
+        // cursor from its raw source UV into that pane (matching the display
+        // layer's split crop -> half-rect mapping) and scale the sprite by the
+        // same factor. The cursor shader's screen_bounds clip already follows
+        // uniforms.display.target_bounds (the morphing half), so a cursor that
+        // lands outside the visible crop is confined automatically.
+        let position_size = match &uniforms.split {
+            Some(split) if split.factor > 0.001 => {
+                let screen_size = constants.options.screen_size;
+                let crop = ProjectUniforms::get_crop(&constants.options, &uniforms.project);
+                let display_size = ProjectUniforms::display_size(
+                    &constants.options,
+                    &uniforms.project,
+                    resolution_base,
+                );
+
+                let scrop = split.screen.crop;
+                let starget = split.screen.target;
+                let crop_w = (scrop[2] - scrop[0]).max(f32::EPSILON);
+                let crop_h = (scrop[3] - scrop[1]).max(f32::EPSILON);
+                let target_w = starget[2] - starget[0];
+                let target_h = starget[3] - starget[1];
+
+                let cursor_px = [
+                    cursor_uv.x as f32 * screen_size.x as f32,
+                    cursor_uv.y as f32 * screen_size.y as f32,
+                ];
+                let tip = [
+                    starget[0] + (cursor_px[0] - scrop[0]) / crop_w * target_w,
+                    starget[1] + (cursor_px[1] - scrop[1]) / crop_h * target_h,
+                ];
+
+                // Source->pane scale (uniform; the split crop matches the pane
+                // aspect) relative to the normal source->frame scale.
+                let normal_scale = display_size.x as f32 / (crop.size.x as f32).max(f32::EPSILON);
+                let size_factor = (target_w / crop_w) / normal_scale.max(f32::EPSILON);
+
+                let split_pos = [
+                    tip[0] - hotspot.x as f32 * size_factor,
+                    tip[1] - hotspot.y as f32 * size_factor,
+                ];
+                let split_size = [size.x as f32 * size_factor, size.y as f32 * size_factor];
+
+                let t = split.factor as f32;
+                [
+                    crate::lerp_f32(zoomed_position.x as f32, split_pos[0], t),
+                    crate::lerp_f32(zoomed_position.y as f32, split_pos[1], t),
+                    crate::lerp_f32(zoomed_size.x as f32, split_size[0], t),
+                    crate::lerp_f32(zoomed_size.y as f32, split_size[1], t),
+                ]
+            }
+            _ => [
                 zoomed_position.x as f32,
                 zoomed_position.y as f32,
                 zoomed_size.x as f32,
                 zoomed_size.y as f32,
             ],
+        };
+
+        let cursor_uniforms = CursorUniforms {
+            position_size,
             output_size: [
                 uniforms.output_size.0 as f32,
                 uniforms.output_size.1 as f32,
