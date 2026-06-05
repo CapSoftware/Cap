@@ -302,12 +302,17 @@ async fn wait_for_session_ready(
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         if let Ok(Some(status)) = child.try_wait() {
-            if let Ok(session) = session::read_session(recording_id)
-                && session.status == SessionStatus::Error
-            {
-                return Err(session
-                    .error
-                    .unwrap_or_else(|| "recording worker failed to start".to_string()));
+            // A short `--duration` recording can finish and write `Stopped` before the parent's first
+            // poll, so a worker that has already exited is only a failure when it recorded nothing.
+            if let Ok(session) = session::read_session(recording_id) {
+                match session.status {
+                    SessionStatus::Recording | SessionStatus::Stopped => return Ok(session),
+                    SessionStatus::Error => {
+                        return Err(session
+                            .error
+                            .unwrap_or_else(|| "recording worker failed to start".to_string()));
+                    }
+                }
             }
             let log = session::log_file(recording_id)
                 .map(|p| p.display().to_string())
