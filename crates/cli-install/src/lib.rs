@@ -138,15 +138,16 @@ fn same_file(a: &Path, b: &Path) -> bool {
 
 #[cfg(windows)]
 fn shim_points_to(shim_path: &Path, target_path: &Path) -> Result<bool, String> {
-    let contents = match fs::read_to_string(shim_path) {
+    let contents = match fs::read(shim_path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(err) => return Err(format!("Could not read CLI shim: {err}")),
     };
 
     let target = display_path(target_path);
-    Ok(windows_shim_target(&contents)
-        .is_some_and(|shim_target| shim_target.eq_ignore_ascii_case(&target)))
+    Ok(windows_shim_target(&contents).is_some_and(|shim_target| {
+        windows_shim_target_matches(shim_target, &target, |name| env::var(name).ok())
+    }))
 }
 
 #[cfg(unix)]
@@ -159,29 +160,107 @@ fn shim_is_cap_managed(shim_path: &Path) -> bool {
 
 #[cfg(windows)]
 fn shim_is_cap_managed(shim_path: &Path) -> bool {
-    fs::read_to_string(shim_path).is_ok_and(|contents| windows_shim_target(&contents).is_some())
+    fs::read(shim_path).is_ok_and(|contents| windows_shim_target(&contents).is_some())
 }
 
 #[cfg(any(windows, test))]
-fn windows_shim_target(contents: &str) -> Option<&str> {
-    let mut lines = contents.lines();
-    if !lines.next()?.trim().eq_ignore_ascii_case("@echo off") {
+fn windows_shim_target(contents: &[u8]) -> Option<&[u8]> {
+    let contents = contents.strip_prefix(b"\xef\xbb\xbf").unwrap_or(contents);
+    let mut lines = contents.split(|byte| *byte == b'\n');
+    if !trim_ascii_whitespace(lines.next()?).eq_ignore_ascii_case(b"@echo off") {
         return None;
     }
 
-    let command = lines.next()?.trim();
-    if lines.any(|line| !line.trim().is_empty()) {
+    let command = trim_ascii_whitespace(lines.next()?);
+    if lines.any(|line| !trim_ascii_whitespace(line).is_empty()) {
         return None;
     }
 
-    let target = command.strip_prefix('"')?.strip_suffix("\" %*")?;
-    let lower = target.to_ascii_lowercase();
-    if lower == "cap-cli.exe" || lower.ends_with("\\cap-cli.exe") || lower.ends_with("/cap-cli.exe")
+    let target = command.strip_prefix(b"\"")?.strip_suffix(b"\" %*")?;
+    if target.eq_ignore_ascii_case(b"cap-cli.exe")
+        || ascii_ends_with(target, b"\\cap-cli.exe")
+        || ascii_ends_with(target, b"/cap-cli.exe")
     {
         Some(target)
     } else {
         None
     }
+}
+
+#[cfg(any(windows, test))]
+fn windows_shim_target_matches<F>(shim_target: &[u8], target: &str, env_value: F) -> bool
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    if shim_target.eq_ignore_ascii_case(target.as_bytes()) {
+        return true;
+    }
+
+    let Ok(shim_target) = std::str::from_utf8(shim_target) else {
+        return false;
+    };
+
+    windows_expand_env_prefix(shim_target, env_value)
+        .is_some_and(|expanded| expanded.eq_ignore_ascii_case(target))
+}
+
+#[cfg(any(windows, test))]
+fn windows_expand_env_prefix<F>(target: &str, mut env_value: F) -> Option<String>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let rest = target.strip_prefix('%')?;
+    let (name, suffix) = rest.split_once('%')?;
+    if name.is_empty() {
+        return None;
+    }
+
+    env_value(name).map(|value| format!("{value}{suffix}"))
+}
+
+#[cfg(any(windows, test))]
+fn windows_env_prefixed_path<F>(target: &str, mut env_value: F) -> Option<String>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    for name in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
+        let Some(value) = env_value(name) else {
+            continue;
+        };
+        let Some(suffix) = strip_ascii_prefix(target, &value) else {
+            continue;
+        };
+        if suffix.is_empty() || suffix.starts_with('\\') || suffix.starts_with('/') {
+            return Some(format!("%{name}%{suffix}"));
+        }
+    }
+
+    None
+}
+
+#[cfg(any(windows, test))]
+fn strip_ascii_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = value.get(..prefix.len())?;
+    let tail = value.get(prefix.len()..)?;
+    head.eq_ignore_ascii_case(prefix).then_some(tail)
+}
+
+#[cfg(any(windows, test))]
+fn trim_ascii_whitespace(mut value: &[u8]) -> &[u8] {
+    while value.first().is_some_and(|byte| byte.is_ascii_whitespace()) {
+        value = &value[1..];
+    }
+
+    while value.last().is_some_and(|byte| byte.is_ascii_whitespace()) {
+        value = &value[..value.len() - 1];
+    }
+
+    value
+}
+
+#[cfg(any(windows, test))]
+fn ascii_ends_with(value: &[u8], suffix: &[u8]) -> bool {
+    value.len() >= suffix.len() && value[value.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
 }
 
 fn shell_command(install_dir: &Path) -> String {
@@ -243,6 +322,7 @@ fn write_shim(shim_path: &Path, target_path: &Path) -> Result<(), String> {
 #[cfg(windows)]
 fn write_shim(shim_path: &Path, target_path: &Path) -> Result<(), String> {
     let target = display_path(target_path);
+    let target = windows_env_prefixed_path(&target, |name| env::var(name).ok()).unwrap_or(target);
     let contents = format!(
         r#"@echo off
 "{target}" %*
@@ -475,21 +555,59 @@ mod tests {
     #[test]
     fn windows_cap_cmd_detection_requires_generated_shape() {
         assert_eq!(
-            windows_shim_target("@echo off\n\"C:\\Program Files\\Cap\\cap-cli.exe\" %*\n"),
-            Some("C:\\Program Files\\Cap\\cap-cli.exe")
+            windows_shim_target(b"@echo off\n\"C:\\Program Files\\Cap\\cap-cli.exe\" %*\n"),
+            Some(&b"C:\\Program Files\\Cap\\cap-cli.exe"[..])
         );
         assert_eq!(
-            windows_shim_target("@echo off\n\"C:/Program Files/Cap/cap-cli.exe\" %*\n"),
-            Some("C:/Program Files/Cap/cap-cli.exe")
+            windows_shim_target(b"@echo off\n\"C:/Program Files/Cap/cap-cli.exe\" %*\n"),
+            Some(&b"C:/Program Files/Cap/cap-cli.exe"[..])
         );
-        assert!(windows_shim_target("@echo off\ncap-cli.exe %*\n").is_none());
-        assert!(windows_shim_target("@echo off\n\"C:\\Tools\\other.exe\" %*\n").is_none());
-        assert!(windows_shim_target("@echo off\nrem cap-cli.exe lives somewhere else\n").is_none());
+        assert!(windows_shim_target(b"@echo off\ncap-cli.exe %*\n").is_none());
+        assert!(windows_shim_target(b"@echo off\n\"C:\\Tools\\other.exe\" %*\n").is_none());
+        assert!(
+            windows_shim_target(b"@echo off\nrem cap-cli.exe lives somewhere else\n").is_none()
+        );
         assert!(
             windows_shim_target(
-                "@echo off\n\"C:\\Program Files\\Cap\\cap-cli.exe\" %*\necho done\n"
+                b"@echo off\n\"C:\\Program Files\\Cap\\cap-cli.exe\" %*\necho done\n"
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn windows_cap_cmd_detection_handles_web_installer_targets() {
+        let target = b"%LOCALAPPDATA%\\Programs\\Cap\\cap-cli.exe";
+        assert_eq!(
+            windows_shim_target(
+                b"\xef\xbb\xbf@echo off\r\n\"%LOCALAPPDATA%\\Programs\\Cap\\cap-cli.exe\" %*\r\n"
+            ),
+            Some(&target[..])
+        );
+        assert!(windows_shim_target_matches(
+            target,
+            "C:\\Users\\Renee\\AppData\\Local\\Programs\\Cap\\cap-cli.exe",
+            |name| match name {
+                "LOCALAPPDATA" => Some("C:\\Users\\Renee\\AppData\\Local".to_string()),
+                _ => None,
+            },
+        ));
+        assert_eq!(
+            windows_env_prefixed_path(
+                "C:\\Users\\Renee\\AppData\\Local\\Programs\\Cap\\cap-cli.exe",
+                |name| match name {
+                    "LOCALAPPDATA" => Some("C:\\Users\\Renee\\AppData\\Local".to_string()),
+                    _ => None,
+                },
+            )
+            .as_deref(),
+            Some("%LOCALAPPDATA%\\Programs\\Cap\\cap-cli.exe")
+        );
+        assert_eq!(
+            windows_shim_target(
+                b"@echo off\n\"C:\\Users\\Ren\xe9\\AppData\\Local\\Programs\\Cap\\cap-cli.exe\" %*\n"
+            ),
+            Some(&b"C:\\Users\\Ren\xe9\\AppData\\Local\\Programs\\Cap\\cap-cli.exe"[..])
         );
     }
 }

@@ -38,6 +38,26 @@ if (-not (Test-Path $cliTarget)) {
 	exit 1
 }
 
+$shimTarget = $cliTarget
+$knownRoots = @(
+	@{ Value = $env:LOCALAPPDATA; Token = "%LOCALAPPDATA%" },
+	@{ Value = $env:ProgramFiles; Token = "%ProgramFiles%" },
+	@{ Value = "${programFilesX86}"; Token = "%ProgramFiles(x86)%" }
+)
+
+foreach ($root in $knownRoots) {
+	$value = $root["Value"]
+	$token = $root["Token"]
+
+	if ($value -and $cliTarget.StartsWith($value, [System.StringComparison]::OrdinalIgnoreCase)) {
+		$suffix = $cliTarget.Substring($value.Length)
+		if (-not $suffix -or $suffix.StartsWith('\') -or $suffix.StartsWith('/')) {
+			$shimTarget = "$token$suffix"
+			break
+		}
+	}
+}
+
 $installDir = if ($env:CAP_CLI_INSTALL_DIR) { $env:CAP_CLI_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".cap\bin" }
 $shimPath = Join-Path $installDir "cap.cmd"
 
@@ -45,7 +65,7 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 if (Test-Path $shimPath) {
 	$contents = Get-Content $shimPath -Raw
-	if (-not ($contents.Contains($cliTarget) -or $contents -match '\\Cap\\cap-cli\.exe')) {
+	if (-not ($contents.Contains($cliTarget) -or $contents.Contains($shimTarget) -or $contents -match '\\Cap\\cap-cli\.exe')) {
 		Write-Error "$shimPath already exists and is not managed by Cap. Remove it or set CAP_CLI_INSTALL_DIR, then run this script again."
 		exit 1
 	}
@@ -53,7 +73,7 @@ if (Test-Path $shimPath) {
 
 @"
 @echo off
-"$cliTarget" %*
+"$shimTarget" %*
 "@ | Set-Content -Encoding Oem $shimPath
 
 & $shimPath --help | Out-Null
