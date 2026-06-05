@@ -1056,25 +1056,32 @@ name = "cap"
 version = "0.1.0"
 dependencies = [
  "cap-camera",
- "cap-editor",
+ "cap-cli-install",
  "cap-export",
- "cap-flags",
- "cap-media",
  "cap-project",
  "cap-recording",
- "cap-rendering",
- "cap-utils",
  "cidre",
  "clap",
+ "clap_complete",
+ "dirs 6.0.0",
  "ffmpeg-next",
  "flume",
+ "futures",
+ "image 0.25.8",
+ "kameo",
+ "libc",
+ "reqwest 0.12.24",
+ "scap-screencapturekit",
  "scap-targets",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 
@@ -1201,6 +1208,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-cli-install"
+version = "0.1.0"
+dependencies = [
+ "dirs 6.0.0",
+ "serde",
+ "specta",
+ "tempfile",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cap-cpal-ffmpeg"
 version = "0.1.0"
 dependencies = [
@@ -1257,6 +1275,7 @@ dependencies = [
  "cap-audio",
  "cap-camera",
  "cap-camera-effects",
+ "cap-cli-install",
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-export",
@@ -2014,6 +2033,15 @@ dependencies = [
  "anstyle",
  "clap_lex",
  "strsim",
+]
+
+[[package]]
+name = "clap_complete"
+version = "4.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0a7a9bfdb35811f9e59832f0f05975114d2251b415fb534108e6f34060fd772"
+dependencies = [
+ "clap",
 ]
 
 [[package]]

@@ -7,6 +7,7 @@ mod auth;
 mod camera;
 mod camera_legacy;
 mod captions;
+mod cli;
 mod crash_sentinel;
 mod deeplink_actions;
 mod editor_window;
@@ -4169,6 +4170,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording_settings::set_recording_mode,
             upload_logs,
             get_system_diagnostics,
+            cli::get_cli_install_status,
+            cli::install_cli,
+            cli::uninstall_cli,
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,

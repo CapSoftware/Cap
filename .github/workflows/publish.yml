@@ -248,9 +248,9 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain
 
-      - name: Build cap-muxer sidecar
+      - name: Build desktop binaries
         shell: bash
-        run: ./scripts/build-cap-muxer.sh ${{ matrix.settings.target }}
+        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
       - name: Build app
         working-directory: apps/desktop

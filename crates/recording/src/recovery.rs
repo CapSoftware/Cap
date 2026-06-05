@@ -108,6 +108,23 @@ impl RecoveryManager {
         }
     }
 
+    /// Remux a recording in place if its tracks are still fragment directories (status `NeedsRemux`,
+    /// e.g. straight after a fragmented studio stop), running the same `recover` the desktop uses
+    /// after stop. A no-op for recordings already stored as progressive mp4, so callers can run it
+    /// unconditionally before consuming a `.cap`.
+    pub fn remux_if_needed(project_path: &Path) -> Result<bool, RecoveryError> {
+        let Some(incomplete) = Self::find_incomplete_single(project_path) else {
+            return Ok(false);
+        };
+
+        if incomplete.recoverable_segments.is_empty() {
+            return Ok(false);
+        }
+
+        Self::recover(&incomplete)?;
+        Ok(true)
+    }
+
     pub fn find_incomplete(recordings_dir: &Path) -> Vec<IncompleteRecording> {
         let mut incomplete = Vec::new();
 

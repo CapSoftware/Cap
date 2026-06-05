@@ -4,7 +4,10 @@ pub mod mp4;
 pub mod preview;
 
 use cap_editor::SegmentMedia;
-use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
+use cap_project::{
+    BackgroundSource, ProjectConfiguration, RecordingMeta, StudioRecordingMeta,
+    TimelineConfiguration, TimelineSegment,
+};
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
 use std::{path::PathBuf, sync::Arc};
 
@@ -76,7 +79,7 @@ impl ExporterBuilder {
     pub async fn build(self) -> Result<ExporterBase, ExporterBuildError> {
         type Error = ExporterBuildError;
 
-        let project_config = if let Some(config) = self.config {
+        let mut project_config = if let Some(config) = self.config {
             config
         } else {
             ProjectConfiguration::load(&self.project_path)
@@ -93,6 +96,40 @@ impl ExporterBuilder {
             ProjectRecordingsMeta::new(&recording_meta.project_path, studio_meta)
                 .map_err(Error::RecordingsMeta)?,
         );
+
+        // A freshly recorded .cap has no timeline — only the editor creates one. Without it the
+        // render loop's get_segment_time() returns None on frame 0 and produces zero frames (an empty
+        // export). Synthesize the same default timeline the editor would (one segment per recording,
+        // spanning its full duration) so raw recordings — e.g. from `cap export` — render correctly.
+        // Desktop exports already carry a timeline by export time, so this only fires for un-edited
+        // projects and changes nothing for them.
+        if project_config.timeline.is_none() {
+            let segments: Vec<TimelineSegment> = recordings
+                .segments
+                .iter()
+                .enumerate()
+                .filter_map(|(i, segment)| {
+                    let duration = segment.duration();
+                    (duration > 0.0).then_some(TimelineSegment {
+                        recording_clip: i as u32,
+                        start: 0.0,
+                        end: duration,
+                        timescale: 1.0,
+                    })
+                })
+                .collect();
+            if !segments.is_empty() {
+                project_config.timeline = Some(TimelineConfiguration {
+                    segments,
+                    zoom_segments: Vec::new(),
+                    scene_segments: Vec::new(),
+                    mask_segments: Vec::new(),
+                    text_segments: Vec::new(),
+                    caption_segments: Vec::new(),
+                    keyboard_segments: Vec::new(),
+                });
+            }
+        }
 
         let render_constants = Arc::new(
             RenderVideoConstants::new(
