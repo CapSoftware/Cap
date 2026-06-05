@@ -58,7 +58,7 @@ is taken from `CAP_SERVER_URL`, else Cap Desktop's configured server, else `http
 ```sh
 cap doctor --json                          # verify permissions & capture readiness (exits 0; read `ok`/`captureReady`)
 cap targets --json                         # discover screens/windows/cameras/mics (ids feed the next steps)
-cap record start --screen <id> --json      # start in the background -> {"type":"started","recordingId","pid","path"}
+cap record start --screen <id> --json --detach  # start in the background -> {"type":"started","recordingId","pid","path"}
 # ... the agent performs whatever it needs to capture ...
 cap record stop --id <recordingId> --json  # finalize -> {"type":"stopped","path","recordingMetaExists":true}
 cap project validate <path.cap> --json     # confirm the recording is complete before exporting

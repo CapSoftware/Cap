@@ -47,7 +47,7 @@ ENVIRONMENT
 TYPICAL AGENT WORKFLOW
   cap doctor --json                          # verify permissions & capture readiness
   cap targets --json                         # discover screens/windows/cameras/mics
-  cap record start --screen <id> --json      # start in background -> {recordingId, pid, path}
+  cap record start --screen <id> --json --detach  # start in background -> {recordingId, pid, path}
   cap record stop --id <recordingId> --json  # finalize the .cap recording
   cap project validate <path.cap> --json     # confirm the recording is complete
   cap export <path.cap> --output out.mp4 --json

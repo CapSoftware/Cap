@@ -55,11 +55,11 @@ pub struct RecordParams {
 
 impl RecordParams {
     fn validate(&self) -> Result<(), String> {
-        if self
-            .duration
-            .is_some_and(|duration| !duration.is_finite() || duration <= 0.0)
-        {
-            return Err("Duration must be greater than 0".to_string());
+        if self.duration.is_some_and(|duration| {
+            // `> u64::MAX` would panic in `Duration::from_secs_f64` (used by `wait_for_stop`).
+            !duration.is_finite() || duration <= 0.0 || duration > u64::MAX as f64
+        }) {
+            return Err("Duration must be a positive, finite number of seconds".to_string());
         }
         if self.fps == Some(0) {
             return Err("--fps must be greater than 0".to_string());

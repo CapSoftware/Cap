@@ -61,6 +61,7 @@ fn store_server(store: &Value) -> Option<String> {
         .get("general_settings")?
         .get("serverUrl")?
         .as_str()
+        .filter(|value| !value.is_empty())
         .map(str::to_string)
 }
 
