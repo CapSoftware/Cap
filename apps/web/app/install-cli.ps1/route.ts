@@ -45,7 +45,7 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 if (Test-Path $shimPath) {
 	$contents = Get-Content $shimPath -Raw
-	if (-not $contents.Contains("cap-cli.exe")) {
+	if (-not ($contents.Contains($cliTarget) -or $contents -match '\\Cap\\cap-cli\.exe')) {
 		Write-Error "$shimPath already exists and is not managed by Cap. Remove it or set CAP_CLI_INSTALL_DIR, then run this script again."
 		exit 1
 	}
