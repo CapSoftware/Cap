@@ -118,14 +118,32 @@ pub fn cleanup(id: &str) {
     }
 }
 
-/// Whether `pid` is still running. On unix `kill(pid, 0)` probes existence without signalling; other
-/// platforms cannot cheaply check, so callers fall back to the recorded session status.
+/// Whether `pid` is still running. On unix `kill(pid, 0)` probes existence without signalling; on
+/// Windows a zero-timeout wait on the process handle does the equivalent.
 #[cfg(unix)]
 pub fn process_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn process_alive(pid: u32) -> bool {
+    use windows::Win32::{
+        Foundation::{CloseHandle, WAIT_TIMEOUT},
+        System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+    };
+    // A running process handle is non-signaled, so a zero-timeout wait returns WAIT_TIMEOUT; once it
+    // exits the handle is signaled (WAIT_OBJECT_0). OpenProcess failing means the pid is already gone.
+    unsafe {
+        let Ok(handle) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) else {
+            return false;
+        };
+        let alive = WaitForSingleObject(handle, 0) == WAIT_TIMEOUT;
+        let _ = CloseHandle(handle);
+        alive
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn process_alive(_pid: u32) -> bool {
     true
 }
