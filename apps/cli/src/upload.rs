@@ -156,10 +156,36 @@ fn probe_video_meta(path: &Path) -> Result<VideoMeta, String> {
         .or_else(|| decoder.frame_rate().and_then(rational_fps))
         .unwrap_or(30.0);
 
+    let width = decoder.width();
+    let height = decoder.height();
+    if width == 0 || height == 0 {
+        return Err(format!(
+            "{} has invalid video dimensions ({width}x{height})",
+            path.display()
+        ));
+    }
+
+    // ffmpeg reports AV_NOPTS_VALUE (a large negative) for the container duration of a streamed or
+    // fragmented MP4; fall back to the video stream's own duration and clamp, so a probe gap never
+    // sends a negative durationInSecs to the server (which stores it verbatim).
+    let container_duration = input.duration();
+    let duration_in_secs = if container_duration > 0 {
+        container_duration as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)
+    } else {
+        let stream_duration = stream.duration();
+        let time_base = stream.time_base();
+        if stream_duration > 0 && time_base.denominator() != 0 {
+            stream_duration as f64 * f64::from(time_base.numerator())
+                / f64::from(time_base.denominator())
+        } else {
+            0.0
+        }
+    };
+
     Ok(VideoMeta {
-        duration_in_secs: input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE),
-        width: decoder.width(),
-        height: decoder.height(),
+        duration_in_secs,
+        width,
+        height,
         fps,
     })
 }
