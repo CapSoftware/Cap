@@ -309,6 +309,8 @@ impl Export {
         let output = self.resolve_output()?;
         let settings = self.resolve_settings()?;
 
+        ensure_remuxed(self.project_path.clone()).await?;
+
         let force_ffmpeg_decoder = self.force_ffmpeg_decoder || settings.force_ffmpeg_decoder();
         let mut builder = ExporterBase::builder(self.project_path.clone())
             .with_force_ffmpeg_decoder(force_ffmpeg_decoder);
@@ -395,10 +397,27 @@ impl Export {
     }
 }
 
+/// Remux a recording left as fragments (status `NeedsRemux`) into a progressive `display.mp4` before
+/// export, reusing the shared `RecoveryManager`. A graceful `cap record` stop already remuxes in
+/// `finalize`, so this only fires for recordings interrupted before that (e.g. a killed worker);
+/// without it the exporter fails trying to open a fragment directory as a video. No-op for recordings
+/// that are already progressive.
+async fn ensure_remuxed(project_path: PathBuf) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        cap_recording::recovery::RecoveryManager::remux_if_needed(&project_path)
+    })
+    .await
+    .map_err(|e| format!("recording remux task failed: {e}"))?
+    .map_err(|e| format!("Failed to remux recording before export: {e}"))?;
+
+    Ok(())
+}
+
 /// Render a project to its default output path with default settings (mp4, 1080p60, Maximum). Used by
 /// `cap upload --export` to glue record -> export -> upload into one step.
 pub async fn export_project_default(project_path: PathBuf) -> Result<PathBuf, String> {
     let settings = settings_from_flags(&ExportFlags::default())?;
+    ensure_remuxed(project_path.clone()).await?;
     let exporter_base = ExporterBase::builder(project_path)
         .with_force_ffmpeg_decoder(settings.force_ffmpeg_decoder())
         .build()
