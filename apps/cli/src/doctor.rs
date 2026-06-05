@@ -73,7 +73,12 @@ pub struct VersionInfo {
 
 impl VersionInfo {
     pub fn collect() -> Self {
-        let exe = std::env::current_exe().ok();
+        // The CLI is normally invoked through the installed shim (a symlink), and on macOS
+        // `current_exe()` returns that symlink path verbatim — so resolve it to the real binary before
+        // deriving distribution/bundle/sidecar paths, which all live next to the real executable.
+        let exe = std::env::current_exe()
+            .ok()
+            .map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe));
         let distribution = exe
             .as_deref()
             .map(distribution)
