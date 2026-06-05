@@ -362,15 +362,21 @@ impl SessionRunArgs {
             Ok(()) => Ok(()),
             Err(error) => {
                 // Record the failure so the parent (`record start`) and `record stop` can surface it
-                // instead of an opaque exit.
+                // instead of an opaque exit. Reuse the startedAt/path the worker may already have
+                // written for the Recording session so the Error row keeps the real start time, which
+                // `record status` sorts by.
+                let prior = session::read_session(&recording_id).ok();
                 let _ = session::write_session(&Session {
-                    recording_id,
                     pid: std::process::id(),
-                    path: PathBuf::new(),
+                    path: prior.as_ref().map(|s| s.path.clone()).unwrap_or_default(),
                     status: SessionStatus::Error,
-                    started_at: session::now_unix(),
+                    started_at: prior
+                        .as_ref()
+                        .and_then(|s| s.started_at)
+                        .or_else(session::now_unix),
                     recording_meta_exists: None,
                     error: Some(error.clone()),
+                    recording_id,
                 });
                 Err(error)
             }
