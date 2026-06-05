@@ -45,7 +45,7 @@ pub struct RecordParams {
     /// Path to save the '.cap' project to (defaults to <recordingId>.cap in the working directory)
     #[arg(long)]
     path: Option<PathBuf>,
-    /// Maximum fps to record at (clamped to 1-120)
+    /// Maximum fps to record at (clamped to 1-120; camera recordings follow the desktop camera cap)
     #[arg(long)]
     fps: Option<u32>,
     /// Stop automatically after N seconds
@@ -186,8 +186,7 @@ async fn foreground_inner(params: RecordParams, format: OutputFormat) -> Result<
     let actor = start_recording(&params, target, path.clone()).await?;
     let path_display = path.display().to_string();
 
-    // The recording is now writing to disk. With `with_fragmented(false)` only a graceful `stop()`
-    // writes the mp4 trailer + recording-meta.json, so every path from here must finalize the actor.
+    // The recording is now writing to disk, so every path from here must finalize the actor.
     if let Err(error) = emit_record_event(
         format,
         &RecordEvent::Started {
@@ -605,14 +604,9 @@ async fn start_recording(
     target: ScreenCaptureTarget,
     path: PathBuf,
 ) -> Result<ActorHandle, String> {
-    let mut builder = studio_recording::Actor::builder(path, target)
-        .with_system_audio(params.system_audio)
-        .with_custom_cursor(false)
-        .with_fragmented(false);
-
-    if let Some(fps) = params.fps {
-        builder = builder.with_max_fps(fps);
-    }
+    let mut builder =
+        studio_recording::Actor::builder(path, target).with_system_audio(params.system_audio);
+    let mut camera_active = false;
 
     // Feeds must be locked and attached before build(); the lock keeps the device open for the whole
     // recording, so the feed actor handle itself does not need to be retained.
@@ -642,6 +636,7 @@ async fn start_recording(
             .await
             .map_err(|e| format!("Failed to lock camera feed: {e}"))?;
         builder = builder.with_camera_feed(Arc::new(lock));
+        camera_active = true;
     }
 
     if let Some(mic_name) = params.mic.as_deref() {
@@ -673,6 +668,14 @@ async fn start_recording(
         builder = builder.with_mic_feed(Arc::new(lock));
     }
 
+    // Reuse the desktop app's recording defaults rather than a CLI-specific config; `finalize`
+    // remuxes the resulting fragmented recording so the `.cap` stays directly exportable.
+    let builder = cap_recording::RecordingDefaults::default().apply_to_studio_builder(
+        builder,
+        camera_active,
+        params.fps,
+    );
+
     builder
         .build(
             #[cfg(target_os = "macos")]
@@ -687,9 +690,14 @@ async fn start_recording(
 }
 
 /// Wait for the stop trigger, then finalize the recording. A panic between start and stop would
-/// otherwise drop the actor without writing the mp4 trailer + recording-meta.json (`ActorHandle` has
-/// no `Drop`), leaving an unplayable .cap; catch it and best-effort finalize so the recording is
-/// recoverable.
+/// otherwise drop the actor without writing recording-meta.json (`ActorHandle` has no `Drop`),
+/// leaving an unrecoverable .cap; catch it and best-effort finalize so the recording is recoverable.
+///
+/// Studio recordings are fragmented for crash recovery, so a graceful stop leaves the display track
+/// as a directory of fragments with status `NeedsRemux`. We then run the shared
+/// `RecoveryManager::remux_if_needed` — the same remux the desktop runs after stop — so the `.cap`
+/// is immediately exportable instead of `cap export`/`cap upload` failing to open a fragment
+/// directory as a video.
 async fn finalize(
     actor: ActorHandle,
     duration: Option<f64>,
@@ -703,14 +711,31 @@ async fn finalize(
     .catch_unwind()
     .await;
 
-    match outcome {
-        Ok(Ok(completed)) => Ok(completed),
-        Ok(Err(error)) => Err(error),
+    let completed = match outcome {
+        Ok(Ok(completed)) => completed,
+        Ok(Err(error)) => return Err(error),
         Err(_) => actor
             .stop()
             .await
-            .map_err(|e| format!("recording panicked; finalize failed: {e}")),
-    }
+            .map_err(|e| format!("recording panicked; finalize failed: {e}"))?,
+    };
+
+    remux_fragmented(completed).await
+}
+
+/// Remux a freshly-stopped recording in place if it finalized as fragments (`NeedsRemux`). Reuses
+/// the shared `RecoveryManager` the desktop uses; `recover` is synchronous and ffmpeg-heavy, so it
+/// runs on a blocking thread. A no-op for recordings already stored as progressive mp4.
+async fn remux_fragmented(completed: CompletedRecording) -> Result<CompletedRecording, String> {
+    let project_path = completed.project_path.clone();
+    tokio::task::spawn_blocking(move || {
+        cap_recording::recovery::RecoveryManager::remux_if_needed(&project_path)
+    })
+    .await
+    .map_err(|e| format!("recording finalize task failed: {e}"))?
+    .map_err(|e| format!("Failed to remux recording: {e}"))?;
+
+    Ok(completed)
 }
 
 fn emit_stopped(format: OutputFormat, completed: &CompletedRecording) -> Result<(), String> {
