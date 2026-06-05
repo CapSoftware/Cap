@@ -80,6 +80,11 @@ fn shim_path() -> Result<PathBuf, String> {
 
 fn target_path() -> Result<PathBuf, String> {
     let exe = env::current_exe().map_err(|e| format!("Could not locate Cap executable: {e}"))?;
+    // When `cap` runs through the installed shim (a symlink), macOS `current_exe()` returns the
+    // symlink path; resolve it to the real binary so the sibling `cap-cli` resolves to the bundled
+    // one rather than a non-existent path next to the shim (which made status() report installed:false
+    // for every `cap desktop` subcommand). Mirrors doctor.rs's VersionInfo::collect().
+    let exe = fs::canonicalize(&exe).unwrap_or(exe);
     let dir = exe
         .parent()
         .ok_or_else(|| "Could not locate Cap executable directory".to_string())?;
@@ -316,7 +321,9 @@ fn ensure_path_persisted(install_dir: &Path) -> bool {
     if env::var_os("CAP_NO_MODIFY_PATH").is_some() {
         return false;
     }
-    let dir = display_path(install_dir);
+    // Escape single quotes for the single-quoted PowerShell string literal below; a profile path
+    // containing an apostrophe (e.g. C:\Users\O'Brien) would otherwise break or alter the script.
+    let dir = display_path(install_dir).replace('\'', "''");
     // Mirror the web installer: prepend to the persistent User PATH (idempotent) and broadcast the
     // change via the same Environment API the .ps1 script uses.
     let script = format!(
@@ -342,8 +349,34 @@ fn path_persisted(install_dir: &Path, on_path: bool) -> bool {
 }
 
 #[cfg(windows)]
-fn path_persisted(_install_dir: &Path, on_path: bool) -> bool {
-    on_path
+fn path_persisted(install_dir: &Path, on_path: bool) -> bool {
+    // `ensure_path_persisted` writes to the User registry PATH, which the current process's PATH
+    // env var does not reflect until a new shell starts — so checking only `on_path` reports
+    // pathConfigured:false right after a successful install. Consult the persisted User PATH too.
+    on_path || windows_user_path_contains(install_dir)
+}
+
+#[cfg(windows)]
+fn windows_user_path_contains(install_dir: &Path) -> bool {
+    let Ok(output) = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Environment]::GetEnvironmentVariable('Path', 'User')",
+        ])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let needle = display_path(install_dir);
+    let needle = needle.trim();
+    String::from_utf8_lossy(&output.stdout)
+        .split(';')
+        .any(|entry| entry.trim().eq_ignore_ascii_case(needle))
 }
 
 #[cfg(unix)]
