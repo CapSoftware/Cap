@@ -22,6 +22,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 use tokio::io::AsyncBufReadExt;
 use tokio_util::sync::CancellationToken;
