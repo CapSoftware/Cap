@@ -164,9 +164,6 @@ pub fn status(format: OutputFormat) -> Result<(), String> {
                 };
                 println!("authenticated: yes (via {source})");
                 println!("server: {}", status.server);
-                if let Some(user_id) = &status.user_id {
-                    println!("user: {user_id}");
-                }
             } else {
                 println!("authenticated: no");
                 println!("server: {}", status.server);
