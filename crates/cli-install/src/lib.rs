@@ -52,9 +52,12 @@ fn install_dir() -> Result<PathBuf, String> {
     // Prefer whichever candidate already holds a Cap-managed shim, so `status` and `install` agree
     // regardless of whether they run from the GUI or a terminal (whose PATHs differ). Without this,
     // a shim the web installer placed in ~/.local/bin reads as "not installed" from a GUI launch.
+    // Also match a shim pointing at a different/older Cap install so `install` repoints it in place
+    // rather than leaving it stranded and creating a second shim elsewhere.
     if let Ok(target) = target_path() {
         for candidate in [&cap_bin, &local_bin] {
-            if shim_points_to(&candidate.join(SHIM_NAME), &target).unwrap_or(false) {
+            let shim = candidate.join(SHIM_NAME);
+            if shim_points_to(&shim, &target).unwrap_or(false) || shim_is_cap_managed(&shim) {
                 return Ok(candidate.clone());
             }
         }
@@ -136,7 +139,44 @@ fn shim_points_to(shim_path: &Path, target_path: &Path) -> Result<bool, String> 
         Err(err) => return Err(format!("Could not read CLI shim: {err}")),
     };
 
-    Ok(contents.contains(&display_path(target_path)))
+    let target = display_path(target_path);
+    Ok(windows_shim_target(&contents)
+        .is_some_and(|shim_target| shim_target.eq_ignore_ascii_case(&target)))
+}
+
+#[cfg(unix)]
+fn shim_is_cap_managed(shim_path: &Path) -> bool {
+    match fs::read_link(shim_path) {
+        Ok(link) => link.file_name().is_some_and(|name| name == CLI_BINARY_NAME),
+        Err(_) => false,
+    }
+}
+
+#[cfg(windows)]
+fn shim_is_cap_managed(shim_path: &Path) -> bool {
+    fs::read_to_string(shim_path).is_ok_and(|contents| windows_shim_target(&contents).is_some())
+}
+
+#[cfg(any(windows, test))]
+fn windows_shim_target(contents: &str) -> Option<&str> {
+    let mut lines = contents.lines();
+    if !lines.next()?.trim().eq_ignore_ascii_case("@echo off") {
+        return None;
+    }
+
+    let command = lines.next()?.trim();
+    if lines.any(|line| !line.trim().is_empty()) {
+        return None;
+    }
+
+    let target = command.strip_prefix('"')?.strip_suffix("\" %*")?;
+    let lower = target.to_ascii_lowercase();
+    if lower == "cap-cli.exe" || lower.ends_with("\\cap-cli.exe") || lower.ends_with("/cap-cli.exe")
+    {
+        Some(target)
+    } else {
+        None
+    }
 }
 
 fn shell_command(install_dir: &Path) -> String {
@@ -160,7 +200,7 @@ pub fn status() -> Result<CliInstallStatus, String> {
     let target_exists = target_path.exists();
     let shim_exists = path_is_present(&shim_path);
     let installed = target_exists && shim_points_to(&shim_path, &target_path)?;
-    let conflict = if shim_exists && !installed {
+    let conflict = if shim_exists && !installed && !shim_is_cap_managed(&shim_path) {
         Some(format!(
             "{} already exists and is not managed by Cap",
             display_path(&shim_path)
@@ -221,14 +261,22 @@ pub fn install() -> Result<CliInstallStatus, String> {
     fs::create_dir_all(&install_dir).map_err(|e| format!("Could not create CLI directory: {e}"))?;
 
     if path_is_present(&shim_path) {
-        if !shim_points_to(&shim_path, &target_path)? {
+        // Repoint our own shim and any other Cap-managed shim (e.g. one left by a previous or moved
+        // install, or by the web installer); only refuse to clobber a genuinely foreign file.
+        if !shim_points_to(&shim_path, &target_path)? && !shim_is_cap_managed(&shim_path) {
             return Err(format!(
                 "{} already exists and is not managed by Cap",
                 display_path(&shim_path)
             ));
         }
 
-        fs::remove_file(&shim_path).map_err(|e| format!("Could not replace CLI shim: {e}"))?;
+        // The file may vanish between the check above and here (e.g. a concurrent uninstall); a
+        // NotFound means the goal — no stale shim in the way — is already met, so don't fail on it.
+        match fs::remove_file(&shim_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Could not replace CLI shim: {e}")),
+        }
     }
 
     write_shim(&shim_path, &target_path)?;
@@ -364,5 +412,51 @@ mod tests {
         // not duplicate the entry; verify a second append would be the only way to duplicate.
         let contents = std::fs::read_to_string(&profile).unwrap();
         assert_eq!(contents.matches(install_dir).count(), 1);
+    }
+
+    #[test]
+    fn cap_managed_shim_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join(SHIM_NAME);
+
+        // A symlink to a cap-cli binary is Cap-managed even when it points at a different/moved install
+        // (the target need not exist — a dangling link from a moved app still counts).
+        std::os::unix::fs::symlink("/elsewhere/Cap.app/Contents/MacOS/cap-cli", &shim).unwrap();
+        assert!(shim_is_cap_managed(&shim));
+
+        // A symlink to anything else is not Cap-managed.
+        fs::remove_file(&shim).unwrap();
+        std::os::unix::fs::symlink("/bin/ls", &shim).unwrap();
+        assert!(!shim_is_cap_managed(&shim));
+
+        // A regular (non-symlink) file is not Cap-managed, so install refuses to clobber it.
+        fs::remove_file(&shim).unwrap();
+        fs::write(&shim, b"#!/bin/sh\n").unwrap();
+        assert!(!shim_is_cap_managed(&shim));
+
+        // A missing path is not Cap-managed.
+        fs::remove_file(&shim).unwrap();
+        assert!(!shim_is_cap_managed(&shim));
+    }
+
+    #[test]
+    fn windows_cap_cmd_detection_requires_generated_shape() {
+        assert_eq!(
+            windows_shim_target("@echo off\n\"C:\\Program Files\\Cap\\cap-cli.exe\" %*\n"),
+            Some("C:\\Program Files\\Cap\\cap-cli.exe")
+        );
+        assert_eq!(
+            windows_shim_target("@echo off\n\"C:/Program Files/Cap/cap-cli.exe\" %*\n"),
+            Some("C:/Program Files/Cap/cap-cli.exe")
+        );
+        assert!(windows_shim_target("@echo off\ncap-cli.exe %*\n").is_none());
+        assert!(windows_shim_target("@echo off\n\"C:\\Tools\\other.exe\" %*\n").is_none());
+        assert!(windows_shim_target("@echo off\nrem cap-cli.exe lives somewhere else\n").is_none());
+        assert!(
+            windows_shim_target(
+                "@echo off\n\"C:\\Program Files\\Cap\\cap-cli.exe\" %*\necho done\n"
+            )
+            .is_none()
+        );
     }
 }
