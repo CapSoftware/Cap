@@ -44,6 +44,11 @@ fn rational_fps(rate: ffmpeg::Rational) -> Option<f64> {
         .then(|| f64::from(rate.numerator()) / f64::from(rate.denominator()))
 }
 
+fn is_mp4(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
+}
+
 impl UploadArgs {
     pub async fn run(self, json: bool) -> Result<(), String> {
         let format = resolve_format(json, self.format);
@@ -110,6 +115,17 @@ impl UploadArgs {
                 input.display()
             ))
         } else if input.exists() {
+            // The video is stored under (and played back from) a canonical `result.mp4` key, so the
+            // bytes must actually be MP4. A `.cap` project always resolves to an MP4 output above, but a
+            // directly-passed file could be a gif/mov from `cap export`; reject it rather than store it
+            // mislabeled.
+            if !is_mp4(input) {
+                return Err(format!(
+                    "cap upload only supports MP4 files; {} is not an .mp4. \
+                     Export to MP4 first with `cap export <project.cap> --format mp4`.",
+                    input.display()
+                ));
+            }
             Ok(input.clone())
         } else {
             Err(format!("File not found: {}", input.display()))
@@ -218,6 +234,9 @@ async fn presign_put(
         .header("Authorization", auth)
         .json(&json!({
             "videoId": video_id,
+            // The web player resolves a desktopMP4 video from the canonical `<id>/result.mp4` key, and
+            // the server only marks the upload complete when the key ends in `result.mp4` — so this is
+            // fixed, and `cap upload` guards its input to MP4 to keep the stored bytes consistent.
             "subpath": "result.mp4",
             "method": "put",
             "durationInSecs": meta.duration_in_secs,
