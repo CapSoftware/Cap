@@ -405,12 +405,30 @@ pub async fn export_project_default(project_path: PathBuf) -> Result<PathBuf, St
         .await
         .map_err(|v| format!("Exporter build error: {v}"))?;
 
+    let total_frames = exporter_base.total_frames(settings.fps());
+    let rendered = Arc::new(AtomicU32::new(0));
+    let progress_rendered = Arc::clone(&rendered);
+    let on_progress = move |frame_index: u32| {
+        progress_rendered.store((frame_index + 1).min(total_frames), Ordering::Relaxed);
+        true
+    };
+
     let output_path = match settings {
-        CliExportSettings::Mp4(settings) => settings.export(exporter_base, |_| true).await,
-        CliExportSettings::Gif(settings) => settings.export(exporter_base, |_| true).await,
-        CliExportSettings::Mov(settings) => settings.export(exporter_base, |_| true).await,
+        CliExportSettings::Mp4(settings) => settings.export(exporter_base, on_progress).await,
+        CliExportSettings::Gif(settings) => settings.export(exporter_base, on_progress).await,
+        CliExportSettings::Mov(settings) => settings.export(exporter_base, on_progress).await,
     }
     .map_err(|v| format!("Exporter error: {v}"))?;
+
+    // Same 0-frame guard as Export::run_inner: a recording with missing media renders an empty,
+    // unplayable file that otherwise "succeeds", and `cap upload --export` would sign + upload it and
+    // hand back a valid-looking link. Fail loudly and remove the artifact instead.
+    if total_frames > 0 && rendered.load(Ordering::Relaxed) == 0 {
+        let _ = std::fs::remove_file(&output_path);
+        return Err(format!(
+            "Export rendered 0 of {total_frames} frames; the recording may be unplayable. No output written."
+        ));
+    }
 
     Ok(output_path)
 }
