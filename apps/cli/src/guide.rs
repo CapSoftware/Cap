@@ -155,11 +155,11 @@ fn build() -> Guide {
             CommandDoc {
                 requires_duration: false,
                 notes: Some(
-                    "Use `--detach` to background it (returns immediately with recordingId+pid) and stop later with `cap record stop`.",
+                    "The `started` then `stopped` sequence applies to the foreground run. With `--detach` the stream emits only `started` (or `error`) and returns immediately with recordingId+pid; the `stopped` event is delivered by `cap record stop`.",
                 ),
                 ..cmd(
                     "record start",
-                    "Start a recording. Emits `started` then `stopped` (success requires recordingMetaExists:true).",
+                    "Start a recording. Foreground emits `started` then `stopped` (success requires recordingMetaExists:true); see notes for `--detach`.",
                     OutputMode::Ndjson,
                     &["started", "stopped", "error"],
                 )
