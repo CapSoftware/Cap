@@ -236,8 +236,11 @@ pub struct Check {
 #[derive(Serialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum PermissionStatus {
+    #[cfg(target_os = "macos")]
     Granted,
+    #[cfg(target_os = "macos")]
     Denied,
+    #[cfg(target_os = "macos")]
     NotDetermined,
     Unknown,
 }
@@ -317,6 +320,7 @@ fn avformat_version() -> String {
 
 fn permission_check(permissions: &Permissions) -> Check {
     match permissions.screen_recording {
+        #[cfg(target_os = "macos")]
         PermissionStatus::Granted => Check {
             id: CheckId::ScreenRecordingPermission,
             status: CheckStatus::Ok,
@@ -330,6 +334,7 @@ fn permission_check(permissions: &Permissions) -> Check {
                 .clone()
                 .unwrap_or_else(|| "Screen recording permission status unknown".to_string()),
         },
+        #[cfg(target_os = "macos")]
         PermissionStatus::Denied | PermissionStatus::NotDetermined => Check {
             id: CheckId::ScreenRecordingPermission,
             status: CheckStatus::Warn,
@@ -368,6 +373,16 @@ fn install_check(install: &Result<cap_cli_install::CliInstallStatus, String>) ->
             status: CheckStatus::Unknown,
             message: format!("Could not determine install status: {e}"),
         },
+    }
+}
+
+fn capture_ready(permissions: &Permissions) -> bool {
+    match permissions.screen_recording {
+        #[cfg(target_os = "macos")]
+        PermissionStatus::Granted => true,
+        PermissionStatus::Unknown => true,
+        #[cfg(target_os = "macos")]
+        PermissionStatus::Denied | PermissionStatus::NotDetermined => false,
     }
 }
 
@@ -434,12 +449,7 @@ pub fn run_doctor(format: OutputFormat) -> Result<(), String> {
     let ok = !checks
         .iter()
         .any(|check| matches!(check.status, CheckStatus::Fail));
-    // On platforms with no runtime screen-capture permission gate (Windows) the status is
-    // Unknown rather than Granted, yet capture can still start — treat that as ready.
-    let capture_ready = matches!(
-        permissions.screen_recording,
-        PermissionStatus::Granted | PermissionStatus::Unknown
-    );
+    let capture_ready = capture_ready(&permissions);
 
     let doctor = Doctor {
         schema_version: SCHEMA_VERSION,

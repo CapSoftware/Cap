@@ -178,6 +178,12 @@ impl ExportWorkerMode {
 #[derive(Clone)]
 struct ExportProgress(tauri::ipc::Channel<FramesRendered>);
 
+struct ExportSaveDialogRequest {
+    app: tauri::AppHandle,
+    file_name: String,
+    file_type: String,
+}
+
 impl ExportProgress {
     fn send(&self, progress: FramesRendered) -> bool {
         self.0.send(progress).is_ok()
@@ -1028,9 +1034,8 @@ pub async fn export_video_with_id(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(app, window, progress, editor))]
+#[instrument(skip(window, progress, editor))]
 pub async fn export_video_to_file(
-    app: tauri::AppHandle,
     window: tauri::Window,
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
@@ -1039,6 +1044,7 @@ pub async fn export_video_to_file(
     file_type: String,
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
+    let app = window.app_handle().clone();
     let window_label = window.label().to_string();
     Box::pin(run_export_command(move || async move {
         let cancellation_guard = ExportCancellationGuard::new(
@@ -1046,13 +1052,15 @@ pub async fn export_video_to_file(
             Some(window_label),
         );
         export_video_to_file_inner(
-            app,
             project_path,
-            progress,
             settings,
-            file_name,
-            file_type,
             editor,
+            ExportProgress(progress),
+            ExportSaveDialogRequest {
+                app,
+                file_name,
+                file_type,
+            },
             cancellation_guard.token(),
         )
         .await
@@ -1061,30 +1069,27 @@ pub async fn export_video_to_file(
 }
 
 async fn export_video_to_file_inner(
-    app: tauri::AppHandle,
     project_path: PathBuf,
-    progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
-    file_name: String,
-    file_type: String,
     editor: OptionalWindowEditorInstance,
+    progress: ExportProgress,
+    save_dialog: ExportSaveDialogRequest,
     cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
     let _session_guard = ExportSessionGuard::new();
+    let ExportSaveDialogRequest {
+        app,
+        file_name,
+        file_type,
+    } = save_dialog;
     let Some(save_path) = show_export_save_dialog(&app, file_name, file_type).await? else {
         return Err("Save dialog cancelled".to_string());
     };
 
     info!(path = %save_path.display(), "Export save path selected");
 
-    let output_path = export_video_inner(
-        project_path,
-        settings,
-        editor,
-        ExportProgress(progress),
-        cancel_token,
-    )
-    .await?;
+    let output_path =
+        export_video_inner(project_path, settings, editor, progress, cancel_token).await?;
     copy_export_to_path(&output_path, &save_path).await?;
     Ok(save_path)
 }
