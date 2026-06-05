@@ -23,6 +23,8 @@ interface DesktopSegmentsMuxBody {
 	outputPresignedUrl: string;
 	thumbnailPresignedUrl: string;
 	previewGifPresignedUrl: string;
+	spriteSheetPresignedUrl: string;
+	spriteVttPresignedUrl: string;
 	videoInitUrl: string;
 	videoSegmentUrls: string[];
 	audioInitUrl?: string;
@@ -347,6 +349,8 @@ async function buildDesktopSegmentsMuxBody(
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
 	const previewGifKey = `${userId}/${videoId}/preview/animated-preview.gif`;
+	const spriteSheetKey = `${userId}/${videoId}/sprites/sprite.jpg`;
+	const spriteVttKey = `${userId}/${videoId}/sprites/thumbnails.vtt`;
 
 	const outputPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -376,6 +380,25 @@ async function buildDesktopSegmentsMuxBody(
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
 		.pipe(runPromise);
+	const spriteSheetPresignedUrl = await bucket
+		.getInternalPresignedPutUrl(
+			spriteSheetKey,
+			{
+				ContentType: "image/jpeg",
+				CacheControl: "public, max-age=31536000, immutable",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		)
+		.pipe(runPromise);
+	const spriteVttPresignedUrl = await bucket
+		.getInternalPresignedPutUrl(
+			spriteVttKey,
+			{
+				ContentType: "text/vtt",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		)
+		.pipe(runPromise);
 
 	const webhookBaseUrl =
 		serverEnv().MEDIA_SERVER_WEBHOOK_URL || serverEnv().WEB_URL;
@@ -387,6 +410,8 @@ async function buildDesktopSegmentsMuxBody(
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		previewGifPresignedUrl,
+		spriteSheetPresignedUrl,
+		spriteVttPresignedUrl,
 		videoInitUrl,
 		videoSegmentUrls,
 		audioInitUrl,

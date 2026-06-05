@@ -276,6 +276,42 @@ const getPlaylistResponse = (
 			});
 		}
 
+		if (
+			Option.isSome(urlParams.fileType) &&
+			urlParams.fileType.value === "thumbnails-vtt"
+		) {
+			return yield* bucket
+				.getObject(`${video.ownerId}/${video.id}/sprites/thumbnails.vtt`)
+				.pipe(
+					Effect.andThen(
+						Option.match({
+							onNone: () => new HttpApiError.NotFound(),
+							onSome: (c) =>
+								HttpServerResponse.text(c).pipe(
+									HttpServerResponse.setHeaders({
+										...CACHE_CONTROL_HEADERS,
+										"Content-Type": "text/vtt",
+									}),
+								),
+						}),
+					),
+					Effect.withSpan("fetchThumbnailsVtt"),
+				);
+		}
+
+		if (
+			Option.isSome(urlParams.fileType) &&
+			urlParams.fileType.value === "sprite-sheet"
+		) {
+			return yield* bucket
+				.getSignedObjectUrl(`${video.ownerId}/${video.id}/sprites/sprite.jpg`)
+				.pipe(
+					Effect.map(HttpServerResponse.redirect),
+					Effect.catchTag("StorageError", () => new HttpApiError.NotFound()),
+					Effect.withSpan("fetchSpriteSheet"),
+				);
+		}
+
 		if (bucket.provider === "s3" && Option.isNone(customBucket)) {
 			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 

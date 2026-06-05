@@ -314,6 +314,8 @@ async function startMediaServerProcessJob(
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
 		previewGifPresignedUrl: string;
+		spriteSheetPresignedUrl: string;
+		spriteVttPresignedUrl: string;
 		webhookUrl: string;
 		webhookSecret?: string;
 		inputExtension?: string;
@@ -384,6 +386,8 @@ async function processVideoOnMediaServer(
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		previewGifPresignedUrl,
+		spriteSheetPresignedUrl,
+		spriteVttPresignedUrl,
 	} = await Effect.gen(function* () {
 		const [video] = yield* Effect.promise(() =>
 			db()
@@ -407,6 +411,8 @@ async function processVideoOnMediaServer(
 		const outputKey = `${userId}/${videoId}/result.mp4`;
 		const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
 		const previewGifKey = `${userId}/${videoId}/preview/animated-preview.gif`;
+		const spriteSheetKey = `${userId}/${videoId}/sprites/sprite.jpg`;
+		const spriteVttKey = `${userId}/${videoId}/sprites/thumbnails.vtt`;
 
 		const rawVideoUrl = yield* bucket.getInternalSignedObjectUrl(rawFileKey, {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
@@ -435,11 +441,30 @@ async function processVideoOnMediaServer(
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		);
 
+		const spriteSheetPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
+			spriteSheetKey,
+			{
+				ContentType: "image/jpeg",
+				CacheControl: "public, max-age=31536000, immutable",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		);
+
+		const spriteVttPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
+			spriteVttKey,
+			{
+				ContentType: "text/vtt",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		);
+
 		return {
 			rawVideoUrl,
 			outputPresignedUrl,
 			thumbnailPresignedUrl,
 			previewGifPresignedUrl,
+			spriteSheetPresignedUrl,
+			spriteVttPresignedUrl,
 		};
 	}).pipe(runPromise);
 
@@ -470,6 +495,8 @@ async function processVideoOnMediaServer(
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		previewGifPresignedUrl,
+		spriteSheetPresignedUrl,
+		spriteVttPresignedUrl,
 		webhookUrl,
 		webhookSecret: webhookSecret || undefined,
 		inputExtension,
