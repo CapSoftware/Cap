@@ -54,7 +54,7 @@ if (Test-Path $shimPath) {
 @"
 @echo off
 "$cliTarget" %*
-"@ | Set-Content -Encoding ASCII $shimPath
+"@ | Set-Content -Encoding Oem $shimPath
 
 & $shimPath --help | Out-Null
 
