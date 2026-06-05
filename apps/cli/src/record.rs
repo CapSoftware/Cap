@@ -285,14 +285,26 @@ async fn detached_inner(params: RecordParams, format: OutputFormat) -> Result<()
 
     let session = wait_for_session_ready(&recording_id, child).await?;
 
-    emit_record_event(
+    if let Err(error) = emit_record_event(
         format,
         &RecordEvent::Started {
             recording_id: &recording_id,
             pid,
             path: &session.path.display().to_string(),
         },
-    )
+    ) {
+        // The worker is already recording in its own process group. If we cannot hand the caller the
+        // recordingId it could never stop it, so tear the recording down rather than leak an orphan.
+        let _ = session::request_stop(&recording_id);
+        if session::process_alive(pid) {
+            session::terminate(pid);
+        }
+        return Err(format!(
+            "{error}; background recording {recording_id} was stopped because its start event could not be delivered"
+        ));
+    }
+
+    Ok(())
 }
 
 async fn wait_for_session_ready(
