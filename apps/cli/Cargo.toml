@@ -31,6 +31,12 @@ workspace-hack = { version = "0.1", path = "../../crates/workspace-hack" }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
 scap-screencapturekit = { path = "../../crates/scap-screencapturekit" }
