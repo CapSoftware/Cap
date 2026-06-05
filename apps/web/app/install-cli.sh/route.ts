@@ -12,7 +12,7 @@ CLI_INSTALL_DIR_OVERRIDE="${capCliInstallDirParameter}"
 HOME_DIR="${homeParameter}"
 
 if [ -z "$APP_PATH" ]; then
-	for candidate in "/Applications/Cap.app" "$HOME/Applications/Cap.app"; do
+	for candidate in "/Applications/Cap.app" "$HOME_DIR/Applications/Cap.app"; do
 		if [ -d "$candidate" ]; then
 			APP_PATH="$candidate"
 			break
