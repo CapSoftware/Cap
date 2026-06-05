@@ -184,11 +184,16 @@ fn build_report(project_path: &Path, meta: &RecordingMeta) -> ValidationReport {
         .map(|c| c.path.clone())
         .collect();
 
+    let valid = missing.is_empty();
+    // Every `--json` command signals failure with an `error` field (see AGENT_HELP / `cap guide`), so a
+    // missing-media validation must carry one too, not just `valid:false`.
+    let error = (!valid).then(|| format!("project is missing {} required file(s)", missing.len()));
+
     ValidationReport {
         project_path: project_path.to_path_buf(),
-        valid: missing.is_empty(),
+        valid,
         recording_type: Some(recording_type(meta)),
-        error: None,
+        error,
         checks,
         missing,
     }
