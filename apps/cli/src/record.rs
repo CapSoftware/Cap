@@ -374,12 +374,15 @@ async fn session_worker(params: RecordParams, recording_id: &str) -> Result<(), 
         .ok_or_else(|| "internal: detached worker started without --path".to_string())?;
     let actor = start_recording(&params, target, path.clone()).await?;
 
+    // Stamp the start time once; reusing it for the Stopped write keeps `startedAt` meaning the start
+    // (not the stop), which `list_sessions` relies on to sort recordings newest-first.
+    let started_at = session::now_unix();
     session::write_session(&Session {
         recording_id: recording_id.to_string(),
         pid: std::process::id(),
         path: path.clone(),
         status: SessionStatus::Recording,
-        started_at: session::now_unix(),
+        started_at,
         recording_meta_exists: None,
         error: None,
     })?;
@@ -393,7 +396,7 @@ async fn session_worker(params: RecordParams, recording_id: &str) -> Result<(), 
         pid: std::process::id(),
         path: completed.project_path,
         status: SessionStatus::Stopped,
-        started_at: session::now_unix(),
+        started_at,
         recording_meta_exists: Some(recording_meta_exists),
         error: None,
     })
