@@ -102,9 +102,29 @@ fn path_contains_install_dir(install_dir: &Path) -> bool {
 #[cfg(unix)]
 fn shim_points_to(shim_path: &Path, target_path: &Path) -> Result<bool, String> {
     match fs::read_link(shim_path) {
-        Ok(link) => Ok(link == target_path),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        // The web installer may symlink to a literal app path that the desktop's canonicalized
+        // current_exe spells differently; compare the resolved paths too so a Cap-managed shim is still
+        // recognized by status/install/uninstall.
+        Ok(link) => Ok(link == target_path || same_file(&link, target_path)),
+        // A non-symlink regular file (read_link → InvalidInput) or a missing path is simply not a
+        // Cap-managed shim — let the caller report that as a conflict rather than surfacing a raw error.
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput
+            ) =>
+        {
+            Ok(false)
+        }
         Err(err) => Err(format!("Could not read CLI shim: {err}")),
+    }
+}
+
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
     }
 }
 
