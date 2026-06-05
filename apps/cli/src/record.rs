@@ -453,7 +453,11 @@ impl RecordStopArgs {
         }
 
         session::request_stop(&id)?;
-        session::terminate(session.pid);
+        // The stop file is the authoritative cross-platform stop signal; only also SIGTERM a live pid
+        // so a recycled pid belonging to an unrelated process is never signalled.
+        if session::process_alive(session.pid) {
+            session::terminate(session.pid);
+        }
 
         let deadline = Instant::now() + Duration::from_secs_f64(self.timeout.max(0.0));
         loop {
