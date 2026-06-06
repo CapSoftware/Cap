@@ -638,9 +638,59 @@ export function ZoomTrack(props: {
 								>
 									{(() => {
 										const ctx = useSegmentContext();
+										const isInstant = () => segment().instantAnimation;
+
+										const prev = () => zoomSegments()[i - 1];
+										const next = () => zoomSegments()[i + 1];
+
+										const isContiguousWithPrev = () => prev() && prev().end === segment().start;
+										const isContiguousWithNext = () => next() && next().start === segment().end;
+
+										const prevAmt = () => isContiguousWithPrev() ? prev().amount : 1.0;
+										const currAmt = () => segment().amount;
+										const nextAmt = () => isContiguousWithNext() ? next().amount : 1.0;
+
+										// Map amount to Y coordinate to increase amplitude (1.0 -> 90, 2.0 -> 40)
+										const getY = (amt: number) => Math.max(5, 90 - (amt - 1) * 50);
+
+										const startY = () => getY(prevAmt());
+										const currY = () => getY(currAmt());
+										const endY = () => getY(nextAmt());
+
+										const W = () => Math.max(1, ctx.width());
+										const rampUpPct = () => (Math.min(40, W() / 2) / W()) * 100;
+										const rampDownPct = () => (40 / W()) * 100;
+
+										const d = () => {
+											if (isInstant()) {
+												return `M 0 ${startY()} L 0 ${currY()} L 100 ${currY()} ${
+													!isContiguousWithNext() ? `L 100 ${endY()} L ${100 + rampDownPct()} ${endY()}` : ""
+												}`;
+											}
+											return `M 0 ${startY()} C ${rampUpPct() / 2} ${startY()}, ${rampUpPct() / 2} ${currY()}, ${rampUpPct()} ${currY()} L 100 ${currY()} ${
+												!isContiguousWithNext() ? `C ${100 + rampDownPct() / 2} ${currY()}, ${100 + rampDownPct() / 2} ${endY()}, ${100 + rampDownPct()} ${endY()}` : ""
+											}`;
+										};
 
 										return (
-											<Switch>
+											<>
+												<Show when={editorState.timeline.showZoomCurves}>
+													<svg
+														class="absolute inset-0 w-full h-full pointer-events-none opacity-20 text-blue-500 overflow-visible z-0"
+														viewBox="0 0 100 100"
+														preserveAspectRatio="none"
+													>
+														<path
+															d={d()}
+															stroke="currentColor"
+															stroke-width="3"
+															fill="none"
+															vector-effect="non-scaling-stroke"
+														/>
+													</svg>
+												</Show>
+
+												<Switch>
 												<Match when={ctx.width() < 40}>
 													<div class="flex justify-center items-center">
 														<IconLucideSearch class="size-3.5 text-gray-1 dark:text-gray-12" />

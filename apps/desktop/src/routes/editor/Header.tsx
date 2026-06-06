@@ -35,6 +35,7 @@ import {
 import { serializeProjectConfiguration, useEditorContext } from "./context";
 import OrganizationDropdown from "./OrganizationDropdown";
 import PresetsDropdown from "./PresetsDropdown";
+import TimelineDropdown from "./TimelineDropdown";
 import ShareButton from "./ShareButton";
 import { Dialog, EditorButton, Input } from "./ui";
 
@@ -335,6 +336,7 @@ export function Header() {
 				data-tauri-drag-region
 				class="flex flex-row items-center justify-center gap-2 px-4 border-x border-black-transparent-10"
 			>
+				<TimelineDropdown />
 				<PresetsDropdown />
 				<OrganizationDropdown />
 			</div>
