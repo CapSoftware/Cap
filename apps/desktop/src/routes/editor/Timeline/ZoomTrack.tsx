@@ -712,6 +712,7 @@ export function ZoomTrack(props: {
 													</div>
 												</Match>
 											</Switch>
+											</>
 										);
 									})()}
 								</SegmentContent>
