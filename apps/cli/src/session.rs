@@ -78,11 +78,12 @@ fn prune_old_sessions(dir: &PathBuf) {
                 .unwrap_or(SESSION_MAX_AGE_SECS + 1);
             if age > SESSION_MAX_AGE_SECS {
                 let id = &session.recording_id;
-                for f in [session_file(id), stop_file(id), log_file(id)]
-                    .into_iter()
-                    .flatten()
-                {
-                    let _ = std::fs::remove_file(f);
+                for name in [
+                    format!("{id}.json"),
+                    format!("{id}.stop"),
+                    format!("{id}.log"),
+                ] {
+                    let _ = std::fs::remove_file(dir.join(name));
                 }
             }
         }

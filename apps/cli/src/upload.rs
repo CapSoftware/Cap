@@ -320,9 +320,9 @@ async fn upload_file(
         chunk
     });
 
-    if format == OutputFormat::Json {
+    let progress_task = if format == OutputFormat::Json {
         let bytes_sent_progress = bytes_sent.clone();
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                 let sent = bytes_sent_progress.load(Ordering::Relaxed);
@@ -334,8 +334,10 @@ async fn upload_file(
                     break;
                 }
             }
-        });
-    }
+        }))
+    } else {
+        None
+    };
 
     let body = reqwest::Body::wrap_stream(stream);
     let response = http
@@ -345,6 +347,10 @@ async fn upload_file(
         .send()
         .await
         .map_err(|e| format!("Upload failed: {e}"))?;
+
+    if let Some(task) = progress_task {
+        task.abort();
+    }
 
     if !response.status().is_success() {
         let status = response.status();

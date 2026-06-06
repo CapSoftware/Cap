@@ -45,15 +45,15 @@ fn load_desktop_store() -> Option<Value> {
             let Ok(bytes) = std::fs::read(&path) else {
                 continue;
             };
-            let Ok(store) = serde_json::from_slice::<Value>(&bytes) else {
-                continue;
-            };
-            if store
-                .get("auth")
-                .and_then(|auth| auth.get("secret"))
-                .is_some()
-            {
-                return Some(store);
+            match serde_json::from_slice::<Value>(&bytes) {
+                Ok(store) => {
+                    return store
+                        .get("auth")
+                        .and_then(|auth| auth.get("secret"))
+                        .is_some()
+                        .then_some(store);
+                }
+                Err(_) => continue,
             }
         }
         None
