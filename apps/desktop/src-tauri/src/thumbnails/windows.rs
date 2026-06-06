@@ -4,8 +4,15 @@ pub async fn capture_display_thumbnail(display: &scap_targets::Display) -> Optio
     use image::{ColorType, ImageEncoder, codecs::png::PngEncoder};
     use scap_direct3d::{Capturer, Settings};
     use std::io::Cursor;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    let item = display.raw_handle().try_as_capture_item().ok()?;
+    // Wrap in catch_unwind to handle C++ exceptions from CreateForMonitor
+    // in case the display is disconnected between enumeration and capture
+    let item = catch_unwind(AssertUnwindSafe(|| {
+        display.raw_handle().try_as_capture_item()
+    }))
+    .ok()
+    .and_then(|result| result.ok())?;
 
     let (tx, rx) = std::sync::mpsc::channel();
 
@@ -143,8 +150,15 @@ pub async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<S
     use image::{ColorType, ImageEncoder, codecs::png::PngEncoder};
     use scap_direct3d::{Capturer, Settings};
     use std::io::Cursor;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    let item = window.raw_handle().try_as_capture_item().ok()?;
+    // Wrap in catch_unwind to handle C++ exceptions from CreateForWindow
+    // when the window is destroyed between enumeration and capture
+    let item = catch_unwind(AssertUnwindSafe(|| {
+        window.raw_handle().try_as_capture_item()
+    }))
+    .ok()
+    .and_then(|result| result.ok())?;
 
     let (tx, rx) = std::sync::mpsc::channel();
 
