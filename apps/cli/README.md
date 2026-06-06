@@ -7,7 +7,7 @@ machine-readable, and recordings have an explicit start/stop lifecycle.
 ## Install
 
 - **From Cap Desktop:** Settings → Command Line → Install CLI (links the bundled binary onto your PATH).
-- **Script:** `curl -fsSL https://cap.so/install-cli.sh | sh` (Windows PowerShell: `irm https://cap.so/install-cli.ps1 | iex`). If Cap Desktop is missing, the script downloads and installs it first.
+- **Script:** `curl -fsSL https://cap.so/install-cli.sh | sh` (Windows PowerShell: `irm https://cap.so/install-cli.ps1 | iex`; Command Prompt: `curl.exe -fsSL https://cap.so/install-cli.cmd -o "%TEMP%\cap-install-cli.cmd" && "%TEMP%\cap-install-cli.cmd"`). If Cap Desktop is missing, the script downloads and installs it first.
 
 The desktop app and the CLI share the same binary, so the CLI is always in sync with the installed app.
 

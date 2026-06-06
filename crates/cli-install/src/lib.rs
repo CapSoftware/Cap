@@ -88,18 +88,28 @@ fn target_path() -> Result<PathBuf, String> {
     // symlink path; resolve it to the real binary so the sibling `cap-cli` resolves to the bundled
     // one rather than a non-existent path next to the shim (which made status() report installed:false
     // for every `cap desktop` subcommand). Mirrors doctor.rs's VersionInfo::collect().
-    let exe = fs::canonicalize(&exe).unwrap_or(exe);
+    let exe = resolve_path_for_target_lookup(exe);
     let dir = exe
         .parent()
         .ok_or_else(|| "Could not locate Cap executable directory".to_string())?;
 
     for candidate in cli_binary_candidates(dir) {
         if candidate.exists() {
-            return Ok(fs::canonicalize(&candidate).unwrap_or(candidate));
+            return Ok(resolve_path_for_target_lookup(candidate));
         }
     }
 
     Ok(dir.join(CLI_BINARY_NAME))
+}
+
+#[cfg(windows)]
+fn resolve_path_for_target_lookup(path: PathBuf) -> PathBuf {
+    path
+}
+
+#[cfg(not(windows))]
+fn resolve_path_for_target_lookup(path: PathBuf) -> PathBuf {
+    fs::canonicalize(&path).unwrap_or(path)
 }
 
 fn cli_binary_candidates(dir: &Path) -> Vec<PathBuf> {
@@ -234,7 +244,7 @@ fn shim_points_to(shim_path: &Path, target_path: &Path) -> Result<bool, String> 
         Err(err) => return Err(format!("Could not read CLI shim: {err}")),
     };
 
-    let target = display_path(target_path);
+    let target = windows_command_path(target_path);
     Ok(windows_shim_target(&contents).is_some_and(|shim_target| {
         windows_shim_target_matches(shim_target, &target, |name| env::var(name).ok())
     }))
@@ -288,6 +298,21 @@ fn windows_cli_binary_file_name_is_cap_managed(name: &[u8]) -> bool {
     name.eq_ignore_ascii_case(b"cap-cli.exe")
         || name.eq_ignore_ascii_case(b"cap-cli-x86_64-pc-windows-msvc.exe")
         || name.eq_ignore_ascii_case(b"cap-cli-aarch64-pc-windows-msvc.exe")
+}
+
+#[cfg(any(windows, test))]
+fn windows_command_path(path: &Path) -> String {
+    let path = display_path(path);
+
+    if let Some(rest) = path.strip_prefix("\\\\?\\UNC\\") {
+        return format!("\\\\{rest}");
+    }
+
+    if let Some(rest) = path.strip_prefix("\\\\?\\") {
+        return rest.to_string();
+    }
+
+    path
 }
 
 #[cfg(any(windows, test))]
@@ -418,7 +443,7 @@ fn write_shim(shim_path: &Path, target_path: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn write_shim(shim_path: &Path, target_path: &Path) -> Result<(), String> {
-    let target = display_path(target_path);
+    let target = windows_command_path(target_path);
     let target = windows_env_prefixed_path(&target, |name| env::var(name).ok()).unwrap_or(target);
     let contents = format!(
         r#"@echo off
@@ -723,6 +748,20 @@ mod tests {
         assert!(!windows_cli_binary_file_name_is_cap_managed(
             b"cap-cli-.exe"
         ));
+    }
+
+    #[test]
+    fn windows_command_path_strips_verbatim_prefixes() {
+        assert_eq!(
+            windows_command_path(Path::new(
+                "\\\\?\\C:\\Users\\Renee\\AppData\\Local\\Programs\\Cap\\cap-cli.exe"
+            )),
+            "C:\\Users\\Renee\\AppData\\Local\\Programs\\Cap\\cap-cli.exe"
+        );
+        assert_eq!(
+            windows_command_path(Path::new("\\\\?\\UNC\\server\\share\\Cap\\cap-cli.exe")),
+            "\\\\server\\share\\Cap\\cap-cli.exe"
+        );
     }
 
     #[test]
