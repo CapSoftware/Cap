@@ -278,7 +278,7 @@ export default function GoogleDriveConfigPage() {
 	return (
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
-				<IntegrationConfigHeader title="Google Drive" />
+				<IntegrationConfigHeader title={t("Google Drive")} />
 				<Section
 					title={t("Connection")}
 					description={t(

@@ -352,7 +352,7 @@ export function BackgroundSettingsPopover() {
 															src={photo.url}
 															loading="eager"
 															class="object-cover w-full h-full"
-															alt="Wallpaper option"
+															alt={t("Wallpaper option")}
 														/>
 													</KRadioGroup.ItemControl>
 												</KRadioGroup.Item>
@@ -385,7 +385,7 @@ export function BackgroundSettingsPopover() {
 												<img
 													src={convertFileSrc(source())}
 													class="object-cover w-full h-full"
-													alt="Selected background"
+													alt={t("Selected background")}
 												/>
 												<div class="absolute top-2 right-2">
 													<button

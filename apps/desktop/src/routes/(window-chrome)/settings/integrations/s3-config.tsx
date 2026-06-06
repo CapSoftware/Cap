@@ -159,7 +159,7 @@ export default function S3ConfigPage() {
 	return (
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
-				<IntegrationConfigHeader title="S3 Config" />
+				<IntegrationConfigHeader title={t("S3 Config")} />
 				<Section
 					title={t("Configuration")}
 					description={

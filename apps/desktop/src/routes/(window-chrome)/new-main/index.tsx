@@ -2490,7 +2490,7 @@ function Page() {
 									});
 								}}
 								aria-haspopup="menu"
-								aria-label="Choose display"
+								aria-label={t("Choose display")}
 							/>
 						</div>
 						<div
@@ -2528,7 +2528,7 @@ function Page() {
 									});
 								}}
 								aria-haspopup="menu"
-								aria-label="Choose window"
+								aria-label={t("Choose window")}
 							/>
 						</div>
 					</div>

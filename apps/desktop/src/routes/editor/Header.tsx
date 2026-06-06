@@ -605,7 +605,7 @@ function ImportRecordingItem(props: {
 				>
 					<img
 						class="size-12 shrink-0 rounded-md object-cover"
-						alt="Recording thumbnail"
+						alt={t("Recording thumbnail")}
 						src={convertFileSrc(props.recording.thumbnailPath)}
 						onError={() => setImageExists(false)}
 					/>

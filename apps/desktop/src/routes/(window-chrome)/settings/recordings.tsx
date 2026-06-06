@@ -263,7 +263,7 @@ export default function Recordings() {
 									autocorrect="off"
 									autocomplete="off"
 									spellcheck={false}
-									aria-label="Search recordings"
+									aria-label={t("Search recordings")}
 								/>
 							</div>
 						</div>

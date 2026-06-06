@@ -172,7 +172,7 @@ export default function Screenshots() {
 									autocorrect="off"
 									autocomplete="off"
 									spellcheck={false}
-									aria-label="Search screenshots"
+									aria-label={t("Search screenshots")}
 								/>
 							</div>
 						</div>
@@ -247,7 +247,7 @@ function ScreenshotItem(props: {
 				>
 					<img
 						class="object-cover rounded-sm size-12"
-						alt="Screenshot thumbnail"
+						alt={t("Screenshot thumbnail")}
 						src={convertFileSrc(props.screenshot.path)}
 						onError={() => setImageExists(false)}
 					/>

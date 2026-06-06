@@ -816,7 +816,7 @@ export function ExportPage() {
 								<>
 									<img
 										src={url()}
-										alt="Export preview"
+										alt={t("Export preview")}
 										class="relative z-0 w-full h-full object-contain"
 									/>
 									<Show when={previewLoading()}>
@@ -1356,7 +1356,7 @@ export function ExportPage() {
 														type="button"
 														role="switch"
 														aria-checked={forceFfmpegDecoder()}
-														aria-label="Force FFmpeg decoder"
+														aria-label={t("Force FFmpeg decoder")}
 														class="flex items-center gap-2 text-xs text-gray-11 hover:text-gray-12 transition-colors w-full"
 														onClick={() =>
 															setForceFfmpegDecoder(!forceFfmpegDecoder())
@@ -1478,7 +1478,7 @@ export function ExportPage() {
 							{(url) => (
 								<img
 									src={url()}
-									alt="Export preview full size"
+									alt={t("Export preview full size")}
 									class="w-full h-full object-contain"
 								/>
 							)}

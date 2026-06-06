@@ -629,7 +629,7 @@ function Inner() {
 											"bg-gray-3/55 dark:bg-gray-4/50": isResizingTimeline(),
 										}}
 										onMouseDown={handleTimelineResizeStart}
-										aria-label="Resize timeline height"
+										aria-label={t("Resize timeline height")}
 									>
 										<For each={TIMELINE_RESIZE_GRIP_MARKS}>
 											{() => (
@@ -654,7 +654,7 @@ function Inner() {
 									class="flex-none flex items-center justify-center cursor-col-resize select-none group z-10"
 									style={{ width: "12px" }}
 									onMouseDown={handleSplitResizeStart}
-									aria-label="Resize transcript panel"
+									aria-label={t("Resize transcript panel")}
 									role="separator"
 									aria-orientation="vertical"
 								>
@@ -1208,7 +1208,7 @@ function Dialogs() {
 													>
 														<img
 															class="shadow-sm pointer-events-none max-h-[70vh]"
-															alt="Current frame"
+															alt={t("Current frame")}
 															onError={() => {
 																const failedSource = frameSource();
 																logCropProfile("preview-image-failed", {
