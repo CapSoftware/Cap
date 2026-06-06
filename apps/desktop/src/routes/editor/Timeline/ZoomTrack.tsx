@@ -651,8 +651,8 @@ export function ZoomTrack(props: {
 										const currAmt = () => segment().amount;
 										const nextAmt = () => isContiguousWithNext() ? next().amount : 1.0;
 
-										// Map amount to Y coordinate to increase amplitude (1.0 -> 90, 2.0 -> 40)
-										const getY = (amt: number) => Math.max(5, 90 - (amt - 1) * 50);
+										// Map amount to Y coordinate asymptotically (1.0 -> 90, 2.0 -> 40, 4.5 -> 12)
+										const getY = (amt: number) => Math.max(5, 90 - 100 * (1 - 1 / Math.max(1, amt)));
 
 										const startY = () => getY(prevAmt());
 										const currY = () => getY(currAmt());
