@@ -124,6 +124,12 @@ fn build() -> Guide {
                 used_by: "desktop install-cli",
                 description: "Set to skip editing shell profiles / user PATH during install.",
             },
+            EnvVar {
+                name: "CAP_DESKTOP_FORCE_INSTALL",
+                required: false,
+                used_by: "install-cli.sh, install-cli.ps1, update",
+                description: "Force the installer scripts to replace Cap Desktop before linking the CLI.",
+            },
         ],
         exit_codes: vec![
             ExitCode {
@@ -198,6 +204,12 @@ fn build() -> Guide {
             cmd(
                 "upload",
                 "Upload a .cap project or video file; returns a shareable link. Authenticates via Cap Desktop's login or CAP_API_KEY.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "update",
+                "Download and install the latest Cap Desktop bundle, then repair the `cap` shim.",
                 OutputMode::SingleJson,
                 &[],
             ),
