@@ -44,6 +44,7 @@ import { type KeyboardSegmentDragState, KeyboardTrack } from "./KeyboardTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
+import { TimelineDropdown } from "./TimelineDropdown";
 import { TrackIcon, TrackManager } from "./TrackManager";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
@@ -833,6 +834,9 @@ export function Timeline(props: {
 					}
 				}}
 			>
+				<div class="absolute top-1 right-4 z-40">
+					<TimelineDropdown />
+				</div>
 				<div
 					class="relative z-20"
 					style={{ height: `${TIMELINE_HEADER_HEIGHT}px` }}
