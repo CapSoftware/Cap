@@ -1,8 +1,10 @@
 use std::{
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
+use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use clipboard_rs::{Clipboard, ClipboardContext, RustImageData, common::RustImage};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -10,11 +12,22 @@ use tauri::{AppHandle, Manager};
 use tokio::time::sleep;
 
 use crate::{
-    ArcLock,
+    ArcLock, PendingScreenshot, PendingScreenshots,
     general_settings::{GeneralSettingsStore, PostScreenshotCaptureBehaviour},
     notifications::{self, NotificationType},
     windows::ShowCapWindow,
 };
+
+const PENDING_ACTION_TTL: Duration = Duration::from_secs(120);
+
+#[derive(Clone, Default)]
+pub struct PendingScreenshotPostCaptureAction(Arc<Mutex<Option<PendingAction>>>);
+
+#[derive(Clone)]
+struct PendingAction {
+    action: ScreenshotPostCaptureAction,
+    created_at: Instant,
+}
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +56,55 @@ impl ScreenshotPostCaptureAction {
             .map(|settings| settings.post_screenshot_capture_behaviour.into())
             .unwrap_or_default()
     }
+
+    pub fn from_pending_or_settings(app: &AppHandle) -> Self {
+        app.try_state::<PendingScreenshotPostCaptureAction>()
+            .and_then(|pending| pending.take())
+            .unwrap_or_else(|| Self::from_settings(app))
+    }
+}
+
+impl PendingScreenshotPostCaptureAction {
+    pub fn set(&self, action: ScreenshotPostCaptureAction) {
+        let mut pending = self.0.lock().unwrap();
+        *pending = Some(PendingAction {
+            action,
+            created_at: Instant::now(),
+        });
+    }
+
+    pub fn take(&self) -> Option<ScreenshotPostCaptureAction> {
+        let mut pending = self.0.lock().unwrap();
+        let action = pending.take()?;
+
+        if action.created_at.elapsed() <= PENDING_ACTION_TTL {
+            Some(action.action)
+        } else {
+            None
+        }
+    }
+
+    pub fn clear(&self) {
+        let mut pending = self.0.lock().unwrap();
+        *pending = None;
+    }
+}
+
+pub fn set_pending_action(
+    app: &AppHandle,
+    action: ScreenshotPostCaptureAction,
+) -> Result<(), String> {
+    let pending = app
+        .try_state::<PendingScreenshotPostCaptureAction>()
+        .ok_or_else(|| "Screenshot post-capture state unavailable".to_string())?;
+    pending.set(action);
+    Ok(())
+}
+
+pub fn clear_pending_action(app: &AppHandle) {
+    if let Some(pending) = app.try_state::<PendingScreenshotPostCaptureAction>() {
+        pending.clear();
+    }
 }
 
 pub async fn handle(
@@ -52,11 +114,17 @@ pub async fn handle(
 ) -> Result<(), String> {
     match action {
         ScreenshotPostCaptureAction::OpenEditor => {
-            let _ = ShowCapWindow::ScreenshotEditor { path }.show(app).await;
+            ShowCapWindow::ScreenshotEditor { path }
+                .show(app)
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(())
         }
         ScreenshotPostCaptureAction::ShowOverlay => {
-            let _ = ShowCapWindow::RecordingsOverlay.show(app).await;
+            ShowCapWindow::RecordingsOverlay
+                .show(app)
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(())
         }
         ScreenshotPostCaptureAction::CopyToClipboard => {
@@ -65,6 +133,45 @@ pub async fn handle(
             Ok(())
         }
     }
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+#[tracing::instrument(skip(app))]
+pub async fn take_screenshot_with_post_capture(
+    app: AppHandle,
+    target: ScreenCaptureTarget,
+) -> Result<PathBuf, String> {
+    let action = ScreenshotPostCaptureAction::from_pending_or_settings(&app);
+    let path = crate::recording::take_screenshot(app.clone(), target).await?;
+    handle(&app, path.clone(), action).await?;
+    Ok(path)
+}
+
+fn pending_screenshot_image(app: &AppHandle, path: &Path) -> Option<Result<RustImageData, String>> {
+    let key = path.parent()?.to_string_lossy().to_string();
+    let pending = app.try_state::<PendingScreenshots>()?;
+    pending.get(&key).map(image_from_pending_screenshot)
+}
+
+fn image_from_pending_screenshot(frame: PendingScreenshot) -> Result<RustImageData, String> {
+    let image = match frame.channels {
+        4 => image::RgbaImage::from_raw(frame.width, frame.height, frame.data)
+            .map(image::DynamicImage::ImageRgba8),
+        3 => image::RgbImage::from_raw(frame.width, frame.height, frame.data)
+            .map(image::DynamicImage::ImageRgb8),
+        channels => {
+            return Err(format!("Unsupported screenshot channel count: {channels}"));
+        }
+    }
+    .ok_or_else(|| {
+        format!(
+            "Invalid screenshot image data: {}x{}x{}",
+            frame.width, frame.height, frame.channels
+        )
+    })?;
+
+    Ok(RustImageData::from_dynamic_image(image))
 }
 
 async fn read_screenshot_image(path: &Path) -> Result<RustImageData, String> {
@@ -87,7 +194,12 @@ async fn read_screenshot_image(path: &Path) -> Result<RustImageData, String> {
 }
 
 async fn copy_screenshot_to_clipboard(app: &AppHandle, path: &Path) -> Result<(), String> {
-    let img_data = read_screenshot_image(path).await?;
+    let img_data = if let Some(img_data) = pending_screenshot_image(app, path) {
+        img_data?
+    } else {
+        read_screenshot_image(path).await?
+    };
+
     app.state::<ArcLock<ClipboardContext>>()
         .write()
         .await

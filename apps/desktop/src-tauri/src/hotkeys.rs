@@ -3,6 +3,7 @@ use crate::{
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
     screenshot_post_capture::{self, ScreenshotPostCaptureAction},
     tray,
+    windows::ShowCapWindow,
 };
 use cap_recording::screen_capture::ScreenCaptureTarget;
 use global_hotkey::HotKeyState;

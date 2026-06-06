@@ -84,6 +84,11 @@ import {
 const MIN_SIZE = { width: 150, height: 150 };
 const MIN_SCREENSHOT_SIZE = { width: 1, height: 1 };
 
+async function takeScreenshotWithPostCapture(target: ScreenCaptureTarget) {
+	await invoke<string>("take_screenshot_with_post_capture", { target });
+	await commands.closeTargetSelectOverlays();
+}
+
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
 };
@@ -1067,11 +1072,7 @@ function Inner() {
 									}
 									await new Promise((resolve) => setTimeout(resolve, 50));
 
-									const path = await invoke<string>("take_screenshot", {
-										target,
-									});
-									await commands.showWindow({ ScreenshotEditor: { path } });
-									await commands.closeTargetSelectOverlays();
+									await takeScreenshotWithPostCapture(target);
 								} catch (e) {
 									const message = e instanceof Error ? e.message : String(e);
 									toast.error(`Failed to take screenshot: ${message}`);
@@ -1808,11 +1809,7 @@ function RecordingControls(props: {
 											}
 										}
 
-										const path = await invoke<string>("take_screenshot", {
-											target: props.target,
-										});
-										await commands.showWindow({ ScreenshotEditor: { path } });
-										await commands.closeTargetSelectOverlays();
+										await takeScreenshotWithPostCapture(props.target);
 									} catch (e) {
 										const message = e instanceof Error ? e.message : String(e);
 										toast.error(`Failed to take screenshot: ${message}`);

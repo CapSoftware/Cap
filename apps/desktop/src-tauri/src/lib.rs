@@ -3986,6 +3986,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
+            screenshot_post_capture::take_screenshot_with_post_capture,
             recording::list_cameras,
             recording::get_camera_formats,
             recording::get_microphone_info,
@@ -4274,6 +4275,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(http_client::HttpClient::default());
             app.manage(http_client::RetryableHttpClient::default());
             app.manage(PendingScreenshots::default());
+            app.manage(screenshot_post_capture::PendingScreenshotPostCaptureAction::default());
             app.manage(FinalizingRecordings::default());
 
             #[cfg(unix)]

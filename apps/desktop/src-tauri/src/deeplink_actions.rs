@@ -6,13 +6,28 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
 use tracing::trace;
 
-use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
+use crate::{
+    App, ArcLock,
+    recording::StartRecordingInputs,
+    recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+    screenshot_post_capture::{self, ScreenshotPostCaptureAction},
+    tray,
+    windows::ShowCapWindow,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureMode {
     Screen(String),
     Window(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenshotTarget {
+    CurrentDisplay,
+    CurrentWindow,
+    Area,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -31,6 +46,11 @@ pub enum DeepLinkAction {
     },
     OpenSettings {
         page: Option<String>,
+    },
+    TakeScreenshot {
+        target: ScreenshotTarget,
+        #[serde(default)]
+        post_capture_action: Option<ScreenshotPostCaptureAction>,
     },
 }
 
@@ -70,6 +90,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     });
 }
 
+#[derive(Debug)]
 pub enum ActionParseFromUrlError {
     ParseFailed(String),
     Invalid,
@@ -89,9 +110,10 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
-            _ => Err(ActionParseFromUrlError::Invalid),
-        }?;
+            Some("action") => {}
+            Some(_) => return Err(ActionParseFromUrlError::NotAction),
+            None => return Err(ActionParseFromUrlError::Invalid),
+        };
 
         let params = url
             .query_pairs()
@@ -153,6 +175,95 @@ impl DeepLinkAction {
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
+            DeepLinkAction::TakeScreenshot {
+                target,
+                post_capture_action,
+            } => take_screenshot(app, target, post_capture_action).await,
         }
+    }
+}
+
+async fn take_screenshot(
+    app: &AppHandle,
+    target: ScreenshotTarget,
+    post_capture_action: Option<ScreenshotPostCaptureAction>,
+) -> Result<(), String> {
+    let capture_target = match target {
+        ScreenshotTarget::CurrentDisplay => {
+            use scap_targets::Display;
+
+            let display = Display::get_containing_cursor().unwrap_or_else(Display::primary);
+            ScreenCaptureTarget::Display { id: display.id() }
+        }
+        ScreenshotTarget::CurrentWindow => {
+            use scap_targets::Window;
+
+            let window = Window::get_topmost_at_cursor()
+                .ok_or_else(|| "No window found under cursor".to_string())?;
+            ScreenCaptureTarget::Window { id: window.id() }
+        }
+        ScreenshotTarget::Area => {
+            if let Some(action) = post_capture_action {
+                screenshot_post_capture::set_pending_action(app, action)?;
+            } else {
+                screenshot_post_capture::clear_pending_action(app);
+            }
+
+            RecordingSettingsStore::set_mode(app, RecordingMode::Screenshot)?;
+            tray::update_tray_icon_for_mode(app, RecordingMode::Screenshot);
+            crate::open_target_picker(app, RecordingTargetMode::Area).await;
+            return Ok(());
+        }
+    };
+
+    let action =
+        post_capture_action.unwrap_or_else(|| ScreenshotPostCaptureAction::from_settings(app));
+    let path = crate::recording::take_screenshot(app.clone(), capture_target)
+        .await
+        .map_err(|e| format!("Failed to take screenshot: {e}"))?;
+    screenshot_post_capture::handle(app, path, action).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_take_screenshot_deeplink_with_post_capture_action() {
+        let mut url = Url::parse("cap-desktop://action").unwrap();
+        url.query_pairs_mut().append_pair(
+            "value",
+            &serde_json::to_string(&DeepLinkAction::TakeScreenshot {
+                target: ScreenshotTarget::CurrentDisplay,
+                post_capture_action: Some(ScreenshotPostCaptureAction::CopyToClipboard),
+            })
+            .unwrap(),
+        );
+
+        let action = DeepLinkAction::try_from(&url).unwrap();
+
+        match action {
+            DeepLinkAction::TakeScreenshot {
+                target,
+                post_capture_action,
+            } => {
+                assert_eq!(target, ScreenshotTarget::CurrentDisplay);
+                assert_eq!(
+                    post_capture_action,
+                    Some(ScreenshotPostCaptureAction::CopyToClipboard)
+                );
+            }
+            _ => panic!("expected TakeScreenshot"),
+        }
+    }
+
+    #[test]
+    fn ignores_non_action_deeplink() {
+        let url = Url::parse("cap-desktop://login?value=ignored").unwrap();
+
+        assert!(matches!(
+            DeepLinkAction::try_from(&url),
+            Err(ActionParseFromUrlError::NotAction)
+        ));
     }
 }
