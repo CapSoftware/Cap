@@ -107,6 +107,7 @@ declare global {
   const IconLucideSave: typeof import('~icons/lucide/save.jsx')['default']
   const IconLucideSearch: typeof import('~icons/lucide/search.jsx')['default']
   const IconLucideSettings: typeof import('~icons/lucide/settings.jsx')['default']
+  const IconLucideSettings2: typeof import('~icons/lucide/settings2.jsx')['default']
   const IconLucideSparkles: typeof import('~icons/lucide/sparkles.jsx')['default']
   const IconLucideSquarePlay: typeof import('~icons/lucide/square-play.jsx')['default']
   const IconLucideSubtitles: typeof import('~icons/lucide/subtitles.jsx')['default']
