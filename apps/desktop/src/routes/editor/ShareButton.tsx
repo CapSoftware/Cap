@@ -5,6 +5,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { createSignal, Show } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import Tooltip from "~/components/Tooltip";
+import { useI18n } from "~/i18n";
 import { createProgressBar } from "~/routes/editor/utils";
 import { authStore } from "~/store";
 import { exportVideo } from "~/utils/export";
@@ -21,6 +22,7 @@ import {
 } from "./ui";
 
 function ShareButton() {
+	const { t } = useI18n();
 	const { editorInstance, meta, customDomain, editorState, setEditorState } =
 		useEditorContext();
 	const projectPath = editorInstance.path;
@@ -193,7 +195,9 @@ function ShareButton() {
 						<div class="flex gap-3 items-center">
 							<Tooltip
 								content={
-									upload.isPending ? "Reuploading video" : "Reupload video"
+									upload.isPending
+										? t("Reuploading video")
+										: t("Reupload video")
 								}
 							>
 								<Button
@@ -215,7 +219,7 @@ function ShareButton() {
 									)}
 								</Button>
 							</Tooltip>
-							<Tooltip content="Open link">
+							<Tooltip content={t("Open link")}>
 								<div class="rounded-xl px-3 py-2 flex flex-row items-center gap-1.5 bg-gray-3 hover:bg-gray-4 transition-colors duration-100">
 									<a
 										href={
@@ -236,7 +240,7 @@ function ShareButton() {
 											customDomain.data?.domain_verified
 										}
 									>
-										<Tooltip content="Select link">
+										<Tooltip content={t("Select link")}>
 											<KSelect
 												value={linkToDisplay()}
 												onChange={(value) => value && setLinkToDisplay(value)}
@@ -277,7 +281,7 @@ function ShareButton() {
 										</Tooltip>
 									</Show>
 									{/** Copy button */}
-									<Tooltip content="Copy link">
+									<Tooltip content={t("Copy link")}>
 										<div
 											class="flex justify-center items-center transition-colors duration-200 rounded-lg size-[22px] text-gray-12 bg-gray-6 hover:bg-gray-7"
 											onClick={copyLink}
@@ -297,7 +301,7 @@ function ShareButton() {
 			</Show>
 			<Dialog.Root open={!upload.isIdle}>
 				<DialogContent
-					title={"Reupload Recording"}
+					title={t("Reupload Recording")}
 					confirm={null}
 					close={null}
 					class="text-gray-12 dark:text-gray-12"
@@ -327,12 +331,12 @@ function ShareButton() {
 
 						<p class="relative z-10 mt-3 text-xs text-white">
 							{uploadState.type === "idle" || uploadState.type === "starting"
-								? "Preparing to render..."
+								? t("Preparing to render...")
 								: uploadState.type === "rendering"
-									? `Rendering video (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`
+									? `${t("Rendering video")} (${uploadState.renderedFrames}/${uploadState.totalFrames} ${t("frames")})`
 									: uploadState.type === "uploading"
 										? `Uploading - ${Math.floor(uploadState.progress)}%`
-										: "Link copied to clipboard!"}
+										: t("Link copied to clipboard!")}
 						</p>
 					</div>
 				</DialogContent>

@@ -57,6 +57,7 @@ import {
 } from "~/components/Cropper";
 import ModeSelect from "~/components/ModeSelect";
 import SelectionHint from "~/components/selection-hint";
+import { useI18n } from "~/i18n";
 import { authStore, generalSettingsStore } from "~/store";
 import { getCameraWindow } from "~/utils/camera-window";
 import { createDevicesQuery } from "~/utils/devices";
@@ -167,6 +168,7 @@ function useOptions() {
 }
 
 function Inner() {
+	const { t } = useI18n();
 	const [params] = useSearchParams<{
 		displayId: DisplayId;
 		isHoveredDisplay: string;
@@ -325,9 +327,9 @@ function Inner() {
 				<div class="relative w-screen h-screen flex flex-col items-center justify-center bg-black/70">
 					<div class="absolute inset-0 bg-black/60 -z-10" />
 					<div class="flex flex-col items-center text-white mb-4">
-						<span class="mb-2 text-3xl font-semibold">Camera Only</span>
+						<span class="mb-2 text-3xl font-semibold">{t("Camera Only")}</span>
 						<span class="text-xs text-gray-11">
-							Record using only your camera and microphone
+							{t("Record using only your camera and microphone")}
 						</span>
 					</div>
 					<div class="flex justify-center w-full px-6 mb-4">
@@ -356,7 +358,7 @@ function Inner() {
 								<div class="flex flex-col items-center text-white">
 									<IconCapMonitor class="size-20 mb-3" />
 									<span class="mb-2 text-3xl font-semibold">
-										{display.name || "Monitor"}
+										{display.name || t("Monitor")}
 									</span>
 									<Show when={display.physical_size}>
 										{(size) => (
@@ -672,7 +674,7 @@ function Inner() {
 												});
 											}}
 										>
-											Adjust recording area
+											{t("Adjust recording area")}
 										</Button>
 										<ShowCapFreeWarning
 											isInstantMode={options.mode === "instant"}
@@ -1075,7 +1077,7 @@ function Inner() {
 									await commands.closeTargetSelectOverlays();
 								} catch (e) {
 									const message = e instanceof Error ? e.message : String(e);
-									toast.error(`Failed to take screenshot: ${message}`);
+									toast.error(`${t("Failed to take screenshot")}: ${message}`);
 									console.error("Failed to take screenshot", e);
 								}
 							}
@@ -1123,13 +1125,14 @@ function Inner() {
 									<Show when={!isValid()}>
 										<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-xs border-red-4 text-sm">
 											<p>
-												Minimum size is {minSize().width} x {minSize().height}
+												{t("Minimum size is")} {minSize().width} x{" "}
+												{minSize().height}
 											</p>
 											<small>
 												<code>
 													{crop().width} x {crop().height}
 												</code>{" "}
-												is too small
+												{t("is too small")}
 											</small>
 										</div>
 									</Show>
@@ -1181,6 +1184,7 @@ function calculateBackoffWithJitter(
 const WS_STALL_TIMEOUT_MS = 2000;
 
 function CameraPreviewInline() {
+	const { t } = useI18n();
 	const { rawOptions } = useRecordingOptions();
 	const [state, setState] = makePersisted(
 		createStore<CameraWindowState>(getDefaultCameraWindowState()),
@@ -1579,7 +1583,9 @@ function CameraPreviewInline() {
 						fallback={
 							<div class="flex flex-col items-center gap-2 text-center px-4">
 								<IconCapCamera class="size-8 text-gray-9 mb-2" />
-								<div class="text-sm text-gray-11">Please select a camera</div>
+								<div class="text-sm text-gray-11">
+									{t("Please select a camera")}
+								</div>
 							</div>
 						}
 					>
@@ -1588,14 +1594,14 @@ function CameraPreviewInline() {
 							fallback={
 								<div class="flex flex-col items-center gap-2 text-center px-4">
 									<div class="text-sm text-red-400">
-										Camera connection failed
+										{t("Camera connection failed")}
 									</div>
 									<button
 										type="button"
 										onClick={handleRetryConnection}
 										class="text-xs text-blue-400 hover:text-blue-300 underline"
 									>
-										Try again
+										{t("Try again")}
 									</button>
 								</div>
 							}
@@ -1603,7 +1609,9 @@ function CameraPreviewInline() {
 							<Show
 								when={frame()}
 								fallback={
-									<div class="text-sm text-gray-11">Loading camera...</div>
+									<div class="text-sm text-gray-11">
+										{t("Loading camera...")}
+									</div>
 								}
 							>
 								<canvas ref={canvasRef} style={canvasStyle()} />
@@ -1630,6 +1638,7 @@ function RecordingControls(props: {
 	onRecordingStart?: () => void;
 	onClose?: () => void;
 }) {
+	const { t } = useI18n();
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
 
@@ -1691,7 +1700,7 @@ function RecordingControls(props: {
 		await Menu.new({
 			items: [
 				await CheckMenuItem.new({
-					text: "Studio Mode",
+					text: t("Studio Mode"),
 					action: () => {
 						setOptions("mode", "studio");
 						commands.setRecordingMode("studio");
@@ -1699,7 +1708,7 @@ function RecordingControls(props: {
 					checked: rawOptions.mode === "studio",
 				}),
 				await CheckMenuItem.new({
-					text: "Instant Mode",
+					text: t("Instant Mode"),
 					action: () => {
 						setOptions("mode", "instant");
 						commands.setRecordingMode("instant");
@@ -1707,7 +1716,7 @@ function RecordingControls(props: {
 					checked: rawOptions.mode === "instant",
 				}),
 				await CheckMenuItem.new({
-					text: "Screenshot Mode",
+					text: t("Screenshot Mode"),
 					action: () => {
 						setOptions("mode", "screenshot");
 						commands.setRecordingMode("screenshot");
@@ -1719,7 +1728,7 @@ function RecordingControls(props: {
 
 	const countdownItems = async () => [
 		await CheckMenuItem.new({
-			text: "Off",
+			text: t("Off"),
 			action: () => generalSettingsStore.set({ recordingCountdown: 0 }),
 			checked:
 				!generalSetings.data?.recordingCountdown ||
@@ -1830,7 +1839,9 @@ function RecordingControls(props: {
 										await commands.closeTargetSelectOverlays();
 									} catch (e) {
 										const message = e instanceof Error ? e.message : String(e);
-										toast.error(`Failed to take screenshot: ${message}`);
+										toast.error(
+											`${t("Failed to take screenshot")}: ${message}`,
+										);
 										console.error("Failed to take screenshot", e);
 									}
 									return;

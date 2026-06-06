@@ -34,6 +34,7 @@ import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
+import { useI18n } from "~/i18n";
 import { Input } from "~/routes/editor/ui";
 import {
 	authStore,
@@ -324,6 +325,7 @@ function CameraListItem(props: {
 	ref?: (el: HTMLButtonElement) => void;
 	settingsLabel?: string;
 }) {
+	const { t } = useI18n();
 	const formatDetails = () => {
 		if (props.settingsLabel) return props.settingsLabel;
 		if (!props.camera.bestFormat) return null;
@@ -373,8 +375,8 @@ function CameraListItem(props: {
 			<button
 				type="button"
 				disabled={props.disabled}
-				title="Device settings"
-				aria-label="Device settings"
+				title={t("Device settings")}
+				aria-label={t("Device settings")}
 				onPointerDown={(event) => event.stopPropagation()}
 				onClick={(event) => {
 					event.preventDefault();
@@ -405,6 +407,7 @@ function MicrophoneListItem(props: {
 	audioLevel?: number;
 	settingsLabel?: string;
 }) {
+	const { t } = useI18n();
 	const formatDetails = () => {
 		if (props.settingsLabel) return props.settingsLabel;
 		if (!props.mic.sampleRate) return null;
@@ -468,8 +471,8 @@ function MicrophoneListItem(props: {
 			<button
 				type="button"
 				disabled={props.disabled}
-				title="Device settings"
-				aria-label="Device settings"
+				title={t("Device settings")}
+				aria-label={t("Device settings")}
 				onPointerDown={(event) => event.stopPropagation()}
 				onClick={(event) => {
 					event.preventDefault();
@@ -495,6 +498,7 @@ function CameraSettingsPanel(props: {
 	onChange: (settings: CameraDeviceSettings) => void;
 	compatibilityStudioMode: boolean;
 }) {
+	const { t } = useI18n();
 	const formats = createMemo(() => {
 		const formats = props.camera.formats ?? [];
 		const seen = new Set<string>();
@@ -554,7 +558,7 @@ function CameraSettingsPanel(props: {
 				)}
 			>
 				<div class="flex-1 min-w-0">
-					<div class="truncate">Default</div>
+					<div class="truncate">{t("Default")}</div>
 					<Show when={defaultSetting()}>
 						{(setting) => (
 							<div
@@ -603,7 +607,7 @@ function CameraSettingsPanel(props: {
 													: "text-amber-11",
 											)}
 										>
-											Compatibility mode may reduce this setting.
+											{t("Compatibility mode may reduce this setting.")}
 										</div>
 									</Show>
 								</div>
@@ -625,6 +629,7 @@ function MicrophoneSettingsPanel(props: {
 	onChange: (settings: MicrophoneDeviceSettings) => void;
 	compatibilityStudioMode: boolean;
 }) {
+	const { t } = useI18n();
 	const formats = createMemo(() => {
 		const formats =
 			props.mic.formats && props.mic.formats.length > 0
@@ -681,7 +686,7 @@ function MicrophoneSettingsPanel(props: {
 				)}
 			>
 				<div class="flex-1 min-w-0">
-					<div class="truncate">Default</div>
+					<div class="truncate">{t("Default")}</div>
 					<Show when={defaultSetting()}>
 						{(setting) => (
 							<div
@@ -731,7 +736,7 @@ function MicrophoneSettingsPanel(props: {
 													: "text-amber-11",
 											)}
 										>
-											Compatibility mode may reduce this setting.
+											{t("Compatibility mode may reduce this setting.")}
 										</div>
 									</Show>
 								</div>
@@ -748,6 +753,7 @@ function MicrophoneSettingsPanel(props: {
 }
 
 function DeviceListPanel(props: DeviceListPanelProps) {
+	const { t } = useI18n();
 	const DB_SCALE = 40;
 	const requestPermission = useRequestPermission();
 	const [focusedIndex, setFocusedIndex] = createSignal(-1);
@@ -913,7 +919,9 @@ function DeviceListPanel(props: DeviceListPanelProps) {
 				</div>
 			</Show>
 			<Show when={props.isLoading}>
-				<div class="py-6 text-sm text-center text-gray-11">Loading...</div>
+				<div class="py-6 text-sm text-center text-gray-11">
+					{t("Loading...")}
+				</div>
 			</Show>
 			<Show when={!props.isLoading && !props.errorMessage}>
 				<button
@@ -935,7 +943,7 @@ function DeviceListPanel(props: DeviceListPanelProps) {
 				>
 					<IconLucideCircleOff class="size-4 shrink-0" />
 					<span class="truncate flex-1">
-						{props.variant === "camera" ? "No Camera" : "No Microphone"}
+						{props.variant === "camera" ? t("No Camera") : t("No Microphone")}
 					</span>
 					<Show when={isNoneSelected()}>
 						<IconLucideCheck class="size-4 shrink-0" />
@@ -1006,6 +1014,7 @@ function DeviceListPanel(props: DeviceListPanelProps) {
 }
 
 function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
+	const { t } = useI18n();
 	const [search, setSearch] = createSignal("");
 	const trimmedSearch = createMemo(() => search().trim());
 	const normalizedQuery = createMemo(() => trimmedSearch().toLowerCase());
@@ -1078,7 +1087,9 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	};
 
 	const settingsSubtitle = () =>
-		props.variant === "camera" ? "Camera settings" : "Microphone settings";
+		props.variant === "camera"
+			? t("Camera settings")
+			: t("Microphone settings");
 
 	const settingsTitle = () => {
 		const target = settingsTarget();
@@ -1087,28 +1098,28 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	};
 	const placeholder =
 		props.variant === "display"
-			? "Search displays"
+			? t("Search displays")
 			: props.variant === "window"
-				? "Search windows"
+				? t("Search windows")
 				: props.variant === "recording"
-					? "Search recordings"
+					? t("Search recordings")
 					: props.variant === "screenshot"
-						? "Search screenshots"
+						? t("Search screenshots")
 						: props.variant === "camera"
-							? "Search cameras"
-							: "Search microphones";
+							? t("Search cameras")
+							: t("Search microphones");
 	const noResultsMessage =
 		props.variant === "display"
-			? "No matching displays"
+			? t("No matching displays")
 			: props.variant === "window"
-				? "No matching windows"
+				? t("No matching windows")
 				: props.variant === "recording"
-					? "No matching recordings"
+					? t("No matching recordings")
 					: props.variant === "screenshot"
-						? "No matching screenshots"
+						? t("No matching screenshots")
 						: props.variant === "camera"
-							? "No matching cameras"
-							: "No matching microphones";
+							? t("No matching cameras")
+							: t("No matching microphones");
 
 	const handleVideoImport = async () => {
 		try {
@@ -1307,7 +1318,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							}
 							disabled={cameraProps.disabled}
 							emptyMessage={
-								trimmedSearch() ? noResultsMessage : "No cameras found"
+								trimmedSearch() ? noResultsMessage : t("No cameras found")
 							}
 							permissions={cameraProps.permissions}
 							deviceSettings={cameraProps.deviceSettings}
@@ -1365,7 +1376,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							onSettingsRequested={(mic) => handleSettingsTargetChange(mic)}
 							disabled={micProps.disabled}
 							emptyMessage={
-								trimmedSearch() ? noResultsMessage : "No microphones found"
+								trimmedSearch() ? noResultsMessage : t("No microphones found")
 							}
 							permissions={micProps.permissions}
 							deviceSettings={micProps.deviceSettings}
@@ -1398,10 +1409,10 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 					class="flex h-[36px] gap-1 items-center shrink-0 rounded-md px-2 text-xs
 					text-gray-11 transition-colors hover:text-gray-12 hover:bg-gray-4
 					focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
-					aria-label={inSettingsMode() ? "Back to list" : "Back"}
+					aria-label={inSettingsMode() ? t("Back to list") : t("Back")}
 				>
 					<IconLucideArrowLeft class="size-3 text-gray-11" />
-					<span class="font-medium text-gray-12">Back</span>
+					<span class="font-medium text-gray-12">{t("Back")}</span>
 				</button>
 				<Show
 					when={inSettingsMode()}
@@ -1446,7 +1457,9 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 								>
 									<IconLucideImport class="size-3.5" />
 									<span>
-										{props.variant === "screenshot" ? "Import image" : "Import"}
+										{props.variant === "screenshot"
+											? t("Import image")
+											: t("Import")}
 									</span>
 								</Button>
 							</Show>
@@ -1592,8 +1605,9 @@ function createUpdateCheck() {
 }
 
 function MainWindowHelpButton() {
+	const { t } = useI18n();
 	return (
-		<Tooltip content={<span>Help & Tour</span>}>
+		<Tooltip content={<span>{t("Help & Tour")}</span>}>
 			<button
 				type="button"
 				onClick={() => {
@@ -1608,6 +1622,7 @@ function MainWindowHelpButton() {
 }
 
 function Page() {
+	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
@@ -2454,7 +2469,7 @@ function Page() {
 								onClick={() => {
 									toggleTargetMode("display");
 								}}
-								name="Display"
+								name={t("Display")}
 								class="flex-1 rounded-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
 							/>
 							<TargetDropdownButton
@@ -2492,7 +2507,7 @@ function Page() {
 								onClick={() => {
 									toggleTargetMode("window");
 								}}
-								name="Window"
+								name={t("Window")}
 								class="flex-1 rounded-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
 							/>
 							<TargetDropdownButton
@@ -2525,7 +2540,7 @@ function Page() {
 							onClick={() => {
 								toggleTargetMode("area");
 							}}
-							name="Area"
+							name={t("Area")}
 							class="flex-1"
 						/>
 						<TargetTypeButton
@@ -2535,7 +2550,7 @@ function Page() {
 							onClick={() => {
 								toggleTargetMode("camera");
 							}}
-							name="Camera Only"
+							name={t("Camera Only")}
 							class="flex-1"
 						/>
 					</div>
@@ -2578,7 +2593,7 @@ function Page() {
 					<MainWindowHelpButton />
 					<div class="flex-1 min-h-9 min-w-0" data-tauri-drag-region />
 					<div class="flex gap-1 items-center shrink-0" data-tauri-drag-region>
-						<Tooltip content={<span>Settings</span>}>
+						<Tooltip content={<span>{t("Settings")}</span>}>
 							<button
 								type="button"
 								onClick={async () => {
@@ -2590,7 +2605,7 @@ function Page() {
 								<IconLucideSettings class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
-						<Tooltip content={<span>Screenshots</span>}>
+						<Tooltip content={<span>{t("Screenshots")}</span>}>
 							<button
 								type="button"
 								onClick={() => {
@@ -2609,7 +2624,7 @@ function Page() {
 								<IconLucideImage class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
-						<Tooltip content={<span>Recordings</span>}>
+						<Tooltip content={<span>{t("Recordings")}</span>}>
 							<button
 								type="button"
 								onClick={() => {
@@ -2665,8 +2680,8 @@ function Page() {
 									fallback={
 										<span class="text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5 bg-(--blue-400) text-gray-1 dark:text-gray-12">
 											{license.data?.type === "commercial"
-												? "Commercial"
-												: "Pro"}
+												? t("Commercial")
+												: t("Pro")}
 										</span>
 									}
 								>
@@ -2677,7 +2692,7 @@ function Page() {
 										}}
 										class="text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5 bg-gray-3 hover:bg-gray-5"
 									>
-										Personal
+										{t("Personal")}
 									</button>
 								</Show>
 							</Suspense>
@@ -2700,7 +2715,7 @@ function Page() {
 				<Show when={signIn.isPending}>
 					<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
 						<div class="flex flex-col gap-4 justify-center items-center">
-							<span>Signing In...</span>
+							<span>{t("Signing In...")}</span>
 
 							<Button
 								onClick={() => {
@@ -2710,7 +2725,7 @@ function Page() {
 								variant="gray"
 								class="w-full"
 							>
-								Cancel Sign In
+								{t("Cancel Sign In")}
 							</Button>
 						</div>
 					</div>
@@ -2750,7 +2765,9 @@ function Page() {
 									targets={recordingsData()}
 									isLoading={recordings.isPending}
 									errorMessage={
-										recordings.error ? "Failed to load recordings" : undefined
+										recordings.error
+											? t("Failed to load recordings")
+											: undefined
 									}
 									onSelect={async (recording) => {
 										if (recording.mode === "studio") {
@@ -2800,7 +2817,9 @@ function Page() {
 									targets={screenshotsData()}
 									isLoading={screenshots.isPending}
 									errorMessage={
-										screenshots.error ? "Failed to load screenshots" : undefined
+										screenshots.error
+											? t("Failed to load screenshots")
+											: undefined
 									}
 									onSelect={async (screenshot) => {
 										await commands.showWindow({
@@ -2903,7 +2922,7 @@ function Page() {
 							>
 								<IconCapStopCircle class="size-4" />
 							</Show>
-							<span>Stop Recording</span>
+							<span>{t("Stop Recording")}</span>
 						</button>
 					</div>
 				</div>

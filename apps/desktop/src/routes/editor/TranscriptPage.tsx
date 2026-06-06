@@ -11,6 +11,7 @@ import {
 	Show,
 } from "solid-js";
 import { produce } from "solid-js/store";
+import { useI18n } from "~/i18n";
 import { commands } from "~/utils/tauri";
 import {
 	createCaptionTrackSegments,
@@ -51,6 +52,7 @@ const TEXT_SIZES = [
 ] as const;
 
 export function TranscriptPanel() {
+	const { t } = useI18n();
 	const {
 		editorState,
 		setEditorState,
@@ -294,7 +296,7 @@ export function TranscriptPanel() {
 	return (
 		<div class="flex flex-col min-h-0 h-full">
 			<div class="px-3 py-2 border-b border-gray-3 flex items-center justify-between shrink-0">
-				<span class="text-xs font-medium text-gray-12">Transcript</span>
+				<span class="text-xs font-medium text-gray-12">{t("Transcript")}</span>
 				<div class="flex items-center gap-1">
 					<button
 						type="button"
@@ -408,6 +410,7 @@ function TranscriptEditor(props: {
 	onDeleteWord: (flatIndex: number) => void;
 	onDeleteWords: (flatIndices: number[]) => void;
 }) {
+	const { t } = useI18n();
 	const [selectedIndices, setSelectedIndices] = createSignal<Set<number>>(
 		new Set(),
 	);
@@ -561,9 +564,9 @@ function TranscriptEditor(props: {
 				fallback={
 					<div class="flex flex-col items-center justify-center h-full text-gray-9">
 						<IconCapCaptions class="size-10 mb-3 text-gray-7" />
-						<span class="text-sm">No transcript available</span>
+						<span class="text-sm">{t("No transcript available")}</span>
 						<span class="text-xs mt-1">
-							Generate captions in the editor first
+							{t("Generate captions in the editor first")}
 						</span>
 					</div>
 				}

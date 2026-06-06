@@ -10,6 +10,7 @@ import {
 	Switch,
 } from "solid-js";
 import { Transition } from "solid-transition-group";
+import { useI18n } from "~/i18n";
 import type {
 	CaptureDisplayWithThumbnail,
 	CaptureWindowWithThumbnail,
@@ -108,6 +109,7 @@ function ViewAllButton(props: { onClick: () => void; label: string }) {
 }
 
 export default function TargetMenuGrid(props: TargetMenuGridProps) {
+	const { t } = useI18n();
 	const items = createMemo(() => props.targets ?? []);
 	const skeletonItems = createMemo(() =>
 		Array.from({ length: props.skeletonCount ?? DEFAULT_SKELETON_COUNT }),
@@ -196,11 +198,13 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 			return (
 				<EmptyState
 					icon={<IconLucideSquarePlay class="size-5 text-gray-10" />}
-					title="No recordings yet"
-					description="Your screen recordings will appear here. Start recording to get started!"
+					title={t("No recordings yet")}
+					description={t(
+						"Your screen recordings will appear here. Start recording to get started!",
+					)}
 					action={
 						onViewAll
-							? { label: "View All Recordings", onClick: onViewAll }
+							? { label: t("View All Recordings"), onClick: onViewAll }
 							: undefined
 					}
 				/>
@@ -211,11 +215,13 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 			return (
 				<EmptyState
 					icon={<IconLucideImage class="size-5 text-gray-10" />}
-					title="No screenshots yet"
-					description="Your screenshots will appear here. Take a screenshot to get started!"
+					title={t("No screenshots yet")}
+					description={t(
+						"Your screenshots will appear here. Take a screenshot to get started!",
+					)}
 					action={
 						onViewAll
-							? { label: "View All Screenshots", onClick: onViewAll }
+							? { label: t("View All Screenshots"), onClick: onViewAll }
 							: undefined
 					}
 				/>
@@ -226,8 +232,8 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 			<div class="col-span-2 py-6 text-sm text-center text-gray-11">
 				{props.emptyMessage ??
 					(props.variant === "display"
-						? "No displays found"
-						: "No windows found")}
+						? t("No displays found")
+						: t("No windows found"))}
 			</div>
 		);
 	};
@@ -408,7 +414,7 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 											{(onViewAll) => (
 												<ViewAllButton
 													onClick={onViewAll()}
-													label="View All Recordings"
+													label={t("View All Recordings")}
 												/>
 											)}
 										</Show>
@@ -470,7 +476,7 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 											{(onViewAll) => (
 												<ViewAllButton
 													onClick={onViewAll()}
-													label="View All Screenshots"
+													label={t("View All Screenshots")}
 												/>
 											)}
 										</Show>

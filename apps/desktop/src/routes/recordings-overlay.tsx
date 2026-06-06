@@ -23,6 +23,7 @@ import {
 } from "solid-js";
 import { createStore, produce, type SetStoreFunction } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
+import { useI18n } from "~/i18n";
 import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createExportToFileTask, exportVideo } from "~/utils/export";
@@ -47,6 +48,7 @@ type MediaEntry = {
 };
 
 export default function () {
+	const { t } = useI18n();
 	onMount(() => {
 		document.documentElement.setAttribute("data-transparent-window", "true");
 		document.body.style.background = "transparent";
@@ -206,10 +208,10 @@ export default function () {
 															<ActionProgressOverlay
 																title={
 																	state.type === "rendering"
-																		? "Rendering video"
+																		? t("Rendering video")
 																		: state.type === "copying"
-																			? "Copying to clipboard"
-																			: "Copied to clipboard"
+																			? t("Copying to clipboard")
+																			: t("Copied to clipboard")
 																}
 																progressPercentage={actionProgressPercentage(
 																	actionState,
@@ -227,20 +229,20 @@ export default function () {
 															<ActionProgressOverlay
 																title={(() => {
 																	if (state.type === "choosing-location")
-																		return "Preparing";
+																		return t("Preparing");
 
 																	if (isRecording) {
 																		if (state.type === "rendering")
-																			return "Rendering video";
+																			return t("Rendering video");
 																		if (state.type === "saving")
-																			return "Saving video";
-																		return "Saved video";
+																			return t("Saving video");
+																		return t("Saved video");
 																	} else {
 																		if (state.type === "rendering")
-																			return "Rendering image";
+																			return t("Rendering image");
 																		if (state.type === "saving")
-																			return "Saving image";
-																		return "Saved image";
+																			return t("Saving image");
+																		return t("Saved image");
 																	}
 																})()}
 																progressPercentage={actionProgressPercentage(
@@ -248,8 +250,10 @@ export default function () {
 																)}
 																progressMessage={
 																	state.type === "choosing-location" &&
-																	`Choose where to ${
-																		isRecording ? "export video" : "save image"
+																	`${t("Choose where to")} ${
+																		isRecording
+																			? t("export video")
+																			: t("save image")
 																	}...`
 																}
 															/>
@@ -265,10 +269,10 @@ export default function () {
 															<ActionProgressOverlay
 																title={
 																	state.type === "rendering"
-																		? "Rendering video"
+																		? t("Rendering video")
 																		: state.type === "uploading"
-																			? "Creating shareable link"
-																			: "Shareable link copied"
+																			? t("Creating shareable link")
+																			: t("Shareable link copied")
 																}
 																progressPercentage={actionProgressPercentage(
 																	actionState,
@@ -292,7 +296,7 @@ export default function () {
 												>
 													<TooltipIconButton
 														class="absolute top-3 left-3 z-20"
-														tooltipText="Close"
+														tooltipText={t("Close")}
 														tooltipPlacement="right"
 														onClick={() => {
 															const setMedia = isRecording
@@ -315,7 +319,7 @@ export default function () {
 													{isRecording ? (
 														<TooltipIconButton
 															class="absolute bottom-3 left-3 z-20"
-															tooltipText="Edit"
+															tooltipText={t("Edit")}
 															tooltipPlacement="right"
 															onClick={() => {
 																const setMedia = isRecording
@@ -341,7 +345,7 @@ export default function () {
 													) : (
 														<TooltipIconButton
 															class="absolute bottom-3 left-3 z-20"
-															tooltipText="View"
+															tooltipText={t("View")}
 															tooltipPlacement="right"
 															onClick={() => {
 																commands.openFilePath(media.path);
@@ -354,8 +358,8 @@ export default function () {
 														class="absolute top-3 right-3 z-20"
 														tooltipText={
 															copy.isPending
-																? "Copying to Clipboard"
-																: "Copy to Clipboard"
+																? t("Copying to Clipboard")
+																: t("Copy to Clipboard")
 														}
 														tooltipPlacement="left"
 														onClick={() => copy.mutate()}
@@ -366,8 +370,8 @@ export default function () {
 														class="absolute right-3 bottom-3 z-998"
 														tooltipText={
 															recordingMeta.data?.sharing
-																? "Copy Shareable Link"
-																: "Create Shareable Link"
+																? t("Copy Shareable Link")
+																: t("Create Shareable Link")
 														}
 														tooltipPlacement="left"
 														onClick={() => upload.mutate()}
@@ -380,7 +384,7 @@ export default function () {
 															size="sm"
 															onClick={() => save.mutate()}
 														>
-															Export
+															{t("Export")}
 														</Button>
 													</div>
 												</div>

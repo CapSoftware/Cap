@@ -19,6 +19,7 @@ import {
 } from "solid-js";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
+import { useI18n } from "~/i18n";
 
 import { authStore, userProfileStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
@@ -126,6 +127,7 @@ function SettingsContentSkeleton() {
 }
 
 export default function Settings(props: RouteSectionProps) {
+	const { t } = useI18n();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const signIn = createSignInMutation();
@@ -189,58 +191,58 @@ export default function Settings(props: RouteSectionProps) {
 	const settingsItems = [
 		{
 			href: "general",
-			name: "General",
+			name: t("General"),
 			icon: IconCapSettings,
 		},
 		{
 			href: "hotkeys",
-			name: "Shortcuts",
+			name: t("Shortcuts"),
 			icon: IconCapHotkeys,
 		},
 		{
 			href: "recordings",
-			name: "Recordings",
+			name: t("Recordings"),
 			icon: IconLucideSquarePlay,
 		},
 		{
 			href: "screenshots",
-			name: "Screenshots",
+			name: t("Screenshots"),
 			icon: IconLucideImage,
 		},
 		{
 			href: "transcription",
-			name: "Transcription",
+			name: t("Transcription"),
 			icon: IconCapCaptions,
 		},
 		{
 			href: "integrations",
-			name: "Integrations",
+			name: t("Integrations"),
 			icon: IconLucideUnplug,
 		},
 		{
 			href: "license",
-			name: "License",
+			name: t("License"),
 			icon: IconLucideGift,
 		},
 		{
 			href: "experimental",
-			name: "Experimental",
+			name: t("Experimental"),
 			icon: IconCapSettings,
 		},
 		{
 			href: "feedback",
-			name: "Feedback",
+			name: t("Feedback"),
 			icon: IconLucideMessageSquarePlus,
 		},
 		{
 			href: "changelog",
-			name: "Changelog",
+			name: t("Changelog"),
 			icon: IconLucideBell,
 		},
 	];
 	const accountName = createMemo(() => {
-		if (!auth()) return "Click to sign in";
-		if (!userProfile.isSuccess) return "Signed in";
+		if (!auth()) return t("Click to sign in");
+		if (!userProfile.isSuccess) return t("Signed in");
 
 		const name = userProfile.data?.name?.trim();
 		if (name) return name;
@@ -248,7 +250,7 @@ export default function Settings(props: RouteSectionProps) {
 		const email = userProfile.data?.email?.trim();
 		if (email) return email;
 
-		return "Signed in";
+		return t("Signed in");
 	});
 	const accountRemoteImageUrl = createMemo(() => {
 		if (!userProfile.isSuccess) return null;
@@ -465,7 +467,7 @@ export default function Settings(props: RouteSectionProps) {
 							{accountName()}
 						</p>
 						<p class="h-[13px] truncate text-[11px] leading-[13px] text-gray-10">
-							Account
+							{t("Account")}
 						</p>
 					</div>
 				</button>
@@ -498,7 +500,7 @@ export default function Settings(props: RouteSectionProps) {
 											shell.open("https://cap.so/download/versions")
 										}
 									>
-										View previous versions
+										{t("View previous versions")}
 									</button>
 									<button
 										type="button"
@@ -507,8 +509,8 @@ export default function Settings(props: RouteSectionProps) {
 										onClick={checkForUpdates}
 									>
 										{isCheckingForUpdates()
-											? "Checking..."
-											: "Check for updates"}
+											? t("Checking...")
+											: t("Check for updates")}
 									</button>
 								</div>
 							</div>
@@ -522,10 +524,10 @@ export default function Settings(props: RouteSectionProps) {
 					>
 						{auth() ? (
 							<Button onClick={handleAuth} variant="gray" class="w-full">
-								Sign Out
+								{t("Sign Out")}
 							</Button>
 						) : (
-							<SignInButton>Sign In</SignInButton>
+							<SignInButton>{t("Sign In")}</SignInButton>
 						)}
 					</Show>
 				</div>

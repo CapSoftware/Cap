@@ -1,11 +1,13 @@
 import { Popover } from "@kobalte/core/popover";
 import { batch } from "solid-js";
+import { useI18n } from "~/i18n";
 import IconCapShadow from "~icons/cap/shadow";
 import { useScreenshotEditorContext } from "../context";
 import { EditorButton, Slider } from "../ui";
 import ShadowSettings from "./ShadowSettings";
 
 export function ShadowPopover() {
+	const { t } = useI18n();
 	const { project, setProject, activePopover, setActivePopover } =
 		useScreenshotEditorContext();
 	let optionalScrollContainerRef: HTMLDivElement | undefined;
@@ -24,14 +26,16 @@ export function ShadowPopover() {
 					setActivePopover(activePopover() === "shadow" ? null : "shadow")
 				}
 				leftIcon={<IconCapShadow class="size-4" />}
-				tooltipText="Shadow"
+				tooltipText={t("Shadow")}
 				kbd={["H"]}
 			/>
 			<Popover.Portal>
 				<Popover.Content class="z-50 w-[280px] overflow-hidden rounded-xl border border-gray-3 bg-gray-1 shadow-xl animate-in fade-in zoom-in-95 p-4">
 					<div ref={optionalScrollContainerRef} class="flex flex-col gap-4">
 						<div class="flex flex-col gap-2">
-							<span class="text-xs font-medium text-gray-11">Shadow</span>
+							<span class="text-xs font-medium text-gray-11">
+								{t("Shadow")}
+							</span>
 							<Slider
 								value={[project.background.shadow ?? 0]}
 								onChange={(v) => {

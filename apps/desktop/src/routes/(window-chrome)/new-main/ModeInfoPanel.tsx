@@ -1,6 +1,7 @@
 import { cx } from "cva";
 import { For } from "solid-js";
 import { Transition } from "solid-transition-group";
+import { useI18n } from "~/i18n";
 import { commands, type RecordingMode } from "~/utils/tauri";
 import IconLucideArrowLeft from "~icons/lucide/arrow-left";
 import { useRecordingOptions } from "../OptionsContext";
@@ -34,6 +35,7 @@ const modeOptions = [
 ];
 
 export default function ModeInfoPanel(props: ModeInfoPanelProps) {
+	const { t } = useI18n();
 	const { rawOptions, setOptions } = useRecordingOptions();
 
 	const handleModeSelect = (mode: RecordingMode) => {
@@ -53,9 +55,11 @@ export default function ModeInfoPanel(props: ModeInfoPanelProps) {
 					focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
 				>
 					<IconLucideArrowLeft class="size-3 text-gray-11" />
-					<span class="font-medium text-gray-12">Back</span>
+					<span class="font-medium text-gray-12">{t("Back")}</span>
 				</button>
-				<span class="text-xs font-medium text-gray-11">Recording Modes</span>
+				<span class="text-xs font-medium text-gray-11">
+					{t("Recording Modes")}
+				</span>
 			</div>
 			<div class="flex flex-col flex-1 min-h-0 pt-4">
 				<div class="px-1 custom-scroll flex-1 overflow-y-auto">
@@ -107,10 +111,10 @@ export default function ModeInfoPanel(props: ModeInfoPanelProps) {
 															isSelected() ? "text-blue-11" : "text-gray-12",
 														)}
 													>
-														{option.title}
+														{t(option.title)}
 													</h3>
 													<p class="text-xs leading-relaxed text-gray-11">
-														{option.description}
+														{t(option.description)}
 													</p>
 												</div>
 											</button>

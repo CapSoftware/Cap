@@ -10,6 +10,7 @@ import {
 	Show,
 } from "solid-js";
 import { Portal } from "solid-js/web";
+import { useI18n } from "~/i18n";
 
 export type DeviceSelectOverlayProps<T> = {
 	open: boolean;
@@ -30,6 +31,7 @@ export type DeviceSelectOverlayProps<T> = {
 export default function DeviceSelectOverlay<T>(
 	props: DeviceSelectOverlayProps<T>,
 ) {
+	const { t } = useI18n();
 	let overlayRef: HTMLDivElement | undefined;
 	let listRef: HTMLDivElement | undefined;
 	const [searchQuery, setSearchQuery] = createSignal("");
@@ -172,7 +174,7 @@ export default function DeviceSelectOverlay<T>(
 						<div class="px-2 pt-2">
 							<input
 								type="text"
-								placeholder="Search..."
+								placeholder={t("Search...")}
 								value={searchQuery()}
 								onInput={(e) => setSearchQuery(e.currentTarget.value)}
 								class="w-full px-3 py-1.5 text-sm rounded-lg outline-hidden placeholder:text-white/40 text-white"
@@ -209,7 +211,7 @@ export default function DeviceSelectOverlay<T>(
 								)}
 							>
 								<IconLucideCircleOff class="size-4 shrink-0" />
-								<span class="truncate">{props.noneLabel ?? "None"}</span>
+								<span class="truncate">{props.noneLabel ?? t("None")}</span>
 								<Show when={props.selectedItem === null}>
 									<IconLucideCheck class="size-4 ml-auto shrink-0" />
 								</Show>
@@ -221,8 +223,8 @@ export default function DeviceSelectOverlay<T>(
 							fallback={
 								<div class="px-3 py-6 text-center text-sm text-white/50">
 									{searchQuery()
-										? "No matching devices"
-										: (props.emptyMessage ?? "No devices found")}
+										? t("No matching devices")
+										: (props.emptyMessage ?? t("No devices found"))}
 								</div>
 							}
 						>

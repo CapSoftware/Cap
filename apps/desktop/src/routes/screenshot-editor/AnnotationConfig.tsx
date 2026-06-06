@@ -2,11 +2,13 @@ import { Popover } from "@kobalte/core/popover";
 import { cx } from "cva";
 import { createMemo, For, type JSX, Show } from "solid-js";
 import Tooltip from "~/components/Tooltip";
+import { useI18n } from "~/i18n";
 import { BACKGROUND_COLORS, hexToRgb, RgbInput, rgbToHex } from "./ColorPicker";
 import { type Annotation, useScreenshotEditorContext } from "./context";
 import { Slider } from "./ui";
 
 export function AnnotationConfigBar() {
+	const { t } = useI18n();
 	const {
 		annotations,
 		selectedAnnotationId,
@@ -44,7 +46,9 @@ export function AnnotationConfigBar() {
 					>
 						<div class="flex items-center justify-center gap-6 px-4 h-11">
 							<Show when={!isMask()}>
-								<ConfigItem label={type() === "text" ? "Color" : "Stroke"}>
+								<ConfigItem
+									label={type() === "text" ? t("Color") : t("Stroke")}
+								>
 									<ColorPickerButton
 										value={ann().strokeColor}
 										onChange={(c) => update("strokeColor", c)}
@@ -54,7 +58,7 @@ export function AnnotationConfigBar() {
 
 							<Show when={type() !== "text" && !isMask()}>
 								<ConfigItem
-									label="Width"
+									label={t("Width")}
 									value={`${Math.round(ann().strokeWidth)}px`}
 								>
 									<Slider
@@ -69,7 +73,7 @@ export function AnnotationConfigBar() {
 							</Show>
 
 							<Show when={type() === "rectangle" || type() === "circle"}>
-								<ConfigItem label="Fill">
+								<ConfigItem label={t("Fill")}>
 									<ColorPickerButton
 										value={ann().fillColor}
 										onChange={(c) => update("fillColor", c)}
@@ -80,7 +84,7 @@ export function AnnotationConfigBar() {
 
 							<Show when={!isMask()}>
 								<ConfigItem
-									label="Opacity"
+									label={t("Opacity")}
 									value={`${Math.round(ann().opacity * 100)}%`}
 								>
 									<Slider
@@ -95,7 +99,7 @@ export function AnnotationConfigBar() {
 							</Show>
 
 							<Show when={type() === "mask"}>
-								<ConfigItem label="Style">
+								<ConfigItem label={t("Style")}>
 									<div class="flex gap-1">
 										<button
 											type="button"
@@ -107,7 +111,7 @@ export function AnnotationConfigBar() {
 											)}
 											onClick={() => update("maskType", "blur")}
 										>
-											Blur
+											{t("Blur")}
 										</button>
 										<button
 											type="button"
@@ -119,7 +123,7 @@ export function AnnotationConfigBar() {
 											)}
 											onClick={() => update("maskType", "pixelate")}
 										>
-											Pixelate
+											{t("Pixelate")}
 										</button>
 									</div>
 								</ConfigItem>
@@ -127,7 +131,7 @@ export function AnnotationConfigBar() {
 
 							<Show when={type() === "mask"}>
 								<ConfigItem
-									label="Intensity"
+									label={t("Intensity")}
 									value={`${Math.round(maskLevel())}`}
 								>
 									<Slider
@@ -143,7 +147,7 @@ export function AnnotationConfigBar() {
 
 							<Show when={type() === "text"}>
 								<ConfigItem
-									label="Size"
+									label={t("Size")}
 									value={`${Math.round(ann().height)}px`}
 								>
 									<Slider
@@ -164,7 +168,7 @@ export function AnnotationConfigBar() {
 								class="text-xs text-blue-11 font-medium hover:text-blue-9 transition-colors"
 								onClick={() => setSelectedAnnotationId(null)}
 							>
-								Done
+								{t("Done")}
 							</button>
 						</div>
 					</div>

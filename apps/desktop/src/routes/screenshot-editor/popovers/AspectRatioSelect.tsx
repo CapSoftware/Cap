@@ -1,5 +1,6 @@
 import { Select as KSelect } from "@kobalte/core/select";
 import { createSignal, Show } from "solid-js";
+import { useI18n } from "~/i18n";
 import type { AspectRatio } from "~/utils/tauri";
 import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapLayout from "~icons/cap/layout";
@@ -15,6 +16,7 @@ import {
 } from "../ui";
 
 export function AspectRatioSelect() {
+	const { t } = useI18n();
 	const { project, setProject } = useScreenshotEditorContext();
 	const [open, setOpen] = createSignal(false);
 	let triggerSelect: HTMLDivElement | undefined;
@@ -44,7 +46,7 @@ export function AspectRatioSelect() {
 					<MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
 						<KSelect.ItemLabel class="flex-1">
 							{props.item.rawValue === "auto"
-								? "Auto"
+								? t("Auto")
 								: ASPECT_RATIOS[props.item.rawValue].name}
 							<Show when={item()}>
 								{(item) => (
@@ -66,7 +68,7 @@ export function AspectRatioSelect() {
 			<EditorButton<typeof KSelect.Trigger>
 				as={KSelect.Trigger}
 				class="w-20"
-				tooltipText="Aspect Ratio"
+				tooltipText={t("Aspect Ratio")}
 				leftIcon={<IconCapLayout class="size-4" />}
 				rightIcon={
 					<KSelect.Icon>
@@ -79,7 +81,7 @@ export function AspectRatioSelect() {
 					{(state) => {
 						const text = () => {
 							const option = state.selectedOption();
-							if (option === "auto") return "Auto";
+							if (option === "auto") return t("Auto");
 							const ratio = ASPECT_RATIOS[option].ratio;
 							return `${ratio[0]}:${ratio[1]}`;
 						};

@@ -20,6 +20,7 @@ import {
 	type Ratio,
 } from "~/components/Cropper";
 import SelectionHint from "~/components/selection-hint";
+import { useI18n } from "~/i18n";
 import { createOptionsQuery } from "~/utils/queries";
 import type { DisplayId } from "~/utils/tauri";
 import { emitTo } from "~/utils/tauriSpectaHack";
@@ -28,6 +29,7 @@ import IconLucideExpand from "~icons/lucide/expand";
 const MIN_SIZE = { width: 150, height: 150 };
 
 export default function CaptureArea() {
+	const { t } = useI18n();
 	const webview = getCurrentWebviewWindow();
 
 	const setPendingState = (pending: boolean) =>
@@ -191,7 +193,7 @@ export default function CaptureArea() {
 							classList={{ "flex-row-reverse": ostype() === "windows" }}
 						>
 							<button
-								title="Close"
+								title={t("Close")}
 								class="group flex items-center justify-center size-12 text-gray-11 shadow-xl shadow-black/30 bg-gray-1 border border-gray-5 hover:bg-gray-4 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
 								type="button"
 								onClick={close}
@@ -201,7 +203,7 @@ export default function CaptureArea() {
 							<div class="flex items-center h-full gap-2">
 								<div class="flex items-center justify-between gap-1 px-[3px] size-full shadow-xl shadow-black/30 bg-gray-1 border border-gray-5 rounded-full">
 									<button
-										title="Reset"
+										title={t("Reset")}
 										type="button"
 										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
 										onClick={reset}
@@ -210,7 +212,7 @@ export default function CaptureArea() {
 									</button>
 									<div class="inline-block my-3 w-px self-stretch bg-gray-3" />
 									<button
-										title="Fill"
+										title={t("Fill")}
 										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
 										type="button"
 										onClick={() => cropperRef?.fill()}
@@ -219,7 +221,7 @@ export default function CaptureArea() {
 									</button>
 									<div class="inline-block my-3 w-px self-stretch bg-gray-3" />
 									<button
-										title="Aspect Ratio"
+										title={t("Aspect Ratio")}
 										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
 										type="button"
 										onClick={showCropOptionsMenu}
@@ -262,7 +264,7 @@ export default function CaptureArea() {
 											}}
 										>
 											<IconLucideCheck class="size-5 *:pointer-events-none" />
-											<span class="font-medium text-sm">Confirm</span>
+											<span class="font-medium text-sm">{t("Confirm")}</span>
 										</div>
 									</button>
 								</div>

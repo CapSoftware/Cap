@@ -20,6 +20,7 @@ import "unfonts.css";
 import "./styles/theme.css";
 
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
+import { I18nProvider } from "./i18n";
 import WindowChromeLayout from "./routes/(window-chrome)";
 import SettingsLayout from "./routes/(window-chrome)/settings";
 import { generalSettingsStore } from "./store";
@@ -107,9 +108,11 @@ const queryClient = new QueryClient({
 export default function App() {
 	return (
 		<QueryClientProvider client={queryClient}>
-			<Suspense>
-				<Inner />
-			</Suspense>
+			<I18nProvider>
+				<Suspense>
+					<Inner />
+				</Suspense>
+			</I18nProvider>
 		</QueryClientProvider>
 	);
 }

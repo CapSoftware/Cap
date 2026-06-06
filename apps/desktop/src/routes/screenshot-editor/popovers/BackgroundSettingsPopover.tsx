@@ -12,6 +12,7 @@ import {
 	For,
 	Show,
 } from "solid-js";
+import { useI18n } from "~/i18n";
 import type { BackgroundSource } from "~/utils/tauri";
 import IconCapBgBlur from "~icons/cap/bg-blur";
 import IconCapCircleX from "~icons/cap/circle-x";
@@ -131,6 +132,7 @@ const BACKGROUND_THEMES = {
 };
 
 export function BackgroundSettingsPopover() {
+	const { t } = useI18n();
 	const {
 		project,
 		setProject,
@@ -221,7 +223,7 @@ export function BackgroundSettingsPopover() {
 					)
 				}
 				leftIcon={<IconCapImage class="size-4" />}
-				tooltipText="Background"
+				tooltipText={t("Background")}
 				kbd={["B"]}
 			/>
 			<Popover.Portal>
@@ -232,7 +234,7 @@ export function BackgroundSettingsPopover() {
 					>
 						<Field
 							icon={<IconCapImage class="size-4" />}
-							name="Background Image"
+							name={t("Background Image")}
 						>
 							<KTabs
 								value={project.background.source.type}
@@ -373,7 +375,7 @@ export function BackgroundSettingsPopover() {
 											>
 												<IconCapImage class="text-gray-11 size-6" />
 												<span class="text-gray-12">
-													Click to select or drag and drop image
+													{t("Click to select or drag and drop image")}
 												</span>
 											</button>
 										}
@@ -538,7 +540,7 @@ export function BackgroundSettingsPopover() {
 							</KTabs>
 						</Field>
 
-						<Field name="Background Blur" icon={<IconCapBgBlur />}>
+						<Field name={t("Background Blur")} icon={<IconCapBgBlur />}>
 							<Slider
 								value={[project.background.blur]}
 								onChange={(v) => setProject("background", "blur", v[0])}

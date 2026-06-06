@@ -1,5 +1,6 @@
 import { cx } from "cva";
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
+import { useI18n } from "~/i18n";
 import IconLucideArrowUpRight from "~icons/lucide/arrow-up-right";
 import IconLucideCircle from "~icons/lucide/circle";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
@@ -27,6 +28,7 @@ const ANNOTATION_TYPE_LABELS = {
 };
 
 export function LayersPanel() {
+	const { t } = useI18n();
 	const {
 		annotations,
 		setAnnotations,
@@ -53,7 +55,7 @@ export function LayersPanel() {
 				ann.text.length > 12 ? `${ann.text.slice(0, 12)}...` : ann.text;
 			return truncated;
 		}
-		return ANNOTATION_TYPE_LABELS[ann.type];
+		return t(ANNOTATION_TYPE_LABELS[ann.type]);
 	};
 
 	const reversedAnnotations = () => [...annotations].reverse();
@@ -201,7 +203,7 @@ export function LayersPanel() {
 			<div class="flex items-center justify-between px-3 h-10 border-b border-gray-3">
 				<div class="flex items-center gap-2 text-sm font-medium text-gray-12">
 					<IconLucideLayers class="size-4" />
-					<span>Layers</span>
+					<span>{t("Layers")}</span>
 				</div>
 				<button
 					type="button"
@@ -218,9 +220,9 @@ export function LayersPanel() {
 					fallback={
 						<div class="flex flex-col items-center justify-center h-full px-4 text-center">
 							<IconLucideLayers class="size-8 text-gray-7 mb-2" />
-							<p class="text-xs text-gray-10">No layers yet</p>
+							<p class="text-xs text-gray-10">{t("No layers yet")}</p>
 							<p class="text-[10px] text-gray-8 mt-1">
-								Use the tools above to add annotations
+								{t("Use the tools above to add annotations")}
 							</p>
 						</div>
 					}
@@ -316,7 +318,7 @@ export function LayersPanel() {
 			</div>
 
 			<div class="px-3 py-2 border-t border-gray-3 text-[10px] text-gray-9">
-				Drag to reorder • Top = front
+				{t("Drag to reorder • Top = front")}
 			</div>
 		</div>
 	);

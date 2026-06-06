@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import toast from "solid-toast";
 import { SignInButton } from "~/components/SignInButton";
+import { useI18n } from "~/i18n";
 import {
 	createSelectedOrganization,
 	type DesktopOrganization,
@@ -98,6 +99,7 @@ function BrandSettingsDialog(props: {
 	onOpenChange: (open: boolean) => void;
 	onSaved: (organization: DesktopOrganization) => void;
 }) {
+	const { t } = useI18n();
 	const [brandColors, setBrandColors] = createSignal<OrganizationBrandColors>(
 		EMPTY_ORGANIZATION_BRAND_COLORS,
 	);
@@ -151,11 +153,11 @@ function BrandSettingsDialog(props: {
 
 	const selectLogoFile = (file: File) => {
 		if (!isSupportedLogoContentType(file.type)) {
-			toast.error("Unsupported logo file type");
+			toast.error(t("Unsupported logo file type"));
 			return;
 		}
 		if (file.size > ORGANIZATION_LOGO_MAX_BYTES) {
-			toast.error("Logo file must be less than 1MB");
+			toast.error(t("Logo file must be less than 1MB"));
 			return;
 		}
 
@@ -197,14 +199,14 @@ function BrandSettingsDialog(props: {
 				},
 			);
 
-			toast.success("Organization branding updated");
+			toast.success(t("Organization branding updated"));
 			props.onSaved(updatedOrganization);
 			props.onOpenChange(false);
 		} catch (error) {
 			toast.error(
 				error instanceof Error
 					? error.message
-					: "Failed to update organization branding",
+					: t("Failed to update organization branding"),
 			);
 		} finally {
 			setSaving(false);
@@ -229,7 +231,7 @@ function BrandSettingsDialog(props: {
 							disabled={saving() || !props.organization}
 							onClick={() => void save()}
 						>
-							{saving() ? "Saving..." : "Save"}
+							{saving() ? t("Saving...") : t("Save")}
 						</Dialog.ConfirmButton>
 					</>
 				}
@@ -336,6 +338,7 @@ function BrandSettingsDialog(props: {
 }
 
 export function OrganizationDropdown() {
+	const { t } = useI18n();
 	const organizationSelection = createSelectedOrganization();
 	const [settingsOrganizationId, setSettingsOrganizationId] = createSignal<
 		string | null
@@ -355,27 +358,32 @@ export function OrganizationDropdown() {
 	const triggerLabel = createMemo(() => {
 		const availability = organizationSelection.availability();
 		if (availability === "available") {
-			return selectedOrganization()?.name ?? "Organization";
+			return selectedOrganization()?.name ?? t("Organization");
 		}
-		if (availability === "loading") return "Loading...";
-		if (availability === "unavailable") return "Organization";
-		return "Sign in";
+		if (availability === "loading") return t("Loading...");
+		if (availability === "unavailable") return t("Organization");
+		return t("Sign in");
 	});
 	const fallbackTitle = createMemo(() => {
 		const availability = organizationSelection.availability();
-		if (availability === "loading") return "Loading organizations";
-		if (availability === "unavailable") return "Unable to load organizations";
-		return "Organization branding requires sign in";
+		if (availability === "loading") return t("Loading organizations");
+		if (availability === "unavailable")
+			return t("Unable to load organizations");
+		return t("Organization branding requires sign in");
 	});
 	const fallbackDescription = createMemo(() => {
 		const availability = organizationSelection.availability();
 		if (availability === "loading") {
-			return "Fetching organization branding from Cap web.";
+			return t("Fetching organization branding from Cap web.");
 		}
 		if (availability === "unavailable") {
-			return "Organization branding uses live Cap web data. Connect to Cap web to select an organization and use its colours.";
+			return t(
+				"Organization branding uses live Cap web data. Connect to Cap web to select an organization and use its colours.",
+			);
 		}
-		return "Sign in to select an organization, edit brand colours, and use those colours in Studio.";
+		return t(
+			"Sign in to select an organization, edit brand colours, and use those colours in Studio.",
+		);
 	});
 
 	const selectOrganization = (organization: DesktopOrganization) => {

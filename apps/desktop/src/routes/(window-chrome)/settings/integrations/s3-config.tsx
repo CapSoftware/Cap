@@ -2,6 +2,7 @@ import { Button } from "@cap/ui-solid";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { useMutation } from "@tanstack/solid-query";
 import { createResource, Show, Suspense } from "solid-js";
+import { useI18n } from "~/i18n";
 import { Input } from "~/routes/editor/ui";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
@@ -28,6 +29,7 @@ const DEFAULT_CONFIG = {
 };
 
 export default function S3ConfigPage() {
+	const { t } = useI18n();
 	const organizationSelection = createSelectedOrganization();
 	const [_s3Config, { refetch }] = createResource(
 		() => organizationSelection.selectedOrganizationId(),
@@ -159,20 +161,21 @@ export default function S3ConfigPage() {
 			<SettingsPageContent>
 				<IntegrationConfigHeader title="S3 Config" />
 				<Section
-					title="Configuration"
+					title={t("Configuration")}
 					description={
 						<>
-							It should take under 10 minutes to set up and connect your storage
-							bucket to Cap. View the{" "}
+							{t(
+								"It should take under 10 minutes to set up and connect your storage bucket to Cap. View the",
+							)}{" "}
 							<a
 								href="https://cap.so/docs/s3-config"
 								target="_blank"
 								class="underline text-gray-12"
 								rel="noopener"
 							>
-								Storage Config Guide
+								{t("Storage Config Guide")}
 							</a>{" "}
-							to get started.
+							{t("to get started.")}
 						</>
 					}
 				>
@@ -188,14 +191,14 @@ export default function S3ConfigPage() {
 								<Show when={managedByOrganization()}>
 									{(organization) => (
 										<p class="text-xs leading-relaxed text-gray-10">
-											Managed by your organization: {organization().name}
+											{t("Managed by your organization:")} {organization().name}
 										</p>
 									)}
 								</Show>
 
 								<div class="space-y-2">
 									<label class="text-[13px] text-gray-12">
-										Storage Provider
+										{t("Storage Provider")}
 									</label>
 									<div class="relative">
 										<select
@@ -211,9 +214,9 @@ export default function S3ConfigPage() {
 										>
 											<option value="aws">AWS S3</option>
 											<option value="cloudflare">Cloudflare R2</option>
-											<option value="supabase">Supabase</option>
-											<option value="minio">MinIO</option>
-											<option value="other">Other S3-Compatible</option>
+											<option value="supabase">{t("Supabase")}</option>
+											<option value="minio">{t("MinIO")}</option>
+											<option value="other">{t("Other S3-Compatible")}</option>
 										</select>
 										<div class="flex absolute inset-y-0 right-0 items-center px-2 pointer-events-none">
 											<svg
@@ -233,24 +236,24 @@ export default function S3ConfigPage() {
 								</div>
 
 								{renderInput(
-									"Access Key ID",
+									t("Access Key ID"),
 									"accessKeyId",
 									"PL31OADSQNK",
 									"password",
 								)}
 								{renderInput(
-									"Secret Access Key",
+									t("Secret Access Key"),
 									"secretAccessKey",
 									"PL31OADSQNK",
 									"password",
 								)}
 								{renderInput(
-									"Endpoint",
+									t("Endpoint"),
 									"endpoint",
 									"https://s3.amazonaws.com",
 								)}
-								{renderInput("Bucket Name", "bucketName", "my-bucket")}
-								{renderInput("Region", "region", "us-east-1")}
+								{renderInput(t("Bucket Name"), "bucketName", "my-bucket")}
+								{renderInput(t("Region"), "region", "us-east-1")}
 							</div>
 						</Suspense>
 					</SectionCard>
@@ -272,14 +275,16 @@ export default function S3ConfigPage() {
 									variant="destructive"
 									onClick={() => deleteConfig.mutate()}
 								>
-									{deleteConfig.isPending ? "Removing..." : "Remove Config"}
+									{deleteConfig.isPending
+										? t("Removing...")
+										: t("Remove Config")}
 								</Button>
 							)}
 							<Button
 								variant="gray"
 								onClick={() => testConfig.mutate(s3Config())}
 							>
-								{testConfig.isPending ? "Testing..." : "Test Connection"}
+								{testConfig.isPending ? t("Testing...") : t("Test Connection")}
 							</Button>
 						</div>
 						<Button
@@ -287,7 +292,7 @@ export default function S3ConfigPage() {
 							variant="primary"
 							onClick={() => saveConfig.mutate(s3Config())}
 						>
-							{saveConfig.isPending ? "Saving..." : "Save"}
+							{saveConfig.isPending ? t("Saving...") : t("Save")}
 						</Button>
 					</fieldset>
 				</div>

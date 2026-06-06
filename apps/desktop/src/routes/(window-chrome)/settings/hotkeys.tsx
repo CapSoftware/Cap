@@ -12,6 +12,7 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore } from "solid-js/store";
+import { useI18n } from "~/i18n";
 import { hotkeysStore } from "~/store";
 
 import {
@@ -50,6 +51,7 @@ export default function () {
 
 const MODIFIER_KEYS = new Set(["Meta", "Shift", "Control", "Alt"]);
 function Inner(props: { initialStore: HotkeysStore | null }) {
+	const { t } = useI18n();
 	const [hotkeys, setHotkeys] = createStore<{
 		[K in HotkeyAction]?: Hotkey;
 	}>(props.initialStore?.hotkeys ?? {});
@@ -101,8 +103,10 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
 				<Section
-					title="Shortcuts"
-					description="Configure system-wide keyboard shortcuts to control Cap."
+					title={t("Shortcuts")}
+					description={t(
+						"Configure system-wide keyboard shortcuts to control Cap.",
+					)}
 				>
 					<SectionCard class="flex flex-col gap-3 p-4">
 						<Index each={actions()}>
@@ -120,7 +124,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 									<>
 										<div class="flex flex-row justify-between items-center w-full h-8">
 											<p class="text-[13px] text-gray-12">
-												{ACTION_TEXT[item()]}
+												{t(ACTION_TEXT[item()])}
 											</p>
 											<Switch>
 												<Match when={listening()?.action === item()}>
@@ -129,7 +133,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 															when={hotkeys[item()]}
 															fallback={
 																<p class="text-[13px] text-gray-11">
-																	Set hotkeys...
+																	{t("Set hotkeys...")}
 																</p>
 															}
 														>
@@ -176,7 +180,6 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 														type="button"
 														class="text-sm bg-transparent rounded-lg"
 														onClick={() => {
-															// ensures that previously selected hotkey is cleared by letting the event propagate before listening to the new hotkey
 															setTimeout(() => {
 																setListening({
 																	action: item(),
@@ -192,7 +195,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 																	class="flex items-center text-[11px] uppercase transition-colors hover:bg-gray-6 hover:border-gray-7
                         cursor-pointer py-3 px-2.5 h-5 bg-gray-4 border border-gray-5 rounded-lg text-gray-11 hover:text-gray-12"
 																>
-																	None
+																	{t("None")}
 																</p>
 															}
 														>

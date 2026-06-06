@@ -1,6 +1,7 @@
 import { createQuery } from "@tanstack/solid-query";
 import { Store } from "@tauri-apps/plugin-store";
 import { onCleanup } from "solid-js";
+import type { Locale } from "~/locales";
 import type { GeneralSettingsStore } from "~/utils/general-settings";
 import type {
 	AuthStore,
@@ -17,6 +18,10 @@ export type UserProfileStore = {
 		imageUrl: string | null;
 	};
 	updatedAt: number;
+};
+
+export type UiSettingsStore = {
+	language?: Locale;
 };
 
 let _store: Promise<Store> | undefined;
@@ -90,3 +95,4 @@ export const recordingSettingsStore = declareStore<RecordingSettingsStore>(
 		microphoneDeviceSettings: {},
 	},
 );
+export const uiSettingsStore = declareStore<UiSettingsStore>("ui_settings");

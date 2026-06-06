@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { useMutation } from "@tanstack/solid-query";
 import { createResource, createSignal, Show, Suspense } from "solid-js";
+import { useI18n } from "~/i18n";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
@@ -77,6 +78,7 @@ const fetchS3Config = async (orgId: string | null) => {
 };
 
 export default function GoogleDriveConfigPage() {
+	const { t } = useI18n();
 	const organizationSelection = createSelectedOrganization();
 	const [isWaitingForConnection, setIsWaitingForConnection] =
 		createSignal(false);
@@ -278,8 +280,10 @@ export default function GoogleDriveConfigPage() {
 			<SettingsPageContent>
 				<IntegrationConfigHeader title="Google Drive" />
 				<Section
-					title="Connection"
-					description="Google Drive stores new uploads in a private Cap folder in your Drive. Existing Cap-hosted and S3 videos keep using their current storage."
+					title={t("Connection")}
+					description={t(
+						"Google Drive stores new uploads in a private Cap folder in your Drive. Existing Cap-hosted and S3 videos keep using their current storage.",
+					)}
 				>
 					<SectionCard padded class="custom-scroll">
 						<Suspense
@@ -293,7 +297,7 @@ export default function GoogleDriveConfigPage() {
 								<Show when={managedByOrganization()}>
 									{(organization) => (
 										<p class="text-xs leading-relaxed text-gray-10">
-											Managed by your organization: {organization().name}
+											{t("Managed by your organization:")} {organization().name}
 										</p>
 									)}
 								</Show>
@@ -309,9 +313,9 @@ export default function GoogleDriveConfigPage() {
 											<p class="text-xs leading-snug text-gray-10">
 												{isConnected()
 													? isActive()
-														? "Active for new uploads"
-														: "Connected but not active"
-													: "Not connected"}
+														? t("Active for new uploads")
+														: t("Connected but not active")
+													: t("Not connected")}
 											</p>
 										</div>
 										<Button
@@ -319,7 +323,7 @@ export default function GoogleDriveConfigPage() {
 											disabled={busy()}
 											onClick={() => refetch()}
 										>
-											{isRefreshing() ? "Refreshing..." : "Refresh"}
+											{isRefreshing() ? t("Refreshing...") : t("Refresh")}
 										</Button>
 									</div>
 
@@ -332,10 +336,10 @@ export default function GoogleDriveConfigPage() {
 												onClick={() => connect.mutate()}
 											>
 												{isWaitingForConnection()
-													? "Waiting..."
+													? t("Waiting...")
 													: connect.isPending
-														? "Opening..."
-														: "Connect Google Drive"}
+														? t("Opening...")
+														: t("Connect Google Drive")}
 											</Button>
 										}
 									>
@@ -343,7 +347,9 @@ export default function GoogleDriveConfigPage() {
 											<div class="pt-3 space-y-2 border-t border-gray-3">
 												<div class="flex justify-between items-start gap-4">
 													<div class="flex flex-col gap-0.5 min-w-0">
-														<p class="text-[13px] text-gray-12">Storage</p>
+														<p class="text-[13px] text-gray-12">
+															{t("Storage")}
+														</p>
 														<Show when={quotaUsageLabel()}>
 															{(label) => (
 																<p class="text-xs leading-snug text-gray-10">
@@ -374,7 +380,7 @@ export default function GoogleDriveConfigPage() {
 													<Show when={formatBytes(storageQuota()?.remaining)}>
 														{(remaining) => (
 															<>
-																<p class="text-gray-10">Remaining</p>
+																<p class="text-gray-10">{t("Remaining")}</p>
 																<p class="text-right text-gray-11">
 																	{remaining()}
 																</p>
@@ -386,7 +392,7 @@ export default function GoogleDriveConfigPage() {
 													>
 														{(usageInDrive) => (
 															<>
-																<p class="text-gray-10">Drive files</p>
+																<p class="text-gray-10">{t("Drive files")}</p>
 																<p class="text-right text-gray-11">
 																	{usageInDrive()}
 																</p>
@@ -400,7 +406,7 @@ export default function GoogleDriveConfigPage() {
 													>
 														{(usageInDriveTrash) => (
 															<>
-																<p class="text-gray-10">Trash</p>
+																<p class="text-gray-10">{t("Trash")}</p>
 																<p class="text-right text-gray-11">
 																	{usageInDriveTrash()}
 																</p>
@@ -416,7 +422,7 @@ export default function GoogleDriveConfigPage() {
 												disabled={busy() || isActive()}
 												onClick={() => setActive.mutate("googleDrive")}
 											>
-												{isActive() ? "Active" : "Use Google Drive"}
+												{isActive() ? t("Active") : t("Use Google Drive")}
 											</Button>
 											<Show when={hasS3Config()}>
 												<Button
@@ -424,7 +430,7 @@ export default function GoogleDriveConfigPage() {
 													disabled={busy() || !isActive()}
 													onClick={() => setActive.mutate("s3")}
 												>
-													Use S3
+													{t("Use S3")}
 												</Button>
 											</Show>
 											<Button
@@ -432,14 +438,14 @@ export default function GoogleDriveConfigPage() {
 												disabled={busy()}
 												onClick={() => testConnection.mutate()}
 											>
-												{testConnection.isPending ? "Testing..." : "Test"}
+												{testConnection.isPending ? t("Testing...") : t("Test")}
 											</Button>
 											<Button
 												variant="destructive"
 												disabled={busy()}
 												onClick={() => disconnect.mutate()}
 											>
-												Disconnect
+												{t("Disconnect")}
 											</Button>
 										</div>
 									</Show>

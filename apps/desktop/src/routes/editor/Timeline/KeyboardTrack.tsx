@@ -2,6 +2,7 @@ import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import { createMemo, createRoot, For } from "solid-js";
 
+import { useI18n } from "~/i18n";
 import { useEditorContext } from "../context";
 import { useTimelineContext } from "./context";
 import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
@@ -18,6 +19,7 @@ export function KeyboardTrack(props: {
 	onDragStateChanged: (v: KeyboardSegmentDragState) => void;
 	handleUpdatePlayhead: (e: MouseEvent) => void;
 }) {
+	const { t } = useI18n();
 	const {
 		project,
 		setProject,
@@ -139,7 +141,7 @@ export function KeyboardTrack(props: {
 				each={keyboardSegments()}
 				fallback={
 					<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl pointer-events-none">
-						<div>No keyboard events</div>
+						<div>{t("No keyboard events")}</div>
 						<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
 							Record keyboard presses or generate from recording
 						</div>

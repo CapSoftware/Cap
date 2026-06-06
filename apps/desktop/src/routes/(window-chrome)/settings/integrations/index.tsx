@@ -4,6 +4,7 @@ import { createResource, For, onMount } from "solid-js";
 import IconLucideDatabase from "~icons/lucide/database";
 
 import "@total-typescript/ts-reset/filter-boolean";
+import { useI18n } from "~/i18n";
 import { authStore } from "~/store";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
@@ -45,6 +46,7 @@ const GoogleDriveIcon = (props: { class?: string }) => (
 );
 
 export default function AppsTab() {
+	const { t } = useI18n();
 	const navigate = useNavigate();
 	const auth = authStore.createQuery();
 	const organizationSelection = createSelectedOrganization();
@@ -69,26 +71,28 @@ export default function AppsTab() {
 		void commands.checkUpgradedAndUpdate();
 	});
 
-	const apps = [
+	const apps = () => [
 		{
 			name: "Google Drive",
-			description:
+			description: t(
 				"Connect Google Drive for new shareable link uploads. Cap stores new videos in a private Cap folder in your Drive and continues serving them through Cap after normal access checks.",
+			),
 			icon: GoogleDriveIcon,
 			url: "/settings/integrations/google-drive-config",
 			pro: true,
 		},
 		{
 			name: "S3 Config",
-			description:
+			description: t(
 				"Connect your own S3 bucket for complete control over your data storage. All new shareable link uploads will be automatically uploaded to your configured S3 bucket, ensuring you maintain complete ownership and control over your content. Perfect for organizations requiring data sovereignty and custom storage policies.",
+			),
 			icon: IconLucideDatabase,
 			url: "/settings/integrations/s3-config",
 			pro: true,
 		},
 	];
 
-	const handleAppClick = async (app: (typeof apps)[number]) => {
+	const handleAppClick = async (app: ReturnType<typeof apps>[number]) => {
 		try {
 			if (managedByOrganization()) return;
 			if (app.pro && !isPro()) {
@@ -105,11 +109,13 @@ export default function AppsTab() {
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
 				<Section
-					title="Integrations"
-					description="Configure integrations to extend Cap's functionality and connect with third-party services."
+					title={t("Integrations")}
+					description={t(
+						"Configure integrations to extend Cap's functionality and connect with third-party services.",
+					)}
 				>
 					<div class="space-y-3">
-						<For each={apps}>
+						<For each={apps()}>
 							{(app) => (
 								<SectionCard padded class="space-y-3">
 									<div class="flex justify-between items-center gap-3">
@@ -124,10 +130,10 @@ export default function AppsTab() {
 											onClick={() => handleAppClick(app)}
 										>
 											{managedByOrganization()
-												? "Managed by your organization"
+												? t("Managed by your organization")
 												: app.pro && !isPro()
-													? "Upgrade to Pro"
-													: "Configure"}
+													? t("Upgrade to Pro")
+													: t("Configure")}
 										</Button>
 									</div>
 									<p class="text-xs leading-snug text-gray-10">

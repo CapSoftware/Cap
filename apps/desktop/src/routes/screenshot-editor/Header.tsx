@@ -7,6 +7,7 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { createEffect, onCleanup, Suspense } from "solid-js";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { useI18n } from "~/i18n";
 import IconCapCrop from "~icons/cap/crop";
 import IconCapTrash from "~icons/cap/trash";
 import IconLucideCopy from "~icons/lucide/copy";
@@ -21,7 +22,6 @@ import { BorderPopover } from "./popovers/BorderPopover";
 import { PaddingPopover } from "./popovers/PaddingPopover";
 import { RoundingPopover } from "./popovers/RoundingPopover";
 import { ShadowPopover } from "./popovers/ShadowPopover";
-
 import {
 	DropdownItem,
 	EditorButton,
@@ -32,6 +32,7 @@ import {
 import { useScreenshotExport } from "./useScreenshotExport";
 
 export function Header() {
+	const { t } = useI18n();
 	const ctx = useScreenshotEditorContext();
 	const {
 		setDialog,
@@ -104,7 +105,7 @@ export function Header() {
 			<div class="flex items-center gap-2 absolute left-1/2 -translate-x-1/2">
 				<AspectRatioSelect />
 				<EditorButton
-					tooltipText="Crop Image"
+					tooltipText={t("Crop Image")}
 					onClick={cropDialogHandler}
 					disabled={isCropDisabled()}
 					leftIcon={<IconCapCrop class="size-4" />}
@@ -131,13 +132,13 @@ export function Header() {
 					onClick={() => {
 						exportImage("clipboard");
 					}}
-					tooltipText="Copy to Clipboard"
+					tooltipText={t("Copy to Clipboard")}
 					disabled={isExporting()}
 					leftIcon={<IconLucideCopy class="w-4" />}
 				/>
 
 				<EditorButton
-					tooltipText="Save"
+					tooltipText={t("Save")}
 					onClick={() => exportImage("file")}
 					disabled={isExporting()}
 					leftIcon={<IconLucideSave class="size-4" />}
@@ -146,7 +147,7 @@ export function Header() {
 				<DropdownMenu gutter={8} placement="bottom-end">
 					<EditorButton<typeof DropdownMenu.Trigger>
 						as={DropdownMenu.Trigger}
-						tooltipText="More Actions"
+						tooltipText={t("More Actions")}
 						leftIcon={<IconLucideMoreHorizontal class="size-4" />}
 					/>
 					<DropdownMenu.Portal>
@@ -165,13 +166,13 @@ export function Header() {
 										}}
 									>
 										<IconLucideFolder class="size-4 text-gray-11" />
-										<span>Open Folder</span>
+										<span>{t("Open Folder")}</span>
 									</DropdownItem>
 									<DropdownItem
 										onSelect={async () => {
 											if (
 												await ask(
-													"Are you sure you want to delete this screenshot?",
+													t("Are you sure you want to delete this screenshot?"),
 												)
 											) {
 												await remove(path());
@@ -180,7 +181,7 @@ export function Header() {
 										}}
 									>
 										<IconCapTrash class="size-4 text-gray-11" />
-										<span>Delete</span>
+										<span>{t("Delete")}</span>
 									</DropdownItem>
 								</MenuItemList>
 							</PopperContent>

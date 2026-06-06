@@ -8,6 +8,7 @@ import {
 	createSignal,
 	Show,
 } from "solid-js";
+import { useI18n } from "~/i18n";
 import { trackEvent } from "~/utils/analytics";
 import { createCurrentRecordingQuery } from "~/utils/queries";
 import {
@@ -26,8 +27,6 @@ import {
 import InfoPill from "./InfoPill";
 import TargetSelectInfoPill from "./TargetSelectInfoPill";
 import useRequestPermission from "./useRequestPermission";
-
-const NO_CAMERA = "No Camera";
 
 export default function CameraSelect(props: {
 	disabled?: boolean;
@@ -93,12 +92,13 @@ export default function CameraSelect(props: {
 		props.permissions.camera === "granted" ||
 		props.permissions.camera === "notNeeded";
 
+	const { t } = useI18n();
 	const hasSelection = () => props.isSelected ?? props.value !== null;
 
 	const label = () =>
 		props.value?.display_name ??
 		(hasSelection() ? props.selectedLabel : null) ??
-		(hasSelection() ? "Camera" : NO_CAMERA);
+		(hasSelection() ? t("Camera") : t("No Camera"));
 
 	const showHiddenIndicator = () =>
 		props.value !== null &&
@@ -135,8 +135,8 @@ export default function CameraSelect(props: {
 							onClick={openCameraWindow}
 							onPointerDown={(e) => e.stopPropagation()}
 							class={DEVICE_SHORTCUT_BUTTON_CLASS}
-							title="Show camera preview"
-							aria-label="Show camera preview"
+							title={t("Show camera preview")}
+							aria-label={t("Show camera preview")}
 						>
 							<IconLucideEyeOff class="size-3.5" />
 						</button>
@@ -151,8 +151,8 @@ export default function CameraSelect(props: {
 							}}
 							onPointerDown={(e) => e.stopPropagation()}
 							class={DEVICE_SHORTCUT_BUTTON_CLASS}
-							title="Camera settings"
-							aria-label="Camera settings"
+							title={t("Camera settings")}
+							aria-label={t("Camera settings")}
 						>
 							<IconLucideSettings class="size-3.5" />
 						</button>
@@ -243,6 +243,7 @@ export function CameraSelectBase(props: {
 		props.permissions.camera === "granted" ||
 		props.permissions.camera === "notNeeded";
 
+	const { t } = useI18n();
 	const onChange = (cameraLabel: CameraInfo | null) => {
 		if (!cameraLabel && !permissionGranted())
 			return requestPermission("camera", props.permissions?.camera);
@@ -274,7 +275,7 @@ export function CameraSelectBase(props: {
 
 					Promise.all([
 						CheckMenuItem.new({
-							text: NO_CAMERA,
+							text: t("No Camera"),
 							checked: props.value === null,
 							action: () => onChange(null),
 						}),
@@ -296,7 +297,7 @@ export function CameraSelectBase(props: {
 			>
 				<IconCapCamera class={props.iconClass} />
 				<p class="flex-1 text-sm text-left truncate">
-					{props.value?.display_name ?? NO_CAMERA}
+					{props.value?.display_name ?? t("No Camera")}
 				</p>
 				<div class="flex items-center gap-1">
 					{showHiddenIndicator() && (
@@ -305,7 +306,7 @@ export function CameraSelectBase(props: {
 							onClick={openCameraWindow}
 							onPointerDown={(e) => e.stopPropagation()}
 							class="flex items-center justify-center px-2 py-1 rounded-full bg-gray-6 text-gray-11 hover:bg-gray-7 transition-colors"
-							title="Show camera preview"
+							title={t("Show camera preview")}
 						>
 							<IconLucideEyeOff class="size-3.5" />
 						</button>

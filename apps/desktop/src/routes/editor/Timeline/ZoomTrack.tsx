@@ -15,6 +15,7 @@ import {
 	Switch,
 } from "solid-js";
 import { produce } from "solid-js/store";
+import { useI18n } from "~/i18n";
 import { commands } from "~/utils/tauri";
 import { useEditorContext } from "../context";
 import {
@@ -43,6 +44,7 @@ export function ZoomTrack(props: {
 	onDragStateChanged: (v: ZoomSegmentDragState) => void;
 	handleUpdatePlayhead: (e: MouseEvent) => void;
 }) {
+	const { t } = useI18n();
 	const {
 		project,
 		setProject,
@@ -328,7 +330,7 @@ export function ZoomTrack(props: {
 									type="button"
 									class="flex shrink-0 justify-center items-center rounded-full outline-hidden text-gray-11 hover:text-gray-12 hover:bg-gray-5 focus-visible:ring-2 focus-visible:ring-gray-8 size-8 transition-colors"
 									disabled={isGeneratingAutoZoom()}
-									aria-label="Dismiss for this session"
+									aria-label={t("Dismiss for this session")}
 									onClick={() => setSessionDismissedGenerateZoomPrompt(true)}
 								>
 									<IconLucideX class="size-4" />
@@ -654,7 +656,7 @@ export function ZoomTrack(props: {
 												</Match>
 												<Match when={true}>
 													<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
-														<span class="opacity-70">Zoom</span>
+														<span class="opacity-70">{t("Zoom")}</span>
 														<div class="flex gap-1 items-center text-md">
 															<IconLucideSearch class="size-3.5" />
 															{zoomPercentage()}

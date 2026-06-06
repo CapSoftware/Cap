@@ -3,6 +3,7 @@ import { type } from "@tauri-apps/plugin-os";
 import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 
+import { useI18n } from "~/i18n";
 import { generalSettingsStore } from "~/store";
 import {
 	deriveGeneralSettings,
@@ -30,6 +31,7 @@ function Inner(props: {
 	initialStore: GeneralSettingsStore | null;
 	osType: ReturnType<typeof type>;
 }) {
+	const { t } = useI18n();
 	const [settings, setSettings] = createStore<GeneralSettingsStore>(
 		deriveGeneralSettings(props.initialStore),
 	);
@@ -62,15 +64,19 @@ function Inner(props: {
 					when={props.osType !== "windows"}
 					fallback={
 						<p class="text-xs leading-relaxed text-gray-10 px-1">
-							No experimental features are currently available on this platform.
+							{t(
+								"No experimental features are currently available on this platform.",
+							)}
 						</p>
 					}
 				>
-					<Section title="Preview">
+					<Section title={t("Preview")}>
 						<SectionRows>
 							<ToggleSettingItem
-								label="Native camera preview"
-								description="Render the camera preview using a native GPU surface instead of through the webview. Not stable on certain Windows systems."
+								label={t("Native camera preview")}
+								description={t(
+									"Render the camera preview using a native GPU surface instead of through the webview. Not stable on certain Windows systems.",
+								)}
 								value={!!settings.enableNativeCameraPreview}
 								onChange={(value) =>
 									handleChange("enableNativeCameraPreview", value)
@@ -80,11 +86,13 @@ function Inner(props: {
 					</Section>
 				</Show>
 
-				<Section title="Reliability">
+				<Section title={t("Reliability")}>
 					<SectionRows>
 						<ToggleSettingItem
-							label="Out-of-process muxer"
-							description="Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary."
+							label={t("Out-of-process muxer")}
+							description={t(
+								"Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary.",
+							)}
 							value={!!settings.outOfProcessMuxer}
 							onChange={(value) => handleChange("outOfProcessMuxer", value)}
 						/>

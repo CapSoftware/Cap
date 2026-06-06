@@ -8,6 +8,7 @@ import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
 
 import Tooltip from "~/components/Tooltip";
+import { useI18n } from "~/i18n";
 import { captionsStore } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
@@ -42,6 +43,7 @@ function logCropProfile(
 }
 
 export function PlayerContent() {
+	const { t } = useI18n();
 	const {
 		project,
 		editorInstance,
@@ -57,16 +59,16 @@ export function PlayerContent() {
 		setPreviewQuality,
 	} = useEditorContext();
 
-	const previewOptions = [
-		{ label: "Full", value: "full" as EditorPreviewQuality },
-		{ label: "Half", value: "half" as EditorPreviewQuality },
-		{ label: "Quarter", value: "quarter" as EditorPreviewQuality },
+	const previewOptions = () => [
+		{ label: t("Full"), value: "full" as EditorPreviewQuality },
+		{ label: t("Half"), value: "half" as EditorPreviewQuality },
+		{ label: t("Quarter"), value: "quarter" as EditorPreviewQuality },
 	];
 
 	const zoomHint = () =>
 		ostype() === "windows"
-			? "Hold Ctrl and scroll, or press Ctrl +/- to zoom"
-			: "Pinch, or press Cmd +/- to zoom";
+			? t("Hold Ctrl and scroll, or press Ctrl +/- to zoom")
+			: t("Pinch, or press Cmd +/- to zoom");
 
 	// Load captions on mount
 	onMount(async () => {
@@ -321,20 +323,22 @@ export function PlayerContent() {
 				<div class="flex items-center gap-3">
 					<AspectRatioSelect />
 					<EditorButton
-						tooltipText="Crop Video"
+						tooltipText={t("Crop Video")}
 						onClick={cropDialogHandler}
 						leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
 					>
-						Crop
+						{t("Crop")}
 					</EditorButton>
 				</div>
 				<div class="flex items-center gap-2">
-					<span class="text-xs font-medium text-gray-11">Preview quality</span>
+					<span class="text-xs font-medium text-gray-11">
+						{t("Preview quality")}
+					</span>
 					<KSelect<{ label: string; value: EditorPreviewQuality }>
-						options={previewOptions}
+						options={previewOptions()}
 						optionValue="value"
 						optionTextValue="label"
-						value={previewOptions.find(
+						value={previewOptions().find(
 							(option) => option.value === previewQuality(),
 						)}
 						onChange={(next) => {
@@ -361,7 +365,7 @@ export function PlayerContent() {
 								value: EditorPreviewQuality;
 							}> class="flex-1 text-left truncate">
 								{(state) =>
-									state.selectedOption()?.label ?? "Select preview quality"
+									state.selectedOption()?.label ?? t("Select preview quality")
 								}
 							</KSelect.Value>
 							<KSelect.Icon>
@@ -407,7 +411,7 @@ export function PlayerContent() {
 					>
 						<IconCapPrev class="text-gray-12 size-3" />
 					</button>
-					<Tooltip kbd={["Space"]} content="Play/Pause video">
+					<Tooltip kbd={["Space"]} content={t("Play/Pause video")}>
 						<button
 							type="button"
 							onClick={handlePlayPauseClick}
@@ -435,7 +439,7 @@ export function PlayerContent() {
 				<div class="flex flex-row flex-1 gap-4 justify-end items-center">
 					<div class="flex-1" />
 					<EditorButton<typeof KToggleButton>
-						tooltipText="Toggle Split"
+						tooltipText={t("Toggle Split")}
 						kbd={["S"]}
 						pressed={editorState.timeline.interactMode === "split"}
 						onChange={(v: boolean) =>
@@ -454,7 +458,7 @@ export function PlayerContent() {
 						}
 					/>
 					<div class="w-px h-8 rounded-full bg-gray-4" />
-					<Tooltip kbd={["meta", "-"]} content="Zoom out">
+					<Tooltip kbd={["meta", "-"]} content={t("Zoom out")}>
 						<IconCapZoomOut
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
@@ -465,7 +469,7 @@ export function PlayerContent() {
 							class="text-gray-12 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
 						/>
 					</Tooltip>
-					<Tooltip kbd={["meta", "+"]} content="Zoom in">
+					<Tooltip kbd={["meta", "+"]} content={t("Zoom in")}>
 						<IconCapZoomIn
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
@@ -499,7 +503,7 @@ export function PlayerContent() {
 						formatTooltip={() =>
 							`${editorState.timeline.transform.zoom.toFixed(
 								0,
-							)} seconds visible`
+							)} ${t("seconds visible")}`
 						}
 					/>
 				</div>
@@ -524,6 +528,7 @@ const gridStyle = {
 };
 
 function PreviewCanvas() {
+	const { t } = useI18n();
 	const { latestFrame, canvasControls, performanceMode, setPerformanceMode } =
 		useEditorContext();
 
@@ -535,7 +540,9 @@ function PreviewCanvas() {
 			items: [
 				{
 					id: "performance-mode",
-					text: performanceMode() ? "✓ Performance Mode" : "Performance Mode",
+					text: performanceMode()
+						? `✓ ${t("Performance Mode")}`
+						: t("Performance Mode"),
 					action: () => setPerformanceMode(!performanceMode()),
 				},
 			],

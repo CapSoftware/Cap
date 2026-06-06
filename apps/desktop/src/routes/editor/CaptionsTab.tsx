@@ -15,6 +15,7 @@ import { produce } from "solid-js/store";
 import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
+import { useI18n } from "~/i18n";
 import { defaultCaptionSettings } from "~/store/captions";
 import type { OrganizationBrandColorSwatch } from "~/utils/organization-branding";
 import type { CaptionSettings } from "~/utils/tauri";
@@ -136,6 +137,7 @@ const LANGUAGE_OPTIONS: LanguageOption[] = [
 export function CaptionsTab(props: {
 	brandColorSwatches: OrganizationBrandColorSwatch[];
 }) {
+	const { t } = useI18n();
 	const { project, setProject, editorInstance, editorState, setEditorState } =
 		useEditorContext();
 
@@ -387,10 +389,10 @@ export function CaptionsTab(props: {
 			unlisten();
 
 			setDownloadedModels((prev) => [...prev, modelToDownload]);
-			toast.success("Transcription model downloaded successfully!");
+			toast.success(t("Transcription model downloaded successfully!"));
 		} catch (error) {
 			console.error("Error downloading model:", error);
-			toast.error("Failed to download transcription model");
+			toast.error(t("Failed to download transcription model"));
 		} finally {
 			setIsDownloading(false);
 			setDownloadingModel(null);
@@ -399,7 +401,7 @@ export function CaptionsTab(props: {
 
 	const generateCaptions = async () => {
 		if (!editorInstance) {
-			toast.error("Editor instance not found");
+			toast.error(t("Editor instance not found"));
 			return;
 		}
 
@@ -426,7 +428,7 @@ export function CaptionsTab(props: {
 				setEditorState("timeline", "tracks", "caption", true);
 				setEditorState("captions", "isStale", false);
 
-				toast.success("Captions generated successfully!");
+				toast.success(t("Captions generated successfully!"));
 			} else {
 				toast.error(
 					"No captions were generated. The audio might be too quiet or unclear.",
@@ -435,7 +437,7 @@ export function CaptionsTab(props: {
 		} catch (error) {
 			console.error("Error generating captions:", error);
 			const errorMessage = getCaptionGenerationErrorMessage(error);
-			toast.error(`Failed to generate captions: ${errorMessage}`);
+			toast.error(`${t("Failed to generate captions:")} ${errorMessage}`);
 		} finally {
 			setIsGenerating(false);
 		}
@@ -448,11 +450,11 @@ export function CaptionsTab(props: {
 	);
 
 	return (
-		<Field name="Captions" icon={<IconCapMessageBubble />} badge="Beta">
+		<Field name={t("Captions")} icon={<IconCapMessageBubble />} badge="Beta">
 			<div class="flex flex-col gap-4">
 				<div class="space-y-6 transition-all duration-200">
 					<div class="space-y-4">
-						<Subfield name="Model" class="items-start">
+						<Subfield name={t("Model")} class="items-start">
 							<KSelect<string>
 								options={availableModelOptions().map((model) => model.name)}
 								value={selectedModel()}
@@ -510,7 +512,7 @@ export function CaptionsTab(props: {
 									<div class="min-w-0 flex-1 text-left">
 										<div class="flex items-center gap-1.5">
 											<span class="truncate font-medium">
-												{selectedModelOption()?.label || "Select a model"}
+												{selectedModelOption()?.label || t("Select a model")}
 											</span>
 											<Show when={selectedModelOption()}>
 												<Tooltip
@@ -563,7 +565,7 @@ export function CaptionsTab(props: {
 							</p>
 						</Show>
 
-						<Subfield name="Language">
+						<Subfield name={t("Language")}>
 							<KSelect<string>
 								options={LANGUAGE_OPTIONS.map((l) => l.code)}
 								value={selectedLanguage()}
@@ -592,7 +594,7 @@ export function CaptionsTab(props: {
 												(l) => l.code === state.selectedOption(),
 											);
 											return (
-												<span>{language?.label || "Select a language"}</span>
+												<span>{language?.label || t("Select a language")}</span>
 											);
 										}}
 									</KSelect.Value>
@@ -629,7 +631,7 @@ export function CaptionsTab(props: {
 												fallback={
 													<>
 														<IconLucideDownload class="size-4" />
-														Download{" "}
+														{t("Download")}{" "}
 														{
 															availableModelOptions().find(
 																(m) => m.name === selectedModel(),
@@ -639,7 +641,7 @@ export function CaptionsTab(props: {
 													</>
 												}
 											>
-												Downloading... {Math.round(downloadProgress())}%
+												{t("Downloading...")} {Math.round(downloadProgress())}%
 											</Show>
 										</Button>
 										<Show when={isDownloading()}>
@@ -662,8 +664,8 @@ export function CaptionsTab(props: {
 										{isGenerating()
 											? "Generating..."
 											: hasCaptions()
-												? "Regenerate Captions"
-												: "Generate Captions"}
+												? t("Regenerate Captions")
+												: t("Generate Captions")}
 									</Button>
 								</Show>
 							</Show>
@@ -676,10 +678,10 @@ export function CaptionsTab(props: {
 							!hasCaptions() && "opacity-50 pointer-events-none",
 						)}
 					>
-						<Field name="Font Settings" icon={<IconCapMessageBubble />}>
+						<Field name={t("Font Settings")} icon={<IconCapMessageBubble />}>
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-11 text-sm">Font Family</span>
+									<span class="text-gray-11 text-sm">{t("Font Family")}</span>
 									<KSelect<string>
 										options={FONT_OPTIONS.map((f) => f.value)}
 										value={getSetting("font")}
@@ -730,7 +732,7 @@ export function CaptionsTab(props: {
 								</div>
 
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-11 text-sm">Size</span>
+									<span class="text-gray-11 text-sm">{t("Size")}</span>
 									<Slider
 										value={[getSetting("size")]}
 										onChange={(v) => updateCaptionSetting("size", v[0])}
@@ -763,7 +765,7 @@ export function CaptionsTab(props: {
 								</div>
 
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-11 text-sm">Text Color</span>
+									<span class="text-gray-11 text-sm">{t("Text Color")}</span>
 									<HexColorInput
 										value={getSetting("color")}
 										brandColorSwatches={props.brandColorSwatches}
@@ -773,10 +775,15 @@ export function CaptionsTab(props: {
 							</div>
 						</Field>
 
-						<Field name="Background Settings" icon={<IconCapMessageBubble />}>
+						<Field
+							name={t("Background Settings")}
+							icon={<IconCapMessageBubble />}
+						>
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-11 text-sm">Background Color</span>
+									<span class="text-gray-11 text-sm">
+										{t("Background Color")}
+									</span>
 									<HexColorInput
 										value={getSetting("backgroundColor")}
 										brandColorSwatches={props.brandColorSwatches}
@@ -787,7 +794,9 @@ export function CaptionsTab(props: {
 								</div>
 
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-11 text-sm">Background Opacity</span>
+									<span class="text-gray-11 text-sm">
+										{t("Background Opacity")}
+									</span>
 									<Slider
 										value={[getSetting("backgroundOpacity")]}
 										onChange={(v) =>
@@ -802,7 +811,7 @@ export function CaptionsTab(props: {
 							</div>
 						</Field>
 
-						<Field name="Position" icon={<IconCapMessageBubble />}>
+						<Field name={t("Position")} icon={<IconCapMessageBubble />}>
 							<KSelect<string>
 								options={CAPTION_POSITION_OPTIONS.map((p) => p.value)}
 								value={getSetting("position")}
@@ -855,10 +864,12 @@ export function CaptionsTab(props: {
 							</KSelect>
 						</Field>
 
-						<Field name="Animation" icon={<IconCapMessageBubble />}>
+						<Field name={t("Animation")} icon={<IconCapMessageBubble />}>
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-11 text-sm">Highlight Color</span>
+									<span class="text-gray-11 text-sm">
+										{t("Highlight Color")}
+									</span>
 									<HexColorInput
 										value={getSetting("highlightColor")}
 										brandColorSwatches={props.brandColorSwatches}
@@ -868,7 +879,7 @@ export function CaptionsTab(props: {
 									/>
 								</div>
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-11 text-sm">Fade Duration</span>
+									<span class="text-gray-11 text-sm">{t("Fade Duration")}</span>
 									<Slider
 										value={[getSetting("fadeDuration") * 100]}
 										onChange={(v) =>
@@ -886,7 +897,7 @@ export function CaptionsTab(props: {
 							</div>
 						</Field>
 
-						<Field name="Font Weight" icon={<IconCapMessageBubble />}>
+						<Field name={t("Font Weight")} icon={<IconCapMessageBubble />}>
 							<KSelect
 								options={TEXT_WEIGHT_OPTIONS}
 								optionValue="value"
@@ -942,8 +953,8 @@ export function CaptionsTab(props: {
 							</KSelect>
 						</Field>
 
-						<Field name="Export Options" icon={<IconCapMessageBubble />}>
-							<Subfield name="Export with Subtitles">
+						<Field name={t("Export Options")} icon={<IconCapMessageBubble />}>
+							<Subfield name={t("Export with Subtitles")}>
 								<Toggle
 									checked={getSetting("exportWithSubtitles")}
 									onChange={(checked) =>
@@ -964,13 +975,13 @@ export function CaptionsTab(props: {
 						{(() => {
 							return (
 								<Field
-									name="Selected Caption Override"
+									name={t("Selected Caption Override")}
 									icon={<IconCapMessageBubble />}
 								>
 									<Show when={selectedCaptionSegment()}>
 										{(seg) => (
 											<div class="space-y-3">
-												<Subfield name="Start Time">
+												<Subfield name={t("Start Time")}>
 													<Input
 														type="number"
 														value={seg().start.toFixed(2)}
@@ -985,7 +996,7 @@ export function CaptionsTab(props: {
 														}
 													/>
 												</Subfield>
-												<Subfield name="End Time">
+												<Subfield name={t("End Time")}>
 													<Input
 														type="number"
 														value={seg().end.toFixed(2)}
@@ -998,7 +1009,7 @@ export function CaptionsTab(props: {
 														}
 													/>
 												</Subfield>
-												<Subfield name="Caption Text">
+												<Subfield name={t("Caption Text")}>
 													<Input
 														type="text"
 														value={seg().text}
@@ -1015,7 +1026,7 @@ export function CaptionsTab(props: {
 														}
 													/>
 												</Subfield>
-												<Subfield name="Fade Duration Override">
+												<Subfield name={t("Fade Duration Override")}>
 													<Slider
 														value={[
 															(seg().fadeDurationOverride ??
