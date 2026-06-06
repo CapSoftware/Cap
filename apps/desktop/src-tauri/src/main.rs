@@ -1,10 +1,12 @@
 #![recursion_limit = "256"]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "macos")]
+use std::ffi::CStr;
 use std::sync::Arc;
 
 use cap_desktop_lib::DynLoggingLayer;
-use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 const TOKIO_WORKER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 
@@ -56,7 +58,7 @@ fn main() {
         let path = dirs::home_dir()
             .unwrap()
             .join("Library/Logs")
-            .join("so.cap.desktop");
+            .join(macos_log_bundle_identifier().unwrap_or_else(|| "so.cap.desktop".to_string()));
 
         #[cfg(not(target_os = "macos"))]
         let path = dirs::data_local_dir()
@@ -156,6 +158,33 @@ fn main() {
         .build()
         .expect("Failed to build multi threaded tokio runtime")
         .block_on(cap_desktop_lib::run(handle, logs_dir));
+}
+
+#[cfg(target_os = "macos")]
+fn macos_log_bundle_identifier() -> Option<String> {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSAutoreleasePool;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    unsafe {
+        let _pool = NSAutoreleasePool::new(nil);
+        let bundle: id = msg_send![class!(NSBundle), mainBundle];
+        if bundle == nil {
+            return None;
+        }
+
+        let identifier: id = msg_send![bundle, bundleIdentifier];
+        if identifier == nil {
+            return None;
+        }
+
+        let utf8: *const std::os::raw::c_char = msg_send![identifier, UTF8String];
+        if utf8.is_null() {
+            return None;
+        }
+
+        Some(CStr::from_ptr(utf8).to_string_lossy().into_owned())
+    }
 }
 
 fn install_panic_hook(logs_dir: std::path::PathBuf) {
