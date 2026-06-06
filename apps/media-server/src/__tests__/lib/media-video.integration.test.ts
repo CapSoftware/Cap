@@ -21,6 +21,7 @@ import {
 	materializeStreamingInput,
 	muxMediaTracksToMp4,
 	normalizeVideoInputExtension,
+	pickMobileSafeH264Level,
 	processVideo,
 	repairContainer,
 	uploadToS3,
@@ -39,6 +40,25 @@ async function expectRejected(promise: Promise<unknown>): Promise<void> {
 		rejected = true;
 	}
 	expect(rejected).toBe(true);
+}
+
+function readH264Level(filePath: string): number {
+	const output = execFileSync("ffprobe", [
+		"-hide_banner",
+		"-v",
+		"error",
+		"-select_streams",
+		"v:0",
+		"-show_entries",
+		"stream=level",
+		"-of",
+		"default=noprint_wrappers=1:nokey=1",
+		filePath,
+	])
+		.toString()
+		.trim();
+
+	return Number.parseInt(output, 10);
 }
 
 afterAll(() => {
@@ -599,6 +619,50 @@ describe("processVideo integration tests", () => {
 		expect(outputSize).toBeGreaterThan(Math.round(sourceSize * 0.75));
 
 		await tempFile.cleanup();
+	}, 120000);
+
+	test("re-encodes compatible h264 input when the level is unsafe for mobile", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-high-level-h264-"));
+		try {
+			const highLevelPath = join(workDir, "high-level.mp4");
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-i",
+				TEST_VIDEO_WITH_AUDIO,
+				"-c:v",
+				"libx264",
+				"-level:v",
+				"6.1",
+				"-c:a",
+				"copy",
+				highLevelPath,
+			]);
+
+			const metadata = await probeVideo(`file://${highLevelPath}`);
+			const expectedLevel = pickMobileSafeH264Level(metadata, {
+				maxWidth: metadata.width,
+				maxHeight: metadata.height,
+			});
+
+			expect(readH264Level(highLevelPath)).toBeGreaterThan(expectedLevel.value);
+
+			const tempFile = await processVideo(highLevelPath, metadata, {
+				maxWidth: metadata.width,
+				maxHeight: metadata.height,
+			});
+			tempFiles.push(tempFile.path);
+
+			expect(readH264Level(tempFile.path)).toBeLessThanOrEqual(
+				expectedLevel.value,
+			);
+
+			await tempFile.cleanup();
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
 	}, 120000);
 
 	test("transcodes raw webm input into a valid mp4 output", async () => {

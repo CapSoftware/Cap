@@ -349,6 +349,54 @@ export function ZoomTrack(props: {
 
 						const zoomSegments = () => project.timeline?.zoomSegments ?? [];
 
+						// Double-clicking a handle expands the segment as far as it can go
+						// in that direction (up to the neighbouring segment / timeline edge).
+						const fillStart = () => {
+							const segs = zoomSegments();
+							let minValue = 0;
+							for (let j = segs.length - 1; j >= 0; j--) {
+								const s = segs[j];
+								if (s && s.end <= segment().start) {
+									minValue = s.end;
+									break;
+								}
+							}
+							batch(() => {
+								setProject("timeline", "zoomSegments", i, "start", minValue);
+								setProject(
+									"timeline",
+									"zoomSegments",
+									produce((s) => {
+										s.sort((a, b) => a.start - b.start);
+									}),
+								);
+							});
+							setPreviewTime(minValue);
+						};
+
+						const fillEnd = () => {
+							const segs = zoomSegments();
+							let maxValue = totalDuration();
+							for (let j = 0; j < segs.length; j++) {
+								const s = segs[j];
+								if (s && s.start > segment().end) {
+									maxValue = s.start;
+									break;
+								}
+							}
+							batch(() => {
+								setProject("timeline", "zoomSegments", i, "end", maxValue);
+								setProject(
+									"timeline",
+									"zoomSegments",
+									produce((s) => {
+										s.sort((a, b) => a.start - b.start);
+									}),
+								);
+							});
+							setPreviewTime(maxValue);
+						};
+
 						function createMouseDownDrag<T>(
 							setup: () => T,
 							_update: (e: MouseEvent, v: T, initialMouseX: number) => void,
@@ -494,6 +542,10 @@ export function ZoomTrack(props: {
 							>
 								<SegmentHandle
 									position="start"
+									onDblClick={(e) => {
+										e.stopPropagation();
+										fillStart();
+									}}
 									onMouseDown={createMouseDownDrag(
 										() => {
 											const start = segment().start;
@@ -615,6 +667,10 @@ export function ZoomTrack(props: {
 								</SegmentContent>
 								<SegmentHandle
 									position="end"
+									onDblClick={(e) => {
+										e.stopPropagation();
+										fillEnd();
+									}}
 									onMouseDown={createMouseDownDrag(
 										() => {
 											const end = segment().end;

@@ -26,6 +26,7 @@ import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
 import { clientEnv } from "~/utils/env";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
+import IconLucideTerminal from "~icons/lucide/terminal";
 import IconLucideUserRound from "~icons/lucide/user-round";
 
 const USER_PROFILE_CACHE_GC_MS = 2 * 60 * 60 * 1000;
@@ -197,6 +198,11 @@ export default function Settings(props: RouteSectionProps) {
 			href: "hotkeys",
 			name: "Shortcuts",
 			icon: IconCapHotkeys,
+		},
+		{
+			href: "cli",
+			name: "CLI",
+			icon: IconLucideTerminal,
 		},
 		{
 			href: "recordings",

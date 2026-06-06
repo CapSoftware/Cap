@@ -7,6 +7,8 @@ mod auth;
 mod camera;
 mod camera_legacy;
 mod captions;
+mod cli;
+mod crash_sentinel;
 mod deeplink_actions;
 mod display_utils;
 mod editor_window;
@@ -1616,6 +1618,21 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     let started = Instant::now();
     log_process_memory_snapshot("exit_cleanup_begin");
 
+    // Reverse the macOS Liquid Glass private SPI (remove the NSGlassEffectView, restore
+    // window/WKWebView occlusion detection) BEFORE anything else, so a slow camera/ML
+    // shutdown can never starve it. Leaving an occlusion-suppressed private glass view
+    // attached when the process hard-exits can wedge WindowServer on macOS 26 and soft-
+    // restart the user's login session. Bounded so a stuck main thread can't block exit.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = await_exit_step(
+            "teardown_liquid_glass",
+            APP_EXIT_STEP_TIMEOUT,
+            crate::platform::teardown_all_liquid_glass(app),
+        )
+        .await;
+    }
+
     export::cancel_all_exports();
     power_observer::uninstall(app);
     fake_window::cancel_all_fake_window_listeners(app);
@@ -1756,6 +1773,11 @@ pub async fn request_app_exit(app: AppHandle) {
             timeout_ms = APP_EXIT_TOTAL_TIMEOUT.as_millis(),
             "Timed out while cleaning up app resources for exit"
         );
+    } else {
+        // Cleanup finished within budget — disarm the sentinel so this graceful exit
+        // is not reported as an unexpected termination on next launch. A timed-out
+        // (hung) shutdown deliberately leaves it armed.
+        crash_sentinel::mark_clean_exit();
     }
 
     finalize_app_exit(&app, 0);
@@ -3973,6 +3995,10 @@ type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>,
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
+    // Arm the unexpected-termination sentinel before anything else can crash, and
+    // report any previous session that died without a clean shutdown.
+    crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
+
     ffmpeg::init()
         .map_err(|e| {
             error!("Failed to initialize ffmpeg: {e}");
@@ -3992,6 +4018,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording_settings::set_recording_mode,
             upload_logs,
             get_system_diagnostics,
+            cli::get_cli_install_status,
+            cli::install_cli,
+            cli::uninstall_cli,
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,
@@ -5062,7 +5091,15 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
         tauri::RunEvent::Exit => {
             #[cfg(target_os = "macos")]
             {
-                warn!("macOS runtime exit reached; forcing process exit");
+                // This arm runs on the AppKit main thread, so reverse the Liquid Glass
+                // SPI inline before the hard _exit. This is the last-chance teardown for
+                // terminal paths that skip cleanup_app_resources_for_exit; touching the
+                // NSWindow/NSView here is safe precisely because we are on main.
+                let torn_down = crate::platform::teardown_all_liquid_glass_on_main(_handle);
+                warn!(
+                    windows = torn_down,
+                    "macOS runtime exit reached; tore down liquid glass, forcing process exit"
+                );
                 force_exit(0);
             }
 

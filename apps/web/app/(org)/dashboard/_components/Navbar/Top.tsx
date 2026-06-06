@@ -67,6 +67,7 @@ const Top = () => {
 		"/dashboard/settings/organization/billing": "Organization Settings",
 		"/dashboard/settings/organization/members": "Organization Settings",
 		"/dashboard/settings/account": "Account Settings",
+		"/dashboard/settings/notifications": "Notification Settings",
 		"/dashboard/spaces": "Spaces",
 		"/dashboard/spaces/browse": "Browse Spaces",
 		"/dashboard/analytics": "Analytics",
@@ -165,7 +166,12 @@ const Top = () => {
 					)}
 					<FontAwesomeIcon className="text-gray-12 size-3.5" icon={faBell} />
 					<AnimatePresence>
-						{toggleNotifications && <Notifications ref={notificationsRef} />}
+						{toggleNotifications && (
+							<Notifications
+								ref={notificationsRef}
+								onClose={() => setToggleNotifications(false)}
+							/>
+						)}
 					</AnimatePresence>
 				</div>
 				{!isDeveloperSection && (

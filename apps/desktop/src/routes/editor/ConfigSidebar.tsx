@@ -64,14 +64,20 @@ import {
 	type CursorType,
 	commands,
 	type KeyboardTrackSegment,
+	type SceneMode,
 	type SceneSegment,
+	type SplitLayout,
 	type StereoMode,
 	type TimelineSegment,
+	type XY,
 	type ZoomSegment,
 } from "~/utils/tauri";
 import IconLucideBoxSelect from "~icons/lucide/box-select";
+import IconLucideColumns2 from "~icons/lucide/columns-2";
+import IconLucideEyeOff from "~icons/lucide/eye-off";
 import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideGrid from "~icons/lucide/grid";
+import IconLucideImageOff from "~icons/lucide/image-off";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideMoon from "~icons/lucide/moon";
@@ -80,6 +86,7 @@ import IconLucideRabbit from "~icons/lucide/rabbit";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
+import IconLucideVideo from "~icons/lucide/video";
 import IconLucideWind from "~icons/lucide/wind";
 import { BrandColorsDropdown } from "./BrandColorsDropdown";
 import { CaptionsTab } from "./CaptionsTab";
@@ -89,7 +96,15 @@ import { type CornerRoundingType, useEditorContext } from "./context";
 import { GradientEditor } from "./GradientEditor";
 import { KeyboardTab } from "./KeyboardTab";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
-import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
+import {
+	DEFAULT_BACKGROUND_PADDING,
+	DEFAULT_BACKGROUND_ROUNDING,
+	DEFAULT_CAMERA_SCALE_DURING_ZOOM,
+	DEFAULT_GRADIENT_FROM,
+	DEFAULT_GRADIENT_TO,
+	DEFAULT_SCENE_TRANSITION,
+	DEFAULT_SPLIT_LAYOUT,
+} from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
 import type { TextSegment } from "./text";
@@ -107,7 +122,7 @@ import {
 } from "./ui";
 import { formatTime } from "./utils";
 
-type BackgroundSourceTab = BackgroundSource["type"] | "desktop";
+type BackgroundSourceTab = BackgroundSource["type"] | "desktop" | "none";
 
 const BACKGROUND_SOURCES = {
 	desktop: "Desktop",
@@ -115,6 +130,7 @@ const BACKGROUND_SOURCES = {
 	image: "Image",
 	color: "Color",
 	gradient: "Gradient",
+	none: "None",
 } satisfies Record<BackgroundSourceTab, string>;
 
 const BACKGROUND_ICONS = {
@@ -133,6 +149,7 @@ const BACKGROUND_SOURCES_ROW_ONE = [
 const BACKGROUND_SOURCES_ROW_TWO = [
 	"color",
 	"gradient",
+	"none",
 ] satisfies Array<BackgroundSourceTab>;
 
 const BACKGROUND_IMAGE_ACCEPT =
@@ -1459,6 +1476,8 @@ function BackgroundConfig(props: {
 }) {
 	const { project, setProject, editorInstance, projectHistory } =
 		useEditorContext();
+	const isNoneBackground = () =>
+		project.background.padding === 0 && project.background.rounding === 0;
 	const initialCurrentDesktopBackgroundPath = () => {
 		const source = project.background.source;
 		if (source.type !== "wallpaper" || !source.path) return null;
@@ -1481,11 +1500,16 @@ function BackgroundConfig(props: {
 		return source.type;
 	});
 	const [backgroundSourceTab, setBackgroundSourceTab] =
-		createSignal<BackgroundSourceTab>(projectBackgroundSourceTab());
+		createSignal<BackgroundSourceTab>(
+			isNoneBackground() ? "none" : projectBackgroundSourceTab(),
+		);
 
+	// "None" is a sticky selection: nudging the padding/rounding sliders must not
+	// swap the panel back to the underlying source tab (that reflow moves the very
+	// slider being dragged), so only re-sync when the user isn't sitting on "None".
 	createEffect(
 		on(projectBackgroundSourceTab, (tab) => {
-			setBackgroundSourceTab(tab);
+			if (backgroundSourceTab() !== "none") setBackgroundSourceTab(tab);
 		}),
 	);
 
@@ -1564,9 +1588,33 @@ function BackgroundConfig(props: {
 		return wallpapers()?.find((w) => path.includes(w.id)) ?? null;
 	});
 
-	const ensurePaddingForBackground = () => {
-		if (project.background.padding === 0)
-			setProject("background", "padding", 10);
+	// Leaving "None" seeds default padding AND rounding; real→real switches only
+	// ensure padding so an intentionally-square background keeps rounding 0. Keyed
+	// off `fromNone` because rounding is already 0 once the slider has left None.
+	const ensureBackgroundPresentation = (fromNone = false) => {
+		batch(() => {
+			if (project.background.padding === 0)
+				setProject("background", "padding", DEFAULT_BACKGROUND_PADDING);
+			if (fromNone && project.background.rounding === 0)
+				setProject("background", "rounding", DEFAULT_BACKGROUND_ROUNDING);
+		});
+	};
+
+	const setBackgroundDimension = (
+		key: "padding" | "rounding",
+		value: number,
+	) => {
+		batch(() => {
+			// Revealing padding/rounding out of "None" shows a clean white canvas
+			// rather than resurrecting the hidden source. The tab stays on "None".
+			if (value > 0 && backgroundSourceTab() === "none" && isNoneBackground())
+				setProject("background", "source", {
+					type: "color",
+					value: [255, 255, 255],
+					alpha: 255,
+				});
+			setProject("background", key, value);
+		});
 	};
 
 	onMount(async () => {
@@ -1692,11 +1740,12 @@ function BackgroundConfig(props: {
 			const path = await commands.importCurrentDesktopBackground(
 				editorInstance.path,
 			);
+			const addingFromBlankBackground = isNoneBackground();
 			batch(() => {
 				setCurrentDesktopBackgroundPath(path);
 				setBackgroundSourceTab("desktop");
 				setWallpaperSource(path);
-				ensurePaddingForBackground();
+				ensureBackgroundPresentation(addingFromBlankBackground);
 			});
 		} catch (_err) {
 			toast.error("Couldn't import your desktop wallpaper");
@@ -1706,6 +1755,10 @@ function BackgroundConfig(props: {
 	};
 
 	const renderBackgroundSourceIcon = (item: BackgroundSourceTab) => {
+		if (item === "none") {
+			return <IconLucideImageOff class="size-3.5" />;
+		}
+
 		if (item === "gradient") {
 			const source = project.background.source;
 			const angle = source.type === "gradient" ? source.angle : 90;
@@ -1838,16 +1891,25 @@ function BackgroundConfig(props: {
 					value={backgroundSourceTab()}
 					onChange={(v) => {
 						const tab = v as BackgroundSourceTab;
+						const fromNone = backgroundSourceTab() === "none";
 						setBackgroundSourceTab(tab);
-						ensurePaddingForBackground();
-						switch (tab) {
-							case "desktop": {
-								const desktopBackground = currentDesktopBackground();
-								if (desktopBackground) {
-									setWallpaperSource(desktopBackground.rawPath);
-								}
-								break;
+						if (tab === "none") {
+							batch(() => {
+								setProject("background", "padding", 0);
+								setProject("background", "rounding", 0);
+							});
+							return;
+						}
+						if (tab === "desktop") {
+							const desktopBackground = currentDesktopBackground();
+							if (desktopBackground) {
+								ensureBackgroundPresentation(fromNone);
+								setWallpaperSource(desktopBackground.rawPath);
 							}
+							return;
+						}
+						ensureBackgroundPresentation(fromNone);
+						switch (tab) {
 							case "image": {
 								setProject("background", "source", {
 									type: "image",
@@ -1948,7 +2010,7 @@ function BackgroundConfig(props: {
 										type="button"
 										onClick={() => {
 											setWallpaperSource(photo().rawPath);
-											ensurePaddingForBackground();
+											ensureBackgroundPresentation();
 										}}
 										class={cx(
 											"overflow-hidden relative w-full h-48 rounded-lg border transition cursor-pointer group",
@@ -2040,7 +2102,7 @@ function BackgroundConfig(props: {
 
 									setWallpaperSource(wallpaper.rawPath);
 
-									ensurePaddingForBackground();
+									ensureBackgroundPresentation();
 								} catch (_err) {
 									toast.error("Failed to set wallpaper");
 								}
@@ -2288,7 +2350,7 @@ function BackgroundConfig(props: {
 			<Field name="Padding" icon={<IconCapPadding class="size-4" />}>
 				<Slider
 					value={[project.background.padding]}
-					onChange={(v) => setProject("background", "padding", v[0])}
+					onChange={(v) => setBackgroundDimension("padding", v[0])}
 					minValue={0}
 					maxValue={40}
 					step={0.1}
@@ -2299,7 +2361,7 @@ function BackgroundConfig(props: {
 				<div class="flex flex-col gap-3">
 					<Slider
 						value={[project.background.rounding]}
-						onChange={(v) => setProject("background", "rounding", v[0])}
+						onChange={(v) => setBackgroundDimension("rounding", v[0])}
 						minValue={0}
 						maxValue={100}
 						step={0.1}
@@ -2742,6 +2804,21 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 					formatTooltip="%"
 				/>
 			</Field>
+			<Subfield name="Keep original size during zoom">
+				<Toggle
+					checked={
+						(project.camera.scaleDuringZoom ??
+							DEFAULT_CAMERA_SCALE_DURING_ZOOM) >= 1
+					}
+					onChange={(keep) =>
+						setProject(
+							"camera",
+							"scaleDuringZoom",
+							keep ? 1 : DEFAULT_CAMERA_SCALE_DURING_ZOOM,
+						)
+					}
+				/>
+			</Subfield>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
 				<div class="flex flex-col gap-3">
 					<Slider
@@ -4142,11 +4219,90 @@ function SourceOffsetField(props: {
 	);
 }
 
+const SCENE_MODE_TRIGGER_CLASS =
+	"z-10 flex justify-center items-center gap-1.5 py-2.5 px-2 text-xs whitespace-nowrap text-gray-11 rounded-[10px] border border-transparent transition-colors duration-200 outline-hidden data-selected:border-gray-3 data-selected:bg-gray-3 data-selected:text-gray-12 not-data-selected:hover:border-gray-7 disabled:opacity-40 disabled:cursor-not-allowed";
+
+// 2D drag pad for a normalized focal point (mirrors the manual-zoom position
+// picker): click/drag anywhere to set {x,y} in 0..1, pausing history so the
+// whole drag is one undo step.
+function PositionPad(props: {
+	value: () => XY<number>;
+	onChange: (pos: XY<number>) => void;
+}) {
+	const { projectHistory } = useEditorContext();
+
+	const onPick = (downEvent: MouseEvent) => {
+		downEvent.preventDefault();
+		const bounds = downEvent.currentTarget as HTMLElement;
+		const rect = bounds.getBoundingClientRect();
+		const resumeHistory = projectHistory.pause();
+		const apply = (e: MouseEvent) => {
+			props.onChange({
+				x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+				y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
+			});
+		};
+		apply(downEvent);
+		createRoot((dispose) =>
+			createEventListenerMap(window, {
+				mousemove: apply,
+				mouseup: () => {
+					resumeHistory();
+					dispose();
+				},
+			}),
+		);
+	};
+
+	return (
+		<div
+			class="overflow-hidden relative w-full h-28 rounded-lg border border-gray-3 bg-gray-2 cursor-crosshair"
+			onMouseDown={onPick}
+		>
+			<div class="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-gray-3 pointer-events-none" />
+			<div class="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-gray-3 pointer-events-none" />
+			<div
+				class="flex absolute z-10 justify-center items-center w-6 h-6 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2 bg-gray-1 pointer-events-none"
+				style={{
+					left: `${props.value().x * 100}%`,
+					top: `${props.value().y * 100}%`,
+				}}
+			>
+				<div class="rounded-full size-1.5 bg-gray-5" />
+			</div>
+		</div>
+	);
+}
+
 function SceneSegmentConfig(props: {
 	segmentIndex: number;
 	segment: SceneSegment;
 }) {
-	const { setProject, setEditorState, projectActions } = useEditorContext();
+	const { setProject, setEditorState, projectActions, editorInstance } =
+		useEditorContext();
+
+	const hasCamera = () =>
+		!editorInstance.recordings.segments.every((s) => s.camera === null);
+
+	const description = () => {
+		switch (props.segment.mode) {
+			case "cameraOnly":
+				return "Shows only the camera feed";
+			case "hideCamera":
+				return "Shows only the screen recording";
+			case "splitScreen":
+				return "Screen and camera side by side (auto-stacks in portrait)";
+			default:
+				return "Shows both screen and camera";
+		}
+	};
+
+	const split = () => props.segment.splitLayout ?? DEFAULT_SPLIT_LAYOUT;
+	const updateSplit = (patch: Partial<SplitLayout>) =>
+		setProject("timeline", "sceneSegments", props.segmentIndex, "splitLayout", {
+			...split(),
+			...patch,
+		});
 
 	return (
 		<>
@@ -4171,79 +4327,138 @@ function SceneSegmentConfig(props: {
 			</div>
 			<Field name="Camera Layout" icon={<IconLucideLayout />}>
 				<KTabs
-					class="space-y-6"
+					class="space-y-3"
 					value={props.segment.mode || "default"}
 					onChange={(v) => {
-						setProject(
-							"timeline",
-							"sceneSegments",
-							props.segmentIndex,
-							"mode",
-							v as "default" | "cameraOnly" | "hideCamera",
-						);
+						const mode = v as SceneMode;
+						batch(() => {
+							setProject(
+								"timeline",
+								"sceneSegments",
+								props.segmentIndex,
+								"mode",
+								mode,
+							);
+							// Seed identity overrides so the new split segment renders
+							// correctly and the fine-tune controls have values to bind to.
+							if (mode === "splitScreen" && !props.segment.splitLayout)
+								setProject(
+									"timeline",
+									"sceneSegments",
+									props.segmentIndex,
+									"splitLayout",
+									{ ...DEFAULT_SPLIT_LAYOUT },
+								);
+						});
 					}}
 				>
-					<KTabs.List class="flex flex-col gap-3">
-						<div class="flex flex-row items-center rounded-lg relative border">
-							<KTabs.Trigger
-								value="default"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-hidden data-selected:text-gray-12 peer"
-							>
-								Default
-							</KTabs.Trigger>
-							<KTabs.Trigger
-								value="cameraOnly"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-hidden data-selected:text-gray-12 peer"
-							>
-								Camera Only
-							</KTabs.Trigger>
-							<KTabs.Trigger
-								value="hideCamera"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-hidden data-selected:text-gray-12 peer"
-							>
-								Hide Camera
-							</KTabs.Trigger>
-							<KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline-solid outline-2 outline-blue-9 outline-offset-2 rounded-[0.6rem] overflow-hidden">
-								<div class="flex-1 bg-gray-3" />
-							</KTabs.Indicator>
-						</div>
-
-						<div class="relative">
-							<div
-								class="absolute -top-3 w-px h-3 transition-all duration-200 bg-gray-3"
-								style={{
-									left:
-										props.segment.mode === "cameraOnly"
-											? "50%"
-											: props.segment.mode === "hideCamera"
-												? "83.33%"
-												: "16.67%",
-								}}
-							/>
-							<div
-								class="absolute -top-1 w-2 h-2 rounded-full transition-all duration-200 -translate-x-1/2 bg-gray-3"
-								style={{
-									left:
-										props.segment.mode === "cameraOnly"
-											? "50%"
-											: props.segment.mode === "hideCamera"
-												? "83.33%"
-												: "16.67%",
-								}}
-							/>
-							<div class="p-2.5 rounded-md bg-gray-2 border border-gray-3">
-								<div class="text-xs text-center text-gray-11">
-									{props.segment.mode === "cameraOnly"
-										? "Shows only the camera feed"
-										: props.segment.mode === "hideCamera"
-											? "Shows only the screen recording"
-											: "Shows both screen and camera"}
-								</div>
-							</div>
-						</div>
+					<KTabs.List class="grid grid-cols-2 gap-2">
+						<KTabs.Trigger value="default" class={SCENE_MODE_TRIGGER_CLASS}>
+							<IconLucideMonitor class="size-3.5" />
+							Default
+						</KTabs.Trigger>
+						<KTabs.Trigger value="cameraOnly" class={SCENE_MODE_TRIGGER_CLASS}>
+							<IconLucideVideo class="size-3.5" />
+							Camera Only
+						</KTabs.Trigger>
+						<KTabs.Trigger value="hideCamera" class={SCENE_MODE_TRIGGER_CLASS}>
+							<IconLucideEyeOff class="size-3.5" />
+							Hide Camera
+						</KTabs.Trigger>
+						<KTabs.Trigger
+							value="splitScreen"
+							disabled={!hasCamera()}
+							class={SCENE_MODE_TRIGGER_CLASS}
+						>
+							<IconLucideColumns2 class="size-3.5" />
+							Split Screen
+						</KTabs.Trigger>
 					</KTabs.List>
+					<div class="p-2.5 rounded-md bg-gray-2 border border-gray-3">
+						<div class="text-xs text-center text-gray-11">{description()}</div>
+					</div>
 				</KTabs>
 			</Field>
+
+			<Field name="Transition" icon={<IconLucideTimer class="size-4" />}>
+				<div class="flex flex-col gap-3">
+					<Subfield name="In">
+						<Slider
+							class="flex-1 ml-4"
+							value={[props.segment.transitionIn ?? DEFAULT_SCENE_TRANSITION]}
+							onChange={(v) =>
+								setProject(
+									"timeline",
+									"sceneSegments",
+									props.segmentIndex,
+									"transitionIn",
+									v[0],
+								)
+							}
+							minValue={0}
+							maxValue={2}
+							step={0.05}
+							formatTooltip={(v) => `${v.toFixed(2)}s`}
+						/>
+					</Subfield>
+					<Subfield name="Out">
+						<Slider
+							class="flex-1 ml-4"
+							value={[props.segment.transitionOut ?? DEFAULT_SCENE_TRANSITION]}
+							onChange={(v) =>
+								setProject(
+									"timeline",
+									"sceneSegments",
+									props.segmentIndex,
+									"transitionOut",
+									v[0],
+								)
+							}
+							minValue={0}
+							maxValue={2}
+							step={0.05}
+							formatTooltip={(v) => `${v.toFixed(2)}s`}
+						/>
+					</Subfield>
+				</div>
+			</Field>
+
+			<Show when={props.segment.mode === "splitScreen"}>
+				<div class="w-full border-t border-dashed border-gray-5" />
+				<Field name="Screen Zoom" icon={<IconCapEnlarge class="size-4" />}>
+					<Slider
+						value={[split().screenZoom * 100]}
+						onChange={(v) => updateSplit({ screenZoom: v[0] / 100 })}
+						minValue={100}
+						maxValue={300}
+						step={1}
+						formatTooltip="%"
+					/>
+				</Field>
+				<Field name="Screen Position" icon={<IconLucideMove class="size-4" />}>
+					<PositionPad
+						value={() => split().screenPosition}
+						onChange={(pos) => updateSplit({ screenPosition: pos })}
+					/>
+				</Field>
+				<div class="w-full border-t border-dashed border-gray-5" />
+				<Field name="Camera Zoom" icon={<IconCapEnlarge class="size-4" />}>
+					<Slider
+						value={[split().cameraZoom * 100]}
+						onChange={(v) => updateSplit({ cameraZoom: v[0] / 100 })}
+						minValue={100}
+						maxValue={300}
+						step={1}
+						formatTooltip="%"
+					/>
+				</Field>
+				<Field name="Camera Position" icon={<IconLucideMove class="size-4" />}>
+					<PositionPad
+						value={() => split().cameraPosition}
+						onChange={(pos) => updateSplit({ cameraPosition: pos })}
+					/>
+				</Field>
+			</Show>
 		</>
 	);
 }
