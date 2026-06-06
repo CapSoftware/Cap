@@ -272,15 +272,14 @@ impl EditorInstance {
             Arc::new(rc)
         };
 
-        let layers_rx = editor::start_renderer_layers_creation(&render_constants);
+        let layers_rx = editor::start_renderer_layers_creation(&render_constants, &project);
 
         let segments = create_segments(&recording_meta, meta.as_ref(), false).await?;
+        let layers_rx = editor::finish_renderer_layers_creation(layers_rx).await;
 
         let renderer = Arc::new(editor::Renderer::spawn(
             render_constants.clone(),
             frame_cb,
-            &recording_meta,
-            meta,
             layers_rx,
         )?);
 
@@ -623,9 +622,41 @@ pub struct EditorState {
 pub struct SegmentMedia {
     pub audio: Option<Arc<AudioData>>,
     pub system_audio: Option<Arc<AudioData>>,
+    pub audio_timing_repair: SegmentAudioTimingRepair,
     pub cursor: Arc<CursorEvents>,
     pub keyboard: Arc<cap_project::KeyboardEvents>,
     pub decoders: RecordingSegmentDecoders,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SegmentAudioTimingRepair {
+    pub mic_offset_secs: f32,
+    pub system_audio_offset_secs: f32,
+}
+
+const MIN_STALE_STARTUP_DROPS: u32 = 3;
+const MIN_STALE_STARTUP_TRIMMED_MS: u32 = 100;
+const MAX_STALE_STARTUP_REPAIR_MS: u32 = 2_000;
+
+/// Compensating offset (seconds, negative) for stale-startup audio drift the recorder captured
+/// in [`cap_project::AudioGapSummary`]. A burst of whole-frame overlap drops in the first frames
+/// means the recorded audio starts late relative to the timeline, so shifting it earlier by the
+/// trimmed span resyncs it. Scattered mid-recording overlaps and trims outside the expected
+/// startup-drift range are ignored.
+fn audio_timing_repair_offset(summary: Option<&cap_project::AudioGapSummary>) -> f32 {
+    let Some(summary) = summary else {
+        return 0.0;
+    };
+
+    if summary.startup_overlap_drops < MIN_STALE_STARTUP_DROPS
+        || summary.overlap_dropped_frames < MIN_STALE_STARTUP_DROPS
+        || !(MIN_STALE_STARTUP_TRIMMED_MS..=MAX_STALE_STARTUP_REPAIR_MS)
+            .contains(&summary.total_overlap_trimmed_ms)
+    {
+        return 0.0;
+    }
+
+    -(summary.total_overlap_trimmed_ms as f32 / 1_000.0)
 }
 
 pub async fn create_segments(
@@ -635,15 +666,12 @@ pub async fn create_segments(
 ) -> Result<Vec<SegmentMedia>, String> {
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
-            let audio = s
-                .audio
-                .as_ref()
-                .map(|audio_meta| {
-                    AudioData::from_file(recording_meta.path(&audio_meta.path))
-                        .map_err(|e| format!("SingleSegment Audio / {e}"))
-                })
-                .transpose()?
-                .map(Arc::new);
+            let audio_task = s.audio.as_ref().map(|audio_meta| {
+                spawn_audio_load(
+                    recording_meta.path(&audio_meta.path),
+                    "SingleSegment Audio".to_string(),
+                )
+            });
 
             let cursor = Arc::new(
                 s.cursor
@@ -676,11 +704,19 @@ pub async fn create_segments(
                 force_ffmpeg,
             )
             .await
-            .map_err(|e| format!("SingleSegment / {e}"))?;
+            .map_err(|e| format!("SingleSegment / {e}"));
+            let audio = collect_audio_task(audio_task, "SingleSegment Audio").await?;
+            let decoders = decoders?;
 
             Ok(vec![SegmentMedia {
                 audio,
                 system_audio: None,
+                audio_timing_repair: SegmentAudioTimingRepair {
+                    mic_offset_secs: audio_timing_repair_offset(
+                        s.audio.as_ref().and_then(|m| m.gap_summary.as_ref()),
+                    ),
+                    system_audio_offset_secs: 0.0,
+                },
                 cursor,
                 keyboard: Arc::new(Default::default()),
                 decoders,
@@ -690,25 +726,16 @@ pub async fn create_segments(
             let mut segments = vec![];
 
             for (i, s) in inner.segments.iter().enumerate() {
-                let audio = s
+                let audio_label = format!("MultipleSegments {i} Audio");
+                let audio_task = s
                     .mic
                     .as_ref()
-                    .map(|audio| {
-                        AudioData::from_file(recording_meta.path(&audio.path))
-                            .map_err(|e| format!("MultipleSegments {i} Audio / {e}"))
-                    })
-                    .transpose()?
-                    .map(Arc::new);
+                    .map(|audio| spawn_audio_load(recording_meta.path(&audio.path), audio_label));
 
-                let system_audio = s
-                    .system_audio
-                    .as_ref()
-                    .map(|audio| {
-                        AudioData::from_file(recording_meta.path(&audio.path))
-                            .map_err(|e| format!("MultipleSegments {i} System Audio / {e}"))
-                    })
-                    .transpose()?
-                    .map(Arc::new);
+                let system_audio_label = format!("MultipleSegments {i} System Audio");
+                let system_audio_task = s.system_audio.as_ref().map(|audio| {
+                    spawn_audio_load(recording_meta.path(&audio.path), system_audio_label)
+                });
 
                 let cursor = Arc::new(s.cursor_events(recording_meta));
 
@@ -723,13 +750,29 @@ pub async fn create_segments(
                     force_ffmpeg,
                 )
                 .await
-                .map_err(|e| format!("MultipleSegments {i} / {e}"))?;
+                .map_err(|e| format!("MultipleSegments {i} / {e}"));
 
                 let keyboard = Arc::new(s.keyboard_events(recording_meta));
+                let audio =
+                    collect_audio_task(audio_task, &format!("MultipleSegments {i} Audio")).await?;
+                let system_audio = collect_audio_task(
+                    system_audio_task,
+                    &format!("MultipleSegments {i} System Audio"),
+                )
+                .await?;
+                let decoders = decoders?;
 
                 segments.push(SegmentMedia {
                     audio,
                     system_audio,
+                    audio_timing_repair: SegmentAudioTimingRepair {
+                        mic_offset_secs: audio_timing_repair_offset(
+                            s.mic.as_ref().and_then(|m| m.gap_summary.as_ref()),
+                        ),
+                        system_audio_offset_secs: audio_timing_repair_offset(
+                            s.system_audio.as_ref().and_then(|m| m.gap_summary.as_ref()),
+                        ),
+                    },
                     cursor,
                     keyboard,
                     decoders,
@@ -738,6 +781,30 @@ pub async fn create_segments(
 
             Ok(segments)
         }
+    }
+}
+
+fn spawn_audio_load(
+    path: PathBuf,
+    label: String,
+) -> tokio::task::JoinHandle<Result<AudioData, String>> {
+    tokio::task::spawn_blocking(move || {
+        AudioData::from_file(path).map_err(|e| format!("{label} / {e}"))
+    })
+}
+
+async fn collect_audio_task(
+    task: Option<tokio::task::JoinHandle<Result<AudioData, String>>>,
+    label: &str,
+) -> Result<Option<Arc<AudioData>>, String> {
+    match task {
+        Some(task) => {
+            let audio = task
+                .await
+                .map_err(|e| format!("{label} task failed: {e}"))??;
+            Ok(Some(Arc::new(audio)))
+        }
+        None => Ok(None),
     }
 }
 
@@ -759,5 +826,56 @@ fn get_calibration_offset(
     match (camera_id, mic_id) {
         (Some(cam), Some(mic)) => store.get_offset(cam, mic).map(|o| o as f32),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_project::AudioGapSummary;
+
+    #[test]
+    fn audio_timing_repair_detects_stale_startup_overlap() {
+        let summary = AudioGapSummary {
+            total_overlap_trimmed_ms: 867,
+            overlap_dropped_frames: 23,
+            startup_overlap_drops: 23,
+        };
+
+        assert_eq!(audio_timing_repair_offset(Some(&summary)), -0.867);
+    }
+
+    #[test]
+    fn audio_timing_repair_ignores_missing_summary() {
+        assert_eq!(audio_timing_repair_offset(None), 0.0);
+    }
+
+    #[test]
+    fn audio_timing_repair_ignores_overlap_without_startup_signature() {
+        // Plenty of overlap drops, but none in the startup window — a mid-recording artifact.
+        let summary = AudioGapSummary {
+            total_overlap_trimmed_ms: 867,
+            overlap_dropped_frames: 23,
+            startup_overlap_drops: 0,
+        };
+
+        assert_eq!(audio_timing_repair_offset(Some(&summary)), 0.0);
+    }
+
+    #[test]
+    fn audio_timing_repair_ignores_trim_outside_expected_range() {
+        let too_small = AudioGapSummary {
+            total_overlap_trimmed_ms: MIN_STALE_STARTUP_TRIMMED_MS - 1,
+            overlap_dropped_frames: 5,
+            startup_overlap_drops: 5,
+        };
+        assert_eq!(audio_timing_repair_offset(Some(&too_small)), 0.0);
+
+        let too_large = AudioGapSummary {
+            total_overlap_trimmed_ms: MAX_STALE_STARTUP_REPAIR_MS + 1,
+            overlap_dropped_frames: 5,
+            startup_overlap_drops: 5,
+        };
+        assert_eq!(audio_timing_repair_offset(Some(&too_large)), 0.0);
     }
 }
