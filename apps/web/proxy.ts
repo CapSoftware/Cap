@@ -44,6 +44,7 @@ export async function proxy(request: NextRequest) {
 		if (
 			!(
 				path.startsWith("/s/") ||
+				path.startsWith("/embed/") ||
 				path.startsWith("/middleware") ||
 				path.startsWith("/dashboard") ||
 				path.startsWith("/onboarding") ||
