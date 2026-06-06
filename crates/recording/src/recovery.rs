@@ -1234,6 +1234,7 @@ impl RecoveryManager {
                                 device_id: original_segment
                                     .and_then(|s| s.mic.as_ref())
                                     .and_then(|m| m.device_id.clone()),
+                                gap_summary: None,
                             })
                         } else {
                             None
@@ -1257,6 +1258,7 @@ impl RecoveryManager {
                                 device_id: original_segment
                                     .and_then(|s| s.system_audio.as_ref())
                                     .and_then(|a| a.device_id.clone()),
+                                gap_summary: None,
                             })
                         } else {
                             None
