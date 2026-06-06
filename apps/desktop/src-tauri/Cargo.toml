@@ -41,7 +41,7 @@ tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth",
 tauri-plugin-window-state = "2.2.0"
 tauri-plugin-positioner = "2.2.0"
 tauri-plugin-deep-link = "2.2.0"
-tauri-plugin-clipboard-manager = "2.2.1"
+tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-opener = "2.2.6"
 tauri-plugin-prevent-default = "5"
 
