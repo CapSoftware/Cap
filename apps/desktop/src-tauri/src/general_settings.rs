@@ -26,6 +26,8 @@ pub enum PostScreenshotCaptureBehaviour {
     OpenEditor,
     ShowOverlay,
     CopyToClipboard,
+    Save,
+    Upload,
 }
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]

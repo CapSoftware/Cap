@@ -3,7 +3,9 @@ import type { GeneralSettingsStore as TauriGeneralSettingsStore } from "~/utils/
 export type PostScreenshotCaptureBehaviour =
 	| "openEditor"
 	| "showOverlay"
-	| "copyToClipboard";
+	| "copyToClipboard"
+	| "save"
+	| "upload";
 
 export type GeneralSettingsStore = TauriGeneralSettingsStore & {
 	captureKeyboardEvents?: boolean;

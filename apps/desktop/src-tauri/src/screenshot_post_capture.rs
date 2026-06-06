@@ -36,6 +36,8 @@ pub enum ScreenshotPostCaptureAction {
     OpenEditor,
     ShowOverlay,
     CopyToClipboard,
+    Save,
+    Upload,
 }
 
 impl From<PostScreenshotCaptureBehaviour> for ScreenshotPostCaptureAction {
@@ -44,6 +46,8 @@ impl From<PostScreenshotCaptureBehaviour> for ScreenshotPostCaptureAction {
             PostScreenshotCaptureBehaviour::OpenEditor => Self::OpenEditor,
             PostScreenshotCaptureBehaviour::ShowOverlay => Self::ShowOverlay,
             PostScreenshotCaptureBehaviour::CopyToClipboard => Self::CopyToClipboard,
+            PostScreenshotCaptureBehaviour::Save => Self::Save,
+            PostScreenshotCaptureBehaviour::Upload => Self::Upload,
         }
     }
 }
@@ -132,6 +136,19 @@ pub async fn handle(
             notifications::send_notification(app, NotificationType::ScreenshotCopiedToClipboard);
             Ok(())
         }
+        ScreenshotPostCaptureAction::Save => {
+            notifications::send_notification(app, NotificationType::ScreenshotSaved);
+            Ok(())
+        }
+        ScreenshotPostCaptureAction::Upload => match crate::upload_screenshot_internal(app, path).await? {
+            crate::UploadResult::Success(_) => Ok(()),
+            crate::UploadResult::NotAuthenticated => Ok(()),
+            crate::UploadResult::UpgradeRequired => Ok(()),
+            crate::UploadResult::PlanCheckFailed => {
+                notifications::send_notification(app, NotificationType::ShareableLinkFailed);
+                Ok(())
+            }
+        },
     }
 }
 

@@ -3086,6 +3086,14 @@ async fn upload_screenshot(
     clipboard: MutableState<'_, ClipboardContext>,
     screenshot_path: PathBuf,
 ) -> Result<UploadResult, String> {
+    upload_screenshot_internal_with_clipboard(&app, screenshot_path, Some(clipboard)).await
+}
+
+async fn upload_screenshot_internal_with_clipboard(
+    app: &AppHandle,
+    screenshot_path: PathBuf,
+    clipboard: Option<MutableState<'_, ClipboardContext>>,
+) -> Result<UploadResult, String> {
     let Ok(Some(auth)) = AuthStore::get(&app) else {
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
         return Ok(UploadResult::NotAuthenticated);
@@ -3121,11 +3129,26 @@ async fn upload_screenshot(
 
     println!("Copying to clipboard: {share_link:?}");
 
-    let _ = clipboard.write().await.set_text(share_link.clone());
+    if let Some(clipboard) = clipboard {
+        let _ = clipboard.write().await.set_text(share_link.clone());
+    } else {
+        let _ = app
+            .state::<ArcLock<ClipboardContext>>()
+            .write()
+            .await
+            .set_text(share_link.clone());
+    }
 
     notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
 
     Ok(UploadResult::Success(share_link))
+}
+
+pub(crate) async fn upload_screenshot_internal(
+    app: &AppHandle,
+    screenshot_path: PathBuf,
+) -> Result<UploadResult, String> {
+    upload_screenshot_internal_with_clipboard(app, screenshot_path, None).await
 }
 
 #[tauri::command]
