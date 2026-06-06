@@ -349,6 +349,9 @@ export const videos = mysqlTable(
 			.notNull()
 			.default({ type: "MediaConvert" }),
 		folderId: nanoIdNullable("folderId").$type<Folder.FolderId>(),
+		publicSourcedFromFolderShare: boolean("publicSourcedFromFolderShare")
+			.notNull()
+			.default(false),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		effectiveCreatedAt: datetime("effectiveCreatedAt").generatedAlwaysAs(
 			sql.raw(

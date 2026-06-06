@@ -43,8 +43,10 @@ export async function enableFolderSharing(folderId: Folder.FolderId) {
 		.where(eq(folders.id, folderId));
 	await db()
 		.update(videos)
-		.set({ public: true })
-		.where(eq(videos.folderId, folderId));
+		.set({ public: true, publicSourcedFromFolderShare: true })
+		.where(
+			and(eq(videos.folderId, folderId), eq(videos.public, false)),
+		);
 	revalidatePath(`/dashboard/folder/${folderId}`);
 	revalidatePath(`/dashboard/caps`);
 	return { slug: signFolderShareSlug(folderId) };
@@ -58,8 +60,13 @@ export async function disableFolderSharing(folderId: Folder.FolderId) {
 		.where(eq(folders.id, folderId));
 	await db()
 		.update(videos)
-		.set({ public: false })
-		.where(eq(videos.folderId, folderId));
+		.set({ public: false, publicSourcedFromFolderShare: false })
+		.where(
+			and(
+				eq(videos.folderId, folderId),
+				eq(videos.publicSourcedFromFolderShare, true),
+			),
+		);
 	revalidatePath(`/dashboard/folder/${folderId}`);
 	revalidatePath(`/dashboard/caps`);
 }

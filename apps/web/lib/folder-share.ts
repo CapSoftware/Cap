@@ -1,4 +1,5 @@
-import { createHmac } from "node:crypto";
+import type { Folder } from "@cap/web-domain";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 const getSecret = () => {
 	const s = process.env.NEXTAUTH_SECRET;
@@ -19,11 +20,13 @@ const toBase64Url = (s: string) =>
 const fromBase64Url = (s: string) =>
 	Buffer.from(s, "base64url").toString("utf8");
 
-export const signFolderShareSlug = (folderId: string): string => {
+export const signFolderShareSlug = (folderId: Folder.FolderId): string => {
 	return `${toBase64Url(folderId)}.${sign(folderId)}`;
 };
 
-export const verifyFolderShareSlug = (slug: string): string | null => {
+export const verifyFolderShareSlug = (
+	slug: string,
+): Folder.FolderId | null => {
 	const parts = slug.split(".");
 	if (parts.length !== 2) return null;
 	const [encodedId, sig] = parts;
@@ -34,6 +37,9 @@ export const verifyFolderShareSlug = (slug: string): string | null => {
 	} catch {
 		return null;
 	}
-	if (sign(folderId) !== sig) return null;
-	return folderId;
+	const expected = Buffer.from(sign(folderId));
+	const actual = Buffer.from(sig);
+	if (expected.length !== actual.length || !timingSafeEqual(expected, actual))
+		return null;
+	return folderId as Folder.FolderId;
 };

@@ -21,7 +21,7 @@ export async function generateMetadata(props: {
 	const [folder] = await db()
 		.select({ name: folders.name, publicShared: folders.publicShared })
 		.from(folders)
-		.where(eq(folders.id, folderId as any));
+		.where(eq(folders.id, folderId));
 	if (!folder || !folder.publicShared) return { title: "Cap" };
 	return {
 		title: `${folder.name} | Cap`,
@@ -53,14 +53,7 @@ async function resolveThumbnailUrl(
 		const [bucket] = await S3Buckets.getBucketAccess(
 			Option.fromNullable(bucketId),
 		).pipe(runPromise);
-		const listResponse = await bucket
-			.listObjects({ prefix: `${ownerId}/${videoId}/` })
-			.pipe(runPromise);
-		const contents = listResponse.Contents || [];
-		const thumbnailKey = contents.find((item) =>
-			item.Key?.endsWith("screen-capture.jpg"),
-		)?.Key;
-		if (!thumbnailKey) return null;
+		const thumbnailKey = `${ownerId}/${videoId}/screenshot/screen-capture.jpg`;
 		const url = await bucket
 			.getSignedObjectUrl(thumbnailKey)
 			.pipe(runPromise);
@@ -85,7 +78,7 @@ export default async function SharedFolderPage(props: {
 			publicShared: folders.publicShared,
 		})
 		.from(folders)
-		.where(eq(folders.id, folderId as any));
+		.where(eq(folders.id, folderId));
 
 	if (!folder || !folder.publicShared) return notFound();
 
@@ -102,7 +95,7 @@ export default async function SharedFolderPage(props: {
 		})
 		.from(videos)
 		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
-		.where(eq(videos.folderId, folderId as any));
+		.where(eq(videos.folderId, folderId));
 
 	const videosWithThumbs = await Promise.all(
 		folderVideos.map(async (v) => ({
