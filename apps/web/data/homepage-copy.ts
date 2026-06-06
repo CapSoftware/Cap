@@ -303,11 +303,12 @@ export const homepageCopy: HomePageCopy = {
 		commercial: {
 			title: "Desktop License",
 			description:
-				"For professionals who want unlimited local recording and editing.",
+				"A commercial license for the Cap desktop app — unlimited local recording and editing.",
 			features: [
-				"Commercial usage",
-				"Unlimited local recordings",
+				"Commercial usage rights",
+				"Unlimited local recordings & editing",
 				"Studio Mode with full editor",
+				"20 cloud shareable links / month (up to 5 min each)",
 				"Export to any format",
 				"Community support",
 			],
