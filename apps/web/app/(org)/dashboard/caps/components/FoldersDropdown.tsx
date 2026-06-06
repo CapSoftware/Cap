@@ -7,6 +7,7 @@ import {
 import {
 	faEllipsis,
 	faPencil,
+	faShareNodes,
 	faTrash,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -16,6 +17,7 @@ interface FoldersDropdownProps {
 	id: string;
 	setIsRenaming: (isRenaming: boolean) => void;
 	setConfirmDeleteFolderOpen: (open: boolean) => void;
+	setShareDialogOpen?: (open: boolean) => void;
 	nameRef: RefObject<HTMLTextAreaElement | null>;
 	parentId?: string | null;
 }
@@ -23,6 +25,7 @@ interface FoldersDropdownProps {
 export const FoldersDropdown = ({
 	setIsRenaming,
 	setConfirmDeleteFolderOpen,
+	setShareDialogOpen,
 	nameRef,
 }: FoldersDropdownProps) => {
 	return (
@@ -62,6 +65,15 @@ export const FoldersDropdown = ({
 									}, 0);
 								},
 							},
+							...(setShareDialogOpen
+								? [
+										{
+											label: "Share folder",
+											icon: faShareNodes,
+											onClick: () => setShareDialogOpen(true),
+										} satisfies FolderDropdownItem,
+									]
+								: []),
 							// Only show Duplicate if there is NO active space
 							// ...(!activeSpace
 							//   ? [

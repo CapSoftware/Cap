@@ -298,6 +298,7 @@ export const folders = mysqlTable(
 		spaceId: nanoIdNullable("spaceId").$type<Space.SpaceIdOrOrganisationId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+		publicShared: boolean("publicShared").notNull().default(false),
 	},
 	(table) => ({
 		organizationIdIndex: index("organization_id_idx").on(table.organizationId),

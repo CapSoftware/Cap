@@ -14,6 +14,7 @@ import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";
 import { FoldersDropdown } from "./FoldersDropdown";
+import { ShareFolderDialog } from "./ShareFolderDialog";
 
 export type FolderDataType = {
 	name: string;
@@ -35,6 +36,7 @@ const FolderCard = ({
 	const router = useRouter();
 	const { theme } = useTheme();
 	const [confirmDeleteFolderOpen, setConfirmDeleteFolderOpen] = useState(false);
+	const [shareDialogOpen, setShareDialogOpen] = useState(false);
 	const [isRenaming, setIsRenaming] = useState(false);
 	const [updateName, setUpdateName] = useState(name);
 	const nameRef = useRef<HTMLTextAreaElement>(null);
@@ -402,7 +404,13 @@ const FolderCard = ({
 					parentId={parentId}
 					setIsRenaming={setIsRenaming}
 					setConfirmDeleteFolderOpen={setConfirmDeleteFolderOpen}
+					setShareDialogOpen={spaceId ? undefined : setShareDialogOpen}
 					nameRef={nameRef}
+				/>
+				<ShareFolderDialog
+					open={shareDialogOpen}
+					onOpenChange={setShareDialogOpen}
+					folderId={id}
 				/>
 			</div>
 		</Link>
