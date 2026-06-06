@@ -43,6 +43,7 @@ pub struct AudioSegmentTrack {
     get_gain: fn(&AudioConfiguration) -> f32,
     get_stereo_mode: fn(&AudioConfiguration) -> StereoMode,
     get_offset: fn(&ClipOffsets) -> f32,
+    timing_offset_secs: f32,
 }
 
 impl AudioSegmentTrack {
@@ -57,7 +58,13 @@ impl AudioSegmentTrack {
             get_gain,
             get_stereo_mode,
             get_offset,
+            timing_offset_secs: 0.0,
         }
+    }
+
+    pub fn with_timing_offset_secs(mut self, timing_offset_secs: f32) -> Self {
+        self.timing_offset_secs = timing_offset_secs;
+        self
     }
 
     pub fn data(&self) -> &Arc<AudioData> {
@@ -73,7 +80,7 @@ impl AudioSegmentTrack {
     }
 
     pub fn offset(&self, offsets: &ClipOffsets) -> f32 {
-        (self.get_offset)(offsets)
+        (self.get_offset)(offsets) + self.timing_offset_secs
     }
 }
 
@@ -942,6 +949,42 @@ mod tests {
 
     fn expected(value: i16) -> f32 {
         value as f32 / 32768.0
+    }
+
+    #[test]
+    fn export_audio_virtual_negative_timing_offset_inserts_leading_silence() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("delayed.wav");
+        write_step_wav(&path, &[12000, 24000]);
+
+        let data = Arc::new(AudioData::from_file(&path).unwrap());
+        let mut renderer = AudioRenderer::new(vec![AudioSegment {
+            tracks: vec![
+                AudioSegmentTrack::new(data, gain, stereo, no_offset).with_timing_offset_secs(-1.0),
+            ],
+        }]);
+        let project = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: vec![segment(0, 0.0, 3.0, 1.0)],
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+            }),
+            clips: vec![ClipConfiguration {
+                index: 0,
+                offsets: Default::default(),
+            }],
+            ..Default::default()
+        };
+
+        let stream = render_export_audio(&mut renderer, &project, 30, 3 * 30);
+
+        assert_eq!(left_at_second(&stream, 0), 0.0);
+        assert!((left_at_second(&stream, 1) - expected(12000)).abs() < 0.01);
+        assert!((left_at_second(&stream, 2) - expected(24000)).abs() < 0.01);
     }
 
     // Time->sample conversion rounds to nearest (not truncates), so a fractional
