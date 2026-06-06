@@ -43,9 +43,50 @@ pub fn now_unix() -> Option<u64> {
 }
 
 pub fn sessions_dir() -> Result<PathBuf, String> {
-    dirs::home_dir()
+    let dir = dirs::home_dir()
         .ok_or_else(|| "Could not determine home directory".to_string())
-        .map(|home| home.join(".cap").join("sessions"))
+        .map(|home| home.join(".cap").join("sessions"))?;
+    prune_old_sessions(&dir);
+    Ok(dir)
+}
+
+const SESSION_MAX_AGE_SECS: u64 = 7 * 24 * 60 * 60;
+
+fn prune_old_sessions(dir: &PathBuf) {
+    let now = now_unix().unwrap_or(0);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        if ext != "json" {
+            continue;
+        }
+        let Ok(body) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(session) = serde_json::from_slice::<Session>(&body) else {
+            continue;
+        };
+        if matches!(session.status, SessionStatus::Stopped | SessionStatus::Error) {
+            let age = session
+                .started_at
+                .map(|t| now.saturating_sub(t))
+                .unwrap_or(SESSION_MAX_AGE_SECS + 1);
+            if age > SESSION_MAX_AGE_SECS {
+                let id = &session.recording_id;
+                for f in [session_file(id), stop_file(id), log_file(id)]
+                    .into_iter()
+                    .flatten()
+                {
+                    let _ = std::fs::remove_file(f);
+                }
+            }
+        }
+    }
 }
 
 pub fn session_file(id: &str) -> Result<PathBuf, String> {
