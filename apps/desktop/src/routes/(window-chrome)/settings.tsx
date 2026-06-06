@@ -191,52 +191,52 @@ export default function Settings(props: RouteSectionProps) {
 	const settingsItems = [
 		{
 			href: "general",
-			name: t("General"),
+			name: "General",
 			icon: IconCapSettings,
 		},
 		{
 			href: "hotkeys",
-			name: t("Shortcuts"),
+			name: "Shortcuts",
 			icon: IconCapHotkeys,
 		},
 		{
 			href: "recordings",
-			name: t("Recordings"),
+			name: "Recordings",
 			icon: IconLucideSquarePlay,
 		},
 		{
 			href: "screenshots",
-			name: t("Screenshots"),
+			name: "Screenshots",
 			icon: IconLucideImage,
 		},
 		{
 			href: "transcription",
-			name: t("Transcription"),
+			name: "Transcription",
 			icon: IconCapCaptions,
 		},
 		{
 			href: "integrations",
-			name: t("Integrations"),
+			name: "Integrations",
 			icon: IconLucideUnplug,
 		},
 		{
 			href: "license",
-			name: t("License"),
+			name: "License",
 			icon: IconLucideGift,
 		},
 		{
 			href: "experimental",
-			name: t("Experimental"),
+			name: "Experimental",
 			icon: IconCapSettings,
 		},
 		{
 			href: "feedback",
-			name: t("Feedback"),
+			name: "Feedback",
 			icon: IconLucideMessageSquarePlus,
 		},
 		{
 			href: "changelog",
-			name: t("Changelog"),
+			name: "Changelog",
 			icon: IconLucideBell,
 		},
 	];
@@ -481,7 +481,7 @@ export default function Settings(props: RouteSectionProps) {
 									class="cap-settings-nav-item rounded-lg h-8 hover:bg-gray-3 text-[13px] px-2 flex flex-row items-center gap-1.5 transition-colors"
 								>
 									<item.icon class="opacity-60 size-4" aria-hidden="true" />
-									<span>{item.name}</span>
+									<span>{t(item.name)}</span>
 								</A>
 							</li>
 						)}

@@ -206,6 +206,9 @@ function AppearanceSection(props: {
 
 function LanguageSection() {
 	const { t, locale, setLocale } = useI18n();
+	const currentLabel = () =>
+		LOCALE_META.find((meta) => meta.value === locale())?.nativeLabel ??
+		locale();
 
 	return (
 		<Section
@@ -213,14 +216,27 @@ function LanguageSection() {
 			description={t("Choose the language for the app.")}
 		>
 			<SectionCard padded>
-				<SegmentedControl
-					value={locale()}
-					onChange={setLocale}
-					options={LOCALE_META.map((meta) => ({
-						value: meta.value,
-						label: meta.nativeLabel,
-					}))}
-				/>
+				<button
+					type="button"
+					class="flex flex-row gap-1.5 text-xs items-center px-2.5 py-1.5 rounded-lg border transition-colors bg-gray-3 hover:bg-gray-4 text-gray-12 border-gray-4"
+					onClick={async () => {
+						const items = await Promise.all(
+							LOCALE_META.map((meta) =>
+								CheckMenuItem.new({
+									text: meta.nativeLabel,
+									checked: locale() === meta.value,
+									action: () => setLocale(meta.value),
+								}),
+							),
+						);
+						const menu = await Menu.new({ items });
+						await menu.popup();
+						await menu.close();
+					}}
+				>
+					{currentLabel()}
+					<IconCapChevronDown class="size-3.5 text-gray-10" />
+				</button>
 			</SectionCard>
 		</Section>
 	);
