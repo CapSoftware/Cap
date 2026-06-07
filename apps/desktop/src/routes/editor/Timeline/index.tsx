@@ -1005,6 +1005,8 @@ export function Timeline(props: {
 								<TrackRow 
 									icon={() => <IconLucideActivity class="size-4 text-blue-500" />}
 									subordinate={true}
+									onIconClick={() => setEditorState("timeline", "showZoomCurves", false)}
+									iconOverlay={() => <IconLucideChevronUp class="size-5 text-gray-11" />}
 								>
 									<ZoomCurveTrack />
 								</TrackRow>
