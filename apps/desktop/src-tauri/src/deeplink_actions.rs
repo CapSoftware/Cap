@@ -2,11 +2,9 @@ use cap_recording::{
     RecordingMode, feeds::camera::DeviceOrModelID, sources::screen_capture::ScreenCaptureTarget,
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    path::{Path, PathBuf},
-    sync::{Mutex, PoisonError},
-};
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
+use tokio::sync::Mutex;
 use tracing::{trace, warn};
 
 use crate::{
@@ -55,7 +53,7 @@ impl TemporaryScreenshotModeState {
 }
 
 static TEMPORARY_SCREENSHOT_MODE: Mutex<TemporaryScreenshotModeState> =
-    Mutex::new(TemporaryScreenshotModeState {
+    Mutex::const_new(TemporaryScreenshotModeState {
         previous_mode: None,
         active_count: 0,
     });
@@ -529,14 +527,12 @@ fn set_recording_mode(app: &AppHandle, mode: RecordingMode) -> Result<(), String
     Ok(())
 }
 
-fn begin_temporary_screenshot_mode(app: &AppHandle) -> Result<(), String> {
+async fn begin_temporary_screenshot_mode(app: &AppHandle) -> Result<(), String> {
     let previous_mode = RecordingSettingsStore::get(app)
         .map(|settings| settings.and_then(|settings| settings.mode))?;
 
     let should_enable_screenshot_mode = {
-        let mut temporary_mode = TEMPORARY_SCREENSHOT_MODE
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut temporary_mode = TEMPORARY_SCREENSHOT_MODE.lock().await;
         temporary_mode.begin(previous_mode)
     };
 
@@ -545,9 +541,7 @@ fn begin_temporary_screenshot_mode(app: &AppHandle) -> Result<(), String> {
     }
 
     if let Err(err) = set_recording_mode(app, RecordingMode::Screenshot) {
-        let mut temporary_mode = TEMPORARY_SCREENSHOT_MODE
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut temporary_mode = TEMPORARY_SCREENSHOT_MODE.lock().await;
         let _ = temporary_mode.restore();
         return Err(err);
     }
@@ -555,11 +549,9 @@ fn begin_temporary_screenshot_mode(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn restore_temporary_recording_mode(app: &AppHandle) {
+pub(crate) async fn restore_temporary_recording_mode(app: &AppHandle) {
     let previous_mode = {
-        let mut temporary_mode = TEMPORARY_SCREENSHOT_MODE
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut temporary_mode = TEMPORARY_SCREENSHOT_MODE.lock().await;
         temporary_mode.restore()
     };
 
@@ -591,7 +583,7 @@ async fn take_screenshot(app: &AppHandle, target: ScreenshotTarget) -> Result<()
             ScreenCaptureTarget::Window { id: window.id() }
         }
         ScreenshotTarget::Area => {
-            begin_temporary_screenshot_mode(app)?;
+            begin_temporary_screenshot_mode(app).await?;
             crate::open_target_picker(app, RecordingTargetMode::Area).await;
             return Ok(());
         }

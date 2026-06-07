@@ -326,7 +326,7 @@ pub async fn close_target_select_overlays(
         state.destroy(&display_id, app.global_shortcut());
     }
 
-    crate::deeplink_actions::restore_temporary_recording_mode(&app);
+    crate::deeplink_actions::restore_temporary_recording_mode(&app).await;
 
     Ok(())
 }

@@ -58,13 +58,13 @@ export function createRecordingInputHandlers({
 		micName: string | null,
 		cameraID: DeviceOrModelID | null,
 	) => {
-		if (micName) {
+		if (micName != null) {
 			await setMicInput(micName).catch((error) =>
 				console.error("Failed to set mic input:", error),
 			);
 		}
 
-		if (cameraID) {
+		if (cameraID != null) {
 			await setCameraInput({
 				model: cameraID,
 				skipCameraWindow: getSkipCameraWindow(),
