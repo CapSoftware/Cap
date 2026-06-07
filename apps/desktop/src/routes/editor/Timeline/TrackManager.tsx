@@ -76,18 +76,28 @@ export function TrackManager(props: {
 	);
 }
 
-export function TrackIcon(props: { icon: JSX.Element; class?: string; onClick?: () => void }) {
+import { Show } from "solid-js";
+
+export function TrackIcon(props: { icon: JSX.Element; class?: string; onClick?: () => void; subordinate?: boolean }) {
 	return (
 		<div
 			class={cx(
-				"relative z-10 w-14 h-13 flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/60 text-gray-12 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)] dark:border-gray-4/60 dark:bg-gray-3/40",
+				"relative z-10 w-14 flex items-center justify-center",
+				props.subordinate 
+					? "h-full text-gray-11"
+					: "h-13 rounded-xl border border-gray-4/70 bg-gray-2/60 text-gray-12 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)] dark:border-gray-4/60 dark:bg-gray-3/40",
 				props.onClick ? "cursor-pointer hover:bg-gray-3 dark:hover:bg-gray-4/40 transition-colors" : "",
 				props.class,
 			)}
 			onClick={props.onClick}
 			onMouseDown={(e) => e.stopPropagation()}
 		>
-			{props.icon}
+			<Show when={props.subordinate}>
+				{/* Tree connector L shape */}
+				<div class="absolute left-4 -top-2 w-px h-[calc(50%+8px)] bg-gray-5/70 dark:bg-gray-6/60" />
+				<div class="absolute left-4 top-1/2 w-3 h-px bg-gray-5/70 dark:bg-gray-6/60" />
+			</Show>
+			<div class={cx("relative z-10", props.subordinate && "translate-x-2")}>{props.icon}</div>
 		</div>
 	);
 }

@@ -998,7 +998,10 @@ export function Timeline(props: {
 							</TrackRow>
 							<Show when={editorState.timeline.showZoomCurves}>
 								<div class="animate-in slide-in-from-top-4 fade-in duration-200">
-									<TrackRow icon={() => <IconLucideActivity class="size-4 text-blue-500" />}>
+									<TrackRow 
+										icon={() => <IconLucideActivity class="size-4 text-blue-500" />}
+										subordinate={true}
+									>
 										<ZoomCurveTrack />
 									</TrackRow>
 								</div>
@@ -1028,16 +1031,19 @@ function TrackRow(props: {
 	onContextMenu?: (e: MouseEvent) => void;
 	onIconClick?: () => void;
 	iconOverlay?: () => JSX.Element;
+	subordinate?: boolean;
+	class?: string;
 }) {
 	return (
 		<div
-			class="group/track flex items-stretch gap-2"
+			class={cx("group/track flex items-stretch gap-2", props.class)}
 			onContextMenu={props.onContextMenu}
 		>
 			<div class="relative">
 				<TrackIcon
 					icon={props.icon()}
 					onClick={props.onIconClick}
+					subordinate={props.subordinate}
 					class={
 						props.onDelete || props.iconOverlay
 							? "transition-opacity group-hover/track:pointer-events-none group-hover/track:opacity-0"
