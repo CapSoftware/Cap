@@ -1,6 +1,6 @@
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -70,7 +70,7 @@ impl ScreenshotPostCaptureAction {
 
 impl PendingScreenshotPostCaptureAction {
     pub fn set(&self, action: ScreenshotPostCaptureAction) {
-        let mut pending = self.0.lock().unwrap();
+        let mut pending = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         *pending = Some(PendingAction {
             action,
             created_at: Instant::now(),
@@ -78,7 +78,7 @@ impl PendingScreenshotPostCaptureAction {
     }
 
     pub fn take(&self) -> Option<ScreenshotPostCaptureAction> {
-        let mut pending = self.0.lock().unwrap();
+        let mut pending = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let action = pending.take()?;
 
         if action.created_at.elapsed() <= PENDING_ACTION_TTL {
@@ -89,7 +89,7 @@ impl PendingScreenshotPostCaptureAction {
     }
 
     pub fn clear(&self) {
-        let mut pending = self.0.lock().unwrap();
+        let mut pending = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         *pending = None;
     }
 }
@@ -140,15 +140,17 @@ pub async fn handle(
             save_screenshot_image_file(&path).await?;
             Ok(())
         }
-        ScreenshotPostCaptureAction::Upload => match crate::upload_screenshot_internal(app, path).await? {
-            crate::UploadResult::Success(_) => Ok(()),
-            crate::UploadResult::NotAuthenticated => Ok(()),
-            crate::UploadResult::UpgradeRequired => Ok(()),
-            crate::UploadResult::PlanCheckFailed => {
-                notifications::send_notification(app, NotificationType::ShareableLinkFailed);
-                Ok(())
+        ScreenshotPostCaptureAction::Upload => {
+            match crate::upload_screenshot_internal(app, path).await? {
+                crate::UploadResult::Success(_) => Ok(()),
+                crate::UploadResult::NotAuthenticated => Ok(()),
+                crate::UploadResult::UpgradeRequired => Ok(()),
+                crate::UploadResult::PlanCheckFailed => {
+                    notifications::send_notification(app, NotificationType::ShareableLinkFailed);
+                    Ok(())
+                }
             }
-        },
+        }
     }
 }
 

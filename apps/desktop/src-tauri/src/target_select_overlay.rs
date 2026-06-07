@@ -328,6 +328,7 @@ pub async fn close_target_select_overlays(
     }
 
     screenshot_post_capture::clear_pending_action(&app);
+    crate::deeplink_actions::restore_temporary_recording_mode(&app).await;
 
     Ok(())
 }

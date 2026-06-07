@@ -4009,7 +4009,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
-            screenshot_post_capture::take_screenshot_with_post_capture,
             recording::list_cameras,
             recording::get_camera_formats,
             recording::get_microphone_info,
@@ -4025,6 +4024,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             fake_window::remove_fake_window,
             focus_captures_panel,
             get_current_recording,
+            screenshot_post_capture::take_screenshot_with_post_capture,
             export::begin_export_session,
             export::end_export_session,
             export::export_video,
@@ -5200,6 +5200,13 @@ fn close_target_select_overlays(app: &AppHandle) {
     if !saw_overlay && let Some(focus_manager) = focus_manager {
         focus_manager.shutdown(app);
     }
+
+    screenshot_post_capture::clear_pending_action(app);
+
+    let app = app.clone();
+    spawn_on_runtime(async move {
+        deeplink_actions::restore_temporary_recording_mode(&app).await;
+    });
 }
 
 #[cfg(target_os = "windows")]

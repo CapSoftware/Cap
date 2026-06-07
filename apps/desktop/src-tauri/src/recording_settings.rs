@@ -48,10 +48,17 @@ impl RecordingSettingsStore {
     }
 
     pub fn set_mode(app: &AppHandle<Wry>, mode: RecordingMode) -> Result<(), String> {
+        Self::set_mode_option(app, Some(mode))
+    }
+
+    pub(crate) fn set_mode_option(
+        app: &AppHandle<Wry>,
+        mode: Option<RecordingMode>,
+    ) -> Result<(), String> {
         let store = app.store("store").map_err(|e| e.to_string())?;
 
         let mut settings = Self::get(app)?.unwrap_or_default();
-        settings.mode = Some(mode);
+        settings.mode = mode;
 
         store.set(Self::KEY, serde_json::json!(settings));
         store.save().map_err(|e| e.to_string())

@@ -47,9 +47,6 @@ async deleteRecording() : Promise<null> {
 async takeScreenshot(target: ScreenCaptureTarget) : Promise<string> {
     return await TAURI_INVOKE("take_screenshot", { target });
 },
-async takeScreenshotWithPostCapture(target: ScreenCaptureTarget) : Promise<string> {
-    return await TAURI_INVOKE("take_screenshot_with_post_capture", { target });
-},
 async listCameras() : Promise<CameraInfo[]> {
     return await TAURI_INVOKE("list_cameras");
 },
@@ -94,6 +91,9 @@ async focusCapturesPanel() : Promise<void> {
 },
 async getCurrentRecording() : Promise<JsonValue<CurrentRecording | null>> {
     return await TAURI_INVOKE("get_current_recording");
+},
+async takeScreenshotWithPostCapture(target: ScreenCaptureTarget) : Promise<string> {
+    return await TAURI_INVOKE("take_screenshot_with_post_capture", { target });
 },
 async beginExportSession() : Promise<void> {
     await TAURI_INVOKE("begin_export_session");

@@ -4,7 +4,8 @@ use cap_recording::{
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
-use tracing::trace;
+use tokio::sync::Mutex;
+use tracing::{trace, warn};
 
 use crate::{
     App, ArcLock,
@@ -14,6 +15,48 @@ use crate::{
     tray,
     windows::ShowCapWindow,
 };
+
+#[derive(Debug, Default)]
+struct TemporaryScreenshotModeState {
+    previous_mode: Option<RecordingMode>,
+    active_count: usize,
+}
+
+impl TemporaryScreenshotModeState {
+    fn begin(&mut self, previous_mode: Option<RecordingMode>) -> bool {
+        if self.active_count > 0 {
+            self.active_count += 1;
+            return false;
+        }
+
+        if matches!(previous_mode, Some(RecordingMode::Screenshot)) {
+            return false;
+        }
+
+        self.previous_mode = previous_mode;
+        self.active_count = 1;
+        true
+    }
+
+    fn restore(&mut self) -> Option<Option<RecordingMode>> {
+        if self.active_count == 0 {
+            return None;
+        }
+
+        self.active_count -= 1;
+        if self.active_count > 0 {
+            return None;
+        }
+
+        Some(self.previous_mode.take())
+    }
+}
+
+static TEMPORARY_SCREENSHOT_MODE: Mutex<TemporaryScreenshotModeState> =
+    Mutex::const_new(TemporaryScreenshotModeState {
+        previous_mode: None,
+        active_count: 0,
+    });
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -209,8 +252,11 @@ async fn take_screenshot(
                 screenshot_post_capture::clear_pending_action(app);
             }
 
-            RecordingSettingsStore::set_mode(app, RecordingMode::Screenshot)?;
-            tray::update_tray_icon_for_mode(app, RecordingMode::Screenshot);
+            if let Err(err) = begin_temporary_screenshot_mode(app).await {
+                screenshot_post_capture::clear_pending_action(app);
+                return Err(err);
+            }
+
             crate::open_target_picker(app, RecordingTargetMode::Area).await;
             return Ok(());
         }
@@ -222,6 +268,52 @@ async fn take_screenshot(
         .await
         .map_err(|e| format!("Failed to take screenshot: {e}"))?;
     screenshot_post_capture::handle(app, path, action).await
+}
+
+fn set_recording_mode(app: &AppHandle, mode: RecordingMode) -> Result<(), String> {
+    RecordingSettingsStore::set_mode(app, mode)?;
+    tray::update_tray_icon_for_mode(app, mode);
+    Ok(())
+}
+
+async fn begin_temporary_screenshot_mode(app: &AppHandle) -> Result<(), String> {
+    let previous_mode = RecordingSettingsStore::get(app)
+        .map(|settings| settings.and_then(|settings| settings.mode))?;
+
+    let should_enable_screenshot_mode = {
+        let mut temporary_mode = TEMPORARY_SCREENSHOT_MODE.lock().await;
+        temporary_mode.begin(previous_mode)
+    };
+
+    if !should_enable_screenshot_mode {
+        return Ok(());
+    }
+
+    if let Err(err) = set_recording_mode(app, RecordingMode::Screenshot) {
+        let mut temporary_mode = TEMPORARY_SCREENSHOT_MODE.lock().await;
+        let _ = temporary_mode.restore();
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn restore_temporary_recording_mode(app: &AppHandle) {
+    let previous_mode = {
+        let mut temporary_mode = TEMPORARY_SCREENSHOT_MODE.lock().await;
+        temporary_mode.restore()
+    };
+
+    let Some(previous_mode) = previous_mode else {
+        return;
+    };
+
+    if let Err(err) = RecordingSettingsStore::set_mode_option(app, previous_mode) {
+        warn!("Failed to restore recording mode after screenshot deeplink: {err}");
+        return;
+    }
+
+    tray::update_tray_icon_for_mode(app, previous_mode.unwrap_or_default());
 }
 
 #[cfg(test)]
@@ -265,5 +357,38 @@ mod tests {
             DeepLinkAction::try_from(&url),
             Err(ActionParseFromUrlError::NotAction)
         ));
+    }
+
+    #[test]
+    fn temporary_screenshot_mode_restores_after_last_nested_flow() {
+        let mut state = TemporaryScreenshotModeState::default();
+
+        assert!(state.begin(Some(RecordingMode::Studio)));
+        assert!(!state.begin(Some(RecordingMode::Screenshot)));
+        assert_eq!(state.active_count, 2);
+
+        assert_eq!(state.restore(), None);
+        assert_eq!(state.restore(), Some(Some(RecordingMode::Studio)));
+        assert_eq!(state.restore(), None);
+    }
+
+    #[test]
+    fn temporary_screenshot_mode_preserves_missing_previous_mode() {
+        let mut state = TemporaryScreenshotModeState::default();
+
+        assert!(state.begin(None));
+
+        assert_eq!(state.restore(), Some(None));
+        assert_eq!(state.restore(), None);
+    }
+
+    #[test]
+    fn temporary_screenshot_mode_noops_when_already_screenshot() {
+        let mut state = TemporaryScreenshotModeState::default();
+
+        assert!(!state.begin(Some(RecordingMode::Screenshot)));
+
+        assert_eq!(state.active_count, 0);
+        assert_eq!(state.restore(), None);
     }
 }
