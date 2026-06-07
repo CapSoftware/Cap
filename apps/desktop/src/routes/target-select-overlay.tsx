@@ -1665,7 +1665,7 @@ function RecordingControls(props: {
 		}
 
 		return isScreenshotMode;
-	}, false);
+	}, rawOptions.mode === "screenshot");
 
 	onMount(async () => {
 		const storedSettings = await recordingSettingsStore.get().catch((error) => {

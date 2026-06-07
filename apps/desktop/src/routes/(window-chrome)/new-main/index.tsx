@@ -2083,7 +2083,7 @@ function Page() {
 		}
 
 		return isScreenshotMode;
-	}, false);
+	}, rawOptions.mode === "screenshot");
 
 	onMount(async () => {
 		if (document.activeElement instanceof HTMLElement) {
