@@ -1,7 +1,7 @@
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
 import { cx } from "cva";
-import type { JSX } from "solid-js";
+import { Show, type JSX } from "solid-js";
 import type { TimelineTrackType } from "../context";
 
 type TrackManagerOption = {
@@ -75,8 +75,6 @@ export function TrackManager(props: {
 		</button>
 	);
 }
-
-import { Show } from "solid-js";
 
 export function TrackIcon(props: { icon: JSX.Element; class?: string; onClick?: () => void; subordinate?: boolean }) {
 	return (
