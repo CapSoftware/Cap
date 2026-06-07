@@ -516,7 +516,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								{ text: "Open editor", value: "openEditor" },
 								{ text: "Show in overlay", value: "showOverlay" },
 								{ text: "Copy to clipboard", value: "copyToClipboard" },
-								{ text: "Save only", value: "save" },
+								{ text: "Save PNG file", value: "save" },
 								{ text: "Upload link", value: "upload" },
 							]}
 						/>

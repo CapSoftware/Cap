@@ -137,7 +137,7 @@ pub async fn handle(
             Ok(())
         }
         ScreenshotPostCaptureAction::Save => {
-            notifications::send_notification(app, NotificationType::ScreenshotSaved);
+            save_screenshot_image_file(&path).await?;
             Ok(())
         }
         ScreenshotPostCaptureAction::Upload => match crate::upload_screenshot_internal(app, path).await? {
@@ -222,4 +222,44 @@ async fn copy_screenshot_to_clipboard(app: &AppHandle, path: &Path) -> Result<()
         .await
         .set_image(img_data)
         .map_err(|err| format!("Failed to copy screenshot to clipboard: {err}"))
+}
+
+async fn save_screenshot_image_file(path: &Path) -> Result<(), String> {
+    let desktop_dir = dirs::desktop_dir()
+        .ok_or_else(|| "Failed to resolve Desktop directory for screenshot export".to_string())?;
+
+    let file_stem = path
+        .parent()
+        .and_then(|parent| parent.file_stem())
+        .or_else(|| path.file_stem())
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("Screenshot");
+
+    let target_name = format!("{}.png", sanitize_filename::sanitize(file_stem));
+    let target_path = desktop_dir.join(cap_utils::ensure_unique_filename(
+        &target_name,
+        &desktop_dir,
+    )?);
+
+    let started_at = Instant::now();
+    loop {
+        match tokio::fs::copy(path, &target_path).await {
+            Ok(_) => return Ok(()),
+            Err(err) if started_at.elapsed() < Duration::from_secs(2) => {
+                sleep(Duration::from_millis(50)).await;
+                if !path.exists() {
+                    continue;
+                }
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    continue;
+                }
+            }
+            Err(err) => {
+                return Err(format!(
+                    "Failed to save screenshot image to {}: {err}",
+                    target_path.display()
+                ));
+            }
+        }
+    }
 }
