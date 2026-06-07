@@ -829,16 +829,20 @@ export function ZoomCurveTrack() {
 
 									const W = () => Math.max(1, width());
 									const rampUpPct = () => (Math.min(40, W() / 2) / W()) * 100;
-									const rampDownPct = () => (40 / W()) * 100;
+									const rampDownPct = () => (Math.min(40, W() / 2) / W()) * 100;
 
 									const d = () => {
 										if (isInstant()) {
 											return `M 0 ${startY()} L 0 ${currY()} L 100 ${currY()} ${
-												!isContiguousWithNext() ? `L 100 ${endY()} L ${100 + rampDownPct()} ${endY()}` : ""
+												!isContiguousWithNext() ? `L 100 ${endY()}` : ""
 											}`;
 										}
-										return `M 0 ${startY()} C ${rampUpPct() / 2} ${startY()}, ${rampUpPct() / 2} ${currY()}, ${rampUpPct()} ${currY()} L 100 ${currY()} ${
-											!isContiguousWithNext() ? `C ${100 + rampDownPct() / 2} ${currY()}, ${100 + rampDownPct() / 2} ${endY()}, ${100 + rampDownPct()} ${endY()}` : ""
+										return `M 0 ${startY()} C ${rampUpPct() / 2} ${startY()}, ${rampUpPct() / 2} ${currY()}, ${rampUpPct()} ${currY()} L ${
+											!isContiguousWithNext() ? 100 - rampDownPct() : 100
+										} ${currY()} ${
+											!isContiguousWithNext()
+												? `C ${100 - rampDownPct() / 2} ${currY()}, ${100 - rampDownPct() / 2} ${endY()}, 100 ${endY()}`
+												: ""
 										}`;
 									};
 
