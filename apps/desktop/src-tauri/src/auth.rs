@@ -100,10 +100,15 @@ impl AuthStore {
             last_checked: chrono::Utc::now().timestamp() as i32,
             manual: auth.plan.as_ref().is_some_and(|p| p.manual),
         });
-        auth.organizations = api::fetch_organizations(app)
-            .await
-            .map_err(|e| e.to_string())?;
-        auth.organizations_updated_at = Some(chrono::Utc::now().timestamp() as i32);
+        match api::fetch_organizations(app).await {
+            Ok(orgs) => {
+                auth.organizations = orgs;
+                auth.organizations_updated_at = Some(chrono::Utc::now().timestamp() as i32);
+            }
+            Err(e) => {
+                println!("Failed to fetch organizations: {e}");
+            }
+        }
 
         Self::set(app, Some(auth))?;
 
