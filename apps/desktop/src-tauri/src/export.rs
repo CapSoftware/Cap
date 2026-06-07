@@ -715,13 +715,19 @@ fn resolve_exporter_binary() -> Result<PathBuf, String> {
 }
 
 fn exporter_binary_candidates(root: &Path) -> Vec<PathBuf> {
-    let mut candidates = vec![
+    let mut candidates = Vec::new();
+
+    if cfg!(debug_assertions) {
+        candidates.extend(debug_exporter_binary_candidates(root));
+    }
+
+    candidates.push(
         root.join("apps")
             .join("desktop")
             .join("src-tauri")
             .join("binaries")
             .join(exporter_bin_name()),
-    ];
+    );
 
     if let Some(target_triple) = current_target_triple() {
         candidates.push(
@@ -734,6 +740,36 @@ fn exporter_binary_candidates(root: &Path) -> Vec<PathBuf> {
                     std::env::consts::EXE_SUFFIX
                 )),
         );
+    }
+
+    candidates
+}
+
+fn debug_exporter_binary_candidates(root: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![
+        root.join("target").join("debug").join(exporter_bin_name()),
+        root.join("target")
+            .join("debug")
+            .join(format!("cap{}", std::env::consts::EXE_SUFFIX)),
+    ];
+
+    if let Some(target_triple) = current_target_triple() {
+        candidates.push(
+            root.join("target")
+                .join(target_triple)
+                .join("debug")
+                .join(exporter_bin_name()),
+        );
+        candidates.push(
+            root.join("target")
+                .join(target_triple)
+                .join("debug")
+                .join(format!("cap{}", std::env::consts::EXE_SUFFIX)),
+        );
+        candidates.push(root.join("target").join("debug").join(format!(
+            "cap-exporter-{target_triple}{}",
+            std::env::consts::EXE_SUFFIX
+        )));
     }
 
     candidates

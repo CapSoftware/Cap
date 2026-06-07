@@ -19,6 +19,7 @@ pub fn get_audio_segments(segments: &[SegmentMedia]) -> Vec<AudioSegment> {
                         },
                         |o| o.mic,
                     )
+                    .with_timing_offset_secs(s.audio_timing_repair.mic_offset_secs)
                 }),
                 s.system_audio.clone().map(|a| -> AudioSegmentTrack {
                     AudioSegmentTrack::new(
@@ -27,6 +28,7 @@ pub fn get_audio_segments(segments: &[SegmentMedia]) -> Vec<AudioSegment> {
                         |_| cap_audio::StereoMode::Stereo,
                         |o| o.system_audio,
                     )
+                    .with_timing_offset_secs(s.audio_timing_repair.system_audio_offset_secs)
                 }),
             ]
             .into_iter()
