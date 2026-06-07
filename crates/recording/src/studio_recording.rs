@@ -428,6 +428,7 @@ fn to_project_gap_summary(
 ) -> Option<cap_project::AudioGapSummary> {
     summary.map(|s| cap_project::AudioGapSummary {
         total_overlap_trimmed_ms: s.total_overlap_trimmed_ms,
+        startup_overlap_trimmed_ms: s.startup_overlap_trimmed_ms,
         overlap_dropped_frames: s.overlap_dropped_frames,
         startup_overlap_drops: s.startup_overlap_drops,
     })
