@@ -5174,6 +5174,8 @@ fn close_target_select_overlays(app: &AppHandle) {
     if !saw_overlay && let Some(focus_manager) = focus_manager {
         focus_manager.shutdown(app);
     }
+
+    deeplink_actions::restore_temporary_recording_mode(app);
 }
 
 #[cfg(target_os = "windows")]

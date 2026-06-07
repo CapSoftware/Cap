@@ -2,9 +2,12 @@ use cap_recording::{
     RecordingMode, feeds::camera::DeviceOrModelID, sources::screen_capture::ScreenCaptureTarget,
 };
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Mutex, PoisonError},
+};
 use tauri::{AppHandle, Manager, Url};
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::{
     App, ArcLock,
@@ -14,6 +17,8 @@ use crate::{
     tray,
     windows::ShowCapWindow,
 };
+
+static TEMPORARY_SCREENSHOT_MODE: Mutex<Option<Option<RecordingMode>>> = Mutex::new(None);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -451,6 +456,45 @@ fn set_recording_mode(app: &AppHandle, mode: RecordingMode) -> Result<(), String
     Ok(())
 }
 
+fn begin_temporary_screenshot_mode(app: &AppHandle) -> Result<(), String> {
+    let previous_mode = RecordingSettingsStore::get(app)
+        .map(|settings| settings.and_then(|settings| settings.mode))?;
+
+    if matches!(previous_mode, Some(RecordingMode::Screenshot)) {
+        return Ok(());
+    }
+
+    {
+        let mut pending = TEMPORARY_SCREENSHOT_MODE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+
+        if pending.is_none() {
+            *pending = Some(previous_mode);
+        }
+    }
+
+    set_recording_mode(app, RecordingMode::Screenshot)
+}
+
+pub(crate) fn restore_temporary_recording_mode(app: &AppHandle) {
+    let previous_mode = TEMPORARY_SCREENSHOT_MODE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+
+    let Some(previous_mode) = previous_mode else {
+        return;
+    };
+
+    if let Err(err) = RecordingSettingsStore::set_mode_option(app, previous_mode) {
+        warn!("Failed to restore recording mode after screenshot deeplink: {err}");
+        return;
+    }
+
+    tray::update_tray_icon_for_mode(app, previous_mode.unwrap_or_default());
+}
+
 async fn take_screenshot(app: &AppHandle, target: ScreenshotTarget) -> Result<(), String> {
     let capture_target = match target {
         ScreenshotTarget::CurrentDisplay => {
@@ -467,7 +511,7 @@ async fn take_screenshot(app: &AppHandle, target: ScreenshotTarget) -> Result<()
             ScreenCaptureTarget::Window { id: window.id() }
         }
         ScreenshotTarget::Area => {
-            set_recording_mode(app, RecordingMode::Screenshot)?;
+            begin_temporary_screenshot_mode(app)?;
             crate::open_target_picker(app, RecordingTargetMode::Area).await;
             return Ok(());
         }
