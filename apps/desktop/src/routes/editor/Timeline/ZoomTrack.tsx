@@ -808,7 +808,6 @@ export function ZoomCurveTrack() {
 								}}
 							>
 								{(() => {
-									const ctxWidth = width();
 									const isInstant = () => segment.instantAnimation;
 
 									const prev = () => zoomSegments()[i() - 1];
@@ -828,7 +827,7 @@ export function ZoomCurveTrack() {
 									const currY = () => getY(currAmt());
 									const endY = () => getY(nextAmt());
 
-									const W = () => Math.max(1, ctxWidth);
+									const W = () => Math.max(1, width());
 									const rampUpPct = () => (Math.min(40, W() / 2) / W()) * 100;
 									const rampDownPct = () => (40 / W()) * 100;
 
