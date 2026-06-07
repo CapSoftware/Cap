@@ -43,6 +43,7 @@ describe("general-settings", () => {
 			captureKeyboardEvents: true,
 			custom_cursor_capture2: true,
 			postScreenshotCaptureBehaviour: "openEditor",
+			screenshotSaveDirectory: null,
 		});
 	});
 

@@ -2,9 +2,15 @@ import type { GeneralSettingsStore as TauriGeneralSettingsStore } from "~/utils/
 
 export type PostScreenshotCaptureBehaviour =
 	| "openEditor"
+	| "doNothing"
+	| "askEveryTime"
 	| "showOverlay"
 	| "copyToClipboard"
+	| "copyFilePath"
+	| "copyMarkdownImage"
 	| "save"
+	| "saveToFolder"
+	| "revealInFinder"
 	| "upload";
 
 export type GeneralSettingsStore = TauriGeneralSettingsStore & {
@@ -32,6 +38,7 @@ export function createDefaultGeneralSettings(): GeneralSettingsStore {
 		autoZoomOnClicks: false,
 		captureKeyboardEvents: true,
 		postScreenshotCaptureBehaviour: "openEditor",
+		screenshotSaveDirectory: null,
 		custom_cursor_capture2: true,
 		excludedWindows: [],
 		instantModeMaxResolution: 1920,

@@ -3,7 +3,7 @@ use scap_targets::DisplayId;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
 #[cfg(target_os = "macos")]
 use tauri::Listener;
 use tauri::{AppHandle, Wry};
@@ -24,9 +24,15 @@ pub enum PostStudioRecordingBehaviour {
 pub enum PostScreenshotCaptureBehaviour {
     #[default]
     OpenEditor,
+    DoNothing,
+    AskEveryTime,
     ShowOverlay,
     CopyToClipboard,
+    CopyFilePath,
+    CopyMarkdownImage,
     Save,
+    SaveToFolder,
+    RevealInFinder,
     Upload,
 }
 
@@ -162,6 +168,8 @@ pub struct GeneralSettingsStore {
     #[serde(default)]
     pub post_screenshot_capture_behaviour: PostScreenshotCaptureBehaviour,
     #[serde(default)]
+    pub screenshot_save_directory: Option<PathBuf>,
+    #[serde(default)]
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
     #[serde(default = "default_true", rename = "custom_cursor_capture2")]
     pub custom_cursor_capture: bool,
@@ -272,6 +280,7 @@ impl Default for GeneralSettingsStore {
             window_transparency: false,
             post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
             post_screenshot_capture_behaviour: PostScreenshotCaptureBehaviour::OpenEditor,
+            screenshot_save_directory: None,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
             custom_cursor_capture: true,
             server_url: default_server_url(),

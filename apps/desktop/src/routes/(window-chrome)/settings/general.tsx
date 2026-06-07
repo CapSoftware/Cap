@@ -8,7 +8,7 @@ import { type OsType, type } from "@tauri-apps/plugin-os";
 import "@total-typescript/ts-reset/filter-boolean";
 import { Collapsible } from "@kobalte/core/collapsible";
 import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -42,6 +42,7 @@ import {
 	type StudioRecordingQuality,
 	type WindowExclusion,
 } from "~/utils/tauri";
+import IconLucideFolderOpen from "~icons/lucide/folder-open";
 import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideX from "~icons/lucide/x";
 import {
@@ -254,6 +255,18 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			setSettings(key as keyof GeneralSettingsStore, previousValue);
 			console.error(`Failed to update ${key}`, error);
 		}
+	};
+
+	const handleChooseScreenshotSaveDirectory = async () => {
+		const selected = await open({
+			directory: true,
+			multiple: false,
+			title: "Choose Screenshot Save Folder",
+			defaultPath: settings.screenshotSaveDirectory ?? undefined,
+		});
+
+		if (typeof selected !== "string") return;
+		await handleChange("screenshotSaveDirectory", selected);
 	};
 
 	const ostype: OsType = type();
@@ -513,13 +526,68 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								handleChange("postScreenshotCaptureBehaviour", value)
 							}
 							options={[
+								{ text: "Ask every time", value: "askEveryTime" },
 								{ text: "Open editor", value: "openEditor" },
 								{ text: "Show in overlay", value: "showOverlay" },
-								{ text: "Copy to clipboard", value: "copyToClipboard" },
-								{ text: "Save PNG file", value: "save" },
+								{ text: "Copy image to clipboard", value: "copyToClipboard" },
+								{ text: "Copy file path", value: "copyFilePath" },
+								{ text: "Copy Markdown image", value: "copyMarkdownImage" },
+								{ text: "Save PNG to Desktop", value: "save" },
+								{ text: "Save PNG to folder", value: "saveToFolder" },
+								{ text: "Reveal in Finder", value: "revealInFinder" },
 								{ text: "Upload link", value: "upload" },
+								{ text: "Do nothing", value: "doNothing" },
 							]}
 						/>
+						<Show
+							when={settings.postScreenshotCaptureBehaviour === "saveToFolder"}
+						>
+							<SettingItem
+								label="Screenshot save folder"
+								description="Folder used when screenshots are saved after capture."
+							>
+								<div class="flex items-center gap-2 min-w-0 max-w-[22rem]">
+									<Show
+										when={settings.screenshotSaveDirectory}
+										fallback={
+											<span class="text-xs whitespace-nowrap text-gray-10">
+												Not set
+											</span>
+										}
+									>
+										{(directory) => (
+											<span
+												class="min-w-0 max-w-[12rem] truncate text-xs text-gray-10"
+												title={directory()}
+											>
+												{directory()}
+											</span>
+										)}
+									</Show>
+									<Button
+										size="sm"
+										variant="gray"
+										class="flex items-center gap-1.5"
+										onClick={handleChooseScreenshotSaveDirectory}
+									>
+										<IconLucideFolderOpen class="size-3.5" />
+										<span>Choose</span>
+									</Button>
+									<Show when={settings.screenshotSaveDirectory}>
+										<Button
+											size="sm"
+											variant="gray"
+											title="Clear screenshot save folder"
+											onClick={() =>
+												handleChange("screenshotSaveDirectory", null)
+											}
+										>
+											<IconLucideX class="size-3.5" />
+										</Button>
+									</Show>
+								</div>
+							</SettingItem>
+						</Show>
 						<SelectSettingItem
 							label="After deleting a recording"
 							description="Whether the recording window should reopen."

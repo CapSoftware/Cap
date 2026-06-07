@@ -9,8 +9,12 @@ use clipboard_rs::{Clipboard, ClipboardContext, RustImageData, common::RustImage
 use image::ImageEncoder;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Manager};
-use tokio::time::sleep;
+use tauri::{AppHandle, Manager, Url};
+use tauri_plugin_dialog::{
+    DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
+};
+use tauri_plugin_opener::OpenerExt;
+use tokio::{sync::oneshot, time::sleep};
 
 use crate::{
     ArcLock, PendingScreenshot, PendingScreenshots,
@@ -35,9 +39,15 @@ struct PendingAction {
 pub enum ScreenshotPostCaptureAction {
     #[default]
     OpenEditor,
+    DoNothing,
+    AskEveryTime,
     ShowOverlay,
     CopyToClipboard,
+    CopyFilePath,
+    CopyMarkdownImage,
     Save,
+    SaveToFolder,
+    RevealInFinder,
     Upload,
 }
 
@@ -45,9 +55,15 @@ impl From<PostScreenshotCaptureBehaviour> for ScreenshotPostCaptureAction {
     fn from(value: PostScreenshotCaptureBehaviour) -> Self {
         match value {
             PostScreenshotCaptureBehaviour::OpenEditor => Self::OpenEditor,
+            PostScreenshotCaptureBehaviour::DoNothing => Self::DoNothing,
+            PostScreenshotCaptureBehaviour::AskEveryTime => Self::AskEveryTime,
             PostScreenshotCaptureBehaviour::ShowOverlay => Self::ShowOverlay,
             PostScreenshotCaptureBehaviour::CopyToClipboard => Self::CopyToClipboard,
+            PostScreenshotCaptureBehaviour::CopyFilePath => Self::CopyFilePath,
+            PostScreenshotCaptureBehaviour::CopyMarkdownImage => Self::CopyMarkdownImage,
             PostScreenshotCaptureBehaviour::Save => Self::Save,
+            PostScreenshotCaptureBehaviour::SaveToFolder => Self::SaveToFolder,
+            PostScreenshotCaptureBehaviour::RevealInFinder => Self::RevealInFinder,
             PostScreenshotCaptureBehaviour::Upload => Self::Upload,
         }
     }
@@ -117,7 +133,17 @@ pub async fn handle(
     path: PathBuf,
     action: ScreenshotPostCaptureAction,
 ) -> Result<(), String> {
+    let action = match action {
+        ScreenshotPostCaptureAction::AskEveryTime => match prompt_post_capture_action(app).await? {
+            Some(action) => action,
+            None => return Ok(()),
+        },
+        action => action,
+    };
+
     match action {
+        ScreenshotPostCaptureAction::DoNothing => Ok(()),
+        ScreenshotPostCaptureAction::AskEveryTime => Ok(()),
         ScreenshotPostCaptureAction::OpenEditor => {
             ShowCapWindow::ScreenshotEditor { path }
                 .show(app)
@@ -137,8 +163,37 @@ pub async fn handle(
             notifications::send_notification(app, NotificationType::ScreenshotCopiedToClipboard);
             Ok(())
         }
+        ScreenshotPostCaptureAction::CopyFilePath => {
+            wait_for_screenshot_image(path.as_path()).await?;
+            copy_text_to_clipboard(app, path.to_string_lossy().to_string()).await?;
+            notifications::send_notification(app, NotificationType::ScreenshotCopiedToClipboard);
+            Ok(())
+        }
+        ScreenshotPostCaptureAction::CopyMarkdownImage => {
+            wait_for_screenshot_image(path.as_path()).await?;
+            copy_text_to_clipboard(app, markdown_image_for_path(path.as_path())?).await?;
+            notifications::send_notification(app, NotificationType::ScreenshotCopiedToClipboard);
+            Ok(())
+        }
         ScreenshotPostCaptureAction::Save => {
             save_screenshot_image_file(app, &path).await?;
+            notifications::send_notification(app, NotificationType::ScreenshotSaved);
+            Ok(())
+        }
+        ScreenshotPostCaptureAction::SaveToFolder => {
+            if save_screenshot_image_file_to_configured_directory(app, &path)
+                .await?
+                .is_some()
+            {
+                notifications::send_notification(app, NotificationType::ScreenshotSaved);
+            }
+            Ok(())
+        }
+        ScreenshotPostCaptureAction::RevealInFinder => {
+            wait_for_screenshot_image(path.as_path()).await?;
+            app.opener()
+                .reveal_item_in_dir(path)
+                .map_err(|err| format!("Failed to reveal screenshot in Finder: {err}"))?;
             Ok(())
         }
         ScreenshotPostCaptureAction::Upload => {
@@ -166,6 +221,165 @@ pub async fn take_screenshot_with_post_capture(
     let path = crate::recording::take_screenshot(app.clone(), target).await?;
     handle(&app, path.clone(), action).await?;
     Ok(path)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DialogButton {
+    First,
+    Second,
+    Third,
+}
+
+async fn prompt_post_capture_action(
+    app: &AppHandle,
+) -> Result<Option<ScreenshotPostCaptureAction>, String> {
+    match choose_post_capture_button(
+        app,
+        "After Screenshot",
+        "Choose what Cap should do with this screenshot.",
+        "Open editor",
+        "More actions",
+        "Do nothing",
+    )
+    .await?
+    {
+        DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::OpenEditor)),
+        DialogButton::Third => Ok(None),
+        DialogButton::Second => match choose_post_capture_button(
+            app,
+            "After Screenshot",
+            "Choose what Cap should do with this screenshot.",
+            "Copy image",
+            "Save Desktop",
+            "More actions",
+        )
+        .await?
+        {
+            DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::CopyToClipboard)),
+            DialogButton::Second => Ok(Some(ScreenshotPostCaptureAction::Save)),
+            DialogButton::Third => match choose_post_capture_button(
+                app,
+                "After Screenshot",
+                "Choose what Cap should do with this screenshot.",
+                "Save folder",
+                "Upload link",
+                "More actions",
+            )
+            .await?
+            {
+                DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::SaveToFolder)),
+                DialogButton::Second => Ok(Some(ScreenshotPostCaptureAction::Upload)),
+                DialogButton::Third => match choose_post_capture_button(
+                    app,
+                    "After Screenshot",
+                    "Choose what Cap should do with this screenshot.",
+                    "Show overlay",
+                    "Reveal in Finder",
+                    "More actions",
+                )
+                .await?
+                {
+                    DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::ShowOverlay)),
+                    DialogButton::Second => Ok(Some(ScreenshotPostCaptureAction::RevealInFinder)),
+                    DialogButton::Third => match choose_post_capture_button(
+                        app,
+                        "After Screenshot",
+                        "Choose what Cap should do with this screenshot.",
+                        "Copy path",
+                        "Copy Markdown",
+                        "Do nothing",
+                    )
+                    .await?
+                    {
+                        DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::CopyFilePath)),
+                        DialogButton::Second => {
+                            Ok(Some(ScreenshotPostCaptureAction::CopyMarkdownImage))
+                        }
+                        DialogButton::Third => Ok(None),
+                    },
+                },
+            },
+        },
+    }
+}
+
+async fn choose_post_capture_button(
+    app: &AppHandle,
+    title: &str,
+    message: &str,
+    first: &str,
+    second: &str,
+    third: &str,
+) -> Result<DialogButton, String> {
+    let first_label = first.to_string();
+    let second_label = second.to_string();
+    let third_label = third.to_string();
+    let (tx, rx) = oneshot::channel();
+
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::YesNoCancelCustom(
+            first_label.clone(),
+            second_label.clone(),
+            third_label.clone(),
+        ))
+        .show_with_result(move |result| {
+            let _ = tx.send(result);
+        });
+
+    let result = rx
+        .await
+        .map_err(|err| format!("Failed to show screenshot action dialog: {err}"))?;
+
+    Ok(dialog_result_to_button(
+        result,
+        &first_label,
+        &second_label,
+        &third_label,
+    ))
+}
+
+fn dialog_result_to_button(
+    result: MessageDialogResult,
+    first: &str,
+    second: &str,
+    third: &str,
+) -> DialogButton {
+    match result {
+        MessageDialogResult::Ok | MessageDialogResult::Yes => DialogButton::First,
+        MessageDialogResult::No => DialogButton::Second,
+        MessageDialogResult::Cancel => DialogButton::Third,
+        MessageDialogResult::Custom(label) if label == first => DialogButton::First,
+        MessageDialogResult::Custom(label) if label == second => DialogButton::Second,
+        MessageDialogResult::Custom(label) if label == third => DialogButton::Third,
+        MessageDialogResult::Custom(_) => DialogButton::Third,
+    }
+}
+
+async fn choose_screenshot_save_directory(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    let (tx, rx) = oneshot::channel();
+
+    app.dialog()
+        .file()
+        .set_title("Choose Screenshot Folder")
+        .pick_folder(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let selected_path = rx
+        .await
+        .map_err(|err| format!("Failed to show screenshot folder dialog: {err}"))?
+        .and_then(|path| path.as_path().map(Path::to_path_buf));
+
+    if let Some(path) = selected_path.clone() {
+        GeneralSettingsStore::update(app, |settings| {
+            settings.screenshot_save_directory = Some(path);
+        })?;
+    }
+
+    Ok(selected_path)
 }
 
 fn pending_screenshot(app: &AppHandle, path: &Path) -> Option<PendingScreenshot> {
@@ -209,7 +423,7 @@ async fn read_screenshot_image(path: &Path) -> Result<RustImageData, String> {
             Ok(img_data) => return Ok(img_data),
             Err(e) => {
                 if started_at.elapsed() >= Duration::from_secs(2) {
-                    return Err(format!("Failed to copy screenshot to clipboard: {e}"));
+                    return Err(format!("Screenshot image was not ready: {e}"));
                 }
                 sleep(Duration::from_millis(50)).await;
             }
@@ -217,11 +431,17 @@ async fn read_screenshot_image(path: &Path) -> Result<RustImageData, String> {
     }
 }
 
+async fn wait_for_screenshot_image(path: &Path) -> Result<(), String> {
+    read_screenshot_image(path).await.map(|_| ())
+}
+
 async fn copy_screenshot_to_clipboard(app: &AppHandle, path: &Path) -> Result<(), String> {
     let img_data = if let Some(img_data) = pending_screenshot_image(app, path) {
         img_data?
     } else {
-        read_screenshot_image(path).await?
+        read_screenshot_image(path)
+            .await
+            .map_err(|err| format!("Failed to copy screenshot to clipboard: {err}"))?
     };
 
     app.state::<ArcLock<ClipboardContext>>()
@@ -231,17 +451,73 @@ async fn copy_screenshot_to_clipboard(app: &AppHandle, path: &Path) -> Result<()
         .map_err(|err| format!("Failed to copy screenshot to clipboard: {err}"))
 }
 
-async fn save_screenshot_image_file(app: &AppHandle, path: &Path) -> Result<(), String> {
+async fn copy_text_to_clipboard(app: &AppHandle, text: String) -> Result<(), String> {
+    app.state::<ArcLock<ClipboardContext>>()
+        .write()
+        .await
+        .set_text(text)
+        .map_err(|err| format!("Failed to copy screenshot text to clipboard: {err}"))
+}
+
+fn markdown_image_for_path(path: &Path) -> Result<String, String> {
+    let url = Url::from_file_path(path)
+        .map_err(|_| format!("Failed to create file URL for {}", path.display()))?;
+
+    Ok(format!("![Screenshot](<{}>)", url.as_str()))
+}
+
+async fn save_screenshot_image_file(app: &AppHandle, path: &Path) -> Result<PathBuf, String> {
     let desktop_dir = dirs::desktop_dir()
         .ok_or_else(|| "Failed to resolve Desktop directory for screenshot export".to_string())?;
-    let target_path = screenshot_save_target_path(path, &desktop_dir)?;
+    save_screenshot_image_file_to_directory(app, path, &desktop_dir).await
+}
+
+async fn save_screenshot_image_file_to_configured_directory(
+    app: &AppHandle,
+    path: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let target_dir = match configured_screenshot_save_directory(app) {
+        Some(path) => path,
+        None => match choose_screenshot_save_directory(app).await? {
+            Some(path) => path,
+            None => return Ok(None),
+        },
+    };
+
+    save_screenshot_image_file_to_directory(app, path, &target_dir)
+        .await
+        .map(Some)
+}
+
+fn configured_screenshot_save_directory(app: &AppHandle) -> Option<PathBuf> {
+    GeneralSettingsStore::get(app)
+        .ok()
+        .flatten()
+        .and_then(|settings| settings.screenshot_save_directory)
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
+async fn save_screenshot_image_file_to_directory(
+    app: &AppHandle,
+    path: &Path,
+    target_dir: &Path,
+) -> Result<PathBuf, String> {
+    tokio::fs::create_dir_all(target_dir).await.map_err(|err| {
+        format!(
+            "Failed to create screenshot save directory {}: {err}",
+            target_dir.display()
+        )
+    })?;
+
+    let target_path = screenshot_save_target_path(path, target_dir)?;
 
     if let Some(screenshot) = pending_screenshot(app, path) {
-        write_pending_screenshot_png(screenshot, target_path).await?;
-        return Ok(());
+        write_pending_screenshot_png(screenshot, target_path.clone()).await?;
+        return Ok(target_path);
     }
 
-    copy_screenshot_image_file_to_path(path, target_path).await
+    copy_screenshot_image_file_to_path(path, target_path.clone()).await?;
+    Ok(target_path)
 }
 
 fn screenshot_save_target_path(path: &Path, target_dir: &Path) -> Result<PathBuf, String> {
@@ -441,6 +717,106 @@ mod tests {
             Ok(_) => panic!("expected unsupported channel count error"),
             Err(err) => assert!(err.contains("Unsupported screenshot channel count: 2")),
         }
+    }
+
+    #[test]
+    fn post_screenshot_capture_behaviour_maps_to_actions() {
+        let mappings = [
+            (
+                PostScreenshotCaptureBehaviour::OpenEditor,
+                ScreenshotPostCaptureAction::OpenEditor,
+            ),
+            (
+                PostScreenshotCaptureBehaviour::DoNothing,
+                ScreenshotPostCaptureAction::DoNothing,
+            ),
+            (
+                PostScreenshotCaptureBehaviour::AskEveryTime,
+                ScreenshotPostCaptureAction::AskEveryTime,
+            ),
+            (
+                PostScreenshotCaptureBehaviour::ShowOverlay,
+                ScreenshotPostCaptureAction::ShowOverlay,
+            ),
+            (
+                PostScreenshotCaptureBehaviour::CopyToClipboard,
+                ScreenshotPostCaptureAction::CopyToClipboard,
+            ),
+            (
+                PostScreenshotCaptureBehaviour::CopyFilePath,
+                ScreenshotPostCaptureAction::CopyFilePath,
+            ),
+            (
+                PostScreenshotCaptureBehaviour::CopyMarkdownImage,
+                ScreenshotPostCaptureAction::CopyMarkdownImage,
+            ),
+            (
+                PostScreenshotCaptureBehaviour::Save,
+                ScreenshotPostCaptureAction::Save,
+            ),
+            (
+                PostScreenshotCaptureBehaviour::SaveToFolder,
+                ScreenshotPostCaptureAction::SaveToFolder,
+            ),
+            (
+                PostScreenshotCaptureBehaviour::RevealInFinder,
+                ScreenshotPostCaptureAction::RevealInFinder,
+            ),
+            (
+                PostScreenshotCaptureBehaviour::Upload,
+                ScreenshotPostCaptureAction::Upload,
+            ),
+        ];
+
+        for (behaviour, action) in mappings {
+            assert_eq!(ScreenshotPostCaptureAction::from(behaviour), action);
+        }
+    }
+
+    #[test]
+    fn dialog_result_to_button_maps_custom_labels() {
+        assert_eq!(
+            dialog_result_to_button(
+                MessageDialogResult::Custom("Open editor".to_string()),
+                "Open editor",
+                "More actions",
+                "Do nothing",
+            ),
+            DialogButton::First
+        );
+        assert_eq!(
+            dialog_result_to_button(
+                MessageDialogResult::Custom("More actions".to_string()),
+                "Open editor",
+                "More actions",
+                "Do nothing",
+            ),
+            DialogButton::Second
+        );
+        assert_eq!(
+            dialog_result_to_button(
+                MessageDialogResult::Custom("Do nothing".to_string()),
+                "Open editor",
+                "More actions",
+                "Do nothing",
+            ),
+            DialogButton::Third
+        );
+    }
+
+    #[test]
+    fn markdown_image_for_path_uses_file_url() {
+        let path = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("Launch Clip.cap")
+            .join("original.png");
+
+        let markdown = markdown_image_for_path(&path).unwrap();
+
+        assert!(markdown.starts_with("![Screenshot](<file://"));
+        assert!(markdown.contains("Launch%20Clip.cap/original.png"));
+        assert!(markdown.ends_with(">)"));
     }
 
     #[tokio::test]
