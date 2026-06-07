@@ -49,6 +49,9 @@ pub struct AudioMeta {
 pub struct AudioGapSummary {
     /// Total audio trimmed from overlapping frames over the whole recording, in milliseconds.
     pub total_overlap_trimmed_ms: u32,
+    /// Startup-window trim used for stale-startup repair, excluding mid-recording trims.
+    #[serde(default)]
+    pub startup_overlap_trimmed_ms: u32,
     /// Number of whole audio frames dropped because they fully overlapped the committed timeline.
     pub overlap_dropped_frames: u32,
     /// Subset of `overlap_dropped_frames` that dropped within the first few frames — the
