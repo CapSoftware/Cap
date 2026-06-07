@@ -987,6 +987,56 @@ mod tests {
         assert!((left_at_second(&stream, 2) - expected(24000)).abs() < 0.01);
     }
 
+    #[test]
+    fn prerendered_playback_and_export_apply_negative_timing_offset_consistently() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("delayed.wav");
+        write_step_wav(&path, &[12000, 24000]);
+
+        let data = Arc::new(AudioData::from_file(&path).unwrap());
+        let segments = vec![AudioSegment {
+            tracks: vec![
+                AudioSegmentTrack::new(data, gain, stereo, no_offset)
+                    .with_timing_offset_secs(-0.867),
+            ],
+        }];
+        let project = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: vec![segment(0, 0.0, 3.0, 1.0)],
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+            }),
+            clips: vec![ClipConfiguration {
+                index: 0,
+                offsets: Default::default(),
+            }],
+            ..Default::default()
+        };
+
+        let mut export_renderer = AudioRenderer::new(segments.clone());
+        let export_stream = render_export_audio(&mut export_renderer, &project, 30, 3 * 30);
+
+        let mut playback_buffer =
+            PrerenderedAudioBuffer::<f32>::new(segments, &project, AudioRenderer::info(), 3.0);
+        let mut playback_stream = vec![0.0; 3 * AudioData::SAMPLE_RATE as usize * 2];
+        playback_buffer.fill(&mut playback_stream);
+
+        for second in 0..3usize {
+            let export_sample = left_at_second(&export_stream, second);
+            let playback_sample = left_at_second(&playback_stream, second);
+            assert!(
+                (export_sample - playback_sample).abs() < 0.01,
+                "second {second}: export {export_sample}, playback {playback_sample}"
+            );
+        }
+        assert_eq!(left_at_second(&export_stream, 0), 0.0);
+        assert_eq!(left_at_second(&playback_stream, 0), 0.0);
+    }
+
     // Time->sample conversion rounds to nearest (not truncates), so a fractional
     // sample position lands on the nearest sample rather than biasing downward.
     #[test]
