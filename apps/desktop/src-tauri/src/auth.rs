@@ -106,7 +106,7 @@ impl AuthStore {
                 auth.organizations_updated_at = Some(chrono::Utc::now().timestamp() as i32);
             }
             Err(e) => {
-                println!("Failed to fetch organizations: {e}");
+                tracing::warn!("Failed to fetch organizations: {e}");
             }
         }
 
