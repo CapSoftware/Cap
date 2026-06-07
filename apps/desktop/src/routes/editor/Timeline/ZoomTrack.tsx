@@ -782,24 +782,28 @@ export function ZoomTrack(props: {
 }
 
 export function ZoomCurveTrack() {
-	const { project } = useEditorContext();
+	const { project, editorState } = useEditorContext();
 	const { secsPerPixel } = useTimelineContext();
 
 	const zoomSegments = () => project.timeline?.zoomSegments ?? [];
 
 	return (
 		<TrackRoot>
+			<div class="absolute inset-x-0 top-[5%] border-t border-gray-500/30 border-dashed" />
+			<div class="absolute inset-x-0 top-[90%] border-t border-gray-500/30 border-dashed" />
+
 			<div class="relative w-full h-full pointer-events-none">
 				<For each={zoomSegments()}>
 					{(segment, i) => {
-						const left = () => segment.start / secsPerPixel();
+						const base = () => editorState.timeline.transform.position;
+						const translateX = () => (segment.start - base()) / secsPerPixel();
 						const width = () => (segment.end - segment.start) / secsPerPixel();
 
 						return (
 							<div
 								class="absolute top-0 bottom-0 overflow-visible"
 								style={{
-									left: `${left()}px`,
+									transform: `translateX(${translateX()}px)`,
 									width: `${width()}px`,
 								}}
 							>
