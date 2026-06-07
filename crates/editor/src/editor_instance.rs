@@ -622,9 +622,134 @@ pub struct SegmentAudioTimingRepair {
     pub system_audio_offset_secs: f32,
 }
 
+#[derive(Clone, Copy)]
+enum LegacyAudioLogTrack {
+    Mic,
+    SystemAudio,
+}
+
+impl LegacyAudioLogTrack {
+    fn span(self) -> &'static str {
+        match self {
+            Self::Mic => "mic-out",
+            Self::SystemAudio => "system-audio-out",
+        }
+    }
+}
+
+struct LegacyAudioTimingRepair {
+    log: Option<String>,
+}
+
+impl LegacyAudioTimingRepair {
+    fn load(project_path: &Path) -> Self {
+        let log_path = project_path.join("recording-logs.log");
+        Self {
+            log: std::fs::read_to_string(log_path).ok(),
+        }
+    }
+
+    fn offset(
+        &self,
+        segment_index: usize,
+        track: LegacyAudioLogTrack,
+        structured_summary: Option<&cap_project::AudioGapSummary>,
+    ) -> f32 {
+        let structured_offset = audio_timing_repair_offset(structured_summary);
+        if structured_offset != 0.0 {
+            return structured_offset;
+        }
+
+        let should_try_legacy = match structured_summary {
+            Some(summary) => {
+                summary.startup_overlap_trimmed_ms == 0 && summary.total_overlap_trimmed_ms > 0
+            }
+            None => true,
+        };
+        if !should_try_legacy {
+            return 0.0;
+        }
+
+        self.summary(segment_index, track)
+            .as_ref()
+            .map(|summary| audio_timing_repair_offset(Some(summary)))
+            .unwrap_or(0.0)
+    }
+
+    fn summary(
+        &self,
+        segment_index: usize,
+        track: LegacyAudioLogTrack,
+    ) -> Option<cap_project::AudioGapSummary> {
+        legacy_audio_gap_summary_from_log(self.log.as_deref()?, segment_index, track)
+    }
+}
+
 const MIN_STALE_STARTUP_DROPS: u32 = 3;
 const MIN_STALE_STARTUP_TRIMMED_MS: u32 = 100;
 const MAX_STALE_STARTUP_REPAIR_MS: u32 = 2_000;
+const STARTUP_OVERLAP_DROP_FRAME_COUNT: u32 = 3;
+
+fn parse_u32_log_field(line: &str, field: &str) -> Option<u32> {
+    let value = line
+        .split_once(field)?
+        .1
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?;
+    value.parse().ok()
+}
+
+fn legacy_audio_gap_summary_from_log(
+    log: &str,
+    segment_index: usize,
+    track: LegacyAudioLogTrack,
+) -> Option<cap_project::AudioGapSummary> {
+    let segment_marker = format!("segment{{index={segment_index}}}");
+    let track_marker = format!(":{}:", track.span());
+    let mut summary = cap_project::AudioGapSummary {
+        total_overlap_trimmed_ms: 0,
+        startup_overlap_trimmed_ms: 0,
+        overlap_dropped_frames: 0,
+        startup_overlap_drops: 0,
+    };
+
+    for line in log.lines() {
+        if !line.contains(&segment_marker) || !line.contains(&track_marker) {
+            continue;
+        }
+
+        let dropped = line.contains("Dropping overlapping audio frame");
+        let trimmed = line.contains("Trimmed overlapping audio frame");
+        if !(dropped || trimmed) {
+            continue;
+        }
+
+        let Some(overlap_ms) = parse_u32_log_field(line, "overlap_ms=") else {
+            continue;
+        };
+        let Some(frame_count) = parse_u32_log_field(line, "frame_count=") else {
+            continue;
+        };
+
+        summary.total_overlap_trimmed_ms =
+            summary.total_overlap_trimmed_ms.saturating_add(overlap_ms);
+
+        if frame_count < STARTUP_OVERLAP_DROP_FRAME_COUNT {
+            summary.startup_overlap_trimmed_ms = summary
+                .startup_overlap_trimmed_ms
+                .saturating_add(overlap_ms);
+        }
+
+        if dropped {
+            summary.overlap_dropped_frames = summary.overlap_dropped_frames.saturating_add(1);
+            if frame_count < STARTUP_OVERLAP_DROP_FRAME_COUNT {
+                summary.startup_overlap_drops = summary.startup_overlap_drops.saturating_add(1);
+            }
+        }
+    }
+
+    (summary.total_overlap_trimmed_ms > 0).then_some(summary)
+}
 
 fn audio_timing_repair_offset(summary: Option<&cap_project::AudioGapSummary>) -> f32 {
     let Some(summary) = summary else {
@@ -647,6 +772,8 @@ pub async fn create_segments(
     meta: &StudioRecordingMeta,
     force_ffmpeg: bool,
 ) -> Result<Vec<SegmentMedia>, String> {
+    let legacy_timing_repair = LegacyAudioTimingRepair::load(&recording_meta.project_path);
+
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
             let audio_task = s.audio.as_ref().map(|audio_meta| {
@@ -695,7 +822,9 @@ pub async fn create_segments(
                 audio,
                 system_audio: None,
                 audio_timing_repair: SegmentAudioTimingRepair {
-                    mic_offset_secs: audio_timing_repair_offset(
+                    mic_offset_secs: legacy_timing_repair.offset(
+                        0,
+                        LegacyAudioLogTrack::Mic,
                         s.audio.as_ref().and_then(|m| m.gap_summary.as_ref()),
                     ),
                     system_audio_offset_secs: 0.0,
@@ -749,10 +878,14 @@ pub async fn create_segments(
                     audio,
                     system_audio,
                     audio_timing_repair: SegmentAudioTimingRepair {
-                        mic_offset_secs: audio_timing_repair_offset(
+                        mic_offset_secs: legacy_timing_repair.offset(
+                            i,
+                            LegacyAudioLogTrack::Mic,
                             s.mic.as_ref().and_then(|m| m.gap_summary.as_ref()),
                         ),
-                        system_audio_offset_secs: audio_timing_repair_offset(
+                        system_audio_offset_secs: legacy_timing_repair.offset(
+                            i,
+                            LegacyAudioLogTrack::SystemAudio,
                             s.system_audio.as_ref().and_then(|m| m.gap_summary.as_ref()),
                         ),
                     },
@@ -827,6 +960,29 @@ mod tests {
         };
 
         assert_eq!(audio_timing_repair_offset(Some(&summary)), -0.867);
+    }
+
+    #[test]
+    fn legacy_audio_timing_repair_reads_startup_trimmed_overlap_from_log() {
+        let log = r#"
+2026-06-01T12:37:20.016795Z DEBUG recording:studio_recording:segment{index=0}:mic-out:{task="mux-audio"}: cap_recording::output_pipeline::core: Trimmed overlapping audio frame frame_count=1 overlap_ms=34 frame_samples=1680 trim_samples=1656 kept_samples=24
+2026-06-01T12:37:20.051756Z DEBUG recording:studio_recording:segment{index=0}:mic-out:{task="mux-audio"}: cap_recording::output_pipeline::core: Dropping overlapping audio frame frame_count=2 overlap_ms=35 frame_samples=1680 trim_samples=1680
+2026-06-01T12:37:20.086773Z DEBUG recording:studio_recording:segment{index=0}:mic-out:{task="mux-audio"}: cap_recording::output_pipeline::core: Dropping overlapping audio frame frame_count=2 overlap_ms=35 frame_samples=1680 trim_samples=1680
+2026-06-01T12:37:20.121809Z DEBUG recording:studio_recording:segment{index=0}:mic-out:{task="mux-audio"}: cap_recording::output_pipeline::core: Dropping overlapping audio frame frame_count=2 overlap_ms=35 frame_samples=1680 trim_samples=1680
+2026-06-01T12:37:30.121809Z DEBUG recording:studio_recording:segment{index=0}:mic-out:{task="mux-audio"}: cap_recording::output_pipeline::core: Dropping overlapping audio frame frame_count=50 overlap_ms=800 frame_samples=1680 trim_samples=1680
+"#;
+
+        let summary = legacy_audio_gap_summary_from_log(log, 0, LegacyAudioLogTrack::Mic).unwrap();
+
+        assert_eq!(summary.total_overlap_trimmed_ms, 939);
+        assert_eq!(summary.startup_overlap_trimmed_ms, 139);
+        assert_eq!(summary.overlap_dropped_frames, 4);
+        assert_eq!(summary.startup_overlap_drops, 3);
+        assert_eq!(audio_timing_repair_offset(Some(&summary)), -0.139);
+        assert_eq!(
+            legacy_audio_gap_summary_from_log(log, 0, LegacyAudioLogTrack::SystemAudio),
+            None
+        );
     }
 
     #[test]
