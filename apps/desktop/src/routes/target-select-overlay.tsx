@@ -1861,11 +1861,19 @@ function RecordingControls(props: {
 											target: props.target,
 										});
 										await commands.showWindow({ ScreenshotEditor: { path } });
-										await commands.closeTargetSelectOverlays();
 									} catch (e) {
 										const message = e instanceof Error ? e.message : String(e);
 										toast.error(`Failed to take screenshot: ${message}`);
 										console.error("Failed to take screenshot", e);
+									} finally {
+										await commands
+											.closeTargetSelectOverlays()
+											.catch((error) =>
+												console.error(
+													"Failed to close target select overlays after screenshot:",
+													error,
+												),
+											);
 									}
 									return;
 								}
