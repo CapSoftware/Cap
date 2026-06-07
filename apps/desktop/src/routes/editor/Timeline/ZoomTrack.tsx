@@ -905,7 +905,8 @@ export function ZoomCurveTrack() {
 											/>
 											<path
 												d={dColored()}
-												class="stroke-blue-200 dark:stroke-blue-200"
+												class="stroke-blue-400 dark:stroke-blue-400"
+												style={{ filter: "drop-shadow(0px 0px 6px rgba(96, 165, 250, 0.8))" }}
 												stroke-width="3"
 												fill="none"
 												vector-effect="non-scaling-stroke"
