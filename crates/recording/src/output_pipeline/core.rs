@@ -667,16 +667,14 @@ fn audio_tail_padding_duration(audio_elapsed: Duration, target_elapsed: Duration
         .min(MAX_AUDIO_TAIL_PADDING)
 }
 
-/// A whole-frame overlap drop counts towards the stale-startup signature only while at most this
-/// many frames have been committed — the buffered burst that triggers startup drift lands in the
-/// first frames, before the steady-state capture clock settles.
-const STARTUP_OVERLAP_DROP_FRAME_LIMIT: u64 = 3;
+const STARTUP_OVERLAP_DROP_FRAME_COUNT: u64 = 3;
 
 /// Overlap-trim accounting surfaced from the audio mux task at finish so the editor can
 /// compensate for stale-startup drift from typed metadata rather than the recording log.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AudioGapSummary {
     pub total_overlap_trimmed_ms: u32,
+    pub startup_overlap_trimmed_ms: u32,
     pub overlap_dropped_frames: u32,
     pub startup_overlap_drops: u32,
 }
@@ -693,6 +691,7 @@ struct AudioGapTracker {
     overlap_dropped_frames: u64,
     startup_overlap_drops: u64,
     total_overlap_trimmed: Duration,
+    startup_overlap_trimmed: Duration,
 }
 
 impl AudioGapTracker {
@@ -713,15 +712,20 @@ impl AudioGapTracker {
             overlap_dropped_frames: 0,
             startup_overlap_drops: 0,
             total_overlap_trimmed: Duration::ZERO,
+            startup_overlap_trimmed: Duration::ZERO,
         }
     }
 
     fn record_overlap(&mut self, overlap: Duration, dropped_whole_frame: bool, frame_count: u64) {
         self.overlap_event_count += 1;
         self.total_overlap_trimmed = self.total_overlap_trimmed.saturating_add(overlap);
+        let is_startup_overlap = frame_count < STARTUP_OVERLAP_DROP_FRAME_COUNT;
+        if is_startup_overlap {
+            self.startup_overlap_trimmed = self.startup_overlap_trimmed.saturating_add(overlap);
+        }
         if dropped_whole_frame {
             self.overlap_dropped_frames += 1;
-            if frame_count <= STARTUP_OVERLAP_DROP_FRAME_LIMIT {
+            if is_startup_overlap {
                 self.startup_overlap_drops += 1;
             }
         }
@@ -730,6 +734,8 @@ impl AudioGapTracker {
     fn gap_summary(&self) -> AudioGapSummary {
         AudioGapSummary {
             total_overlap_trimmed_ms: u32::try_from(self.total_overlap_trimmed.as_millis())
+                .unwrap_or(u32::MAX),
+            startup_overlap_trimmed_ms: u32::try_from(self.startup_overlap_trimmed.as_millis())
                 .unwrap_or(u32::MAX),
             overlap_dropped_frames: u32::try_from(self.overlap_dropped_frames).unwrap_or(u32::MAX),
             startup_overlap_drops: u32::try_from(self.startup_overlap_drops).unwrap_or(u32::MAX),
@@ -2366,6 +2372,8 @@ impl PreparedAudioSources {
                         overlap_events = gap_tracker.overlap_event_count,
                         overlap_dropped_frames = gap_tracker.overlap_dropped_frames,
                         total_overlap_trimmed_ms = gap_tracker.total_overlap_trimmed.as_millis(),
+                        startup_overlap_trimmed_ms =
+                            gap_tracker.startup_overlap_trimmed.as_millis(),
                         "Audio gap tracking summary at finish"
                     );
                 }
@@ -3230,23 +3238,22 @@ mod tests {
         fn gap_summary_counts_only_early_whole_frame_drops_as_startup() {
             let mut tracker = AudioGapTracker::new(false, Timestamps::now());
 
-            // Whole-frame drops within the startup window carry the stale-burst signature.
             tracker.record_overlap(Duration::from_millis(35), true, 0);
+            tracker.record_overlap(Duration::from_millis(35), true, 1);
             tracker.record_overlap(Duration::from_millis(35), true, 2);
             tracker.record_overlap(
                 Duration::from_millis(35),
                 true,
-                STARTUP_OVERLAP_DROP_FRAME_LIMIT,
+                STARTUP_OVERLAP_DROP_FRAME_COUNT,
             );
-            // A whole-frame drop past the startup window is a mid-recording overlap, not startup drift.
             tracker.record_overlap(Duration::from_millis(35), true, 50);
-            // A partial trim keeps the frame, so it is never a startup drop.
             tracker.record_overlap(Duration::from_millis(10), false, 1);
 
             let summary = tracker.gap_summary();
             assert_eq!(summary.startup_overlap_drops, 3);
-            assert_eq!(summary.overlap_dropped_frames, 4);
-            assert_eq!(summary.total_overlap_trimmed_ms, 35 * 4 + 10);
+            assert_eq!(summary.startup_overlap_trimmed_ms, 35 * 3 + 10);
+            assert_eq!(summary.overlap_dropped_frames, 5);
+            assert_eq!(summary.total_overlap_trimmed_ms, 35 * 5 + 10);
         }
     }
 
