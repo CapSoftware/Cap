@@ -19,7 +19,11 @@ use lru::LruCache;
 use std::{
     collections::{HashSet, VecDeque},
     num::NonZeroUsize,
-    sync::{Arc, RwLock, mpsc as std_mpsc},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+        mpsc as std_mpsc,
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::watch;
@@ -1189,15 +1193,7 @@ impl PlaybackHandle {
 /// How long the audio thread waits for the output device's first callback before giving up and
 /// reporting "no audio". Slow transports (e.g. Bluetooth) can take several seconds.
 const AUDIO_FIRST_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// How long the caller waits for the audio thread's ready verdict. This MUST stay strictly larger
-/// than [`AUDIO_FIRST_CALLBACK_TIMEOUT`] plus the thread's setup time so the thread's verdict
-/// always wins the race. The setup includes a synchronous full pre-render of the recording, which
-/// scales with its length, hence the generous headroom. If the caller times out first it concludes
-/// "no audio" and stops feeding the playhead while the audio thread may still start a now-unsynced
-/// stream — the desync this guards against. The thread reports failures immediately, so this only
-/// bounds a genuinely wedged device and is never waited out in normal operation.
-const AUDIO_READY_TIMEOUT: Duration = Duration::from_secs(15);
+const AUDIO_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 struct AudioPlayback {
     segments: Vec<AudioSegment>,
@@ -1219,6 +1215,9 @@ impl AudioPlayback {
         }
 
         let (ready_tx, ready_rx) = std_mpsc::channel();
+        let mut stop_rx_before_ready = self.stop_rx.clone();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled_for_thread = Arc::clone(&cancelled);
 
         std::thread::spawn(move || {
             let host = cpal::default_host();
@@ -1304,11 +1303,21 @@ impl AudioPlayback {
                 }
             };
 
+            if cancelled_for_thread.load(Ordering::Acquire) || *stop_rx.borrow() {
+                let _ = ready_tx.send(false);
+                return;
+            }
+
             if let Err(e) = stream.play() {
                 error!(
                     "Failed to play audio stream: {}. Skipping audio playback.",
                     e
                 );
+                let _ = ready_tx.send(false);
+                return;
+            }
+
+            if cancelled_for_thread.load(Ordering::Acquire) || *stop_rx.borrow() {
                 let _ = ready_tx.send(false);
                 return;
             }
@@ -1333,7 +1342,18 @@ impl AudioPlayback {
             info!("Audio playback thread finished.");
         });
 
-        ready_rx.recv_timeout(AUDIO_READY_TIMEOUT).unwrap_or(false)
+        loop {
+            match ready_rx.recv_timeout(AUDIO_READY_POLL_INTERVAL) {
+                Ok(ready) => return ready,
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                    if *stop_rx_before_ready.borrow_and_update() {
+                        cancelled.store(true, Ordering::Release);
+                        return false;
+                    }
+                }
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
