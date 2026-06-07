@@ -3049,7 +3049,9 @@ pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) ->
     };
 
     for segment in &inner.segments {
-        let display_path = segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(recording_dir);
+        let Some(display_path) = segment.display.as_ref().map(|d| d.path.to_path(recording_dir)) else {
+            continue;
+        };
         if display_path.is_dir() {
             return true;
         }
