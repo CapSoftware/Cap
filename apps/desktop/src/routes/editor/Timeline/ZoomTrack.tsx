@@ -810,21 +810,45 @@ export function ZoomCurveTrack() {
 								{(() => {
 									const isInstant = () => segment.instantAnimation;
 
-									const prev = () => zoomSegments()[i() - 1];
+									const prev = () => i() > 0 ? zoomSegments()[i() - 1] : null;
 									const next = () => zoomSegments()[i() + 1];
 
-									const isContiguousWithPrev = () => prev() && prev().end === segment.start;
-									const isContiguousWithNext = () => next() && next().start === segment.end;
+									const gapBeforeSecs = () => prev() ? segment.start - prev()!.end : Infinity;
+									const gapAfterSecs = () => next() ? next()!.start - segment.end : Infinity;
 
-									const prevAmt = () => isContiguousWithPrev() ? prev().amount : 1.0;
+									const isContiguousWithPrev = () => gapBeforeSecs() <= 0.001;
+									const isContiguousWithNext = () => gapAfterSecs() <= 0.001;
+
+									const rampDurationSecs = 1.0;
+
+									const prevAmt = () => {
+										const p = prev();
+										if (!p) return 1.0;
+										if (isContiguousWithPrev()) return p.amount;
+										if (gapBeforeSecs() >= rampDurationSecs) return 1.0;
+										const t = gapBeforeSecs() / rampDurationSecs;
+										return p.amount + (1.0 - p.amount) * t;
+									};
+
 									const currAmt = () => segment.amount;
-									const nextAmt = () => isContiguousWithNext() ? next().amount : 1.0;
+
+									const nextAmt = () => {
+										const n = next();
+										if (!n) return 1.0;
+										if (isContiguousWithNext()) return n.amount;
+										if (gapAfterSecs() >= rampDurationSecs) return 1.0;
+										const t = gapAfterSecs() / rampDurationSecs;
+										return segment.amount + (1.0 - segment.amount) * t;
+									};
 
 									// Map amount to Y coordinate linearly (1.0 -> 90, 4.5 -> 5)
 									const getY = (amt: number) => {
-										// Allow p to be negative so zoom-out (< 1.0) goes below the baseline
-										const p = Math.min(1, (amt - 1) / 3.5);
-										return 90 - 85 * p;
+										const minAmt = 1.0;
+										const maxAmt = 4.5;
+										const minY = 90;
+										const maxY = 5;
+										const clampedAmt = Math.min(maxAmt, Math.max(minAmt, amt));
+										return minY - ((clampedAmt - minAmt) / (maxAmt - minAmt)) * (minY - maxY);
 									};
 
 									const startY = () => getY(prevAmt());
@@ -832,13 +856,13 @@ export function ZoomCurveTrack() {
 									const endY = () => getY(nextAmt());
 
 									const W = () => Math.max(1, width());
-									// The video rendering engine uses exactly 1.0 second for the zoom transition
-									const rampDurationSecs = 1.0;
 									const rampPixels = () => rampDurationSecs / secsPerPixel();
 									
 									const toPct = (px: number) => (px / W()) * 100;
 									const rampUpPct = () => isInstant() ? 0 : toPct(Math.min(rampPixels(), W() / 2));
 									const rampDownPct = () => isInstant() ? 0 : toPct(rampPixels());
+									
+									const actualRampDownPct = () => isInstant() ? 0 : toPct(Math.min(rampDurationSecs, gapAfterSecs()) / secsPerPixel());
 
 									const dGray = () => {
 										let parts = [];
@@ -846,13 +870,14 @@ export function ZoomCurveTrack() {
 										// 1. Gap before
 										if (i() === 0) {
 											parts.push(`M -100000 ${getY(1.0)} L 0 ${getY(1.0)}`);
-										} else {
+										} else if (gapBeforeSecs() >= rampDurationSecs) {
 											const prevSeg = prev();
-											const prevEndOffset = (prevSeg.end - segment.start) / secsPerPixel();
-											const prevRampDownW = prevSeg.instantAnimation ? 0 : rampPixels();
-											const gapStartX = isContiguousWithPrev() ? 0 : prevEndOffset + prevRampDownW;
-											if (gapStartX < 0) {
-												parts.push(`M ${toPct(gapStartX)} ${getY(1.0)} L 0 ${getY(1.0)}`);
+											if (prevSeg) {
+												const prevEndOffset = (prevSeg.end - segment.start) / secsPerPixel();
+												const gapStartX = prevSeg.instantAnimation ? prevEndOffset : prevEndOffset + rampPixels();
+												if (gapStartX < 0) {
+													parts.push(`M ${toPct(gapStartX)} ${getY(1.0)} L 0 ${getY(1.0)}`);
+												}
 											}
 										}
 
@@ -883,7 +908,7 @@ export function ZoomCurveTrack() {
 											if (isInstant()) {
 												parts.push(`M 100 ${currY()} L 100 ${endY()}`);
 											} else {
-												parts.push(`M 100 ${currY()} C ${100 + rampDownPct() / 2} ${currY()}, ${100 + rampDownPct() / 2} ${endY()}, ${100 + rampDownPct()} ${endY()}`);
+												parts.push(`M 100 ${currY()} C ${100 + actualRampDownPct() / 2} ${currY()}, ${100 + actualRampDownPct() / 2} ${endY()}, ${100 + actualRampDownPct()} ${endY()}`);
 											}
 										}
 
