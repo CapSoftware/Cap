@@ -983,6 +983,11 @@ export function Timeline(props: {
 							<TrackRow 
 								icon={trackIcons.zoom} 
 								onIconClick={() => setEditorState("timeline", "showZoomCurves", (v) => !v)}
+								iconOverlay={() => 
+									editorState.timeline.showZoomCurves ? 
+										<IconLucideChevronUp class="size-5 text-gray-11" /> : 
+										<IconLucideChevronDown class="size-5 text-gray-11" />
+								}
 							>
 								<ZoomTrack
 									onDragStateChanged={(v) => {
@@ -992,9 +997,11 @@ export function Timeline(props: {
 								/>
 							</TrackRow>
 							<Show when={editorState.timeline.showZoomCurves}>
-								<TrackRow icon={() => <IconLucideActivity class="size-4 text-blue-500" />}>
-									<ZoomCurveTrack />
-								</TrackRow>
+								<div class="animate-in slide-in-from-top-4 fade-in duration-200">
+									<TrackRow icon={() => <IconLucideActivity class="size-4 text-blue-500" />}>
+										<ZoomCurveTrack />
+									</TrackRow>
+								</div>
 							</Show>
 							<Show when={sceneTrackVisible()}>
 								<TrackRow icon={trackIcons.scene}>
@@ -1020,6 +1027,7 @@ function TrackRow(props: {
 	onDelete?: () => void;
 	onContextMenu?: (e: MouseEvent) => void;
 	onIconClick?: () => void;
+	iconOverlay?: () => JSX.Element;
 }) {
 	return (
 		<div
@@ -1031,7 +1039,7 @@ function TrackRow(props: {
 					icon={props.icon()}
 					onClick={props.onIconClick}
 					class={
-						props.onDelete
+						props.onDelete || props.iconOverlay
 							? "transition-opacity group-hover/track:pointer-events-none group-hover/track:opacity-0"
 							: undefined
 					}
@@ -1047,6 +1055,19 @@ function TrackRow(props: {
 						title="Delete track"
 					>
 						<IconCapTrash class="size-4" />
+					</button>
+				</Show>
+				<Show when={props.iconOverlay && !props.onDelete}>
+					<button
+						class="absolute inset-0 z-20 pointer-events-none flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/90 text-gray-12 opacity-0 transition-opacity group-hover/track:pointer-events-auto group-hover/track:opacity-100 dark:border-gray-4/60 dark:bg-gray-3/90 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)]"
+						onClick={(e) => {
+							e.stopPropagation();
+							props.onIconClick?.();
+						}}
+						onMouseDown={(e) => e.stopPropagation()}
+						title="Toggle"
+					>
+						{props.iconOverlay?.()}
 					</button>
 				</Show>
 			</div>

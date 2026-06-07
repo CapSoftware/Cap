@@ -783,25 +783,28 @@ export function ZoomTrack(props: {
 
 export function ZoomCurveTrack() {
 	const { project } = useEditorContext();
+	const { secsPerPixel } = useTimelineContext();
 
 	const zoomSegments = () => project.timeline?.zoomSegments ?? [];
 
 	return (
 		<TrackRoot>
-			<For each={zoomSegments()}>
-				{(segment, i) => {
-					return (
-						<SegmentRoot
-							segment={segment}
-							innerClass=""
-							classList={{
-								"bg-transparent border-transparent": true,
-							}}
-							style={{ "pointer-events": "none" }}
-						>
-							<SegmentContent class="overflow-visible">
+			<div class="relative w-full h-full pointer-events-none">
+				<For each={zoomSegments()}>
+					{(segment, i) => {
+						const left = () => segment.start / secsPerPixel();
+						const width = () => (segment.end - segment.start) / secsPerPixel();
+
+						return (
+							<div
+								class="absolute top-0 bottom-0 overflow-visible"
+								style={{
+									left: `${left()}px`,
+									width: `${width()}px`,
+								}}
+							>
 								{(() => {
-									const ctx = useSegmentContext();
+									const ctxWidth = width();
 									const isInstant = () => segment.instantAnimation;
 
 									const prev = () => zoomSegments()[i() - 1];
@@ -821,7 +824,7 @@ export function ZoomCurveTrack() {
 									const currY = () => getY(currAmt());
 									const endY = () => getY(nextAmt());
 
-									const W = () => Math.max(1, ctx.width());
+									const W = () => Math.max(1, ctxWidth);
 									const rampUpPct = () => (Math.min(40, W() / 2) / W()) * 100;
 									const rampDownPct = () => (40 / W()) * 100;
 
@@ -852,11 +855,11 @@ export function ZoomCurveTrack() {
 										</svg>
 									);
 								})()}
-							</SegmentContent>
-						</SegmentRoot>
-					);
-				}}
-			</For>
+							</div>
+						);
+					}}
+				</For>
+			</div>
 		</TrackRoot>
 	);
 }
