@@ -822,7 +822,8 @@ export function ZoomCurveTrack() {
 
 									// Map amount to Y coordinate linearly (1.0 -> 90, 5.0 -> 5)
 									const getY = (amt: number) => {
-										const p = Math.min(1, Math.max(0, (amt - 1) / 4));
+										// Allow p to be negative so zoom-out (< 1.0) goes below the baseline
+										const p = Math.min(1, (amt - 1) / 4);
 										return 90 - 85 * p;
 									};
 
@@ -831,13 +832,16 @@ export function ZoomCurveTrack() {
 									const endY = () => getY(nextAmt());
 
 									const W = () => Math.max(1, width());
-									const rampUpPct = () => (Math.min(40, W() / 2) / W()) * 100;
-									const rampDownPct = () => (40 / W()) * 100;
+									// The video rendering engine uses exactly 1.0 second for the zoom transition
+									const rampDurationSecs = 1.0;
+									const rampPixels = () => rampDurationSecs / secsPerPixel();
+									const rampUpPct = () => (Math.min(rampPixels(), W() / 2) / W()) * 100;
+									const rampDownPct = () => (rampPixels() / W()) * 100;
 
 									const d = () => {
 										if (isInstant()) {
 											return `M 0 ${startY()} L 0 ${currY()} L 100 ${currY()} ${
-												!isContiguousWithNext() ? `L 100 ${endY()} L ${100 + rampDownPct()} ${endY()}` : ""
+												!isContiguousWithNext() ? `L 100 ${endY()}` : ""
 											}`;
 										}
 										return `M 0 ${startY()} C ${rampUpPct() / 2} ${startY()}, ${rampUpPct() / 2} ${currY()}, ${rampUpPct()} ${currY()} L 100 ${currY()} ${
