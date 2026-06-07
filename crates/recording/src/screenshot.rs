@@ -320,7 +320,7 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
             }
             unsafe { core_graphics::image::CGImage::from_ptr(image) }
         }
-        ScreenCaptureTarget::CameraOnly => {
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
             return None;
         }
     };
@@ -884,7 +884,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                     )
                     .ok_or_else(|| anyhow!("Failed to get content filter"))?
             }
-            ScreenCaptureTarget::CameraOnly => {
+            ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
                 return Err(anyhow!("Camera-only not supported for screenshots"));
             }
         };
@@ -902,7 +902,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                 .and_then(|d| d.physical_size())
                 .map(|s| s.width())
                 .unwrap_or(1920.0),
-            ScreenCaptureTarget::CameraOnly => {
+            ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
                 return Err(anyhow!("Camera-only not supported for screenshots"));
             }
         } as usize;
@@ -920,7 +920,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                 .and_then(|d| d.physical_size())
                 .map(|s| s.height())
                 .unwrap_or(1080.0),
-            ScreenCaptureTarget::CameraOnly => {
+            ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
                 return Err(anyhow!("Camera-only not supported for screenshots"));
             }
         } as usize;

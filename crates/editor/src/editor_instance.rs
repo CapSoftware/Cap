@@ -807,7 +807,11 @@ pub async fn create_segments(
                 recording_meta,
                 meta,
                 SegmentVideoPaths {
-                    display: recording_meta.path(&s.display.path),
+                    display: s
+                        .display
+                        .as_ref()
+                        .map(|d| recording_meta.path(&d.path))
+                        .unwrap_or_default(),
                     camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                 },
                 0,
@@ -855,7 +859,11 @@ pub async fn create_segments(
                     recording_meta,
                     meta,
                     SegmentVideoPaths {
-                        display: recording_meta.path(&s.display.path),
+                        display: s
+                            .display
+                            .as_ref()
+                            .map(|d| recording_meta.path(&d.path))
+                            .unwrap_or_default(),
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
                     i,

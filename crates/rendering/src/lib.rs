@@ -271,10 +271,14 @@ impl RecordingSegmentDecoders {
         };
 
         let screen_fps = match &meta {
-            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                inner.segments[segment_i].display.fps
+            StudioRecordingMeta::SingleSegment { segment } => {
+                segment.display.as_ref().map(|d| d.fps).unwrap_or(0)
             }
+            StudioRecordingMeta::MultipleSegments { inner, .. } => inner.segments[segment_i]
+                .display
+                .as_ref()
+                .map(|d| d.fps)
+                .unwrap_or(0),
         };
 
         let camera_fps = match &meta {
@@ -293,7 +297,7 @@ impl RecordingSegmentDecoders {
                 let segment = &inner.segments[segment_i];
 
                 latest_start_time
-                    .zip(segment.display.start_time)
+                    .zip(segment.display.as_ref().and_then(|d| d.start_time))
                     .map(|(latest_start_time, display_time)| latest_start_time - display_time)
                     .unwrap_or(0.0)
             }

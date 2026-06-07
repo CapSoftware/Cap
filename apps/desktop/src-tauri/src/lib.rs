@@ -2226,6 +2226,7 @@ enum CurrentRecordingTarget {
         bounds: LogicalBounds,
     },
     Camera,
+    Audio,
 }
 
 #[derive(Serialize, Type)]
@@ -2278,6 +2279,7 @@ async fn get_current_recording(
             bounds: *bounds,
         },
         ScreenCaptureTarget::CameraOnly => CurrentRecordingTarget::Camera,
+        ScreenCaptureTarget::AudioOnly => CurrentRecordingTarget::Audio,
     };
 
     Ok(JsonValue::new(&Some(CurrentRecording {
@@ -2906,12 +2908,12 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
 
             match &**meta {
                 StudioRecordingMeta::SingleSegment { segment } => {
-                    vec![recording_meta.path(&segment.display.path)]
+                    vec![recording_meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default())]
                 }
                 StudioRecordingMeta::MultipleSegments { inner } => inner
                     .segments
                     .iter()
-                    .map(|s| recording_meta.path(&s.display.path))
+                    .map(|s| recording_meta.path(&s.display.as_ref().map(|d| d.path.clone()).unwrap_or_default()))
                     .collect(),
             }
         }

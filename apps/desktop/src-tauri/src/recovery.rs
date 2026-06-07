@@ -128,11 +128,13 @@ pub async fn recover_recording(app: AppHandle, project_path: String) -> Result<S
 
     let display_output_path = match &recovered.meta {
         StudioRecordingMeta::SingleSegment { segment } => {
-            segment.display.path.to_path(&recovered.project_path)
+            segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(&recovered.project_path)
         }
         StudioRecordingMeta::MultipleSegments { inner, .. } => inner.segments[0]
             .display
-            .path
+            .as_ref()
+            .map(|d| d.path.clone())
+            .unwrap_or_default()
             .to_path(&recovered.project_path),
     };
 

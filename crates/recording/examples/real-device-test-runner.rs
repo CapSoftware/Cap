@@ -615,7 +615,7 @@ fn validate_av_sync(meta: &RecordingMeta) -> AVSyncValidation {
 
     if let StudioRecordingMeta::MultipleSegments { inner } = studio_meta.as_ref() {
         for (idx, segment) in inner.segments.iter().enumerate() {
-            let display_start = segment.display.start_time;
+            let display_start = segment.display.as_ref().and_then(|d| d.start_time);
             let camera_start = segment.camera.as_ref().and_then(|c| c.start_time);
             let mic_start = segment.mic.as_ref().and_then(|m| m.start_time);
             let system_audio_start = segment.system_audio.as_ref().and_then(|s| s.start_time);
@@ -749,7 +749,7 @@ fn validate_segment_timing(meta: &RecordingMeta) -> SegmentTimingValidation {
 
     if let StudioRecordingMeta::MultipleSegments { inner } = studio_meta.as_ref() {
         for (idx, segment) in inner.segments.iter().enumerate() {
-            if let Some(start_time) = segment.display.start_time
+            if let Some(start_time) = segment.display.as_ref().and_then(|d| d.start_time)
                 && start_time.abs() > START_TIME_THRESHOLD
             {
                 result.all_valid = false;
@@ -978,7 +978,7 @@ async fn analyze_frame_rate(
 
     match studio_meta.as_ref() {
         StudioRecordingMeta::SingleSegment { segment } => {
-            let display_path = meta.path(&segment.display.path);
+            let display_path = meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default());
             let expected_dur = expected_durations.first().copied().unwrap_or_default();
 
             let file_path = if display_path.is_dir() {
@@ -1015,7 +1015,7 @@ async fn analyze_frame_rate(
         }
         StudioRecordingMeta::MultipleSegments { inner } => {
             for (idx, segment) in inner.segments.iter().enumerate() {
-                let display_path = meta.path(&segment.display.path);
+                let display_path = meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default());
                 let expected_dur = expected_durations.get(idx).copied().unwrap_or_default();
 
                 let file_path = if display_path.is_dir() {
@@ -1178,7 +1178,7 @@ async fn analyze_audio_timing(
                 ..Default::default()
             };
 
-            let display_path = meta.path(&segment.display.path);
+            let display_path = meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default());
             let video_duration_secs = probe_media_duration(&display_path)
                 .await
                 .map(|d| d.as_secs_f64())
@@ -1220,7 +1220,7 @@ async fn analyze_audio_timing(
                     ..Default::default()
                 };
 
-                let display_path = meta.path(&segment.display.path);
+                let display_path = meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default());
                 let video_duration_secs = probe_media_duration(&display_path)
                     .await
                     .map(|d| d.as_secs_f64())
@@ -1304,7 +1304,7 @@ async fn validate_duration(
     match &meta.inner {
         RecordingMetaInner::Studio(studio_meta) => match studio_meta.as_ref() {
             StudioRecordingMeta::SingleSegment { segment } => {
-                let display_path = meta.path(&segment.display.path);
+                let display_path = meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default());
                 let actual = probe_media_duration(&display_path)
                     .await
                     .unwrap_or_default();
@@ -1321,7 +1321,7 @@ async fn validate_duration(
             }
             StudioRecordingMeta::MultipleSegments { inner } => {
                 for (idx, segment) in inner.segments.iter().enumerate() {
-                    let display_path = meta.path(&segment.display.path);
+                    let display_path = meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default());
                     let actual = probe_media_duration(&display_path)
                         .await
                         .unwrap_or_default();
@@ -1455,6 +1455,7 @@ async fn execute_recording(
         sharing: None,
         inner: RecordingMetaInner::Studio(Box::new(completed.meta)),
         upload: None,
+        audio_only: false,
     };
     meta.save_for_project()
         .map_err(|e| anyhow::anyhow!("Failed to save recording metadata: {:?}", e))?;

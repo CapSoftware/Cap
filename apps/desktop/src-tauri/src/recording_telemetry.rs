@@ -186,6 +186,7 @@ pub fn target_kind_label(
         ScreenCaptureTarget::Window { .. } => "window",
         ScreenCaptureTarget::Area { .. } => "area",
         ScreenCaptureTarget::CameraOnly => "camera_only",
+        ScreenCaptureTarget::AudioOnly => "audio_only",
     }
 }
 

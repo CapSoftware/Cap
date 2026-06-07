@@ -1194,7 +1194,10 @@ pub async fn start_recording(
     }
 
     let mut inputs = inputs;
-    if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+    if matches!(
+        inputs.capture_target,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+    ) {
         inputs.capture_system_audio = false;
 
         {
@@ -1287,8 +1290,10 @@ pub async fn start_recording(
         RecordingMode::Instant => {
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
-                    let upload_mode =
-                        if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+                    let upload_mode = if matches!(
+                            inputs.capture_target,
+                            ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+                        ) {
                             "desktopMP4"
                         } else {
                             "desktopSegments"
@@ -1361,6 +1366,7 @@ pub async fn start_recording(
         },
         sharing: None,
         upload: None,
+        audio_only: matches!(inputs.capture_target, ScreenCaptureTarget::AudioOnly),
     };
 
     meta.save_for_project()
@@ -1468,7 +1474,7 @@ pub async fn start_recording(
 
             #[cfg(target_os = "macos")]
             let mut shareable_content = match inputs.capture_target {
-                ScreenCaptureTarget::CameraOnly => None,
+                ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => None,
                 _ => Some(acquire_shareable_content_for_target(&inputs.capture_target).await?),
             };
 
@@ -2445,7 +2451,7 @@ pub async fn take_screenshot(
     };
 
     let segment = cap_project::SingleSegment {
-        display: video_meta,
+        display: Some(video_meta),
         camera: None,
         audio: None,
         cursor: None,
@@ -2460,6 +2466,7 @@ pub async fn take_screenshot(
             cap_project::StudioRecordingMeta::SingleSegment { segment },
         )),
         upload: None,
+        audio_only: false,
     };
 
     meta.save_for_project()
@@ -2784,10 +2791,10 @@ async fn handle_recording_finish(
 
             let display_output_path = match &updated_studio_meta {
                 StudioRecordingMeta::SingleSegment { segment } => {
-                    segment.display.path.to_path(&recording_dir)
+                    segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(&recording_dir)
                 }
                 StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                    inner.segments[0].display.path.to_path(&recording_dir)
+                    inner.segments[0].display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(&recording_dir)
                 }
             };
 
@@ -3028,10 +3035,10 @@ async fn finalize_studio_recording(
 
     let display_output_path = match &updated_studio_meta {
         StudioRecordingMeta::SingleSegment { segment } => {
-            segment.display.path.to_path(&recording_dir)
+            segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(&recording_dir)
         }
         StudioRecordingMeta::MultipleSegments { inner, .. } => {
-            inner.segments[0].display.path.to_path(&recording_dir)
+            inner.segments[0].display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(&recording_dir)
         }
     };
 
@@ -3159,6 +3166,7 @@ pub fn generate_zoom_segments_from_clicks(
         sharing: None,
         inner: RecordingMetaInner::Studio(Box::new(recording.meta.clone())),
         upload: None,
+        audio_only: false,
     };
 
     generate_zoom_segments_for_project(&recording_meta, recordings)
@@ -3357,7 +3365,9 @@ pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) ->
     };
 
     for segment in &inner.segments {
-        let display_path = segment.display.path.to_path(recording_dir);
+        let Some(display_path) = segment.display.as_ref().map(|d| d.path.to_path(recording_dir)) else {
+            continue;
+        };
         if display_path.is_dir() {
             return true;
         }
@@ -3410,7 +3420,7 @@ pub fn remux_fragmented_recording_with_trigger(
                                     inner
                                         .segments
                                         .iter()
-                                        .filter_map(|seg| seg.display.start_time)
+                                        .filter_map(|seg| seg.display.as_ref().and_then(|d| d.start_time))
                                         .fold(0.0_f64, |acc, v| acc.max(v)),
                                 ),
                                 StudioRecordingMeta::SingleSegment { .. } => None,

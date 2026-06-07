@@ -1186,19 +1186,23 @@ impl RecoveryManager {
                     }
                 };
 
-                let display_start_time = original_segment.and_then(|s| s.display.start_time);
+                let display_start_time = original_segment
+                    .and_then(|s| s.display.as_ref())
+                    .and_then(|d| d.start_time);
 
                 let get_start_time_or_fallback = |original_time: Option<f64>| -> Option<f64> {
                     start_time_or_display_fallback(original_time, display_start_time)
                 };
 
                 MultipleSegment {
-                    display: VideoMeta {
+                    display: Some(VideoMeta {
                         path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
                         fps,
                         start_time: display_start_time,
-                        device_id: original_segment.and_then(|s| s.display.device_id.clone()),
-                    },
+                        device_id: original_segment
+                            .and_then(|s| s.display.as_ref())
+                            .and_then(|d| d.device_id.clone()),
+                    }),
                     camera: if camera_path.exists() {
                         Some(VideoMeta {
                             path: RelativePathBuf::from(format!("{segment_base}/camera.mp4")),
@@ -1307,12 +1311,16 @@ impl RecoveryManager {
             .iter()
             .enumerate()
             .filter_map(|(i, segment)| {
-                let display_path = recording.project_path.join(segment.display.path.as_str());
+                let display_path = segment
+                    .display
+                    .as_ref()
+                    .map(|d| recording.project_path.join(d.path.as_str()))
+                    .unwrap_or_default();
 
                 let duration = get_media_duration(&display_path)
                     .map(|d| d.as_secs_f64())
                     .unwrap_or_else(|| {
-                        let fps = segment.display.fps as f64;
+                        let fps = f64::from(segment.display.as_ref().map(|d| d.fps).unwrap_or(0));
                         if fps > 0.0 {
                             recording.estimated_duration.as_secs_f64()
                                 / recording.recoverable_segments.len() as f64

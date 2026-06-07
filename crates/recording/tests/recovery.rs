@@ -118,12 +118,12 @@ impl TestRecording {
             inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
                 inner: MultipleSegments {
                     segments: vec![MultipleSegment {
-                        display: VideoMeta {
+                        display: Some(VideoMeta {
                             path: RelativePathBuf::from("content/segments/segment-0/display.mp4"),
                             fps: 30,
                             start_time: None,
                             device_id: None,
-                        },
+                        }),
                         camera: None,
                         mic: None,
                         system_audio: None,
@@ -134,6 +134,7 @@ impl TestRecording {
                     status: Some(status),
                 },
             })),
+            audio_only: false,
         };
 
         let meta_path = self.project_path.join("recording-meta.json");

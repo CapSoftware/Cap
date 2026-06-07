@@ -94,7 +94,11 @@ async fn main() -> Result<()> {
                 &recording_meta,
                 &studio_meta,
                 SegmentVideoPaths {
-                    display: recording_meta.path(&segment.display.path),
+                    display: segment
+                        .display
+                        .as_ref()
+                        .map(|d| recording_meta.path(&d.path))
+                        .unwrap_or_default(),
                     camera: segment
                         .camera
                         .as_ref()
@@ -120,7 +124,11 @@ async fn main() -> Result<()> {
                     &recording_meta,
                     &studio_meta,
                     SegmentVideoPaths {
-                        display: recording_meta.path(&s.display.path),
+                        display: s
+                            .display
+                            .as_ref()
+                            .map(|d| recording_meta.path(&d.path))
+                            .unwrap_or_default(),
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
                     i,
