@@ -1039,17 +1039,19 @@ function TrackRow(props: {
 }) {
 	return (
 		<div
-			class={cx("flex items-stretch gap-2", props.class)}
+			class={cx("group/track flex items-stretch gap-2", props.class)}
 			onContextMenu={props.onContextMenu}
 		>
-			<div class="relative group/track">
+			<div class="relative group/icon">
 				<TrackIcon
 					icon={props.icon()}
 					onClick={props.onIconClick}
 					subordinate={props.subordinate}
 					class={
-						props.onDelete || props.iconOverlay
+						props.onDelete
 							? "transition-opacity group-hover/track:pointer-events-none group-hover/track:opacity-0"
+							: props.iconOverlay
+							? "transition-opacity group-hover/icon:pointer-events-none group-hover/icon:opacity-0"
 							: undefined
 					}
 				/>
@@ -1068,7 +1070,7 @@ function TrackRow(props: {
 				</Show>
 				<Show when={props.iconOverlay && !props.onDelete}>
 					<button
-						class="absolute inset-0 z-20 pointer-events-none flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/90 text-gray-12 opacity-0 transition-opacity group-hover/track:pointer-events-auto group-hover/track:opacity-100 dark:border-gray-4/60 dark:bg-gray-3/90 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)]"
+						class="absolute inset-0 z-20 pointer-events-none flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/90 text-gray-12 opacity-0 transition-opacity group-hover/icon:pointer-events-auto group-hover/icon:opacity-100 dark:border-gray-4/60 dark:bg-gray-3/90 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)]"
 						onClick={(e) => {
 							e.stopPropagation();
 							props.onIconClick?.();
