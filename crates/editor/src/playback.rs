@@ -93,6 +93,10 @@ fn precision_sleep_sync(deadline: Instant) {
     }
 }
 
+fn valid_playback_duration(duration: f64) -> Option<f64> {
+    (duration.is_finite() && duration > 0.0).then_some(duration)
+}
+
 #[derive(Debug)]
 pub enum PlaybackStartError {
     InvalidFps,
@@ -215,17 +219,19 @@ impl Playback {
         let prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
         let prefetch_segment_medias = self.segment_medias.clone();
-        let (prefetch_duration, has_timeline) =
-            if let Some(timeline) = &self.project.borrow().timeline {
-                (timeline.duration(), true)
-            } else {
-                (f64::MAX, false)
-            };
+        let (prefetch_duration, has_timeline) = self
+            .project
+            .borrow()
+            .timeline
+            .as_ref()
+            .and_then(|timeline| valid_playback_duration(timeline.duration()))
+            .map(|duration| (duration, true))
+            .unwrap_or((0.0, false));
         let segment_media_count = self.segment_medias.len();
 
         tokio::spawn(async move {
             if !has_timeline {
-                warn!("Prefetch: No timeline configuration found");
+                warn!("Prefetch: No valid timeline duration found");
             }
             if segment_media_count == 0 {
                 warn!("Prefetch: No segment media available");
@@ -455,10 +461,17 @@ impl Playback {
         let tokio_handle = tokio::runtime::Handle::current();
 
         let playback_body = move || {
-            let duration = if let Some(timeline) = &self.project.borrow().timeline {
-                timeline.duration()
-            } else {
-                f64::MAX
+            let duration = self
+                .project
+                .borrow()
+                .timeline
+                .as_ref()
+                .and_then(|timeline| valid_playback_duration(timeline.duration()));
+            let Some(duration) = duration else {
+                warn!("Playback: No valid timeline duration found");
+                stop_tx.send(true).ok();
+                event_tx.send(PlaybackEvent::Stop).ok();
+                return;
             };
 
             let (audio_playhead_tx, audio_playhead_rx) =
@@ -1658,6 +1671,12 @@ impl AudioPlayback {
         let buffer_size = output_info.buffer_size;
 
         let playhead = f64::from(start_frame_number) / f64::from(fps);
+
+        if valid_playback_duration(duration_secs).is_none() {
+            return Err(MediaError::TaskLaunch(format!(
+                "Invalid audio pre-render duration: {duration_secs}"
+            )));
+        }
 
         info!(
             duration_secs = duration_secs,
