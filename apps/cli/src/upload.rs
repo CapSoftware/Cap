@@ -340,17 +340,19 @@ async fn upload_file(
     };
 
     let body = reqwest::Body::wrap_stream(stream);
-    let response = http
+    let send_result = http
         .put(put_url)
         .header(reqwest::header::CONTENT_LENGTH, total_bytes)
         .body(body)
         .send()
         .await
-        .map_err(|e| format!("Upload failed: {e}"))?;
+        .map_err(|e| format!("Upload failed: {e}"));
 
     if let Some(task) = progress_task {
         task.abort();
     }
+
+    let response = send_result?;
 
     if !response.status().is_success() {
         let status = response.status();
