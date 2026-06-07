@@ -6,6 +6,7 @@ use std::{
 
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use clipboard_rs::{Clipboard, ClipboardContext, RustImageData, common::RustImage};
+use image::ImageEncoder;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager};
@@ -137,7 +138,7 @@ pub async fn handle(
             Ok(())
         }
         ScreenshotPostCaptureAction::Save => {
-            save_screenshot_image_file(&path).await?;
+            save_screenshot_image_file(app, &path).await?;
             Ok(())
         }
         ScreenshotPostCaptureAction::Upload => {
@@ -167,10 +168,14 @@ pub async fn take_screenshot_with_post_capture(
     Ok(path)
 }
 
-fn pending_screenshot_image(app: &AppHandle, path: &Path) -> Option<Result<RustImageData, String>> {
+fn pending_screenshot(app: &AppHandle, path: &Path) -> Option<PendingScreenshot> {
     let key = path.parent()?.to_string_lossy().to_string();
     let pending = app.try_state::<PendingScreenshots>()?;
-    pending.get(&key).map(image_from_pending_screenshot)
+    pending.get(&key)
+}
+
+fn pending_screenshot_image(app: &AppHandle, path: &Path) -> Option<Result<RustImageData, String>> {
+    pending_screenshot(app, path).map(image_from_pending_screenshot)
 }
 
 fn image_from_pending_screenshot(frame: PendingScreenshot) -> Result<RustImageData, String> {
@@ -226,19 +231,25 @@ async fn copy_screenshot_to_clipboard(app: &AppHandle, path: &Path) -> Result<()
         .map_err(|err| format!("Failed to copy screenshot to clipboard: {err}"))
 }
 
-async fn save_screenshot_image_file(path: &Path) -> Result<(), String> {
+async fn save_screenshot_image_file(app: &AppHandle, path: &Path) -> Result<(), String> {
     let desktop_dir = dirs::desktop_dir()
         .ok_or_else(|| "Failed to resolve Desktop directory for screenshot export".to_string())?;
+    let target_path = screenshot_save_target_path(path, &desktop_dir)?;
 
-    save_screenshot_image_file_to_dir(path, &desktop_dir)
-        .await
-        .map(|_| ())
+    if let Some(screenshot) = pending_screenshot(app, path) {
+        write_pending_screenshot_png(screenshot, target_path).await?;
+        return Ok(());
+    }
+
+    copy_screenshot_image_file_to_path(path, target_path).await
 }
 
-async fn save_screenshot_image_file_to_dir(
-    path: &Path,
-    target_dir: &Path,
-) -> Result<PathBuf, String> {
+fn screenshot_save_target_path(path: &Path, target_dir: &Path) -> Result<PathBuf, String> {
+    let target_name = screenshot_save_target_name(path);
+    Ok(target_dir.join(cap_utils::ensure_unique_filename(&target_name, target_dir)?))
+}
+
+fn screenshot_save_target_name(path: &Path) -> String {
     let file_stem = path
         .parent()
         .and_then(|parent| parent.file_stem())
@@ -246,13 +257,29 @@ async fn save_screenshot_image_file_to_dir(
         .and_then(|stem| stem.to_str())
         .unwrap_or("Screenshot");
 
-    let target_name = format!("{}.png", sanitize_filename::sanitize(file_stem));
-    let target_path = target_dir.join(cap_utils::ensure_unique_filename(&target_name, target_dir)?);
+    format!("{}.png", sanitize_filename::sanitize(file_stem))
+}
+
+#[cfg(test)]
+async fn save_screenshot_image_file_to_dir(
+    path: &Path,
+    target_dir: &Path,
+) -> Result<PathBuf, String> {
+    let target_path = screenshot_save_target_path(path, target_dir)?;
+    copy_screenshot_image_file_to_path(path, target_path.clone()).await?;
+    Ok(target_path)
+}
+
+async fn copy_screenshot_image_file_to_path(
+    path: &Path,
+    target_path: PathBuf,
+) -> Result<(), String> {
+    read_screenshot_image(path).await?;
 
     let started_at = Instant::now();
     loop {
         match tokio::fs::copy(path, &target_path).await {
-            Ok(_) => return Ok(target_path),
+            Ok(_) => return Ok(()),
             Err(err) if started_at.elapsed() < Duration::from_secs(2) => {
                 sleep(Duration::from_millis(50)).await;
                 if !path.exists() {
@@ -272,11 +299,57 @@ async fn save_screenshot_image_file_to_dir(
     }
 }
 
+async fn write_pending_screenshot_png(
+    screenshot: PendingScreenshot,
+    target_path: PathBuf,
+) -> Result<(), String> {
+    let color_type = match screenshot.channels {
+        4 => image::ColorType::Rgba8,
+        3 => image::ColorType::Rgb8,
+        channels => {
+            return Err(format!("Unsupported screenshot channel count: {channels}"));
+        }
+    };
+
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let file = std::fs::File::create(&target_path).map_err(|err| {
+            format!(
+                "Failed to save screenshot image to {}: {err}",
+                target_path.display()
+            )
+        })?;
+        let encoder = image::codecs::png::PngEncoder::new(std::io::BufWriter::new(file));
+
+        encoder
+            .write_image(
+                &screenshot.data,
+                screenshot.width,
+                screenshot.height,
+                color_type.into(),
+            )
+            .map_err(|err| {
+                format!(
+                    "Failed to save screenshot image to {}: {err}",
+                    target_path.display()
+                )
+            })
+    })
+    .await
+    .map_err(|err| format!("Failed to save screenshot image: {err}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use clipboard_rs::common::RustImage;
+    use image::GenericImageView;
     use std::panic::AssertUnwindSafe;
+
+    fn write_test_png(path: &Path, color: [u8; 4]) {
+        image::RgbaImage::from_pixel(2, 1, image::Rgba(color))
+            .save(path)
+            .unwrap();
+    }
 
     #[test]
     fn pending_action_is_consumed_once() {
@@ -376,17 +449,16 @@ mod tests {
         let project_dir = temp_dir.path().join("Launch Clip.cap");
         let target_dir = temp_dir.path().join("Desktop");
         let source_path = project_dir.join("original.png");
-        let contents = b"png bytes";
         std::fs::create_dir_all(&project_dir).unwrap();
         std::fs::create_dir_all(&target_dir).unwrap();
-        std::fs::write(&source_path, contents).unwrap();
+        write_test_png(&source_path, [255, 0, 0, 255]);
 
         let saved_path = save_screenshot_image_file_to_dir(&source_path, &target_dir)
             .await
             .unwrap();
 
         assert_eq!(saved_path.file_name().unwrap(), "Launch Clip.png");
-        assert_eq!(std::fs::read(saved_path).unwrap(), contents);
+        assert_eq!(image::open(saved_path).unwrap().dimensions(), (2, 1));
     }
 
     #[tokio::test]
@@ -397,7 +469,7 @@ mod tests {
         let source_path = project_dir.join("original.png");
         std::fs::create_dir_all(&project_dir).unwrap();
         std::fs::create_dir_all(&target_dir).unwrap();
-        std::fs::write(&source_path, b"new").unwrap();
+        write_test_png(&source_path, [0, 255, 0, 255]);
         std::fs::write(target_dir.join("Launch Clip.png"), b"existing").unwrap();
 
         let saved_path = save_screenshot_image_file_to_dir(&source_path, &target_dir)
@@ -405,6 +477,53 @@ mod tests {
             .unwrap();
 
         assert_eq!(saved_path.file_name().unwrap(), "Launch Clip (1).png");
-        assert_eq!(std::fs::read(saved_path).unwrap(), b"new");
+        assert_eq!(image::open(saved_path).unwrap().dimensions(), (2, 1));
+    }
+
+    #[tokio::test]
+    async fn save_screenshot_image_file_to_dir_waits_for_valid_png_before_copying() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let project_dir = temp_dir.path().join("Launch Clip.cap");
+        let target_dir = temp_dir.path().join("Desktop");
+        let source_path = project_dir.join("original.png");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(&source_path, []).unwrap();
+
+        let source_path_for_writer = source_path.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(100)).await;
+            write_test_png(&source_path_for_writer, [0, 0, 255, 255]);
+        });
+
+        let saved_path = save_screenshot_image_file_to_dir(&source_path, &target_dir)
+            .await
+            .unwrap();
+
+        assert_eq!(saved_path.file_name().unwrap(), "Launch Clip.png");
+        assert!(std::fs::metadata(&saved_path).unwrap().len() > 0);
+        assert_eq!(image::open(saved_path).unwrap().dimensions(), (2, 1));
+    }
+
+    #[tokio::test]
+    async fn write_pending_screenshot_png_writes_valid_png() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target_path = temp_dir.path().join("Pending.png");
+
+        write_pending_screenshot_png(
+            PendingScreenshot {
+                data: vec![255, 0, 0, 255, 0, 255, 0, 255],
+                width: 2,
+                height: 1,
+                channels: 4,
+                created_at: Instant::now(),
+            },
+            target_path.clone(),
+        )
+        .await
+        .unwrap();
+
+        assert!(std::fs::metadata(&target_path).unwrap().len() > 0);
+        assert_eq!(image::open(target_path).unwrap().dimensions(), (2, 1));
     }
 }
