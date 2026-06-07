@@ -11,6 +11,15 @@ export interface HeaderCopy {
 		href: string;
 	};
 	variants: HeaderCopyVariants;
+	modes: {
+		id: "instant" | "studio" | "screenshot";
+		label: string;
+		title: string;
+	}[];
+	links: {
+		label: string;
+		href: string;
+	}[];
 	cta: {
 		primaryButton: string;
 		secondaryButton: string;
@@ -131,19 +140,43 @@ export const homepageCopy: HomePageCopy = {
 		},
 		variants: {
 			default: {
-				title: "Beautiful, Shareable Screen Recordings",
+				title: "The only screen recording app you need",
 				description:
-					"Cap is the open-source alternative to Loom — native, fast, and yours to control. Record locally with full editing power, or share instantly while you record. Bring your own S3 bucket, your own domain, your own rules.",
+					"Cap is the only screen recording tool you need — three modes in one app that replace your recorder, editor, screenshot tool, and video host. Fully open source, and you can connect your own Google Drive or S3 bucket, so you own every recording.",
 			},
 		},
+		modes: [
+			{
+				id: "instant",
+				label: "Instant",
+				title: "Record and share in seconds",
+			},
+			{
+				id: "studio",
+				label: "Studio",
+				title: "Record and edit locally",
+			},
+			{
+				id: "screenshot",
+				label: "Screenshot",
+				title: "Capture, annotate and copy",
+			},
+		],
+		links: [
+			{ label: "Screen recordings", href: "/screen-recorder" },
+			{ label: "Screenshots", href: "/features" },
+			{ label: "Privacy", href: "/privacy" },
+			{ label: "Open source", href: "/open-source-screen-recorder" },
+		],
 		cta: {
 			primaryButton: "Upgrade to Cap Pro",
-			secondaryButton: "Download",
-			freeVersionText: "No credit card required. Get started for free.",
+			secondaryButton: "View on GitHub",
+			freeVersionText:
+				"No credit card required. Record locally, share when you choose.",
 			seeOtherOptionsText: "More download options",
 		},
 	},
-	textReveal: "Record. Edit. Share. — On Your Terms.",
+	textReveal: "Record. Edit. Share.",
 	recordingModes: {
 		title: "Three Modes, Zero Compromise",
 		subtitle:
@@ -266,15 +299,16 @@ export const homepageCopy: HomePageCopy = {
 		title: "Simple, Honest Pricing",
 		subtitle:
 			"Start free, upgrade when you need more. Early adopter pricing locked in forever.",
-		lovedBy: "Trusted by 30,000+ users",
+		lovedBy: "Trusted by 40,000+ users",
 		commercial: {
 			title: "Desktop License",
 			description:
-				"For professionals who want unlimited local recording and editing.",
+				"A commercial license for the Cap desktop app — unlimited local recording and editing.",
 			features: [
-				"Commercial usage",
-				"Unlimited local recordings",
+				"Commercial usage rights",
+				"Unlimited local recordings & editing",
 				"Studio Mode with full editor",
+				"20 cloud shareable links / month (up to 5 min each)",
 				"Export to any format",
 				"Community support",
 			],

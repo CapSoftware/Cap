@@ -46,10 +46,11 @@ export function shouldDeferPlaybackSource(
 export function shouldReloadPlaybackAfterUploadCompletes(
 	previousUploadProgress: UploadProgress | null,
 	uploadProgress: UploadProgress | null,
+	options: { includeFetching?: boolean } = {},
 ): boolean {
 	return (
 		previousUploadProgress !== null &&
-		previousUploadProgress.status !== "fetching" &&
+		(options.includeFetching || previousUploadProgress.status !== "fetching") &&
 		uploadProgress === null
 	);
 }

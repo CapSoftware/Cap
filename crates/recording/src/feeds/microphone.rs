@@ -13,6 +13,7 @@ use indexmap::IndexMap;
 use kameo::prelude::*;
 use replace_with::replace_with_or_abort;
 use std::{
+    collections::VecDeque,
     ops::Deref,
     sync::{
         Arc, Weak,
@@ -26,6 +27,25 @@ use tracing::{debug, error, info, trace, warn};
 pub type MicrophonesMap = IndexMap<String, (Device, SupportedStreamConfig)>;
 type StreamReadyFuture =
     BoxFuture<'static, Result<(SupportedStreamConfig, Option<u32>), SetInputError>>;
+
+const SAMPLE_RATE_ESTIMATE_MIN_INTERVALS: u32 = 4;
+const SAMPLE_RATE_ESTIMATE_MIN_DELTA: Duration = Duration::from_millis(2);
+const SAMPLE_RATE_ESTIMATE_MAX_DELTA: Duration = Duration::from_millis(250);
+const SAMPLE_RATE_ESTIMATE_MAX_PENDING: usize = 32;
+const SAMPLE_RATE_CONFIGURED_TOLERANCE: f64 = 0.05;
+const SAMPLE_RATE_STANDARD_TOLERANCE: f64 = 0.04;
+const PENDING_TIMESTAMP_STALE_MIN: Duration = Duration::from_millis(5);
+// A newly-inferred rate must be observed this many estimation windows in a row before
+// it replaces the active rate. Each window already averages
+// `SAMPLE_RATE_ESTIMATE_MIN_INTERVALS` callbacks, so a single slow/jittery callback
+// batch (e.g. one late buffer under CPU load) cannot mislabel a correctly-clocked
+// device — which would otherwise flip a true 48k mic to 44.1k and resample it at the
+// wrong ratio, pitch-/time-stretching the audio until the next clean window.
+const SAMPLE_RATE_CHANGE_AGREEMENTS: u32 = 3;
+const STANDARD_SAMPLE_RATES: [u32; 13] = [
+    8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000, 176_400,
+    192_000,
+];
 
 #[derive(
     serde::Serialize, serde::Deserialize, specta::Type, Clone, Copy, Debug, PartialEq, Eq, Default,
@@ -44,6 +64,324 @@ pub struct MicrophoneSamples {
     pub channels: u16,
     pub info: InputCallbackInfo,
     pub timestamp: Timestamp,
+}
+
+/// Debounces sample-rate changes: a freshly-inferred rate is only adopted after it is
+/// observed `SAMPLE_RATE_CHANGE_AGREEMENTS` windows in a row, so a lone divergent
+/// observation cannot flip a correctly-clocked device to the wrong standard rate.
+struct RateChangeGate {
+    current_rate: u32,
+    pending_rate: Option<u32>,
+    agreements: u32,
+}
+
+impl RateChangeGate {
+    fn new(rate: u32) -> Self {
+        Self {
+            current_rate: rate,
+            pending_rate: None,
+            agreements: 0,
+        }
+    }
+
+    /// Feed one window's inferred rate; returns the effective (debounced) rate.
+    fn observe(&mut self, inferred: u32) -> u32 {
+        if inferred == self.current_rate {
+            self.pending_rate = None;
+            self.agreements = 0;
+        } else if self.pending_rate == Some(inferred) {
+            self.agreements += 1;
+            if self.agreements >= SAMPLE_RATE_CHANGE_AGREEMENTS {
+                self.current_rate = inferred;
+                self.pending_rate = None;
+                self.agreements = 0;
+            }
+        } else {
+            self.pending_rate = Some(inferred);
+            self.agreements = 1;
+        }
+
+        self.current_rate
+    }
+
+    /// Drop any in-progress candidate without changing the active rate.
+    fn clear_pending(&mut self) {
+        self.pending_rate = None;
+        self.agreements = 0;
+    }
+}
+
+struct CallbackSampleRateEstimator {
+    configured_rate: u32,
+    gate: RateChangeGate,
+    settled: bool,
+    previous_capture: Option<cpal::StreamInstant>,
+    previous_frame_count: Option<usize>,
+    observation: SampleRateObservation,
+}
+
+struct SampleRateEstimate {
+    sample_rate: u32,
+    settled: bool,
+}
+
+impl CallbackSampleRateEstimator {
+    fn new(configured_rate: u32) -> Self {
+        Self {
+            configured_rate,
+            gate: RateChangeGate::new(configured_rate),
+            settled: false,
+            previous_capture: None,
+            previous_frame_count: None,
+            observation: SampleRateObservation::new(configured_rate),
+        }
+    }
+
+    fn sample_rate_for(
+        &mut self,
+        timestamp: cpal::InputStreamTimestamp,
+        frame_count: usize,
+    ) -> SampleRateEstimate {
+        if let (Some(previous_capture), Some(previous_frame_count)) =
+            (self.previous_capture, self.previous_frame_count)
+        {
+            match timestamp.capture.duration_since(&previous_capture) {
+                Some(delta) => {
+                    if let Some(inferred) = self.observation.push(previous_frame_count, delta) {
+                        let previous_rate = self.gate.current_rate;
+                        let effective = self.gate.observe(inferred);
+                        if effective != previous_rate {
+                            info!(
+                                configured_rate = self.configured_rate,
+                                previous_rate,
+                                inferred_rate = effective,
+                                "Microphone callback sample rate adjusted"
+                            );
+                        }
+                        // Must stay unconditional: an inference means the rate is now
+                        // known, so buffered `pending_samples` can drain even when the
+                        // debounce gate withholds the change. Gating this on
+                        // `effective != previous_rate` would buffer audio until the
+                        // pending cap and then dump it late.
+                        self.settled = true;
+                        self.observation.reset();
+                    }
+                }
+                None => self.observation.reset(),
+            }
+        }
+
+        self.previous_capture = Some(timestamp.capture);
+        self.previous_frame_count = Some(frame_count);
+        SampleRateEstimate {
+            sample_rate: self.gate.current_rate,
+            settled: self.settled,
+        }
+    }
+
+    fn force_current(&mut self) -> u32 {
+        self.settled = true;
+        self.observation.reset();
+        self.gate.clear_pending();
+        self.gate.current_rate
+    }
+}
+
+struct SampleRateObservation {
+    configured_rate: u32,
+    frame_count: u64,
+    duration: Duration,
+    intervals: u32,
+}
+
+impl SampleRateObservation {
+    fn new(configured_rate: u32) -> Self {
+        Self {
+            configured_rate,
+            frame_count: 0,
+            duration: Duration::ZERO,
+            intervals: 0,
+        }
+    }
+
+    fn push(&mut self, frame_count: usize, delta: Duration) -> Option<u32> {
+        if frame_count == 0
+            || !(SAMPLE_RATE_ESTIMATE_MIN_DELTA..=SAMPLE_RATE_ESTIMATE_MAX_DELTA).contains(&delta)
+        {
+            self.reset();
+            return None;
+        }
+
+        self.frame_count = self.frame_count.saturating_add(frame_count as u64);
+        self.duration = self.duration.saturating_add(delta);
+        self.intervals = self.intervals.saturating_add(1);
+
+        if self.intervals < SAMPLE_RATE_ESTIMATE_MIN_INTERVALS {
+            return None;
+        }
+
+        self.inferred_rate()
+    }
+
+    fn reset(&mut self) {
+        self.frame_count = 0;
+        self.duration = Duration::ZERO;
+        self.intervals = 0;
+    }
+
+    fn inferred_rate(&self) -> Option<u32> {
+        let duration_secs = self.duration.as_secs_f64();
+        if duration_secs <= 0.0 {
+            return None;
+        }
+
+        let observed_rate = self.frame_count as f64 / duration_secs;
+        if relative_delta(self.configured_rate as f64, observed_rate)
+            <= SAMPLE_RATE_CONFIGURED_TOLERANCE
+        {
+            return Some(self.configured_rate);
+        }
+
+        nearest_standard_sample_rate(observed_rate)
+    }
+}
+
+fn nearest_standard_sample_rate(observed_rate: f64) -> Option<u32> {
+    STANDARD_SAMPLE_RATES
+        .iter()
+        .copied()
+        .min_by(|a, b| {
+            relative_delta(*a as f64, observed_rate)
+                .total_cmp(&relative_delta(*b as f64, observed_rate))
+        })
+        .filter(|rate| {
+            relative_delta(*rate as f64, observed_rate) <= SAMPLE_RATE_STANDARD_TOLERANCE
+        })
+}
+
+fn relative_delta(a: f64, b: f64) -> f64 {
+    if b <= f64::EPSILON {
+        return f64::INFINITY;
+    }
+
+    ((a - b) / b).abs()
+}
+
+fn callback_frame_count(data_len: usize, sample_format: SampleFormat, channels: u16) -> usize {
+    let bytes_per_frame = sample_format
+        .sample_size()
+        .saturating_mul(usize::from(channels.max(1)));
+
+    if bytes_per_frame == 0 {
+        return 0;
+    }
+
+    data_len / bytes_per_frame
+}
+
+fn timestamp_duration_since(current: Timestamp, start: Timestamp) -> Option<Duration> {
+    match (current, start) {
+        (Timestamp::Instant(current), Timestamp::Instant(start)) => {
+            current.checked_duration_since(start)
+        }
+        (Timestamp::SystemTime(current), Timestamp::SystemTime(start)) => {
+            current.duration_since(start).ok()
+        }
+        #[cfg(windows)]
+        (Timestamp::PerformanceCounter(current), Timestamp::PerformanceCounter(start)) => {
+            current.checked_duration_since(start)
+        }
+        #[cfg(target_os = "macos")]
+        (Timestamp::MachAbsoluteTime(current), Timestamp::MachAbsoluteTime(start)) => {
+            current.checked_duration_since(start)
+        }
+        _ => None,
+    }
+}
+
+fn pending_timestamp_stale_threshold(sample_duration: Duration) -> Duration {
+    let half_duration = Duration::from_secs_f64(sample_duration.as_secs_f64() * 0.5);
+    PENDING_TIMESTAMP_STALE_MIN.max(half_duration)
+}
+
+fn normalize_pending_timestamp(
+    timestamp: &mut Timestamp,
+    expected: Option<Timestamp>,
+    stale_threshold: Duration,
+) -> bool {
+    let Some(expected) = expected else {
+        return false;
+    };
+
+    if timestamp_duration_since(*timestamp, expected).is_some() {
+        return false;
+    }
+
+    let Some(stale_by) = timestamp_duration_since(expected, *timestamp) else {
+        return false;
+    };
+
+    if stale_by < stale_threshold {
+        return false;
+    }
+
+    *timestamp = expected;
+    true
+}
+
+fn microphone_sample_duration(samples: &MicrophoneSamples) -> Duration {
+    let frame_count = callback_frame_count(samples.data.len(), samples.format, samples.channels);
+    if frame_count == 0 || samples.sample_rate == 0 {
+        return Duration::ZERO;
+    }
+
+    Duration::from_secs_f64(frame_count as f64 / samples.sample_rate as f64)
+}
+
+fn normalize_pending_timestamps<'a>(
+    pending_timestamps: impl IntoIterator<Item = (&'a mut Timestamp, Duration)>,
+) -> u32 {
+    let mut next_timestamp = None;
+    let mut adjusted_frames = 0u32;
+
+    for (timestamp, sample_duration) in pending_timestamps {
+        if normalize_pending_timestamp(
+            timestamp,
+            next_timestamp,
+            pending_timestamp_stale_threshold(sample_duration),
+        ) {
+            adjusted_frames = adjusted_frames.saturating_add(1);
+        }
+        next_timestamp = Some(*timestamp + sample_duration);
+    }
+
+    adjusted_frames
+}
+
+fn prepare_pending_samples(pending_samples: &mut VecDeque<MicrophoneSamples>, sample_rate: u32) {
+    let adjusted_frames = normalize_pending_timestamps(pending_samples.iter_mut().map(|pending| {
+        pending.sample_rate = sample_rate;
+        let sample_duration = microphone_sample_duration(pending);
+        (&mut pending.timestamp, sample_duration)
+    }));
+
+    if adjusted_frames > 0 {
+        debug!(
+            adjusted_frames,
+            sample_rate, "Normalized stale pending microphone timestamps"
+        );
+    }
+}
+
+fn enqueue_microphone_samples(
+    actor_ref: &ActorRef<MicrophoneFeed>,
+    dropped_message_count: &AtomicU64,
+    samples: MicrophoneSamples,
+) {
+    if let Err(error) = actor_ref.tell(samples).try_send() {
+        dropped_message_count.fetch_add(1, Ordering::Relaxed);
+        warn!("Failed to enqueue microphone samples: {error}");
+    }
 }
 
 #[derive(Actor)]
@@ -291,6 +629,9 @@ impl MicrophoneFeed {
 
                 let callback_sample_rate = config.sample_rate().0;
                 let callback_channels = config.channels();
+                let mut sample_rate_estimator =
+                    CallbackSampleRateEstimator::new(callback_sample_rate);
+                let mut pending_samples = VecDeque::new();
 
                 let stream = match device.build_input_stream_raw(
                     &stream_config,
@@ -299,29 +640,68 @@ impl MicrophoneFeed {
                         let actor_ref = actor_ref.clone();
                         let mut callback_count = 0u64;
                         move |data, info| {
+                            let frame_count = callback_frame_count(
+                                data.bytes().len(),
+                                data.sample_format(),
+                                callback_channels,
+                            );
+                            let input_timestamp = info.timestamp();
+                            let effective_sample_rate =
+                                sample_rate_estimator.sample_rate_for(input_timestamp, frame_count);
+
                             if callback_count == 0 {
                                 info!(
-                                    "🎤 First audio callback - data size: {} bytes, format: {:?}",
+                                    "🎤 First audio callback - data size: {} bytes, frames: {}, format: {:?}, rate: {}",
                                     data.bytes().len(),
-                                    data.sample_format()
+                                    frame_count,
+                                    data.sample_format(),
+                                    effective_sample_rate.sample_rate
                                 );
                             }
                             callback_count += 1;
 
-                            if let Err(error) = actor_ref
-                                .tell(MicrophoneSamples {
-                                    data: data.bytes().to_vec(),
-                                    format: data.sample_format(),
-                                    sample_rate: callback_sample_rate,
-                                    channels: callback_channels,
-                                    info: info.clone(),
-                                    timestamp: Timestamp::from_cpal(info.timestamp().capture),
-                                })
-                                .try_send()
-                            {
-                                dropped_message_count.fetch_add(1, Ordering::Relaxed);
-                                warn!("Failed to enqueue microphone samples: {error}");
+                            let samples = MicrophoneSamples {
+                                data: data.bytes().to_vec(),
+                                format: data.sample_format(),
+                                sample_rate: effective_sample_rate.sample_rate,
+                                channels: callback_channels,
+                                info: info.clone(),
+                                timestamp: Timestamp::from_cpal(input_timestamp.capture),
+                            };
+
+                            if !effective_sample_rate.settled {
+                                pending_samples.push_back(samples);
+                                if pending_samples.len() >= SAMPLE_RATE_ESTIMATE_MAX_PENDING {
+                                    let sample_rate = sample_rate_estimator.force_current();
+                                    prepare_pending_samples(&mut pending_samples, sample_rate);
+                                    while let Some(pending) = pending_samples.pop_front() {
+                                        enqueue_microphone_samples(
+                                            &actor_ref,
+                                            &dropped_message_count,
+                                            pending,
+                                        );
+                                    }
+                                }
+                                return;
                             }
+
+                            prepare_pending_samples(
+                                &mut pending_samples,
+                                effective_sample_rate.sample_rate,
+                            );
+                            while let Some(pending) = pending_samples.pop_front() {
+                                enqueue_microphone_samples(
+                                    &actor_ref,
+                                    &dropped_message_count,
+                                    pending,
+                                );
+                            }
+
+                            enqueue_microphone_samples(
+                                &actor_ref,
+                                &dropped_message_count,
+                                samples,
+                            );
                         }
                     },
                     move |e| {
@@ -433,8 +813,15 @@ fn select_preferred_config(
                 .channels
                 .and_then(|channels| find_config(Some(channels), None))
         })?;
+    let sample_rate = rate
+        .filter(|rate| supports_sample_rate(config, *rate))
+        .unwrap_or_else(|| select_sample_rate(config));
 
-    Some(config.with_sample_rate(rate.unwrap_or_else(|| select_sample_rate(config))))
+    config.try_with_sample_rate(sample_rate)
+}
+
+fn supports_sample_rate(config: &SupportedStreamConfigRange, rate: cpal::SampleRate) -> bool {
+    config.min_sample_rate().0 <= rate.0 && rate.0 <= config.max_sample_rate().0
 }
 
 fn select_sample_rate(config: &SupportedStreamConfigRange) -> cpal::SampleRate {
@@ -1098,5 +1485,314 @@ impl Message<Unlock> for MicrophoneFeed {
                 state
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_range(rate: u32, channels: u16) -> SupportedStreamConfigRange {
+        SupportedStreamConfigRange::new(
+            channels,
+            cpal::SampleRate(rate),
+            cpal::SampleRate(rate),
+            cpal::SupportedBufferSize::Unknown,
+            SampleFormat::F32,
+        )
+    }
+
+    fn estimate_rate(
+        configured_rate: u32,
+        frames_per_interval: usize,
+        interval: Duration,
+    ) -> Option<u32> {
+        let mut observation = SampleRateObservation::new(configured_rate);
+        let mut result = None;
+
+        for _ in 0..SAMPLE_RATE_ESTIMATE_MIN_INTERVALS {
+            result = observation.push(frames_per_interval, interval);
+        }
+
+        result
+    }
+
+    #[test]
+    fn sample_rate_observation_keeps_configured_rate() {
+        assert_eq!(
+            estimate_rate(48_000, 480, Duration::from_millis(10)),
+            Some(48_000)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_keeps_configured_rate_for_small_jitter() {
+        assert_eq!(
+            estimate_rate(48_000, 458, Duration::from_millis(10)),
+            Some(48_000)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_detects_double_rate() {
+        assert_eq!(
+            estimate_rate(48_000, 960, Duration::from_millis(10)),
+            Some(96_000)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_detects_double_44100_rate() {
+        assert_eq!(
+            estimate_rate(44_100, 882, Duration::from_millis(10)),
+            Some(88_200)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_detects_lower_standard_rate() {
+        assert_eq!(
+            estimate_rate(48_000, 441, Duration::from_millis(10)),
+            Some(44_100)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_detects_half_standard_rate() {
+        assert_eq!(
+            estimate_rate(48_000, 240, Duration::from_millis(10)),
+            Some(24_000)
+        );
+    }
+
+    #[test]
+    fn sample_rate_observation_ignores_distant_nonstandard_rate() {
+        assert_eq!(estimate_rate(48_000, 550, Duration::from_millis(10)), None);
+    }
+
+    #[test]
+    fn rate_change_gate_debounces_single_window_flip() {
+        let mut gate = RateChangeGate::new(48_000);
+
+        // A lone divergent window must not change the active rate...
+        assert_eq!(gate.observe(44_100), 48_000);
+        // ...and a window back at the true rate clears the candidate.
+        assert_eq!(gate.observe(48_000), 48_000);
+        assert_eq!(gate.observe(44_100), 48_000);
+        assert_eq!(gate.observe(48_000), 48_000);
+
+        // Only SAMPLE_RATE_CHANGE_AGREEMENTS consecutive agreeing windows switch.
+        assert_eq!(gate.observe(44_100), 48_000);
+        assert_eq!(gate.observe(44_100), 48_000);
+        assert_eq!(gate.observe(44_100), 44_100);
+    }
+
+    #[test]
+    fn rate_change_gate_resets_candidate_on_disagreement() {
+        let mut gate = RateChangeGate::new(48_000);
+
+        assert_eq!(gate.observe(44_100), 48_000);
+        // A different candidate restarts the agreement count.
+        assert_eq!(gate.observe(24_000), 48_000);
+        assert_eq!(gate.observe(24_000), 48_000);
+        assert_eq!(gate.observe(24_000), 24_000);
+    }
+
+    #[test]
+    fn rate_change_gate_clear_pending_keeps_active_rate() {
+        let mut gate = RateChangeGate::new(48_000);
+
+        assert_eq!(gate.observe(44_100), 48_000);
+        gate.clear_pending();
+        // After clearing, the candidate must start over rather than flip early.
+        assert_eq!(gate.observe(44_100), 48_000);
+        assert_eq!(gate.observe(44_100), 48_000);
+        assert_eq!(gate.observe(44_100), 44_100);
+    }
+
+    #[test]
+    fn callback_frame_count_uses_channel_count() {
+        let frames =
+            callback_frame_count(960 * 2 * std::mem::size_of::<f32>(), SampleFormat::F32, 2);
+
+        assert_eq!(frames, 960);
+    }
+
+    #[test]
+    fn normalize_pending_timestamp_advances_stale_startup_timestamps() {
+        let base = Timestamp::Instant(Instant::now());
+        let expected = base + Duration::from_millis(35);
+        let mut timestamp = base;
+
+        assert!(normalize_pending_timestamp(
+            &mut timestamp,
+            Some(expected),
+            pending_timestamp_stale_threshold(Duration::from_millis(35))
+        ));
+
+        assert_eq!(
+            timestamp_duration_since(timestamp, expected),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn normalize_pending_timestamp_keeps_small_startup_jitter() {
+        let base = Timestamp::Instant(Instant::now());
+        let expected = base + Duration::from_millis(35);
+        let jittered = expected - Duration::from_millis(3);
+        let mut timestamp = jittered;
+
+        assert!(!normalize_pending_timestamp(
+            &mut timestamp,
+            Some(expected),
+            pending_timestamp_stale_threshold(Duration::from_millis(35))
+        ));
+
+        assert_eq!(
+            timestamp_duration_since(timestamp, jittered),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn normalize_pending_timestamp_keeps_forward_timestamps() {
+        let base = Timestamp::Instant(Instant::now());
+        let expected = base + Duration::from_millis(35);
+        let forward = expected + Duration::from_millis(2);
+        let mut timestamp = forward;
+
+        assert!(!normalize_pending_timestamp(
+            &mut timestamp,
+            Some(expected),
+            pending_timestamp_stale_threshold(Duration::from_millis(35))
+        ));
+
+        assert_eq!(
+            timestamp_duration_since(timestamp, forward),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn normalize_pending_timestamps_recovers_repeated_stale_startup_sequence() {
+        let base = Timestamp::Instant(Instant::now());
+        let sample_duration = Duration::from_millis(35);
+        let mut timestamps = [base; 8];
+
+        let adjusted_frames =
+            normalize_pending_timestamps(timestamps.iter_mut().map(|ts| (ts, sample_duration)));
+
+        assert_eq!(adjusted_frames, 7);
+        for (index, timestamp) in timestamps.iter().copied().enumerate() {
+            let expected = base + sample_duration * index as u32;
+            assert_eq!(
+                timestamp_duration_since(timestamp, expected),
+                Some(Duration::ZERO)
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_pending_timestamps_preserves_small_jitter_sequence() {
+        let base = Timestamp::Instant(Instant::now());
+        let sample_duration = Duration::from_millis(35);
+        let mut timestamps = vec![
+            base,
+            base + Duration::from_millis(32),
+            base + Duration::from_millis(64),
+            base + Duration::from_millis(96),
+        ];
+        let original = timestamps.clone();
+
+        let adjusted_frames =
+            normalize_pending_timestamps(timestamps.iter_mut().map(|ts| (ts, sample_duration)));
+
+        assert_eq!(adjusted_frames, 0);
+        for (timestamp, expected) in timestamps.into_iter().zip(original) {
+            assert_eq!(
+                timestamp_duration_since(timestamp, expected),
+                Some(Duration::ZERO)
+            );
+        }
+    }
+
+    #[test]
+    fn preferred_config_uses_requested_rate_when_supported() {
+        let configs = [config_range(48_000, 1), config_range(96_000, 1)];
+
+        let selected = select_preferred_config(
+            &configs,
+            &MicrophoneDeviceSettings {
+                sample_rate: Some(96_000),
+                channels: Some(1),
+            },
+        )
+        .expect("config");
+
+        assert_eq!(selected.sample_rate().0, 96_000);
+        assert_eq!(selected.channels(), 1);
+    }
+
+    #[test]
+    fn preferred_config_falls_back_when_requested_rate_is_unsupported() {
+        let configs = [config_range(44_100, 1)];
+
+        let selected = select_preferred_config(
+            &configs,
+            &MicrophoneDeviceSettings {
+                sample_rate: Some(96_000),
+                channels: Some(1),
+            },
+        )
+        .expect("config");
+
+        assert_eq!(selected.sample_rate().0, 44_100);
+        assert_eq!(selected.channels(), 1);
+    }
+
+    #[test]
+    fn preferred_config_never_panics_for_stale_settings_matrix() {
+        let configs = [
+            config_range(44_100, 1),
+            config_range(48_000, 1),
+            config_range(96_000, 1),
+            config_range(48_000, 2),
+        ];
+        let sample_rates = [
+            None,
+            Some(8_000),
+            Some(44_100),
+            Some(48_000),
+            Some(96_000),
+            Some(192_000),
+        ];
+        let channels = [None, Some(1), Some(2), Some(8)];
+
+        for sample_rate in sample_rates {
+            for channels in channels {
+                let settings = MicrophoneDeviceSettings {
+                    sample_rate,
+                    channels,
+                };
+                let result =
+                    std::panic::catch_unwind(|| select_preferred_config(&configs, &settings));
+
+                assert!(
+                    result.is_ok(),
+                    "select_preferred_config panicked for settings={settings:?}"
+                );
+
+                if let Some(selected) = result.expect("panic checked") {
+                    assert!(
+                        configs.iter().any(|config| {
+                            config.channels() == selected.channels()
+                                && supports_sample_rate(config, selected.sample_rate())
+                        }),
+                        "selected unsupported config {selected:?} for settings={settings:?}"
+                    );
+                }
+            }
+        }
     }
 }

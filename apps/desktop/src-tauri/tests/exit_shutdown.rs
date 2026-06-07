@@ -232,6 +232,19 @@ fn exit_requested_allows_runtime_exit_when_already_exiting() {
 }
 
 #[test]
+fn exit_requested_allows_runtime_exit_when_export_cancel_is_draining() {
+    let prevented = Arc::new(AtomicBool::new(false));
+    let prevented_flag = prevented.clone();
+
+    let decision = handle_exit_requested(true, true, true, move || {
+        prevented_flag.store(true, Ordering::Release);
+    });
+
+    assert_eq!(decision, ExitRequestDecision::AllowRuntimeExit);
+    assert!(!prevented.load(Ordering::Acquire));
+}
+
+#[test]
 fn exit_requested_prevents_runtime_exit_during_export() {
     let prevented = Arc::new(AtomicBool::new(false));
     let prevented_flag = prevented.clone();

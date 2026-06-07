@@ -1,0 +1,19 @@
+[package]
+name = "cap-cli-install"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { workspace = true }
+dirs = "6.0.0"
+specta = { workspace = true, optional = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[features]
+specta = ["dep:specta"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

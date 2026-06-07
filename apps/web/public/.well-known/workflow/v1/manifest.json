@@ -1,40 +1,53 @@
 {
 	"version": "1.0.0",
 	"steps": {
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
-			"fetch": {
-				"stepId": "step//workflow@4.2.0-beta.73//fetch"
+		"workflows/process-video.ts": {
+			"cleanupRawUpload": {
+				"stepId": "step//./workflows/process-video//cleanupRawUpload"
+			},
+			"processVideoOnMediaServer": {
+				"stepId": "step//./workflows/process-video//processVideoOnMediaServer"
+			},
+			"saveMetadataAndComplete": {
+				"stepId": "step//./workflows/process-video//saveMetadataAndComplete"
+			},
+			"setProcessingError": {
+				"stepId": "step//./workflows/process-video//setProcessingError"
+			},
+			"validateProcessingRequest": {
+				"stepId": "step//./workflows/process-video//validateProcessingRequest"
 			}
 		},
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
-			"__builtin_response_array_buffer": {
-				"stepId": "__builtin_response_array_buffer"
+		"workflows/finalize-desktop-recording.ts": {
+			"completeWithoutMediaServerIfUnavailable": {
+				"stepId": "step//./workflows/finalize-desktop-recording//completeWithoutMediaServerIfUnavailable"
 			},
-			"__builtin_response_json": {
-				"stepId": "__builtin_response_json"
+			"isDesktopRecordingFinalized": {
+				"stepId": "step//./workflows/finalize-desktop-recording//isDesktopRecordingFinalized"
 			},
-			"__builtin_response_text": {
-				"stepId": "__builtin_response_text"
-			}
-		},
-		"workflows/edit-video.ts": {
-			"clearEditProcessingState": {
-				"stepId": "step//./workflows/edit-video//clearEditProcessingState"
+			"markMuxError": {
+				"stepId": "step//./workflows/finalize-desktop-recording//markMuxError"
 			},
-			"invalidateEditedVideoCache": {
-				"stepId": "step//./workflows/edit-video//invalidateEditedVideoCache"
+			"markMuxProcessing": {
+				"stepId": "step//./workflows/finalize-desktop-recording//markMuxProcessing"
 			},
-			"queueTranscriptionRegeneration": {
-				"stepId": "step//./workflows/edit-video//queueTranscriptionRegeneration"
+			"markMuxRetrying": {
+				"stepId": "step//./workflows/finalize-desktop-recording//markMuxRetrying"
 			},
-			"renderVideoEditOnMediaServer": {
-				"stepId": "step//./workflows/edit-video//renderVideoEditOnMediaServer"
+			"queueFinalizedRecordingTranscription": {
+				"stepId": "step//./workflows/finalize-desktop-recording//queueFinalizedRecordingTranscription"
 			},
-			"saveEditResultAndComplete": {
-				"stepId": "step//./workflows/edit-video//saveEditResultAndComplete"
+			"startDesktopSegmentsMuxJob": {
+				"stepId": "step//./workflows/finalize-desktop-recording//startDesktopSegmentsMuxJob"
 			},
-			"validateEditRequest": {
-				"stepId": "step//./workflows/edit-video//validateEditRequest"
+			"validateDesktopSegmentsRecording": {
+				"stepId": "step//./workflows/finalize-desktop-recording//validateDesktopSegmentsRecording"
+			},
+			"waitBeforeMuxRetry": {
+				"stepId": "step//./workflows/finalize-desktop-recording//waitBeforeMuxRetry"
+			},
+			"waitForDesktopSegmentsMuxCompletion": {
+				"stepId": "step//./workflows/finalize-desktop-recording//waitForDesktopSegmentsMuxCompletion"
 			}
 		},
 		"workflows/import-loom-video.ts": {
@@ -49,6 +62,11 @@
 			},
 			"setProcessingError": {
 				"stepId": "step//./workflows/import-loom-video//setProcessingError"
+			}
+		},
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
+			"fetch": {
+				"stepId": "step//workflow@4.2.0-beta.73//fetch"
 			}
 		},
 		"workflows/generate-ai.ts": {
@@ -66,6 +84,17 @@
 			},
 			"validateAndSetProcessing": {
 				"stepId": "step//./workflows/generate-ai//validateAndSetProcessing"
+			}
+		},
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
+			"__builtin_response_array_buffer": {
+				"stepId": "__builtin_response_array_buffer"
+			},
+			"__builtin_response_json": {
+				"stepId": "__builtin_response_json"
+			},
+			"__builtin_response_text": {
+				"stepId": "__builtin_response_text"
 			}
 		},
 		"workflows/transcribe.ts": {
@@ -103,35 +132,71 @@
 				"stepId": "step//./workflows/transcribe//validateVideo"
 			}
 		},
-		"workflows/process-video.ts": {
-			"cleanupRawUpload": {
-				"stepId": "step//./workflows/process-video//cleanupRawUpload"
+		"workflows/edit-video.ts": {
+			"clearEditProcessingState": {
+				"stepId": "step//./workflows/edit-video//clearEditProcessingState"
 			},
-			"processVideoOnMediaServer": {
-				"stepId": "step//./workflows/process-video//processVideoOnMediaServer"
+			"invalidateEditedVideoCache": {
+				"stepId": "step//./workflows/edit-video//invalidateEditedVideoCache"
 			},
-			"saveMetadataAndComplete": {
-				"stepId": "step//./workflows/process-video//saveMetadataAndComplete"
+			"queueTranscriptionRegeneration": {
+				"stepId": "step//./workflows/edit-video//queueTranscriptionRegeneration"
 			},
-			"setProcessingError": {
-				"stepId": "step//./workflows/process-video//setProcessingError"
+			"renderVideoEditOnMediaServer": {
+				"stepId": "step//./workflows/edit-video//renderVideoEditOnMediaServer"
 			},
-			"validateProcessingRequest": {
-				"stepId": "step//./workflows/process-video//validateProcessingRequest"
+			"saveEditResultAndComplete": {
+				"stepId": "step//./workflows/edit-video//saveEditResultAndComplete"
+			},
+			"validateEditRequest": {
+				"stepId": "step//./workflows/edit-video//validateEditRequest"
 			}
 		}
 	},
 	"workflows": {
-		"workflows/edit-video.ts": {
-			"editVideoWorkflow": {
-				"workflowId": "workflow//./workflows/edit-video//editVideoWorkflow",
+		"workflows/process-video.ts": {
+			"processVideoWorkflow": {
+				"workflowId": "workflow//./workflows/process-video//processVideoWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: editVideoWorkflow",
+								"label": "Start: processVideoWorkflow",
+								"nodeKind": "workflow_start"
+							}
+						},
+						{
+							"id": "end",
+							"type": "workflowEnd",
+							"data": {
+								"label": "Return",
+								"nodeKind": "workflow_end"
+							}
+						}
+					],
+					"edges": [
+						{
+							"id": "e_start_end",
+							"source": "start",
+							"target": "end",
+							"type": "default"
+						}
+					]
+				}
+			}
+		},
+		"workflows/finalize-desktop-recording.ts": {
+			"finalizeDesktopRecordingWorkflow": {
+				"workflowId": "workflow//./workflows/finalize-desktop-recording//finalizeDesktopRecordingWorkflow",
+				"graph": {
+					"nodes": [
+						{
+							"id": "start",
+							"type": "workflowStart",
+							"data": {
+								"label": "Start: finalizeDesktopRecordingWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},
@@ -254,16 +319,16 @@
 				}
 			}
 		},
-		"workflows/process-video.ts": {
-			"processVideoWorkflow": {
-				"workflowId": "workflow//./workflows/process-video//processVideoWorkflow",
+		"workflows/edit-video.ts": {
+			"editVideoWorkflow": {
+				"workflowId": "workflow//./workflows/edit-video//editVideoWorkflow",
 				"graph": {
 					"nodes": [
 						{
 							"id": "start",
 							"type": "workflowStart",
 							"data": {
-								"label": "Start: processVideoWorkflow",
+								"label": "Start: editVideoWorkflow",
 								"nodeKind": "workflow_start"
 							}
 						},

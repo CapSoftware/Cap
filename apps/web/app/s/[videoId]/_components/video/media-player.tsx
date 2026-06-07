@@ -55,7 +55,12 @@ import { useComposedRefs } from "@/app/lib/compose-refs";
 import { cn } from "@/app/lib/utils";
 import { Badge } from "./badge";
 import { Button as PlayerButton } from "./button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "./tooltip";
 
 const ROOT_NAME = "MediaPlayer";
 const SEEK_NAME = "MediaPlayerSeek";
@@ -65,6 +70,12 @@ const PLAYBACK_SPEED_NAME = "MediaPlayerPlaybackSpeed";
 
 const FLOATING_MENU_SIDE_OFFSET = 10;
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const VOLUME_INDICATOR_BARS = Array.from({ length: 10 }, (_, index) => ({
+	id: `volume-bar-${index}`,
+	position: index,
+	height: 12 + index * 2,
+	animationDelay: `${index * 50}ms`,
+}));
 
 const SEEK_STEP_SHORT = 5;
 const SEEK_STEP_LONG = 10;
@@ -839,43 +850,45 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 	const RootPrimitive = asChild ? Slot : "div";
 
 	return (
-		<MediaPlayerContext.Provider value={contextValue}>
-			<RootPrimitive
-				aria-labelledby={labelId}
-				aria-describedby={descriptionId}
-				aria-disabled={disabled}
-				data-disabled={disabled ? "" : undefined}
-				data-controls-visible={controlsVisible ? "" : undefined}
-				data-slot="media-player"
-				data-state={isFullscreen ? "fullscreen" : "windowed"}
-				dir={dir}
-				tabIndex={disabled ? undefined : 0}
-				{...rootImplProps}
-				ref={composedRef}
-				onMouseLeave={onMouseLeave}
-				onMouseMove={onMouseMove}
-				onKeyDown={onKeyDown}
-				onKeyUp={onKeyUp}
-				className={cn(
-					"dark relative isolate flex flex-col overflow-visible bg-background outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_video]:relative [&_video]:object-contain",
-					"data-[state=fullscreen]:[&_video]:size-full [:fullscreen_&]:flex [:fullscreen_&]:h-full [:fullscreen_&]:max-h-screen [:fullscreen_&]:flex-col [:fullscreen_&]:justify-between",
-					"[&_[data-slider]::before]:-top-4 [&_[data-slider]::before]:-bottom-2 [&_[data-slider]::before]:absolute [&_[data-slider]::before]:inset-x-0 [&_[data-slider]::before]:z-10 [&_[data-slider]::before]:h-8 [&_[data-slider]::before]:cursor-pointer [&_[data-slider]::before]:content-[''] [&_[data-slider]]:relative [&_[data-slot='media-player-seek']:not([data-hovering])::before]:cursor-default",
-					"[&_video::-webkit-media-text-track-display]:top-auto! [&_video::-webkit-media-text-track-display]:bottom-[4%]! [&_video::-webkit-media-text-track-display]:mb-0! data-[state=fullscreen]:data-[controls-visible]:[&_video::-webkit-media-text-track-display]:bottom-[9%]! data-[controls-visible]:[&_video::-webkit-media-text-track-display]:bottom-[13%]! data-[state=fullscreen]:[&_video::-webkit-media-text-track-display]:bottom-[7%]!",
-					className,
-				)}
-			>
-				<span id={labelId} className="sr-only">
-					{label ?? "Media player"}
-				</span>
-				<span id={descriptionId} className="sr-only">
-					{isVideo
-						? "Video player with custom controls for playback, volume, seeking, and more. Use space bar to play/pause, arrow keys (←/→) to seek, and arrow keys (↑/↓) to adjust volume."
-						: "Audio player with custom controls for playback, volume, seeking, and more. Use space bar to play/pause, Shift + arrow keys (←/→) to seek, and arrow keys (↑/↓) to adjust volume."}
-				</span>
-				{children}
-				<MediaPlayerVolumeIndicator />
-			</RootPrimitive>
-		</MediaPlayerContext.Provider>
+		<TooltipProvider>
+			<MediaPlayerContext.Provider value={contextValue}>
+				<RootPrimitive
+					aria-labelledby={labelId}
+					aria-describedby={descriptionId}
+					aria-disabled={disabled}
+					data-disabled={disabled ? "" : undefined}
+					data-controls-visible={controlsVisible ? "" : undefined}
+					data-slot="media-player"
+					data-state={isFullscreen ? "fullscreen" : "windowed"}
+					dir={dir}
+					tabIndex={disabled ? undefined : 0}
+					{...rootImplProps}
+					ref={composedRef}
+					onMouseLeave={onMouseLeave}
+					onMouseMove={onMouseMove}
+					onKeyDown={onKeyDown}
+					onKeyUp={onKeyUp}
+					className={cn(
+						"dark relative isolate flex flex-col overflow-visible bg-background outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_video]:relative [&_video]:object-contain",
+						"data-[state=fullscreen]:[&_video]:size-full [:fullscreen_&]:flex [:fullscreen_&]:h-full [:fullscreen_&]:max-h-screen [:fullscreen_&]:flex-col [:fullscreen_&]:justify-between",
+						"[&_[data-slider]::before]:-top-4 [&_[data-slider]::before]:-bottom-2 [&_[data-slider]::before]:absolute [&_[data-slider]::before]:inset-x-0 [&_[data-slider]::before]:z-10 [&_[data-slider]::before]:h-8 [&_[data-slider]::before]:cursor-pointer [&_[data-slider]::before]:content-[''] [&_[data-slider]]:relative [&_[data-slot='media-player-seek']:not([data-hovering])::before]:cursor-default",
+						"[&_video::-webkit-media-text-track-display]:top-auto! [&_video::-webkit-media-text-track-display]:bottom-[4%]! [&_video::-webkit-media-text-track-display]:mb-0! data-[state=fullscreen]:data-[controls-visible]:[&_video::-webkit-media-text-track-display]:bottom-[9%]! data-[controls-visible]:[&_video::-webkit-media-text-track-display]:bottom-[13%]! data-[state=fullscreen]:[&_video::-webkit-media-text-track-display]:bottom-[7%]!",
+						className,
+					)}
+				>
+					<span id={labelId} className="sr-only">
+						{label ?? "Media player"}
+					</span>
+					<span id={descriptionId} className="sr-only">
+						{isVideo
+							? "Video player with custom controls for playback, volume, seeking, and more. Use space bar to play/pause, arrow keys (←/→) to seek, and arrow keys (↑/↓) to adjust volume."
+							: "Audio player with custom controls for playback, volume, seeking, and more. Use space bar to play/pause, Shift + arrow keys (←/→) to seek, and arrow keys (↑/↓) to adjust volume."}
+					</span>
+					{children}
+					<MediaPlayerVolumeIndicator />
+				</RootPrimitive>
+			</MediaPlayerContext.Provider>
+		</TooltipProvider>
 	);
 }
 
@@ -1009,7 +1022,7 @@ function MediaPlayerControls(props: MediaPlayerControlsProps) {
 	);
 }
 
-interface MediaPlayerLoadingProps extends React.ComponentProps<"div"> {
+interface MediaPlayerLoadingProps extends React.ComponentProps<"output"> {
 	delayMs?: number;
 	asChild?: boolean;
 }
@@ -1063,11 +1076,10 @@ function MediaPlayerLoading(props: MediaPlayerLoadingProps) {
 
 	if (!shouldRender) return null;
 
-	const LoadingPrimitive = asChild ? Slot : "div";
+	const LoadingPrimitive = asChild ? Slot : "output";
 
 	return (
 		<LoadingPrimitive
-			role="status"
 			aria-live="polite"
 			data-slot="media-player-loading"
 			{...loadingProps}
@@ -1251,7 +1263,8 @@ function MediaPlayerError(props: MediaPlayerErrorProps) {
 	);
 }
 
-interface MediaPlayerVolumeIndicatorProps extends React.ComponentProps<"div"> {
+interface MediaPlayerVolumeIndicatorProps
+	extends React.ComponentProps<"output"> {
 	asChild?: boolean;
 }
 
@@ -1269,14 +1282,13 @@ function MediaPlayerVolumeIndicator(props: MediaPlayerVolumeIndicatorProps) {
 
 	const effectiveVolume = mediaMuted ? 0 : mediaVolume;
 	const volumePercentage = Math.round(effectiveVolume * 100);
-	const barCount = 10;
+	const barCount = VOLUME_INDICATOR_BARS.length;
 	const activeBarCount = Math.ceil(effectiveVolume * barCount);
 
-	const VolumeIndicatorPrimitive = asChild ? Slot : "div";
+	const VolumeIndicatorPrimitive = asChild ? Slot : "output";
 
 	return (
 		<VolumeIndicatorPrimitive
-			role="status"
 			aria-live="polite"
 			aria-label={`Volume ${mediaMuted ? "muted" : `${volumePercentage}%`}`}
 			data-slot="media-player-volume-indicator"
@@ -1300,18 +1312,18 @@ function MediaPlayerVolumeIndicator(props: MediaPlayerVolumeIndicatorProps) {
 					</span>
 				</div>
 				<div className="flex gap-1 items-center">
-					{Array.from({ length: barCount }, (_, index) => (
+					{VOLUME_INDICATOR_BARS.map((bar) => (
 						<div
-							key={index}
+							key={bar.id}
 							className={cn(
 								"w-1.5 rounded-full transition-all duration-150",
-								index < activeBarCount && !mediaMuted
+								bar.position < activeBarCount && !mediaMuted
 									? "scale-100 bg-white"
 									: "scale-90 bg-white/30",
 							)}
 							style={{
-								height: `${12 + index * 2}px`,
-								animationDelay: `${index * 50}ms`,
+								height: `${bar.height}px`,
+								animationDelay: bar.animationDelay,
 							}}
 						/>
 					))}
@@ -2582,12 +2594,7 @@ function MediaPlayerTime(props: MediaPlayerTimeProps) {
 			<span className="text-xs tabular-nums text-white min-w-fit md:text-base">
 				{times.current}
 			</span>
-			<span
-				className="text-xs tabular-nums text-gray-11"
-				role="separator"
-				aria-hidden="true"
-				tabIndex={-1}
-			>
+			<span className="text-xs tabular-nums text-gray-11" aria-hidden="true">
 				/
 			</span>
 			<span className="text-xs tabular-nums text-white min-w-fit md:text-base">

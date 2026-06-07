@@ -95,14 +95,7 @@ async function createHybridDesktopSession(signal: AbortSignal) {
 			]);
 
 			await deepLink.dispose();
-
-			if (result.source === "deep-link") {
-				window.setTimeout(() => {
-					void localCallback.dispose();
-				}, 10000);
-			} else {
-				await localCallback.dispose();
-			}
+			await localCallback.dispose();
 
 			if (!result.data) return null;
 			if (signal.aborted) throw new Error("Sign in aborted");

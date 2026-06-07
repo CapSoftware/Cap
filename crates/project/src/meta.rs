@@ -38,6 +38,25 @@ pub struct AudioMeta {
     pub start_time: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_summary: Option<AudioGapSummary>,
+}
+
+/// Overlap-trim accounting captured by the recorder's audio gap tracker, persisted so the
+/// editor can compensate for stale-startup audio drift from typed data instead of scraping
+/// the recording log. See `cap-editor`'s `audio_timing_repair_offset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct AudioGapSummary {
+    /// Total audio trimmed from overlapping frames over the whole recording, in milliseconds.
+    pub total_overlap_trimmed_ms: u32,
+    /// Startup-window trim used for stale-startup repair, excluding mid-recording trims.
+    #[serde(default)]
+    pub startup_overlap_trimmed_ms: u32,
+    /// Number of whole audio frames dropped because they fully overlapped the committed timeline.
+    pub overlap_dropped_frames: u32,
+    /// Subset of `overlap_dropped_frames` that dropped within the first few frames — the
+    /// signature of a stale buffered burst at capture start.
+    pub startup_overlap_drops: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

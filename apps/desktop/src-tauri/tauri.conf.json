@@ -38,7 +38,11 @@
 		"active": true,
 		"createUpdaterArtifacts": true,
 		"targets": "all",
-		"externalBin": ["binaries/cap-muxer", "binaries/cap-exporter"],
+		"externalBin": [
+			"binaries/cap-muxer",
+			"binaries/cap-exporter",
+			"binaries/cap-cli"
+		],
 		"icon": [
 			"icons/32x32.png",
 			"icons/128x128.png",

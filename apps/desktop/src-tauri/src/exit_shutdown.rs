@@ -96,11 +96,11 @@ pub(crate) fn handle_exit_requested<FPrevent>(
 where
     FPrevent: FnOnce(),
 {
-    if export_active {
+    if is_exiting && runtime_exit_requested {
+        ExitRequestDecision::AllowRuntimeExit
+    } else if export_active {
         prevent_exit();
         ExitRequestDecision::ExportActive
-    } else if is_exiting && runtime_exit_requested {
-        ExitRequestDecision::AllowRuntimeExit
     } else if is_exiting {
         prevent_exit();
         ExitRequestDecision::AlreadyExiting

@@ -80,6 +80,330 @@ fn recording_stopped_share_url(link: &str) -> String {
     }
 }
 
+const CURRENT_DESKTOP_BACKGROUND_BASENAME: &str = "current-desktop-background";
+const CURRENT_DESKTOP_BACKGROUND_FILENAME: &str = "current-desktop-background.jpg";
+const CURRENT_DESKTOP_BACKGROUND_PENDING_FILENAME: &str = "current-desktop-background.pending.jpg";
+
+fn current_desktop_background_snapshot_path(recording_dir: &Path) -> PathBuf {
+    recording_dir
+        .join("assets")
+        .join(CURRENT_DESKTOP_BACKGROUND_FILENAME)
+}
+
+fn stored_current_desktop_background_path(recording_dir: &Path) -> Option<String> {
+    let path = current_desktop_background_snapshot_path(recording_dir);
+    path.exists().then(|| path.to_string_lossy().into_owned())
+}
+
+fn pending_current_desktop_background_snapshot_path(recording_dir: &Path) -> PathBuf {
+    recording_dir
+        .join("assets")
+        .join(CURRENT_DESKTOP_BACKGROUND_PENDING_FILENAME)
+}
+
+fn spawn_current_desktop_background_snapshot(
+    recording_dir: PathBuf,
+    capture_target: ScreenCaptureTarget,
+) {
+    if matches!(capture_target, ScreenCaptureTarget::CameraOnly) {
+        return;
+    }
+
+    tokio::spawn(async move {
+        match store_current_desktop_background_snapshot(recording_dir, capture_target).await {
+            Ok(path) => debug!(
+                path = %path.display(),
+                "Stored current desktop background for recording"
+            ),
+            Err(error) => debug!(%error, "Failed to store current desktop background"),
+        }
+    });
+}
+
+async fn store_current_desktop_background_snapshot(
+    recording_dir: PathBuf,
+    capture_target: ScreenCaptureTarget,
+) -> Result<PathBuf, String> {
+    let display_id = capture_target
+        .display()
+        .map(|display| display.id().to_string());
+
+    tokio::task::spawn_blocking(move || {
+        let output_path = current_desktop_background_snapshot_path(&recording_dir);
+        let pending_path = pending_current_desktop_background_snapshot_path(&recording_dir);
+        write_current_desktop_background_to(
+            &output_path,
+            &pending_path,
+            display_id.as_deref(),
+            true,
+        )?;
+        Ok(output_path)
+    })
+    .await
+    .map_err(|err| format!("Desktop background snapshot task failed: {err}"))?
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument]
+pub async fn import_current_desktop_background(project_path: String) -> Result<String, String> {
+    let project_dir = PathBuf::from(project_path);
+
+    tokio::task::spawn_blocking(move || {
+        let assets_dir = project_dir.join("assets");
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis())
+            .unwrap_or(0);
+        let output_name = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.jpg");
+        let output_path = assets_dir.join(&output_name);
+        let pending_path = assets_dir.join(format!(
+            "{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.pending.jpg"
+        ));
+
+        write_current_desktop_background_to(&output_path, &pending_path, None, false)?;
+        remove_imported_desktop_background_snapshots(&assets_dir, &output_name);
+
+        Ok(output_path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|err| format!("Desktop background snapshot task failed: {err}"))?
+}
+
+fn remove_imported_desktop_background_snapshots(assets_dir: &Path, keep_name: &str) {
+    let Ok(entries) = std::fs::read_dir(assets_dir) else {
+        return;
+    };
+
+    let prefix = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-");
+    for entry in entries.flatten() {
+        if let Some(name) = entry.file_name().to_str()
+            && name != keep_name
+            && name.starts_with(prefix.as_str())
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn write_current_desktop_background_to(
+    output_path: &Path,
+    pending_path: &Path,
+    display_id: Option<&str>,
+    enforce_protected_check: bool,
+) -> Result<(), String> {
+    let source_path = current_desktop_background_source_path(display_id)
+        .ok_or_else(|| "Current desktop background path not found".to_string())?;
+
+    if enforce_protected_check && desktop_background_source_requires_user_prompt(&source_path) {
+        return Err(format!(
+            "Skipping current desktop background from protected location: {}",
+            source_path.display()
+        ));
+    }
+
+    if !source_path.exists() {
+        return Err(format!(
+            "Current desktop background does not exist: {}",
+            source_path.display()
+        ));
+    }
+
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("Failed to create background assets directory: {err}"))?;
+    }
+
+    let _ = std::fs::remove_file(pending_path);
+    if let Err(error) = write_desktop_background_snapshot(&source_path, pending_path) {
+        let _ = std::fs::remove_file(pending_path);
+        return Err(error);
+    }
+
+    if output_path.exists() {
+        std::fs::remove_file(output_path)
+            .map_err(|err| format!("Failed to replace current desktop background: {err}"))?;
+    }
+
+    std::fs::rename(pending_path, output_path)
+        .map_err(|err| format!("Failed to store current desktop background: {err}"))?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn current_desktop_background_source_path(display_id: Option<&str>) -> Option<PathBuf> {
+    use cocoa::appkit::NSScreen;
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSString;
+    use objc::{class, msg_send, sel, sel_impl};
+    use std::ffi::CStr;
+
+    unsafe {
+        let screen =
+            macos_screen_for_display_id(display_id).unwrap_or_else(|| NSScreen::mainScreen(nil));
+        if screen == nil {
+            return None;
+        }
+
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        if workspace == nil {
+            return None;
+        }
+
+        let url: id = msg_send![workspace, desktopImageURLForScreen: screen];
+        if url == nil {
+            return None;
+        }
+
+        let path: id = msg_send![url, path];
+        if path == nil {
+            return None;
+        }
+
+        let path = CStr::from_ptr(NSString::UTF8String(path))
+            .to_string_lossy()
+            .to_string();
+        (!path.is_empty()).then(|| PathBuf::from(path))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_screen_for_display_id(display_id: Option<&str>) -> Option<cocoa::base::id> {
+    use cocoa::appkit::NSScreen;
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::{NSArray, NSDictionary, NSString};
+    use objc::{msg_send, sel, sel_impl};
+
+    let expected_id = display_id?.parse::<u32>().ok()?;
+
+    unsafe {
+        let screens = NSScreen::screens(nil);
+        if screens == nil {
+            return None;
+        }
+
+        let screen_number_key = NSString::alloc(nil).init_str("NSScreenNumber");
+        for index in 0..NSArray::count(screens) {
+            let screen: id = screens.objectAtIndex(index);
+            if screen == nil {
+                continue;
+            }
+
+            let device_description = NSScreen::deviceDescription(screen);
+            let number = NSDictionary::valueForKey_(device_description, screen_number_key) as id;
+            if number == nil {
+                continue;
+            }
+
+            let number_value: u32 = msg_send![number, unsignedIntValue];
+            if number_value == expected_id {
+                return Some(screen);
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn current_desktop_background_source_path(_display_id: Option<&str>) -> Option<PathBuf> {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SPI_GETDESKWALLPAPER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    };
+
+    let mut buffer = vec![0u16; 32_768];
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETDESKWALLPAPER,
+            u32::try_from(buffer.len()).ok()?,
+            Some(buffer.as_mut_ptr().cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .ok()?;
+    }
+
+    let len = buffer
+        .iter()
+        .position(|character| *character == 0)
+        .unwrap_or(buffer.len());
+    (len > 0).then(|| PathBuf::from(OsString::from_wide(&buffer[..len])))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn current_desktop_background_source_path(_display_id: Option<&str>) -> Option<PathBuf> {
+    None
+}
+
+fn desktop_background_source_requires_user_prompt(source_path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        dirs::home_dir().is_some_and(|home_dir| {
+            desktop_background_source_requires_user_prompt_for_home(source_path, &home_dir)
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = source_path;
+        false
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn desktop_background_source_requires_user_prompt_for_home(
+    source_path: &Path,
+    home_dir: &Path,
+) -> bool {
+    [
+        home_dir.join("Desktop"),
+        home_dir.join("Documents"),
+        home_dir.join("Downloads"),
+        home_dir.join("Library/Mobile Documents"),
+        home_dir.join("Library/CloudStorage"),
+    ]
+    .iter()
+    .any(|protected_dir| source_path.starts_with(protected_dir))
+}
+
+#[cfg(target_os = "macos")]
+fn write_desktop_background_snapshot(source_path: &Path, output_path: &Path) -> Result<(), String> {
+    let sips_result = std::process::Command::new("sips")
+        .arg("-s")
+        .arg("format")
+        .arg("jpeg")
+        .arg(source_path)
+        .arg("--out")
+        .arg(output_path)
+        .output();
+
+    if let Ok(output) = sips_result
+        && output.status.success()
+    {
+        return Ok(());
+    }
+
+    write_desktop_background_snapshot_with_image_crate(source_path, output_path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_desktop_background_snapshot(source_path: &Path, output_path: &Path) -> Result<(), String> {
+    write_desktop_background_snapshot_with_image_crate(source_path, output_path)
+}
+
+fn write_desktop_background_snapshot_with_image_crate(
+    source_path: &Path,
+    output_path: &Path,
+) -> Result<(), String> {
+    let image = image::open(source_path)
+        .map_err(|err| format!("Failed to decode current desktop background: {err}"))?;
+    image
+        .to_rgb8()
+        .save_with_format(output_path, image::ImageFormat::Jpeg)
+        .map_err(|err| format!("Failed to save current desktop background: {err}"))
+}
+
 #[derive(Clone)]
 pub struct InProgressRecordingCommon {
     pub target_name: String,
@@ -529,6 +853,26 @@ pub struct StartRecordingInputs {
     pub mode: RecordingMode,
     #[serde(default)]
     pub organization_id: Option<String>,
+}
+
+fn desktop_recording_defaults(
+    general_settings: Option<&GeneralSettingsStore>,
+) -> cap_recording::RecordingDefaults {
+    // Build straight from the user's persisted settings when present so we don't run the RAM probe
+    // behind `RecordingDefaults::default()` only to immediately overwrite every field; fall back to
+    // the probing default (e.g. first launch before settings are written).
+    match general_settings {
+        Some(settings) => cap_recording::RecordingDefaults {
+            custom_cursor_capture: settings.custom_cursor_capture,
+            capture_keyboard_events: settings.capture_keyboard_events,
+            crash_recovery_recording: settings.crash_recovery_recording,
+            max_fps: settings.max_fps,
+            studio_recording_quality: settings.studio_recording_quality.into(),
+            out_of_process_muxer: settings.out_of_process_muxer,
+            instant_mode_max_resolution: settings.instant_mode_max_resolution,
+        },
+        None => cap_recording::RecordingDefaults::default(),
+    }
 }
 
 #[derive(Deserialize, Type, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1189,62 +1533,18 @@ pub async fn start_recording(
                         selected_mic_settings,
                     )
                     .await?;
+                    let defaults = desktop_recording_defaults(general_settings.as_ref());
 
                     match inputs.mode {
                         RecordingMode::Studio => {
-                            let max_fps =
-                                general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60);
-                            let max_fps = if camera_feed.is_some() {
-                                max_fps.min(30)
-                            } else {
-                                max_fps
-                            };
-                            let mut builder = studio_recording::Actor::builder(
-                                recording_dir.clone(),
-                                inputs.capture_target.clone(),
-                            )
-                            .with_system_audio(inputs.capture_system_audio)
-                            .with_custom_cursor(
-                                general_settings
-                                    .as_ref()
-                                    .map(|s| s.custom_cursor_capture)
-                                    .unwrap_or_default(),
-                            )
-                            .with_keyboard_capture(
-                                general_settings
-                                    .as_ref()
-                                    .map(|s| s.capture_keyboard_events)
-                                    .unwrap_or(true),
-                            )
-                            .with_fragmented(
-                                general_settings
-                                    .as_ref()
-                                    .map(|s| s.crash_recovery_recording)
-                                    .unwrap_or(true),
-                            )
-                            .with_out_of_process_muxer(
-                                general_settings
-                                    .as_ref()
-                                    .map(|s| s.out_of_process_muxer)
-                                    .unwrap_or(false),
-                            )
-                            .with_max_fps(max_fps)
-                            .with_quality(
-                                match general_settings
-                                    .as_ref()
-                                    .map(|s| s.studio_recording_quality)
-                                    .unwrap_or_default()
-                                {
-                                    crate::general_settings::StudioRecordingQuality::Compatibility => {
-                                        cap_recording::StudioQuality::Compatibility
-                                    }
-                                    crate::general_settings::StudioRecordingQuality::Balanced => {
-                                        cap_recording::StudioQuality::Balanced
-                                    }
-                                    crate::general_settings::StudioRecordingQuality::Ultra => {
-                                        cap_recording::StudioQuality::Ultra
-                                    }
-                                },
+                            let mut builder = defaults.apply_to_studio_builder(
+                                studio_recording::Actor::builder(
+                                    recording_dir.clone(),
+                                    inputs.capture_target.clone(),
+                                )
+                                .with_system_audio(inputs.capture_system_audio),
+                                camera_feed.is_some(),
+                                None,
                             );
 
                             #[cfg(target_os = "macos")]
@@ -1288,12 +1588,7 @@ pub async fn start_recording(
                                 inputs.capture_target.clone(),
                             )
                             .with_system_audio(inputs.capture_system_audio)
-                            .with_max_output_size(
-                                general_settings
-                                    .as_ref()
-                                    .map(|settings| settings.instant_mode_max_resolution)
-                                    .unwrap_or(1920),
-                            );
+                            .with_max_output_size(defaults.instant_mode_max_resolution);
 
                             #[cfg(target_os = "macos")]
                             {
@@ -1425,6 +1720,13 @@ pub async fn start_recording(
             return Err(message);
         }
     };
+
+    if matches!(inputs.mode, RecordingMode::Studio) {
+        spawn_current_desktop_background_snapshot(
+            project_file_path.clone(),
+            inputs.capture_target.clone(),
+        );
+    }
 
     let _ = RecordingEvent::Started.emit(&app);
     let _ = RecordingStarted.emit(&app);
@@ -2515,6 +2817,7 @@ async fn handle_recording_finish(
                 &recordings,
                 PresetsStore::get_default_preset(app)?.map(|p| p.config),
                 Some(&capture_target),
+                stored_current_desktop_background_path(&recording_dir),
             );
 
             config.write(&recording_dir).map_err(|e| e.to_string())?;
@@ -2759,6 +3062,7 @@ async fn finalize_studio_recording(
         &recordings,
         default_preset,
         capture_target.as_ref(),
+        stored_current_desktop_background_path(&recording_dir),
     );
 
     config
@@ -2914,6 +3218,7 @@ fn project_config_from_recording(
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
     capture_target: Option<&ScreenCaptureTarget>,
+    stored_desktop_background_path: Option<String>,
 ) -> ProjectConfiguration {
     let settings = GeneralSettingsStore::get(app)
         .unwrap_or(None)
@@ -2922,7 +3227,13 @@ fn project_config_from_recording(
     let using_default_config = default_config.is_none();
     let mut config = default_config.unwrap_or_default();
     config.cursor.size = cap_project::CursorConfiguration::default().size;
-    apply_recording_presentation_defaults(app, &mut config, capture_target, using_default_config);
+    apply_recording_presentation_defaults(
+        app,
+        &mut config,
+        capture_target,
+        using_default_config,
+        stored_desktop_background_path,
+    );
 
     let camera_preview_manager = CameraPreviewManager::new(app);
     if let Ok(camera_preview_state) = camera_preview_manager.get_state() {
@@ -2982,12 +3293,15 @@ fn apply_recording_presentation_defaults(
     config: &mut ProjectConfiguration,
     capture_target: Option<&ScreenCaptureTarget>,
     using_default_config: bool,
+    stored_desktop_background_path: Option<String>,
 ) {
     let default_wallpaper_path = if using_default_config {
-        app.path()
-            .resolve("assets/backgrounds/cities/sf.jpg", BaseDirectory::Resource)
-            .ok()
-            .map(|path| path.to_string_lossy().into_owned())
+        stored_desktop_background_path.or_else(|| {
+            app.path()
+                .resolve("assets/backgrounds/cities/sf.jpg", BaseDirectory::Resource)
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
     } else {
         None
     };
@@ -2999,6 +3313,8 @@ fn apply_recording_presentation_defaults(
         default_wallpaper_path,
     );
 }
+
+const DEFAULT_SCREEN_RECORDING_BACKGROUND_ROUNDING_PERCENT: f64 = 7.5;
 
 fn apply_screen_recording_presentation_defaults(
     config: &mut ProjectConfiguration,
@@ -3032,7 +3348,7 @@ fn apply_screen_recording_presentation_defaults(
         Some(ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::Display { .. })
     ) && config.background.rounding <= f64::EPSILON
     {
-        config.background.rounding = 2.0;
+        config.background.rounding = DEFAULT_SCREEN_RECORDING_BACKGROUND_ROUNDING_PERCENT;
     }
 
     if (config.screen_movement_spring.stiffness - 120.0).abs() < f32::EPSILON
@@ -3186,7 +3502,7 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
     use crate::posthog::{PostHogEvent, async_capture_event};
     use crate::recording_telemetry::{mode_label, target_kind_label};
 
-    let (mode, target_kind, has_camera, has_mic, has_system_audio) = {
+    let (mode, recording_mode, target_kind, has_camera, has_mic, has_system_audio) = {
         let state = state_mtx.read().await;
         let Some(recording) = state.current_recording() else {
             return;
@@ -3199,6 +3515,7 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
         };
         (
             mode_label(inputs.mode),
+            inputs.mode,
             target_kind,
             has_camera,
             state.selected_mic_label.is_some(),
@@ -3207,15 +3524,17 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
     };
 
     let general = GeneralSettingsStore::get(app).ok().flatten();
-    let fragmented = general
-        .as_ref()
-        .map(|s| s.crash_recovery_recording)
-        .unwrap_or(true);
-    let custom_cursor_capture = general
-        .as_ref()
-        .map(|s| s.custom_cursor_capture)
-        .unwrap_or(true);
-    let target_fps = general.as_ref().map(|s| s.max_fps).unwrap_or(60);
+    let defaults = desktop_recording_defaults(general.as_ref());
+    let fragmented = defaults.crash_recovery_recording;
+    let custom_cursor_capture = defaults.custom_cursor_capture;
+    // Studio applies the camera fps clamp via `apply_to_studio_builder`; Instant records screen at a
+    // fixed fps, so report the value each mode actually uses rather than the raw studio cap.
+    let target_fps = match recording_mode {
+        RecordingMode::Studio => defaults.studio_max_fps(has_camera, None),
+        RecordingMode::Instant | RecordingMode::Screenshot => {
+            cap_recording::DEFAULT_INSTANT_MODE_FPS
+        }
+    };
 
     async_capture_event(
         app,
@@ -3394,6 +3713,28 @@ mod tests {
     }
 
     #[test]
+    fn skips_desktop_background_paths_that_can_trigger_macos_prompts() {
+        let home = Path::new("/Users/test");
+
+        assert!(desktop_background_source_requires_user_prompt_for_home(
+            Path::new("/Users/test/Downloads/wallpaper.jpg"),
+            home
+        ));
+        assert!(desktop_background_source_requires_user_prompt_for_home(
+            Path::new("/Users/test/Library/CloudStorage/iCloud Drive/wallpaper.jpg"),
+            home
+        ));
+        assert!(!desktop_background_source_requires_user_prompt_for_home(
+            Path::new("/Users/test/Pictures/wallpaper.jpg"),
+            home
+        ));
+        assert!(!desktop_background_source_requires_user_prompt_for_home(
+            Path::new("/System/Library/Desktop Pictures/wallpaper.jpg"),
+            home
+        ));
+    }
+
+    #[test]
     fn skips_screen_presentation_defaults_for_camera_only_recordings() {
         let mut config = ProjectConfiguration::default();
 
@@ -3429,7 +3770,7 @@ mod tests {
         );
 
         assert_eq!(config.background.padding, 10.0);
-        assert_eq!(config.background.rounding, 2.0);
+        assert_eq!(config.background.rounding, 7.5);
         assert!(matches!(
             config.background.source,
             cap_project::BackgroundSource::Wallpaper { path: Some(path) } if path == "wallpaper.jpg"
@@ -3450,7 +3791,7 @@ mod tests {
             Some("wallpaper.jpg".to_string()),
         );
 
-        assert_eq!(config.background.rounding, 2.0);
+        assert_eq!(config.background.rounding, 7.5);
         assert!(config.background.border.is_none());
     }
 

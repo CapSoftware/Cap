@@ -1,8 +1,8 @@
 use anyhow::Result;
 use cap_project::{
     AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, CornerStyle, Crop,
-    CursorEvents, CursorType, MaskKind, ProjectConfiguration, RecordingMeta, StudioRecordingMeta,
-    XY,
+    CursorEvents, CursorType, MaskKind, ProjectConfiguration, RecordingMeta, SceneMode,
+    StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -1686,6 +1686,90 @@ impl RenderVideoConstants {
     }
 }
 
+/// One pane of the split-screen layout. `target` is the fully-split destination
+/// rect in output px `[x0,y0,x1,y1]`. The crop is NOT stored as a fixed rect —
+/// during the morph it is re-derived each frame from the *current* (lerped)
+/// target's aspect so crop aspect always equals target aspect (no distortion);
+/// `focal`/`zoom` (within `src_origin`+`src_size`, the source sub-region in frame
+/// px) are blended from identity toward these as the morph completes. `crop` is
+/// the fully-split crop, kept only for the cursor remap.
+#[derive(Clone, Copy, Debug)]
+pub struct SplitPaneLayout {
+    pub target: [f32; 4],
+    pub crop: [f32; 4],
+    pub focal: [f32; 2],
+    pub zoom: f32,
+    pub src_origin: [f32; 2],
+    pub src_size: [f32; 2],
+}
+
+impl SplitPaneLayout {
+    /// Crop matching `target_t`'s aspect, with focal/zoom blended from identity
+    /// (centre, 1.0) toward this pane's values by `t`. At `t == 0` this
+    /// reproduces the layer's pre-split crop (full source at the pre-split
+    /// aspect); at `t == 1` it is the fully-split crop.
+    fn crop_for(&self, target_t: [f32; 4], t: f32) -> [f32; 4] {
+        let aspect = (target_t[2] - target_t[0]) / (target_t[3] - target_t[1]).max(f32::EPSILON);
+        let focal = [
+            lerp_f32(0.5, self.focal[0], t),
+            lerp_f32(0.5, self.focal[1], t),
+        ];
+        let zoom = lerp_f32(1.0, self.zoom, t);
+        fit_crop_to_target(self.src_origin, self.src_size, aspect, focal, zoom)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SplitLayoutComputed {
+    pub screen: SplitPaneLayout,
+    pub camera: SplitPaneLayout,
+    /// 0..1 morph amount; the layers lerp from their normal layout toward these
+    /// panes by this factor, giving the fade in/out at segment boundaries.
+    pub factor: f64,
+}
+
+fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+fn lerp_bounds(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        lerp_f32(a[0], b[0], t),
+        lerp_f32(a[1], b[1], t),
+        lerp_f32(a[2], b[2], t),
+        lerp_f32(a[3], b[3], t),
+    ]
+}
+
+/// Largest centred crop of `src` (origin+size, frame px) matching `target_aspect`
+/// (aspect-fill, no letterboxing), then tightened by `zoom` (>=1 zooms in) and
+/// recentred on the normalized `focal` point, clamped to stay inside `src`.
+/// Mirrors the camera-only fill-crop derivation, generalized with pan + zoom.
+fn fit_crop_to_target(
+    src_origin: [f32; 2],
+    src_size: [f32; 2],
+    target_aspect: f32,
+    focal: [f32; 2],
+    zoom: f32,
+) -> [f32; 4] {
+    let src_aspect = src_size[0] / src_size[1].max(f32::EPSILON);
+    let (base_w, base_h) = if src_aspect > target_aspect {
+        (src_size[1] * target_aspect, src_size[1])
+    } else {
+        (src_size[0], src_size[0] / target_aspect.max(f32::EPSILON))
+    };
+    let zoom = zoom.max(0.01);
+    let w = (base_w / zoom).min(src_size[0]);
+    let h = (base_h / zoom).min(src_size[1]);
+    let focal_px = [
+        src_origin[0] + focal[0].clamp(0.0, 1.0) * src_size[0],
+        src_origin[1] + focal[1].clamp(0.0, 1.0) * src_size[1],
+    ];
+    let x0 = (focal_px[0] - w * 0.5).clamp(src_origin[0], src_origin[0] + src_size[0] - w);
+    let y0 = (focal_px[1] - h * 0.5).clamp(src_origin[1], src_origin[1] + src_size[1] - h);
+    [x0, y0, x0 + w, y0 + h]
+}
+
 #[derive(Clone, Debug)]
 pub struct ProjectUniforms {
     pub output_size: (u32, u32),
@@ -1702,6 +1786,7 @@ pub struct ProjectUniforms {
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
     pub scene: InterpolatedScene,
+    pub split: Option<SplitLayoutComputed>,
     pub resolution_base: XY<u32>,
     pub display_parent_motion_px: XY<f32>,
     pub motion_blur_amount: f32,
@@ -1969,6 +2054,11 @@ fn normalized_motion_amount(user_motion_blur: f32, fps: f32) -> f32 {
 }
 
 const CAMERA_PADDING: f32 = 50.0;
+
+/// Output aspect ratio at/above which split-screen lays the screen and camera
+/// side-by-side (left/right). Below it (portrait/narrow output) the panes stack
+/// top/bottom instead.
+const SPLIT_STACK_ASPECT_THRESHOLD: f32 = 1.0;
 
 const SCREEN_MAX_PADDING: f64 = 0.4;
 
@@ -2713,6 +2803,94 @@ impl ProjectUniforms {
             scene_segments,
         ));
 
+        // Resolve the side-by-side layout once and share it with the display,
+        // camera and cursor layers. Only engages when a camera actually exists;
+        // otherwise the layers render normally (graceful full-screen fallback).
+        let split_layout: Option<SplitLayoutComputed> = if scene.is_split() {
+            options
+                .camera_size
+                .filter(|_| !project.camera.hide)
+                .map(|camera_size| {
+                    let out_w = output_size.0 as f32;
+                    let out_h = output_size.1 as f32;
+                    let horizontal =
+                        (out_w / out_h.max(f32::EPSILON)) >= SPLIT_STACK_ASPECT_THRESHOLD;
+
+                    let (screen_target, camera_target) = if horizontal {
+                        let mid = out_w * 0.5;
+                        ([0.0, 0.0, mid, out_h], [mid, 0.0, out_w, out_h])
+                    } else {
+                        let mid = out_h * 0.5;
+                        ([0.0, 0.0, out_w, mid], [0.0, mid, out_w, out_h])
+                    };
+
+                    let params = scene_segments
+                        .iter()
+                        .find(|s| {
+                            matches!(s.mode, SceneMode::SplitScreen)
+                                && (frame_time as f64) >= s.start - s.transition_in.max(0.0)
+                                && (frame_time as f64) < s.end + s.transition_out.max(0.0)
+                        })
+                        .and_then(|s| s.split_layout)
+                        .unwrap_or_default();
+
+                    let screen_src_origin = [crop.position.x as f32, crop.position.y as f32];
+                    let screen_src_size = [crop.size.x as f32, crop.size.y as f32];
+                    let camera_src_size = [camera_size.x as f32, camera_size.y as f32];
+
+                    let screen = SplitPaneLayout {
+                        target: screen_target,
+                        crop: fit_crop_to_target(
+                            screen_src_origin,
+                            screen_src_size,
+                            (screen_target[2] - screen_target[0])
+                                / (screen_target[3] - screen_target[1]).max(f32::EPSILON),
+                            [
+                                params.screen_position.x as f32,
+                                params.screen_position.y as f32,
+                            ],
+                            params.screen_zoom as f32,
+                        ),
+                        focal: [
+                            params.screen_position.x as f32,
+                            params.screen_position.y as f32,
+                        ],
+                        zoom: params.screen_zoom as f32,
+                        src_origin: screen_src_origin,
+                        src_size: screen_src_size,
+                    };
+                    let camera = SplitPaneLayout {
+                        target: camera_target,
+                        crop: fit_crop_to_target(
+                            [0.0, 0.0],
+                            camera_src_size,
+                            (camera_target[2] - camera_target[0])
+                                / (camera_target[3] - camera_target[1]).max(f32::EPSILON),
+                            [
+                                params.camera_position.x as f32,
+                                params.camera_position.y as f32,
+                            ],
+                            params.camera_zoom as f32,
+                        ),
+                        focal: [
+                            params.camera_position.x as f32,
+                            params.camera_position.y as f32,
+                        ],
+                        zoom: params.camera_zoom as f32,
+                        src_origin: [0.0, 0.0],
+                        src_size: camera_src_size,
+                    };
+
+                    SplitLayoutComputed {
+                        screen,
+                        camera,
+                        factor: scene.split_factor,
+                    }
+                })
+        } else {
+            None
+        };
+
         let (display, display_motion_parent) = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
             let size = [options.screen_size.x as f32, options.screen_size.y as f32];
@@ -2734,8 +2912,6 @@ impl ProjectUniforms {
             let (prev_start, prev_end) =
                 Self::display_bounds(&motion_prev_zoom, display_offset, display_size, output_size);
 
-            let target_size = (end - start).coord;
-            let min_target_axis = target_size.x.min(target_size.y);
             let scene_blur_strength = (scene.screen_blur as f32 * 0.8).min(1.2);
 
             let display_motion = Self::compute_display_motion_blur(
@@ -2749,20 +2925,43 @@ impl ProjectUniforms {
             let descriptor = display_motion.descriptor;
             let display_parent_motion_px = display_motion.parent_movement_px;
 
+            // Morph the screen toward its split-screen half (and its
+            // aspect-matched crop) by the scene's split factor; the normal
+            // full-frame rect is untouched when not splitting (split_t == 0).
+            let base_target_bounds = [start.x as f32, start.y as f32, end.x as f32, end.y as f32];
+            let base_crop_bounds = [
+                crop_start.x as f32,
+                crop_start.y as f32,
+                crop_end.x as f32,
+                crop_end.y as f32,
+            ];
+            let split_t = split_layout.as_ref().map_or(0.0, |s| s.factor as f32);
+            let split_fade = 1.0 - split_t;
+            let final_target_bounds = split_layout.as_ref().map_or(base_target_bounds, |s| {
+                lerp_bounds(base_target_bounds, s.screen.target, split_t)
+            });
+            // Derive the crop from the CURRENT (lerped) target aspect so crop
+            // aspect always equals target aspect during the morph — a linear
+            // crop lerp would distort the image mid-transition.
+            let final_crop_bounds = split_layout.as_ref().map_or(base_crop_bounds, |s| {
+                s.screen.crop_for(final_target_bounds, split_t)
+            });
+            let final_target_size = [
+                final_target_bounds[2] - final_target_bounds[0],
+                final_target_bounds[3] - final_target_bounds[1],
+            ];
+            let final_min_axis = final_target_size[0].min(final_target_size[1]) as f64;
+
             (
                 CompositeVideoFrameUniforms {
                     output_size: [output_size.x as f32, output_size.y as f32],
                     frame_size: size,
-                    crop_bounds: [
-                        crop_start.x as f32,
-                        crop_start.y as f32,
-                        crop_end.x as f32,
-                        crop_end.y as f32,
-                    ],
-                    target_bounds: [start.x as f32, start.y as f32, end.x as f32, end.y as f32],
-                    target_size: [target_size.x as f32, target_size.y as f32],
-                    rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis)
-                        as f32,
+                    crop_bounds: final_crop_bounds,
+                    target_bounds: final_target_bounds,
+                    target_size: final_target_size,
+                    rounding_px: (project.background.rounding / 100.0 * 0.5 * final_min_axis)
+                        as f32
+                        * split_fade,
                     rounding_type: rounding_type_value(project.background.rounding_type),
                     mirror_x: 0.0,
                     motion_blur_vector: descriptor.movement_vector_uv,
@@ -2773,7 +2972,7 @@ impl ProjectUniforms {
                         descriptor.zoom_amount,
                         0.0,
                     ],
-                    shadow: project.background.shadow,
+                    shadow: project.background.shadow * split_fade,
                     shadow_size: project
                         .background
                         .advanced_shadow
@@ -2783,7 +2982,8 @@ impl ProjectUniforms {
                         .background
                         .advanced_shadow
                         .as_ref()
-                        .map_or(18.0, |s| s.opacity),
+                        .map_or(18.0, |s| s.opacity)
+                        * split_fade,
                     shadow_blur: project
                         .background
                         .advanced_shadow
@@ -2928,16 +3128,34 @@ impl ProjectUniforms {
                     }
                 };
 
+                // Morph the camera from its PiP overlay toward its split-screen
+                // half by the split factor. The crop is re-derived from the
+                // current (lerped) target's aspect so it never distorts: at
+                // t == 0 it reproduces the shape crop (square center-crop /
+                // source), at t == 1 it is the aspect-fill split crop.
+                let split_t = split_layout.as_ref().map_or(0.0, |s| s.factor as f32);
+                let split_fade = 1.0 - split_t;
+                let final_target_bounds = split_layout.as_ref().map_or(target_bounds, |s| {
+                    lerp_bounds(target_bounds, s.camera.target, split_t)
+                });
+                let final_crop_bounds = split_layout.as_ref().map_or(crop_bounds, |s| {
+                    s.camera.crop_for(final_target_bounds, split_t)
+                });
+                let final_target_size = [
+                    final_target_bounds[2] - final_target_bounds[0],
+                    final_target_bounds[3] - final_target_bounds[1],
+                ];
+
                 CompositeVideoFrameUniforms {
                     output_size,
                     frame_size,
-                    crop_bounds,
-                    target_bounds,
-                    target_size: [
-                        target_bounds[2] - target_bounds[0],
-                        target_bounds[3] - target_bounds[1],
-                    ],
-                    rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]),
+                    crop_bounds: final_crop_bounds,
+                    target_bounds: final_target_bounds,
+                    target_size: final_target_size,
+                    rounding_px: project.camera.rounding / 100.0
+                        * 0.5
+                        * final_target_size[0].min(final_target_size[1])
+                        * split_fade,
                     rounding_type: rounding_type_value(project.camera.rounding_type),
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     motion_blur_vector: camera_descriptor.movement_vector_uv,
@@ -2948,7 +3166,7 @@ impl ProjectUniforms {
                         camera_descriptor.zoom_amount,
                         0.0,
                     ],
-                    shadow: project.camera.shadow,
+                    shadow: project.camera.shadow * split_fade,
                     shadow_size: project
                         .camera
                         .advanced_shadow
@@ -2958,7 +3176,8 @@ impl ProjectUniforms {
                         .camera
                         .advanced_shadow
                         .as_ref()
-                        .map_or(18.0, |s| s.opacity),
+                        .map_or(18.0, |s| s.opacity)
+                        * split_fade,
                     shadow_blur: project
                         .camera
                         .advanced_shadow
@@ -3094,6 +3313,7 @@ impl ProjectUniforms {
             project: project.clone(),
             zoom,
             scene,
+            split: split_layout,
             interpolated_cursor,
             frame_rate: fps,
             frame_number,

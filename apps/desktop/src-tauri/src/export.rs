@@ -11,6 +11,7 @@ use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::any::Any;
+use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::{
     collections::HashMap,
@@ -21,6 +22,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 use tokio::io::AsyncBufReadExt;
 use tokio_util::sync::CancellationToken;
@@ -48,6 +50,54 @@ fn export_panic_error(panic: Box<dyn Any + Send>) -> String {
         sentry::Level::Error,
     );
     "Export failed unexpectedly".to_string()
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+async fn run_export_command<T, F, Fut>(make_future: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = Result<T, String>> + 'static,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    // Windows release builds can stack-overflow in Tauri's IPC command entry before the save
+    // dialog or exporter sidecar starts. Keep the export future off that command-entry stack.
+    std::thread::Builder::new()
+        .name("cap-export-command".to_string())
+        .stack_size(EXPORT_COMMAND_THREAD_STACK_SIZE)
+        .spawn(move || {
+            let result = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime.block_on(async move {
+                    match AssertUnwindSafe(make_future()).catch_unwind().await {
+                        Ok(result) => result,
+                        Err(panic) => Err(export_panic_error(panic)),
+                    }
+                }),
+                Err(err) => Err(format!("Failed to build export command runtime: {err}")),
+            };
+
+            let _ = tx.send(result);
+        })
+        .map_err(|err| format!("Failed to spawn export command thread: {err}"))?;
+
+    rx.await
+        .map_err(|err| format!("Export command thread stopped: {err}"))?
+}
+
+#[cfg(not(all(windows, not(debug_assertions))))]
+async fn run_export_command<T, F, Fut>(make_future: F) -> Result<T, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<T, String>>,
+{
+    match AssertUnwindSafe(make_future()).catch_unwind().await {
+        Ok(result) => result,
+        Err(panic) => Err(export_panic_error(panic)),
+    }
 }
 
 async fn run_protected_export(
@@ -86,9 +136,14 @@ async fn run_protected_export(
 
 const EXPORTER_STDERR_TAIL_LIMIT: usize = 80;
 const EXPORT_PROGRESS_FORWARD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+#[cfg(all(windows, not(debug_assertions)))]
+const EXPORT_COMMAND_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 static ACTIVE_EXPORT_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_EXPORT_CANCELLATIONS: LazyLock<Mutex<HashMap<String, ActiveExportCancellation>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static ACTIVE_EXPORT_WINDOW_SESSIONS: LazyLock<Mutex<HashMap<String, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_EXPORT_COMMAND_ID: AtomicUsize = AtomicUsize::new(1);
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -123,6 +178,12 @@ impl ExportWorkerMode {
 
 #[derive(Clone)]
 struct ExportProgress(tauri::ipc::Channel<FramesRendered>);
+
+struct ExportSaveDialogRequest {
+    app: tauri::AppHandle,
+    file_name: String,
+    file_type: String,
+}
 
 impl ExportProgress {
     fn send(&self, progress: FramesRendered) -> bool {
@@ -205,6 +266,18 @@ fn active_export_cancellations() -> MutexGuard<'static, HashMap<String, ActiveEx
     }
 }
 
+fn active_export_window_sessions() -> MutexGuard<'static, HashMap<String, usize>> {
+    match ACTIVE_EXPORT_WINDOW_SESSIONS.lock() {
+        Ok(guard) => guard,
+        Err(err) => err.into_inner(),
+    }
+}
+
+fn next_export_command_id(prefix: &str) -> String {
+    let id = NEXT_EXPORT_COMMAND_ID.fetch_add(1, Ordering::AcqRel);
+    format!("{prefix}-{id}")
+}
+
 fn cancel_export_by_id(export_id: &str) -> bool {
     let cancellations = active_export_cancellations();
     if let Some(active_export) = cancellations.get(export_id) {
@@ -216,20 +289,50 @@ fn cancel_export_by_id(export_id: &str) -> bool {
 }
 
 pub fn cancel_exports_for_window(window_label: &str) {
-    let cancellations = active_export_cancellations();
-    let mut cancelled_count = 0;
+    let tokens = {
+        let cancellations = active_export_cancellations();
+        cancellations
+            .values()
+            .filter(|active_export| active_export.window_label.as_deref() == Some(window_label))
+            .map(|active_export| active_export.token.clone())
+            .collect::<Vec<_>>()
+    };
 
-    for active_export in cancellations.values() {
-        if active_export.window_label.as_deref() == Some(window_label) {
-            active_export.token.cancel();
-            cancelled_count += 1;
-        }
+    for token in &tokens {
+        token.cancel();
     }
 
-    if cancelled_count > 0 {
+    let released_sessions = release_export_sessions_for_window(window_label);
+
+    if !tokens.is_empty() || released_sessions > 0 {
         info!(
             window = window_label,
-            cancelled_count, "Cancelled window exports"
+            cancelled_count = tokens.len(),
+            released_sessions,
+            "Cancelled window exports"
+        );
+    }
+}
+
+pub fn cancel_all_exports() {
+    let tokens = {
+        let cancellations = active_export_cancellations();
+        cancellations
+            .values()
+            .map(|active_export| active_export.token.clone())
+            .collect::<Vec<_>>()
+    };
+
+    for token in &tokens {
+        token.cancel();
+    }
+
+    let released_sessions = release_all_window_export_sessions();
+
+    if !tokens.is_empty() || released_sessions > 0 {
+        info!(
+            cancelled_count = tokens.len(),
+            released_sessions, "Cancelled active exports"
         );
     }
 }
@@ -239,6 +342,13 @@ pub fn cancel_exports_for_window(window_label: &str) {
 #[instrument]
 pub fn cancel_export(export_id: String) -> bool {
     cancel_export_by_id(&export_id)
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(window))]
+pub fn cancel_current_window_exports(window: tauri::Window) {
+    cancel_exports_for_window(window.label());
 }
 
 fn retain_export_session() {
@@ -276,16 +386,71 @@ pub fn export_session_active() -> bool {
     ACTIVE_EXPORT_SESSIONS.load(Ordering::Acquire) > 0
 }
 
-#[tauri::command]
-#[specta::specta]
-pub fn begin_export_session() {
+fn retain_export_session_for_window(window_label: &str) {
     retain_export_session();
+    let mut sessions = active_export_window_sessions();
+    *sessions.entry(window_label.to_string()).or_insert(0) += 1;
+}
+
+fn release_export_session_for_window(window_label: &str) {
+    let should_release = {
+        let mut sessions = active_export_window_sessions();
+        if let Some(count) = sessions.get_mut(window_label) {
+            *count -= 1;
+            if *count == 0 {
+                sessions.remove(window_label);
+            }
+            true
+        } else {
+            false
+        }
+    };
+
+    if should_release {
+        release_export_session();
+    } else {
+        tracing::warn!(
+            window = window_label,
+            "Export session guard release requested with no active window export"
+        );
+    }
+}
+
+fn release_export_sessions_for_window(window_label: &str) -> usize {
+    let count = active_export_window_sessions()
+        .remove(window_label)
+        .unwrap_or(0);
+
+    for _ in 0..count {
+        release_export_session();
+    }
+
+    count
+}
+
+fn release_all_window_export_sessions() -> usize {
+    let count = active_export_window_sessions()
+        .drain()
+        .map(|(_, count)| count)
+        .sum::<usize>();
+
+    for _ in 0..count {
+        release_export_session();
+    }
+
+    count
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn end_export_session() {
-    release_export_session();
+pub fn begin_export_session(window: tauri::Window) {
+    retain_export_session_for_window(window.label());
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn end_export_session(window: tauri::Window) {
+    release_export_session_for_window(window.label());
 }
 
 struct ExportSessionGuard;
@@ -318,10 +483,7 @@ async fn run_out_of_process_export(
     force_ffmpeg: bool,
     cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
-    let mode = ExportWorkerMode::HardwareOptimized;
-    // Windows GPU drivers, MediaFoundation, and encoder DLLs can abort the process on failure.
-    // Keep the first fast hardware attempt in the worker, then retry in software-safe mode so
-    // the desktop process never owns the crash-prone export pipeline.
+    let mode = initial_export_worker_mode();
     match run_out_of_process_export_attempt(
         project_path,
         settings,
@@ -333,7 +495,7 @@ async fn run_out_of_process_export(
     .await
     {
         Ok(path) => Ok(path),
-        Err(e) if e != "Export cancelled" => {
+        Err(e) if e != "Export cancelled" && !mode.is_software_safe() => {
             error!(
                 error = %e,
                 "Export worker failed, retrying with software rendering and encoding"
@@ -349,6 +511,14 @@ async fn run_out_of_process_export(
             .await
         }
         Err(e) => Err(e),
+    }
+}
+
+fn initial_export_worker_mode() -> ExportWorkerMode {
+    if should_start_export_worker_in_software_safe_mode() {
+        ExportWorkerMode::SoftwareSafe
+    } else {
+        ExportWorkerMode::HardwareOptimized
     }
 }
 
@@ -545,13 +715,19 @@ fn resolve_exporter_binary() -> Result<PathBuf, String> {
 }
 
 fn exporter_binary_candidates(root: &Path) -> Vec<PathBuf> {
-    let mut candidates = vec![
+    let mut candidates = Vec::new();
+
+    if cfg!(debug_assertions) {
+        candidates.extend(debug_exporter_binary_candidates(root));
+    }
+
+    candidates.push(
         root.join("apps")
             .join("desktop")
             .join("src-tauri")
             .join("binaries")
             .join(exporter_bin_name()),
-    ];
+    );
 
     if let Some(target_triple) = current_target_triple() {
         candidates.push(
@@ -564,6 +740,36 @@ fn exporter_binary_candidates(root: &Path) -> Vec<PathBuf> {
                     std::env::consts::EXE_SUFFIX
                 )),
         );
+    }
+
+    candidates
+}
+
+fn debug_exporter_binary_candidates(root: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![
+        root.join("target").join("debug").join(exporter_bin_name()),
+        root.join("target")
+            .join("debug")
+            .join(format!("cap{}", std::env::consts::EXE_SUFFIX)),
+    ];
+
+    if let Some(target_triple) = current_target_triple() {
+        candidates.push(
+            root.join("target")
+                .join(target_triple)
+                .join("debug")
+                .join(exporter_bin_name()),
+        );
+        candidates.push(
+            root.join("target")
+                .join(target_triple)
+                .join("debug")
+                .join(format!("cap{}", std::env::consts::EXE_SUFFIX)),
+        );
+        candidates.push(root.join("target").join("debug").join(format!(
+            "cap-exporter-{target_triple}{}",
+            std::env::consts::EXE_SUFFIX
+        )));
     }
 
     candidates
@@ -799,32 +1005,42 @@ fn should_force_ffmpeg_export(_project_path: &Path, settings: &ExportSettings) -
     settings.force_ffmpeg_decoder()
 }
 
+fn should_force_ffmpeg_preview() -> bool {
+    false
+}
+
+fn should_start_export_worker_in_software_safe_mode() -> bool {
+    false
+}
+
 fn should_use_out_of_process_export() -> bool {
     cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(progress, editor))]
+#[instrument(skip(window, progress, editor))]
 pub async fn export_video(
+    window: tauri::Window,
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
-    match AssertUnwindSafe(export_video_inner(
-        project_path,
-        settings,
-        editor,
-        ExportProgress(progress),
-        CancellationToken::new(),
-    ))
-    .catch_unwind()
+    let window_label = window.label().to_string();
+    Box::pin(run_export_command(move || async move {
+        let cancellation_guard =
+            ExportCancellationGuard::new(next_export_command_id("export"), Some(window_label));
+        export_video_inner(
+            project_path,
+            settings,
+            editor,
+            ExportProgress(progress),
+            cancellation_guard.token(),
+        )
+        .await
+    }))
     .await
-    {
-        Ok(result) => result,
-        Err(panic) => Err(export_panic_error(panic)),
-    }
 }
 
 #[tauri::command]
@@ -839,7 +1055,7 @@ pub async fn export_video_with_id(
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
     let window_label = window.label().to_string();
-    match AssertUnwindSafe(async move {
+    Box::pin(run_export_command(move || async move {
         let cancellation_guard = ExportCancellationGuard::new(export_id, Some(window_label));
         export_video_inner(
             project_path,
@@ -849,20 +1065,15 @@ pub async fn export_video_with_id(
             cancellation_guard.token(),
         )
         .await
-    })
-    .catch_unwind()
+    }))
     .await
-    {
-        Ok(result) => result,
-        Err(panic) => Err(export_panic_error(panic)),
-    }
 }
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(app, progress, editor))]
+#[instrument(skip(window, progress, editor))]
 pub async fn export_video_to_file(
-    app: tauri::AppHandle,
+    window: tauri::Window,
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
@@ -870,47 +1081,52 @@ pub async fn export_video_to_file(
     file_type: String,
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
-    match AssertUnwindSafe(export_video_to_file_inner(
-        app,
-        project_path,
-        progress,
-        settings,
-        file_name,
-        file_type,
-        editor,
-    ))
-    .catch_unwind()
+    let app = window.app_handle().clone();
+    let window_label = window.label().to_string();
+    Box::pin(run_export_command(move || async move {
+        let cancellation_guard = ExportCancellationGuard::new(
+            next_export_command_id("export-to-file"),
+            Some(window_label),
+        );
+        export_video_to_file_inner(
+            project_path,
+            settings,
+            editor,
+            ExportProgress(progress),
+            ExportSaveDialogRequest {
+                app,
+                file_name,
+                file_type,
+            },
+            cancellation_guard.token(),
+        )
+        .await
+    }))
     .await
-    {
-        Ok(result) => result,
-        Err(panic) => Err(export_panic_error(panic)),
-    }
 }
 
 async fn export_video_to_file_inner(
-    app: tauri::AppHandle,
     project_path: PathBuf,
-    progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
-    file_name: String,
-    file_type: String,
     editor: OptionalWindowEditorInstance,
+    progress: ExportProgress,
+    save_dialog: ExportSaveDialogRequest,
+    cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
     let _session_guard = ExportSessionGuard::new();
+    let ExportSaveDialogRequest {
+        app,
+        file_name,
+        file_type,
+    } = save_dialog;
     let Some(save_path) = show_export_save_dialog(&app, file_name, file_type).await? else {
         return Err("Save dialog cancelled".to_string());
     };
 
     info!(path = %save_path.display(), "Export save path selected");
 
-    let output_path = export_video_inner(
-        project_path,
-        settings,
-        editor,
-        ExportProgress(progress),
-        CancellationToken::new(),
-    )
-    .await?;
+    let output_path =
+        export_video_inner(project_path, settings, editor, progress, cancel_token).await?;
     copy_export_to_path(&output_path, &save_path).await?;
     Ok(save_path)
 }
@@ -1276,7 +1492,7 @@ async fn generate_export_preview_inner(
         .map_err(|e| format!("Failed to create render constants: {e}"))?,
     );
 
-    let force_ffmpeg = false;
+    let force_ffmpeg = should_force_ffmpeg_preview();
     info!(
         project_path = %project_path.display(),
         force_ffmpeg,
@@ -1488,9 +1704,8 @@ mod tests {
         assert!(!should_force_ffmpeg_export(dir.path(), &gif_settings));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
-    fn windows_exports_do_not_force_ffmpeg_without_explicit_setting() {
+    fn exports_do_not_force_ffmpeg_without_explicit_setting() {
         let dir = tempdir().unwrap();
 
         let gif_settings = ExportSettings::Gif(cap_export::gif::GifExportSettings {
@@ -1500,6 +1715,11 @@ mod tests {
         });
 
         assert!(!should_force_ffmpeg_export(dir.path(), &gif_settings));
+    }
+
+    #[test]
+    fn export_worker_starts_in_hardware_mode() {
+        assert!(!should_start_export_worker_in_software_safe_mode());
     }
 }
 

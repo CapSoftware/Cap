@@ -7,6 +7,8 @@ mod auth;
 mod camera;
 mod camera_legacy;
 mod captions;
+mod cli;
+mod crash_sentinel;
 mod deeplink_actions;
 mod editor_window;
 mod exit_shutdown;
@@ -756,6 +758,14 @@ impl App {
         Ok(())
     }
 
+    async fn ensure_mic_feed_alive(&mut self) -> Result<(), String> {
+        if self.mic_feed.is_alive() {
+            return Ok(());
+        }
+
+        self.restart_mic_feed().await
+    }
+
     async fn add_recording_logging_handle(&mut self, path: &PathBuf) -> Result<(), String> {
         let logfile =
             std::fs::File::create(path).map_err(|e| format!("Failed to create logfile: {e}"))?;
@@ -851,6 +861,8 @@ impl App {
     }
 
     async fn ensure_selected_mic_ready(&mut self) -> Result<(), String> {
+        self.ensure_mic_feed_alive().await?;
+
         if let Some(label) = self.selected_mic_label.clone() {
             let settings = self.microphone_settings_for_label(&label);
             let ready = self
@@ -892,6 +904,8 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 
     let (mic_feed, studio_handle, previous_label, app_handle) = {
         let mut app = state.write().await;
+        app.ensure_mic_feed_alive().await?;
+
         if desired_label == app.selected_mic_label {
             if desired_label.is_some() && !matches!(app.recording_state, RecordingState::Active(_))
             {
@@ -1759,6 +1773,22 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     let started = Instant::now();
     log_process_memory_snapshot("exit_cleanup_begin");
 
+    // Reverse the macOS Liquid Glass private SPI (remove the NSGlassEffectView, restore
+    // window/WKWebView occlusion detection) BEFORE anything else, so a slow camera/ML
+    // shutdown can never starve it. Leaving an occlusion-suppressed private glass view
+    // attached when the process hard-exits can wedge WindowServer on macOS 26 and soft-
+    // restart the user's login session. Bounded so a stuck main thread can't block exit.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = await_exit_step(
+            "teardown_liquid_glass",
+            APP_EXIT_STEP_TIMEOUT,
+            crate::platform::teardown_all_liquid_glass(app),
+        )
+        .await;
+    }
+
+    export::cancel_all_exports();
     power_observer::uninstall(app);
     fake_window::cancel_all_fake_window_listeners(app);
     close_target_select_overlays(app);
@@ -1875,13 +1905,9 @@ fn finalize_app_exit(app: &AppHandle, exit_code: i32) {
 }
 
 pub async fn request_app_exit(app: AppHandle) {
-    if export::export_session_active() {
-        warn!("Ignoring app exit request during active export");
-        return;
-    }
-
     let Some(exit_state) = app.try_state::<AppExitState>() else {
         warn!("Exit state unavailable while requesting app exit");
+        export::cancel_all_exports();
         finalize_app_exit(&app, 0);
         #[cfg(not(target_os = "macos"))]
         return;
@@ -1892,6 +1918,7 @@ pub async fn request_app_exit(app: AppHandle) {
     }
 
     spawn_exit_watchdog();
+    export::cancel_all_exports();
 
     if tokio::time::timeout(APP_EXIT_TOTAL_TIMEOUT, cleanup_app_resources_for_exit(&app))
         .await
@@ -1901,6 +1928,11 @@ pub async fn request_app_exit(app: AppHandle) {
             timeout_ms = APP_EXIT_TOTAL_TIMEOUT.as_millis(),
             "Timed out while cleaning up app resources for exit"
         );
+    } else {
+        // Cleanup finished within budget — disarm the sentinel so this graceful exit
+        // is not reported as an unexpected termination on next launch. A timed-out
+        // (hung) shutdown deliberately leaves it armed.
+        crash_sentinel::mark_clean_exit();
     }
 
     finalize_app_exit(&app, 0);
@@ -3529,8 +3561,6 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     }
 
     let Ok(Some(auth)) = AuthStore::get(&app) else {
-        println!("No auth found, clearing auth store");
-        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
         return Ok(false);
     };
 
@@ -4118,6 +4148,10 @@ type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>,
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
+    // Arm the unexpected-termination sentinel before anything else can crash, and
+    // report any previous session that died without a clean shutdown.
+    crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
+
     ffmpeg::init()
         .map_err(|e| {
             error!("Failed to initialize ffmpeg: {e}");
@@ -4136,6 +4170,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording_settings::set_recording_mode,
             upload_logs,
             get_system_diagnostics,
+            cli::get_cli_install_status,
+            cli::install_cli,
+            cli::uninstall_cli,
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,
@@ -4144,6 +4181,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
+            recording::import_current_desktop_background,
             recording::list_cameras,
             recording::get_camera_formats,
             recording::get_microphone_info,
@@ -4162,6 +4200,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             export::begin_export_session,
             export::end_export_session,
             export::cancel_export,
+            export::cancel_current_window_exports,
             export::export_video,
             export::export_video_with_id,
             export::export_video_to_file,
@@ -4720,13 +4759,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
                         let window_id = CapWindowId::from_str(label).ok();
-                        if matches!(
+                        if !matches!(
                             window_id,
                             Some(CapWindowId::Editor { .. })
                                 | Some(CapWindowId::ScreenshotEditor { .. })
-                        ) {
-                            export::cancel_exports_for_window(label);
-                        } else if export::export_session_active() {
+                        ) && export::export_session_active()
+                        {
                             api.prevent_close();
                             warn!(
                                 window = label,
@@ -4831,7 +4869,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     if is_editor_window {
                         export::cancel_exports_for_window(label);
                     }
-                    if export::export_session_active() && !is_editor_window {
+                    if export::export_session_active() {
                         warn!(
                             window = label,
                             "Skipping Destroyed cleanup during active export"
@@ -5245,7 +5283,15 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
         tauri::RunEvent::Exit => {
             #[cfg(target_os = "macos")]
             {
-                warn!("macOS runtime exit reached; forcing process exit");
+                // This arm runs on the AppKit main thread, so reverse the Liquid Glass
+                // SPI inline before the hard _exit. This is the last-chance teardown for
+                // terminal paths that skip cleanup_app_resources_for_exit; touching the
+                // NSWindow/NSView here is safe precisely because we are on main.
+                let torn_down = crate::platform::teardown_all_liquid_glass_on_main(_handle);
+                warn!(
+                    windows = torn_down,
+                    "macOS runtime exit reached; tore down liquid glass, forcing process exit"
+                );
                 force_exit(0);
             }
 

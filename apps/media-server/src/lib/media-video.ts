@@ -23,10 +23,15 @@ const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const PREVIEW_GIF_TIMEOUT_MS = 30_000;
+const PROBE_H264_LEVEL_TIMEOUT_MS = 10_000;
 const UPLOAD_MAX_RETRIES = 4;
 const UPLOAD_RETRY_BASE_MS = 250;
 const MAX_STDERR_BYTES = 64 * 1024;
 const REPAIR_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_LEVEL_4_2_WIDTH = 2048;
+const MAX_LEVEL_4_2_HEIGHT = 1088;
+const MAX_LEVEL_5_1_WIDTH = 4096;
+const MAX_LEVEL_5_1_HEIGHT = 2304;
 
 export interface VideoProcessingOptions {
 	maxWidth?: number;
@@ -1022,13 +1027,16 @@ export async function downloadVideoToTemp(
 function needsVideoTranscode(
 	metadata: VideoMetadata,
 	options: VideoProcessingOptions,
+	sourceH264Level: number | null,
 ): boolean {
 	const maxWidth = options.maxWidth ?? DEFAULT_OPTIONS.maxWidth;
 	const maxHeight = options.maxHeight ?? DEFAULT_OPTIONS.maxHeight;
 	return (
 		metadata.width > maxWidth ||
 		metadata.height > maxHeight ||
-		metadata.videoCodec !== "h264"
+		metadata.videoCodec !== "h264" ||
+		(sourceH264Level !== null &&
+			sourceH264Level > pickMobileSafeH264Level(metadata, options).value)
 	);
 }
 
@@ -1115,6 +1123,102 @@ function buildExtraOutputFlags(flags: ResilientInputFlags): string[] {
 	return [];
 }
 
+type H264Level = {
+	value: number;
+	ffmpegValue: string;
+};
+
+function getTargetVideoDimensions(
+	metadata: VideoMetadata,
+	options: VideoProcessingOptions,
+) {
+	const maxWidth = options.maxWidth ?? DEFAULT_OPTIONS.maxWidth;
+	const maxHeight = options.maxHeight ?? DEFAULT_OPTIONS.maxHeight;
+
+	return {
+		width: Math.min(metadata.width, maxWidth),
+		height: Math.min(metadata.height, maxHeight),
+	};
+}
+
+export function pickMobileSafeH264Level(
+	metadata: VideoMetadata,
+	options: VideoProcessingOptions = {},
+): H264Level {
+	const { width, height } = getTargetVideoDimensions(metadata, options);
+
+	if (width <= MAX_LEVEL_4_2_WIDTH && height <= MAX_LEVEL_4_2_HEIGHT) {
+		return { value: 42, ffmpegValue: "4.2" };
+	}
+
+	if (width <= MAX_LEVEL_5_1_WIDTH && height <= MAX_LEVEL_5_1_HEIGHT) {
+		return { value: 51, ffmpegValue: "5.1" };
+	}
+
+	return { value: 52, ffmpegValue: "5.2" };
+}
+
+async function probeH264Level(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<number | null> {
+	const proc = registerSubprocess(
+		spawn({
+			cmd: [
+				"ffprobe",
+				"-v",
+				"error",
+				"-select_streams",
+				"v:0",
+				"-show_entries",
+				"stream=level",
+				"-of",
+				"default=noprint_wrappers=1:nokey=1",
+				inputPath,
+			],
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
+	let abortCleanup: (() => void) | undefined;
+	if (abortSignal) {
+		abortCleanup = () => {
+			void terminateProcess(proc);
+		};
+		abortSignal.addEventListener("abort", abortCleanup, { once: true });
+	}
+
+	try {
+		const stdoutPromise = readStreamWithLimit(
+			proc.stdout as ReadableStream<Uint8Array>,
+			1024,
+		);
+		const stderrPromise = readStreamWithLimit(
+			proc.stderr as ReadableStream<Uint8Array>,
+			2048,
+		);
+
+		const [stdout] = await withTimeout(
+			Promise.all([stdoutPromise, stderrPromise, proc.exited]),
+			PROBE_H264_LEVEL_TIMEOUT_MS,
+			() => terminateProcess(proc),
+		);
+		const exitCode = await proc.exited;
+		if (exitCode !== 0) return null;
+
+		const rawLevel = stdout.trim().split(/\s+/)[0] ?? "";
+		const level = Number.parseInt(rawLevel, 10);
+		return Number.isFinite(level) && level > 0 ? level : null;
+	} catch {
+		return null;
+	} finally {
+		if (abortCleanup) {
+			abortSignal?.removeEventListener("abort", abortCleanup);
+		}
+		await terminateProcess(proc);
+	}
+}
+
 export async function processVideo(
 	inputPath: string,
 	metadata: VideoMetadata,
@@ -1130,9 +1234,14 @@ export async function processVideo(
 	const outputTempFile = await createTempFile(".mp4");
 
 	const remuxOnly = opts.remuxOnly;
+	const sourceH264Level =
+		!remuxOnly && metadata.videoCodec === "h264"
+			? await probeH264Level(inputPath, abortSignal)
+			: null;
+	const targetH264Level = pickMobileSafeH264Level(metadata, opts);
 	const videoTranscode = remuxOnly
 		? false
-		: needsVideoTranscode(metadata, opts);
+		: needsVideoTranscode(metadata, opts, sourceH264Level);
 	const audioTranscode = remuxOnly ? false : needsAudioTranscode(metadata);
 	const extraInputArgs = resilientFlags
 		? buildExtraInputFlags(resilientFlags)
@@ -1163,6 +1272,10 @@ export async function processVideo(
 			opts.crf.toString(),
 			"-vf",
 			`scale='min(${opts.maxWidth},iw)':'min(${opts.maxHeight},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`,
+			"-pix_fmt",
+			"yuv420p",
+			"-level:v",
+			targetH264Level.ffmpegValue,
 		);
 	} else {
 		ffmpegArgs.push("-c:v", "copy");

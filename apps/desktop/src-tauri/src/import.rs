@@ -1496,6 +1496,7 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                             path: RelativePathBuf::from("content/segments/segment-0/audio.ogg"),
                             start_time: Some(0.0),
                             device_id: None,
+                            gap_summary: None,
                         })
                     } else {
                         None
@@ -1680,6 +1681,7 @@ async fn append_mp4_to_editor_project(
             path: output_audio_relative_path,
             start_time: Some(0.0),
             device_id: None,
+            gap_summary: None,
         })
     } else {
         None
