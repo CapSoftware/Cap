@@ -69,6 +69,20 @@ fn get_video_duration_fallback(path: &Path) -> Option<f64> {
     }
 }
 
+fn display_video_duration(path: &Path) -> Option<f64> {
+    match Video::new(path, 0.0) {
+        Ok(v) => Some(v.duration),
+        Err(e) => {
+            warn!(
+                "Failed to load video for duration calculation: {} (path: {}), trying fallback",
+                e,
+                path.display()
+            );
+            get_video_duration_fallback(path)
+        }
+    }
+}
+
 pub struct EditorInstance {
     pub project_path: PathBuf,
     pub recordings: Arc<ProjectRecordingsMeta>,
@@ -126,29 +140,21 @@ impl EditorInstance {
             let timeline_segments = match meta.as_ref() {
                 StudioRecordingMeta::SingleSegment { segment } => {
                     let display_path = recording_meta.path(&segment.display.path);
-                    let duration = match Video::new(&display_path, 0.0) {
-                        Ok(v) => v.duration,
-                        Err(e) => {
+                    match display_video_duration(&display_path) {
+                        Some(duration) if duration > 0.0 => vec![TimelineSegment {
+                            recording_clip: 0,
+                            start: 0.0,
+                            end: duration,
+                            timescale: 1.0,
+                        }],
+                        _ => {
                             warn!(
-                                "Failed to load video for duration calculation: {} (path: {}), trying fallback",
-                                e,
+                                "Failed to determine display duration for {}, leaving timeline unset",
                                 display_path.display()
                             );
-                            match get_video_duration_fallback(&display_path) {
-                                Some(d) => d,
-                                None => {
-                                    warn!("Fallback also failed, using default duration 5.0s");
-                                    5.0
-                                }
-                            }
+                            Vec::new()
                         }
-                    };
-                    vec![TimelineSegment {
-                        recording_clip: 0,
-                        start: 0.0,
-                        end: duration,
-                        timescale: 1.0,
-                    }]
+                    }
                 }
                 StudioRecordingMeta::MultipleSegments { inner } => inner
                     .segments
@@ -156,30 +162,12 @@ impl EditorInstance {
                     .enumerate()
                     .filter_map(|(i, segment)| {
                         let display_path = recording_meta.path(&segment.display.path);
-                        tracing::debug!("Attempting to get duration for segment {}: {:?}", i, display_path);
-                        let duration = match Video::new(&display_path, 0.0) {
-                            Ok(v) => {
-                                tracing::debug!("Video::new succeeded, duration: {}", v.duration);
-                                v.duration
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Failed to load video for duration calculation: {} (path: {}), trying fallback",
-                                    e,
-                                    display_path.display()
-                                );
-                                match get_video_duration_fallback(&display_path) {
-                                    Some(d) => {
-                                        tracing::debug!("Fallback succeeded, duration: {}", d);
-                                        d
-                                    }
-                                    None => {
-                                        warn!("Fallback also failed, using default duration 5.0s");
-                                        5.0
-                                    }
-                                }
-                            }
-                        };
+                        tracing::debug!(
+                            "Attempting to get duration for segment {}: {:?}",
+                            i,
+                            display_path
+                        );
+                        let duration = display_video_duration(&display_path)?;
                         tracing::debug!("Final duration for segment {}: {}", i, duration);
                         if duration <= 0.0 {
                             return None;
