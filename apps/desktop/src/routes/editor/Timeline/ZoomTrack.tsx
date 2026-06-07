@@ -898,7 +898,7 @@ export function ZoomCurveTrack() {
 										>
 											<path
 												d={dGray()}
-												class="stroke-gray-400/70 dark:stroke-gray-500/70"
+												class="stroke-gray-400/30 dark:stroke-gray-500/30"
 												stroke-width="3"
 												fill="none"
 												vector-effect="non-scaling-stroke"
