@@ -638,11 +638,6 @@ const MIN_STALE_STARTUP_DROPS: u32 = 3;
 const MIN_STALE_STARTUP_TRIMMED_MS: u32 = 100;
 const MAX_STALE_STARTUP_REPAIR_MS: u32 = 2_000;
 
-/// Compensating offset (seconds, negative) for stale-startup audio drift the recorder captured
-/// in [`cap_project::AudioGapSummary`]. A burst of whole-frame overlap drops in the first frames
-/// means the recorded audio starts late relative to the timeline, so shifting it earlier by the
-/// trimmed span resyncs it. Scattered mid-recording overlaps and trims outside the expected
-/// startup-drift range are ignored.
 fn audio_timing_repair_offset(summary: Option<&cap_project::AudioGapSummary>) -> f32 {
     let Some(summary) = summary else {
         return 0.0;
@@ -651,12 +646,12 @@ fn audio_timing_repair_offset(summary: Option<&cap_project::AudioGapSummary>) ->
     if summary.startup_overlap_drops < MIN_STALE_STARTUP_DROPS
         || summary.overlap_dropped_frames < MIN_STALE_STARTUP_DROPS
         || !(MIN_STALE_STARTUP_TRIMMED_MS..=MAX_STALE_STARTUP_REPAIR_MS)
-            .contains(&summary.total_overlap_trimmed_ms)
+            .contains(&summary.startup_overlap_trimmed_ms)
     {
         return 0.0;
     }
 
-    -(summary.total_overlap_trimmed_ms as f32 / 1_000.0)
+    -(summary.startup_overlap_trimmed_ms as f32 / 1_000.0)
 }
 
 pub async fn create_segments(
@@ -835,9 +830,10 @@ mod tests {
     use cap_project::AudioGapSummary;
 
     #[test]
-    fn audio_timing_repair_detects_stale_startup_overlap() {
+    fn audio_timing_repair_uses_startup_trimmed_overlap() {
         let summary = AudioGapSummary {
-            total_overlap_trimmed_ms: 867,
+            total_overlap_trimmed_ms: 1_667,
+            startup_overlap_trimmed_ms: 867,
             overlap_dropped_frames: 23,
             startup_overlap_drops: 23,
         };
@@ -852,9 +848,9 @@ mod tests {
 
     #[test]
     fn audio_timing_repair_ignores_overlap_without_startup_signature() {
-        // Plenty of overlap drops, but none in the startup window — a mid-recording artifact.
         let summary = AudioGapSummary {
             total_overlap_trimmed_ms: 867,
+            startup_overlap_trimmed_ms: 867,
             overlap_dropped_frames: 23,
             startup_overlap_drops: 0,
         };
@@ -866,6 +862,7 @@ mod tests {
     fn audio_timing_repair_ignores_trim_outside_expected_range() {
         let too_small = AudioGapSummary {
             total_overlap_trimmed_ms: MIN_STALE_STARTUP_TRIMMED_MS - 1,
+            startup_overlap_trimmed_ms: MIN_STALE_STARTUP_TRIMMED_MS - 1,
             overlap_dropped_frames: 5,
             startup_overlap_drops: 5,
         };
@@ -873,6 +870,7 @@ mod tests {
 
         let too_large = AudioGapSummary {
             total_overlap_trimmed_ms: MAX_STALE_STARTUP_REPAIR_MS + 1,
+            startup_overlap_trimmed_ms: MAX_STALE_STARTUP_REPAIR_MS + 1,
             overlap_dropped_frames: 5,
             startup_overlap_drops: 5,
         };
