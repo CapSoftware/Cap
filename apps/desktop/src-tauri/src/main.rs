@@ -6,7 +6,7 @@ use std::ffi::CStr;
 use std::sync::Arc;
 
 use cap_desktop_lib::DynLoggingLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
+use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 const TOKIO_WORKER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 

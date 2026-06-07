@@ -63,6 +63,7 @@ import {
 	listWindows,
 	listWindowsWithThumbnails,
 } from "~/utils/queries";
+import { createRecordingInputHandlers } from "~/utils/screenshot-recording-inputs";
 import {
 	type CaptureDisplay,
 	type CaptureDisplayWithThumbnail,
@@ -2058,43 +2059,14 @@ function Page() {
 
 	const setCamera = createCameraMutation();
 
-	const suspendRecordingInputsForScreenshot = async () => {
-		await Promise.all([
-			commands
-				.setMicInput(null)
-				.catch((error) =>
-					console.error(
-						"Failed to suspend mic input for screenshot mode:",
-						error,
-					),
-				),
-			commands
-				.setCameraInput(null, null)
-				.catch((error) =>
-					console.error(
-						"Failed to suspend camera input for screenshot mode:",
-						error,
-					),
-				),
-		]);
-	};
-
-	const restoreRecordingInputs = async (
-		micName: string | null,
-		cameraID: DeviceOrModelID | null,
-	) => {
-		if (micName) {
-			await setMicInput
-				.mutateAsync(micName)
-				.catch((error) => console.error("Failed to set mic input:", error));
-		}
-
-		if (cameraID) {
-			await setCamera
-				.mutateAsync({ model: cameraID })
-				.catch((error) => console.error("Failed to set camera input:", error));
-		}
-	};
+	const {
+		restoreRecordingInputs,
+		suspendRecordingInputsForScreenshot,
+		syncRecordingInputsForMode,
+	} = createRecordingInputHandlers({
+		setMicInput: (name) => setMicInput.mutateAsync(name),
+		setCameraInput: (args) => setCamera.mutateAsync(args),
+	});
 
 	createUpdateCheck();
 
@@ -2148,16 +2120,11 @@ function Page() {
 			console.error("Failed to read recording settings:", error);
 			return null;
 		});
-		const mode = storedSettings?.mode ?? rawOptions.mode;
-
-		if (mode === "screenshot") {
-			await suspendRecordingInputsForScreenshot();
-		} else {
-			await restoreRecordingInputs(
-				storedSettings?.micName ?? rawOptions.micName ?? null,
-				storedSettings?.cameraId ?? rawOptions.cameraID ?? null,
-			);
-		}
+		await syncRecordingInputsForMode({
+			mode: rawOptions.mode,
+			micName: storedSettings?.micName ?? rawOptions.micName ?? null,
+			cameraID: storedSettings?.cameraId ?? rawOptions.cameraID ?? null,
+		});
 
 		const unlistenFocus = currentWindow.onFocusChanged(
 			({ payload: focused }) => {

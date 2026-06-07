@@ -343,12 +343,8 @@ impl DeepLinkAction {
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
-            DeepLinkAction::OpenRecordings => {
-                open_settings_page(app, "recordings".to_string()).await
-            }
-            DeepLinkAction::OpenScreenshots => {
-                open_settings_page(app, "screenshots".to_string()).await
-            }
+            DeepLinkAction::OpenRecordings => open_settings_page(app, "recordings").await,
+            DeepLinkAction::OpenScreenshots => open_settings_page(app, "screenshots").await,
             DeepLinkAction::TakeScreenshot { target } => take_screenshot(app, target).await,
         }
     }
@@ -439,8 +435,14 @@ async fn open_recording_picker(
     .await
 }
 
-async fn open_settings_page(app: &AppHandle, page: String) -> Result<(), String> {
-    crate::show_window(app.clone(), ShowCapWindow::Settings { page: Some(page) }).await
+async fn open_settings_page(app: &AppHandle, page: &str) -> Result<(), String> {
+    crate::show_window(
+        app.clone(),
+        ShowCapWindow::Settings {
+            page: Some(page.to_owned()),
+        },
+    )
+    .await
 }
 
 fn set_recording_mode(app: &AppHandle, mode: RecordingMode) -> Result<(), String> {
