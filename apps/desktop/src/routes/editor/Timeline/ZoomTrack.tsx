@@ -820,8 +820,11 @@ export function ZoomCurveTrack() {
 									const currAmt = () => segment.amount;
 									const nextAmt = () => isContiguousWithNext() ? next().amount : 1.0;
 
-									// Map amount to Y coordinate asymptotically (1.0 -> 90, 2.0 -> 40, 4.5 -> 12)
-									const getY = (amt: number) => Math.max(5, 90 - 100 * (1 - 1 / Math.max(1, amt)));
+									// Map amount to Y coordinate linearly (1.0 -> 90, 5.0 -> 5)
+									const getY = (amt: number) => {
+										const p = Math.min(1, Math.max(0, (amt - 1) / 4));
+										return 90 - 85 * p;
+									};
 
 									const startY = () => getY(prevAmt());
 									const currY = () => getY(currAmt());
@@ -829,19 +832,17 @@ export function ZoomCurveTrack() {
 
 									const W = () => Math.max(1, width());
 									const rampUpPct = () => (Math.min(40, W() / 2) / W()) * 100;
-									const rampDownPct = () => (Math.min(40, W() / 2) / W()) * 100;
+									const rampDownPct = () => (40 / W()) * 100;
 
 									const d = () => {
 										if (isInstant()) {
 											return `M 0 ${startY()} L 0 ${currY()} L 100 ${currY()} ${
-												!isContiguousWithNext() ? `L 100 ${endY()}` : ""
+												!isContiguousWithNext() ? `L 100 ${endY()} L ${100 + rampDownPct()} ${endY()}` : ""
 											}`;
 										}
-										return `M 0 ${startY()} C ${rampUpPct() / 2} ${startY()}, ${rampUpPct() / 2} ${currY()}, ${rampUpPct()} ${currY()} L ${
-											!isContiguousWithNext() ? 100 - rampDownPct() : 100
-										} ${currY()} ${
+										return `M 0 ${startY()} C ${rampUpPct() / 2} ${startY()}, ${rampUpPct() / 2} ${currY()}, ${rampUpPct()} ${currY()} L 100 ${currY()} ${
 											!isContiguousWithNext()
-												? `C ${100 - rampDownPct() / 2} ${currY()}, ${100 - rampDownPct() / 2} ${endY()}, 100 ${endY()}`
+												? `C ${100 + rampDownPct() / 2} ${currY()}, ${100 + rampDownPct() / 2} ${endY()}, ${100 + rampDownPct()} ${endY()}`
 												: ""
 										}`;
 									};
