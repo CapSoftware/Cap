@@ -965,11 +965,29 @@ async fn stop_recording(
                 .screen
                 .as_ref()
                 .map(|sc| to_start_time(sc.first_timestamp));
-            let display_start_time = raw_display_start.unwrap_or_else(|| {
+            let display_start_time = if let Some(raw_display) = raw_display_start {
+                if let Some(cam_start) = camera_start_time {
+                    let sync_offset = raw_display - cam_start;
+                    if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
+                        cam_start
+                    } else {
+                        raw_display
+                    }
+                } else if let Some(mic_start) = mic_start_time {
+                    let sync_offset = raw_display - mic_start;
+                    if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
+                        mic_start
+                    } else {
+                        raw_display
+                    }
+                } else {
+                    raw_display
+                }
+            } else {
                 mic_start_time
                     .or(camera_start_time)
                     .unwrap_or(s.start)
-            });
+            };
 
             let diagnostics =
                 (!s.pipeline.track_failures.is_empty()).then(|| SegmentFailureDiagnostics {
