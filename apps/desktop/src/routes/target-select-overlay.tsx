@@ -1652,15 +1652,38 @@ function RecordingControls(props: {
 		skipCameraWindow: () => props.target.variant === "cameraOnly",
 	});
 
+	let recordingInputsToRestore: {
+		micName: string | null;
+		cameraID: DeviceOrModelID | null;
+	} = {
+		micName: rawOptions.micName ?? null,
+		cameraID: rawOptions.cameraID ? { ...rawOptions.cameraID } : null,
+	};
+
+	const rememberRecordingInputsToRestore = (inputs: {
+		micName: string | null;
+		cameraID: DeviceOrModelID | null;
+	}) => {
+		recordingInputsToRestore = {
+			micName: inputs.micName,
+			cameraID: inputs.cameraID ? { ...inputs.cameraID } : null,
+		};
+		return recordingInputsToRestore;
+	};
+
 	createEffect((wasScreenshotMode) => {
 		const isScreenshotMode = rawOptions.mode === "screenshot";
 
 		if (isScreenshotMode && !wasScreenshotMode) {
+			rememberRecordingInputsToRestore({
+				micName: rawOptions.micName ?? null,
+				cameraID: rawOptions.cameraID ?? null,
+			});
 			void suspendRecordingInputsForScreenshot();
 		} else if (!isScreenshotMode && wasScreenshotMode) {
 			void restoreRecordingInputs(
-				rawOptions.micName ?? null,
-				rawOptions.cameraID ?? null,
+				recordingInputsToRestore.micName,
+				recordingInputsToRestore.cameraID,
 			);
 		}
 
@@ -1672,10 +1695,13 @@ function RecordingControls(props: {
 			console.error("Failed to read recording settings:", error);
 			return null;
 		});
-		await syncRecordingInputsForMode({
-			mode: rawOptions.mode,
+		const recordingInputs = rememberRecordingInputsToRestore({
 			micName: storedSettings?.micName ?? rawOptions.micName ?? null,
 			cameraID: storedSettings?.cameraId ?? rawOptions.cameraID ?? null,
+		});
+		await syncRecordingInputsForMode({
+			mode: rawOptions.mode,
+			...recordingInputs,
 		});
 
 		const isCameraOnly = props.target.variant === "cameraOnly";
@@ -1865,7 +1891,7 @@ function RecordingControls(props: {
 									<Match when={rawOptions.mode === "instant"}>
 										<IconCapInstant class="size-4 shrink-0" />
 									</Match>
-									<Match when={(rawOptions.mode as string) === "screenshot"}>
+									<Match when={rawOptions.mode === "screenshot"}>
 										<IconCapCamera class="size-4 shrink-0" />
 									</Match>
 								</Switch>
@@ -1901,7 +1927,7 @@ function RecordingControls(props: {
 						</div>
 					</div>
 				</div>
-				<Show when={(rawOptions.mode as string) !== "screenshot"}>
+				<Show when={rawOptions.mode !== "screenshot"}>
 					<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
 						<div class="grid grid-cols-2 gap-2 w-full">
 							<CameraSelectBase

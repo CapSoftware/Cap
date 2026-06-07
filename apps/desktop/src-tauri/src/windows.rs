@@ -306,13 +306,8 @@ pub(crate) async fn restore_main_window_inputs(app: &AppHandle) {
             warn!("Failed to suspend microphone input for screenshot mode: {err}");
         }
 
-        let operation_lock = app.try_state::<crate::CameraWindowOperationLock>();
-        let _operation_guard = if let Some(operation_lock) = operation_lock.as_ref() {
-            Some(operation_lock.lock().await)
-        } else {
-            warn!("CameraWindowOperationLock unavailable while suspending camera input");
-            None
-        };
+        let operation_lock = app.state::<crate::CameraWindowOperationLock>();
+        let _operation_guard = operation_lock.lock().await;
 
         let (camera_feed, had_camera_input) = {
             let app_state = &mut *state.write().await;

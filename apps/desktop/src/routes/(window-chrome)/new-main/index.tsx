@@ -2068,17 +2068,40 @@ function Page() {
 		setCameraInput: (args) => setCamera.mutateAsync(args),
 	});
 
+	let recordingInputsToRestore: {
+		micName: string | null;
+		cameraID: DeviceOrModelID | null;
+	} = {
+		micName: rawOptions.micName ?? null,
+		cameraID: rawOptions.cameraID ? { ...rawOptions.cameraID } : null,
+	};
+
+	const rememberRecordingInputsToRestore = (inputs: {
+		micName: string | null;
+		cameraID: DeviceOrModelID | null;
+	}) => {
+		recordingInputsToRestore = {
+			micName: inputs.micName,
+			cameraID: inputs.cameraID ? { ...inputs.cameraID } : null,
+		};
+		return recordingInputsToRestore;
+	};
+
 	createUpdateCheck();
 
 	createEffect((wasScreenshotMode) => {
 		const isScreenshotMode = rawOptions.mode === "screenshot";
 
 		if (isScreenshotMode && !wasScreenshotMode) {
+			rememberRecordingInputsToRestore({
+				micName: rawOptions.micName ?? null,
+				cameraID: rawOptions.cameraID ?? null,
+			});
 			void suspendRecordingInputsForScreenshot();
 		} else if (!isScreenshotMode && wasScreenshotMode) {
 			void restoreRecordingInputs(
-				rawOptions.micName ?? null,
-				rawOptions.cameraID ?? null,
+				recordingInputsToRestore.micName,
+				recordingInputsToRestore.cameraID,
 			);
 		}
 
@@ -2120,10 +2143,13 @@ function Page() {
 			console.error("Failed to read recording settings:", error);
 			return null;
 		});
-		await syncRecordingInputsForMode({
-			mode: rawOptions.mode,
+		const recordingInputs = rememberRecordingInputsToRestore({
 			micName: storedSettings?.micName ?? rawOptions.micName ?? null,
 			cameraID: storedSettings?.cameraId ?? rawOptions.cameraID ?? null,
+		});
+		await syncRecordingInputsForMode({
+			mode: rawOptions.mode,
+			...recordingInputs,
 		});
 
 		const unlistenFocus = currentWindow.onFocusChanged(
@@ -2551,7 +2577,7 @@ function Page() {
 							name="Area"
 							class="flex-1"
 						/>
-						<Show when={(rawOptions.mode as string) !== "screenshot"}>
+						<Show when={rawOptions.mode !== "screenshot"}>
 							<TargetTypeButton
 								selected={rawOptions.targetMode === "camera"}
 								Component={IconLucideVideo}
@@ -2565,7 +2591,7 @@ function Page() {
 						</Show>
 					</div>
 				</div>
-				<Show when={(rawOptions.mode as string) !== "screenshot"}>
+				<Show when={rawOptions.mode !== "screenshot"}>
 					<BaseControls />
 				</Show>
 			</div>

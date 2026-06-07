@@ -1,11 +1,7 @@
-import {
-	commands,
-	type DeviceOrModelID,
-	type RecordingMode,
-} from "~/utils/tauri";
+import type { DeviceOrModelID, RecordingMode } from "~/utils/tauri";
 
 type SetCameraInput = (args: {
-	model: DeviceOrModelID;
+	model: DeviceOrModelID | null;
 	skipCameraWindow?: boolean;
 }) => Promise<unknown>;
 
@@ -29,7 +25,7 @@ export function createRecordingInputHandlers({
 	setCameraInput,
 	skipCameraWindow,
 }: {
-	setMicInput: (name: string) => Promise<unknown>;
+	setMicInput: (name: string | null) => Promise<unknown>;
 	setCameraInput: SetCameraInput;
 	skipCameraWindow?: SkipCameraWindow;
 }): RecordingInputHandlers {
@@ -40,22 +36,21 @@ export function createRecordingInputHandlers({
 
 	const suspendRecordingInputsForScreenshot = async () => {
 		await Promise.all([
-			commands
-				.setMicInput(null)
-				.catch((error) =>
-					console.error(
-						"Failed to suspend mic input for screenshot mode:",
-						error,
-					),
+			setMicInput(null).catch((error) =>
+				console.error(
+					"Failed to suspend mic input for screenshot mode:",
+					error,
 				),
-			commands
-				.setCameraInput(null, null)
-				.catch((error) =>
-					console.error(
-						"Failed to suspend camera input for screenshot mode:",
-						error,
-					),
+			),
+			setCameraInput({
+				model: null,
+				skipCameraWindow: getSkipCameraWindow(),
+			}).catch((error) =>
+				console.error(
+					"Failed to suspend camera input for screenshot mode:",
+					error,
 				),
+			),
 		]);
 	};
 
