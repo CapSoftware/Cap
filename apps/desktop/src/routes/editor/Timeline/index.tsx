@@ -1003,7 +1003,7 @@ export function Timeline(props: {
 								)}
 							>
 								<TrackRow 
-									icon={() => <IconLucideExpand class="size-4 text-blue-500" />}
+									icon={() => <IconLucideSpline class="size-4 text-blue-500" />}
 									subordinate={true}
 								>
 									<ZoomCurveTrack />
@@ -1039,10 +1039,10 @@ function TrackRow(props: {
 }) {
 	return (
 		<div
-			class={cx("group/track flex items-stretch gap-2", props.class)}
+			class={cx("flex items-stretch gap-2", props.class)}
 			onContextMenu={props.onContextMenu}
 		>
-			<div class="relative">
+			<div class="relative group/track">
 				<TrackIcon
 					icon={props.icon()}
 					onClick={props.onIconClick}
