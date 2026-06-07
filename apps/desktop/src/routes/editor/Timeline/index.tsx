@@ -996,16 +996,19 @@ export function Timeline(props: {
 									handleUpdatePlayhead={handleUpdatePlayhead}
 								/>
 							</TrackRow>
-							<Show when={editorState.timeline.showZoomCurves}>
-								<div class="animate-in slide-in-from-top-4 fade-in duration-200">
-									<TrackRow 
-										icon={() => <IconLucideActivity class="size-4 text-blue-500" />}
-										subordinate={true}
-									>
-										<ZoomCurveTrack />
-									</TrackRow>
-								</div>
-							</Show>
+							<div
+								class={cx(
+									"transition-all duration-300 ease-in-out overflow-hidden flex-shrink-0",
+									editorState.timeline.showZoomCurves ? "h-[3.25rem] opacity-100" : "h-0 opacity-0 -mt-1"
+								)}
+							>
+								<TrackRow 
+									icon={() => <IconLucideActivity class="size-4 text-blue-500" />}
+									subordinate={true}
+								>
+									<ZoomCurveTrack />
+								</TrackRow>
+							</div>
 							<Show when={sceneTrackVisible()}>
 								<TrackRow icon={trackIcons.scene}>
 									<SceneTrack
