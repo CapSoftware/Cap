@@ -76,13 +76,15 @@ export function TrackManager(props: {
 	);
 }
 
-export function TrackIcon(props: { icon: JSX.Element; class?: string }) {
+export function TrackIcon(props: { icon: JSX.Element; class?: string; onClick?: () => void }) {
 	return (
 		<div
 			class={cx(
 				"relative z-10 w-14 h-13 flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/60 text-gray-12 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)] dark:border-gray-4/60 dark:bg-gray-3/40",
+				props.onClick ? "cursor-pointer hover:bg-gray-3 dark:hover:bg-gray-4/40 transition-colors" : "",
 				props.class,
 			)}
+			onClick={props.onClick}
 			onMouseDown={(e) => e.stopPropagation()}
 		>
 			{props.icon}

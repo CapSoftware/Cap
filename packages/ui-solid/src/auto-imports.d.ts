@@ -63,6 +63,7 @@ declare global {
   const IconCapZoomIn: typeof import('~icons/cap/zoom-in.jsx')['default']
   const IconCapZoomOut: typeof import('~icons/cap/zoom-out.jsx')['default']
   const IconHugeiconsEaseCurveControlPoints: typeof import('~icons/hugeicons/ease-curve-control-points.jsx')['default']
+  const IconLucideActivity: typeof import('~icons/lucide/activity.jsx')['default']
   const IconLucideAlertCircle: typeof import('~icons/lucide/alert-circle.jsx')['default']
   const IconLucideAlertTriangle: typeof import('~icons/lucide/alert-triangle.jsx')['default']
   const IconLucideArrowLeft: typeof import('~icons/lucide/arrow-left.jsx')['default']

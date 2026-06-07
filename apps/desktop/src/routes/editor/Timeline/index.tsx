@@ -44,9 +44,8 @@ import { type KeyboardSegmentDragState, KeyboardTrack } from "./KeyboardTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
-import { TimelineDropdown } from "./TimelineDropdown";
 import { TrackIcon, TrackManager } from "./TrackManager";
-import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
+import { type ZoomSegmentDragState, ZoomTrack, ZoomCurveTrack } from "./ZoomTrack";
 
 const TIMELINE_PADDING = 16;
 const TRACK_GUTTER = 64;
@@ -834,9 +833,6 @@ export function Timeline(props: {
 					}
 				}}
 			>
-				<div class="absolute top-1 right-4 z-40">
-					<TimelineDropdown />
-				</div>
 				<div
 					class="relative z-20"
 					style={{ height: `${TIMELINE_HEADER_HEIGHT}px` }}
@@ -984,7 +980,10 @@ export function Timeline(props: {
 									</TrackRow>
 								)}
 							</For>
-							<TrackRow icon={trackIcons.zoom}>
+							<TrackRow 
+								icon={trackIcons.zoom} 
+								onIconClick={() => setEditorState("timeline", "showZoomCurves", (v) => !v)}
+							>
 								<ZoomTrack
 									onDragStateChanged={(v) => {
 										zoomSegmentDragState = v;
@@ -992,6 +991,11 @@ export function Timeline(props: {
 									handleUpdatePlayhead={handleUpdatePlayhead}
 								/>
 							</TrackRow>
+							<Show when={editorState.timeline.showZoomCurves}>
+								<TrackRow icon={() => <IconLucideActivity class="size-4 text-blue-500" />}>
+									<ZoomCurveTrack />
+								</TrackRow>
+							</Show>
 							<Show when={sceneTrackVisible()}>
 								<TrackRow icon={trackIcons.scene}>
 									<SceneTrack
@@ -1015,6 +1019,7 @@ function TrackRow(props: {
 	children: JSX.Element;
 	onDelete?: () => void;
 	onContextMenu?: (e: MouseEvent) => void;
+	onIconClick?: () => void;
 }) {
 	return (
 		<div
@@ -1024,6 +1029,7 @@ function TrackRow(props: {
 			<div class="relative">
 				<TrackIcon
 					icon={props.icon()}
+					onClick={props.onIconClick}
 					class={
 						props.onDelete
 							? "transition-opacity group-hover/track:pointer-events-none group-hover/track:opacity-0"
