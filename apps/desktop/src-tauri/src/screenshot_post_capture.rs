@@ -230,6 +230,15 @@ async fn save_screenshot_image_file(path: &Path) -> Result<(), String> {
     let desktop_dir = dirs::desktop_dir()
         .ok_or_else(|| "Failed to resolve Desktop directory for screenshot export".to_string())?;
 
+    save_screenshot_image_file_to_dir(path, &desktop_dir)
+        .await
+        .map(|_| ())
+}
+
+async fn save_screenshot_image_file_to_dir(
+    path: &Path,
+    target_dir: &Path,
+) -> Result<PathBuf, String> {
     let file_stem = path
         .parent()
         .and_then(|parent| parent.file_stem())
@@ -238,15 +247,12 @@ async fn save_screenshot_image_file(path: &Path) -> Result<(), String> {
         .unwrap_or("Screenshot");
 
     let target_name = format!("{}.png", sanitize_filename::sanitize(file_stem));
-    let target_path = desktop_dir.join(cap_utils::ensure_unique_filename(
-        &target_name,
-        &desktop_dir,
-    )?);
+    let target_path = target_dir.join(cap_utils::ensure_unique_filename(&target_name, target_dir)?);
 
     let started_at = Instant::now();
     loop {
         match tokio::fs::copy(path, &target_path).await {
-            Ok(_) => return Ok(()),
+            Ok(_) => return Ok(target_path),
             Err(err) if started_at.elapsed() < Duration::from_secs(2) => {
                 sleep(Duration::from_millis(50)).await;
                 if !path.exists() {
@@ -263,5 +269,142 @@ async fn save_screenshot_image_file(path: &Path) -> Result<(), String> {
                 ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clipboard_rs::common::RustImage;
+    use std::panic::AssertUnwindSafe;
+
+    #[test]
+    fn pending_action_is_consumed_once() {
+        let pending = PendingScreenshotPostCaptureAction::default();
+
+        pending.set(ScreenshotPostCaptureAction::CopyToClipboard);
+
+        assert_eq!(
+            pending.take(),
+            Some(ScreenshotPostCaptureAction::CopyToClipboard)
+        );
+        assert_eq!(pending.take(), None);
+    }
+
+    #[test]
+    fn pending_action_clear_discards_action() {
+        let pending = PendingScreenshotPostCaptureAction::default();
+
+        pending.set(ScreenshotPostCaptureAction::Upload);
+        pending.clear();
+
+        assert_eq!(pending.take(), None);
+    }
+
+    #[test]
+    fn pending_action_expires() {
+        let pending = PendingScreenshotPostCaptureAction::default();
+        *pending.0.lock().unwrap() = Some(PendingAction {
+            action: ScreenshotPostCaptureAction::Save,
+            created_at: Instant::now() - PENDING_ACTION_TTL - Duration::from_secs(1),
+        });
+
+        assert_eq!(pending.take(), None);
+        assert_eq!(pending.take(), None);
+    }
+
+    #[test]
+    fn pending_action_recovers_from_poisoned_mutex() {
+        let pending = PendingScreenshotPostCaptureAction::default();
+        let poisoned = pending.clone();
+
+        let _ = std::panic::catch_unwind(AssertUnwindSafe(move || {
+            let _guard = poisoned.0.lock().unwrap();
+            panic!("poison pending screenshot action mutex");
+        }));
+
+        pending.set(ScreenshotPostCaptureAction::ShowOverlay);
+
+        assert_eq!(
+            pending.take(),
+            Some(ScreenshotPostCaptureAction::ShowOverlay)
+        );
+    }
+
+    #[test]
+    fn image_from_pending_screenshot_supports_rgba_and_rgb() {
+        let rgba = image_from_pending_screenshot(PendingScreenshot {
+            data: vec![255, 0, 0, 255, 0, 255, 0, 255],
+            width: 2,
+            height: 1,
+            channels: 4,
+            created_at: Instant::now(),
+        })
+        .unwrap();
+        assert_eq!(rgba.get_size(), (2, 1));
+
+        let rgb = image_from_pending_screenshot(PendingScreenshot {
+            data: vec![255, 0, 0, 0, 255, 0],
+            width: 2,
+            height: 1,
+            channels: 3,
+            created_at: Instant::now(),
+        })
+        .unwrap();
+        assert_eq!(rgb.get_size(), (2, 1));
+    }
+
+    #[test]
+    fn image_from_pending_screenshot_rejects_unsupported_channels() {
+        let result = image_from_pending_screenshot(PendingScreenshot {
+            data: vec![0, 0],
+            width: 1,
+            height: 1,
+            channels: 2,
+            created_at: Instant::now(),
+        });
+
+        match result {
+            Ok(_) => panic!("expected unsupported channel count error"),
+            Err(err) => assert!(err.contains("Unsupported screenshot channel count: 2")),
+        }
+    }
+
+    #[tokio::test]
+    async fn save_screenshot_image_file_to_dir_copies_png_with_project_name() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let project_dir = temp_dir.path().join("Launch Clip.cap");
+        let target_dir = temp_dir.path().join("Desktop");
+        let source_path = project_dir.join("original.png");
+        let contents = b"png bytes";
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(&source_path, contents).unwrap();
+
+        let saved_path = save_screenshot_image_file_to_dir(&source_path, &target_dir)
+            .await
+            .unwrap();
+
+        assert_eq!(saved_path.file_name().unwrap(), "Launch Clip.png");
+        assert_eq!(std::fs::read(saved_path).unwrap(), contents);
+    }
+
+    #[tokio::test]
+    async fn save_screenshot_image_file_to_dir_uses_unique_filename() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let project_dir = temp_dir.path().join("Launch Clip.cap");
+        let target_dir = temp_dir.path().join("Desktop");
+        let source_path = project_dir.join("original.png");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(&source_path, b"new").unwrap();
+        std::fs::write(target_dir.join("Launch Clip.png"), b"existing").unwrap();
+
+        let saved_path = save_screenshot_image_file_to_dir(&source_path, &target_dir)
+            .await
+            .unwrap();
+
+        assert_eq!(saved_path.file_name().unwrap(), "Launch Clip (1).png");
+        assert_eq!(std::fs::read(saved_path).unwrap(), b"new");
     }
 }
