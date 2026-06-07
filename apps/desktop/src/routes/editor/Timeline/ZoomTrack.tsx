@@ -835,31 +835,77 @@ export function ZoomCurveTrack() {
 									// The video rendering engine uses exactly 1.0 second for the zoom transition
 									const rampDurationSecs = 1.0;
 									const rampPixels = () => rampDurationSecs / secsPerPixel();
-									const rampUpPct = () => (Math.min(rampPixels(), W() / 2) / W()) * 100;
-									const rampDownPct = () => (rampPixels() / W()) * 100;
+									
+									const toPct = (px: number) => (px / W()) * 100;
+									const rampUpPct = () => isInstant() ? 0 : toPct(Math.min(rampPixels(), W() / 2));
+									const rampDownPct = () => isInstant() ? 0 : toPct(rampPixels());
 
-									const d = () => {
-										if (isInstant()) {
-											return `M 0 ${startY()} L 0 ${currY()} L 100 ${currY()} ${
-												!isContiguousWithNext() ? `L 100 ${endY()}` : ""
-											}`;
+									const dGray = () => {
+										let parts = [];
+
+										// 1. Gap before
+										if (i() === 0) {
+											parts.push(`M -100000 ${getY(1.0)} L 0 ${getY(1.0)}`);
+										} else {
+											const prevSeg = prev();
+											const prevEndOffset = (prevSeg.end - segment.start) / secsPerPixel();
+											const prevRampDownW = prevSeg.instantAnimation ? 0 : rampPixels();
+											const gapStartX = isContiguousWithPrev() ? 0 : prevEndOffset + prevRampDownW;
+											if (gapStartX < 0) {
+												parts.push(`M ${toPct(gapStartX)} ${getY(1.0)} L 0 ${getY(1.0)}`);
+											}
 										}
-										return `M 0 ${startY()} C ${rampUpPct() / 2} ${startY()}, ${rampUpPct() / 2} ${currY()}, ${rampUpPct()} ${currY()} L 100 ${currY()} ${
-											!isContiguousWithNext()
-												? `C ${100 + rampDownPct() / 2} ${currY()}, ${100 + rampDownPct() / 2} ${endY()}, ${100 + rampDownPct()} ${endY()}`
-												: ""
-										}`;
+
+										// 2. Flat top
+										parts.push(`M ${rampUpPct()} ${currY()} L 100 ${currY()}`);
+
+										// 3. Gap after (if last)
+										if (i() === zoomSegments().length - 1) {
+											const afterXPct = 100 + (!isContiguousWithNext() ? rampDownPct() : 0);
+											parts.push(`M ${afterXPct} ${getY(1.0)} L 100000 ${getY(1.0)}`);
+										}
+
+										return parts.join(" ");
+									};
+
+									const dColored = () => {
+										let parts = [];
+
+										// 1. Ramp Up
+										if (isInstant()) {
+											parts.push(`M 0 ${startY()} L 0 ${currY()}`);
+										} else {
+											parts.push(`M 0 ${startY()} C ${rampUpPct() / 2} ${startY()}, ${rampUpPct() / 2} ${currY()}, ${rampUpPct()} ${currY()}`);
+										}
+
+										// 2. Ramp Down
+										if (!isContiguousWithNext()) {
+											if (isInstant()) {
+												parts.push(`M 100 ${currY()} L 100 ${endY()}`);
+											} else {
+												parts.push(`M 100 ${currY()} C ${100 + rampDownPct() / 2} ${currY()}, ${100 + rampDownPct() / 2} ${endY()}, ${100 + rampDownPct()} ${endY()}`);
+											}
+										}
+
+										return parts.join(" ");
 									};
 
 									return (
 										<svg
-											class="absolute inset-0 w-full h-full pointer-events-none opacity-40 text-blue-500 overflow-visible z-0"
+											class="absolute inset-0 w-full h-full pointer-events-none overflow-visible z-0"
 											viewBox="0 0 100 100"
 											preserveAspectRatio="none"
 										>
 											<path
-												d={d()}
-												stroke="currentColor"
+												d={dGray()}
+												class="stroke-gray-500/60"
+												stroke-width="3"
+												fill="none"
+												vector-effect="non-scaling-stroke"
+											/>
+											<path
+												d={dColored()}
+												class="stroke-blue-500"
 												stroke-width="3"
 												fill="none"
 												vector-effect="non-scaling-stroke"
