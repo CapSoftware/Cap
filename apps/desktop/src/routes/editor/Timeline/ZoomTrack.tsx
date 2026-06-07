@@ -820,10 +820,10 @@ export function ZoomCurveTrack() {
 									const currAmt = () => segment.amount;
 									const nextAmt = () => isContiguousWithNext() ? next().amount : 1.0;
 
-									// Map amount to Y coordinate linearly (1.0 -> 90, 5.0 -> 5)
+									// Map amount to Y coordinate linearly (1.0 -> 90, 4.5 -> 5)
 									const getY = (amt: number) => {
 										// Allow p to be negative so zoom-out (< 1.0) goes below the baseline
-										const p = Math.min(1, (amt - 1) / 4);
+										const p = Math.min(1, (amt - 1) / 3.5);
 										return 90 - 85 * p;
 									};
 
@@ -898,14 +898,14 @@ export function ZoomCurveTrack() {
 										>
 											<path
 												d={dGray()}
-												class="stroke-gray-500/60"
+												class="stroke-gray-400/70 dark:stroke-gray-500/70"
 												stroke-width="3"
 												fill="none"
 												vector-effect="non-scaling-stroke"
 											/>
 											<path
 												d={dColored()}
-												class="stroke-blue-500"
+												class="stroke-blue-400 dark:stroke-blue-400"
 												stroke-width="3"
 												fill="none"
 												vector-effect="non-scaling-stroke"
