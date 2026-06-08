@@ -17,6 +17,7 @@ import {
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
@@ -106,6 +107,7 @@ export const ShareVideo = forwardRef<
 		const [confirmStoppedError, setConfirmStoppedError] = useState<
 			string | null
 		>(null);
+		const autoFinalizeAttemptedRef = useRef(false);
 		const segmentUploadProgress = useUploadProgress(
 			data.id,
 			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
@@ -267,6 +269,31 @@ export const ShareVideo = forwardRef<
 			data.id,
 			data.source.type,
 			router,
+		]);
+		const shouldAutoFinalizeFailedSegments =
+			isSegmentsSource &&
+			(data.hasActiveUpload ?? false) &&
+			canFinalizeDesktopSegments &&
+			!userConfirmedStopped &&
+			segmentUploadProgress?.status === "error" &&
+			isRetryableDesktopSegmentsFinalizationError(
+				segmentUploadProgress.errorMessage,
+			);
+		useEffect(() => {
+			if (
+				!shouldAutoFinalizeFailedSegments ||
+				autoFinalizeAttemptedRef.current ||
+				isConfirmingStopped
+			) {
+				return;
+			}
+
+			autoFinalizeAttemptedRef.current = true;
+			void handleConfirmStopped();
+		}, [
+			handleConfirmStopped,
+			isConfirmingStopped,
+			shouldAutoFinalizeFailedSegments,
 		]);
 		const showFinalizeRecordingControl =
 			isSegmentsSource &&
