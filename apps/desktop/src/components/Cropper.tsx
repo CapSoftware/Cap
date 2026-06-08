@@ -14,6 +14,7 @@ import {
 	createSignal,
 	For,
 	on,
+	onCleanup,
 	onMount,
 	type ParentProps,
 	Show,
@@ -642,6 +643,8 @@ export function Cropper(
 	function onRegionPointerDown(e: PointerEvent) {
 		if (!containerRef || e.button !== 0) return;
 
+		const target = e.currentTarget as HTMLElement;
+		disposeActivePointerSession();
 		stopAnimation();
 		e.stopPropagation();
 		setMouseState({ drag: "region" });
@@ -652,25 +655,103 @@ export function Cropper(
 			y: e.clientY - containerRect.top - currentBounds.y,
 		};
 
-		createRoot((dispose) =>
+		trackPointerSession(
+			target,
+			e.pointerId,
+			(e) => {
+				let newX = e.clientX - containerRect.left - startOffset.x;
+				let newY = e.clientY - containerRect.top - startOffset.y;
+
+				newX = clamp(newX, 0, containerRect.width - currentBounds.width);
+				newY = clamp(newY, 0, containerRect.height - currentBounds.height);
+
+				currentBounds = moveBounds(currentBounds, newX, newY);
+				setRawBounds(currentBounds);
+
+				if (!isAnimating()) setDisplayRawBounds(currentBounds);
+			},
+			() => {
+				setMouseState({ drag: null });
+			},
+		);
+	}
+
+	let activePointerSessionDispose: (() => void) | undefined;
+
+	function disposeActivePointerSession() {
+		activePointerSessionDispose?.();
+		activePointerSessionDispose = undefined;
+	}
+
+	function trackPointerSession(
+		target: HTMLElement,
+		pointerId: number,
+		onMove: (event: PointerEvent) => void,
+		onEnd: () => void,
+	) {
+		target.setPointerCapture?.(pointerId);
+
+		createRoot((dispose) => {
+			let ended = false;
+			const finish = () => {
+				if (ended) return;
+				ended = true;
+				if (target.hasPointerCapture?.(pointerId)) {
+					target.releasePointerCapture(pointerId);
+				}
+				onEnd();
+				activePointerSessionDispose = undefined;
+				dispose();
+			};
+			const finishForPointer = (event: PointerEvent) => {
+				if (event.pointerId === pointerId) finish();
+			};
+
 			createEventListenerMap(window, {
-				pointerup: () => {
-					setMouseState({ drag: null });
-					dispose();
+				pointermove: (event) => {
+					if (event.pointerId === pointerId) onMove(event);
 				},
-				pointermove: (e) => {
-					let newX = e.clientX - containerRect.left - startOffset.x;
-					let newY = e.clientY - containerRect.top - startOffset.y;
+				pointerup: finishForPointer,
+				pointercancel: finishForPointer,
+				blur: finish,
+			});
+			createEventListenerMap(target, {
+				lostpointercapture: finishForPointer,
+			});
 
-					newX = clamp(newX, 0, containerRect.width - currentBounds.width);
-					newY = clamp(newY, 0, containerRect.height - currentBounds.height);
+			activePointerSessionDispose = finish;
+		});
+	}
 
-					currentBounds = moveBounds(currentBounds, newX, newY);
-					setRawBounds(currentBounds);
+	onCleanup(() => {
+		disposeActivePointerSession();
+		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+	});
 
-					if (!isAnimating()) setDisplayRawBounds(currentBounds);
-				},
-			}),
+	function onHandlePointerDown(handle: HandleSide, e: PointerEvent) {
+		if (!containerRef || e.button !== 0) return;
+		const target = e.currentTarget as HTMLElement;
+		disposeActivePointerSession();
+		e.stopPropagation();
+
+		stopAnimation();
+		setMouseState({ drag: "handle", cursor: handle.cursor });
+
+		const context: ResizeSessionState = {
+			containerRect: containerRef.getBoundingClientRect(),
+			startBounds: rawBounds(),
+			isAltMode: e.altKey,
+			activeHandle: { ...handle },
+			originalHandle: handle,
+		};
+
+		trackPointerSession(
+			target,
+			e.pointerId,
+			(e) => handleResizePointerMove(e, context),
+			() => {
+				setMouseState({ drag: null });
+			},
 		);
 	}
 
@@ -777,34 +858,6 @@ export function Cropper(
 		if (!isAnimating()) setDisplayRawBounds(finalBounds);
 	}
 
-	function onHandlePointerDown(handle: HandleSide, e: PointerEvent) {
-		if (!containerRef || e.button !== 0) return;
-		e.stopPropagation();
-
-		stopAnimation();
-		setMouseState({ drag: "handle", cursor: handle.cursor });
-
-		const context: ResizeSessionState = {
-			containerRect: containerRef.getBoundingClientRect(),
-			startBounds: rawBounds(),
-			isAltMode: e.altKey,
-			activeHandle: { ...handle },
-			originalHandle: handle,
-		};
-
-		createRoot((dispose) =>
-			createEventListenerMap(window, {
-				pointerup: () => {
-					setMouseState({ drag: null });
-					// Note: may need to be added back
-					// setAspectState("snapped", null);
-					dispose();
-				},
-				pointermove: (e) => handleResizePointerMove(e, context),
-			}),
-		);
-	}
-
 	function onHandleDoubleClick(handle: HandleSide, e: MouseEvent) {
 		e.stopPropagation();
 		const currentBounds = rawBounds();
@@ -832,8 +885,11 @@ export function Cropper(
 
 	function onOverlayPointerDown(e: PointerEvent) {
 		if (!containerRef || e.button !== 0) return;
+		const target = e.currentTarget as HTMLElement;
+		disposeActivePointerSession();
 		e.preventDefault();
 		e.stopPropagation();
+		stopAnimation();
 
 		const initialBounds = { ...rawBounds() };
 		const SE_HANDLE_INDEX = 3; // use bottom-right as the temporary handle
