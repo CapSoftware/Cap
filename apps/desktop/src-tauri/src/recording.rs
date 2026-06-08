@@ -858,9 +858,6 @@ pub struct StartRecordingInputs {
 fn desktop_recording_defaults(
     general_settings: Option<&GeneralSettingsStore>,
 ) -> cap_recording::RecordingDefaults {
-    // Build straight from the user's persisted settings when present so we don't run the RAM probe
-    // behind `RecordingDefaults::default()` only to immediately overwrite every field; fall back to
-    // the probing default (e.g. first launch before settings are written).
     match general_settings {
         Some(settings) => cap_recording::RecordingDefaults {
             custom_cursor_capture: settings.custom_cursor_capture,
@@ -869,7 +866,7 @@ fn desktop_recording_defaults(
             max_fps: settings.max_fps,
             studio_recording_quality: settings.studio_recording_quality.into(),
             out_of_process_muxer: settings.out_of_process_muxer,
-            instant_mode_max_resolution: settings.instant_mode_max_resolution,
+            instant_mode_max_resolution: cap_recording::DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
         },
         None => cap_recording::RecordingDefaults::default(),
     }
@@ -1283,58 +1280,62 @@ pub async fn start_recording(
         warn!(%error, "Failed to update camera window content protection");
     }
 
-    let video_upload_info = match inputs.mode {
+    let (video_upload_info, instant_mode_max_resolution) = match inputs.mode {
         RecordingMode::Instant => {
-            match AuthStore::get(&app).ok().flatten() {
-                Some(_) => {
-                    let upload_mode =
-                        if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
-                            "desktopMP4"
-                        } else {
-                            "desktopSegments"
-                        };
-
-                    let s3_config = match crate::upload::create_or_get_video_with_mode(
-                        &app,
-                        false,
-                        None,
-                        Some(project_name.clone()),
-                        None,
-                        inputs.organization_id.clone(),
-                        upload_mode,
-                    )
-                    .await
-                    {
-                        Ok(meta) => meta,
-                        Err(AuthedApiError::InvalidAuthentication) => {
-                            return Ok(RecordingAction::InvalidAuthentication);
-                        }
-                        Err(AuthedApiError::UpgradeRequired) => {
-                            return Ok(RecordingAction::UpgradeRequired);
-                        }
-                        Err(err) => {
-                            error!("Error creating instant mode video: {err}");
-                            return Err(err.to_string());
-                        }
-                    };
-
-                    let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
-                    info!("Pre-created shareable link: {}", link);
-
-                    Some(VideoUploadInfo {
-                        id: s3_config.id.to_string(),
-                        link: link.clone(),
-                        config: s3_config,
+            let Some(auth) = AuthStore::get(&app).ok().flatten() else {
+                return Err("Please sign in to use instant recording".to_string());
+            };
+            let instant_mode_max_resolution = if auth.is_upgraded() {
+                general_settings
+                    .map_or(cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION, |settings| {
+                        settings.instant_mode_max_resolution
                     })
+            } else {
+                cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
+            };
+            let upload_mode = if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+                "desktopMP4"
+            } else {
+                "desktopSegments"
+            };
+
+            let s3_config = match crate::upload::create_or_get_video_with_mode(
+                &app,
+                false,
+                None,
+                Some(project_name.clone()),
+                None,
+                inputs.organization_id.clone(),
+                upload_mode,
+            )
+            .await
+            {
+                Ok(meta) => meta,
+                Err(AuthedApiError::InvalidAuthentication) => {
+                    return Ok(RecordingAction::InvalidAuthentication);
                 }
-                // Allow the recording to proceed without error for any signed-in user
-                _ => {
-                    // User is not signed in
-                    return Err("Please sign in to use instant recording".to_string());
+                Err(AuthedApiError::UpgradeRequired) => {
+                    return Ok(RecordingAction::UpgradeRequired);
                 }
-            }
+                Err(err) => {
+                    error!("Error creating instant mode video: {err}");
+                    return Err(err.to_string());
+                }
+            };
+
+            let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
+            info!("Pre-created shareable link: {}", link);
+
+            (
+                Some(VideoUploadInfo {
+                    id: s3_config.id.to_string(),
+                    link: link.clone(),
+                    config: s3_config,
+                }),
+                instant_mode_max_resolution,
+            )
         }
-        RecordingMode::Studio => None,
+        RecordingMode::Studio => (None, cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION),
         RecordingMode::Screenshot => return Err("Use take_screenshot for screenshots".to_string()),
     };
 
@@ -1582,7 +1583,7 @@ pub async fn start_recording(
                                 inputs.capture_target.clone(),
                             )
                             .with_system_audio(inputs.capture_system_audio)
-                            .with_max_output_size(defaults.instant_mode_max_resolution);
+                            .with_max_output_size(instant_mode_max_resolution);
 
                             #[cfg(target_os = "macos")]
                             {
