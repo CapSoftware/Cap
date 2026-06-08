@@ -110,7 +110,9 @@ export async function getVideoEngagement(videoId: string) {
 
 	if (!video || video.ownerId !== user.id) throw new Error("Unauthorized");
 
-	const safeId = escapeLiteral(videoId);
+	if (!/^[0-9a-zA-Z_-]+$/.test(videoId))
+		throw new Error("Invalid video ID format");
+	const safeId = videoId;
 
 	return runPromise(
 		Effect.gen(function* () {
