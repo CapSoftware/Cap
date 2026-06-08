@@ -72,6 +72,8 @@ function isRetryableMuxError(error: unknown) {
 		message.includes("SERVER_BUSY") ||
 		message.includes("Server is at capacity") ||
 		message.includes("fetch failed") ||
+		message.includes("Segment manifest not found") ||
+		message.includes("Segment manifest is not marked as complete") ||
 		message.includes("timed out") ||
 		message.includes("timeout")
 	);
