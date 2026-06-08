@@ -13,7 +13,8 @@ export function getEmailProvider(): EmailProvider | null {
 
 function build(): EmailProvider | null {
 	const env = serverEnv();
-	const requested = env.EMAIL_PROVIDER ?? (env.RESEND_API_KEY ? "resend" : null);
+	const requested =
+		env.EMAIL_PROVIDER ?? (env.RESEND_API_KEY ? "resend" : null);
 
 	if (requested === "smtp") {
 		if (!env.SMTP_HOST || !env.SMTP_PORT) {

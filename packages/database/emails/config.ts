@@ -39,14 +39,14 @@ export const sendEmail = async ({
 		from = "Cap Auth <no-reply@auth.cap.so>";
 	else {
 		const env = serverEnv();
-		const domain = env.EMAIL_FROM ?? env.RESEND_FROM_DOMAIN;
-		if (!domain) {
+		if (env.EMAIL_FROM) from = env.EMAIL_FROM;
+		else if (env.RESEND_FROM_DOMAIN) from = `auth@${env.RESEND_FROM_DOMAIN}`;
+		else {
 			console.warn(
 				"[email] No EMAIL_FROM or RESEND_FROM_DOMAIN configured — skipping send",
 			);
 			return;
 		}
-		from = env.EMAIL_FROM ? domain : `auth@${domain}`;
 	}
 
 	if (scheduledAt && provider.name !== "resend") {

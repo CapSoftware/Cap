@@ -1,11 +1,7 @@
 import { render } from "@react-email/render";
 import type { Transporter } from "nodemailer";
 import { createTransport } from "nodemailer";
-import type {
-	EmailProvider,
-	SendEmailInput,
-	SendEmailResult,
-} from "./types";
+import type { EmailProvider, SendEmailInput, SendEmailResult } from "./types";
 
 export type SmtpConfig = {
 	host: string;
@@ -32,27 +28,26 @@ export class SmtpEmailProvider implements EmailProvider {
 	}
 
 	async send(input: SendEmailInput): Promise<SendEmailResult> {
-		if (input.scheduledAt) {
-			throw new Error(
-				"SMTP provider does not support scheduled sends. Use Resend for scheduledAt.",
-			);
+		try {
+			const [html, text] = await Promise.all([
+				render(input.react),
+				render(input.react, { plainText: true }),
+			]);
+
+			const info = await this.transporter.sendMail({
+				from: input.from,
+				to: input.to,
+				cc: input.cc,
+				replyTo: input.replyTo,
+				subject: input.subject,
+				html,
+				text,
+			});
+
+			return { id: info.messageId };
+		} catch (error) {
+			console.error("[email] SMTP send failed:", error);
+			return {};
 		}
-
-		const [html, text] = await Promise.all([
-			render(input.react),
-			render(input.react, { plainText: true }),
-		]);
-
-		const info = await this.transporter.sendMail({
-			from: input.from,
-			to: input.to,
-			cc: input.cc,
-			replyTo: input.replyTo,
-			subject: input.subject,
-			html,
-			text,
-		});
-
-		return { id: info.messageId };
 	}
 }

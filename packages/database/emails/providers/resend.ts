@@ -1,9 +1,5 @@
 import { Resend } from "resend";
-import type {
-	EmailProvider,
-	SendEmailInput,
-	SendEmailResult,
-} from "./types";
+import type { EmailProvider, SendEmailInput, SendEmailResult } from "./types";
 
 export class ResendEmailProvider implements EmailProvider {
 	readonly name = "resend" as const;
@@ -25,9 +21,10 @@ export class ResendEmailProvider implements EmailProvider {
 		});
 
 		if (result.error) {
-			throw new Error(
-				`Resend send failed: ${result.error.name} — ${result.error.message}`,
+			console.error(
+				`[email] Resend send failed: ${result.error.name} — ${result.error.message}`,
 			);
+			return {};
 		}
 
 		return { id: result.data?.id };
