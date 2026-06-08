@@ -113,6 +113,7 @@ interface Props {
 	showPlaybackStatusBadge?: boolean;
 	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
+	defaultPlaybackSpeed?: number;
 }
 
 export function CapVideoPlayer({
@@ -145,6 +146,7 @@ export function CapVideoPlayer({
 	showPlaybackStatusBadge = false,
 	showFloatingVolumeControl = false,
 	onUploadComplete,
+	defaultPlaybackSpeed,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -618,6 +620,7 @@ export function CapVideoPlayer({
 				"[&::-webkit-media-text-track-display]:!hidden",
 			)}
 			autoHide
+			defaultPlaybackRate={defaultPlaybackSpeed}
 		>
 			{showUploadFailureOverlay && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">

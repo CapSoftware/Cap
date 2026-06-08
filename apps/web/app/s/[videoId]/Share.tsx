@@ -502,6 +502,7 @@ export const Share = ({
 									showPlaybackStatusBadge={viewerId === data.owner.id}
 									isEditProcessing={isEditProcessing}
 									recordingStopped={recordingStopped}
+									defaultPlaybackSpeed={data.settings?.defaultPlaybackSpeed}
 									ref={playerRef}
 								/>
 							</div>

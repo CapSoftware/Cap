@@ -6,7 +6,9 @@ export type ViewerSettingKey =
 	| "disableTranscript"
 	| "disableComments";
 
-export type ViewerSettings = Partial<Record<ViewerSettingKey, boolean>>;
+export type ViewerSettings = Partial<Record<ViewerSettingKey, boolean>> & {
+	defaultPlaybackSpeed?: number;
+};
 
 export type SpaceRuleInput = {
 	id: string;
@@ -44,6 +46,7 @@ const emptySettings: Required<ViewerSettings> = {
 	disableReactions: false,
 	disableTranscript: false,
 	disableComments: false,
+	defaultPlaybackSpeed: 1,
 };
 
 export function resolveEffectiveVideoRules({
@@ -73,6 +76,11 @@ export function resolveEffectiveVideoRules({
 				videoSettings?.[key] ?? organizationSettings?.[key] ?? false;
 		}
 	}
+
+	settings.defaultPlaybackSpeed =
+		videoSettings?.defaultPlaybackSpeed ??
+		organizationSettings?.defaultPlaybackSpeed ??
+		1;
 
 	const inheritedPasswordSources = spaces
 		.filter((space) => space.hasPassword || Boolean(space.password))

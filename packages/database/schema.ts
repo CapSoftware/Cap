@@ -205,6 +205,7 @@ export const organizations = mysqlTable(
 			hideShareableLinkCapLogo?: boolean;
 			shareableLinkUseOrganizationIcon?: boolean;
 			aiGenerationLanguage?: AiGenerationLanguage;
+			defaultPlaybackSpeed?: number;
 		}>(),
 		iconUrl: varchar("iconUrl", {
 			length: 1024,
@@ -331,6 +332,7 @@ export const videos = mysqlTable(
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
 			disableComments?: boolean;
+			defaultPlaybackSpeed?: number;
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
 			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO"
@@ -948,6 +950,7 @@ export const spaces = mysqlTable(
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
 			disableComments?: boolean;
+			defaultPlaybackSpeed?: number;
 		}>(),
 		password: encryptedTextNullable("password"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),

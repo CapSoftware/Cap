@@ -101,6 +101,7 @@ interface Props {
 	canRetryProcessing?: boolean;
 	duration?: number | null;
 	previewMode?: "background";
+	defaultPlaybackSpeed?: number;
 }
 
 export function HLSVideoPlayer({
@@ -125,6 +126,7 @@ export function HLSVideoPlayer({
 	canRetryProcessing = false,
 	duration: fallbackDuration,
 	previewMode,
+	defaultPlaybackSpeed,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -616,6 +618,7 @@ export function HLSVideoPlayer({
 				isBackgroundPreview && "pointer-events-none [&_video]:opacity-70",
 			)}
 			autoHide
+			defaultPlaybackRate={defaultPlaybackSpeed}
 		>
 			{hasFailedOrError && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">

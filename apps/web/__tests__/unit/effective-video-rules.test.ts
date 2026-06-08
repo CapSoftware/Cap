@@ -66,6 +66,36 @@ describe("resolveEffectiveVideoRules", () => {
 		expect(rules.settings.disableSummary).toBe(true);
 	});
 
+	it("uses video defaultPlaybackSpeed if provided", () => {
+		const rules = resolveEffectiveVideoRules({
+			videoSettings: { defaultPlaybackSpeed: 1.5 },
+			organizationSettings: { defaultPlaybackSpeed: 2 },
+			spaces: [],
+		});
+
+		expect(rules.settings.defaultPlaybackSpeed).toBe(1.5);
+	});
+
+	it("uses organization defaultPlaybackSpeed if video setting is unset", () => {
+		const rules = resolveEffectiveVideoRules({
+			videoSettings: {},
+			organizationSettings: { defaultPlaybackSpeed: 1.25 },
+			spaces: [],
+		});
+
+		expect(rules.settings.defaultPlaybackSpeed).toBe(1.25);
+	});
+
+	it("uses 1 as defaultPlaybackSpeed if unset in both video and organization", () => {
+		const rules = resolveEffectiveVideoRules({
+			videoSettings: {},
+			organizationSettings: {},
+			spaces: [],
+		});
+
+		expect(rules.settings.defaultPlaybackSpeed).toBe(1);
+	});
+
 	it("reports inherited password sources", () => {
 		const rules = resolveEffectiveVideoRules({
 			videoSettings: {},

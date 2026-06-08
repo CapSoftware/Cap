@@ -15,6 +15,7 @@ export async function updateVideoSettings(
 		disableReactions?: boolean;
 		disableTranscript?: boolean;
 		disableComments?: boolean;
+		defaultPlaybackSpeed?: number;
 	},
 ) {
 	const user = await getCurrentUser();

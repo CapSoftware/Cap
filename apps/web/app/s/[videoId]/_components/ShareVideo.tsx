@@ -52,6 +52,7 @@ export const ShareVideo = forwardRef<
 		areCaptionsDisabled?: boolean;
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;
+		defaultPlaybackSpeed?: number;
 		aiGenerationStatus?: AiGenerationStatus | null;
 		canRetryProcessing?: boolean;
 		showPlaybackStatusBadge?: boolean;
@@ -68,6 +69,7 @@ export const ShareVideo = forwardRef<
 			areChaptersDisabled,
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
+			defaultPlaybackSpeed,
 			canRetryProcessing,
 			showPlaybackStatusBadge = false,
 			isEditProcessing,
@@ -323,6 +325,7 @@ export const ShareVideo = forwardRef<
 							enableCrossOrigin={enableCrossOrigin}
 							hasActiveUpload={data.hasActiveUpload}
 							blockPlaybackDuringProcessing={isEditProcessing}
+							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							onUploadComplete={handleUploadComplete}
 							comments={commentsData.map((comment) => ({
 								id: comment.id,
@@ -361,6 +364,7 @@ export const ShareVideo = forwardRef<
 							isCaptionLoading={captionContext.isTranslating}
 							hasCaptions={data.transcriptionStatus === "COMPLETE"}
 							canRetryProcessing={canRetryProcessing}
+							defaultPlaybackSpeed={defaultPlaybackSpeed}
 						/>
 					)}
 				</div>

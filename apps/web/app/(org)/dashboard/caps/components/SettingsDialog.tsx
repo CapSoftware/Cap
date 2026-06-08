@@ -6,6 +6,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 	Switch,
+	Select,
 } from "@cap/ui";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
@@ -86,6 +87,7 @@ export const SettingsDialog = ({
 			disableChapters: data?.disableChapters,
 			disableReactions: data?.disableReactions,
 			disableTranscript: data?.disableTranscript,
+			defaultPlaybackSpeed: data?.defaultPlaybackSpeed,
 		}),
 		[],
 	);
@@ -217,6 +219,35 @@ export const SettingsDialog = ({
 							</div>
 						);
 					})}
+					<div className="flex gap-10 justify-between items-center p-4 rounded-xl border transition-colors min-w-fit border-gray-3 bg-gray-1">
+						<div className="flex flex-col flex-1">
+							<div className="flex gap-1.5 items-center flex-wrap">
+								<p className="text-sm text-gray-12">Default playback speed</p>
+							</div>
+							<p className="text-xs text-gray-10">
+								Set the default video speed for viewers
+							</p>
+						</div>
+						<Select
+							value={String(settings?.defaultPlaybackSpeed ?? organizationSettings?.defaultPlaybackSpeed ?? 1)}
+							onValueChange={(value) => {
+								setSettings((prev) => ({
+									...prev,
+									defaultPlaybackSpeed: Number(value),
+								}));
+							}}
+							placeholder="Select speed"
+							options={[
+								{ label: "0.5x", value: "0.5" },
+								{ label: "0.75x", value: "0.75" },
+								{ label: "1x (Normal)", value: "1" },
+								{ label: "1.25x", value: "1.25" },
+								{ label: "1.5x", value: "1.5" },
+								{ label: "1.75x", value: "1.75" },
+								{ label: "2x", value: "2" },
+							]}
+						/>
+					</div>
 				</div>
 				<DialogFooter className="p-5 border-t border-gray-4">
 					<Button

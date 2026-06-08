@@ -305,6 +305,7 @@ interface MediaPlayerRootProps
 	autoHide?: boolean;
 	disabled?: boolean;
 	withoutTooltip?: boolean;
+	defaultPlaybackRate?: number;
 }
 
 function MediaPlayerRoot(props: MediaPlayerRootProps) {
@@ -352,6 +353,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 		children,
 		className,
 		ref,
+		defaultPlaybackRate,
 		...rootImplProps
 	} = props;
 
@@ -446,8 +448,18 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 			mediaPaused,
 			menuOpen,
 			dragging,
+			rootImplProps,
 		],
 	);
+
+	React.useEffect(() => {
+		if (defaultPlaybackRate !== undefined && defaultPlaybackRate !== 1) {
+			dispatch({
+				type: MediaActionTypes.MEDIA_PLAYBACK_RATE_REQUEST,
+				detail: defaultPlaybackRate,
+			});
+		}
+	}, [defaultPlaybackRate, dispatch]);
 
 	const onMouseMove = React.useCallback(
 		(event: React.MouseEvent<HTMLDivElement>) => {
