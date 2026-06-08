@@ -13,7 +13,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { buildEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
@@ -552,6 +552,10 @@ async function AuthorizedContent({
 		organizationSettings: video.orgSettings,
 		spaces: sharedSpaces.filter((space) => space.id !== space.organizationId),
 	});
+	const env = serverEnv();
+	const transcriptionGenerationAvailable =
+		Boolean(env.DEEPGRAM_API_KEY) && !rules.settings.disableTranscript;
+	const aiProviderAvailable = Boolean(env.GROQ_API_KEY || env.OPENAI_API_KEY);
 
 	let aiGenerationEnabled = false;
 	const videoOwnerQuery = await db()
@@ -570,7 +574,7 @@ async function AuthorizedContent({
 	}
 
 	if (
-		!rules.settings.disableTranscript &&
+		transcriptionGenerationAvailable &&
 		!video.hasActiveUpload &&
 		video.transcriptionStatus !== "COMPLETE" &&
 		video.transcriptionStatus !== "PROCESSING" &&
@@ -870,7 +874,8 @@ async function AuthorizedContent({
 				recordingStopped={recordingStopped}
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}
-				aiGenerationEnabled={aiGenerationEnabled}
+				aiGenerationAvailable={aiGenerationEnabled && aiProviderAvailable}
+				transcriptionGenerationAvailable={transcriptionGenerationAvailable}
 			/>
 		</div>
 	);
