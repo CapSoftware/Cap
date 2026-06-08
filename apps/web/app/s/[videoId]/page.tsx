@@ -42,6 +42,7 @@ import {
 	getDashboardData,
 	type OrganizationSettings,
 } from "@/app/(org)/dashboard/dashboard-data";
+import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { createNotification } from "@/lib/Notification";
 import {
 	canManageOrganizationSettings,
@@ -508,8 +509,33 @@ async function AuthorizedContent({
 	// will have already been fetched if auth is required
 	const user = await getCurrentUser();
 	const videoId = video.id;
-	const canRegisterView =
+	let recoveredDesktopSegmentsUpload = false;
+
+	if (
+		user?.id === video.owner.id &&
+		video.source?.type === "desktopSegments" &&
 		!video.hasActiveUpload &&
+		serverEnv().MEDIA_SERVER_URL
+	) {
+		try {
+			const result = await completeDesktopSegmentsManifestAndQueue({
+				videoId,
+				userId: user.id,
+			});
+			recoveredDesktopSegmentsUpload =
+				result.status === "queued" || result.status === "already-processing";
+		} catch (error) {
+			console.error(
+				`[ShareVideoPage] Failed to recover desktop segments upload ${videoId}:`,
+				error,
+			);
+		}
+	}
+
+	const hasActiveUpload =
+		video.hasActiveUpload || recoveredDesktopSegmentsUpload;
+	const canRegisterView =
+		!hasActiveUpload &&
 		Date.now() - video.updatedAt.getTime() >= VIEW_NOTIFICATION_DELAY_MS;
 
 	if (user && video && user.id !== video.owner.id && canRegisterView) {
@@ -575,7 +601,7 @@ async function AuthorizedContent({
 
 	if (
 		transcriptionGenerationAvailable &&
-		!video.hasActiveUpload &&
+		!hasActiveUpload &&
 		video.transcriptionStatus !== "COMPLETE" &&
 		video.transcriptionStatus !== "PROCESSING" &&
 		video.transcriptionStatus !== "SKIPPED" &&
@@ -800,6 +826,7 @@ async function AuthorizedContent({
 
 		return {
 			...video,
+			hasActiveUpload,
 			owner: {
 				id: video.owner.id,
 				name: video.owner.name,
