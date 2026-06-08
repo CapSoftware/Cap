@@ -351,12 +351,8 @@ export function createCustomDomainQuery() {
 export function createOrganizationsQuery() {
 	const auth = authStore.createQuery();
 
-	// Refresh organizations if they're missing
 	createEffect(() => {
-		if (
-			auth.data?.user_id &&
-			(!auth.data?.organizations || auth.data.organizations.length === 0)
-		) {
+		if (auth.data?.user_id && !auth.data?.organizations_updated_at) {
 			commands.updateAuthPlan().catch(console.error);
 		}
 	});
