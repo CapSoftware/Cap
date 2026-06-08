@@ -1,5 +1,11 @@
 {
 	"$schema": "https://openapi.vercel.sh/vercel.json",
+	"crons": [
+		{
+			"path": "/api/cron/finalize-stale-desktop-segments",
+			"schedule": "*/15 * * * *"
+		}
+	],
 	"functions": {
 		"app/.well-known/workflow/v1/step/route.js": {
 			"memory": 3009
