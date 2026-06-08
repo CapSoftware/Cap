@@ -918,20 +918,19 @@ export function Cropper(
 			originalHandle: handle,
 		};
 
-		createRoot((dispose) => {
-			createEventListenerMap(window, {
-				pointerup: () => {
-					setMouseState({ drag: null });
-					const bounds = rawBounds();
-					if (bounds.width < 5 || bounds.height < 5) {
-						setRawBounds(initialBounds);
-						if (!isAnimating()) setDisplayRawBounds(initialBounds);
-					}
-					dispose();
-				},
-				pointermove: (e) => handleResizePointerMove(e, context),
-			});
-		});
+		trackPointerSession(
+			target,
+			e.pointerId,
+			(e) => handleResizePointerMove(e, context),
+			() => {
+				setMouseState({ drag: null });
+				const bounds = rawBounds();
+				if (bounds.width < 5 || bounds.height < 5) {
+					setRawBounds(initialBounds);
+					if (!isAnimating()) setDisplayRawBounds(initialBounds);
+				}
+			},
+		);
 	}
 
 	const KEY_MAPPINGS = new Map([
