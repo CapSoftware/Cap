@@ -141,6 +141,13 @@ type AiGenerationStatus =
 	| "ERROR"
 	| "SKIPPED";
 
+type TranscriptionStatus =
+	| "PROCESSING"
+	| "COMPLETE"
+	| "ERROR"
+	| "SKIPPED"
+	| "NO_AUDIO";
+
 interface ShareProps {
 	data: VideoData;
 	comments: MaybePromise<CommentWithAuthor[]>;
@@ -159,12 +166,16 @@ interface ShareProps {
 		chapters?: { title: string; start: number }[] | null;
 		aiGenerationStatus?: AiGenerationStatus | null;
 	} | null;
-	aiGenerationEnabled: boolean;
+	aiGenerationAvailable: boolean;
+	transcriptionGenerationAvailable: boolean;
 }
 
 const useVideoStatus = (
 	videoId: Video.VideoId,
-	aiGenerationEnabled: boolean,
+	availability: {
+		aiGeneration: boolean;
+		transcriptionGeneration: boolean;
+	},
 	initialData?: {
 		transcriptionStatus?: string | null;
 		name?: string | null;
@@ -186,13 +197,8 @@ const useVideoStatus = (
 		},
 		initialData: initialData
 			? {
-					transcriptionStatus: initialData.transcriptionStatus as
-						| "PROCESSING"
-						| "COMPLETE"
-						| "ERROR"
-						| "SKIPPED"
-						| "NO_AUDIO"
-						| null,
+					transcriptionStatus:
+						initialData.transcriptionStatus as TranscriptionStatus | null,
 					aiGenerationStatus:
 						(initialData.aiData?.aiGenerationStatus as AiGenerationStatus) ||
 						null,
@@ -207,10 +213,11 @@ const useVideoStatus = (
 			if (!data) return 2000;
 
 			const shouldContinuePolling = () => {
-				if (
-					!data.transcriptionStatus ||
-					data.transcriptionStatus === "PROCESSING"
-				) {
+				if (!data.transcriptionStatus) {
+					return availability.transcriptionGeneration;
+				}
+
+				if (data.transcriptionStatus === "PROCESSING") {
 					return true;
 				}
 
@@ -223,7 +230,7 @@ const useVideoStatus = (
 				}
 
 				if (data.transcriptionStatus === "COMPLETE") {
-					if (!aiGenerationEnabled) {
+					if (!availability.aiGeneration) {
 						return false;
 					}
 
@@ -242,7 +249,11 @@ const useVideoStatus = (
 						return true;
 					}
 
-					if (!data.aiGenerationStatus && !data.summary && !data.chapters) {
+					if (
+						!data.aiGenerationStatus &&
+						!data.summary &&
+						!data.chapters?.length
+					) {
 						return true;
 					}
 
@@ -264,12 +275,13 @@ export const Share = ({
 	comments,
 	views,
 	initialAiData,
-	aiGenerationEnabled,
 	videoSettings,
 	viewerId,
 	isEditProcessing,
 	recordingStopped = false,
 	defaultPlaybackSpeed,
+	aiGenerationAvailable,
+	transcriptionGenerationAvailable,
 }: ShareProps) => {
 	const effectiveDate: Date = data.metadata?.customCreatedAt
 		? new Date(data.metadata.customCreatedAt)
@@ -288,11 +300,18 @@ export const Share = ({
 		},
 	);
 
-	const { data: videoStatus } = useVideoStatus(data.id, aiGenerationEnabled, {
-		transcriptionStatus: data.transcriptionStatus,
-		name: data.name,
-		aiData: initialAiData,
-	});
+	const { data: videoStatus } = useVideoStatus(
+		data.id,
+		{
+			aiGeneration: aiGenerationAvailable,
+			transcriptionGeneration: transcriptionGenerationAvailable,
+		},
+		{
+			transcriptionStatus: data.transcriptionStatus,
+			name: data.name,
+			aiData: initialAiData,
+		},
+	);
 
 	const transcriptionStatus =
 		videoStatus?.transcriptionStatus || data.transcriptionStatus;
@@ -319,12 +338,32 @@ export const Share = ({
 		});
 	}, [data.id, data.orgId, data.owner.id, viewerId]);
 
+	const isDisabled = (setting: ViewerSettingKey) =>
+		videoSettings?.[setting] ?? data.orgSettings?.[setting] ?? false;
+
+	const areChaptersDisabled = isDisabled("disableChapters");
+	const isSummaryDisabled = isDisabled("disableSummary");
+	const areCaptionsDisabled = isDisabled("disableCaptions");
+	const areCommentStampsDisabled = isDisabled("disableComments");
+	const areReactionStampsDisabled = isDisabled("disableReactions");
+	const allSettingsDisabled =
+		isDisabled("disableComments") &&
+		isDisabled("disableSummary") &&
+		isDisabled("disableTranscript");
+
 	const shouldShowLoading = () => {
-		if (!aiGenerationEnabled) {
+		const hasVisibleAiSection = !isSummaryDisabled || !areChaptersDisabled;
+		const hasAiData = Boolean(aiData.summary || aiData.chapters?.length);
+
+		if (!hasVisibleAiSection || !aiGenerationAvailable || hasAiData) {
 			return false;
 		}
 
-		if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
+		if (!transcriptionStatus) {
+			return transcriptionGenerationAvailable;
+		}
+
+		if (transcriptionStatus === "PROCESSING") {
 			return true;
 		}
 
@@ -350,7 +389,7 @@ export const Share = ({
 			) {
 				return true;
 			}
-			if (!aiData.aiGenerationStatus && !aiData.summary && !aiData.chapters) {
+			if (!aiData.aiGenerationStatus) {
 				return true;
 			}
 		}
@@ -468,19 +507,6 @@ export const Share = ({
 		}, 100);
 	}, []);
 
-	const isDisabled = (setting: ViewerSettingKey) =>
-		videoSettings?.[setting] ?? data.orgSettings?.[setting] ?? false;
-
-	const areChaptersDisabled = isDisabled("disableChapters");
-	const isSummaryDisabled = isDisabled("disableSummary");
-	const areCaptionsDisabled = isDisabled("disableCaptions");
-	const areCommentStampsDisabled = isDisabled("disableComments");
-	const areReactionStampsDisabled = isDisabled("disableReactions");
-	const allSettingsDisabled =
-		isDisabled("disableComments") &&
-		isDisabled("disableSummary") &&
-		isDisabled("disableTranscript");
-
 	return (
 		<CaptionProvider
 			videoId={data.id}
@@ -538,7 +564,7 @@ export const Share = ({
 								onSeek={handleSeek}
 								videoId={data.id}
 								aiData={aiData}
-								aiGenerationEnabled={aiGenerationEnabled}
+								aiGenerationEnabled={aiGenerationAvailable}
 								ref={activityRef}
 							/>
 						</div>
