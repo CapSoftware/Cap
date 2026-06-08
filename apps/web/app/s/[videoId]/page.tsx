@@ -47,6 +47,7 @@ import {
 	canManageOrganizationSettings,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
+import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import {
@@ -830,6 +831,11 @@ async function AuthorizedContent({
 		rawFileKey: video.activeUploadRawFileKey,
 	});
 
+	const defaultPlaybackSpeed = resolveDefaultPlaybackSpeed(
+		video.videoSettings?.defaultPlaybackSpeed,
+		video.orgSettings?.defaultPlaybackSpeed,
+	);
+
 	return (
 		<div className="container flex-1 px-4 mx-auto">
 			<ShareHeader
@@ -862,6 +868,7 @@ async function AuthorizedContent({
 				viewerId={user?.id ?? null}
 				isEditProcessing={isEditProcessing}
 				recordingStopped={recordingStopped}
+				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}
 				aiGenerationEnabled={aiGenerationEnabled}
 			/>
