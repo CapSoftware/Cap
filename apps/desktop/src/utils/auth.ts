@@ -8,6 +8,8 @@ import { z } from "zod";
 import callbackTemplate from "~/components/callback.template";
 import { authStore, generalSettingsStore } from "~/store";
 import { identifyUser, trackEvent } from "./analytics";
+import { clientEnv } from "./env";
+import { shouldUseLocalServerSessionForUrl } from "./server-url-routing";
 import { commands } from "./tauri";
 
 const paramsValidator = z.union([
@@ -28,7 +30,7 @@ type AuthParams = z.infer<typeof paramsValidator>;
 export function createSignInMutation() {
 	return createMutation(() => ({
 		mutationFn: async (abort: AbortController) => {
-			const session = import.meta.env.DEV
+			const session = (await shouldUseLocalServerSession())
 				? await createLocalServerSession(abort.signal)
 				: await createHybridDesktopSession(abort.signal);
 
@@ -42,12 +44,26 @@ export function createSignInMutation() {
 	}));
 }
 
+async function getConfiguredServerUrl() {
+	return (
+		(await generalSettingsStore.get())?.serverUrl ?? clientEnv.VITE_SERVER_URL
+	);
+}
+
+async function shouldUseLocalServerSession() {
+	const serverUrl = await getConfiguredServerUrl();
+	return shouldUseLocalServerSessionForUrl(
+		serverUrl,
+		clientEnv.VITE_SERVER_URL,
+		import.meta.env.DEV,
+	);
+}
+
 async function createSessionRequestUrl(
 	port: string | null,
 	platform: "web" | "desktop",
 ) {
-	const serverUrl =
-		(await generalSettingsStore.get())?.serverUrl ?? "https://cap.so";
+	const serverUrl = await getConfiguredServerUrl();
 	const callbackUrl = new URL(
 		`/api/desktop/session/request?type=api_key`,
 		serverUrl,
