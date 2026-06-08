@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { Tinybird } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
@@ -98,7 +99,18 @@ export async function getVideoAnalytics(
 export async function getVideoEngagement(videoId: string) {
 	if (!videoId) throw new Error("Video ID is required");
 
-	const safeId = videoId.replace(/'/g, "''");
+	const user = await getCurrentUser();
+	if (!user?.id) throw new Error("Unauthorized");
+
+	const [video] = await db()
+		.select({ ownerId: videos.ownerId })
+		.from(videos)
+		.where(eq(videos.id, Video.VideoId.make(videoId)))
+		.limit(1);
+
+	if (!video || video.ownerId !== user.id) throw new Error("Unauthorized");
+
+	const safeId = escapeLiteral(videoId);
 
 	return runPromise(
 		Effect.gen(function* () {

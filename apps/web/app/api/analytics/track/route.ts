@@ -104,6 +104,22 @@ export async function POST(request: NextRequest) {
 		if (percentWatched !== null) {
 			await runPromise(
 				Effect.gen(function* () {
+					const maybeUser = yield* Effect.serviceOption(CurrentUser);
+					const userId = Option.match(maybeUser, {
+						onNone: () => null as string | null,
+						onSome: (user) => (user as { id: string }).id,
+					});
+
+					const [videoRecord] = yield* Effect.tryPromise(() =>
+						db()
+							.select({ ownerId: videos.ownerId })
+							.from(videos)
+							.where(eq(videos.id, Video.VideoId.make(body.videoId)))
+							.limit(1),
+					).pipe(Effect.orElseSucceed(() => [] as { ownerId: string }[]));
+
+					if (videoRecord && userId === videoRecord.ownerId) return;
+
 					const tinybird = yield* Tinybird;
 					yield* tinybird.appendEvents([
 						{
@@ -115,7 +131,7 @@ export async function POST(request: NextRequest) {
 							percent_watched: percentWatched,
 						},
 					]);
-				}),
+				}).pipe(provideOptionalAuth),
 			);
 		}
 		return Response.json({ success: true });

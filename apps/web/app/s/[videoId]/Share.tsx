@@ -369,12 +369,11 @@ export const Share = ({
 
 	useEffect(() => {
 		if (viewerId && viewerId === data.owner.id) return;
-		const video = playerRef.current;
-		if (!video) return;
 
 		const fired = new Set<number>();
 
-		const onTimeUpdate = () => {
+		const onTimeUpdate = (e: Event) => {
+			const video = e.currentTarget as HTMLVideoElement;
 			if (!video.duration || video.duration === 0) return;
 			const pct = (video.currentTime / video.duration) * 100;
 			for (const milestone of PROGRESS_MILESTONES) {
@@ -385,8 +384,18 @@ export const Share = ({
 			}
 		};
 
-		video.addEventListener("timeupdate", onTimeUpdate);
-		return () => video.removeEventListener("timeupdate", onTimeUpdate);
+		const attach = () => {
+			const video = playerRef.current;
+			if (!video) return null;
+			video.addEventListener("timeupdate", onTimeUpdate);
+			return () => video.removeEventListener("timeupdate", onTimeUpdate);
+		};
+
+		const detach = attach();
+		if (detach) return detach;
+
+		const raf = requestAnimationFrame(() => attach());
+		return () => cancelAnimationFrame(raf);
 	}, [data.id, data.owner.id, viewerId]);
 
 	const isDisabled = (setting: ViewerSettingKey) =>
