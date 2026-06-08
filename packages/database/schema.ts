@@ -1068,28 +1068,42 @@ export const foldersRelations = relations(folders, ({ one, many }) => ({
 	videos: many(videos),
 }));
 
-export const videoUploads = mysqlTable("video_uploads", {
-	videoId: nanoId("video_id").primaryKey().notNull().$type<Video.VideoId>(),
-	uploaded: bigint("uploaded", { mode: "number", unsigned: true })
-		.notNull()
-		.$defaultFn(() => 0),
-	total: bigint("total", { mode: "number", unsigned: true })
-		.notNull()
-		.$defaultFn(() => 0),
-	startedAt: timestamp("started_at").notNull().defaultNow(),
-	updatedAt: timestamp("updated_at").notNull().defaultNow(),
-	mode: varchar("mode", { length: 255, enum: ["singlepart", "multipart"] }),
-	phase: varchar("phase", { length: 32 })
-		.$type<
-			"uploading" | "processing" | "generating_thumbnail" | "complete" | "error"
-		>()
-		.notNull()
-		.default("uploading"),
-	processingProgress: int("processing_progress").notNull().default(0),
-	processingMessage: varchar("processing_message", { length: 255 }),
-	processingError: text("processing_error"),
-	rawFileKey: varchar("raw_file_key", { length: 512 }),
-});
+export const videoUploads = mysqlTable(
+	"video_uploads",
+	{
+		videoId: nanoId("video_id").primaryKey().notNull().$type<Video.VideoId>(),
+		uploaded: bigint("uploaded", { mode: "number", unsigned: true })
+			.notNull()
+			.$defaultFn(() => 0),
+		total: bigint("total", { mode: "number", unsigned: true })
+			.notNull()
+			.$defaultFn(() => 0),
+		startedAt: timestamp("started_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at").notNull().defaultNow(),
+		mode: varchar("mode", { length: 255, enum: ["singlepart", "multipart"] }),
+		phase: varchar("phase", { length: 32 })
+			.$type<
+				| "uploading"
+				| "processing"
+				| "generating_thumbnail"
+				| "complete"
+				| "error"
+			>()
+			.notNull()
+			.default("uploading"),
+		processingProgress: int("processing_progress").notNull().default(0),
+		processingMessage: varchar("processing_message", { length: 255 }),
+		processingError: text("processing_error"),
+		rawFileKey: varchar("raw_file_key", { length: 512 }),
+	},
+	(table) => [
+		index("phase_updated_at_video_id_idx").on(
+			table.phase,
+			table.updatedAt,
+			table.videoId,
+		),
+	],
+);
 
 export const importedVideos = mysqlTable(
 	"imported_videos",
