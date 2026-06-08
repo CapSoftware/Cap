@@ -23,6 +23,8 @@ interface TrackPayload {
 	hostname?: string | null;
 	userAgent?: string;
 	occurredAt?: string;
+	action?: string;
+	percentWatched?: number | null;
 }
 
 const VIEW_TRACKING_DELAY_MS = 2 * 60 * 1000;
@@ -85,6 +87,39 @@ export async function POST(request: NextRequest) {
 		"";
 
 	const pathname = body.pathname ?? `/s/${body.videoId}`;
+	const action = body.action ?? "page_hit";
+
+	if (action === "video_progress") {
+		const sessionId =
+			typeof body.sessionId === "string"
+				? body.sessionId.trim().slice(0, 128) || null
+				: null;
+		const percentWatched =
+			typeof body.percentWatched === "number" &&
+			body.percentWatched >= 0 &&
+			body.percentWatched <= 100
+				? Math.round(body.percentWatched)
+				: null;
+
+		if (percentWatched !== null) {
+			await runPromise(
+				Effect.gen(function* () {
+					const tinybird = yield* Tinybird;
+					yield* tinybird.appendEvents([
+						{
+							timestamp: new Date().toISOString(),
+							action: "video_progress",
+							version: "1.0",
+							session_id: sessionId ?? "anon",
+							video_id: body.videoId,
+							percent_watched: percentWatched,
+						},
+					]);
+				}),
+			);
+		}
+		return Response.json({ success: true });
+	}
 
 	await runPromise(
 		Effect.gen(function* () {

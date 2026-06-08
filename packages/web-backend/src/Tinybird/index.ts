@@ -23,6 +23,7 @@ export interface TinybirdEventRow {
 	browser?: string | null;
 	device?: string | null;
 	os?: string | null;
+	percent_watched?: number | null;
 }
 
 export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
@@ -185,6 +186,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 						browser: row.browser ?? "unknown",
 						device: row.device ?? "desktop",
 						os: row.os ?? "unknown",
+						percent_watched: row.percent_watched ?? null,
 					}),
 				)
 				.join("\n");
