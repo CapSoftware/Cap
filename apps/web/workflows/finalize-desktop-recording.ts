@@ -292,16 +292,26 @@ async function buildDesktopSegmentsMuxBody(
 		throw new Error("Invalid segment manifest JSON");
 	}
 
-	const manifest = await Schema.decodeUnknown(Video.SegmentManifest)(parsed)
+	let manifest = await Schema.decodeUnknown(Video.SegmentManifest)(parsed)
 		.pipe(Effect.mapError(() => new Error("Invalid segment manifest format")))
 		.pipe(runPromise);
 
-	if (!manifest.is_complete) {
-		throw new Error("Segment manifest is not marked as complete");
-	}
-
 	if (!manifest.video_init_uploaded || manifest.video_segments.length === 0) {
 		throw new Error("No video segments found in manifest");
+	}
+
+	if (!manifest.is_complete) {
+		manifest = {
+			...manifest,
+			is_complete: true,
+		};
+		const body = JSON.stringify(manifest, null, 2);
+		await bucket
+			.putObject(segSource.getManifestKey(), body, {
+				contentType: "application/json",
+				contentLength: Buffer.byteLength(body),
+			})
+			.pipe(runPromise);
 	}
 
 	const videoInitUrl = await bucket
