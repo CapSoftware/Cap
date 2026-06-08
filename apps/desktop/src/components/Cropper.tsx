@@ -436,6 +436,9 @@ export function Cropper(
 			target.width === start.width &&
 			target.height === start.height
 		) {
+			animationFrameId = null;
+			setIsAnimating(false);
+			setDisplayRawBounds(target);
 			return;
 		}
 
@@ -470,6 +473,7 @@ export function Cropper(
 		durationMs = 240,
 	) {
 		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+		animationFrameId = null;
 		setIsAnimating(true);
 		setRawBoundsConstraining(bounds, origin);
 		animateToRawBounds(rawBounds(), durationMs);
