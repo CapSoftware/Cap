@@ -2,7 +2,9 @@ import type { comments as commentsSchema } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { useTranscript } from "hooks/use-transcript";
+import { CheckCircle2, Info, Loader2Icon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
 	forwardRef,
@@ -12,6 +14,8 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
+import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
@@ -54,6 +58,7 @@ export const ShareVideo = forwardRef<
 		areReactionStampsDisabled?: boolean;
 		aiGenerationStatus?: AiGenerationStatus | null;
 		canRetryProcessing?: boolean;
+		canFinalizeDesktopSegments?: boolean;
 		showPlaybackStatusBadge?: boolean;
 		isEditProcessing: boolean;
 		recordingStopped?: boolean;
@@ -70,6 +75,7 @@ export const ShareVideo = forwardRef<
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
 			canRetryProcessing,
+			canFinalizeDesktopSegments = false,
 			showPlaybackStatusBadge = false,
 			isEditProcessing,
 			recordingStopped = false,
@@ -96,6 +102,10 @@ export const ShareVideo = forwardRef<
 		const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
 		const [userConfirmedStopped, setUserConfirmedStopped] =
 			useState(recordingStopped);
+		const [isConfirmingStopped, setIsConfirmingStopped] = useState(false);
+		const [confirmStoppedError, setConfirmStoppedError] = useState<
+			string | null
+		>(null);
 		const segmentUploadProgress = useUploadProgress(
 			data.id,
 			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
@@ -225,6 +235,45 @@ export const ShareVideo = forwardRef<
 			!userConfirmedStopped &&
 			!isActivelyRecording &&
 			shouldDeferPlaybackSource(segmentUploadProgress);
+		const handleConfirmStopped = useCallback(async () => {
+			if (
+				!canFinalizeDesktopSegments ||
+				data.source.type !== "desktopSegments" ||
+				!data.hasActiveUpload
+			) {
+				setUserConfirmedStopped(true);
+				return;
+			}
+
+			setIsConfirmingStopped(true);
+			setConfirmStoppedError(null);
+
+			try {
+				await finalizeDesktopSegmentsRecording({ videoId: data.id });
+				setUserConfirmedStopped(true);
+				router.refresh();
+			} catch (error) {
+				setConfirmStoppedError(
+					error instanceof Error
+						? error.message
+						: "Recording could not be finalized",
+				);
+			} finally {
+				setIsConfirmingStopped(false);
+			}
+		}, [
+			canFinalizeDesktopSegments,
+			data.hasActiveUpload,
+			data.id,
+			data.source.type,
+			router,
+		]);
+		const showFinalizeRecordingControl =
+			isSegmentsSource &&
+			(data.hasActiveUpload ?? false) &&
+			canFinalizeDesktopSegments &&
+			!userConfirmedStopped &&
+			segmentUploadProgress?.status === "failed";
 		useEffect(() => {
 			if (!isSegmentsSource || !data.hasActiveUpload || !userConfirmedStopped) {
 				previousSegmentUploadProgressRef.current = segmentUploadProgress;
@@ -300,7 +349,9 @@ export const ShareVideo = forwardRef<
 							/>
 							<div className="absolute inset-0 z-20">
 								<RecordingInProgressOverlay
-									onConfirmStopped={() => setUserConfirmedStopped(true)}
+									onConfirmStopped={handleConfirmStopped}
+									isConfirmingStopped={isConfirmingStopped}
+									confirmStoppedError={confirmStoppedError}
 									className="h-full"
 									variant="overlay"
 								/>
@@ -366,6 +417,47 @@ export const ShareVideo = forwardRef<
 							hasCaptions={data.transcriptionStatus === "COMPLETE"}
 							canRetryProcessing={canRetryProcessing}
 						/>
+					)}
+					{showFinalizeRecordingControl && (
+						<div className="absolute bottom-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-1.5">
+							<div className="flex items-center gap-1.5">
+								<button
+									type="button"
+									onClick={handleConfirmStopped}
+									disabled={isConfirmingStopped}
+									className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/15 bg-black/65 px-2.5 text-[11px] font-medium text-white shadow-sm backdrop-blur-sm transition-colors hover:bg-black/80 disabled:cursor-not-allowed disabled:opacity-70"
+								>
+									{isConfirmingStopped ? (
+										<Loader2Icon className="size-3 animate-spin" />
+									) : (
+										<CheckCircle2 className="size-3" />
+									)}
+									{isConfirmingStopped
+										? "Marking as completed..."
+										: "Mark video as completed"}
+								</button>
+								<TooltipPrimitive.Provider delayDuration={150}>
+									<Tooltip
+										position="top"
+										className="max-w-[260px] items-start text-left leading-relaxed"
+										content="We didn't receive confirmation that this recording finished uploading. Mark it as completed to publish what's been uploaded. Next time, keep the desktop app open after you stop recording until the video loads here, so all files finish uploading."
+									>
+										<button
+											type="button"
+											aria-label="Why this recording needs to be marked as completed"
+											className="inline-flex size-7 items-center justify-center rounded-md border border-white/15 bg-black/65 text-white/80 shadow-sm backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
+										>
+											<Info className="size-3.5" />
+										</button>
+									</Tooltip>
+								</TooltipPrimitive.Provider>
+							</div>
+							{confirmStoppedError && (
+								<p className="max-w-56 rounded-md bg-black/70 px-2 py-1 text-[11px] text-red-100">
+									{confirmStoppedError}
+								</p>
+							)}
+						</div>
 					)}
 				</div>
 
