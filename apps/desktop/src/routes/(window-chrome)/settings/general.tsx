@@ -30,6 +30,7 @@ import {
 	deriveGeneralSettings,
 	type GeneralSettingsStore,
 	type PostScreenshotCaptureBehaviour,
+	type ScreenshotSaveDestination,
 } from "~/utils/general-settings";
 import {
 	type AppTheme,
@@ -269,6 +270,16 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		await handleChange("screenshotSaveDirectory", selected);
 	};
 
+	const handleScreenshotSaveDestinationChange = async (
+		value: ScreenshotSaveDestination,
+	) => {
+		await handleChange("screenshotSaveDestination", value);
+
+		if (value === "chosenFolder" && !settings.screenshotSaveDirectory) {
+			await handleChooseScreenshotSaveDirectory();
+		}
+	};
+
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
 
@@ -377,6 +388,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
 			| PostScreenshotCaptureBehaviour
+			| ScreenshotSaveDestination
 			| PostDeletionBehaviour
 			| StudioRecordingQuality
 			| number,
@@ -532,19 +544,26 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								{ text: "Copy image to clipboard", value: "copyToClipboard" },
 								{ text: "Copy file path", value: "copyFilePath" },
 								{ text: "Copy Markdown image", value: "copyMarkdownImage" },
-								{ text: "Save PNG to Desktop", value: "save" },
-								{ text: "Save PNG to folder", value: "saveToFolder" },
 								{ text: "Reveal in Finder", value: "revealInFinder" },
 								{ text: "Upload link", value: "upload" },
 								{ text: "Do nothing", value: "doNothing" },
 							]}
 						/>
-						<Show
-							when={settings.postScreenshotCaptureBehaviour === "saveToFolder"}
-						>
+						<SelectSettingItem
+							label="Save screenshots to"
+							description="Where Cap writes the PNG file after every screenshot."
+							value={settings.screenshotSaveDestination ?? "desktop"}
+							onChange={handleScreenshotSaveDestinationChange}
+							options={[
+								{ text: "Desktop", value: "desktop" },
+								{ text: "Choose folder", value: "chosenFolder" },
+								{ text: "App library only", value: "appLibraryOnly" },
+							]}
+						/>
+						<Show when={settings.screenshotSaveDestination === "chosenFolder"}>
 							<SettingItem
 								label="Screenshot save folder"
-								description="Folder used when screenshots are saved after capture."
+								description="Folder used for automatic screenshot PNG files."
 							>
 								<div class="flex items-center gap-2 min-w-0 max-w-[22rem]">
 									<Show

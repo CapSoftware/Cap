@@ -19,7 +19,7 @@ pub enum PostStudioRecordingBehaviour {
     ShowOverlay,
 }
 
-#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum PostScreenshotCaptureBehaviour {
     #[default]
@@ -34,6 +34,15 @@ pub enum PostScreenshotCaptureBehaviour {
     SaveToFolder,
     RevealInFinder,
     Upload,
+}
+
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ScreenshotSaveDestination {
+    #[default]
+    Desktop,
+    ChosenFolder,
+    AppLibraryOnly,
 }
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
@@ -168,6 +177,8 @@ pub struct GeneralSettingsStore {
     #[serde(default)]
     pub post_screenshot_capture_behaviour: PostScreenshotCaptureBehaviour,
     #[serde(default)]
+    pub screenshot_save_destination: ScreenshotSaveDestination,
+    #[serde(default)]
     pub screenshot_save_directory: Option<PathBuf>,
     #[serde(default)]
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
@@ -280,6 +291,7 @@ impl Default for GeneralSettingsStore {
             window_transparency: false,
             post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
             post_screenshot_capture_behaviour: PostScreenshotCaptureBehaviour::OpenEditor,
+            screenshot_save_destination: ScreenshotSaveDestination::Desktop,
             screenshot_save_directory: None,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
             custom_cursor_capture: true,
@@ -322,12 +334,42 @@ impl GeneralSettingsStore {
         match app.store("store").map(|s| s.get("general_settings")) {
             Ok(Some(store)) => {
                 // Handle potential deserialization errors gracefully
-                match serde_json::from_value(store) {
-                    Ok(settings) => Ok(Some(settings)),
+                match serde_json::from_value::<Self>(store.clone()) {
+                    Ok(mut settings) => {
+                        settings.normalize_legacy_screenshot_settings(&store);
+                        Ok(Some(settings))
+                    }
                     Err(e) => Err(format!("Failed to deserialize general settings store: {e}")),
                 }
             }
             _ => Ok(None),
+        }
+    }
+
+    fn normalize_legacy_screenshot_settings(&mut self, store: &serde_json::Value) {
+        let Some(post_capture_behaviour) = store
+            .get("postScreenshotCaptureBehaviour")
+            .and_then(|value| value.as_str())
+        else {
+            return;
+        };
+
+        let has_save_destination = store.get("screenshotSaveDestination").is_some();
+
+        match post_capture_behaviour {
+            "save" => {
+                if !has_save_destination {
+                    self.screenshot_save_destination = ScreenshotSaveDestination::Desktop;
+                }
+                self.post_screenshot_capture_behaviour = PostScreenshotCaptureBehaviour::DoNothing;
+            }
+            "saveToFolder" => {
+                if !has_save_destination {
+                    self.screenshot_save_destination = ScreenshotSaveDestination::ChosenFolder;
+                }
+                self.post_screenshot_capture_behaviour = PostScreenshotCaptureBehaviour::DoNothing;
+            }
+            _ => {}
         }
     }
 
@@ -450,4 +492,67 @@ fn bundled_muxer_bin_name() -> &'static str {
 #[instrument]
 pub fn get_default_excluded_windows() -> Vec<WindowExclusion> {
     default_excluded_windows()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_legacy_screenshot_save_to_desktop_destination() {
+        let store = json!({
+            "postScreenshotCaptureBehaviour": "save",
+        });
+        let mut settings: GeneralSettingsStore = serde_json::from_value(store.clone()).unwrap();
+
+        settings.normalize_legacy_screenshot_settings(&store);
+
+        assert_eq!(
+            settings.post_screenshot_capture_behaviour,
+            PostScreenshotCaptureBehaviour::DoNothing
+        );
+        assert_eq!(
+            settings.screenshot_save_destination,
+            ScreenshotSaveDestination::Desktop
+        );
+    }
+
+    #[test]
+    fn normalizes_legacy_screenshot_save_to_folder_destination() {
+        let store = json!({
+            "postScreenshotCaptureBehaviour": "saveToFolder",
+        });
+        let mut settings: GeneralSettingsStore = serde_json::from_value(store.clone()).unwrap();
+
+        settings.normalize_legacy_screenshot_settings(&store);
+
+        assert_eq!(
+            settings.post_screenshot_capture_behaviour,
+            PostScreenshotCaptureBehaviour::DoNothing
+        );
+        assert_eq!(
+            settings.screenshot_save_destination,
+            ScreenshotSaveDestination::ChosenFolder
+        );
+    }
+
+    #[test]
+    fn legacy_screenshot_save_normalization_preserves_existing_destination() {
+        let store = json!({
+            "postScreenshotCaptureBehaviour": "save",
+            "screenshotSaveDestination": "appLibraryOnly",
+        });
+        let mut settings: GeneralSettingsStore = serde_json::from_value(store.clone()).unwrap();
+
+        settings.normalize_legacy_screenshot_settings(&store);
+
+        assert_eq!(
+            settings.post_screenshot_capture_behaviour,
+            PostScreenshotCaptureBehaviour::DoNothing
+        );
+        assert_eq!(
+            settings.screenshot_save_destination,
+            ScreenshotSaveDestination::AppLibraryOnly
+        );
+    }
 }

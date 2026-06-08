@@ -13,9 +13,15 @@ export type PostScreenshotCaptureBehaviour =
 	| "revealInFinder"
 	| "upload";
 
+export type ScreenshotSaveDestination =
+	| "desktop"
+	| "chosenFolder"
+	| "appLibraryOnly";
+
 export type GeneralSettingsStore = TauriGeneralSettingsStore & {
 	captureKeyboardEvents?: boolean;
 	postScreenshotCaptureBehaviour?: PostScreenshotCaptureBehaviour;
+	screenshotSaveDestination?: ScreenshotSaveDestination;
 	transcriptionHints?: string[];
 	enableTelemetry?: boolean;
 	outOfProcessMuxer?: boolean;
@@ -38,6 +44,7 @@ export function createDefaultGeneralSettings(): GeneralSettingsStore {
 		autoZoomOnClicks: false,
 		captureKeyboardEvents: true,
 		postScreenshotCaptureBehaviour: "openEditor",
+		screenshotSaveDestination: "desktop",
 		screenshotSaveDirectory: null,
 		custom_cursor_capture2: true,
 		excludedWindows: [],
@@ -52,10 +59,24 @@ export function createDefaultGeneralSettings(): GeneralSettingsStore {
 export function deriveGeneralSettings(
 	store: GeneralSettingsStore | null | undefined,
 ): GeneralSettingsStore {
-	return {
+	const settings = {
 		...createDefaultGeneralSettings(),
 		...(store ?? {}),
 	};
+
+	if (settings.postScreenshotCaptureBehaviour === "save") {
+		settings.postScreenshotCaptureBehaviour = "doNothing";
+		settings.screenshotSaveDestination =
+			store?.screenshotSaveDestination ?? "desktop";
+	}
+
+	if (settings.postScreenshotCaptureBehaviour === "saveToFolder") {
+		settings.postScreenshotCaptureBehaviour = "doNothing";
+		settings.screenshotSaveDestination =
+			store?.screenshotSaveDestination ?? "chosenFolder";
+	}
+
+	return settings;
 }
 
 export function normalizeTranscriptionHints(

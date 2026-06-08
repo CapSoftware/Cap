@@ -18,7 +18,9 @@ use tokio::{sync::oneshot, time::sleep};
 
 use crate::{
     ArcLock, PendingScreenshot, PendingScreenshots,
-    general_settings::{GeneralSettingsStore, PostScreenshotCaptureBehaviour},
+    general_settings::{
+        GeneralSettingsStore, PostScreenshotCaptureBehaviour, ScreenshotSaveDestination,
+    },
     notifications::{self, NotificationType},
     windows::ShowCapWindow,
 };
@@ -32,6 +34,34 @@ pub struct PendingScreenshotPostCaptureAction(Arc<Mutex<Option<PendingAction>>>)
 struct PendingAction {
     action: ScreenshotPostCaptureAction,
     created_at: Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SavedScreenshot {
+    path: PathBuf,
+    destination: ScreenshotSaveDestination,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScreenshotPostCaptureContext {
+    source_path: PathBuf,
+    saved_screenshot: Option<SavedScreenshot>,
+}
+
+impl ScreenshotPostCaptureContext {
+    fn action_target_path(&self) -> &Path {
+        self.saved_screenshot
+            .as_ref()
+            .map(|saved| saved.path.as_path())
+            .unwrap_or(self.source_path.as_path())
+    }
+
+    fn saved_to(&self, destination: ScreenshotSaveDestination) -> Option<PathBuf> {
+        self.saved_screenshot
+            .as_ref()
+            .filter(|saved| saved.destination == destination)
+            .map(|saved| saved.path.clone())
+    }
 }
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,22 +163,31 @@ pub async fn handle(
     path: PathBuf,
     action: ScreenshotPostCaptureAction,
 ) -> Result<(), String> {
+    let context = prepare_screenshot_post_capture_context(app, path).await;
     let action = match action {
         ScreenshotPostCaptureAction::AskEveryTime => match prompt_post_capture_action(app).await? {
             Some(action) => action,
-            None => return Ok(()),
+            None => ScreenshotPostCaptureAction::DoNothing,
         },
         action => action,
     };
+
+    if matches!(action, ScreenshotPostCaptureAction::DoNothing)
+        && context.saved_screenshot.is_some()
+    {
+        notifications::send_notification(app, NotificationType::ScreenshotSaved);
+    }
 
     match action {
         ScreenshotPostCaptureAction::DoNothing => Ok(()),
         ScreenshotPostCaptureAction::AskEveryTime => Ok(()),
         ScreenshotPostCaptureAction::OpenEditor => {
-            ShowCapWindow::ScreenshotEditor { path }
-                .show(app)
-                .await
-                .map_err(|e| e.to_string())?;
+            ShowCapWindow::ScreenshotEditor {
+                path: context.source_path,
+            }
+            .show(app)
+            .await
+            .map_err(|e| e.to_string())?;
             Ok(())
         }
         ScreenshotPostCaptureAction::ShowOverlay => {
@@ -159,45 +198,58 @@ pub async fn handle(
             Ok(())
         }
         ScreenshotPostCaptureAction::CopyToClipboard => {
-            copy_screenshot_to_clipboard(app, &path).await?;
+            copy_screenshot_to_clipboard(app, &context.source_path).await?;
             notifications::send_notification(app, NotificationType::ScreenshotCopiedToClipboard);
             Ok(())
         }
         ScreenshotPostCaptureAction::CopyFilePath => {
-            wait_for_screenshot_image(path.as_path()).await?;
-            copy_text_to_clipboard(app, path.to_string_lossy().to_string()).await?;
+            let target_path = context.action_target_path();
+            wait_for_screenshot_image(target_path).await?;
+            copy_text_to_clipboard(app, target_path.to_string_lossy().to_string()).await?;
             notifications::send_notification(app, NotificationType::ScreenshotCopiedToClipboard);
             Ok(())
         }
         ScreenshotPostCaptureAction::CopyMarkdownImage => {
-            wait_for_screenshot_image(path.as_path()).await?;
-            copy_text_to_clipboard(app, markdown_image_for_path(path.as_path())?).await?;
+            let target_path = context.action_target_path();
+            wait_for_screenshot_image(target_path).await?;
+            copy_text_to_clipboard(app, markdown_image_for_path(target_path)?).await?;
             notifications::send_notification(app, NotificationType::ScreenshotCopiedToClipboard);
             Ok(())
         }
         ScreenshotPostCaptureAction::Save => {
-            save_screenshot_image_file(app, &path).await?;
+            if context
+                .saved_to(ScreenshotSaveDestination::Desktop)
+                .is_none()
+            {
+                save_screenshot_image_file(app, &context.source_path).await?;
+            }
             notifications::send_notification(app, NotificationType::ScreenshotSaved);
             Ok(())
         }
         ScreenshotPostCaptureAction::SaveToFolder => {
-            if save_screenshot_image_file_to_configured_directory(app, &path)
-                .await?
-                .is_some()
-            {
+            let saved_path = match context.saved_to(ScreenshotSaveDestination::ChosenFolder) {
+                Some(path) => Some(path),
+                None => {
+                    save_screenshot_image_file_to_configured_directory(app, &context.source_path)
+                        .await?
+                }
+            };
+
+            if saved_path.is_some() {
                 notifications::send_notification(app, NotificationType::ScreenshotSaved);
             }
             Ok(())
         }
         ScreenshotPostCaptureAction::RevealInFinder => {
-            wait_for_screenshot_image(path.as_path()).await?;
+            let target_path = context.action_target_path().to_path_buf();
+            wait_for_screenshot_image(target_path.as_path()).await?;
             app.opener()
-                .reveal_item_in_dir(path)
+                .reveal_item_in_dir(target_path)
                 .map_err(|err| format!("Failed to reveal screenshot in Finder: {err}"))?;
             Ok(())
         }
         ScreenshotPostCaptureAction::Upload => {
-            match crate::upload_screenshot_internal(app, path).await? {
+            match crate::upload_screenshot_internal(app, context.source_path).await? {
                 crate::UploadResult::Success(_) => Ok(()),
                 crate::UploadResult::NotAuthenticated => Ok(()),
                 crate::UploadResult::UpgradeRequired => Ok(()),
@@ -207,6 +259,25 @@ pub async fn handle(
                 }
             }
         }
+    }
+}
+
+async fn prepare_screenshot_post_capture_context(
+    app: &AppHandle,
+    path: PathBuf,
+) -> ScreenshotPostCaptureContext {
+    let saved_screenshot = match save_screenshot_for_configured_destination(app, &path).await {
+        Ok(saved_screenshot) => saved_screenshot,
+        Err(err) => {
+            tracing::warn!(error = %err, "Failed to auto-save screenshot after capture");
+            notifications::send_notification(app, NotificationType::ScreenshotSaveFailed);
+            None
+        }
+    };
+
+    ScreenshotPostCaptureContext {
+        source_path: path,
+        saved_screenshot,
     }
 }
 
@@ -236,67 +307,51 @@ async fn prompt_post_capture_action(
     match choose_post_capture_button(
         app,
         "After Screenshot",
-        "Choose what Cap should do with this screenshot.",
+        "Choose what Cap should do next.",
         "Open editor",
+        "Copy image",
         "More actions",
-        "Do nothing",
     )
     .await?
     {
         DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::OpenEditor)),
-        DialogButton::Third => Ok(None),
-        DialogButton::Second => match choose_post_capture_button(
+        DialogButton::Second => Ok(Some(ScreenshotPostCaptureAction::CopyToClipboard)),
+        DialogButton::Third => match choose_post_capture_button(
             app,
             "After Screenshot",
-            "Choose what Cap should do with this screenshot.",
-            "Copy image",
-            "Save Desktop",
+            "Choose what Cap should do next.",
+            "Upload link",
+            "Show overlay",
             "More actions",
         )
         .await?
         {
-            DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::CopyToClipboard)),
-            DialogButton::Second => Ok(Some(ScreenshotPostCaptureAction::Save)),
+            DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::Upload)),
+            DialogButton::Second => Ok(Some(ScreenshotPostCaptureAction::ShowOverlay)),
             DialogButton::Third => match choose_post_capture_button(
                 app,
                 "After Screenshot",
-                "Choose what Cap should do with this screenshot.",
-                "Save folder",
-                "Upload link",
+                "Choose what Cap should do next.",
+                "Reveal in Finder",
+                "Copy path",
                 "More actions",
             )
             .await?
             {
-                DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::SaveToFolder)),
-                DialogButton::Second => Ok(Some(ScreenshotPostCaptureAction::Upload)),
+                DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::RevealInFinder)),
+                DialogButton::Second => Ok(Some(ScreenshotPostCaptureAction::CopyFilePath)),
                 DialogButton::Third => match choose_post_capture_button(
                     app,
                     "After Screenshot",
-                    "Choose what Cap should do with this screenshot.",
-                    "Show overlay",
-                    "Reveal in Finder",
-                    "More actions",
+                    "Choose what Cap should do next.",
+                    "Copy Markdown",
+                    "Do nothing",
+                    "Cancel",
                 )
                 .await?
                 {
-                    DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::ShowOverlay)),
-                    DialogButton::Second => Ok(Some(ScreenshotPostCaptureAction::RevealInFinder)),
-                    DialogButton::Third => match choose_post_capture_button(
-                        app,
-                        "After Screenshot",
-                        "Choose what Cap should do with this screenshot.",
-                        "Copy path",
-                        "Copy Markdown",
-                        "Do nothing",
-                    )
-                    .await?
-                    {
-                        DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::CopyFilePath)),
-                        DialogButton::Second => {
-                            Ok(Some(ScreenshotPostCaptureAction::CopyMarkdownImage))
-                        }
-                        DialogButton::Third => Ok(None),
-                    },
+                    DialogButton::First => Ok(Some(ScreenshotPostCaptureAction::CopyMarkdownImage)),
+                    DialogButton::Second | DialogButton::Third => Ok(None),
                 },
             },
         },
@@ -464,6 +519,33 @@ fn markdown_image_for_path(path: &Path) -> Result<String, String> {
         .map_err(|_| format!("Failed to create file URL for {}", path.display()))?;
 
     Ok(format!("![Screenshot](<{}>)", url.as_str()))
+}
+
+async fn save_screenshot_for_configured_destination(
+    app: &AppHandle,
+    path: &Path,
+) -> Result<Option<SavedScreenshot>, String> {
+    let destination = configured_screenshot_save_destination(app);
+
+    match destination {
+        ScreenshotSaveDestination::Desktop => save_screenshot_image_file(app, path)
+            .await
+            .map(|path| Some(SavedScreenshot { path, destination })),
+        ScreenshotSaveDestination::ChosenFolder => {
+            save_screenshot_image_file_to_configured_directory(app, path)
+                .await
+                .map(|path| path.map(|path| SavedScreenshot { path, destination }))
+        }
+        ScreenshotSaveDestination::AppLibraryOnly => Ok(None),
+    }
+}
+
+fn configured_screenshot_save_destination(app: &AppHandle) -> ScreenshotSaveDestination {
+    GeneralSettingsStore::get(app)
+        .ok()
+        .flatten()
+        .map(|settings| settings.screenshot_save_destination)
+        .unwrap_or_default()
 }
 
 async fn save_screenshot_image_file(app: &AppHandle, path: &Path) -> Result<PathBuf, String> {
@@ -817,6 +899,42 @@ mod tests {
         assert!(markdown.starts_with("![Screenshot](<file://"));
         assert!(markdown.contains("Launch%20Clip.cap/original.png"));
         assert!(markdown.ends_with(">)"));
+    }
+
+    #[test]
+    fn post_capture_context_prefers_saved_path_for_file_actions() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("Launch Clip.cap").join("original.png");
+        let saved_path = temp_dir.path().join("Desktop").join("Launch Clip.png");
+        let context = ScreenshotPostCaptureContext {
+            source_path: source_path.clone(),
+            saved_screenshot: Some(SavedScreenshot {
+                path: saved_path.clone(),
+                destination: ScreenshotSaveDestination::Desktop,
+            }),
+        };
+
+        assert_eq!(context.action_target_path(), saved_path.as_path());
+        assert_eq!(
+            context.saved_to(ScreenshotSaveDestination::Desktop),
+            Some(saved_path)
+        );
+        assert_eq!(
+            context.saved_to(ScreenshotSaveDestination::ChosenFolder),
+            None
+        );
+    }
+
+    #[test]
+    fn post_capture_context_falls_back_to_source_path_without_export() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("Launch Clip.cap").join("original.png");
+        let context = ScreenshotPostCaptureContext {
+            source_path: source_path.clone(),
+            saved_screenshot: None,
+        };
+
+        assert_eq!(context.action_target_path(), source_path.as_path());
     }
 
     #[tokio::test]

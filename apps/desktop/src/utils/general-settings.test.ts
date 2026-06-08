@@ -43,7 +43,30 @@ describe("general-settings", () => {
 			captureKeyboardEvents: true,
 			custom_cursor_capture2: true,
 			postScreenshotCaptureBehaviour: "openEditor",
+			screenshotSaveDestination: "desktop",
 			screenshotSaveDirectory: null,
+		});
+	});
+
+	it("normalizes legacy screenshot save actions into save destinations", () => {
+		expect(
+			deriveGeneralSettings({
+				enableNativeCameraPreview: false,
+				postScreenshotCaptureBehaviour: "save",
+			}),
+		).toMatchObject({
+			postScreenshotCaptureBehaviour: "doNothing",
+			screenshotSaveDestination: "desktop",
+		});
+
+		expect(
+			deriveGeneralSettings({
+				enableNativeCameraPreview: false,
+				postScreenshotCaptureBehaviour: "saveToFolder",
+			}),
+		).toMatchObject({
+			postScreenshotCaptureBehaviour: "doNothing",
+			screenshotSaveDestination: "chosenFolder",
 		});
 	});
 
