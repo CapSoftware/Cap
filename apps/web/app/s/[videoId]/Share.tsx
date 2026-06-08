@@ -152,6 +152,7 @@ interface ShareProps {
 	viewerId?: string | null;
 	isEditProcessing: boolean;
 	recordingStopped?: boolean;
+	defaultPlaybackSpeed?: number;
 	initialAiData?: {
 		title?: string | null;
 		summary?: string | null;
@@ -268,6 +269,7 @@ export const Share = ({
 	viewerId,
 	isEditProcessing,
 	recordingStopped = false,
+	defaultPlaybackSpeed,
 }: ShareProps) => {
 	const effectiveDate: Date = data.metadata?.customCreatedAt
 		? new Date(data.metadata.customCreatedAt)
@@ -502,6 +504,7 @@ export const Share = ({
 									showPlaybackStatusBadge={viewerId === data.owner.id}
 									isEditProcessing={isEditProcessing}
 									recordingStopped={recordingStopped}
+									defaultPlaybackSpeed={defaultPlaybackSpeed}
 									ref={playerRef}
 								/>
 							</div>

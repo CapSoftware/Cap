@@ -57,6 +57,7 @@ export const ShareVideo = forwardRef<
 		showPlaybackStatusBadge?: boolean;
 		isEditProcessing: boolean;
 		recordingStopped?: boolean;
+		defaultPlaybackSpeed?: number;
 	}
 >(
 	(
@@ -72,6 +73,7 @@ export const ShareVideo = forwardRef<
 			showPlaybackStatusBadge = false,
 			isEditProcessing,
 			recordingStopped = false,
+			defaultPlaybackSpeed,
 		},
 		ref,
 	) => {
@@ -313,6 +315,7 @@ export const ShareVideo = forwardRef<
 							videoSrc={videoSrc}
 							rawFallbackSrc={rawFallbackSrc}
 							duration={data.duration}
+							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							disableCaptions={areCaptionsDisabled ?? false}
 							disableCommentStamps={areCommentStampsDisabled ?? false}
@@ -346,6 +349,7 @@ export const ShareVideo = forwardRef<
 							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 							videoSrc={videoSrc}
 							duration={data.duration}
+							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							disableCaptions={areCaptionsDisabled ?? false}
 							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
