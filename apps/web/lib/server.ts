@@ -51,7 +51,14 @@ const CookiePasswordAttachmentLive = Layer.effect(
 		const password = Option.fromNullable(
 			yield* Effect.promise(async () => {
 				const pw = (await cookies()).get("x-cap-password")?.value;
-				if (pw) return decrypt(pw);
+				if (!pw) return undefined;
+				try {
+					return await decrypt(pw);
+				} catch {
+					// Corrupt or stale cookie (e.g. rotated encryption key) — treat
+					// as absent rather than crashing the page with a defect.
+					return undefined;
+				}
 			}),
 		);
 		return { password };
