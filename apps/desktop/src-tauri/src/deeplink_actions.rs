@@ -265,6 +265,25 @@ fn query_param(url: &Url, name: &str) -> Option<String> {
         .map(|(_, value)| value.into_owned())
 }
 
+fn resolve_microphone_label(label: &str) -> Result<String, String> {
+    use cap_recording::feeds::microphone::MicrophoneFeed;
+
+    let devices = MicrophoneFeed::list();
+    if devices.contains_key(label) {
+        return Ok(label.to_string());
+    }
+
+    let selected_lower = label.to_lowercase();
+    devices
+        .keys()
+        .find(|name| {
+            let name_lower = name.to_lowercase();
+            name_lower.contains(&selected_lower) || selected_lower.contains(&name_lower)
+        })
+        .cloned()
+        .ok_or_else(|| format!("No microphone with label \"{label}\""))
+}
+
 fn resolve_camera_selector(
     selector: &CameraSelector,
     cameras: &[CameraIdentity],
@@ -370,15 +389,18 @@ impl DeepLinkAction {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::SetMicrophone { label } => {
+                if let Some(ref mic_label) = label {
+                    resolve_microphone_label(mic_label)?;
+                }
                 pause_for_input_change(app).await?;
                 crate::set_mic_input(app.state(), label).await
             }
             DeepLinkAction::SetCamera { selector } => {
-                pause_for_input_change(app).await?;
                 let camera_id = selector
                     .as_ref()
                     .map(|selector| resolve_camera_selector(selector, &CameraIdentity::current()))
                     .transpose()?;
+                pause_for_input_change(app).await?;
                 crate::set_camera_input(app.clone(), app.state(), camera_id, None).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
