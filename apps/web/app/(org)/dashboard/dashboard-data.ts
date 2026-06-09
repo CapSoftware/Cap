@@ -10,6 +10,7 @@ import {
 	users,
 	videos,
 } from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
 import { Database, ImageUploads } from "@cap/web-backend";
 import type { ImageUpload } from "@cap/web-domain";
 import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
@@ -43,6 +44,8 @@ export type Organization = {
 	invites: (typeof organizationInvites.$inferSelect)[];
 	inviteQuota: number;
 	totalInvites: number;
+	/** Whether the organization OWNER is on Pro — gates org-wide Pro features. */
+	ownerIsPro: boolean;
 };
 
 export type OrganizationSettings = NonNullable<
@@ -191,6 +194,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 								id: spaces.id,
 								primary: spaces.primary,
 								privacy: spaces.privacy,
+								public: spaces.public,
 								name: spaces.name,
 								description: spaces.description,
 								organizationId: spaces.organizationId,
@@ -306,6 +310,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						videoCount: orgVideoCount,
 						settings: null,
 						hasPassword: false,
+						public: false,
 						currentUserRole: currentOrganizationRole,
 						currentUserCanManage: canManageOrganizationMembers(
 							currentOrganizationRole,
@@ -358,6 +363,8 @@ export async function getDashboardData(user: typeof userSelectProps) {
 								inviteQuota: users.inviteQuota,
 								stripeSubscriptionId: users.stripeSubscriptionId,
 								stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+								thirdPartyStripeSubscriptionId:
+									users.thirdPartyStripeSubscriptionId,
 							})
 							.from(users)
 							.where(inArray(users.id, managerIds)),
@@ -455,6 +462,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						),
 						inviteQuota: proSeatProvider?.inviteQuota || 1,
 						totalInvites,
+						ownerIsPro: userIsPro(owner ?? null),
 					};
 				}),
 			),
