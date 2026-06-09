@@ -19,6 +19,8 @@ import { useRouter } from "next/navigation";
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { PublicCollectionField } from "../../_components/PublicCollectionField";
+import { useDashboardContext } from "../../Contexts";
 import {
 	BlueFolder,
 	type FolderHandle,
@@ -77,6 +79,8 @@ export const NewFolderDialog: React.FC<Props> = ({
 		(typeof FolderOptions)[number]["value"] | null
 	>(null);
 	const [folderName, setFolderName] = useState<string>("");
+	const [publicEnabled, setPublicEnabled] = useState(false);
+	const { activeOrganization, setUpgradeModalOpen } = useDashboardContext();
 	const router = useRouter();
 
 	const { riveFile } = useRiveFile({
@@ -84,7 +88,10 @@ export const NewFolderDialog: React.FC<Props> = ({
 	});
 
 	useEffect(() => {
-		if (!open) setSelectedColor(null);
+		if (!open) {
+			setSelectedColor(null);
+			setPublicEnabled(false);
+		}
 	}, [open]);
 
 	const folderRefs = useRef(
@@ -103,10 +110,15 @@ export const NewFolderDialog: React.FC<Props> = ({
 	const rpc = useRpcClient();
 
 	const createFolder = useEffectMutation({
-		mutationFn: (data: { name: string; color: Folder.FolderColor }) =>
+		mutationFn: (data: {
+			name: string;
+			color: Folder.FolderColor;
+			public: boolean;
+		}) =>
 			rpc.FolderCreate({
 				name: data.name,
 				color: data.color,
+				public: data.public,
 				spaceId: Option.fromNullable(spaceId),
 				parentId: Option.none(),
 			}),
@@ -140,7 +152,8 @@ export const NewFolderDialog: React.FC<Props> = ({
 					<div className="flex flex-wrap gap-2 mt-3">
 						{FolderOptions.map((option) => {
 							return (
-								<div
+								<button
+									type="button"
 									className={clsx(
 										"flex flex-col flex-1 gap-1 items-center p-2 rounded-xl border transition-colors duration-200 cursor-pointer",
 										selectedColor === option.value
@@ -172,10 +185,19 @@ export const NewFolderDialog: React.FC<Props> = ({
 										riveFile as RiveFile,
 										folderRefs.current[option.value],
 									)}
-									<p className="text-xs text-gray-10">{option.label}</p>
-								</div>
+									<span className="text-xs text-gray-10">{option.label}</span>
+								</button>
 							);
 						})}
+					</div>
+					<div className="mt-4">
+						<PublicCollectionField
+							kind="folder"
+							enabled={publicEnabled}
+							onChange={setPublicEnabled}
+							isPro={Boolean(activeOrganization?.ownerIsPro)}
+							onUpgrade={() => setUpgradeModalOpen(true)}
+						/>
 					</div>
 				</div>
 				<DialogFooter>
@@ -185,7 +207,11 @@ export const NewFolderDialog: React.FC<Props> = ({
 					<Button
 						onClick={() => {
 							if (selectedColor === null) return;
-							createFolder.mutate({ name: folderName, color: selectedColor });
+							createFolder.mutate({
+								name: folderName,
+								color: selectedColor,
+								public: publicEnabled,
+							});
 						}}
 						size="sm"
 						spinner={createFolder.isPending}
