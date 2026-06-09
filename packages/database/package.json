@@ -58,6 +58,7 @@
 	"exports": {
 		".": "./index.ts",
 		"./auth/auth-options": "./auth/auth-options.ts",
+		"./auth/domain-utils": "./auth/domain-utils.ts",
 		"./auth/session": "./auth/session.ts",
 		"./schema": "./schema.ts",
 		"./crypto": "./crypto.ts",
@@ -71,6 +72,7 @@
 		"exports": {
 			".": "./dist/index.js",
 			"./auth/auth-options": "./dist/auth/auth-options.js",
+			"./auth/domain-utils": "./dist/auth/domain-utils.js",
 			"./auth/session": "./dist/auth/session.js",
 			"./schema": "./dist/schema.js",
 			"./crypto": "./dist/crypto.js",
