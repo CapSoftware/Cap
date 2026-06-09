@@ -12,7 +12,7 @@ import {
 	type TimelineSegment,
 } from "~/utils/tauri";
 import type { CaptionWordExtended } from "./caption-types";
-import { isFillerWord } from "./filler-detection";
+import { isFillerWord, PAUSE_DETECTION_THRESHOLD } from "./filler-detection";
 export const DEFAULT_CAPTION_MODEL = "best";
 export const DEFAULT_WHISPER_CAPTION_MODEL = "small";
 export const DEFAULT_CAPTION_LANGUAGE = "auto";
@@ -238,6 +238,93 @@ export function createCaptionTrackSegments(
 	});
 }
 
+function cappedWordEnd(word: CaptionWord): number {
+	const duration = word.end - word.start;
+	const maxDuration = Math.max(0.5, Math.min(1.5, word.text.length * 0.1));
+	if (duration > maxDuration + 0.3) {
+		return word.start + maxDuration;
+	}
+	return word.end;
+}
+
+function insertPauseWordsIntoSegments(segments: CaptionSegment[]): void {
+	const allWords: { segIdx: number; wIdx: number; word: CaptionWord }[] = [];
+	for (let s = 0; s < segments.length; s++) {
+		const ws = (segments[s].words ?? []) as CaptionWordExtended[];
+		for (let w = 0; w < ws.length; w++) {
+			if (ws[w].isPause) continue;
+			allWords.push({ segIdx: s, wIdx: w, word: ws[w] });
+		}
+	}
+
+	const insertions: {
+		segIdx: number;
+		afterWIdx: number;
+		pause: CaptionWordExtended;
+	}[] = [];
+
+	if (allWords.length > 0) {
+		const first = allWords[0];
+		const hasPauseBefore =
+			first.wIdx > 0 &&
+			(segments[first.segIdx].words?.[first.wIdx - 1] as CaptionWordExtended)
+				?.isPause;
+		if (first.word.start >= PAUSE_DETECTION_THRESHOLD && !hasPauseBefore) {
+			insertions.push({
+				segIdx: first.segIdx,
+				afterWIdx: first.wIdx - 1,
+				pause: {
+					text: `[Pause ${first.word.start.toFixed(1)}s]`,
+					start: 0,
+					end: first.word.start,
+					isPause: true,
+					isFiller: false,
+				},
+			});
+		}
+	}
+
+	for (let i = 1; i < allWords.length; i++) {
+		const prev = allWords[i - 1];
+		const curr = allWords[i];
+		const prevEnd = cappedWordEnd(prev.word);
+		const gap = curr.word.start - prevEnd;
+		if (gap < PAUSE_DETECTION_THRESHOLD) continue;
+
+		let alreadyHasPause = false;
+		if (prev.segIdx === curr.segIdx) {
+			const ws = (segments[prev.segIdx].words ?? []) as CaptionWordExtended[];
+			for (let j = prev.wIdx + 1; j < curr.wIdx; j++) {
+				if (ws[j]?.isPause) {
+					alreadyHasPause = true;
+					break;
+				}
+			}
+		}
+		if (alreadyHasPause) continue;
+
+		insertions.push({
+			segIdx: prev.segIdx,
+			afterWIdx: prev.wIdx,
+			pause: {
+				text: `[Pause ${gap.toFixed(1)}s]`,
+				start: prevEnd,
+				end: curr.word.start,
+				isPause: true,
+				isFiller: false,
+			},
+		});
+	}
+
+	for (let i = insertions.length - 1; i >= 0; i--) {
+		const ins = insertions[i];
+		const seg = segments[ins.segIdx];
+		if (seg.words) {
+			seg.words.splice(ins.afterWIdx + 1, 0, ins.pause);
+		}
+	}
+}
+
 export function applyCaptionResultToProject<
 	T extends {
 		captions?:
@@ -289,6 +376,8 @@ export function applyCaptionResultToProject<
 		timeline.segments,
 		recordingSegments,
 	);
+
+	insertPauseWordsIntoSegments(mappedSegments);
 
 	captions.segments = mappedSegments;
 	timeline.captionSegments = createCaptionTrackSegments(mappedSegments);

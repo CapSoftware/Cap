@@ -22,7 +22,6 @@ import {
 	AUTO_CLEAN_SILENCE_THRESHOLD,
 	DEFAULT_PAUSE_BUFFER,
 	isFillerWord,
-	PAUSE_DETECTION_THRESHOLD,
 } from "./filler-detection";
 import {
 	rippleDeleteAllTracks,
@@ -49,15 +48,6 @@ interface FlatWord {
 	isPause: boolean;
 	bufferStart: number;
 	bufferEnd: number;
-}
-
-interface PauseIndicator {
-	type: "pause";
-	start: number;
-	end: number;
-	duration: number;
-	afterSegmentIndex: number;
-	afterWordIndex: number;
 }
 
 interface TranscriptSegmentGroup {
@@ -127,66 +117,13 @@ export function TranscriptPanel() {
 		return result;
 	});
 
-	const pauses = createMemo((): PauseIndicator[] => {
-		const words = allWords();
-		const result: PauseIndicator[] = [];
-		let lastVisible: (typeof words)[0] | null = null;
-		let hasPauseWordInGap = false;
-		let deletedDurationInGap = 0;
-
-		for (let i = 0; i < words.length; i++) {
-			const curr = words[i];
-			if (curr.deleted) {
-				if (curr.isPause) {
-					hasPauseWordInGap = true;
-				} else {
-					const bufStart = curr.bufferStart || 0;
-					const bufEnd = curr.bufferEnd || 0;
-					deletedDurationInGap +=
-						curr.storedEnd + bufEnd - Math.max(0, curr.start - bufStart);
-				}
-				continue;
-			}
-
-			if (!lastVisible) {
-				const gap = curr.start;
-				const silentGap = Math.max(0, gap - deletedDurationInGap);
-				if (silentGap >= PAUSE_DETECTION_THRESHOLD && !hasPauseWordInGap) {
-					result.push({
-						type: "pause",
-						start: 0,
-						end: curr.start,
-						duration: silentGap,
-						afterSegmentIndex: curr.segmentIndex,
-						afterWordIndex: -1,
-					});
-				}
-			} else {
-				const gap = curr.start - lastVisible.end;
-				const silentGap = Math.max(0, gap - deletedDurationInGap);
-				if (silentGap >= PAUSE_DETECTION_THRESHOLD && !hasPauseWordInGap) {
-					result.push({
-						type: "pause",
-						start: lastVisible.end,
-						end: curr.start,
-						duration: silentGap,
-						afterSegmentIndex: lastVisible.segmentIndex,
-						afterWordIndex: lastVisible.wordIndex,
-					});
-				}
-			}
-			lastVisible = curr;
-			hasPauseWordInGap = false;
-			deletedDurationInGap = 0;
-		}
-		return result;
-	});
-
 	const fillerCount = createMemo(
 		() => allWords().filter((w) => w.isFiller && !w.deleted).length,
 	);
 
-	const pauseCount = createMemo(() => pauses().length);
+	const pauseCount = createMemo(
+		() => allWords().filter((w) => w.isPause && !w.deleted).length,
+	);
 
 	const segmentGroups = createMemo((): TranscriptSegmentGroup[] => {
 		const words = allWords();
@@ -384,13 +321,9 @@ export function TranscriptPanel() {
 					if (!seg?.words) continue;
 					const w = seg.words[word.wordIndex] as CaptionWordExtended;
 					if (w) {
-						if (w.isPause) {
-							seg.words.splice(word.wordIndex, 1);
-						} else {
-							w.deleted = false;
-							w.bufferStart = 0;
-							w.bufferEnd = 0;
-						}
+						w.deleted = false;
+						w.bufferStart = 0;
+						w.bufferEnd = 0;
 					}
 				}
 
@@ -439,7 +372,13 @@ export function TranscriptPanel() {
 	);
 
 	const cleanablePauseCount = createMemo(
-		() => pauses().filter((p) => p.duration >= silenceThreshold()).length,
+		() =>
+			allWords().filter(
+				(w) =>
+					w.isPause &&
+					!w.deleted &&
+					w.storedEnd - w.start >= silenceThreshold(),
+			).length,
 	);
 
 	const autoClean = () => {
@@ -769,7 +708,6 @@ export function TranscriptPanel() {
 			<TranscriptEditor
 				segmentGroups={segmentGroups()}
 				allWords={allWords()}
-				pauses={pauses()}
 				activeWordIndex={activeWordIndex()}
 				textSizeClass={
 					TEXT_SIZES[textSizeIndex()]?.value ?? TEXT_SIZES[1].value
@@ -1021,10 +959,18 @@ function WordWithTooltip(props: {
 	);
 }
 
-function PauseBadge(props: { pause: PauseIndicator; onDelete: () => void }) {
+function PauseBadge(props: { word: FlatWord; onDelete: () => void }) {
+	const duration = props.word.storedEnd - props.word.start;
 	return (
-		<span class="group relative inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded border border-dashed border-gray-6 text-[10px] text-gray-8 bg-gray-3/30 select-none cursor-default">
-			⏸ {props.pause.duration.toFixed(1)}s
+		<span
+			class={cx(
+				"group relative inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded border border-dashed text-[10px] select-none cursor-default",
+				props.word.deleted
+					? "border-gray-4 text-gray-6 bg-gray-2/30 line-through opacity-40"
+					: "border-gray-6 text-gray-8 bg-gray-3/30",
+			)}
+		>
+			⏸ {duration.toFixed(1)}s
 			<button
 				type="button"
 				class="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center size-4 rounded-full bg-red-9 text-white hover:bg-red-10 transition-colors z-50 shadow-sm"
@@ -1032,9 +978,14 @@ function PauseBadge(props: { pause: PauseIndicator; onDelete: () => void }) {
 					e.stopPropagation();
 					props.onDelete();
 				}}
-				title="Delete pause"
+				title={props.word.deleted ? "Restore pause" : "Delete pause"}
 			>
-				<IconCapTrash class="size-2.5" />
+				<Show
+					when={!props.word.deleted}
+					fallback={<IconLucideRotateCcw class="size-2.5" />}
+				>
+					<IconCapTrash class="size-2.5" />
+				</Show>
 			</button>
 		</span>
 	);
@@ -1043,7 +994,6 @@ function PauseBadge(props: { pause: PauseIndicator; onDelete: () => void }) {
 function TranscriptEditor(props: {
 	segmentGroups: TranscriptSegmentGroup[];
 	allWords: FlatWord[];
-	pauses: PauseIndicator[];
 	activeWordIndex: number;
 	textSizeClass: string;
 	onWordClick: (word: FlatWord) => void;
@@ -1078,14 +1028,6 @@ function TranscriptEditor(props: {
 		flatIndexMap().get(`${word.segmentIndex}:${word.wordIndex}`) ?? -1;
 
 	const selectedCount = () => selectedIndices().size;
-
-	const pauseAfterWord = createMemo(() => {
-		const map = new Map<string, PauseIndicator>();
-		for (const p of props.pauses) {
-			map.set(`${p.afterSegmentIndex}:${p.afterWordIndex}`, p);
-		}
-		return map;
-	});
 
 	createEffect(
 		on(
@@ -1352,54 +1294,6 @@ function TranscriptEditor(props: {
 		}
 	};
 
-	const handleDeletePause = (pause: PauseIndicator) => {
-		setProject(
-			produce((p) => {
-				if (!p.captions?.segments) return;
-				const seg = p.captions.segments[pause.afterSegmentIndex];
-				if (seg?.words) {
-					const pauseWord: CaptionWordExtended = {
-						text: `[Pause ${pause.duration.toFixed(1)}s]`,
-						start: pause.start,
-						end: pause.end,
-						deleted: true,
-						isPause: true,
-						isFiller: false,
-						bufferStart: DEFAULT_PAUSE_BUFFER,
-						bufferEnd: DEFAULT_PAUSE_BUFFER,
-					};
-					seg.words.splice(pause.afterWordIndex + 1, 0, pauseWord);
-				}
-
-				const cutStart = Math.max(0, pause.start - DEFAULT_PAUSE_BUFFER);
-				const cutEnd = pause.end + DEFAULT_PAUSE_BUFFER;
-				const cutDuration = cutEnd - cutStart;
-
-				if (cutDuration > 0.001) {
-					shiftCaptionTimesAfterCut(p.captions.segments, cutStart, cutDuration);
-				}
-
-				for (const s of p.captions.segments) {
-					const extWords = (s.words ?? []) as CaptionWordExtended[];
-					s.text = getCaptionTextFromWords(extWords);
-					const visible = extWords.filter((w) => !w.deleted);
-					if (visible.length > 0) {
-						s.start = visible[0].start;
-						s.end = visible[visible.length - 1].end;
-					}
-				}
-
-				if (p.timeline) {
-					rippleDeleteAllTracks(p.timeline, cutStart, cutEnd);
-					p.timeline.captionSegments = createCaptionTrackSegments(
-						p.captions.segments,
-					);
-				}
-			}),
-		);
-		setEditorState("captions", "isStale", false);
-	};
-
 	return (
 		<div
 			ref={scrollContainerRef}
@@ -1430,50 +1324,38 @@ function TranscriptEditor(props: {
 									const flatIdx = () => flatIndexOf(word);
 									const isActive = () => props.activeWordIndex === flatIdx();
 									const isSelected = () => selectedIndices().has(flatIdx());
-									const pauseBefore = () =>
-										word.wordIndex === 0
-											? pauseAfterWord().get(`${word.segmentIndex}:-1`)
-											: undefined;
 
-									const pause = () =>
-										pauseAfterWord().get(
-											`${word.segmentIndex}:${word.wordIndex}`,
+									if (word.isPause) {
+										return (
+											<PauseBadge
+												word={word}
+												onDelete={() => {
+													if (word.deleted) {
+														handleWordRestore(word);
+													} else {
+														handleWordDelete(word);
+													}
+												}}
+											/>
 										);
+									}
 
 									return (
-										<>
-											<Show when={pauseBefore()}>
-												{(p) => (
-													<PauseBadge
-														pause={p()}
-														onDelete={() => handleDeletePause(p())}
-													/>
-												)}
-											</Show>
-											<WordWithTooltip
-												word={word}
-												isActive={isActive()}
-												isSelected={isSelected()}
-												selectedCount={selectedCount()}
-												ref={(el: HTMLSpanElement) => {
-													if (isActive()) activeWordRef = el;
-												}}
-												onClick={(e: MouseEvent) => handleWordSelect(word, e)}
-												onDelete={() => handleWordDelete(word)}
-												onRestore={() => handleWordRestore(word)}
-												onContextMenu={(e: MouseEvent) =>
-													handleContextMenu(word, e)
-												}
-											/>
-											<Show when={pause()}>
-												{(p) => (
-													<PauseBadge
-														pause={p()}
-														onDelete={() => handleDeletePause(p())}
-													/>
-												)}
-											</Show>
-										</>
+										<WordWithTooltip
+											word={word}
+											isActive={isActive()}
+											isSelected={isSelected()}
+											selectedCount={selectedCount()}
+											ref={(el: HTMLSpanElement) => {
+												if (isActive()) activeWordRef = el;
+											}}
+											onClick={(e: MouseEvent) => handleWordSelect(word, e)}
+											onDelete={() => handleWordDelete(word)}
+											onRestore={() => handleWordRestore(word)}
+											onContextMenu={(e: MouseEvent) =>
+												handleContextMenu(word, e)
+											}
+										/>
 									);
 								}}
 							</For>
