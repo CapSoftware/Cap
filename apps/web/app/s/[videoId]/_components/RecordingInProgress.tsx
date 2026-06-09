@@ -4,10 +4,14 @@ import { LogoSpinner } from "@cap/ui";
 
 export function RecordingInProgressOverlay({
 	onConfirmStopped,
+	isConfirmingStopped = false,
+	confirmStoppedError,
 	className,
 	variant = "solid",
 }: {
 	onConfirmStopped: () => void;
+	isConfirmingStopped?: boolean;
+	confirmStoppedError?: string | null;
 	className?: string;
 	variant?: "solid" | "overlay";
 }) {
@@ -34,10 +38,18 @@ export function RecordingInProgressOverlay({
 			<button
 				type="button"
 				onClick={onConfirmStopped}
+				disabled={isConfirmingStopped}
 				className="mt-1 text-white/30 text-xs hover:text-white/60 transition-colors underline underline-offset-2"
 			>
-				I have stopped recording
+				{isConfirmingStopped
+					? "Finishing recording..."
+					: "I have stopped recording"}
 			</button>
+			{confirmStoppedError && (
+				<p className="text-xs text-red-200/80 text-center max-w-xs">
+					{confirmStoppedError}
+				</p>
+			)}
 		</div>
 	);
 }

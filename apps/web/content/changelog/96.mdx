@@ -1,0 +1,32 @@
+---
+title: Agent CLI, Split-Screen Scenes, Recording Recovery & Export Fixes
+app: Cap Desktop
+publishedAt: "2026-06-06"
+version: 0.5.1
+image:
+---
+
+This release turns Cap Desktop into a stronger recorder for both humans and agents. The desktop app now ships with the Cap CLI, adds a dedicated CLI settings page, and gives automated workflows a reliable way to record, export, inspect, upload, update, and diagnose Cap from the command line.
+
+It also brings a new split-screen editing mode, self-hosted server routing, tighter recording defaults, more resilient fragmented and segmented upload recovery, and another round of export, audio timing, auth, and macOS stability fixes.
+
+- **Bundled Cap CLI** — Cap Desktop now bundles the `cap` command-line tool and can install or repair it from Settings -> CLI. The installer detects existing Cap-managed shims, repoints stale links, handles symlinked targets, and recognizes persisted Windows PATH entries.
+- **Agent-ready recording workflows** — The CLI now supports targets, screenshots, detached recording sessions, JSON output, recording listing, project inspection, project validation, exporting, uploading, doctor diagnostics, and machine-readable guide output so agents and scripts can drive Cap without relying on UI automation.
+- **Split-screen scene mode** — The editor can now compose screen and camera as split-screen panes, with per-segment scene transitions, split factor controls, position pads, preview overlays, timeline scene support, and smooth layout morphing in exports.
+- **Camera size during zoom** — A new editor control keeps the camera size stable while zoom effects move the screen content, making split-screen and picture-in-picture edits easier to tune.
+- **Cleaner background choices** — Scene defaults now include a no-background option, so recordings can use split-screen, transparent, or plain layouts without forcing a decorative background.
+- **Zoom editing shortcut** — Double-click a zoom handle in the timeline to expand the segment quickly instead of manually dragging its edge.
+- **Shared recording defaults** — Desktop and CLI recording flows now use the same default settings, including the default instant-mode frame rate, so recordings started from automation match recordings started from the app.
+- **Fragmented recording recovery** — Cap can remux fragmented recordings when needed, including before export and after CLI-driven Studio recordings, making recovered or interrupted sessions easier to open and share.
+- **Desktop segment upload recovery** — Stale desktop-segment uploads can now be recovered on share-page load, finalized manually by the owner, retried automatically after transient finalization errors, and swept by the scheduled recovery job.
+- **Segment manifest hardening** — Finalization now treats segment manifest failures as retryable mux failures and can auto-complete the manifest before muxing.
+- **Audio timing repair** — Studio recordings now persist audio gap summaries and startup overlap trim, repair stale drift during editor startup, support negative timing offsets, and avoid playback readiness hangs when audio stops or timelines are invalid.
+- **Safer exports** — Export now synthesizes a default timeline for unedited recordings, tracks progress more reliably, and guards against zero-frame output so simple recordings can still export cleanly.
+- **Silent-audio export fallback** — Exports now emit silent audio frames when the renderer returns no audio, avoiding empty-audio edge cases.
+- **Manual titles are preserved** — Desktop uploads now keep track of manually provided recording names, so AI title generation can avoid replacing titles you already chose.
+- **Desktop organization fixes** — Desktop APIs now merge owned and member organizations consistently, so the app can create videos and show organizations correctly for members as well as owners.
+- **Authentication reliability** — macOS Tahoe deep-link delivery no longer wipes auth state, and self-hosted sign-in continues even when organization or plan refreshes fail.
+- **Cropper and preview fixes** — Crop and resize interactions now use pointer capture more reliably, no-op crops reset animation state correctly, and the editor skips unnecessary accurate-frame work when a crop preview is already available.
+- **Rendering edge fixes** — Camera bounds, inset crops, and edge-blur texture samples are now clamped more carefully at source edges, reducing visual artifacts.
+- **Crash recovery markers** — Desktop now records clean exits and initializes a crash sentinel on macOS, giving the app a clearer signal when the previous session ended unexpectedly.
+- **macOS window cleanup fixes** — macOS exit handling now tears down native window effects more carefully and guards unsupported system APIs, reducing quit-time crashes and cleanup failures.

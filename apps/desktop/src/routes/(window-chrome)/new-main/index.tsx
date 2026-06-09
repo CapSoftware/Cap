@@ -45,6 +45,7 @@ import {
 	createStableDevicesQuery,
 	type MicrophoneWithDetails,
 } from "~/utils/devices";
+import { clientEnv } from "~/utils/env";
 import {
 	importImageFromPicker,
 	importVideoFromPicker,
@@ -1615,6 +1616,9 @@ function Page() {
 	const auth = authStore.createQuery();
 	const recordingSettingsQuery = recordingDeviceSettingsStore.createQuery();
 	const generalSettings = generalSettingsStore.createQuery();
+	const serverUrl = createMemo(
+		() => generalSettings.data?.serverUrl ?? clientEnv.VITE_SERVER_URL,
+	);
 	const deviceSettings = createMemo(
 		() => recordingSettingsQuery.data as RecordingDeviceSettingsStore | null,
 	);
@@ -2647,8 +2651,8 @@ function Page() {
 							target="_blank"
 							href={
 								auth.data
-									? `${import.meta.env.VITE_SERVER_URL}/dashboard`
-									: import.meta.env.VITE_SERVER_URL
+									? new URL("/dashboard", serverUrl()).toString()
+									: serverUrl()
 							}
 						>
 							<IconCapLogoFullDark class="hidden dark:block" />

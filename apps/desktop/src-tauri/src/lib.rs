@@ -3406,8 +3406,6 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     }
 
     let Ok(Some(auth)) = AuthStore::get(&app) else {
-        println!("No auth found, clearing auth store");
-        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
         return Ok(false);
     };
 

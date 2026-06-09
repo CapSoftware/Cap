@@ -313,10 +313,26 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             let offset_x = vec2<f32>(texel_size.x, 0.0);
             let offset_y = vec2<f32>(0.0, texel_size.y);
 
-            let left = textureSample(frame_texture, frame_sampler, cropped_uv - offset_x).rgb;
-            let right = textureSample(frame_texture, frame_sampler, cropped_uv + offset_x).rgb;
-            let top = textureSample(frame_texture, frame_sampler, cropped_uv - offset_y).rgb;
-            let bottom = textureSample(frame_texture, frame_sampler, cropped_uv + offset_y).rgb;
+            let left = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv - offset_x, safe_min, safe_max)
+            ).rgb;
+            let right = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv + offset_x, safe_min, safe_max)
+            ).rgb;
+            let top = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv - offset_y, safe_min, safe_max)
+            ).rgb;
+            let bottom = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv + offset_y, safe_min, safe_max)
+            ).rgb;
 
             let blurred = (left + right + top + bottom) * 0.25;
 

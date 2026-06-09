@@ -190,6 +190,13 @@
 			"when": 1779283712737,
 			"tag": "0026_pretty_the_professor",
 			"breakpoints": true
+		},
+		{
+			"idx": 27,
+			"version": "5",
+			"when": 1780932760351,
+			"tag": "0027_giant_shinko_yamashiro",
+			"breakpoints": true
 		}
 	]
 }

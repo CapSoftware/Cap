@@ -7,7 +7,7 @@ machine-readable, and recordings have an explicit start/stop lifecycle.
 ## Install
 
 - **From Cap Desktop:** Settings → Command Line → Install CLI (links the bundled binary onto your PATH).
-- **Script:** `curl -fsSL https://cap.so/install-cli.sh | sh` (Windows PowerShell: `irm https://cap.so/install-cli.ps1 | iex`).
+- **Script:** `curl -fsSL https://cap.so/install-cli.sh | sh` (Windows PowerShell: `irm https://cap.so/install-cli.ps1 | iex`; Command Prompt: `curl.exe -fsSL https://cap.so/install-cli.cmd -o "%TEMP%\cap-install-cli.cmd" && "%TEMP%\cap-install-cli.cmd"`). If Cap Desktop is missing, the script downloads and installs it first.
 
 The desktop app and the CLI share the same binary, so the CLI is always in sync with the installed app.
 
@@ -47,11 +47,12 @@ is taken from `CAP_SERVER_URL`, else Cap Desktop's configured server, else `http
 
 ## Environment variables
 
-| Variable | Used by | Notes |
-| --- | --- | --- |
-| `CAP_API_KEY` | `upload` | Overrides auth with a Cap auth key (Settings). Optional when signed into Cap Desktop. |
-| `CAP_SERVER_URL` | `upload` | Cap server base URL. Defaults to Cap Desktop's server, else `https://cap.so`. |
-| `CAP_NO_MODIFY_PATH` | `desktop install-cli` | Set to skip editing shell profiles / user PATH. |
+| Variable                    | Used by                             | Notes                                                                                 |
+| --------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
+| `CAP_API_KEY`               | `upload`                            | Overrides auth with a Cap auth key (Settings). Optional when signed into Cap Desktop. |
+| `CAP_SERVER_URL`            | `upload`                            | Cap server base URL. Defaults to Cap Desktop's server, else `https://cap.so`.         |
+| `CAP_NO_MODIFY_PATH`        | `desktop install-cli`               | Set to skip editing shell profiles / user PATH.                                       |
+| `CAP_DESKTOP_FORCE_INSTALL` | `install-cli.sh`, `install-cli.ps1` | Force the installer script to replace Cap Desktop before linking the CLI.             |
 
 ## Typical agent workflow
 
@@ -78,6 +79,7 @@ step.
 - `cap project inspect` / `validate` / `config get|set` — inspect and edit `.cap` projects.
 - `cap recordings list` — list `.cap` recordings in the desktop library.
 - `cap upload` — upload a `.cap` project or video file and get a shareable link.
+- `cap update` — download and install the latest Cap Desktop bundle, then repair the `cap` shim.
 - `cap doctor` / `version` / `guide` — diagnostics, version info, and the agent capability manifest.
 - `cap desktop status|install-cli|uninstall-cli` — manage the `cap` shim on PATH.
 - `cap completions <shell>` — shell completion scripts (bash/zsh/fish/powershell).

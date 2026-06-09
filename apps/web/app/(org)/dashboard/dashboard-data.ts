@@ -63,25 +63,57 @@ export type Spaces = Omit<
 
 export type UserPreferences = (typeof users.$inferSelect)["preferences"];
 
+function mergeUserOrganizations(
+	ownedOrganizations: (typeof organizations.$inferSelect)[],
+	memberOrganizations: { organization: typeof organizations.$inferSelect }[],
+) {
+	const organizationsById = new Map<
+		string,
+		typeof organizations.$inferSelect
+	>();
+
+	for (const organization of ownedOrganizations) {
+		organizationsById.set(organization.id, organization);
+	}
+
+	for (const { organization } of memberOrganizations) {
+		organizationsById.set(organization.id, organization);
+	}
+
+	return Array.from(organizationsById.values());
+}
+
 export async function getDashboardData(user: typeof userSelectProps) {
 	try {
-		const memberOrgIds = db()
-			.select({ id: organizationMembers.organizationId })
-			.from(organizationMembers)
-			.where(eq(organizationMembers.userId, user.id));
-
-		const userOrganizations = await db()
-			.select()
-			.from(organizations)
-			.where(
-				and(
-					isNull(organizations.tombstoneAt),
-					or(
+		const [ownedOrganizations, memberOrganizations] = await Promise.all([
+			db()
+				.select()
+				.from(organizations)
+				.where(
+					and(
+						isNull(organizations.tombstoneAt),
 						eq(organizations.ownerId, user.id),
-						inArray(organizations.id, memberOrgIds),
 					),
 				),
-			);
+			db()
+				.select({ organization: organizations })
+				.from(organizationMembers)
+				.innerJoin(
+					organizations,
+					eq(organizations.id, organizationMembers.organizationId),
+				)
+				.where(
+					and(
+						eq(organizationMembers.userId, user.id),
+						isNull(organizations.tombstoneAt),
+					),
+				),
+		]);
+
+		const userOrganizations = mergeUserOrganizations(
+			ownedOrganizations,
+			memberOrganizations,
+		);
 
 		const organizationIds = userOrganizations.map((org) => org.id);
 

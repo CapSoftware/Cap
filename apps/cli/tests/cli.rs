@@ -48,6 +48,7 @@ fn help_succeeds_and_lists_commands() {
         "project",
         "recordings",
         "upload",
+        "update",
         "screenshot",
     ] {
         assert!(text.contains(command), "help missing '{command}':\n{text}");
@@ -65,6 +66,7 @@ fn subcommand_help_succeeds() {
         "desktop",
         "recordings",
         "upload",
+        "update",
         "screenshot",
     ] {
         let output = run(&[command, "--help"]);

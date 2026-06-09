@@ -1024,6 +1024,19 @@ function Dialogs() {
 										),
 									});
 
+									if (initialPreviewUrl) {
+										logCropProfile("accurate-frame-skipped", {
+											elapsedMs: Number(
+												(performance.now() - cropOpenedAt).toFixed(2),
+											),
+											recordingDurationSec: Math.round(
+												editorInstance.recordingDuration,
+											),
+											reason: "current-preview-available",
+										});
+										return;
+									}
+
 									scheduleAccurateFrame("immediate", {
 										idleTimeoutMs: 500,
 										fallbackDelayMs: 16,

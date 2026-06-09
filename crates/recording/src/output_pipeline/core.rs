@@ -16,7 +16,7 @@ use std::{
     ops::Deref,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{self, AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -667,6 +667,18 @@ fn audio_tail_padding_duration(audio_elapsed: Duration, target_elapsed: Duration
         .min(MAX_AUDIO_TAIL_PADDING)
 }
 
+const STARTUP_OVERLAP_DROP_FRAME_COUNT: u64 = 3;
+
+/// Overlap-trim accounting surfaced from the audio mux task at finish so the editor can
+/// compensate for stale-startup drift from typed metadata rather than the recording log.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AudioGapSummary {
+    pub total_overlap_trimmed_ms: u32,
+    pub startup_overlap_trimmed_ms: u32,
+    pub overlap_dropped_frames: u32,
+    pub startup_overlap_drops: u32,
+}
+
 struct AudioGapTracker {
     first_frame_ts: Option<Timestamp>,
     first_frame_wall_clock: Option<Instant>,
@@ -677,7 +689,9 @@ struct AudioGapTracker {
     last_silence_log: Option<Instant>,
     overlap_event_count: u64,
     overlap_dropped_frames: u64,
+    startup_overlap_drops: u64,
     total_overlap_trimmed: Duration,
+    startup_overlap_trimmed: Duration,
 }
 
 impl AudioGapTracker {
@@ -696,15 +710,35 @@ impl AudioGapTracker {
             last_silence_log: None,
             overlap_event_count: 0,
             overlap_dropped_frames: 0,
+            startup_overlap_drops: 0,
             total_overlap_trimmed: Duration::ZERO,
+            startup_overlap_trimmed: Duration::ZERO,
         }
     }
 
-    fn record_overlap(&mut self, overlap: Duration, dropped_whole_frame: bool) {
+    fn record_overlap(&mut self, overlap: Duration, dropped_whole_frame: bool, frame_count: u64) {
         self.overlap_event_count += 1;
         self.total_overlap_trimmed = self.total_overlap_trimmed.saturating_add(overlap);
+        let is_startup_overlap = frame_count < STARTUP_OVERLAP_DROP_FRAME_COUNT;
+        if is_startup_overlap {
+            self.startup_overlap_trimmed = self.startup_overlap_trimmed.saturating_add(overlap);
+        }
         if dropped_whole_frame {
             self.overlap_dropped_frames += 1;
+            if is_startup_overlap {
+                self.startup_overlap_drops += 1;
+            }
+        }
+    }
+
+    fn gap_summary(&self) -> AudioGapSummary {
+        AudioGapSummary {
+            total_overlap_trimmed_ms: u32::try_from(self.total_overlap_trimmed.as_millis())
+                .unwrap_or(u32::MAX),
+            startup_overlap_trimmed_ms: u32::try_from(self.startup_overlap_trimmed.as_millis())
+                .unwrap_or(u32::MAX),
+            overlap_dropped_frames: u32::try_from(self.overlap_dropped_frames).unwrap_or(u32::MAX),
+            startup_overlap_drops: u32::try_from(self.startup_overlap_drops).unwrap_or(u32::MAX),
         }
     }
 
@@ -1555,6 +1589,8 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             video_start_gate.clone(),
         );
 
+        let audio_gap_summary = Arc::new(OnceLock::new());
+
         finish_build(
             setup_ctx,
             audio,
@@ -1568,6 +1604,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             true,
             video_start_gate,
             build_ctx.stop_signal,
+            audio_gap_summary.clone(),
         )
         .await?;
 
@@ -1581,6 +1618,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             cancel_token: build_ctx.stop_token,
             video_frame_count,
             health_rx: Some(build_ctx.health_rx),
+            audio_gap_summary,
         })
     }
 }
@@ -1634,6 +1672,7 @@ impl OutputPipelineBuilder<NoVideo> {
         .await?;
 
         let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
+        let audio_gap_summary = Arc::new(OnceLock::new());
 
         finish_build(
             setup_ctx,
@@ -1648,6 +1687,7 @@ impl OutputPipelineBuilder<NoVideo> {
             false,
             None,
             build_ctx.stop_signal,
+            audio_gap_summary.clone(),
         )
         .await?;
 
@@ -1661,6 +1701,7 @@ impl OutputPipelineBuilder<NoVideo> {
             cancel_token: build_ctx.stop_token,
             video_frame_count: Arc::new(AtomicU64::new(0)),
             health_rx: Some(build_ctx.health_rx),
+            audio_gap_summary,
         })
     }
 }
@@ -1716,6 +1757,7 @@ async fn finish_build(
     has_video: bool,
     video_start_gate: Option<VideoStartGate>,
     stop_signal: PipelineStopSignal,
+    gap_summary_slot: Arc<OnceLock<AudioGapSummary>>,
 ) -> anyhow::Result<()> {
     if let Some(audio) = audio {
         audio.configure(
@@ -1727,6 +1769,7 @@ async fn finish_build(
             shared_pause,
             has_video,
             video_start_gate,
+            gap_summary_slot,
         );
     }
 
@@ -2117,6 +2160,7 @@ impl PreparedAudioSources {
         shared_pause: SharedWallClockPause,
         has_video: bool,
         video_start_gate: Option<VideoStartGate>,
+        gap_summary_slot: Arc<OnceLock<AudioGapSummary>>,
     ) {
         let audio_info = self.audio_info;
         let has_wireless_source = self.has_wireless_source;
@@ -2327,8 +2371,14 @@ impl PreparedAudioSources {
                         overlap_events = gap_tracker.overlap_event_count,
                         overlap_dropped_frames = gap_tracker.overlap_dropped_frames,
                         total_overlap_trimmed_ms = gap_tracker.total_overlap_trimmed.as_millis(),
+                        startup_overlap_trimmed_ms =
+                            gap_tracker.startup_overlap_trimmed.as_millis(),
                         "Audio gap tracking summary at finish"
                     );
+                }
+
+                if gap_tracker.overlap_event_count > 0 {
+                    let _ = gap_summary_slot.set(gap_tracker.gap_summary());
                 }
 
                 for source in &mut self.erased_audio_sources {
@@ -2448,7 +2498,9 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
         let frame_samples = frame.inner.samples();
 
         if trim_samples >= frame_samples {
-            state.gap_tracker.record_overlap(overlap_duration, true);
+            state
+                .gap_tracker
+                .record_overlap(overlap_duration, true, *state.frame_count);
             debug!(
                 frame_count = *state.frame_count,
                 overlap_ms = overlap_duration.as_millis() as u64,
@@ -2461,7 +2513,9 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
 
         if trim_samples > 0 {
             if let Some(trimmed) = trim_audio_frame_front(&frame.inner, trim_samples) {
-                state.gap_tracker.record_overlap(overlap_duration, false);
+                state
+                    .gap_tracker
+                    .record_overlap(overlap_duration, false, *state.frame_count);
                 debug!(
                     frame_count = *state.frame_count,
                     overlap_ms = overlap_duration.as_millis() as u64,
@@ -2668,6 +2722,7 @@ pub struct OutputPipeline {
     cancel_token: CancellationToken,
     video_frame_count: Arc<AtomicU64>,
     health_rx: Option<HealthReceiver>,
+    audio_gap_summary: Arc<OnceLock<AudioGapSummary>>,
 }
 
 pub struct FinishedOutputPipeline {
@@ -2675,6 +2730,7 @@ pub struct FinishedOutputPipeline {
     pub first_timestamp: Timestamp,
     pub video_info: Option<VideoInfo>,
     pub video_frame_count: u64,
+    pub audio_gap_summary: Option<AudioGapSummary>,
 }
 
 #[derive(Clone, Default)]
@@ -2766,6 +2822,7 @@ impl OutputPipeline {
             first_timestamp,
             video_info: self.video_info,
             video_frame_count: self.video_frame_count.load(Ordering::Acquire),
+            audio_gap_summary: self.audio_gap_summary.get().copied(),
         })
     }
 
@@ -3174,6 +3231,28 @@ mod tests {
                 .expect("wall-clock-confirmed stall should insert silence");
 
             assert_eq!(gap, MAX_SILENCE_INSERTION);
+        }
+
+        #[test]
+        fn gap_summary_counts_only_early_whole_frame_drops_as_startup() {
+            let mut tracker = AudioGapTracker::new(false, Timestamps::now());
+
+            tracker.record_overlap(Duration::from_millis(35), true, 0);
+            tracker.record_overlap(Duration::from_millis(35), true, 1);
+            tracker.record_overlap(Duration::from_millis(35), true, 2);
+            tracker.record_overlap(
+                Duration::from_millis(35),
+                true,
+                STARTUP_OVERLAP_DROP_FRAME_COUNT,
+            );
+            tracker.record_overlap(Duration::from_millis(35), true, 50);
+            tracker.record_overlap(Duration::from_millis(10), false, 1);
+
+            let summary = tracker.gap_summary();
+            assert_eq!(summary.startup_overlap_drops, 3);
+            assert_eq!(summary.startup_overlap_trimmed_ms, 35 * 3 + 10);
+            assert_eq!(summary.overlap_dropped_frames, 5);
+            assert_eq!(summary.total_overlap_trimmed_ms, 35 * 5 + 10);
         }
     }
 

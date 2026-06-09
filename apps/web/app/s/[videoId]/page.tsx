@@ -13,7 +13,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { buildEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
@@ -42,11 +42,13 @@ import {
 	getDashboardData,
 	type OrganizationSettings,
 } from "@/app/(org)/dashboard/dashboard-data";
+import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { createNotification } from "@/lib/Notification";
 import {
 	canManageOrganizationSettings,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
+import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import {
@@ -507,8 +509,33 @@ async function AuthorizedContent({
 	// will have already been fetched if auth is required
 	const user = await getCurrentUser();
 	const videoId = video.id;
-	const canRegisterView =
+	let recoveredDesktopSegmentsUpload = false;
+
+	if (
+		user?.id === video.owner.id &&
+		video.source?.type === "desktopSegments" &&
 		!video.hasActiveUpload &&
+		serverEnv().MEDIA_SERVER_URL
+	) {
+		try {
+			const result = await completeDesktopSegmentsManifestAndQueue({
+				videoId,
+				userId: user.id,
+			});
+			recoveredDesktopSegmentsUpload =
+				result.status === "queued" || result.status === "already-processing";
+		} catch (error) {
+			console.error(
+				`[ShareVideoPage] Failed to recover desktop segments upload ${videoId}:`,
+				error,
+			);
+		}
+	}
+
+	const hasActiveUpload =
+		video.hasActiveUpload || recoveredDesktopSegmentsUpload;
+	const canRegisterView =
+		!hasActiveUpload &&
 		Date.now() - video.updatedAt.getTime() >= VIEW_NOTIFICATION_DELAY_MS;
 
 	if (user && video && user.id !== video.owner.id && canRegisterView) {
@@ -551,6 +578,10 @@ async function AuthorizedContent({
 		organizationSettings: video.orgSettings,
 		spaces: sharedSpaces.filter((space) => space.id !== space.organizationId),
 	});
+	const env = serverEnv();
+	const transcriptionGenerationAvailable =
+		Boolean(env.DEEPGRAM_API_KEY) && !rules.settings.disableTranscript;
+	const aiProviderAvailable = Boolean(env.GROQ_API_KEY || env.OPENAI_API_KEY);
 
 	let aiGenerationEnabled = false;
 	const videoOwnerQuery = await db()
@@ -569,8 +600,8 @@ async function AuthorizedContent({
 	}
 
 	if (
-		!rules.settings.disableTranscript &&
-		!video.hasActiveUpload &&
+		transcriptionGenerationAvailable &&
+		!hasActiveUpload &&
 		video.transcriptionStatus !== "COMPLETE" &&
 		video.transcriptionStatus !== "PROCESSING" &&
 		video.transcriptionStatus !== "SKIPPED" &&
@@ -795,6 +826,7 @@ async function AuthorizedContent({
 
 		return {
 			...video,
+			hasActiveUpload,
 			owner: {
 				id: video.owner.id,
 				name: video.owner.name,
@@ -830,6 +862,11 @@ async function AuthorizedContent({
 		rawFileKey: video.activeUploadRawFileKey,
 	});
 
+	const defaultPlaybackSpeed = resolveDefaultPlaybackSpeed(
+		video.videoSettings?.defaultPlaybackSpeed,
+		video.orgSettings?.defaultPlaybackSpeed,
+	);
+
 	return (
 		<div className="container flex-1 px-4 mx-auto">
 			<ShareHeader
@@ -862,8 +899,10 @@ async function AuthorizedContent({
 				viewerId={user?.id ?? null}
 				isEditProcessing={isEditProcessing}
 				recordingStopped={recordingStopped}
+				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}
-				aiGenerationEnabled={aiGenerationEnabled}
+				aiGenerationAvailable={aiGenerationEnabled && aiProviderAvailable}
+				transcriptionGenerationAvailable={transcriptionGenerationAvailable}
 			/>
 		</div>
 	);

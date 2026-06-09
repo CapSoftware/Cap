@@ -7,11 +7,15 @@
 
 use serde::Serialize;
 use std::{
-    env, fs,
+    env,
+    ffi::OsStr,
+    fs,
     path::{Path, PathBuf},
 };
 
-const INSTALL_DIR_NAME: &str = ".cap/bin";
+const CAP_DIR_NAME: &str = ".cap";
+const BIN_DIR_NAME: &str = "bin";
+const CLI_BINARY_STEM: &str = "cap-cli";
 
 #[cfg(windows)]
 const SHIM_NAME: &str = "cap.cmd";
@@ -46,7 +50,7 @@ fn home_dir() -> Result<PathBuf, String> {
 
 fn install_dir() -> Result<PathBuf, String> {
     let home = home_dir()?;
-    let cap_bin = home.join(INSTALL_DIR_NAME);
+    let cap_bin = home.join(CAP_DIR_NAME).join(BIN_DIR_NAME);
     let local_bin = home.join(".local/bin");
 
     // Prefer whichever candidate already holds a Cap-managed shim, so `status` and `install` agree
@@ -84,11 +88,107 @@ fn target_path() -> Result<PathBuf, String> {
     // symlink path; resolve it to the real binary so the sibling `cap-cli` resolves to the bundled
     // one rather than a non-existent path next to the shim (which made status() report installed:false
     // for every `cap desktop` subcommand). Mirrors doctor.rs's VersionInfo::collect().
-    let exe = fs::canonicalize(&exe).unwrap_or(exe);
+    let exe = resolve_path_for_target_lookup(exe);
     let dir = exe
         .parent()
         .ok_or_else(|| "Could not locate Cap executable directory".to_string())?;
+
+    for candidate in cli_binary_candidates(dir) {
+        if candidate.exists() {
+            return Ok(resolve_path_for_target_lookup(candidate));
+        }
+    }
+
     Ok(dir.join(CLI_BINARY_NAME))
+}
+
+#[cfg(windows)]
+fn resolve_path_for_target_lookup(path: PathBuf) -> PathBuf {
+    path
+}
+
+#[cfg(not(windows))]
+fn resolve_path_for_target_lookup(path: PathBuf) -> PathBuf {
+    fs::canonicalize(&path).unwrap_or(path)
+}
+
+fn cli_binary_candidates(dir: &Path) -> Vec<PathBuf> {
+    cli_binary_candidates_for_triple(dir, current_target_triple())
+}
+
+fn cli_binary_candidates_for_triple(dir: &Path, target_triple: Option<&str>) -> Vec<PathBuf> {
+    let mut names = vec![CLI_BINARY_NAME.to_string()];
+    if let Some(target_triple) = target_triple {
+        names.push(target_specific_cli_binary_name(target_triple));
+    }
+
+    let dirs = [
+        dir.to_path_buf(),
+        dir.join("../MacOS"),
+        dir.join("../Resources"),
+    ];
+    let mut candidates = Vec::new();
+    for dir in dirs {
+        for name in &names {
+            candidates.push(dir.join(name));
+        }
+    }
+    candidates
+}
+
+fn target_specific_cli_binary_name(target_triple: &str) -> String {
+    format!(
+        "{CLI_BINARY_STEM}-{target_triple}{}",
+        exe_suffix_for_target(target_triple)
+    )
+}
+
+fn exe_suffix_for_target(target_triple: &str) -> &'static str {
+    if target_triple.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    }
+}
+
+fn current_target_triple() -> Option<&'static str> {
+    if cfg!(all(
+        target_os = "windows",
+        target_arch = "x86_64",
+        target_env = "msvc"
+    )) {
+        Some("x86_64-pc-windows-msvc")
+    } else if cfg!(all(
+        target_os = "windows",
+        target_arch = "aarch64",
+        target_env = "msvc"
+    )) {
+        Some("aarch64-pc-windows-msvc")
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        Some("aarch64-apple-darwin")
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        Some("x86_64-apple-darwin")
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        Some("x86_64-unknown-linux-gnu")
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        Some("aarch64-unknown-linux-gnu")
+    } else {
+        None
+    }
+}
+
+fn cli_binary_file_name_is_cap_managed(name: &OsStr) -> bool {
+    if name == CLI_BINARY_NAME {
+        return true;
+    }
+
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+
+    current_target_triple().is_some_and(|target_triple| {
+        name.eq_ignore_ascii_case(&target_specific_cli_binary_name(target_triple))
+    })
 }
 
 fn display_path(path: &Path) -> String {
@@ -144,7 +244,7 @@ fn shim_points_to(shim_path: &Path, target_path: &Path) -> Result<bool, String> 
         Err(err) => return Err(format!("Could not read CLI shim: {err}")),
     };
 
-    let target = display_path(target_path);
+    let target = windows_command_path(target_path);
     Ok(windows_shim_target(&contents).is_some_and(|shim_target| {
         windows_shim_target_matches(shim_target, &target, |name| env::var(name).ok())
     }))
@@ -153,7 +253,9 @@ fn shim_points_to(shim_path: &Path, target_path: &Path) -> Result<bool, String> 
 #[cfg(unix)]
 fn shim_is_cap_managed(shim_path: &Path) -> bool {
     match fs::read_link(shim_path) {
-        Ok(link) => link.file_name().is_some_and(|name| name == CLI_BINARY_NAME),
+        Ok(link) => link
+            .file_name()
+            .is_some_and(cli_binary_file_name_is_cap_managed),
         Err(_) => false,
     }
 }
@@ -177,14 +279,40 @@ fn windows_shim_target(contents: &[u8]) -> Option<&[u8]> {
     }
 
     let target = command.strip_prefix(b"\"")?.strip_suffix(b"\" %*")?;
-    if target.eq_ignore_ascii_case(b"cap-cli.exe")
-        || ascii_ends_with(target, b"\\cap-cli.exe")
-        || ascii_ends_with(target, b"/cap-cli.exe")
-    {
+    if windows_cli_binary_file_name_is_cap_managed(windows_path_file_name(target)) {
         Some(target)
     } else {
         None
     }
+}
+
+#[cfg(any(windows, test))]
+fn windows_path_file_name(path: &[u8]) -> &[u8] {
+    path.rsplit(|byte| *byte == b'\\' || *byte == b'/')
+        .next()
+        .unwrap_or(path)
+}
+
+#[cfg(any(windows, test))]
+fn windows_cli_binary_file_name_is_cap_managed(name: &[u8]) -> bool {
+    name.eq_ignore_ascii_case(b"cap-cli.exe")
+        || name.eq_ignore_ascii_case(b"cap-cli-x86_64-pc-windows-msvc.exe")
+        || name.eq_ignore_ascii_case(b"cap-cli-aarch64-pc-windows-msvc.exe")
+}
+
+#[cfg(any(windows, test))]
+fn windows_command_path(path: &Path) -> String {
+    let path = display_path(path);
+
+    if let Some(rest) = path.strip_prefix("\\\\?\\UNC\\") {
+        return format!("\\\\{rest}");
+    }
+
+    if let Some(rest) = path.strip_prefix("\\\\?\\") {
+        return rest.to_string();
+    }
+
+    path
 }
 
 #[cfg(any(windows, test))]
@@ -258,19 +386,13 @@ fn trim_ascii_whitespace(mut value: &[u8]) -> &[u8] {
     value
 }
 
-#[cfg(any(windows, test))]
-fn ascii_ends_with(value: &[u8], suffix: &[u8]) -> bool {
-    value.len() >= suffix.len() && value[value.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
-}
-
 fn shell_command(install_dir: &Path) -> String {
     let install_dir = display_path(install_dir);
 
     if cfg!(windows) {
-        // Persist to the user PATH (the session-only `$env:Path = ...` form did not survive
-        // closing the terminal). Takes effect in new shells, matching the macOS profile flow.
+        let install_dir = install_dir.replace('\'', "''");
         format!(
-            r#"[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";{install_dir}", "User")"#
+            r#"powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';{install_dir}', 'User')""#
         )
     } else {
         format!(r#"export PATH="{install_dir}:$PATH""#)
@@ -321,7 +443,7 @@ fn write_shim(shim_path: &Path, target_path: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn write_shim(shim_path: &Path, target_path: &Path) -> Result<(), String> {
-    let target = display_path(target_path);
+    let target = windows_command_path(target_path);
     let target = windows_env_prefixed_path(&target, |name| env::var(name).ok()).unwrap_or(target);
     let contents = format!(
         r#"@echo off
@@ -414,7 +536,8 @@ fn ensure_path_persisted(install_dir: &Path) -> bool {
          $n = if ($u) {{ \"$d;$u\" }} else {{ $d }}; \
          [Environment]::SetEnvironmentVariable('Path', $n, 'User') }}"
     );
-    std::process::Command::new("powershell")
+    let mut command = powershell_command();
+    command
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .status()
         .map(|status| status.success())
@@ -438,7 +561,8 @@ fn path_persisted(install_dir: &Path, on_path: bool) -> bool {
 
 #[cfg(windows)]
 fn windows_user_path_contains(install_dir: &Path) -> bool {
-    let Ok(output) = std::process::Command::new("powershell")
+    let mut command = powershell_command();
+    let Ok(output) = command
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -457,6 +581,17 @@ fn windows_user_path_contains(install_dir: &Path) -> bool {
     String::from_utf8_lossy(&output.stdout)
         .split(';')
         .any(|entry| entry.trim().eq_ignore_ascii_case(needle))
+}
+
+#[cfg(windows)]
+fn powershell_command() -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let mut command = std::process::Command::new("powershell");
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
 }
 
 #[cfg(unix)]
@@ -537,6 +672,19 @@ mod tests {
         std::os::unix::fs::symlink("/elsewhere/Cap.app/Contents/MacOS/cap-cli", &shim).unwrap();
         assert!(shim_is_cap_managed(&shim));
 
+        if let Some(target_triple) = current_target_triple() {
+            fs::remove_file(&shim).unwrap();
+            std::os::unix::fs::symlink(
+                format!(
+                    "/elsewhere/Cap.app/Contents/MacOS/{}",
+                    target_specific_cli_binary_name(target_triple)
+                ),
+                &shim,
+            )
+            .unwrap();
+            assert!(shim_is_cap_managed(&shim));
+        }
+
         // A symlink to anything else is not Cap-managed.
         fs::remove_file(&shim).unwrap();
         std::os::unix::fs::symlink("/bin/ls", &shim).unwrap();
@@ -550,6 +698,15 @@ mod tests {
         // A missing path is not Cap-managed.
         fs::remove_file(&shim).unwrap();
         assert!(!shim_is_cap_managed(&shim));
+    }
+
+    #[test]
+    fn cli_binary_candidates_include_tauri_sidecar_names() {
+        let dir = Path::new("/Applications/Cap.app/Contents/MacOS");
+        let candidates = cli_binary_candidates_for_triple(dir, Some("x86_64-pc-windows-msvc"));
+
+        assert!(candidates.contains(&dir.join("cap-cli-x86_64-pc-windows-msvc.exe")));
+        assert!(candidates.contains(&dir.join("../Resources/cap-cli-x86_64-pc-windows-msvc.exe")));
     }
 
     #[test]
@@ -572,6 +729,38 @@ mod tests {
                 b"@echo off\n\"C:\\Program Files\\Cap\\cap-cli.exe\" %*\necho done\n"
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn windows_cap_cmd_detection_handles_tauri_sidecar_targets() {
+        let target = b"C:\\Program Files\\Cap\\cap-cli-x86_64-pc-windows-msvc.exe";
+
+        assert_eq!(
+            windows_shim_target(
+                b"@echo off\n\"C:\\Program Files\\Cap\\cap-cli-x86_64-pc-windows-msvc.exe\" %*\n"
+            ),
+            Some(&target[..])
+        );
+        assert!(windows_cli_binary_file_name_is_cap_managed(
+            b"CAP-CLI-X86_64-PC-WINDOWS-MSVC.EXE"
+        ));
+        assert!(!windows_cli_binary_file_name_is_cap_managed(
+            b"cap-cli-.exe"
+        ));
+    }
+
+    #[test]
+    fn windows_command_path_strips_verbatim_prefixes() {
+        assert_eq!(
+            windows_command_path(Path::new(
+                "\\\\?\\C:\\Users\\Renee\\AppData\\Local\\Programs\\Cap\\cap-cli.exe"
+            )),
+            "C:\\Users\\Renee\\AppData\\Local\\Programs\\Cap\\cap-cli.exe"
+        );
+        assert_eq!(
+            windows_command_path(Path::new("\\\\?\\UNC\\server\\share\\Cap\\cap-cli.exe")),
+            "\\\\server\\share\\Cap\\cap-cli.exe"
         );
     }
 

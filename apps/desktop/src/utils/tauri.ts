@@ -477,8 +477,31 @@ export type Appearance = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb: number; micStereoMode: StereoMode; systemVolumeDb: number }
+/**
+ * Overlap-trim accounting captured by the recorder's audio gap tracker, persisted so the
+ * editor can compensate for stale-startup audio drift from typed data instead of scraping
+ * the recording log. See `cap-editor`'s `audio_timing_repair_offset`.
+ */
+export type AudioGapSummary = { 
+/**
+ * Total audio trimmed from overlapping frames over the whole recording, in milliseconds.
+ */
+total_overlap_trimmed_ms: number; 
+/**
+ * Startup-window trim used for stale-startup repair, excluding mid-recording trims.
+ */
+startup_overlap_trimmed_ms?: number; 
+/**
+ * Number of whole audio frames dropped because they fully overlapped the committed timeline.
+ */
+overlap_dropped_frames: number; 
+/**
+ * Subset of `overlap_dropped_frames` that dropped within the first few frames — the
+ * signature of a stale buffered burst at capture start.
+ */
+startup_overlap_drops: number }
 export type AudioInputLevelChange = number
-export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null }
+export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null; gap_summary?: AudioGapSummary | null }
 export type AuthSecret = { api_key: string } | { token: string; expires: number }
 export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; organizations?: Organization[]; organizations_updated_at?: number | null }
 export type BackgroundBlurConfig = { mode: BackgroundBlurMode }
