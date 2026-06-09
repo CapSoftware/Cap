@@ -51,6 +51,7 @@ import {
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
+import { getSharePageBranding } from "@/lib/share-branding";
 import {
 	isSocialCrawlerUserAgent,
 	SOCIAL_REFERRER_DOMAINS,
@@ -66,7 +67,6 @@ import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { PendingRecordingShare } from "./_components/PendingRecordingShare";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
-import type { SharePageBranding } from "./types";
 
 const VIEW_NOTIFICATION_DELAY_MS = 2 * 60 * 1000;
 const VIDEO_ID_PATTERN = /^[0-9abcdefghjkmnpqrstvwxyz]+$/;
@@ -191,36 +191,6 @@ const renderNoSuchElement = (awaitRecording: boolean) =>
 	awaitRecording
 		? Effect.succeed(<PendingRecordingShare />)
 		: Effect.sync(() => notFound());
-
-function getSharePageBranding(data: {
-	owner: { isPro: boolean };
-	orgSettings?: OrganizationSettings | null;
-	organizationName?: string | null;
-	organizationIconUrl?: ImageUpload.ImageUrl | null;
-	shareableLinkIconUrl?: ImageUpload.ImageUrl | null;
-}): SharePageBranding | null {
-	if (!data.owner.isPro) {
-		return { type: "cap" };
-	}
-
-	const brandedIcon = data.orgSettings?.shareableLinkUseOrganizationIcon
-		? data.organizationIconUrl
-		: data.shareableLinkIconUrl;
-
-	if (brandedIcon) {
-		return {
-			type: "custom",
-			imageUrl: brandedIcon,
-			name: data.organizationName ?? "Organization",
-		};
-	}
-
-	if (data.orgSettings?.hideShareableLinkCapLogo) {
-		return null;
-	}
-
-	return { type: "cap" };
-}
 
 const getShareVideoPageCatchers = (
 	videoId: Video.VideoId,
