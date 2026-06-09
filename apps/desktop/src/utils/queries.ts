@@ -351,12 +351,9 @@ export function createCustomDomainQuery() {
 export function createOrganizationsQuery() {
 	const auth = authStore.createQuery();
 
-	// Refresh organizations if they're missing
+	// Bootstrap only: auth.rs stamps organizations_updated_at even on org-fetch failure, stopping the loop on self-hosted where the endpoint is absent.
 	createEffect(() => {
-		if (
-			auth.data?.user_id &&
-			(!auth.data?.organizations || auth.data.organizations.length === 0)
-		) {
+		if (auth.data?.user_id && !auth.data?.organizations_updated_at) {
 			commands.updateAuthPlan().catch(console.error);
 		}
 	});

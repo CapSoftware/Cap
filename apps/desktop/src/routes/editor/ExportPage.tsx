@@ -31,7 +31,7 @@ import { createSignInMutation } from "~/utils/auth";
 import {
 	beginExportSessionGuard,
 	createExportTask,
-	exportVideoToFile,
+	createExportToFileTask,
 } from "~/utils/export";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import {
@@ -477,6 +477,11 @@ export function ExportPage() {
 
 	let cancelCurrentExport: (() => void) | null = null;
 
+	onCleanup(() => {
+		cancelCurrentExport?.();
+		cancelCurrentExport = null;
+	});
+
 	const exportWithSettings = (
 		onProgress: (progress: FramesRendered) => void,
 	) => {
@@ -588,22 +593,26 @@ export function ExportPage() {
 				customBpp,
 				forceFfmpegDecoder(),
 			);
-			const savePath = await exportVideoToFile(
+			const task = createExportToFileTask(
 				projectPath,
 				exportSettings,
 				`${meta().prettyName}.${extension}`,
 				extension,
+				(progress) => {
+					if (isCancelled()) throw new SilentError("Cancelled");
+					setExportState({ type: "rendering", progress });
+				},
 				() => {
 					setExportState(reconcile({ action: "save", type: "starting" }));
 				},
 				() => {
 					setExportState({ action: "save", type: "copying" });
 				},
-				(progress) => {
-					if (isCancelled()) throw new SilentError("Cancelled");
-					setExportState({ type: "rendering", progress });
-				},
 			);
+			cancelCurrentExport = task.cancel;
+			const savePath = await task.promise.finally(() => {
+				if (cancelCurrentExport === task.cancel) cancelCurrentExport = null;
+			});
 
 			if (isCancelled()) throw new SilentError("Cancelled");
 
@@ -1473,270 +1482,184 @@ export function ExportPage() {
 					const [copyPressed, setCopyPressed] = createSignal(false);
 					const [clipboardCopyPressed, setClipboardCopyPressed] =
 						createSignal(false);
-					const [showCompletionScreen, setShowCompletionScreen] = createSignal(
-						exportState.type === "done" && exportState.action === "save",
-					);
-
-					createEffect(() => {
-						if (exportState.type === "done" && exportState.action === "save") {
-							setShowCompletionScreen(true);
-						}
-					});
 
 					return (
 						<div
-							class="absolute inset-0 z-50 flex flex-col items-center justify-center p-6 text-gray-12 backdrop-blur-xs"
+							class="flex absolute inset-0 z-50 flex-col gap-6 justify-center items-center p-6 backdrop-blur-md text-gray-12"
 							style={{
 								"background-color":
-									"color-mix(in srgb, var(--gray-1) 85%, transparent)",
+									"color-mix(in srgb, var(--gray-1) 94%, transparent)",
 							}}
 						>
-							<div class="relative z-10 space-y-6 w-full max-w-md text-center">
-								<Switch>
-									<Match
-										when={exportState.action === "copy" && exportState}
-										keyed
-									>
-										{(copyState) => (
-											<div class="flex flex-col gap-4 justify-center items-center h-full">
-												<h1 class="text-lg font-medium text-gray-12">
-													{copyState.type === "starting"
-														? "Preparing..."
-														: copyState.type === "rendering"
-															? `Rendering ${exportMediumLabel()}...`
-															: copyState.type === "copying"
-																? "Copying to clipboard..."
-																: "Copied to clipboard"}
-												</h1>
-												<Show
-													when={
-														(copyState.type === "rendering" ||
-															copyState.type === "starting") &&
-														copyState
-													}
-													keyed
-												>
-													{(copyState) => (
-														<>
-															<RenderProgress
-																state={copyState}
-																label={exportMediumLabel()}
-															/>
-															<Button
-																variant="ghost"
-																size="sm"
-																onClick={handleCancel}
-																class="mt-4 hover:bg-red-500 hover:text-white"
-															>
-																Cancel
-															</Button>
-														</>
-													)}
-												</Show>
-											</div>
-										)}
-									</Match>
-									<Match
-										when={exportState.action === "save" && exportState}
-										keyed
-									>
-										{(saveState) => (
-											<div class="flex flex-col gap-4 justify-center items-center h-full">
-												<Show
-													when={
-														showCompletionScreen() && saveState.type === "done"
-													}
-													fallback={
-														<>
-															<h1 class="text-lg font-medium text-gray-12">
-																{saveState.type === "starting"
-																	? "Preparing..."
-																	: saveState.type === "rendering"
-																		? `Rendering ${exportMediumLabel()}...`
-																		: saveState.type === "copying"
-																			? "Exporting to file..."
-																			: "Export completed"}
-															</h1>
-															<Show
-																when={
-																	(saveState.type === "rendering" ||
-																		saveState.type === "starting") &&
-																	saveState
-																}
-																keyed
-															>
-																{(copyState) => (
-																	<>
-																		<RenderProgress
-																			state={copyState}
-																			label={exportMediumLabel()}
-																		/>
-																		<Button
-																			variant="ghost"
-																			size="sm"
-																			onClick={handleCancel}
-																			class="mt-4 hover:bg-red-500 hover:text-white"
-																		>
-																			Cancel
-																		</Button>
-																	</>
-																)}
-															</Show>
-														</>
-													}
-												>
-													<div class="flex flex-col gap-6 items-center duration-500 animate-in fade-in">
-														<div class="flex flex-col gap-3 items-center">
-															<div class="flex justify-center items-center mb-2 rounded-full bg-gray-12 size-10">
-																<IconLucideCheck class="text-gray-1 size-5" />
-															</div>
-															<div class="flex flex-col gap-1 items-center">
-																<h1 class="text-xl font-medium text-gray-12">
-																	Export Complete
-																</h1>
-																<p class="text-sm text-gray-11">
-																	Your {exportMediumLabel()} is ready
-																</p>
-															</div>
-														</div>
-													</div>
-												</Show>
-											</div>
-										)}
-									</Match>
-									<Match
-										when={exportState.action === "upload" && exportState}
-										keyed
-									>
-										{(uploadState) => (
-											<Switch>
-												<Match
-													when={uploadState.type !== "done" && uploadState}
-													keyed
-												>
-													{(uploadState) => (
-														<div class="flex flex-col gap-4 justify-center items-center">
-															<h1 class="text-lg font-medium text-center text-gray-12">
-																{uploadState.type === "uploading"
-																	? "Uploading..."
-																	: "Preparing..."}
-															</h1>
-															<Switch>
-																<Match
-																	when={
-																		uploadState.type === "uploading" &&
-																		uploadState
-																	}
-																	keyed
-																>
-																	{(uploadState) => (
-																		<ProgressView
-																			amount={uploadState.progress}
-																			label={`Uploading - ${Math.floor(uploadState.progress)}%`}
-																		/>
-																	)}
-																</Match>
-																<Match
-																	when={
-																		uploadState.type !== "uploading" &&
-																		uploadState
-																	}
-																	keyed
-																>
-																	{(renderState) => (
-																		<>
-																			<RenderProgress
-																				state={renderState}
-																				label={exportMediumLabel()}
-																			/>
-																			<Button
-																				variant="ghost"
-																				size="sm"
-																				onClick={handleCancel}
-																				class="mt-4 hover:bg-red-500 hover:text-white"
-																			>
-																				Cancel
-																			</Button>
-																		</>
-																	)}
-																</Match>
-															</Switch>
-														</div>
-													)}
-												</Match>
-												<Match when={uploadState.type === "done"}>
-													<div class="flex flex-col gap-5 justify-center items-center">
-														<div class="flex flex-col gap-1 items-center">
-															<h1 class="mx-auto text-lg font-medium text-center text-gray-12">
-																Upload Complete
-															</h1>
-															<p class="text-sm text-gray-11">
-																Your Cap has been uploaded successfully
-															</p>
-														</div>
-													</div>
-												</Match>
-											</Switch>
-										)}
-									</Match>
-								</Switch>
-							</div>
-							<Show
-								when={
-									exportState.type === "done" &&
-									(exportState.action === "save" ||
-										exportState.action === "upload")
-								}
-							>
-								<div class="mt-6 flex justify-center gap-4">
+							<Switch>
+								<Match
+									when={exportState.action === "copy" && exportState}
+									keyed
+								>
+									{(copyState) => (
+										<Switch>
+											<Match
+												when={
+													(copyState.type === "starting" ||
+														copyState.type === "rendering") &&
+													copyState
+												}
+												keyed
+											>
+												{(renderState) => (
+													<ActiveExport
+														heading={
+															renderState.type === "rendering"
+																? `Rendering ${exportMediumLabel()}`
+																: "Preparing export"
+														}
+														state={renderState}
+														onCancel={handleCancel}
+													/>
+												)}
+											</Match>
+											<Match when={copyState.type === "copying"}>
+												<ActiveExport heading="Copying to clipboard" />
+											</Match>
+											<Match when={copyState.type === "done"}>
+												<CompletedExport
+													title="Copied to clipboard"
+													subtitle={`Your ${exportMediumLabel()} is ready to paste`}
+												/>
+											</Match>
+										</Switch>
+									)}
+								</Match>
+
+								<Match
+									when={exportState.action === "save" && exportState}
+									keyed
+								>
+									{(saveState) => (
+										<Switch>
+											<Match
+												when={
+													(saveState.type === "starting" ||
+														saveState.type === "rendering") &&
+													saveState
+												}
+												keyed
+											>
+												{(renderState) => (
+													<ActiveExport
+														heading={
+															renderState.type === "rendering"
+																? `Rendering ${exportMediumLabel()}`
+																: "Preparing export"
+														}
+														state={renderState}
+														onCancel={handleCancel}
+													/>
+												)}
+											</Match>
+											<Match when={saveState.type === "copying"}>
+												<ActiveExport heading="Saving to file" />
+											</Match>
+											<Match when={saveState.type === "done"}>
+												<CompletedExport
+													title="Export complete"
+													subtitle={`Your ${exportMediumLabel()} is ready`}
+												/>
+											</Match>
+										</Switch>
+									)}
+								</Match>
+
+								<Match
+									when={exportState.action === "upload" && exportState}
+									keyed
+								>
+									{(uploadState) => (
+										<Switch>
+											<Match
+												when={uploadState.type === "uploading" && uploadState}
+												keyed
+											>
+												{(uploading) => (
+													<ActiveExport
+														heading="Uploading"
+														percent={uploading.progress}
+													/>
+												)}
+											</Match>
+											<Match
+												when={
+													(uploadState.type === "starting" ||
+														uploadState.type === "rendering") &&
+													uploadState
+												}
+												keyed
+											>
+												{(renderState) => (
+													<ActiveExport
+														heading={
+															renderState.type === "rendering"
+																? `Rendering ${exportMediumLabel()}`
+																: "Preparing export"
+														}
+														state={renderState}
+														onCancel={handleCancel}
+													/>
+												)}
+											</Match>
+											<Match when={uploadState.type === "done"}>
+												<CompletedExport
+													title="Upload complete"
+													subtitle="Your Cap has been uploaded successfully"
+												/>
+											</Match>
+										</Switch>
+									)}
+								</Match>
+							</Switch>
+
+							<Show when={exportState.type === "done"}>
+								<div class="flex flex-col gap-3 items-center">
 									<Show
 										when={
-											exportState.action === "upload" &&
-											exportState.type === "done"
+											exportState.action === "upload" && meta().sharing?.link
 										}
 									>
-										<Show when={meta().sharing?.link}>
-											{(link) => (
-												<div class="flex gap-2">
+										{(link) => (
+											<div class="flex gap-2">
+												<Button
+													onClick={() => {
+														setCopyPressed(true);
+														setTimeout(() => {
+															setCopyPressed(false);
+														}, 2000);
+														navigator.clipboard.writeText(link());
+													}}
+													variant="dark"
+													class="flex gap-2 justify-center items-center"
+												>
+													{!copyPressed() ? (
+														<IconCapCopy class="transition-colors duration-200 text-gray-1 size-4 group-hover:text-gray-12" />
+													) : (
+														<IconLucideCheck class="transition-colors duration-200 text-gray-1 size-4 svgpathanimation group-hover:text-gray-12" />
+													)}
+													<p>Copy Link</p>
+												</Button>
+												<a href={link()} target="_blank" rel="noreferrer">
 													<Button
-														onClick={() => {
-															setCopyPressed(true);
-															setTimeout(() => {
-																setCopyPressed(false);
-															}, 2000);
-															navigator.clipboard.writeText(link());
-														}}
 														variant="dark"
 														class="flex gap-2 justify-center items-center"
 													>
-														{!copyPressed() ? (
-															<IconCapCopy class="transition-colors duration-200 text-gray-1 size-4 group-hover:text-gray-12" />
-														) : (
-															<IconLucideCheck class="transition-colors duration-200 text-gray-1 size-4 svgpathanimation group-hover:text-gray-12" />
-														)}
-														<p>Copy Link</p>
+														<IconCapLink class="transition-colors duration-200 text-gray-1 size-4 group-hover:text-gray-12" />
+														<p>Open Link</p>
 													</Button>
-													<a href={link()} target="_blank" rel="noreferrer">
-														<Button
-															variant="dark"
-															class="flex gap-2 justify-center items-center"
-														>
-															<IconCapLink class="transition-colors duration-200 text-gray-1 size-4 group-hover:text-gray-12" />
-															<p>Open Link</p>
-														</Button>
-													</a>
-												</div>
-											)}
-										</Show>
+												</a>
+											</div>
+										)}
 									</Show>
 
-									<Show
-										when={
-											exportState.action === "save" &&
-											exportState.type === "done"
-										}
-									>
-										<div class="flex gap-4 w-full">
+									<Show when={exportState.action === "save"}>
+										<div class="flex gap-3">
 											<Button
 												variant="dark"
 												class="flex gap-2 items-center"
@@ -1776,20 +1699,27 @@ export function ExportPage() {
 											</Button>
 										</div>
 									</Show>
+
+									<Button
+										variant="gray"
+										class="flex gap-1.5 items-center"
+										onClick={() => {
+											setExportState({ type: "idle" });
+											handleBack();
+										}}
+									>
+										<IconLucideArrowLeft class="size-4" />
+										Back to Editor
+									</Button>
 								</div>
 							</Show>
-							<Show when={exportState.type === "done"}>
-								<Button
-									variant="gray"
-									class="mt-4 hover:underline"
-									onClick={() => {
-										setExportState({ type: "idle" });
-										handleBack();
-									}}
-								>
-									<IconLucideArrowLeft class="size-4" />
-									Back to Editor
-								</Button>
+
+							<Show when={exportState.type !== "done"}>
+								<p class="max-w-sm text-xs leading-relaxed text-center text-gray-11">
+									<span class="font-semibold text-gray-12">Tip:</span> Use
+									Instant Mode for your next recording to record and upload on
+									the fly, with no exporting required.
+								</p>
 							</Show>
 						</div>
 					);
@@ -1799,37 +1729,99 @@ export function ExportPage() {
 	);
 }
 
-function RenderProgress(props: { state: RenderState; label: string }) {
+function ProgressRing(props: { percent?: number; indeterminate?: boolean }) {
+	const pct = () => Math.max(0, Math.min(100, props.percent ?? 0));
+
 	return (
-		<ProgressView
-			amount={
-				props.state.type === "rendering"
-					? (props.state.progress.renderedCount /
-							props.state.progress.totalFrames) *
-						100
-					: 0
-			}
-			label={
-				props.state.type === "rendering"
-					? `Rendering ${props.label} (${
-							props.state.progress.renderedCount
-						}/${props.state.progress.totalFrames} frames)`
-					: "Preparing to render..."
-			}
-		/>
+		<div class="relative size-20">
+			<svg
+				class={cx("size-20 -rotate-90", props.indeterminate && "animate-spin")}
+				viewBox="0 0 64 64"
+				fill="none"
+			>
+				<circle
+					cx="32"
+					cy="32"
+					r="28"
+					stroke="currentColor"
+					stroke-width="4"
+					class="text-gray-4"
+				/>
+				<circle
+					cx="32"
+					cy="32"
+					r="28"
+					stroke="currentColor"
+					stroke-width="4"
+					stroke-linecap="round"
+					stroke-dasharray={
+						props.indeterminate ? "44 176" : `${pct() * 1.76} 176`
+					}
+					class="transition-all duration-300 text-blue-9"
+				/>
+			</svg>
+			<Show when={!props.indeterminate}>
+				<div class="flex absolute inset-0 justify-center items-center">
+					<span class="text-base font-semibold tabular-nums text-gray-12">
+						{Math.round(pct())}%
+					</span>
+				</div>
+			</Show>
+		</div>
 	);
 }
 
-function ProgressView(props: { amount: number; label?: string }) {
+function ActiveExport(props: {
+	heading: string;
+	state?: RenderState;
+	percent?: number;
+	onCancel?: () => void;
+}) {
+	const frames = () =>
+		props.state?.type === "rendering" ? props.state.progress : null;
+
+	const percent = () => {
+		const rendered = frames();
+		if (rendered) return (rendered.renderedCount / rendered.totalFrames) * 100;
+		return props.percent;
+	};
+
 	return (
-		<>
-			<div class="w-full bg-gray-3 rounded-full h-2.5">
-				<div
-					class="bg-blue-9 h-2.5 rounded-full"
-					style={{ width: `${props.amount}%` }}
-				/>
+		<div class="flex flex-col gap-5 items-center w-72 text-center">
+			<ProgressRing
+				percent={percent()}
+				indeterminate={percent() === undefined}
+			/>
+			<div class="flex flex-col gap-1 items-center">
+				<h2 class="text-lg font-medium text-gray-12">{props.heading}</h2>
+				<Show when={frames()}>
+					{(rendered) => (
+						<p class="text-sm tabular-nums text-gray-11">
+							{rendered().renderedCount.toLocaleString()} /{" "}
+							{rendered().totalFrames.toLocaleString()} frames
+						</p>
+					)}
+				</Show>
 			</div>
-			<p class="text-xs tabular-nums">{props.label}</p>
-		</>
+			<Show when={props.onCancel}>
+				<Button variant="gray" size="sm" onClick={() => props.onCancel?.()}>
+					Cancel
+				</Button>
+			</Show>
+		</div>
+	);
+}
+
+function CompletedExport(props: { title: string; subtitle: string }) {
+	return (
+		<div class="flex flex-col gap-4 items-center text-center">
+			<div class="flex justify-center items-center rounded-full size-16 bg-blue-3">
+				<IconLucideCheck class="size-8 text-blue-9" />
+			</div>
+			<div class="flex flex-col gap-1 items-center">
+				<h2 class="text-lg font-medium text-gray-12">{props.title}</h2>
+				<p class="text-sm text-gray-11">{props.subtitle}</p>
+			</div>
+		</div>
 	);
 }

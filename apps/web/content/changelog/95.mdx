@@ -1,0 +1,35 @@
+---
+title: Google Drive Integration, Merge Recordings, Desktop Backgrounds, Screenshot OCR & More
+app: Cap Desktop
+publishedAt: "2026-05-27"
+version: 0.5.0
+image:
+---
+
+This release gives Cap Desktop a new and improved foundation for the work you do every day: recording, screenshots, importing, editing, exporting, uploading, and recovering when something goes wrong. We have hardened the capture and export pipelines, improved camera and microphone handling, and made the editor smoother so future desktop features can build on a more reliable core.
+
+On top of that foundation, this release adds new features: Google Drive storage, merging Studio Mode recordings, importing existing videos and screenshots, screenshot OCR, camera background blur, organization branding, and more.
+
+- **Google Drive Integration** — Connect Google Drive as a storage option in Settings -> Integrations. New Instant Mode recordings, or Studio Mode recordings created as a shareable link, will use your connected Google Drive for both uploading and serving the video.
+- **Merge previous recordings** — Bring existing Studio Mode recordings into the Cap editor and merge them into your current project. You can also import local videos into the editor, add media from the tray, main window, recordings settings, or drag and drop, with progress shown while Cap converts files into editable projects.
+- **Camera background blur** — Camera recordings now support background blur in both the live preview and the final export. Choose blur strength from the camera controls or editor sidebar, with GPU/Core ML/DirectML acceleration where available and a CPU fallback when needed.
+- **Import screenshots into the editor** — Bring local screenshots and images into the screenshot editor so you can crop, annotate, style, copy, or export them with the same tools as fresh captures.
+- **Native screenshot OCR** — The screenshot editor can now recognize text from screenshots on macOS and Windows. Select an area, copy text from the selectable overlay, and keep the original screenshot layout intact while you work.
+- **Organization branding in the editor** — Pick an organization in the editor, use its brand colors in backgrounds, gradients, captions, keyboard overlays, and exports, and manage brand colors and logos from the new organization dropdown.
+- **Compatibility recording quality** — Studio mode now has Compatibility, Balanced, and Ultra profiles. Compatibility lowers bitrate and capture pressure for older or lower-power machines, while Instant mode quality controls now make upload resolution easier to choose.
+- **More resilient recording recovery** — Recording now preflights disk space, tracks health during capture, hardens fragmented recording recovery, and can rescue more sessions after a crash or forced quit.
+- **Smoother camera and microphone handling** — Cap restores saved camera and microphone selections more reliably, locks the selected microphone during recording start, recovers mic preview after recording, handles camera setup timeouts without blocking the recorder, and now detects microphones whose drivers misreport their sample rate so audio no longer comes out choppy or gappy.
+- **Audio and video stay in sync** — Studio Mode recordings now keep audio locked to video for the full length of a recording, including long sessions. Cap reconciles late or overlapping microphone audio against the capture clock instead of layering in duplicate silence, bounds unexpected gaps against wall-clock time, pads the tail with silence when a capture pipeline is cancelled, and handles Windows system audio, microphone resampling, decoded sources, and surround downmixing more reliably.
+- **Better camera preview reliability** — Camera windows are session-scoped, preview failures show structured messages in the UI, frame stalls trigger recovery, WebSocket reconnects use stronger backoff, and sleep/wake cleanup is more reliable.
+- **Faster camera preview performance** — Camera preview rendering is coalesced, native preview threads are prioritized, legacy preview frames are throttled, and Cap prefers lower-cost camera capture formats when they keep recording smooth.
+- **Clearer, safer exports** — Export now uses the native save dialog, shows a redesigned circular progress overlay, handles cancellation cleanly, prompts before closing a window with an active export, serializes preview generation, guards active exports before quit, and recovers from more rendering failures instead of leaving the app stuck.
+- **Windows export and playback stability** — Windows exports use safer release paths, pin the graphics adapter used by desktop rendering, and avoid text scaling issues that could make the main window and controls render at the wrong size.
+- **Smoother editor playback** — The editor now preloads cursor assets, prerenders the first frame, uses a faster RGBA/WebGPU path, improves NV12 conversion, and keeps audio playback aligned with the visible playhead.
+- **Better cursor, zoom, and composite rendering** — Auto zooms ease out more naturally, zoom focus follows the smoothed cursor path, cursor size defaults are more predictable, cursor height now respects the source screen and crop, and composited frames have smoother antialiasing, blending, and motion blur defaults.
+- **Desktop backgrounds and background controls** — The editor includes a bundled city wallpaper pack, supports manual image imports, can use your current desktop wallpaper as a background, snapshots the desktop background for Studio recordings, and adds a screen background blur control for more polished exports.
+- **Settings redesign** — Desktop settings have a shared layout, a refreshed recordings and integrations experience, an account profile in the sidebar, native macOS material styling, a manual Check for Updates action, and a telemetry opt-out toggle.
+- **More polished recorder controls** — The main recorder has refreshed device controls, camera and microphone format pickers, animated navigation into device settings, better saved input restoration, clearer warnings when Compatibility mode may reduce capture settings, and more reliable click handling for the in-progress recording controls.
+- **Cap windows stay out of recordings** — macOS recordings now exclude more Cap-owned windows by default, including Tauri webviews and overlays. Cap also warns when a window cannot be protected and hides overlays before screenshots.
+- **macOS focus and Dock fixes** — Fixed duplicate Dock icons, app switcher persistence, panel focus behavior, and the hide Dock icon setting when Cap panels or recording windows are visible.
+- **Timeline and editing fixes** — Captions and keyboard tracks now clamp correctly at trim boundaries, split-mode clicks land more accurately on clamped segments, Studio recordings allow deleting the last clip in a segment, and crop menu positioning is more reliable.
+- **App shutdown and upload cleanup** — Exit handling now waits more carefully for recording, export, upload, and editor cleanup work, restores microphone feeds after recording stops, and avoids quit-time crashes from camera teardown.

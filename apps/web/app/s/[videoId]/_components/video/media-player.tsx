@@ -13,12 +13,14 @@ import {
 } from "@cap/ui";
 import * as SliderPrimitive from "@radix-ui/react-slider";
 import { Slot } from "@radix-ui/react-slot";
+import { AnimatePresence, motion } from "framer-motion";
 import {
 	AlertTriangleIcon,
 	CaptionsOffIcon,
 	CheckIcon,
 	DownloadIcon,
 	FastForwardIcon,
+	GaugeIcon,
 	GlobeIcon,
 	Loader2Icon,
 	Maximize2Icon,
@@ -37,6 +39,7 @@ import {
 	Volume1Icon,
 	Volume2Icon,
 	VolumeXIcon,
+	ZapIcon,
 } from "lucide-react";
 import {
 	MediaActionTypes,
@@ -53,9 +56,19 @@ import { forwardRef, useEffect } from "react";
 import * as ReactDOM from "react-dom";
 import { useComposedRefs } from "@/app/lib/compose-refs";
 import { cn } from "@/app/lib/utils";
+import {
+	formatPlaybackDuration,
+	normalizePlaybackSpeed,
+	PLAYBACK_SPEEDS,
+} from "@/lib/playback-speed";
 import { Badge } from "./badge";
 import { Button as PlayerButton } from "./button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "./tooltip";
 
 const ROOT_NAME = "MediaPlayer";
 const SEEK_NAME = "MediaPlayerSeek";
@@ -64,7 +77,13 @@ const VOLUME_NAME = "MediaPlayerVolume";
 const PLAYBACK_SPEED_NAME = "MediaPlayerPlaybackSpeed";
 
 const FLOATING_MENU_SIDE_OFFSET = 10;
-const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const SPEEDS: number[] = [...PLAYBACK_SPEEDS];
+const VOLUME_INDICATOR_BARS = Array.from({ length: 10 }, (_, index) => ({
+	id: `volume-bar-${index}`,
+	position: index,
+	height: 12 + index * 2,
+	animationDelay: `${index * 50}ms`,
+}));
 
 const SEEK_STEP_SHORT = 5;
 const SEEK_STEP_LONG = 10;
@@ -839,43 +858,45 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 	const RootPrimitive = asChild ? Slot : "div";
 
 	return (
-		<MediaPlayerContext.Provider value={contextValue}>
-			<RootPrimitive
-				aria-labelledby={labelId}
-				aria-describedby={descriptionId}
-				aria-disabled={disabled}
-				data-disabled={disabled ? "" : undefined}
-				data-controls-visible={controlsVisible ? "" : undefined}
-				data-slot="media-player"
-				data-state={isFullscreen ? "fullscreen" : "windowed"}
-				dir={dir}
-				tabIndex={disabled ? undefined : 0}
-				{...rootImplProps}
-				ref={composedRef}
-				onMouseLeave={onMouseLeave}
-				onMouseMove={onMouseMove}
-				onKeyDown={onKeyDown}
-				onKeyUp={onKeyUp}
-				className={cn(
-					"dark relative isolate flex flex-col overflow-visible bg-background outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_video]:relative [&_video]:object-contain",
-					"data-[state=fullscreen]:[&_video]:size-full [:fullscreen_&]:flex [:fullscreen_&]:h-full [:fullscreen_&]:max-h-screen [:fullscreen_&]:flex-col [:fullscreen_&]:justify-between",
-					"[&_[data-slider]::before]:-top-4 [&_[data-slider]::before]:-bottom-2 [&_[data-slider]::before]:absolute [&_[data-slider]::before]:inset-x-0 [&_[data-slider]::before]:z-10 [&_[data-slider]::before]:h-8 [&_[data-slider]::before]:cursor-pointer [&_[data-slider]::before]:content-[''] [&_[data-slider]]:relative [&_[data-slot='media-player-seek']:not([data-hovering])::before]:cursor-default",
-					"[&_video::-webkit-media-text-track-display]:top-auto! [&_video::-webkit-media-text-track-display]:bottom-[4%]! [&_video::-webkit-media-text-track-display]:mb-0! data-[state=fullscreen]:data-[controls-visible]:[&_video::-webkit-media-text-track-display]:bottom-[9%]! data-[controls-visible]:[&_video::-webkit-media-text-track-display]:bottom-[13%]! data-[state=fullscreen]:[&_video::-webkit-media-text-track-display]:bottom-[7%]!",
-					className,
-				)}
-			>
-				<span id={labelId} className="sr-only">
-					{label ?? "Media player"}
-				</span>
-				<span id={descriptionId} className="sr-only">
-					{isVideo
-						? "Video player with custom controls for playback, volume, seeking, and more. Use space bar to play/pause, arrow keys (←/→) to seek, and arrow keys (↑/↓) to adjust volume."
-						: "Audio player with custom controls for playback, volume, seeking, and more. Use space bar to play/pause, Shift + arrow keys (←/→) to seek, and arrow keys (↑/↓) to adjust volume."}
-				</span>
-				{children}
-				<MediaPlayerVolumeIndicator />
-			</RootPrimitive>
-		</MediaPlayerContext.Provider>
+		<TooltipProvider>
+			<MediaPlayerContext.Provider value={contextValue}>
+				<RootPrimitive
+					aria-labelledby={labelId}
+					aria-describedby={descriptionId}
+					aria-disabled={disabled}
+					data-disabled={disabled ? "" : undefined}
+					data-controls-visible={controlsVisible ? "" : undefined}
+					data-slot="media-player"
+					data-state={isFullscreen ? "fullscreen" : "windowed"}
+					dir={dir}
+					tabIndex={disabled ? undefined : 0}
+					{...rootImplProps}
+					ref={composedRef}
+					onMouseLeave={onMouseLeave}
+					onMouseMove={onMouseMove}
+					onKeyDown={onKeyDown}
+					onKeyUp={onKeyUp}
+					className={cn(
+						"dark relative isolate flex flex-col overflow-visible bg-background outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_video]:relative [&_video]:object-contain",
+						"data-[state=fullscreen]:[&_video]:size-full [:fullscreen_&]:flex [:fullscreen_&]:h-full [:fullscreen_&]:max-h-screen [:fullscreen_&]:flex-col [:fullscreen_&]:justify-between",
+						"[&_[data-slider]::before]:-top-4 [&_[data-slider]::before]:-bottom-2 [&_[data-slider]::before]:absolute [&_[data-slider]::before]:inset-x-0 [&_[data-slider]::before]:z-10 [&_[data-slider]::before]:h-8 [&_[data-slider]::before]:cursor-pointer [&_[data-slider]::before]:content-[''] [&_[data-slider]]:relative [&_[data-slot='media-player-seek']:not([data-hovering])::before]:cursor-default",
+						"[&_video::-webkit-media-text-track-display]:top-auto! [&_video::-webkit-media-text-track-display]:bottom-[4%]! [&_video::-webkit-media-text-track-display]:mb-0! data-[state=fullscreen]:data-[controls-visible]:[&_video::-webkit-media-text-track-display]:bottom-[9%]! data-[controls-visible]:[&_video::-webkit-media-text-track-display]:bottom-[13%]! data-[state=fullscreen]:[&_video::-webkit-media-text-track-display]:bottom-[7%]!",
+						className,
+					)}
+				>
+					<span id={labelId} className="sr-only">
+						{label ?? "Media player"}
+					</span>
+					<span id={descriptionId} className="sr-only">
+						{isVideo
+							? "Video player with custom controls for playback, volume, seeking, and more. Use space bar to play/pause, arrow keys (←/→) to seek, and arrow keys (↑/↓) to adjust volume."
+							: "Audio player with custom controls for playback, volume, seeking, and more. Use space bar to play/pause, Shift + arrow keys (←/→) to seek, and arrow keys (↑/↓) to adjust volume."}
+					</span>
+					{children}
+					<MediaPlayerVolumeIndicator />
+				</RootPrimitive>
+			</MediaPlayerContext.Provider>
+		</TooltipProvider>
 	);
 }
 
@@ -1009,7 +1030,7 @@ function MediaPlayerControls(props: MediaPlayerControlsProps) {
 	);
 }
 
-interface MediaPlayerLoadingProps extends React.ComponentProps<"div"> {
+interface MediaPlayerLoadingProps extends React.ComponentProps<"output"> {
 	delayMs?: number;
 	asChild?: boolean;
 }
@@ -1063,11 +1084,10 @@ function MediaPlayerLoading(props: MediaPlayerLoadingProps) {
 
 	if (!shouldRender) return null;
 
-	const LoadingPrimitive = asChild ? Slot : "div";
+	const LoadingPrimitive = asChild ? Slot : "output";
 
 	return (
 		<LoadingPrimitive
-			role="status"
 			aria-live="polite"
 			data-slot="media-player-loading"
 			{...loadingProps}
@@ -1251,7 +1271,8 @@ function MediaPlayerError(props: MediaPlayerErrorProps) {
 	);
 }
 
-interface MediaPlayerVolumeIndicatorProps extends React.ComponentProps<"div"> {
+interface MediaPlayerVolumeIndicatorProps
+	extends React.ComponentProps<"output"> {
 	asChild?: boolean;
 }
 
@@ -1269,14 +1290,13 @@ function MediaPlayerVolumeIndicator(props: MediaPlayerVolumeIndicatorProps) {
 
 	const effectiveVolume = mediaMuted ? 0 : mediaVolume;
 	const volumePercentage = Math.round(effectiveVolume * 100);
-	const barCount = 10;
+	const barCount = VOLUME_INDICATOR_BARS.length;
 	const activeBarCount = Math.ceil(effectiveVolume * barCount);
 
-	const VolumeIndicatorPrimitive = asChild ? Slot : "div";
+	const VolumeIndicatorPrimitive = asChild ? Slot : "output";
 
 	return (
 		<VolumeIndicatorPrimitive
-			role="status"
 			aria-live="polite"
 			aria-label={`Volume ${mediaMuted ? "muted" : `${volumePercentage}%`}`}
 			data-slot="media-player-volume-indicator"
@@ -1300,18 +1320,18 @@ function MediaPlayerVolumeIndicator(props: MediaPlayerVolumeIndicatorProps) {
 					</span>
 				</div>
 				<div className="flex gap-1 items-center">
-					{Array.from({ length: barCount }, (_, index) => (
+					{VOLUME_INDICATOR_BARS.map((bar) => (
 						<div
-							key={index}
+							key={bar.id}
 							className={cn(
 								"w-1.5 rounded-full transition-all duration-150",
-								index < activeBarCount && !mediaMuted
+								bar.position < activeBarCount && !mediaMuted
 									? "scale-100 bg-white"
 									: "scale-90 bg-white/30",
 							)}
 							style={{
-								height: `${12 + index * 2}px`,
-								animationDelay: `${index * 50}ms`,
+								height: `${bar.height}px`,
+								animationDelay: bar.animationDelay,
 							}}
 						/>
 					))}
@@ -2582,12 +2602,7 @@ function MediaPlayerTime(props: MediaPlayerTimeProps) {
 			<span className="text-xs tabular-nums text-white min-w-fit md:text-base">
 				{times.current}
 			</span>
-			<span
-				className="text-xs tabular-nums text-gray-11"
-				role="separator"
-				aria-hidden="true"
-				tabIndex={-1}
-			>
+			<span className="text-xs tabular-nums text-gray-11" aria-hidden="true">
 				/
 			</span>
 			<span className="text-xs tabular-nums text-white min-w-fit md:text-base">
@@ -2686,6 +2701,230 @@ function MediaPlayerPlaybackSpeed(props: MediaPlayerPlaybackSpeedProps) {
 				))}
 			</DropdownMenuContent>
 		</DropdownMenu>
+	);
+}
+
+interface MediaPlayerPlaybackSpeedDialProps {
+	defaultSpeed?: number;
+	fallbackDuration?: number | null;
+	speeds?: number[];
+	show?: boolean;
+	className?: string;
+}
+
+function MediaPlayerPlaybackSpeedDial(
+	props: MediaPlayerPlaybackSpeedDialProps,
+) {
+	const {
+		defaultSpeed,
+		fallbackDuration,
+		speeds = SPEEDS,
+		show = false,
+		className,
+	} = props;
+
+	const dispatch = useMediaDispatch();
+	const mediaPlaybackRate = useMediaSelector(selectPlaybackRate);
+	const mediaDuration = useMediaSelector(selectDuration);
+	const [, seekableEnd = 0] = useMediaSelector(selectSeekable);
+
+	const [hovered, setHovered] = React.useState(false);
+	const [pinned, setPinned] = React.useState(false);
+	const [previewSpeed, setPreviewSpeed] = React.useState<number | null>(null);
+	const dialRef = React.useRef<HTMLDivElement | null>(null);
+	const open = hovered || pinned;
+
+	// Touch devices have no hover, so allow tap-to-open with tap-away to close.
+	React.useEffect(() => {
+		if (!pinned) return;
+		const handlePointerDown = (event: PointerEvent) => {
+			if (!dialRef.current?.contains(event.target as Node)) {
+				setPinned(false);
+				setPreviewSpeed(null);
+			}
+		};
+		document.addEventListener("pointerdown", handlePointerDown);
+		return () => document.removeEventListener("pointerdown", handlePointerDown);
+	}, [pinned]);
+
+	React.useEffect(() => {
+		if (!show) {
+			setPinned(false);
+			setHovered(false);
+			setPreviewSpeed(null);
+		}
+	}, [show]);
+
+	const effectiveDuration = React.useMemo(() => {
+		const candidates = [mediaDuration, seekableEnd].filter(
+			(value) => Number.isFinite(value) && value > 0,
+		);
+		if (candidates.length > 0) return Math.max(...candidates);
+		if (fallbackDuration != null && fallbackDuration > 0)
+			return fallbackDuration;
+		return 0;
+	}, [mediaDuration, seekableEnd, fallbackDuration]);
+
+	const appliedDefaultRef = React.useRef(false);
+	React.useEffect(() => {
+		if (appliedDefaultRef.current) return;
+		appliedDefaultRef.current = true;
+		const normalized = normalizePlaybackSpeed(defaultSpeed);
+		if (normalized !== 1) {
+			dispatch({
+				type: MediaActionTypes.MEDIA_PLAYBACK_RATE_REQUEST,
+				detail: normalized,
+			});
+		}
+	}, [defaultSpeed, dispatch]);
+
+	const onSelectSpeed = React.useCallback(
+		(rate: number) => {
+			dispatch({
+				type: MediaActionTypes.MEDIA_PLAYBACK_RATE_REQUEST,
+				detail: rate,
+			});
+		},
+		[dispatch],
+	);
+
+	const displaySpeed = previewSpeed ?? mediaPlaybackRate;
+	const acceleratedDuration =
+		effectiveDuration > 0 ? effectiveDuration / displaySpeed : 0;
+	const showSavings = effectiveDuration > 0 && displaySpeed > 1;
+
+	return (
+		<div className="flex absolute inset-0 z-20 justify-center items-center pointer-events-none">
+			<div className="translate-y-[3.5rem] xs:translate-y-20 md:translate-y-28">
+				<AnimatePresence>
+					{show && (
+						<motion.div
+							ref={dialRef}
+							data-slot="media-player-speed-dial"
+							initial={{ opacity: 0, y: 6, scale: 0.94 }}
+							animate={{ opacity: 1, y: 0, scale: 1 }}
+							exit={{ opacity: 0, y: 6, scale: 0.94 }}
+							transition={{
+								type: "spring",
+								stiffness: 520,
+								damping: 34,
+								mass: 0.7,
+							}}
+							onHoverStart={() => setHovered(true)}
+							onHoverEnd={() => {
+								setHovered(false);
+								setPreviewSpeed(null);
+							}}
+							style={{ willChange: "transform" }}
+							className={cn("pointer-events-auto select-none", className)}
+						>
+							<motion.div
+								layout
+								transition={{
+									type: "spring",
+									stiffness: 480,
+									damping: 38,
+									mass: 0.7,
+								}}
+								className="flex flex-col gap-0.5 sm:gap-1 items-center p-1 sm:p-1.5 rounded-xl sm:rounded-2xl ring-1 shadow-lg sm:shadow-xl bg-zinc-900/95 text-white ring-white/10"
+							>
+								<div className="flex justify-center items-center px-0.5 sm:px-1 min-h-0 sm:min-h-8">
+									<AnimatePresence mode="popLayout" initial={false}>
+										{open ? (
+											<motion.div
+												key="speeds"
+												layout="position"
+												initial={{ opacity: 0 }}
+												animate={{ opacity: 1 }}
+												exit={{ opacity: 0 }}
+												transition={{ duration: 0.13, ease: "easeOut" }}
+												className="flex gap-0 sm:gap-0.5 items-center"
+											>
+												{speeds.map((speed) => {
+													const isCurrent = speed === mediaPlaybackRate;
+													return (
+														<motion.button
+															key={speed}
+															type="button"
+															onClick={() => {
+																onSelectSpeed(speed);
+																setPinned(false);
+																setPreviewSpeed(null);
+															}}
+															onHoverStart={() => setPreviewSpeed(speed)}
+															onHoverEnd={() => setPreviewSpeed(null)}
+															whileHover={{ scale: 1.18 }}
+															whileTap={{ scale: 0.92 }}
+															transition={{
+																type: "spring",
+																stiffness: 600,
+																damping: 20,
+															}}
+															className={cn(
+																"rounded-md sm:rounded-lg px-0.5 sm:px-1.5 py-0.5 sm:py-1 text-[10px] sm:text-sm font-semibold transition-colors tabular-nums",
+																isCurrent
+																	? "text-white bg-white/15"
+																	: "text-white/50 hover:text-white",
+															)}
+														>
+															{speed}×
+														</motion.button>
+													);
+												})}
+											</motion.div>
+										) : (
+											<motion.button
+												key="current"
+												type="button"
+												layout="position"
+												initial={{ opacity: 0 }}
+												animate={{ opacity: 1 }}
+												exit={{ opacity: 0 }}
+												transition={{ duration: 0.13, ease: "easeOut" }}
+												whileTap={{ scale: 0.96 }}
+												onClick={() => setPinned(true)}
+												aria-label="Change playback speed"
+												className="flex gap-1 sm:gap-2 items-center px-1 sm:px-2"
+											>
+												<GaugeIcon className="size-3 sm:size-4 text-white/80" />
+												<span className="text-xs sm:text-base font-semibold tabular-nums">
+													{mediaPlaybackRate}×
+												</span>
+											</motion.button>
+										)}
+									</AnimatePresence>
+								</div>
+								{effectiveDuration > 0 && (
+									<motion.div
+										layout="position"
+										className="flex gap-1 sm:gap-1.5 justify-center items-center px-2 sm:px-3 py-0.5 sm:py-1 text-[10px] sm:text-xs rounded-lg sm:rounded-xl tabular-nums bg-black/40"
+									>
+										{showSavings ? (
+											<>
+												<span className="line-through text-white/40">
+													{formatPlaybackDuration(effectiveDuration)}
+												</span>
+												<ZapIcon
+													className="text-yellow-400 size-2.5 sm:size-3"
+													fill="currentColor"
+												/>
+												<span className="font-medium text-white">
+													{formatPlaybackDuration(acceleratedDuration)}
+												</span>
+											</>
+										) : (
+											<span className="font-medium text-white/80">
+												{formatPlaybackDuration(acceleratedDuration)}
+											</span>
+										)}
+									</motion.div>
+								)}
+							</motion.div>
+						</motion.div>
+					)}
+				</AnimatePresence>
+			</div>
+		</div>
 	);
 }
 
@@ -3558,6 +3797,7 @@ export {
 	MediaPlayerVolume,
 	MediaPlayerTime,
 	MediaPlayerPlaybackSpeed,
+	MediaPlayerPlaybackSpeedDial,
 	MediaPlayerLoop,
 	MediaPlayerFullscreen,
 	MediaPlayerPiP,

@@ -162,10 +162,12 @@ fn macos_sync_activation_policy(app: &tauri::AppHandle, should_show_dock: bool) 
 pub(crate) fn prepare_macos_panel_window(
     app: &tauri::AppHandle,
 ) -> MacosPanelWindowActivationGuard {
-    MACOS_PENDING_PANEL_WINDOWS.fetch_add(1, Ordering::AcqRel);
+    let prev = MACOS_PENDING_PANEL_WINDOWS.fetch_add(1, Ordering::AcqRel);
 
-    if let Err(err) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
-        tracing::warn!("Failed to prepare macOS panel activation policy: {err}");
+    if prev == 0 {
+        if let Err(err) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
+            tracing::warn!("Failed to prepare macOS panel activation policy: {err}");
+        }
     }
 
     MacosPanelWindowActivationGuard { app: app.clone() }
@@ -181,6 +183,16 @@ pub(crate) fn sync_macos_dock_visibility(app: &tauri::AppHandle) {
         .ok()
         .flatten()
         .is_some_and(|settings| settings.hide_dock_icon);
+
+    let has_visible_panel_window = app.webview_windows().iter().any(|(label, window)| {
+        CapWindowId::from_str(label)
+            .map(|id| !id.activates_dock() && window.is_visible().unwrap_or(false))
+            .unwrap_or(false)
+    });
+
+    if has_visible_panel_window && should_hide_dock {
+        return;
+    }
 
     let has_visible_dock_window = app.webview_windows().iter().any(|(label, window)| {
         CapWindowId::from_str(label)

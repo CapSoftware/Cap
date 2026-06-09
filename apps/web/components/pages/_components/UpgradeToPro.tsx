@@ -1,7 +1,13 @@
 import { Button } from "@cap/ui";
 import { useRive } from "@rive-app/react-canvas";
 
-const UpgradeToPro = ({ text = "Upgrade To Cap Pro" }: { text?: string }) => {
+const UpgradeToPro = ({
+	text = "Upgrade To Cap Pro",
+	onClick,
+}: {
+	text?: string;
+	onClick?: () => void;
+}) => {
 	const { rive, RiveComponent: ProRive } = useRive({
 		src: "/rive/pricing.riv",
 		artboard: "pro",
@@ -11,6 +17,7 @@ const UpgradeToPro = ({ text = "Upgrade To Cap Pro" }: { text?: string }) => {
 	return (
 		<Button
 			href="/pricing"
+			onClick={onClick}
 			onMouseEnter={() => {
 				if (rive) {
 					rive.stop();

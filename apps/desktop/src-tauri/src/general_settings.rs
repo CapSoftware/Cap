@@ -84,23 +84,28 @@ impl Default for StudioRecordingQuality {
     }
 }
 
-fn detect_total_memory_bytes() -> Option<u64> {
-    let system = sysinfo::System::new_with_specifics(
-        sysinfo::RefreshKind::nothing()
-            .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
-    );
-    Some(system.total_memory()).filter(|m| *m > 0)
+impl From<cap_recording::StudioQuality> for StudioRecordingQuality {
+    fn from(value: cap_recording::StudioQuality) -> Self {
+        match value {
+            cap_recording::StudioQuality::Compatibility => Self::Compatibility,
+            cap_recording::StudioQuality::Balanced => Self::Balanced,
+            cap_recording::StudioQuality::Ultra => Self::Ultra,
+        }
+    }
 }
 
-const COMPATIBILITY_MEMORY_THRESHOLD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+impl From<StudioRecordingQuality> for cap_recording::StudioQuality {
+    fn from(value: StudioRecordingQuality) -> Self {
+        match value {
+            StudioRecordingQuality::Compatibility => Self::Compatibility,
+            StudioRecordingQuality::Balanced => Self::Balanced,
+            StudioRecordingQuality::Ultra => Self::Ultra,
+        }
+    }
+}
 
 pub fn default_studio_recording_quality() -> StudioRecordingQuality {
-    match detect_total_memory_bytes() {
-        Some(memory) if memory < COMPATIBILITY_MEMORY_THRESHOLD_BYTES => {
-            StudioRecordingQuality::Compatibility
-        }
-        _ => StudioRecordingQuality::Balanced,
-    }
+    cap_recording::default_studio_recording_quality().into()
 }
 
 impl MainWindowRecordingStartBehaviour {
@@ -133,6 +138,19 @@ pub fn default_excluded_windows() -> Vec<WindowExclusion> {
             window_title: Some((*title).to_string()),
         })
         .collect()
+}
+
+fn append_missing_default_excluded_windows(excluded_windows: &mut Vec<WindowExclusion>) -> bool {
+    let mut changed = false;
+
+    for default in default_excluded_windows() {
+        if !excluded_windows.contains(&default) {
+            excluded_windows.push(default);
+            changed = true;
+        }
+    }
+
+    changed
 }
 
 // When adding fields here, #[serde(default)] defines the value to use for existing configurations,
@@ -182,7 +200,10 @@ pub struct GeneralSettingsStore {
     pub screenshot_save_directory: Option<PathBuf>,
     #[serde(default)]
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
-    #[serde(default = "default_true", rename = "custom_cursor_capture2")]
+    #[serde(
+        default = "default_custom_cursor_capture",
+        rename = "custom_cursor_capture2"
+    )]
     pub custom_cursor_capture: bool,
     #[serde(default = "default_server_url")]
     pub server_url: String,
@@ -195,7 +216,7 @@ pub struct GeneralSettingsStore {
     pub enable_native_camera_preview: bool,
     #[serde(default = "default_true")]
     pub auto_zoom_on_clicks: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_capture_keyboard_events")]
     pub capture_keyboard_events: bool,
     #[serde(default)]
     pub post_deletion_behaviour: PostDeletionBehaviour,
@@ -207,7 +228,7 @@ pub struct GeneralSettingsStore {
     pub instant_mode_max_resolution: u32,
     #[serde(default)]
     pub default_project_name_template: Option<String>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_crash_recovery_recording")]
     pub crash_recovery_recording: bool,
     #[serde(default = "default_max_fps")]
     pub max_fps: u32,
@@ -244,11 +265,23 @@ fn default_true() -> bool {
 }
 
 fn default_instant_mode_max_resolution() -> u32 {
-    1920
+    cap_recording::DEFAULT_INSTANT_MODE_MAX_RESOLUTION
 }
 
 fn default_max_fps() -> u32 {
-    60
+    cap_recording::DEFAULT_STUDIO_MAX_FPS
+}
+
+fn default_custom_cursor_capture() -> bool {
+    cap_recording::DEFAULT_CUSTOM_CURSOR_CAPTURE
+}
+
+fn default_capture_keyboard_events() -> bool {
+    cap_recording::DEFAULT_CAPTURE_KEYBOARD_EVENTS
+}
+
+fn default_crash_recovery_recording() -> bool {
+    cap_recording::DEFAULT_CRASH_RECOVERY_RECORDING
 }
 
 fn default_transcription_hints() -> Vec<String> {
@@ -294,19 +327,19 @@ impl Default for GeneralSettingsStore {
             screenshot_save_destination: ScreenshotSaveDestination::Desktop,
             screenshot_save_directory: None,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
-            custom_cursor_capture: true,
+            custom_cursor_capture: cap_recording::DEFAULT_CUSTOM_CURSOR_CAPTURE,
             server_url: default_server_url(),
             recording_countdown: Some(3),
             enable_native_camera_preview: default_enable_native_camera_preview(),
             auto_zoom_on_clicks: false,
-            capture_keyboard_events: true,
+            capture_keyboard_events: cap_recording::DEFAULT_CAPTURE_KEYBOARD_EVENTS,
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,
-            instant_mode_max_resolution: 1920,
+            instant_mode_max_resolution: cap_recording::DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
             default_project_name_template: None,
-            crash_recovery_recording: true,
-            max_fps: 60,
+            crash_recovery_recording: cap_recording::DEFAULT_CRASH_RECOVERY_RECORDING,
+            max_fps: cap_recording::DEFAULT_STUDIO_MAX_FPS,
             transcription_hints: default_transcription_hints(),
             editor_preview_quality: EditorPreviewQuality::Half,
             studio_recording_quality: default_studio_recording_quality(),
@@ -315,7 +348,7 @@ impl Default for GeneralSettingsStore {
             camera_window_positions_by_monitor_name: BTreeMap::new(),
             has_completed_onboarding: false,
             enable_telemetry: true,
-            out_of_process_muxer: false,
+            out_of_process_muxer: cap_recording::DEFAULT_OUT_OF_PROCESS_MUXER,
         }
     }
 }
@@ -425,7 +458,7 @@ fn sync_dock_visibility_on_general_settings_change(app: &AppHandle) {
 pub fn init(app: &AppHandle) {
     println!("Initializing GeneralSettingsStore");
 
-    let store = match GeneralSettingsStore::get(app) {
+    let mut store = match GeneralSettingsStore::get(app) {
         Ok(Some(store)) => store,
         Ok(None) => GeneralSettingsStore::default(),
         Err(e) => {
@@ -434,6 +467,7 @@ pub fn init(app: &AppHandle) {
         }
     };
 
+    append_missing_default_excluded_windows(&mut store.excluded_windows);
     crate::posthog::set_telemetry_enabled(store.enable_telemetry);
     register_bundled_muxer_binary(app);
 
@@ -554,5 +588,49 @@ mod tests {
             settings.screenshot_save_destination,
             ScreenshotSaveDestination::AppLibraryOnly
         );
+    }
+
+    fn title_exclusion(title: &str) -> WindowExclusion {
+        WindowExclusion {
+            bundle_identifier: None,
+            owner_name: None,
+            window_title: Some(title.to_string()),
+        }
+    }
+
+    #[test]
+    fn appends_missing_default_excluded_windows() {
+        let mut excluded_windows = vec![
+            title_exclusion("Cap"),
+            WindowExclusion {
+                bundle_identifier: None,
+                owner_name: Some("Preview".to_string()),
+                window_title: Some("Private Preview".to_string()),
+            },
+        ];
+
+        let changed = append_missing_default_excluded_windows(&mut excluded_windows);
+
+        assert!(changed);
+        assert!(
+            default_excluded_windows()
+                .iter()
+                .all(|default| excluded_windows.contains(default))
+        );
+        assert!(excluded_windows.iter().any(|entry| {
+            entry.owner_name.as_deref() == Some("Preview")
+                && entry.window_title.as_deref() == Some("Private Preview")
+        }));
+    }
+
+    #[test]
+    fn does_not_duplicate_default_excluded_windows() {
+        let mut excluded_windows = default_excluded_windows();
+        let len = excluded_windows.len();
+
+        let changed = append_missing_default_excluded_windows(&mut excluded_windows);
+
+        assert!(!changed);
+        assert_eq!(excluded_windows.len(), len);
     }
 }

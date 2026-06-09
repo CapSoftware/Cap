@@ -1,7 +1,9 @@
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import { sendEmail } from "@cap/database/emails/config";
 import { Feedback } from "@cap/database/emails/feedback";
 import {
+	authApiKeys,
 	organizationMembers,
 	organizations,
 	users,
@@ -12,9 +14,9 @@ import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
 import { ImageUploads } from "@cap/web-backend";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
 import { z } from "zod";
@@ -32,6 +34,8 @@ import {
 } from "./organization-branding";
 
 export const app = new Hono();
+
+const MAX_DESKTOP_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
 
 async function resolveOrganizationIconUrl(iconUrl: string | null) {
 	if (!iconUrl) return null;
@@ -55,6 +59,59 @@ async function resolveUserImageUrl(imageUrl: string | null) {
 	}).pipe(runPromise);
 }
 
+async function fetchDesktopProfileImage(imageUrl: string) {
+	const response = await fetch(imageUrl);
+	if (!response.ok) return null;
+
+	const contentType = response.headers.get("content-type");
+	if (!contentType?.toLowerCase().startsWith("image/")) return null;
+
+	const contentLength = Number(response.headers.get("content-length"));
+	if (contentLength > MAX_DESKTOP_PROFILE_IMAGE_BYTES) return null;
+
+	const bytes = await response.arrayBuffer();
+	if (bytes.byteLength > MAX_DESKTOP_PROFILE_IMAGE_BYTES) return null;
+
+	return { bytes, contentType };
+}
+
+type DesktopProfileUser = {
+	name: string | null;
+	lastName: string | null;
+	email: string | null;
+	image: string | null;
+};
+
+async function getDesktopProfileUser(c: Context) {
+	const authHeader = c.req.header("authorization")?.split(" ")[1];
+
+	if (authHeader?.length === 36) {
+		const [user] = await db()
+			.select({
+				name: users.name,
+				lastName: users.lastName,
+				email: users.email,
+				image: users.image,
+			})
+			.from(users)
+			.innerJoin(authApiKeys, eq(users.id, authApiKeys.userId))
+			.where(eq(authApiKeys.id, authHeader))
+			.limit(1);
+
+		return user ?? null;
+	}
+
+	const user = await getCurrentUser();
+	if (!user) return null;
+
+	return {
+		name: user.name,
+		lastName: user.lastName,
+		email: user.email,
+		image: user.image,
+	} satisfies DesktopProfileUser;
+}
+
 async function toDesktopOrganizations(
 	rows: DesktopOrganizationRow[],
 	userId: string,
@@ -68,6 +125,18 @@ async function toDesktopOrganizations(
 			),
 		),
 	);
+}
+
+function mergeDesktopOrganizationRows(...rowSets: DesktopOrganizationRow[][]) {
+	const rowsById = new Map<string, DesktopOrganizationRow>();
+
+	for (const rows of rowSets) {
+		for (const row of rows) {
+			rowsById.set(row.id, row);
+		}
+	}
+
+	return Array.from(rowsById.values());
 }
 
 async function applyOrganizationLogoUpdate(
@@ -434,8 +503,10 @@ app.get("/plan", withAuth, async (c) => {
 	});
 });
 
-app.get("/user/profile", withAuth, async (c) => {
-	const user = c.get("user");
+app.get("/user/profile", async (c) => {
+	const user = await getDesktopProfileUser(c);
+	if (!user) return c.text("User not authenticated", 401);
+
 	const name = [user.name, user.lastName].filter(Boolean).join(" ").trim();
 
 	return c.json({
@@ -445,36 +516,76 @@ app.get("/user/profile", withAuth, async (c) => {
 	});
 });
 
+app.get("/user/profile/image", async (c) => {
+	const user = await getDesktopProfileUser(c);
+	if (!user) return c.text("User not authenticated", 401);
+	if (!user.image) return c.body(null, 404);
+
+	const imageUrl = await resolveUserImageUrl(user.image);
+	if (!imageUrl) return c.body(null, 404);
+
+	const image = await fetchDesktopProfileImage(imageUrl);
+	if (!image) return c.body(null, 404);
+
+	return new Response(image.bytes, {
+		headers: {
+			"Cache-Control": "private, max-age=300",
+			"Content-Type": image.contentType,
+		},
+	});
+});
+
 app.get("/organizations", withAuth, async (c) => {
 	const user = c.get("user");
 
-	const rows = await db()
-		.select({
-			id: organizations.id,
-			name: organizations.name,
-			ownerId: organizations.ownerId,
-			tombstoneAt: organizations.tombstoneAt,
-			iconUrl: organizations.iconUrl,
-			metadata: organizations.metadata,
-			role: organizationMembers.role,
-		})
-		.from(organizations)
-		.leftJoin(
-			organizationMembers,
-			and(
-				eq(organizationMembers.organizationId, organizations.id),
-				eq(organizationMembers.userId, user.id),
-			),
-		)
-		.where(
-			and(
-				isNull(organizations.tombstoneAt),
-				or(
-					eq(organizations.ownerId, user.id),
+	const [ownedRows, memberRows] = await Promise.all([
+		db()
+			.select({
+				id: organizations.id,
+				name: organizations.name,
+				ownerId: organizations.ownerId,
+				tombstoneAt: organizations.tombstoneAt,
+				iconUrl: organizations.iconUrl,
+				metadata: organizations.metadata,
+				role: organizationMembers.role,
+			})
+			.from(organizations)
+			.leftJoin(
+				organizationMembers,
+				and(
+					eq(organizationMembers.organizationId, organizations.id),
 					eq(organizationMembers.userId, user.id),
 				),
+			)
+			.where(
+				and(
+					isNull(organizations.tombstoneAt),
+					eq(organizations.ownerId, user.id),
+				),
 			),
-		);
+		db()
+			.select({
+				id: organizations.id,
+				name: organizations.name,
+				ownerId: organizations.ownerId,
+				tombstoneAt: organizations.tombstoneAt,
+				iconUrl: organizations.iconUrl,
+				metadata: organizations.metadata,
+				role: organizationMembers.role,
+			})
+			.from(organizationMembers)
+			.innerJoin(
+				organizations,
+				eq(organizations.id, organizationMembers.organizationId),
+			)
+			.where(
+				and(
+					eq(organizationMembers.userId, user.id),
+					isNull(organizations.tombstoneAt),
+				),
+			),
+	]);
+	const rows = mergeDesktopOrganizationRows(ownedRows, memberRows);
 
 	return c.json(await toDesktopOrganizations(rows, user.id));
 });

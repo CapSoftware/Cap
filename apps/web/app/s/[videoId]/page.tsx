@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { nanoIdLength } from "@cap/database/helpers";
 import {
 	comments,
 	organizationMembers,
@@ -12,7 +13,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { buildEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
@@ -41,11 +42,13 @@ import {
 	getDashboardData,
 	type OrganizationSettings,
 } from "@/app/(org)/dashboard/dashboard-data";
+import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { createNotification } from "@/lib/Notification";
 import {
 	canManageOrganizationSettings,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
+import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import {
@@ -60,11 +63,28 @@ import {
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
+import { PendingRecordingShare } from "./_components/PendingRecordingShare";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
 import type { SharePageBranding } from "./types";
 
 const VIEW_NOTIFICATION_DELAY_MS = 2 * 60 * 1000;
+const VIDEO_ID_PATTERN = /^[0-9abcdefghjkmnpqrstvwxyz]+$/;
+
+type ShareVideoSearchParams = {
+	[key: string]: string | string[] | undefined;
+};
+
+const isValidVideoIdParam = (videoId: string) =>
+	videoId.length === nanoIdLength && VIDEO_ID_PATTERN.test(videoId);
+
+const hasRecordingStoppedParam = (searchParams: ShareVideoSearchParams) => {
+	const recordingStoppedParam = Array.isArray(searchParams.recordingStopped)
+		? searchParams.recordingStopped[0]
+		: searchParams.recordingStopped;
+
+	return recordingStoppedParam === "1" || recordingStoppedParam === "true";
+};
 
 // Helper function to fetch shared spaces data for a video
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
@@ -167,7 +187,10 @@ function PolicyDeniedView({ reason }: { reason?: string }) {
 const renderPolicyDenied = (videoId: Video.VideoId, reason?: string) =>
 	Effect.succeed(<PolicyDeniedView key={videoId} reason={reason} />);
 
-const renderNoSuchElement = () => Effect.sync(() => notFound());
+const renderNoSuchElement = (awaitRecording: boolean) =>
+	awaitRecording
+		? Effect.succeed(<PendingRecordingShare />)
+		: Effect.sync(() => notFound());
 
 function getSharePageBranding(data: {
 	owner: { isPro: boolean };
@@ -199,17 +222,23 @@ function getSharePageBranding(data: {
 	return { type: "cap" };
 }
 
-const getShareVideoPageCatchers = (videoId: Video.VideoId) => ({
+const getShareVideoPageCatchers = (
+	videoId: Video.VideoId,
+	awaitRecording: boolean,
+) => ({
 	PolicyDenied: (e: Policy.PolicyDeniedError) =>
 		renderPolicyDenied(videoId, e.reason),
-	NoSuchElementException: renderNoSuchElement,
+	NoSuchElementException: () => renderNoSuchElement(awaitRecording),
 });
 
 export async function generateMetadata(
 	props: PageProps<"/s/[videoId]">,
 ): Promise<Metadata> {
 	const params = await props.params;
+	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
+	const awaitRecording =
+		isValidVideoIdParam(videoId) && hasRecordingStoppedParam(searchParams);
 
 	const headersList = await headers();
 	const referrer =
@@ -224,7 +253,14 @@ export async function generateMetadata(
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
-				onNone: () => notFound(),
+				onNone: () =>
+					awaitRecording
+						? {
+								title: "Cap: Preparing Video",
+								description: "This recording is being made available.",
+								robots: "noindex, nofollow",
+							}
+						: notFound(),
 				onSome: ([video]) => {
 					const previewImageUrl = new URL(
 						`/api/video/preview?videoId=${videoId}&fallback=og`,
@@ -368,6 +404,8 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const params = await props.params;
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
+	const awaitRecording =
+		isValidVideoIdParam(videoId) && hasRecordingStoppedParam(searchParams);
 
 	await reconcileStaleEditUpload(videoId);
 
@@ -441,7 +479,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				)}
 			</div>
 		)),
-		Effect.catchTags(getShareVideoPageCatchers(videoId)),
+		Effect.catchTags(getShareVideoPageCatchers(videoId, awaitRecording)),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
 	);
@@ -466,13 +504,38 @@ async function AuthorizedContent({
 		organizationIconUrl?: ImageUpload.ImageUrlOrKey | null;
 		shareableLinkIconUrl?: ImageUpload.ImageUrlOrKey | null;
 	};
-	searchParams: { [key: string]: string | string[] | undefined };
+	searchParams: ShareVideoSearchParams;
 }) {
 	// will have already been fetched if auth is required
 	const user = await getCurrentUser();
 	const videoId = video.id;
-	const canRegisterView =
+	let recoveredDesktopSegmentsUpload = false;
+
+	if (
+		user?.id === video.owner.id &&
+		video.source?.type === "desktopSegments" &&
 		!video.hasActiveUpload &&
+		serverEnv().MEDIA_SERVER_URL
+	) {
+		try {
+			const result = await completeDesktopSegmentsManifestAndQueue({
+				videoId,
+				userId: user.id,
+			});
+			recoveredDesktopSegmentsUpload =
+				result.status === "queued" || result.status === "already-processing";
+		} catch (error) {
+			console.error(
+				`[ShareVideoPage] Failed to recover desktop segments upload ${videoId}:`,
+				error,
+			);
+		}
+	}
+
+	const hasActiveUpload =
+		video.hasActiveUpload || recoveredDesktopSegmentsUpload;
+	const canRegisterView =
+		!hasActiveUpload &&
 		Date.now() - video.updatedAt.getTime() >= VIEW_NOTIFICATION_DELAY_MS;
 
 	if (user && video && user.id !== video.owner.id && canRegisterView) {
@@ -494,6 +557,7 @@ async function AuthorizedContent({
 	const replyId = optionFromTOrFirst(searchParams.reply).pipe(
 		Option.map(Comment.CommentId.make),
 	);
+	const recordingStopped = hasRecordingStoppedParam(searchParams);
 
 	// Fetch spaces data for the sharing dialog
 	let spacesData = null;
@@ -514,6 +578,10 @@ async function AuthorizedContent({
 		organizationSettings: video.orgSettings,
 		spaces: sharedSpaces.filter((space) => space.id !== space.organizationId),
 	});
+	const env = serverEnv();
+	const transcriptionGenerationAvailable =
+		Boolean(env.DEEPGRAM_API_KEY) && !rules.settings.disableTranscript;
+	const aiProviderAvailable = Boolean(env.GROQ_API_KEY || env.OPENAI_API_KEY);
 
 	let aiGenerationEnabled = false;
 	const videoOwnerQuery = await db()
@@ -532,8 +600,8 @@ async function AuthorizedContent({
 	}
 
 	if (
-		!rules.settings.disableTranscript &&
-		!video.hasActiveUpload &&
+		transcriptionGenerationAvailable &&
+		!hasActiveUpload &&
 		video.transcriptionStatus !== "COMPLETE" &&
 		video.transcriptionStatus !== "PROCESSING" &&
 		video.transcriptionStatus !== "SKIPPED" &&
@@ -758,6 +826,7 @@ async function AuthorizedContent({
 
 		return {
 			...video,
+			hasActiveUpload,
 			owner: {
 				id: video.owner.id,
 				name: video.owner.name,
@@ -793,6 +862,11 @@ async function AuthorizedContent({
 		rawFileKey: video.activeUploadRawFileKey,
 	});
 
+	const defaultPlaybackSpeed = resolveDefaultPlaybackSpeed(
+		video.videoSettings?.defaultPlaybackSpeed,
+		video.orgSettings?.defaultPlaybackSpeed,
+	);
+
 	return (
 		<div className="container flex-1 px-4 mx-auto">
 			<ShareHeader
@@ -824,8 +898,11 @@ async function AuthorizedContent({
 				userOrganizations={userOrganizations}
 				viewerId={user?.id ?? null}
 				isEditProcessing={isEditProcessing}
+				recordingStopped={recordingStopped}
+				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}
-				aiGenerationEnabled={aiGenerationEnabled}
+				aiGenerationAvailable={aiGenerationEnabled && aiProviderAvailable}
+				transcriptionGenerationAvailable={transcriptionGenerationAvailable}
 			/>
 		</div>
 	);

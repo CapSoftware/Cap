@@ -23,6 +23,15 @@ async uploadLogs() : Promise<null> {
 async getSystemDiagnostics() : Promise<SystemDiagnostics> {
     return await TAURI_INVOKE("get_system_diagnostics");
 },
+async getCliInstallStatus() : Promise<CliInstallStatus> {
+    return await TAURI_INVOKE("get_cli_install_status");
+},
+async installCli() : Promise<CliInstallStatus> {
+    return await TAURI_INVOKE("install_cli");
+},
+async uninstallCli() : Promise<CliInstallStatus> {
+    return await TAURI_INVOKE("uninstall_cli");
+},
 async startRecording(inputs: StartRecordingInputs) : Promise<RecordingAction> {
     return await TAURI_INVOKE("start_recording", { inputs });
 },
@@ -49,6 +58,9 @@ async takeScreenshot(target: ScreenCaptureTarget) : Promise<string> {
 },
 async takeScreenshotWithPostCapture(target: ScreenCaptureTarget) : Promise<string> {
     return await TAURI_INVOKE("take_screenshot_with_post_capture", { target });
+},
+async importCurrentDesktopBackground(projectPath: string) : Promise<string> {
+    return await TAURI_INVOKE("import_current_desktop_background", { projectPath });
 },
 async listCameras() : Promise<CameraInfo[]> {
     return await TAURI_INVOKE("list_cameras");
@@ -101,8 +113,17 @@ async beginExportSession() : Promise<void> {
 async endExportSession() : Promise<void> {
     await TAURI_INVOKE("end_export_session");
 },
+async cancelExport(exportId: string) : Promise<boolean> {
+    return await TAURI_INVOKE("cancel_export", { exportId });
+},
+async cancelCurrentWindowExports() : Promise<void> {
+    await TAURI_INVOKE("cancel_current_window_exports");
+},
 async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings) : Promise<string> {
     return await TAURI_INVOKE("export_video", { projectPath, progress, settings });
+},
+async exportVideoWithId(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings, exportId: string) : Promise<string> {
+    return await TAURI_INVOKE("export_video_with_id", { projectPath, progress, settings, exportId });
 },
 async exportVideoToFile(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings, fileName: string, fileType: string) : Promise<string> {
     return await TAURI_INVOKE("export_video_to_file", { projectPath, progress, settings, fileName, fileType });
@@ -462,8 +483,31 @@ export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb: number; micStereoMode: StereoMode; systemVolumeDb: number }
+/**
+ * Overlap-trim accounting captured by the recorder's audio gap tracker, persisted so the
+ * editor can compensate for stale-startup audio drift from typed data instead of scraping
+ * the recording log. See `cap-editor`'s `audio_timing_repair_offset`.
+ */
+export type AudioGapSummary = { 
+/**
+ * Total audio trimmed from overlapping frames over the whole recording, in milliseconds.
+ */
+total_overlap_trimmed_ms: number; 
+/**
+ * Startup-window trim used for stale-startup repair, excluding mid-recording trims.
+ */
+startup_overlap_trimmed_ms?: number; 
+/**
+ * Number of whole audio frames dropped because they fully overlapped the committed timeline.
+ */
+overlap_dropped_frames: number; 
+/**
+ * Subset of `overlap_dropped_frames` that dropped within the first few frames — the
+ * signature of a stale buffered burst at capture start.
+ */
+startup_overlap_drops: number }
 export type AudioInputLevelChange = number
-export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null }
+export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null; gap_summary?: AudioGapSummary | null }
 export type AuthSecret = { api_key: string } | { token: string; expires: number }
 export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; organizations?: Organization[]; organizations_updated_at?: number | null }
 export type BackgroundBlurConfig = { mode: BackgroundBlurMode }
@@ -492,6 +536,12 @@ export type CaptureDisplay = { id: DisplayId; name: string; refresh_rate: number
 export type CaptureDisplayWithThumbnail = { id: DisplayId; name: string; refresh_rate: number; thumbnail: string | null }
 export type CaptureWindow = { id: WindowId; owner_name: string; name: string; bounds: LogicalBounds; refresh_rate: number; bundle_identifier: string | null }
 export type CaptureWindowWithThumbnail = { id: WindowId; owner_name: string; name: string; bounds: LogicalBounds; refresh_rate: number; thumbnail: string | null; app_icon: string | null; bundle_identifier: string | null }
+export type CliInstallStatus = { installDir: string; shimPath: string; targetPath: string; installed: boolean; onPath: boolean; conflict: string | null; pathEntry: string; shellCommand: string; 
+/**
+ * Whether the install dir is persisted to the user's shell PATH config (profile/registry),
+ * so `cap` will be available in a new terminal even though it is not on the current PATH.
+ */
+pathConfigured: boolean }
 export type ClickSpringConfig = { tension: number; mass: number; friction: number }
 export type ClipConfiguration = { index: number; offsets: ClipOffsets }
 export type ClipOffsets = { camera?: number; mic?: number; system_audio?: number }
@@ -606,8 +656,8 @@ export type RequestScrollToSettingsSection = { section: string }
 export type RequestSetTargetMode = { target_mode: RecordingTargetMode | null; display_id: string | null }
 export type RequestStartRecording = { mode: RecordingMode }
 export type S3UploadMeta = { id: string }
-export type SceneMode = "default" | "cameraOnly" | "hideCamera"
-export type SceneSegment = { start: number; end: number; mode?: SceneMode }
+export type SceneMode = "default" | "cameraOnly" | "hideCamera" | "splitScreen"
+export type SceneSegment = { start: number; end: number; mode?: SceneMode; splitLayout?: SplitLayout | null; transitionIn?: number; transitionOut?: number }
 export type ScreenCaptureTarget = { variant: "window"; id: WindowId } | { variant: "display"; id: DisplayId } | { variant: "area"; screen: DisplayId; bounds: LogicalBounds } | { variant: "cameraOnly" }
 export type ScreenMovementSpring = { stiffness: number; damping: number; mass: number }
 export type ScreenshotOcrLine = { text: string; confidence: number | null; bounds: ScreenshotOcrRegion }
@@ -622,6 +672,7 @@ export type ShadowConfiguration = { size: number; opacity: number; blur: number 
 export type SharingMeta = { id: string; link: string }
 export type ShowCapWindow = { Main: { init_target_mode: RecordingTargetMode | null } } | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: DisplayId } } | { TargetSelectOverlay: { display_id: DisplayId; target_mode: RecordingTargetMode | null } } | { CaptureArea: { screen_id: DisplayId } } | { Camera: { centered: boolean } } | { InProgressRecording: { countdown: number | null; capture_target?: ScreenCaptureTarget | null } } | "Upgrade" | "ModeSelect" | { ScreenshotEditor: { path: string } } | "Onboarding"
 export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; cursor?: string | null }
+export type SplitLayout = { screenZoom: number; screenPosition: XY<number>; cameraZoom: number; cameraPosition: XY<number> }
 export type StartRecordingInputs = { capture_target: ScreenCaptureTarget; capture_system_audio?: boolean; mode: RecordingMode; organization_id?: string | null }
 export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }

@@ -9,6 +9,16 @@ import type {
 	RecordingSettingsStore,
 } from "~/utils/tauri";
 
+export type UserProfileStore = {
+	userId: string | null;
+	profile: {
+		name: string | null;
+		email: string | null;
+		imageUrl: string | null;
+	};
+	updatedAt: number;
+};
+
 let _store: Promise<Store> | undefined;
 const store = () => {
 	if (!_store) {
@@ -63,6 +73,7 @@ function declareStore<T extends object>(name: string, defaults?: T) {
 
 export const presetsStore = declareStore<PresetsStore>("presets");
 export const authStore = declareStore<AuthStore>("auth");
+export const userProfileStore = declareStore<UserProfileStore>("user_profile");
 export const hotkeysStore = declareStore<HotkeysStore>("hotkeys");
 export const generalSettingsStore =
 	declareStore<GeneralSettingsStore>("general_settings");

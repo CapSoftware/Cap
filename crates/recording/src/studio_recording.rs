@@ -14,7 +14,9 @@ use crate::{
     cursor::{CursorActor, Cursors, IncrementalCaptureOutputs, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer},
-    output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
+    output_pipeline::{
+        AudioGapSummary, DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError,
+    },
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
 };
@@ -418,6 +420,18 @@ struct SegmentFailureDiagnostics {
 struct SegmentOutput {
     meta: MultipleSegment,
     diagnostics: Option<SegmentFailureDiagnostics>,
+    duration: f64,
+}
+
+fn to_project_gap_summary(
+    summary: Option<AudioGapSummary>,
+) -> Option<cap_project::AudioGapSummary> {
+    summary.map(|s| cap_project::AudioGapSummary {
+        total_overlap_trimmed_ms: s.total_overlap_trimmed_ms,
+        startup_overlap_trimmed_ms: s.startup_overlap_trimmed_ms,
+        overlap_dropped_frames: s.overlap_dropped_frames,
+        startup_overlap_drops: s.startup_overlap_drops,
+    })
 }
 
 fn record_track_failure(
@@ -984,22 +998,34 @@ async fn stop_recording(
                     track_failures: s.pipeline.track_failures.clone(),
                 });
 
+            let display_fps = s
+                .pipeline
+                .screen
+                .video_info
+                .map(|v| v.fps())
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        "Screen video_info missing, using default fps: {}",
+                        DEFAULT_FPS
+                    );
+                    DEFAULT_FPS
+                });
+            // Use the encoded display-media duration (frame_count / fps), not the wall-clock
+            // recording span which includes pipeline-drain latency. This is the timeline the
+            // recorder persists to project-config.json, so it is what un-edited recordings use; the
+            // editor/export fallbacks only synthesize a timeline when none is present and read the
+            // muxed container duration, which this closely (not bit-exactly) matches.
+            let display_media_duration = if display_fps > 0 {
+                s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
+            } else {
+                0.0
+            };
+
             SegmentOutput {
                 meta: MultipleSegment {
                     display: VideoMeta {
                         path: make_relative(&s.pipeline.screen.path),
-                        fps: s
-                            .pipeline
-                            .screen
-                            .video_info
-                            .map(|v| v.fps())
-                            .unwrap_or_else(|| {
-                                tracing::warn!(
-                                    "Screen video_info missing, using default fps: {}",
-                                    DEFAULT_FPS
-                                );
-                                DEFAULT_FPS
-                            }),
+                        fps: display_fps,
                         start_time: Some(display_start_time),
                         device_id: None,
                     },
@@ -1019,6 +1045,7 @@ async fn stop_recording(
                         path: make_relative(&mic.path),
                         start_time: mic_start_time,
                         device_id: s.mic_device_id.clone(),
+                        gap_summary: to_project_gap_summary(mic.audio_gap_summary),
                     }),
                     system_audio: s.pipeline.system_audio.map(|audio| {
                         let raw_sys_start = to_start_time(audio.first_timestamp);
@@ -1041,6 +1068,7 @@ async fn stop_recording(
                             path: make_relative(&audio.path),
                             start_time: Some(sys_start_time),
                             device_id: None,
+                            gap_summary: to_project_gap_summary(audio.audio_gap_summary),
                         }
                     }),
                     cursor: s
@@ -1057,7 +1085,20 @@ async fn stop_recording(
                     }),
                 },
                 diagnostics,
+                duration: display_media_duration,
             }
+        })
+        .collect();
+    let timeline_segments: Vec<_> = segment_outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, segment)| {
+            (segment.duration > 0.0).then_some(TimelineSegment {
+                recording_clip: i as u32,
+                start: 0.0,
+                end: segment.duration,
+                timescale: 1.0,
+            })
         })
         .collect();
     let segment_failure_diagnostics: Vec<_> = segment_outputs
@@ -1068,6 +1109,19 @@ async fn stop_recording(
         .into_iter()
         .map(|segment| segment.meta)
         .collect();
+    let clip_configs = segment_metas
+        .iter()
+        .all(|segment| segment.camera.is_none())
+        .then(|| {
+            segment_metas
+                .iter()
+                .enumerate()
+                .map(|(i, segment)| ClipConfiguration {
+                    index: i as u32,
+                    offsets: segment.calculate_audio_offsets(),
+                })
+                .collect::<Vec<_>>()
+        });
 
     let needs_remux = if fragmented {
         segment_metas.iter().any(|seg| {
@@ -1109,7 +1163,21 @@ async fn stop_recording(
 
     persist_final_recording_meta(&recording_dir, &meta);
 
-    let project_config = cap_project::ProjectConfiguration::default();
+    let mut project_config = cap_project::ProjectConfiguration::default();
+    if !timeline_segments.is_empty() {
+        project_config.timeline = Some(TimelineConfiguration {
+            segments: timeline_segments,
+            zoom_segments: Vec::new(),
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+        });
+    }
+    if let Some(clips) = clip_configs {
+        project_config.clips = clips;
+    }
     project_config
         .write(&recording_dir)
         .map_err(RecordingError::from)?;
@@ -1683,6 +1751,7 @@ mod tests {
             first_timestamp,
             video_info,
             video_frame_count,
+            audio_gap_summary: None,
         }
     }
 

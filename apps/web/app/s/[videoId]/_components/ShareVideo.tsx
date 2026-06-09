@@ -2,7 +2,9 @@ import type { comments as commentsSchema } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { useTranscript } from "hooks/use-transcript";
+import { CheckCircle2, Info, Loader2Icon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
 	forwardRef,
@@ -12,12 +14,19 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
+import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
-import { shouldDeferPlaybackSource, useUploadProgress } from "./ProgressCircle";
+import {
+	shouldDeferPlaybackSource,
+	shouldReloadPlaybackAfterUploadCompletes,
+	useUploadProgress,
+} from "./ProgressCircle";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
@@ -50,8 +59,11 @@ export const ShareVideo = forwardRef<
 		areReactionStampsDisabled?: boolean;
 		aiGenerationStatus?: AiGenerationStatus | null;
 		canRetryProcessing?: boolean;
+		canFinalizeDesktopSegments?: boolean;
 		showPlaybackStatusBadge?: boolean;
 		isEditProcessing: boolean;
+		recordingStopped?: boolean;
+		defaultPlaybackSpeed?: number;
 	}
 >(
 	(
@@ -64,8 +76,11 @@ export const ShareVideo = forwardRef<
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
 			canRetryProcessing,
+			canFinalizeDesktopSegments = false,
 			showPlaybackStatusBadge = false,
 			isEditProcessing,
+			recordingStopped = false,
+			defaultPlaybackSpeed,
 		},
 		ref,
 	) => {
@@ -86,7 +101,13 @@ export const ShareVideo = forwardRef<
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 		const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
-		const [userConfirmedStopped, setUserConfirmedStopped] = useState(false);
+		const [userConfirmedStopped, setUserConfirmedStopped] =
+			useState(recordingStopped);
+		const [isConfirmingStopped, setIsConfirmingStopped] = useState(false);
+		const [confirmStoppedError, setConfirmStoppedError] = useState<
+			string | null
+		>(null);
+		const autoFinalizeAttemptedRef = useRef(false);
 		const segmentUploadProgress = useUploadProgress(
 			data.id,
 			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
@@ -107,6 +128,12 @@ export const ShareVideo = forwardRef<
 				}
 			}
 		}, [comments]);
+
+		useEffect(() => {
+			if (recordingStopped) {
+				setUserConfirmedStopped(true);
+			}
+		}, [recordingStopped]);
 
 		// Handle seek functionality
 		const handleSeek = (time: number) => {
@@ -196,45 +223,108 @@ export const ShareVideo = forwardRef<
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		const isSegmentsSource = data.source.type === "desktopSegments";
+		const previousSegmentUploadProgressRef = useRef(segmentUploadProgress);
 		const isActivelyRecording =
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&
 			!userConfirmedStopped &&
-			segmentUploadProgress?.status === "uploading";
+			(segmentUploadProgress?.status === "fetching" ||
+				segmentUploadProgress?.status === "uploading");
 
 		const isProcessingInProgress =
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&
+			!userConfirmedStopped &&
 			!isActivelyRecording &&
 			shouldDeferPlaybackSource(segmentUploadProgress);
+		const handleConfirmStopped = useCallback(async () => {
+			if (
+				!canFinalizeDesktopSegments ||
+				data.source.type !== "desktopSegments" ||
+				!data.hasActiveUpload
+			) {
+				setUserConfirmedStopped(true);
+				return;
+			}
 
-		const prevProgressRef = useRef<typeof segmentUploadProgress>(
-			segmentUploadProgress,
-		);
-		const [awaitingSourceRefresh, setAwaitingSourceRefresh] = useState(false);
-		const refreshTriggeredRef = useRef(false);
+			setIsConfirmingStopped(true);
+			setConfirmStoppedError(null);
 
+			try {
+				await finalizeDesktopSegmentsRecording({ videoId: data.id });
+				setUserConfirmedStopped(true);
+				router.refresh();
+			} catch (error) {
+				setConfirmStoppedError(
+					error instanceof Error
+						? error.message
+						: "Recording could not be finalized",
+				);
+			} finally {
+				setIsConfirmingStopped(false);
+			}
+		}, [
+			canFinalizeDesktopSegments,
+			data.hasActiveUpload,
+			data.id,
+			data.source.type,
+			router,
+		]);
+		const shouldAutoFinalizeFailedSegments =
+			isSegmentsSource &&
+			(data.hasActiveUpload ?? false) &&
+			canFinalizeDesktopSegments &&
+			!userConfirmedStopped &&
+			segmentUploadProgress?.status === "error" &&
+			isRetryableDesktopSegmentsFinalizationError(
+				segmentUploadProgress.errorMessage,
+			);
 		useEffect(() => {
-			const prev = prevProgressRef.current;
-			prevProgressRef.current = segmentUploadProgress;
+			if (
+				!shouldAutoFinalizeFailedSegments ||
+				autoFinalizeAttemptedRef.current ||
+				isConfirmingStopped
+			) {
+				return;
+			}
 
-			if (refreshTriggeredRef.current || !isSegmentsSource) return;
+			autoFinalizeAttemptedRef.current = true;
+			void handleConfirmStopped();
+		}, [
+			handleConfirmStopped,
+			isConfirmingStopped,
+			shouldAutoFinalizeFailedSegments,
+		]);
+		const showFinalizeRecordingControl =
+			isSegmentsSource &&
+			(data.hasActiveUpload ?? false) &&
+			canFinalizeDesktopSegments &&
+			!userConfirmedStopped &&
+			segmentUploadProgress?.status === "failed";
+		useEffect(() => {
+			if (!isSegmentsSource || !data.hasActiveUpload || !userConfirmedStopped) {
+				previousSegmentUploadProgressRef.current = segmentUploadProgress;
+				return;
+			}
 
-			const prevWasActive = prev !== null;
-			const isNowComplete = segmentUploadProgress === null;
-
-			if (prevWasActive && isNowComplete) {
-				refreshTriggeredRef.current = true;
-				setAwaitingSourceRefresh(true);
+			if (
+				shouldReloadPlaybackAfterUploadCompletes(
+					previousSegmentUploadProgressRef.current,
+					segmentUploadProgress,
+					{ includeFetching: true },
+				)
+			) {
 				router.refresh();
 			}
-		}, [segmentUploadProgress, router, isSegmentsSource]);
 
-		useEffect(() => {
-			if (awaitingSourceRefresh && !isSegmentsSource) {
-				setAwaitingSourceRefresh(false);
-			}
-		}, [awaitingSourceRefresh, isSegmentsSource]);
+			previousSegmentUploadProgressRef.current = segmentUploadProgress;
+		}, [
+			data.hasActiveUpload,
+			isSegmentsSource,
+			router,
+			segmentUploadProgress,
+			userConfirmedStopped,
+		]);
 
 		let videoSrc: string;
 		const rawFallbackSrc =
@@ -244,7 +334,8 @@ export const ShareVideo = forwardRef<
 		let enableCrossOrigin = false;
 
 		if (isSegmentsSource) {
-			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=segments-master`;
+			const requireComplete = userConfirmedStopped ? "&requireComplete=1" : "";
+			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=segments-master${requireComplete}`;
 		} else if (isMp4Source) {
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=mp4`;
 			enableCrossOrigin = true;
@@ -267,11 +358,33 @@ export const ShareVideo = forwardRef<
 					style={{ viewTransitionName: "cap-edit-video" }}
 				>
 					{isActivelyRecording ? (
-						<RecordingInProgressOverlay
-							onConfirmStopped={() => setUserConfirmedStopped(true)}
-							className="h-full"
-						/>
-					) : isProcessingInProgress || awaitingSourceRefresh ? (
+						<div className="relative h-full overflow-hidden rounded-xl bg-black">
+							<HLSVideoPlayer
+								videoId={data.id}
+								mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
+								videoSrc={videoSrc}
+								duration={data.duration}
+								disableCaptions={true}
+								chaptersSrc=""
+								captionsSrc=""
+								videoRef={videoRef}
+								hasActiveUpload={data.hasActiveUpload}
+								isLiveSegments={isSegmentsSource}
+								allowSegmentProbeDuringUpload={true}
+								autoplay={true}
+								previewMode="background"
+							/>
+							<div className="absolute inset-0 z-20">
+								<RecordingInProgressOverlay
+									onConfirmStopped={handleConfirmStopped}
+									isConfirmingStopped={isConfirmingStopped}
+									confirmStoppedError={confirmStoppedError}
+									className="h-full"
+									variant="overlay"
+								/>
+							</div>
+						</div>
+					) : isProcessingInProgress ? (
 						<PreparingVideoOverlay className="h-full" />
 					) : isMp4Source ? (
 						<CapVideoPlayer
@@ -280,6 +393,7 @@ export const ShareVideo = forwardRef<
 							videoSrc={videoSrc}
 							rawFallbackSrc={rawFallbackSrc}
 							duration={data.duration}
+							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							disableCaptions={areCaptionsDisabled ?? false}
 							disableCommentStamps={areCommentStampsDisabled ?? false}
@@ -313,12 +427,16 @@ export const ShareVideo = forwardRef<
 							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 							videoSrc={videoSrc}
 							duration={data.duration}
+							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							disableCaptions={areCaptionsDisabled ?? false}
 							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							hasActiveUpload={data.hasActiveUpload}
 							isLiveSegments={isSegmentsSource}
+							allowSegmentProbeDuringUpload={
+								isSegmentsSource && userConfirmedStopped
+							}
 							captionLanguage={captionContext.selectedLanguage}
 							onCaptionLanguageChange={handleCaptionLanguageChange}
 							availableCaptions={captionContext.availableTranslations}
@@ -326,6 +444,47 @@ export const ShareVideo = forwardRef<
 							hasCaptions={data.transcriptionStatus === "COMPLETE"}
 							canRetryProcessing={canRetryProcessing}
 						/>
+					)}
+					{showFinalizeRecordingControl && (
+						<div className="absolute bottom-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-1.5">
+							<div className="flex items-center gap-1.5">
+								<button
+									type="button"
+									onClick={handleConfirmStopped}
+									disabled={isConfirmingStopped}
+									className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/15 bg-black/65 px-2.5 text-[11px] font-medium text-white shadow-sm backdrop-blur-sm transition-colors hover:bg-black/80 disabled:cursor-not-allowed disabled:opacity-70"
+								>
+									{isConfirmingStopped ? (
+										<Loader2Icon className="size-3 animate-spin" />
+									) : (
+										<CheckCircle2 className="size-3" />
+									)}
+									{isConfirmingStopped
+										? "Marking as completed..."
+										: "Mark video as completed"}
+								</button>
+								<TooltipPrimitive.Provider delayDuration={150}>
+									<Tooltip
+										position="top"
+										className="max-w-[260px] items-start text-left leading-relaxed"
+										content="We didn't receive confirmation that this recording finished uploading. Mark it as completed to publish what's been uploaded. Next time, keep the desktop app open after you stop recording until the video loads here, so all files finish uploading."
+									>
+										<button
+											type="button"
+											aria-label="Why this recording needs to be marked as completed"
+											className="inline-flex size-7 items-center justify-center rounded-md border border-white/15 bg-black/65 text-white/80 shadow-sm backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
+										>
+											<Info className="size-3.5" />
+										</button>
+									</Tooltip>
+								</TooltipPrimitive.Provider>
+							</div>
+							{confirmStoppedError && (
+								<p className="max-w-56 rounded-md bg-black/70 px-2 py-1 text-[11px] text-red-100">
+									{confirmStoppedError}
+								</p>
+							)}
+						</div>
 					)}
 				</div>
 

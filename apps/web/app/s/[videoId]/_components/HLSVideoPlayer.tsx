@@ -33,6 +33,7 @@ import {
 	MediaPlayerLoading,
 	MediaPlayerPiP,
 	MediaPlayerPlay,
+	MediaPlayerPlaybackSpeedDial,
 	MediaPlayerSeek,
 	MediaPlayerSeekBackward,
 	MediaPlayerSeekForward,
@@ -90,6 +91,7 @@ interface Props {
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
 	isLiveSegments?: boolean;
+	allowSegmentProbeDuringUpload?: boolean;
 	enhancedAudioUrl?: string | null;
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
 	captionLanguage?: string;
@@ -99,6 +101,8 @@ interface Props {
 	hasCaptions?: boolean;
 	canRetryProcessing?: boolean;
 	duration?: number | null;
+	defaultPlaybackSpeed?: number;
+	previewMode?: "background";
 }
 
 export function HLSVideoPlayer({
@@ -111,6 +115,7 @@ export function HLSVideoPlayer({
 	autoplay = false,
 	hasActiveUpload,
 	isLiveSegments = false,
+	allowSegmentProbeDuringUpload = false,
 	disableCaptions,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
@@ -121,6 +126,8 @@ export function HLSVideoPlayer({
 	hasCaptions = false,
 	canRetryProcessing = false,
 	duration: fallbackDuration,
+	defaultPlaybackSpeed,
+	previewMode,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -142,6 +149,7 @@ export function HLSVideoPlayer({
 	const router = useRouter();
 	const segmentRetryCountRef = useRef(0);
 	const hasTriedRouterRefreshRef = useRef(false);
+	const isBackgroundPreview = previewMode === "background";
 	const playbackSrc =
 		sourceVersion === 0
 			? videoSrc
@@ -166,6 +174,7 @@ export function HLSVideoPlayer({
 		hasActiveUpload || false,
 	);
 	const shouldDelayPlaybackSource =
+		!allowSegmentProbeDuringUpload &&
 		shouldDeferPlaybackSource(uploadProgressRaw);
 	const liveProbeSrc = isLiveSegments ? getLiveProbeSrc(playbackSrc) : null;
 
@@ -309,6 +318,7 @@ export function HLSVideoPlayer({
 				enableWorker: true,
 				lowLatencyMode: false,
 				backBufferLength: 90,
+				startFragPrefetch: true,
 				...(isLiveSegments
 					? {
 							liveSyncDurationCount: 3,
@@ -317,6 +327,8 @@ export function HLSVideoPlayer({
 							manifestLoadingMaxRetry: 30,
 							levelLoadingRetryDelay: 2000,
 							levelLoadingMaxRetry: 30,
+							fragLoadingRetryDelay: 2000,
+							fragLoadingMaxRetry: 30,
 						}
 					: {}),
 			});
@@ -325,14 +337,15 @@ export function HLSVideoPlayer({
 
 			hls.loadSource(playbackSrc);
 			hls.attachMedia(video);
+			if (isLiveSegments) {
+				hls.startLoad(0);
+			}
 
 			hls.on(Hls.Events.MANIFEST_PARSED, () => {
 				console.log("HLSVideoPlayer: HLS manifest parsed successfully");
-				if (!isLiveSegments) {
-					setVideoLoaded(true);
-					if (!hasPlayedOnceRef.current) {
-						setShowPlayButton(true);
-					}
+				setVideoLoaded(true);
+				if (!hasPlayedOnceRef.current) {
+					setShowPlayButton(true);
 				}
 			});
 
@@ -526,7 +539,9 @@ export function HLSVideoPlayer({
 		(uploadProgressRaw?.status === "error" ||
 			uploadProgressRaw?.status === "failed");
 	const uploadProgress =
-		videoLoaded || isErrorWhileHlsLoading ? null : uploadProgressRaw;
+		isBackgroundPreview || videoLoaded || isErrorWhileHlsLoading
+			? null
+			: uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
 	const isProcessing = uploadProgress?.status === "processing";
 	const isGeneratingThumbnail =
@@ -570,19 +585,27 @@ export function HLSVideoPlayer({
 		}
 	};
 
-	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
+	const prevUploadProgress =
+		useRef<typeof uploadProgressRaw>(uploadProgressRaw);
 	useEffect(() => {
 		if (
 			shouldReloadPlaybackAfterUploadCompletes(
 				prevUploadProgress.current,
-				uploadProgress,
+				uploadProgressRaw,
+				{ includeFetching: isLiveSegments },
 			)
 		) {
-			reloadPlayback();
-			setTimeout(reloadPlayback, 1000);
+			if (isLiveSegments) {
+				router.refresh();
+			}
+
+			if (!isLiveSegments || !videoLoadedRef.current) {
+				reloadPlayback();
+				setTimeout(reloadPlayback, 1000);
+			}
 		}
-		prevUploadProgress.current = uploadProgress;
-	}, [uploadProgress, reloadPlayback]);
+		prevUploadProgress.current = uploadProgressRaw;
+	}, [isLiveSegments, router, uploadProgressRaw, reloadPlayback]);
 
 	return (
 		<MediaPlayer
@@ -593,6 +616,7 @@ export function HLSVideoPlayer({
 			className={clsx(
 				mediaPlayerClassName,
 				"[&::-webkit-media-text-track-display]:!hidden",
+				isBackgroundPreview && "pointer-events-none [&_video]:opacity-70",
 			)}
 			autoHide
 		>
@@ -687,7 +711,8 @@ export function HLSVideoPlayer({
 				{showPlayButton &&
 					videoLoaded &&
 					!hasPlayedOnce &&
-					!hasActiveProgress && (
+					!hasActiveProgress &&
+					!isBackgroundPreview && (
 						<motion.div
 							whileHover={{ scale: 1.1 }}
 							whileTap={{ scale: 0.9 }}
@@ -712,7 +737,8 @@ export function HLSVideoPlayer({
 					!hasPlayedOnce &&
 					!hasFailedOrError &&
 					!hlsInitFailed &&
-					!isLiveSegments
+					!isLiveSegments &&
+					!isBackgroundPreview
 				}
 			/>
 			<MediaPlayerVideo
@@ -725,6 +751,9 @@ export function HLSVideoPlayer({
 				}}
 				playsInline
 				autoPlay={autoplay}
+				muted={isBackgroundPreview}
+				loop={isBackgroundPreview}
+				preload="auto"
 			>
 				{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
 				{captionsSrc && (
@@ -737,6 +766,17 @@ export function HLSVideoPlayer({
 					/>
 				)}
 			</MediaPlayerVideo>
+			{videoLoaded &&
+				!hasActiveProgress &&
+				!hasFailedOrError &&
+				!hlsInitFailed &&
+				!isBackgroundPreview && (
+					<MediaPlayerPlaybackSpeedDial
+						defaultSpeed={defaultPlaybackSpeed}
+						fallbackDuration={playerDuration}
+						show={showPlayButton && !hasPlayedOnce}
+					/>
+				)}
 			{currentCue && toggleCaptions && (
 				<div
 					className={clsx(
@@ -754,16 +794,21 @@ export function HLSVideoPlayer({
 			<MediaPlayerError />
 			<MediaPlayerVolumeIndicator />
 			<MediaPlayerControls
-				className="flex-col items-start gap-2.5"
-				isUploadingOrFailed={hasActiveProgress || hasFailedOrError}
+				className={clsx(
+					"flex-col items-start gap-2.5",
+					showPlayButton && !hasPlayedOnce && "max-sm:hidden",
+				)}
+				isUploadingOrFailed={
+					isBackgroundPreview || hasActiveProgress || hasFailedOrError
+				}
 			>
 				<MediaPlayerControlsOverlay />
 				<MediaPlayerSeek fallbackDuration={playerDuration} />
 				<div className="flex gap-2 items-center w-full">
 					<div className="flex flex-1 gap-2 items-center">
 						<MediaPlayerPlay />
-						<MediaPlayerSeekBackward />
-						<MediaPlayerSeekForward />
+						<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
+						<MediaPlayerSeekForward className="hidden sm:inline-flex" />
 						<MediaPlayerVolume
 							expandable
 							// enhancedAudioEnabled={enhancedAudioEnabled}

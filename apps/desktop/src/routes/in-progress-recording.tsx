@@ -113,6 +113,8 @@ function InProgressRecordingInner() {
 		createSignal<HTMLDivElement | null>(null);
 	let settingsButtonRef: HTMLButtonElement | undefined;
 	let lastInteractiveBoundsKey = "";
+	let pendingInteractiveBoundsKey = "";
+	let interactiveBoundsDisposed = false;
 	const recordingMode = createMemo(
 		() => currentRecording.data?.mode ?? optionsQuery.rawOptions.mode,
 	);
@@ -317,10 +319,13 @@ function InProgressRecordingInner() {
 	});
 
 	const syncInteractiveAreaBounds = () => {
+		if (interactiveBoundsDisposed) return;
+
 		const element = interactiveAreaRef();
 		if (!element) {
 			if (lastInteractiveBoundsKey !== "") {
 				lastInteractiveBoundsKey = "";
+				pendingInteractiveBoundsKey = "";
 				void commands.removeFakeWindow(FAKE_WINDOW_BOUNDS_NAME);
 			}
 			return;
@@ -333,12 +338,30 @@ function InProgressRecordingInner() {
 			.map((value) => value.toFixed(2))
 			.join(":");
 		if (key === lastInteractiveBoundsKey) return;
+		if (pendingInteractiveBoundsKey !== "") return;
 
-		lastInteractiveBoundsKey = key;
-		void commands.setFakeWindowBounds(FAKE_WINDOW_BOUNDS_NAME, {
+		pendingInteractiveBoundsKey = key;
+		const bounds = {
 			position: { x: rect.left, y: rect.top },
 			size: { width: rect.width, height: rect.height },
-		});
+		};
+		void commands
+			.setFakeWindowBounds(FAKE_WINDOW_BOUNDS_NAME, bounds)
+			.then(() => {
+				if (interactiveBoundsDisposed) {
+					void commands.removeFakeWindow(FAKE_WINDOW_BOUNDS_NAME);
+					return;
+				}
+
+				lastInteractiveBoundsKey = key;
+			})
+			.catch((error) => {
+				console.error("Failed to sync recording controls hit area", error);
+			})
+			.finally(() => {
+				if (pendingInteractiveBoundsKey === key)
+					pendingInteractiveBoundsKey = "";
+			});
 	};
 
 	createEffect(() => {
@@ -353,7 +376,9 @@ function InProgressRecordingInner() {
 	});
 
 	onCleanup(() => {
+		interactiveBoundsDisposed = true;
 		lastInteractiveBoundsKey = "";
+		pendingInteractiveBoundsKey = "";
 		void commands.removeFakeWindow(FAKE_WINDOW_BOUNDS_NAME);
 	});
 

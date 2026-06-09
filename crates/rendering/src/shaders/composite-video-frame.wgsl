@@ -66,6 +66,58 @@ fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: f32, rounding_type: f32) -> f
     return outside_norm + min(max(q.x, q.y), 0.0) - r;
 }
 
+fn coverage_from_distance(distance: f32, anti_alias_width: f32) -> f32 {
+    return clamp(1.0 - smoothstep(-anti_alias_width, anti_alias_width, distance), 0.0, 1.0);
+}
+
+fn rounded_rect_coverage(p: vec2<f32>, b: vec2<f32>, r: f32, rounding_type: f32) -> f32 {
+    let distance = sdf_rounded_rect(p, b, r, rounding_type);
+    let anti_alias_width = max(fwidth(distance), 1.0);
+
+    if distance <= -anti_alias_width {
+        return 1.0;
+    }
+
+    if distance >= anti_alias_width {
+        return 0.0;
+    }
+
+    let subpixel_offset = 0.25;
+    var coverage = 0.0;
+    coverage += coverage_from_distance(
+        sdf_rounded_rect(p + vec2<f32>(-subpixel_offset, -subpixel_offset), b, r, rounding_type),
+        anti_alias_width
+    );
+    coverage += coverage_from_distance(
+        sdf_rounded_rect(p + vec2<f32>(subpixel_offset, -subpixel_offset), b, r, rounding_type),
+        anti_alias_width
+    );
+    coverage += coverage_from_distance(
+        sdf_rounded_rect(p + vec2<f32>(-subpixel_offset, subpixel_offset), b, r, rounding_type),
+        anti_alias_width
+    );
+    coverage += coverage_from_distance(
+        sdf_rounded_rect(p + vec2<f32>(subpixel_offset, subpixel_offset), b, r, rounding_type),
+        anti_alias_width
+    );
+    return coverage * 0.25;
+}
+
+fn composite_source_over(foreground: vec4<f32>, background: vec4<f32>) -> vec4<f32> {
+    let alpha = foreground.a + background.a * (1.0 - foreground.a);
+
+    if alpha <= 0.0001 {
+        return vec4<f32>(0.0);
+    }
+
+    let color = (
+        foreground.rgb * foreground.a +
+        background.rgb * background.a * (1.0 - foreground.a)
+    ) / alpha;
+
+    return vec4<f32>(color, alpha);
+}
+
 @fragment
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let p = frag_coord.xy;
@@ -99,52 +151,70 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         shadow_enabled
     );
 
-    let shadow_dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.rounding_type);
+    let shadow_dist = dist;
 
     // Apply blur and size to shadow
     let shadow_strength_final = smoothstep(shadow_size + shadow_blur, -shadow_blur, abs(shadow_dist));
     let shadow_color = vec4<f32>(0.0, 0.0, 0.0, shadow_strength_final * shadow_opacity);
 
-    let uv = p / uniforms.output_size;
     let target_uv = (p - uniforms.target_bounds.xy) / uniforms.target_size;
     let crop_bounds_uv = vec4<f32>(uniforms.crop_bounds.xy / uniforms.frame_size, uniforms.crop_bounds.zw / uniforms.frame_size);
+    let edge_padding = max(2.0, uniforms.border_width + 2.0);
+    let edge_padding_uv = edge_padding / uniforms.target_size;
 
-    let bg_color = vec4<f32>(0.0);
+    if target_uv.x < -edge_padding_uv.x ||
+        target_uv.x > 1.0 + edge_padding_uv.x ||
+        target_uv.y < -edge_padding_uv.y ||
+        target_uv.y > 1.0 + edge_padding_uv.y
+    {
+        return shadow_color;
+    }
 
     if (uniforms.border_enabled > 0.0) {
-        let border_outer_dist = sdf_rounded_rect(
+        let border_outer_coverage = rounded_rect_coverage(
             p - center,
             size + vec2<f32>(uniforms.border_width),
             uniforms.rounding_px + uniforms.border_width,
             uniforms.rounding_type
         );
-        let border_inner_dist =
-            sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.rounding_type);
+        let border_inner_coverage = rounded_rect_coverage(
+            p - center,
+            size,
+            uniforms.rounding_px,
+            uniforms.rounding_type
+        );
+        let border_coverage = clamp(border_outer_coverage - border_inner_coverage, 0.0, 1.0);
 
-        if (border_outer_dist <= 0.0 && border_inner_dist > 0.0) {
-            let inner_alpha = smoothstep(-0.5, 0.5, border_inner_dist);
-            let outer_alpha = 1.0 - smoothstep(-0.5, 0.5, border_outer_dist);
-            let edge_alpha = inner_alpha * outer_alpha;
-
-            let border_alpha = edge_alpha * uniforms.border_color.w;
-            return vec4<f32>(uniforms.border_color.xyz, border_alpha);
+        if (border_coverage > 0.001) {
+            let border_color = vec4<f32>(
+                uniforms.border_color.xyz,
+                border_coverage * uniforms.border_color.w
+            );
+            return composite_source_over(border_color, shadow_color);
         }
     }
+
+    let shape_coverage = rounded_rect_coverage(
+        p - center,
+        size,
+        uniforms.rounding_px,
+        uniforms.rounding_type
+    );
     
-    if target_uv.x < 0.0 || target_uv.x > 1.0 || target_uv.y < 0.0 || target_uv.y > 1.0 {
+    if shape_coverage <= 0.001 {
         return shadow_color;
     }
 
-    var base_color = sample_texture(target_uv, crop_bounds_uv);
-    base_color = apply_rounded_corners(base_color, target_uv);
-    base_color.a = base_color.a * uniforms.opacity;
+    let sample_target_uv = clamp(target_uv, vec2<f32>(0.0), vec2<f32>(1.0));
+    var base_color = sample_texture(sample_target_uv, crop_bounds_uv);
+    base_color.a = base_color.a * shape_coverage * uniforms.opacity;
 
     let blur_mode = uniforms.motion_blur_params.x;
     let blur_strength = uniforms.motion_blur_params.y;
     let zoom_amount = uniforms.motion_blur_params.z;
 
     if blur_mode < 0.5 || blur_strength < 0.001 {
-        return mix(shadow_color, base_color, base_color.a);
+        return composite_source_over(base_color, shadow_color);
     }
 
     let base_weight = max(base_color.a, 0.001);
@@ -155,7 +225,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let motion_vec = uniforms.motion_blur_vector;
         let motion_len = length(motion_vec);
         if motion_len < 1e-4 {
-            return mix(shadow_color, base_color, base_color.a);
+            return composite_source_over(base_color, shadow_color);
         }
 
         let velocity_uv = motion_vec;
@@ -181,7 +251,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let dir = center - target_uv;
         let dist = length(dir);
         if dist < 1e-4 || zoom_amount < 1e-4 {
-            return mix(shadow_color, base_color, base_color.a);
+            return composite_source_over(base_color, shadow_color);
         }
 
         let max_zoom_offset = 0.035;
@@ -210,7 +280,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let blurred = vec4(final_color.rgb, base_color.a);
     let blur_mix = clamp(blur_strength, 0.0, 1.0);
     let blended = mix(base_color, blurred, blur_mix);
-    return mix(shadow_color, blended, blended.a);
+    return composite_source_over(blended, shadow_color);
 }
 
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
@@ -243,10 +313,26 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             let offset_x = vec2<f32>(texel_size.x, 0.0);
             let offset_y = vec2<f32>(0.0, texel_size.y);
 
-            let left = textureSample(frame_texture, frame_sampler, cropped_uv - offset_x).rgb;
-            let right = textureSample(frame_texture, frame_sampler, cropped_uv + offset_x).rgb;
-            let top = textureSample(frame_texture, frame_sampler, cropped_uv - offset_y).rgb;
-            let bottom = textureSample(frame_texture, frame_sampler, cropped_uv + offset_y).rgb;
+            let left = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv - offset_x, safe_min, safe_max)
+            ).rgb;
+            let right = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv + offset_x, safe_min, safe_max)
+            ).rgb;
+            let top = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv - offset_y, safe_min, safe_max)
+            ).rgb;
+            let bottom = textureSample(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv + offset_y, safe_min, safe_max)
+            ).rgb;
 
             let blurred = (left + right + top + bottom) * 0.25;
 
@@ -299,10 +385,12 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {
     let centered_uv = (target_uv - vec2<f32>(0.5)) * uniforms.target_size;
     let half_size = uniforms.target_size * 0.5;
-    let distance = sdf_rounded_rect(centered_uv, half_size, uniforms.rounding_px, uniforms.rounding_type);
-
-    let anti_alias_width = max(fwidth(distance), 0.5);
-    let coverage = clamp(1.0 - smoothstep(0.0, anti_alias_width, distance), 0.0, 1.0);
+    let coverage = rounded_rect_coverage(
+        centered_uv,
+        half_size,
+        uniforms.rounding_px,
+        uniforms.rounding_type
+    );
 
     return vec4(current_color.rgb, current_color.a * coverage);
 }

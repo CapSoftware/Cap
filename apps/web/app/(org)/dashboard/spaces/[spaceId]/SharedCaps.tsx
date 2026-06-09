@@ -201,6 +201,16 @@ export const SharedCaps = ({
 				<div className="flex flex-wrap gap-3">
 					{spaceData && spaceMembers && (
 						<>
+							{canManageCurrentSpace && (
+								<Button
+									variant="gray"
+									size="sm"
+									onClick={() => setIsSpaceSettingsOpen(true)}
+								>
+									<FontAwesomeIcon className="size-3" icon={faGear} />
+									Space settings
+								</Button>
+							)}
 							<MembersIndicator
 								memberCount={spaceMemberCount}
 								members={spaceMembers}
@@ -213,16 +223,6 @@ export const SharedCaps = ({
 										: undefined
 								}
 							/>
-							{canManageCurrentSpace && (
-								<Button
-									variant="gray"
-									size="sm"
-									onClick={() => setIsSpaceSettingsOpen(true)}
-								>
-									<FontAwesomeIcon className="size-3" icon={faGear} />
-									Space settings
-								</Button>
-							)}
 						</>
 					)}
 					{organizationData && organizationMembers && !spaceData && (
@@ -246,7 +246,7 @@ export const SharedCaps = ({
 							className="flex gap-2 items-center w-fit"
 						>
 							<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-							New Folder
+							New folder
 						</Button>
 					)}
 				</div>
@@ -315,6 +315,16 @@ export const SharedCaps = ({
 			<div className="flex flex-wrap gap-3 mb-10">
 				{spaceData && spaceMembers && (
 					<>
+						{canManageCurrentSpace && (
+							<Button
+								variant="gray"
+								size="sm"
+								onClick={() => setIsSpaceSettingsOpen(true)}
+							>
+								<FontAwesomeIcon className="size-3" icon={faGear} />
+								Space settings
+							</Button>
+						)}
 						<MembersIndicator
 							memberCount={spaceMemberCount}
 							members={spaceMembers}
@@ -327,16 +337,6 @@ export const SharedCaps = ({
 									: undefined
 							}
 						/>
-						{canManageCurrentSpace && (
-							<Button
-								variant="gray"
-								size="sm"
-								onClick={() => setIsSpaceSettingsOpen(true)}
-							>
-								<FontAwesomeIcon className="size-3" icon={faGear} />
-								Space settings
-							</Button>
-						)}
 					</>
 				)}
 				{organizationData && organizationMembers && !spaceData && (
@@ -379,7 +379,7 @@ export const SharedCaps = ({
 						className="flex gap-2 items-center w-fit"
 					>
 						<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-						New Folder
+						New folder
 					</Button>
 				)}
 			</div>

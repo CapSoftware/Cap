@@ -22,7 +22,7 @@ export function createExportTask(
 		onProgress(e);
 	});
 	let closed = false;
-	const cancel = () => {
+	const closeProgress = () => {
 		if (closed) return;
 		closed = true;
 		const internals = (
@@ -32,10 +32,21 @@ export function createExportTask(
 		).__TAURI_INTERNALS__;
 		internals?.unregisterCallback?.(progress.id);
 	};
+	const cancel = () => {
+		if (closed) return;
+		void cancelCurrentWindowExports();
+		closeProgress();
+	};
 	const promise = commands
 		.exportVideo(projectPath, progress, settings)
-		.finally(cancel);
+		.finally(closeProgress);
 	return { promise, cancel };
+}
+
+async function cancelCurrentWindowExports() {
+	await commands.cancelCurrentWindowExports().catch((error) => {
+		console.error("Failed to cancel export", error);
+	});
 }
 
 export function createExportToFileTask(
@@ -49,19 +60,16 @@ export function createExportToFileTask(
 ) {
 	let started = false;
 	let copying = false;
+	let cancelled = false;
 	const progress = new Channel<FramesRendered>((e) => {
 		if (!started) {
 			started = true;
 			onStart?.();
 		}
 		onProgress(e);
-		if (!copying && e.totalFrames > 0 && e.renderedCount >= e.totalFrames) {
-			copying = true;
-			onCopying?.();
-		}
 	});
 	let closed = false;
-	const cancel = () => {
+	const closeProgress = () => {
 		if (closed) return;
 		closed = true;
 		const internals = (
@@ -71,9 +79,23 @@ export function createExportToFileTask(
 		).__TAURI_INTERNALS__;
 		internals?.unregisterCallback?.(progress.id);
 	};
+	const cancel = () => {
+		if (cancelled) return;
+		cancelled = true;
+		void cancelCurrentWindowExports();
+		closeProgress();
+	};
 	const promise = commands
 		.exportVideoToFile(projectPath, progress, settings, fileName, fileType)
-		.finally(cancel);
+		.then((savePath) => {
+			if (cancelled) throw new Error("Export cancelled");
+			if (!copying) {
+				copying = true;
+				onCopying?.();
+			}
+			return savePath;
+		})
+		.finally(closeProgress);
 	return { promise, cancel };
 }
 

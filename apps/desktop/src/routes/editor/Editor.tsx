@@ -8,6 +8,8 @@ import { createMutation, createQuery, skipToken } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu } from "@tauri-apps/api/menu";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
 	createEffect,
 	createMemo,
@@ -269,6 +271,7 @@ function Inner() {
 		setEditorState,
 		previewResolutionBase,
 		dialog,
+		exportState,
 	} = useEditorContext();
 
 	const isExportMode = () => {
@@ -285,6 +288,47 @@ function Inner() {
 		const d = dialog();
 		return "type" in d && d.type === "crop" && d.open;
 	};
+
+	const currentWindow = getCurrentWindow();
+	let allowExportClose = false;
+	let closePromptOpen = false;
+
+	onMount(async () => {
+		const unlisten = await currentWindow.onCloseRequested(async (event) => {
+			if (
+				allowExportClose ||
+				exportState.type === "idle" ||
+				exportState.type === "done"
+			) {
+				return;
+			}
+
+			event.preventDefault();
+			if (closePromptOpen) return;
+
+			closePromptOpen = true;
+			try {
+				const resumeExport = await ask(
+					"An export is currently running. Keep this editor open to continue it, or quit the editor and cancel the export.",
+					{
+						title: "Export in Progress",
+						kind: "warning",
+						okLabel: "Resume Export",
+						cancelLabel: "Quit Editor",
+					},
+				);
+
+				if (!resumeExport) {
+					allowExportClose = true;
+					await currentWindow.close();
+				}
+			} finally {
+				closePromptOpen = false;
+			}
+		});
+
+		onCleanup(() => unlisten());
+	});
 
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
 	const layoutBounds = createElementBounds(layoutRef);
@@ -395,24 +439,50 @@ function Inner() {
 		return editorState.playbackTime;
 	});
 
-	const doConfigUpdate = async (time: number) => {
-		const config = getPreviewProjectConfig(project, editorState);
-		const frameNumber = Math.max(Math.floor(time * FPS), 0);
-		const resBase = previewResolutionBase();
+	type PreviewConfigUpdate = {
+		config: ReturnType<typeof getPreviewProjectConfig>;
+		frameNumber: number;
+		resolutionBase: ReturnType<typeof previewResolutionBase>;
+	};
+
+	let previewConfigUpdateInFlight = false;
+	let pendingPreviewConfigUpdate: PreviewConfigUpdate | null = null;
+
+	const flushPreviewConfigUpdate = async () => {
+		if (previewConfigUpdateInFlight) return;
+		const next = pendingPreviewConfigUpdate;
+		if (!next) return;
+
+		pendingPreviewConfigUpdate = null;
+		previewConfigUpdateInFlight = true;
+
 		try {
 			await commands.updateProjectConfigInMemory(
-				config,
-				frameNumber,
+				next.config,
+				next.frameNumber,
 				FPS,
-				resBase,
+				next.resolutionBase,
 			);
 		} catch (e) {
 			console.error(
 				"[Editor] doConfigUpdate - ERROR sending config to Rust:",
 				e,
 			);
+		} finally {
+			previewConfigUpdateInFlight = false;
+			if (pendingPreviewConfigUpdate) void flushPreviewConfigUpdate();
 		}
 	};
+
+	const doConfigUpdate = (time: number) => {
+		pendingPreviewConfigUpdate = {
+			config: getPreviewProjectConfig(project, editorState),
+			frameNumber: Math.max(Math.floor(time * FPS), 0),
+			resolutionBase: previewResolutionBase(),
+		};
+		void flushPreviewConfigUpdate();
+	};
+
 	const throttledConfigUpdate = throttle(doConfigUpdate, 1000 / FPS);
 	const trailingConfigUpdate = debounce(doConfigUpdate, 1000 / FPS + 16);
 	const updateConfigAndRender = (time: number) => {
@@ -956,6 +1026,19 @@ function Dialogs() {
 											editorInstance.recordingDuration,
 										),
 									});
+
+									if (initialPreviewUrl) {
+										logCropProfile("accurate-frame-skipped", {
+											elapsedMs: Number(
+												(performance.now() - cropOpenedAt).toFixed(2),
+											),
+											recordingDurationSec: Math.round(
+												editorInstance.recordingDuration,
+											),
+											reason: "current-preview-available",
+										});
+										return;
+									}
 
 									scheduleAccurateFrame("immediate", {
 										idleTimeoutMs: 500,

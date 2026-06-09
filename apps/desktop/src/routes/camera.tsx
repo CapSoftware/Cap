@@ -32,6 +32,7 @@ import {
 	CameraResizeHandles,
 	type CameraWindowState,
 	cameraBorderRadius,
+	cameraPreviewDimensions,
 	cameraToolbarScale,
 	getDefaultCameraWindowState,
 	normalizeBackgroundBlurMode,
@@ -510,13 +511,18 @@ function LegacyCameraPreviewPage(props: {
 	}
 
 	const STALL_TIMEOUT_MS = 2000;
+	const WS_INITIAL_BACKOFF_MS = 1000;
+	const WS_MAX_BACKOFF_MS = 30000;
+	const WS_MAX_RETRIES = 10;
 
 	const { cameraWsPort } = window.__CAP__;
 	const [isWindowVisible, setIsWindowVisible] = createSignal(!document.hidden);
 	const [_isConnected, setIsConnected] = createSignal(false);
 	let ws: WebSocket | undefined;
-	let reconnectInterval: ReturnType<typeof setInterval> | undefined;
+	let reconnectTimeout: ReturnType<typeof setTimeout> | undefined;
 	let stallCheckInterval: ReturnType<typeof setInterval> | undefined;
+	let retryCount = 0;
+	let isCleanedUp = false;
 	let lastFrameTime = 0;
 
 	onMount(() => {
@@ -537,7 +543,7 @@ function LegacyCameraPreviewPage(props: {
 		const socket = new WebSocket(`ws://localhost:${cameraWsPort}`);
 		socket.binaryType = "arraybuffer";
 
-		socket.addEventListener("open", () => {
+		socket.onopen = () => {
 			setIsConnected(true);
 			lastFrameTime = Date.now();
 			reusableFrameData = null;
@@ -551,19 +557,24 @@ function LegacyCameraPreviewPage(props: {
 					cameraCanvasRef.height,
 				);
 			}
-		});
+		};
 
-		socket.addEventListener("close", () => {
+		socket.onclose = () => {
 			setIsConnected(false);
-		});
+			cleanupSocket(socket);
+			if (ws === socket) ws = undefined;
+			scheduleReconnect();
+		};
 
-		socket.addEventListener("error", () => {
+		socket.onerror = () => {
 			setIsConnected(false);
-		});
+			socket.close();
+		};
 
 		socket.onmessage = (event) => {
 			if (!isWindowVisible()) return;
 
+			retryCount = 0;
 			lastFrameTime = Date.now();
 			if (pendingRender) return;
 
@@ -623,10 +634,42 @@ function LegacyCameraPreviewPage(props: {
 		return socket;
 	};
 
+	const cleanupSocket = (socket: WebSocket) => {
+		socket.onopen = null;
+		socket.onclose = null;
+		socket.onerror = null;
+		socket.onmessage = null;
+	};
+
+	const scheduleReconnect = () => {
+		if (
+			isCleanedUp ||
+			reconnectTimeout ||
+			ws ||
+			!isWindowVisible() ||
+			retryCount >= WS_MAX_RETRIES
+		) {
+			return;
+		}
+
+		const backoffMs = Math.min(
+			WS_INITIAL_BACKOFF_MS * 2 ** retryCount,
+			WS_MAX_BACKOFF_MS,
+		);
+
+		reconnectTimeout = setTimeout(() => {
+			reconnectTimeout = undefined;
+			if (isCleanedUp || ws || !isWindowVisible()) return;
+			retryCount += 1;
+			lastFrameTime = Date.now();
+			ws = createSocket();
+		}, backoffMs);
+	};
+
 	const stopSocket = () => {
-		if (reconnectInterval) {
-			clearInterval(reconnectInterval);
-			reconnectInterval = undefined;
+		if (reconnectTimeout) {
+			clearTimeout(reconnectTimeout);
+			reconnectTimeout = undefined;
 		}
 
 		if (stallCheckInterval) {
@@ -635,6 +678,7 @@ function LegacyCameraPreviewPage(props: {
 		}
 
 		if (ws) {
+			cleanupSocket(ws);
 			ws.close();
 			ws = undefined;
 		}
@@ -645,15 +689,9 @@ function LegacyCameraPreviewPage(props: {
 	const startSocket = () => {
 		if (ws || !isWindowVisible()) return;
 
+		retryCount = 0;
 		lastFrameTime = Date.now();
 		ws = createSocket();
-
-		reconnectInterval = setInterval(() => {
-			if (!ws || ws.readyState !== WebSocket.OPEN) {
-				if (ws) ws.close();
-				ws = createSocket();
-			}
-		}, 5000);
 
 		stallCheckInterval = setInterval(() => {
 			if (
@@ -664,8 +702,7 @@ function LegacyCameraPreviewPage(props: {
 			) {
 				lastFrameTime = Date.now();
 				commands.refreshCameraFeed().catch(() => {});
-				if (ws) ws.close();
-				ws = createSocket();
+				ws.close();
 			}
 		}, STALL_TIMEOUT_MS);
 	};
@@ -679,6 +716,7 @@ function LegacyCameraPreviewPage(props: {
 	});
 
 	onCleanup(() => {
+		isCleanedUp = true;
 		if (rafId !== null) {
 			cancelAnimationFrame(rafId);
 			rafId = null;
@@ -702,12 +740,12 @@ function LegacyCameraPreviewPage(props: {
 				frameDimensions()?.height,
 			] as const,
 		async ([size, shape, frameWidth, frameHeight]) => {
-			const base = Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, size));
-			const aspect = frameWidth && frameHeight ? frameWidth / frameHeight : 1;
-			const windowWidth =
-				shape === "full" ? (aspect >= 1 ? base * aspect : base) : base;
-			const windowHeight =
-				shape === "full" ? (aspect >= 1 ? base : base / aspect) : base;
+			const { width: windowWidth, height: windowHeight } =
+				cameraPreviewDimensions(
+					size,
+					shape,
+					frameWidth && frameHeight ? frameWidth / frameHeight : undefined,
+				);
 			const totalHeight = windowHeight + CAMERA_TOOLBAR_HEIGHT;
 
 			const currentWindow = getCurrentWindow();
@@ -717,7 +755,11 @@ function LegacyCameraPreviewPage(props: {
 			const monitors = await availableMonitors();
 			const activeMonitor = monitor ?? monitors[0];
 			if (!activeMonitor) {
-				return { size: base, windowWidth, windowHeight };
+				return {
+					size: Math.min(windowWidth, windowHeight),
+					windowWidth,
+					windowHeight,
+				};
 			}
 
 			const scalingFactor = activeMonitor.scaleFactor;
@@ -803,7 +845,7 @@ function LegacyCameraPreviewPage(props: {
 				}
 			}
 
-			return { width, height, size: base, windowWidth, windowHeight };
+			return { width, height, size, windowWidth, windowHeight };
 		},
 	);
 
@@ -875,48 +917,23 @@ function Canvas(props: {
 
 		const aspectRatio = frame.data.width / frame.data.height;
 
-		// Use container size if available (for external resize), otherwise use state.size
-		const base = props.containerSize
-			? Math.min(props.containerSize.width, props.containerSize.height)
-			: props.state.size;
+		const targetSize =
+			props.containerSize ??
+			cameraPreviewDimensions(props.state.size, props.state.shape, aspectRatio);
+		const targetAspectRatio = targetSize.width / targetSize.height;
+		const size =
+			aspectRatio > targetAspectRatio
+				? {
+						height: targetSize.height,
+						width: targetSize.height * aspectRatio,
+					}
+				: {
+						height: targetSize.width / aspectRatio,
+						width: targetSize.width,
+					};
 
-		// Replicate window size logic synchronously for the canvas
-		const winWidth =
-			props.state.shape === "full"
-				? aspectRatio >= 1
-					? base * aspectRatio
-					: base
-				: base;
-		const winHeight =
-			props.state.shape === "full"
-				? aspectRatio >= 1
-					? base
-					: base / aspectRatio
-				: base;
-
-		if (props.state.shape === "full") {
-			return {
-				width: `${winWidth}px`,
-				height: `${winHeight}px`,
-				transform: props.state.mirrored ? "scaleX(-1)" : "scaleX(1)",
-			};
-		}
-
-		const size = (() => {
-			if (aspectRatio > 1)
-				return {
-					width: base * aspectRatio,
-					height: base,
-				};
-			else
-				return {
-					width: base,
-					height: base / aspectRatio,
-				};
-		})();
-
-		const left = aspectRatio > 1 ? (size.width - base) / 2 : 0;
-		const top = aspectRatio > 1 ? 0 : (base - size.height) / 2;
+		const left = (size.width - targetSize.width) / 2;
+		const top = (size.height - targetSize.height) / 2;
 
 		return {
 			width: `${size.width}px`,

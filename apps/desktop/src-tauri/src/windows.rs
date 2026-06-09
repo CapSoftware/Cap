@@ -600,7 +600,7 @@ fn center_camera_window(app: &AppHandle, window: &WebviewWindow) {
     let toolbar_height = 56.0;
     let size = camera_state.size as f64;
     let is_full = camera_state.shape == crate::camera::CameraPreviewShape::Full;
-    let aspect_ratio = 16.0 / 9.0;
+    let aspect_ratio = crate::camera::WIDE_CAMERA_ASPECT_RATIO as f64;
 
     let window_width = if is_full { size * aspect_ratio } else { size };
     let window_height = size + toolbar_height;
@@ -1240,6 +1240,7 @@ impl ShowCapWindow {
                     }
                 })
                 .ok();
+                fake_window::spawn_fake_window_listener(app.clone(), window.clone());
                 return Ok(window);
             } else {
                 warn!("InProgressRecording window handle invalid, destroying and recreating...");
@@ -1283,6 +1284,7 @@ impl ShowCapWindow {
             let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
             window.show().ok();
             window.set_focus().ok();
+            fake_window::spawn_fake_window_listener(app.clone(), window.clone());
             return Ok(window);
         }
 
@@ -1399,6 +1401,7 @@ impl ShowCapWindow {
                             .expect("Failed to serialize initial target mode")
                     ))
                     .build()?;
+                lock_window_text_scale(&window);
 
                 let saved_position = GeneralSettingsStore::get(app)
                     .ok()
@@ -1464,6 +1467,19 @@ impl ShowCapWindow {
                 #[cfg(not(target_os = "macos"))]
                 {
                     let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+
+                    #[cfg(windows)]
+                    {
+                        if let Err(e) = window.set_size(LogicalSize::new(330.0, 395.0)) {
+                            warn!("Failed to set Main window size on Windows: {}", e);
+                        }
+                        if let Err(e) =
+                            window.set_position(tauri::LogicalPosition::new(pos_x, pos_y))
+                        {
+                            warn!("Failed to position Main window on Windows: {}", e);
+                        }
+                    }
+
                     window.show().ok();
                 }
 
@@ -1541,6 +1557,7 @@ impl ShowCapWindow {
                 }
 
                 let window = window_builder.build()?;
+                lock_window_text_scale(&window);
 
                 #[cfg(windows)]
                 {
@@ -1651,6 +1668,7 @@ impl ShowCapWindow {
                 }
 
                 let window = builder.build()?;
+                lock_window_text_scale(&window);
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(782.0, 775.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
@@ -1665,8 +1683,6 @@ impl ShowCapWindow {
                     }
                 }
 
-                window.show().ok();
-                window.set_focus().ok();
                 ensure_settings_window_bounds(&window);
 
                 window
@@ -1681,6 +1697,7 @@ impl ShowCapWindow {
                     .min_inner_size(1275.0, 800.0)
                     .focused(true)
                     .build()?;
+                lock_window_text_scale(&window);
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(1275.0, 800.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
@@ -1724,6 +1741,7 @@ impl ShowCapWindow {
                         return Err(error);
                     }
                 };
+                lock_window_text_scale(&window);
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(1240.0, 800.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
@@ -1765,6 +1783,7 @@ impl ShowCapWindow {
                     .maximized(false)
                     .shadow(true)
                     .build()?;
+                lock_window_text_scale(&window);
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(950.0, 850.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
@@ -1800,6 +1819,7 @@ impl ShowCapWindow {
                     .focused(true)
                     .shadow(true)
                     .build()?;
+                lock_window_text_scale(&window);
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(580.0, 340.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
@@ -1839,6 +1859,7 @@ impl ShowCapWindow {
                     .focused(true)
                     .shadow(true)
                     .build()?;
+                lock_window_text_scale(&window);
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(width, height);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
@@ -1974,6 +1995,7 @@ impl ShowCapWindow {
                             return Err(e);
                         }
                     };
+                    lock_window_text_scale(&window);
 
                     #[cfg(target_os = "windows")]
                     log_window_content_protection(&window, should_protect, &title);
@@ -2024,7 +2046,7 @@ impl ShowCapWindow {
                     let (camera_pos_x, camera_pos_y) = if let Some(pos) = saved_position {
                         (pos.x, pos.y)
                     } else if *centered {
-                        let aspect_ratio = 16.0 / 9.0;
+                        let aspect_ratio = crate::camera::WIDE_CAMERA_ASPECT_RATIO as f64;
                         let toolbar_height = 56.0;
                         let window_width = CENTERED_WINDOW_SIZE * aspect_ratio;
                         let window_height = CENTERED_WINDOW_SIZE + toolbar_height;
@@ -2184,6 +2206,7 @@ impl ShowCapWindow {
                     .transparent(true);
 
                 let window = window_builder.build()?;
+                lock_window_text_scale(&window);
 
                 window.set_ignore_cursor_events(true).unwrap();
 
@@ -2230,6 +2253,7 @@ impl ShowCapWindow {
                 }
 
                 let window = window_builder.build()?;
+                lock_window_text_scale(&window);
 
                 #[cfg(target_os = "macos")]
                 crate::platform::set_window_level(
@@ -2301,6 +2325,8 @@ impl ShowCapWindow {
                         countdown.unwrap_or_default()
                     ))
                     .build()?;
+
+                lock_window_text_scale(&window);
 
                 #[cfg(target_os = "windows")]
                 log_window_content_protection(&window, should_protect, &title);
@@ -2417,6 +2443,7 @@ impl ShowCapWindow {
                     .skip_taskbar(true)
                     .transparent(true)
                     .build()?;
+                lock_window_text_scale(&window);
 
                 let _ = window.set_position(tauri::LogicalPosition::new(
                     cursor_monitor.x,
@@ -2546,7 +2573,7 @@ impl ShowCapWindow {
 
         #[cfg(windows)]
         {
-            builder = builder.decorations(false);
+            builder = builder.decorations(false).zoom_hotkeys_enabled(false);
         }
 
         builder
@@ -2585,6 +2612,45 @@ impl ShowCapWindow {
                 let id = s.iter().find(|(p, _)| p == path).unwrap().1;
                 CapWindowId::ScreenshotEditor { id }
             }
+        }
+    }
+}
+
+fn lock_window_text_scale(_window: &WebviewWindow<Wry>) {
+    #[cfg(windows)]
+    {
+        let scale_factor = match _window.scale_factor() {
+            Ok(scale_factor) => scale_factor,
+            Err(e) => {
+                warn!("Failed to read window scale factor: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = _window.with_webview(move |webview| unsafe {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller3;
+            use windows_core::Interface;
+
+            let controller = webview.controller();
+
+            if let Err(e) = controller.SetZoomFactor(1.0) {
+                warn!("Failed to lock WebView zoom factor: {}", e);
+            }
+
+            let Ok(controller3) = controller.cast::<ICoreWebView2Controller3>() else {
+                warn!("Failed to access WebView2 controller scale APIs");
+                return;
+            };
+
+            if let Err(e) = controller3.SetShouldDetectMonitorScaleChanges(false) {
+                warn!("Failed to disable WebView scale detection: {}", e);
+            }
+
+            if let Err(e) = controller3.SetRasterizationScale(scale_factor) {
+                warn!("Failed to lock WebView rasterization scale: {}", e);
+            }
+        }) {
+            warn!("Failed to access platform WebView: {}", e);
         }
     }
 }

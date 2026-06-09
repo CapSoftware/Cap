@@ -4,11 +4,12 @@
 	"scripts": {
 		"dev": "pnpm -w cap-setup && pnpm build:sidecar && dotenv -e ../../.env -- pnpm run preparescript && dotenv -e ../../.env -- pnpm tauri dev",
 		"build:tauri": "pnpm build:sidecar && dotenv -e ../../.env -- pnpm run preparescript && dotenv -e ../../.env -- pnpm tauri build",
-		"build:sidecar": "node ../../scripts/build-cap-muxer.mjs",
+		"build:sidecar": "node ../../scripts/build-desktop-binaries.mjs",
 		"preparescript": "node scripts/prepare.js",
 		"localdev": "dotenv -e ../../.env -- vinxi dev --port 3002",
 		"build": "vinxi build",
 		"tauri": "tauri",
+		"test:display-transport": "node scripts/desktop-display-transport-benchmark.js",
 		"test:memory": "node scripts/desktop-memory-soak.js",
 		"test:memory:unit": "vitest run scripts/desktop-memory-soak.test.js"
 	},

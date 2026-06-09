@@ -20,11 +20,12 @@ import { NotificationHeader } from "./NotificationHeader";
 import { NotificationItem } from "./NotificationItem";
 import { NotificationsSkeleton } from "./Skeleton";
 
-type NotificationsProps = MotionProps & React.HTMLAttributes<HTMLDivElement>;
+type NotificationsProps = MotionProps &
+	React.HTMLAttributes<HTMLDivElement> & { onClose?: () => void };
 
 const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
 	(props, ref) => {
-		const { className } = props;
+		const { className, onClose, ...rest } = props;
 		const { activeOrganization } = useDashboardContext();
 		const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 		const scrollRef = useRef<HTMLDivElement>(null);
@@ -90,7 +91,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
 					"flex absolute right-0 top-12 flex-col rounded-xl origin-top-right cursor-default w-[400px] h-[450px] bg-gray-1",
 					className,
 				)}
-				{...props}
+				{...rest}
 			>
 				<NotificationHeader />
 				<FilterTabs
@@ -134,7 +135,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
 					<div className="flex-1 border-t border-gray-3" />
 				</div>
 
-				<NotificationFooter />
+				<NotificationFooter onClose={onClose} />
 			</motion.div>
 		);
 	},

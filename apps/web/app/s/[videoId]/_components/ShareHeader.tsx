@@ -9,6 +9,7 @@ import {
 	faLock,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Clock, Copy, Globe2, Pencil, Scissors, X } from "lucide-react";
 import moment from "moment";
 import Image from "next/image";
@@ -20,6 +21,7 @@ import {
 	selectShareableLinkBrandingOrganization,
 } from "@/actions/organization/shareable-link-icon";
 import { editTitle } from "@/actions/videos/edit-title";
+import type { VideoStatusResult } from "@/actions/videos/get-status";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
@@ -67,8 +69,15 @@ export const ShareHeader = ({
 }) => {
 	const user = useCurrentUser();
 	const { push, refresh } = useRouter();
+	const queryClient = useQueryClient();
+	const { data: videoStatus } = useQuery<VideoStatusResult>({
+		queryKey: ["videoStatus", data.id],
+		queryFn: skipToken,
+	});
 	const [isEditing, setIsEditing] = useState(false);
-	const [title, setTitle] = useState(data.name);
+	const [displayTitle, setDisplayTitle] = useState(data.name);
+	const [editValue, setEditValue] = useState(data.name);
+	const [isTitleRevealing, setIsTitleRevealing] = useState(false);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 	const [linkCopied, setLinkCopied] = useState(false);
@@ -78,6 +87,13 @@ export const ShareHeader = ({
 	const [isOpeningBrandingSettings, setIsOpeningBrandingSettings] =
 		useState(false);
 	const copyOptionsRef = useRef<HTMLDivElement>(null);
+	const suppressTitleRevealRef = useRef(false);
+	const titleSwapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+		null,
+	);
+	const titleRevealEndTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+		null,
+	);
 
 	useEffect(() => {
 		if (!showCopyOptions) return;
@@ -101,17 +117,67 @@ export const ShareHeader = ({
 
 	const { webUrl } = usePublicEnv();
 
+	const resolvedTitle = videoStatus?.name ?? data.name;
+
 	useEffect(() => {
-		setTitle(data.name);
-	}, [data.name]);
+		if (isEditing) return;
+		if (resolvedTitle === displayTitle) return;
+
+		if (suppressTitleRevealRef.current) {
+			suppressTitleRevealRef.current = false;
+			setDisplayTitle(resolvedTitle);
+			return;
+		}
+
+		const prefersReducedMotion =
+			typeof window !== "undefined" &&
+			window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+		if (prefersReducedMotion) {
+			setDisplayTitle(resolvedTitle);
+			return;
+		}
+
+		setIsTitleRevealing(true);
+		if (titleSwapTimeoutRef.current) clearTimeout(titleSwapTimeoutRef.current);
+		if (titleRevealEndTimeoutRef.current)
+			clearTimeout(titleRevealEndTimeoutRef.current);
+
+		titleSwapTimeoutRef.current = setTimeout(() => {
+			setDisplayTitle(resolvedTitle);
+		}, 160);
+		titleRevealEndTimeoutRef.current = setTimeout(() => {
+			setIsTitleRevealing(false);
+		}, 1000);
+	}, [resolvedTitle, displayTitle, isEditing]);
+
+	useEffect(
+		() => () => {
+			if (titleSwapTimeoutRef.current)
+				clearTimeout(titleSwapTimeoutRef.current);
+			if (titleRevealEndTimeoutRef.current)
+				clearTimeout(titleRevealEndTimeoutRef.current);
+		},
+		[],
+	);
+
+	const startEditing = () => {
+		setEditValue(displayTitle);
+		setIsEditing(true);
+	};
 
 	const handleBlur = async () => {
 		setIsEditing(false);
-		const next = title.trim();
-		if (next === "" || next === data.name) return;
+		const next = editValue.trim();
+		if (next === "" || next === displayTitle) return;
 		try {
-			await editTitle(data.id, title);
+			await editTitle(data.id, next);
 			toast.success("Video title updated");
+			suppressTitleRevealRef.current = true;
+			queryClient.setQueryData<VideoStatusResult>(
+				["videoStatus", data.id],
+				(old) => (old ? { ...old, name: next } : old),
+			);
 			refresh();
 		} catch (error) {
 			if (error instanceof Error) {
@@ -401,34 +467,39 @@ export const ShareHeader = ({
 							<div className="min-w-0 flex-1">
 								{isEditing ? (
 									<input
-										value={title}
-										onChange={(e) => setTitle(e.target.value)}
+										value={editValue}
+										onChange={(e) => setEditValue(e.target.value)}
 										onBlur={handleBlur}
 										onKeyDown={handleKeyDown}
 										className="w-full min-w-0 text-xl sm:text-2xl"
 									/>
 								) : (
-									<h1
-										role={isOwner ? "button" : undefined}
-										tabIndex={isOwner ? 0 : undefined}
-										className="truncate text-xl sm:text-2xl"
-										onClick={() => {
-											if (isOwner) {
-												setIsEditing(true);
-											}
-										}}
-										onKeyDown={(event) => {
-											if (
-												isOwner &&
-												(event.key === "Enter" || event.key === " ")
-											) {
-												event.preventDefault();
-												setIsEditing(true);
-											}
-										}}
-									>
-										{title}
-									</h1>
+									<div className="relative inline-flex min-w-0 max-w-full align-middle">
+										<h1
+											role={isOwner ? "button" : undefined}
+											tabIndex={isOwner ? 0 : undefined}
+											className="truncate text-xl sm:text-2xl"
+											onClick={() => {
+												if (isOwner) {
+													startEditing();
+												}
+											}}
+											onKeyDown={(event) => {
+												if (
+													isOwner &&
+													(event.key === "Enter" || event.key === " ")
+												) {
+													event.preventDefault();
+													startEditing();
+												}
+											}}
+										>
+											{displayTitle}
+										</h1>
+										{isTitleRevealing && (
+											<span aria-hidden className="ai-title-skeleton" />
+										)}
+									</div>
 								)}
 							</div>
 						</div>

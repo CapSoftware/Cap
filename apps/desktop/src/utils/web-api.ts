@@ -6,14 +6,27 @@ import {
 import { fetch } from "@tauri-apps/plugin-http";
 import { type ApiFetcher, initClient } from "@ts-rest/core";
 
-import { authStore } from "~/store";
+import { authStore, generalSettingsStore } from "~/store";
 import { clientEnv } from "./env";
+import { resolveServerRequestPath } from "./server-url-routing";
+
+export async function getConfiguredServerUrl() {
+	return (
+		(await generalSettingsStore.get())?.serverUrl ?? clientEnv.VITE_SERVER_URL
+	);
+}
+
+async function resolveRequestPath(path: string) {
+	const serverUrl = await getConfiguredServerUrl();
+	return resolveServerRequestPath(path, serverUrl, clientEnv.VITE_SERVER_URL);
+}
 
 const api: ApiFetcher = async (args) => {
 	const bypassSecret = import.meta.env.VITE_VERCEL_AUTOMATION_BYPASS_SECRET;
 	if (bypassSecret) args.headers["x-vercel-protection-bypass"] = bypassSecret;
 
-	const resp = await fetch(args.path, args);
+	const path = await resolveRequestPath(args.path);
+	const resp = await fetch(path, args);
 
 	let body: unknown;
 

@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.5.0"
+version = "0.5.1"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -87,6 +87,7 @@ cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
+cap-cli-install = { path = "../../../crates/cli-install", features = ["specta"] }
 cap-enc-ffmpeg = { path = "../../../crates/enc-ffmpeg" }
 cap-media-info = { path = "../../../crates/media-info" }
 scap-targets = { path = "../../../crates/scap-targets" }
@@ -165,6 +166,8 @@ windows = { workspace = true, features = [
 ] }
 windows-sys = { workspace = true }
 winreg = "0.55"
+webview2-com = "0.38.0"
+windows-core = "0.61.2"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }

@@ -10,7 +10,7 @@ import {
 	parseAiGenerationLanguage,
 	type Video,
 } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
@@ -46,23 +46,29 @@ interface AiResult {
 
 const MAX_CHARS_PER_CHUNK = 24000;
 const GENERATED_TITLE_PATTERN =
-	/^(Cap (Recording|Upload) - .+|Untitled|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})$/;
+	/^(Cap (Recording|Upload) - .+|Untitled|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}|.+ \((Display|Window|Area|Camera)\) \d{4}-\d{2}-\d{2} \d{2}:\d{2} [AP]M)$/;
 
 export function shouldReplaceVideoTitle({
 	currentTitle,
 	previousAiTitle,
 	nextAiTitle,
+	sourceName,
+	titleManuallyEdited,
 }: {
 	currentTitle: string | null;
 	previousAiTitle?: string | null;
 	nextAiTitle?: string | null;
+	sourceName?: string | null;
+	titleManuallyEdited?: boolean | null;
 }) {
 	const nextTitle = nextAiTitle?.trim();
 	if (!nextTitle) return false;
+	if (titleManuallyEdited) return false;
 
 	const title = currentTitle?.trim();
 	if (!title) return true;
 	if (previousAiTitle?.trim() && title === previousAiTitle.trim()) return true;
+	if (sourceName?.trim() && title === sourceName.trim()) return true;
 	return GENERATED_TITLE_PATTERN.test(title);
 }
 
@@ -178,11 +184,13 @@ async function markSkipped(
 ): Promise<void> {
 	"use step";
 
+	const currentMetadata = await getCurrentVideoMetadata(videoId, metadata);
+
 	await db()
 		.update(videos)
 		.set({
 			metadata: {
-				...metadata,
+				...currentMetadata,
 				aiGenerationStatus: "SKIPPED",
 			},
 		})
@@ -273,12 +281,17 @@ async function saveResults(
 
 	const { video, metadata } = videoData;
 	const generatedTitle = result.title?.trim();
+	const currentVideo = await getCurrentVideo(videoId);
+	const currentMetadata = currentVideo
+		? (currentVideo.metadata as VideoMetadata) || {}
+		: metadata;
+	const currentTitle = currentVideo?.name ?? video.name;
 
 	const updatedMetadata: VideoMetadata = {
-		...metadata,
-		aiTitle: generatedTitle || metadata.aiTitle,
-		summary: result.summary || metadata.summary,
-		chapters: result.chapters || metadata.chapters,
+		...currentMetadata,
+		aiTitle: generatedTitle || currentMetadata.aiTitle,
+		summary: result.summary || currentMetadata.summary,
+		chapters: result.chapters || currentMetadata.chapters,
 		aiGenerationStatus: "COMPLETE",
 	};
 
@@ -290,16 +303,44 @@ async function saveResults(
 	if (
 		generatedTitle &&
 		shouldReplaceVideoTitle({
-			currentTitle: video.name,
-			previousAiTitle: metadata.aiTitle,
+			currentTitle,
+			previousAiTitle: currentMetadata.aiTitle,
 			nextAiTitle: generatedTitle,
+			sourceName: currentMetadata.sourceName,
+			titleManuallyEdited: currentMetadata.titleManuallyEdited,
 		})
 	) {
 		await db()
 			.update(videos)
 			.set({ name: generatedTitle })
-			.where(eq(videos.id, videoId as Video.VideoId));
+			.where(
+				and(
+					eq(videos.id, videoId as Video.VideoId),
+					eq(videos.name, currentTitle),
+				),
+			);
 	}
+}
+
+async function getCurrentVideo(
+	videoId: string,
+): Promise<typeof videos.$inferSelect | null> {
+	const [currentVideo] = await db()
+		.select()
+		.from(videos)
+		.where(eq(videos.id, videoId as Video.VideoId));
+
+	return currentVideo ?? null;
+}
+
+async function getCurrentVideoMetadata(
+	videoId: string,
+	fallback: VideoMetadata,
+): Promise<VideoMetadata> {
+	const currentVideo = await getCurrentVideo(videoId);
+	return currentVideo
+		? (currentVideo.metadata as VideoMetadata) || {}
+		: fallback;
 }
 
 function parseVttWithTimestamps(vttContent: string): VttSegment[] {
