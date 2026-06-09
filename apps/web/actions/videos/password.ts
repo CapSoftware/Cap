@@ -3,7 +3,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
-	encrypt,
 	hashPassword,
 	verifyPassword as verifyPlainPassword,
 } from "@cap/database/crypto";
@@ -12,7 +11,7 @@ import { collectPasswordHashes } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { cookies } from "next/headers";
+import { setVerifiedPasswordCookie } from "@/lib/password-cookie";
 
 export async function setVideoPassword(
 	videoId: Video.VideoId,
@@ -115,7 +114,7 @@ export async function verifyVideoPassword(
 		for (const passwordHash of passwordHashes) {
 			const valid = await verifyPlainPassword(passwordHash, password);
 			if (valid) {
-				(await cookies()).set("x-cap-password", await encrypt(passwordHash));
+				await setVerifiedPasswordCookie(passwordHash);
 				return { success: true, value: "Password verified" };
 			}
 		}
