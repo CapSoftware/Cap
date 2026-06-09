@@ -22,6 +22,7 @@ export type GeneralSettingsStore = TauriGeneralSettingsStore & {
 	captureKeyboardEvents?: boolean;
 	postScreenshotCaptureBehaviour?: PostScreenshotCaptureBehaviour;
 	screenshotSaveDestination?: ScreenshotSaveDestination;
+	closeScreenshotEditorAfterCopy?: boolean;
 	transcriptionHints?: string[];
 	enableTelemetry?: boolean;
 	outOfProcessMuxer?: boolean;
@@ -46,6 +47,7 @@ export function createDefaultGeneralSettings(): GeneralSettingsStore {
 		postScreenshotCaptureBehaviour: "openEditor",
 		screenshotSaveDestination: "desktop",
 		screenshotSaveDirectory: null,
+		closeScreenshotEditorAfterCopy: false,
 		custom_cursor_capture2: true,
 		excludedWindows: [],
 		instantModeMaxResolution: 1920,

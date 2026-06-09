@@ -677,6 +677,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								</div>
 							</SettingItem>
 						</Show>
+						<ToggleSettingItem
+							label="Close editor after copying"
+							description="Close the screenshot editor after Copy to Clipboard succeeds."
+							value={settings.closeScreenshotEditorAfterCopy ?? false}
+							onChange={(value) =>
+								handleChange("closeScreenshotEditorAfterCopy", value)
+							}
+						/>
 						<SelectSettingItem
 							label="After deleting a recording"
 							description="Whether the recording window should reopen."

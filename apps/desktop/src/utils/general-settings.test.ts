@@ -45,6 +45,7 @@ describe("general-settings", () => {
 			postScreenshotCaptureBehaviour: "openEditor",
 			screenshotSaveDestination: "desktop",
 			screenshotSaveDirectory: null,
+			closeScreenshotEditorAfterCopy: false,
 		});
 	});
 

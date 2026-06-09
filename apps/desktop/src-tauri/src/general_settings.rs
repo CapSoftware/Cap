@@ -199,6 +199,8 @@ pub struct GeneralSettingsStore {
     #[serde(default)]
     pub screenshot_save_directory: Option<PathBuf>,
     #[serde(default)]
+    pub close_screenshot_editor_after_copy: bool,
+    #[serde(default)]
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
     #[serde(
         default = "default_custom_cursor_capture",
@@ -326,6 +328,7 @@ impl Default for GeneralSettingsStore {
             post_screenshot_capture_behaviour: PostScreenshotCaptureBehaviour::OpenEditor,
             screenshot_save_destination: ScreenshotSaveDestination::Desktop,
             screenshot_save_directory: None,
+            close_screenshot_editor_after_copy: false,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
             custom_cursor_capture: cap_recording::DEFAULT_CUSTOM_CURSOR_CAPTURE,
             server_url: default_server_url(),
