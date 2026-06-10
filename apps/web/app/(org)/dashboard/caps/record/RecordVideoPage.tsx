@@ -6,7 +6,6 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useId, useRef, useState } from "react";
-import { FREE_PLAN_MAX_RECORDING_MS } from "../components/web-recorder-dialog/web-recorder-constants";
 import { WebRecorderDialog } from "../components/web-recorder-dialog/web-recorder-dialog";
 
 export const RecordVideoPage = () => {
@@ -71,7 +70,6 @@ export const RecordVideoPage = () => {
 };
 
 const FaqAccordion = () => {
-	const freeMinutes = Math.floor(FREE_PLAN_MAX_RECORDING_MS / 60000);
 	const items = [
 		{
 			id: "what-is-cap",
@@ -106,7 +104,7 @@ const FaqAccordion = () => {
 		{
 			id: "install",
 			q: "Do I need to install the app?",
-			a: `No. You can record in your browser. For longer recordings, system audio, and advanced editing, use Cap Desktop. The Free plan supports up to ${freeMinutes} minutes per recording in the browser.`,
+			a: "No. You can record in your browser. For system audio and advanced editing, use Cap Desktop.",
 		},
 	];
 

@@ -37,22 +37,6 @@ function ShareButton() {
 				throw new Error("You need to sign in to share recordings");
 			}
 
-			const metadata = await commands.getVideoMetadata(projectPath);
-			const plan = await commands.checkUpgradedAndUpdate();
-			const canShare = {
-				allowed: plan || metadata.duration < 300,
-				reason: !plan && metadata.duration >= 300 ? "upgrade_required" : null,
-			};
-
-			if (!canShare.allowed) {
-				if (canShare.reason === "upgrade_required") {
-					await commands.showWindow("Upgrade");
-					throw new Error(
-						"Upgrade required to share recordings longer than 5 minutes",
-					);
-				}
-			}
-
 			const uploadChannel = new Channel<UploadProgress>((progress) => {
 				console.log("Upload progress:", progress);
 				setUploadState(

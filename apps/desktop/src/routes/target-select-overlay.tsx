@@ -396,7 +396,6 @@ function Inner() {
 								commands.closeTargetSelectOverlays();
 							}}
 						/>
-						<ShowCapFreeWarning isInstantMode={options.mode === "instant"} />
 					</div>
 				)}
 			</Match>
@@ -679,9 +678,6 @@ function Inner() {
 										>
 											Adjust recording area
 										</Button>
-										<ShowCapFreeWarning
-											isInstantMode={options.mode === "instant"}
-										/>
 									</div>
 								</div>
 							)}
@@ -1137,11 +1133,6 @@ function Inner() {
 												is too small
 											</small>
 										</div>
-									</Show>
-									<Show when={isValid()}>
-										<ShowCapFreeWarning
-											isInstantMode={options.mode === "instant"}
-										/>
 									</Show>
 								</div>
 							</div>
@@ -1846,25 +1837,5 @@ function RecordingControls(props: {
 				</div>
 			</div>
 		</>
-	);
-}
-
-function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
-	const auth = authStore.createQuery();
-
-	return (
-		<Suspense>
-			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
-				<p class="text-sm text-center max-w-64 text-gray-3 mt-3">
-					Instant Mode recordings are limited to 5 mins,{" "}
-					<button
-						class="underline font-bold text-gray-3"
-						onClick={() => commands.showWindow("Upgrade")}
-					>
-						Upgrade to Pro
-					</button>
-				</p>
-			</Show>
-		</Suspense>
 	);
 }

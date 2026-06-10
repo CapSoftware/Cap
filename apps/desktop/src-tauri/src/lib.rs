@@ -3159,7 +3159,7 @@ async fn upload_exported_video(
     channel: Channel<UploadProgress>,
     organization_id: Option<String>,
 ) -> Result<UploadResult, String> {
-    let Ok(Some(auth)) = AuthStore::get(&app) else {
+    let Ok(Some(_auth)) = AuthStore::get(&app) else {
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
         return Ok(UploadResult::NotAuthenticated);
     };
@@ -3174,10 +3174,6 @@ async fn upload_exported_video(
 
     let metadata = build_video_meta(&file_path)
         .map_err(|err| format!("Error getting output video meta: {err}"))?;
-
-    if !auth.is_upgraded() && metadata.duration_in_secs > 300.0 {
-        return Ok(UploadResult::UpgradeRequired);
-    }
 
     channel.send(UploadProgress { progress: 0.0 }).ok();
 

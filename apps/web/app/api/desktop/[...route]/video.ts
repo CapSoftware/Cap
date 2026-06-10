@@ -12,7 +12,7 @@ import {
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
+import { dub } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
@@ -97,11 +97,6 @@ app.get(
 				orgId,
 			} = c.req.valid("query");
 			const user = c.get("user");
-
-			const isCapPro = userIsPro(user);
-
-			if (!isCapPro && durationInSecs && durationInSecs > /* 5 min */ 5 * 60)
-				return c.json({ error: "upgrade_required" }, { status: 403 });
 
 			console.log("Video create request:", {
 				recordingMode,

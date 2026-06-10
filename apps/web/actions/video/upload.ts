@@ -5,7 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
+import { dub } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
 import {
 	type Folder,
@@ -134,9 +134,6 @@ export async function createVideoAndGetUploadUrl({
 	if (!user) throw new Error("Unauthorized");
 
 	try {
-		if (!userIsPro(user) && duration && duration > 300)
-			throw new Error("upgrade_required");
-
 		await requireOrganizationAccess(user.id, orgId);
 
 		const date = new Date();
