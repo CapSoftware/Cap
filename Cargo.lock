@@ -1310,6 +1310,7 @@ dependencies = [
  "cap-audio",
  "cap-camera",
  "cap-camera-effects",
+ "cap-camera-ffmpeg",
  "cap-cli-install",
  "cap-editor",
  "cap-enc-ffmpeg",

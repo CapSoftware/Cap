@@ -27,7 +27,7 @@ pub struct PendingEditorInstances(Arc<RwLock<HashMap<String, PendingReceiver>>>)
 async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
     let (frame_tx, frame_rx) = watch::channel(None);
 
-    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx, Default::default()).await;
     let (inner, render_frame_event_id) = create_editor_instance_impl(
         &app,
         path,
@@ -35,7 +35,7 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
             let ws_frame = match output {
                 cap_editor::EditorFrameOutput::Nv12(frame) => {
                     let ws_format = match frame.format {
-                        GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                        GpuOutputFormat::Nv12 => WSFrameFormat::Nv12 { full_range: false },
                         GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
                     };
                     WSFrame {
@@ -343,7 +343,8 @@ impl EditorInstances {
 
                 let (frame_tx, frame_rx) = watch::channel(None);
 
-                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+                let (ws_port, ws_shutdown_token) =
+                    create_watch_frame_ws(frame_rx, Default::default()).await;
                 let app_handle = window.app_handle().clone();
                 let (inner, render_frame_event_id) = create_editor_instance_impl(
                     window.app_handle(),
@@ -352,7 +353,9 @@ impl EditorInstances {
                         let ws_frame = match output {
                             cap_editor::EditorFrameOutput::Nv12(frame) => {
                                 let ws_format = match frame.format {
-                                    GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                                    GpuOutputFormat::Nv12 => {
+                                        WSFrameFormat::Nv12 { full_range: false }
+                                    }
                                     GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
                                 };
                                 WSFrame {

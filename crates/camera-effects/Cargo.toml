@@ -13,7 +13,10 @@ tracing.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
 ndarray = "0.16"
 
-[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-23"] }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))'.dependencies]
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-native"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
