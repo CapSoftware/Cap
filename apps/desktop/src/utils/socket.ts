@@ -748,8 +748,6 @@ export function createImageDataWS(
 
 			if (!mainThreadWebGPUInitializing && !mainThreadWebGPU) {
 				mainThreadWebGPUInitializing = true;
-				// initWebGPU's catch covers the no-adapter case, so a separate
-				// isWebGPUSupported probe would just request the adapter twice.
 				const maybeSupported =
 					typeof navigator !== "undefined" && !!navigator.gpu;
 				if (maybeSupported && directCanvas) {

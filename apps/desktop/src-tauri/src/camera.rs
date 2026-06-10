@@ -18,7 +18,6 @@ use kameo::actor::ActorRef;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
-    mem::ManuallyDrop,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -415,13 +414,11 @@ impl CameraPreviewManager {
             );
 
             let (drop_tx, drop_rx) = oneshot::channel();
-            let renderer = ManuallyDrop::new(renderer);
-            window
-                .run_on_main_thread(move || {
-                    drop(ManuallyDrop::into_inner(renderer));
-                    let _ = drop_tx.send(());
-                })
-                .ok();
+            let renderer = Box::new(renderer);
+            let _ = window.run_on_main_thread(move || {
+                drop(renderer);
+                let _ = drop_tx.send(());
+            });
 
             wait_for_shutdown_signal(&rt, drop_rx, Duration::from_millis(250));
 
@@ -1202,11 +1199,14 @@ impl Renderer {
         });
 
         if blurred {
-            let blur_output = self
+            let Some(blur_output) = self
                 .blur_processor
                 .as_mut()
                 .and_then(|p| p.process_returning_output())
-                .expect("blurred flag guarantees output");
+            else {
+                prepared.render(surface, frame_data, frame_stride);
+                return true;
+            };
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1477,14 +1477,12 @@ impl Renderer {
         drop(std::mem::take(&mut self.texture));
         self.aspect_ratio = Cached::default();
 
-        let surface = ManuallyDrop::new(self.surface.take());
+        let surface = self.surface.take();
         let (drop_tx, drop_rx) = oneshot::channel();
-        window
-            .run_on_main_thread(move || {
-                drop(ManuallyDrop::into_inner(surface));
-                let _ = drop_tx.send(());
-            })
-            .ok();
+        let _ = window.run_on_main_thread(move || {
+            drop(surface);
+            let _ = drop_tx.send(());
+        });
         let _ = tokio::time::timeout(Duration::from_millis(250), drop_rx).await;
 
         self.device.destroy();

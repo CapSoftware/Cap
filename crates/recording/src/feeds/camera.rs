@@ -522,11 +522,14 @@ fn release_camera_thread(handle: std::thread::JoinHandle<()>) {
         let _ = handle.join();
     } else {
         warn!("Camera setup thread is still running after cancellation");
-        let _ = std::thread::Builder::new()
+        if let Err(err) = std::thread::Builder::new()
             .name("camera-setup-reaper".to_string())
             .spawn(move || {
                 let _ = handle.join();
-            });
+            })
+        {
+            warn!(?err, "Failed to spawn camera-setup-reaper thread");
+        }
     }
 }
 
@@ -801,7 +804,7 @@ async fn setup_camera(
             // converted to derive VideoInfo; afterwards skip the full-frame
             // copy entirely when nothing consumes ffmpeg frames.
             if ready_signal.is_none()
-                && ffmpeg_sender_count.load(std::sync::atomic::Ordering::Relaxed) == 0
+                && ffmpeg_sender_count.load(std::sync::atomic::Ordering::Acquire) == 0
             {
                 return;
             }
@@ -916,7 +919,7 @@ async fn setup_camera(
             // converted to derive VideoInfo; afterwards skip the full-frame
             // copy entirely when nothing consumes ffmpeg frames.
             if ready_signal.is_none()
-                && ffmpeg_sender_count.load(std::sync::atomic::Ordering::Relaxed) == 0
+                && ffmpeg_sender_count.load(std::sync::atomic::Ordering::Acquire) == 0
             {
                 return;
             }

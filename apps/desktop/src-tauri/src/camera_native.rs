@@ -123,7 +123,8 @@ pub fn classify_frame(frame: &NativeCameraFrame) -> Result<NativeFrameKind, Nati
         .sample_buf
         .format_desc()
         .ok_or(NativeFrameError::NoFormatDesc)?;
-    match cidre::four_cc_to_str(&mut format_desc.media_sub_type().to_be_bytes()) {
+    let mut fourcc = format_desc.media_sub_type().to_be_bytes();
+    match cidre::four_cc_to_str(&mut fourcc) {
         "420v" => Ok(NativeFrameKind::Nv12 { full_range: false }),
         "420f" => Ok(NativeFrameKind::Nv12 { full_range: true }),
         "BGRA" => Ok(NativeFrameKind::Bgra),
