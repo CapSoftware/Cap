@@ -35,6 +35,13 @@ export interface VideoMetadata {
 		| "ERROR"
 		| "SKIPPED";
 	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+	cta?: VideoCta;
+}
+
+export interface VideoCta {
+	enabled: boolean;
+	label: string;
+	url: string;
 }
 
 export type VideoEditRange = {

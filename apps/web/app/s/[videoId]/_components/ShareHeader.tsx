@@ -7,6 +7,7 @@ import {
 	faChartSimple,
 	faChevronDown,
 	faLock,
+	faUpRightFromSquare,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -31,6 +32,7 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
 import { navigateWithTransition } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
+import { CtaDialog } from "./CtaDialog";
 
 export const ShareHeader = ({
 	data,
@@ -80,6 +82,7 @@ export const ShareHeader = ({
 	const [isTitleRevealing, setIsTitleRevealing] = useState(false);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+	const [isCtaDialogOpen, setIsCtaDialogOpen] = useState(false);
 	const [linkCopied, setLinkCopied] = useState(false);
 	const [showCopyOptions, setShowCopyOptions] = useState(false);
 	const [capturedTime, setCapturedTime] = useState(0);
@@ -443,6 +446,12 @@ export const ShareHeader = ({
 					</Button>
 				</div>
 			)}
+			<CtaDialog
+				isOpen={isCtaDialogOpen}
+				onClose={() => setIsCtaDialogOpen(false)}
+				videoId={data.id}
+				cta={data.metadata?.cta}
+			/>
 			<SharingDialog
 				isOpen={isSharingDialogOpen}
 				onClose={() => setIsSharingDialogOpen(false)}
@@ -610,6 +619,18 @@ export const ShareHeader = ({
 												icon={faChartSimple}
 											/>
 											View analytics
+										</Button>
+										<Button
+											variant="gray"
+											size="xs"
+											className="h-8 gap-1.5 rounded-full px-2.5 text-xs"
+											onClick={() => setIsCtaDialogOpen(true)}
+										>
+											<FontAwesomeIcon
+												className="size-3.5 text-gray-12"
+												icon={faUpRightFromSquare}
+											/>
+											Call to action
 										</Button>
 									</>
 								)}

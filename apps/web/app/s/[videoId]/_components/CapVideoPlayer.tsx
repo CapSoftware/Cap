@@ -1,5 +1,6 @@
 "use client";
 
+import type { VideoCta } from "@cap/database/types";
 import { LogoSpinner } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
@@ -13,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import CommentStamp from "./CommentStamp";
+import { CtaButton } from "./CtaButton";
 import { getActiveCaptionText } from "./caption-cues";
 import {
 	AVC_LEVEL_IOS_HARDWARE_CEILING,
@@ -115,6 +117,7 @@ interface Props {
 	showPlaybackStatusBadge?: boolean;
 	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
+	cta?: VideoCta | null;
 }
 
 export function CapVideoPlayer({
@@ -148,6 +151,7 @@ export function CapVideoPlayer({
 	showPlaybackStatusBadge = false,
 	showFloatingVolumeControl = false,
 	onUploadComplete,
+	cta,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -622,6 +626,7 @@ export function CapVideoPlayer({
 			)}
 			autoHide
 		>
+			<CtaButton cta={cta} />
 			{showUploadFailureOverlay && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
