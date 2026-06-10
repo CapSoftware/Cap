@@ -145,6 +145,7 @@ objc = "0.2.7"
 swift-rs = "1.0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 cidre = { workspace = true }
+cap-camera-ffmpeg = { path = "../../../crates/camera-ffmpeg" }
 
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
 parakeet-rs = "0.3.4"
