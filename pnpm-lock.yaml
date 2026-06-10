@@ -1087,7 +1087,14 @@ importers:
         specifier: ^22.15.14
         version: 22.15.14
 
-  packages/local-docker: {}
+  packages/local-docker:
+    devDependencies:
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(lightningcss@1.32.0)(terser@5.44.0)
+      yaml:
+        specifier: ^2.8.1
+        version: 2.8.1
 
   packages/sdk-embed:
     dependencies:
