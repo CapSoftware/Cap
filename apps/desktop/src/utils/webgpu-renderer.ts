@@ -94,22 +94,26 @@ function createEmptyTiming(start: number): WebGPURenderTiming {
 	};
 }
 
-async function requestWebGPUAdapter(): Promise<GPUAdapter | null> {
-	let highPerformanceAdapter: GPUAdapter | null = null;
+async function requestWebGPUAdapter(
+	powerPreference: GPUPowerPreference = "high-performance",
+): Promise<GPUAdapter | null> {
+	let preferredAdapter: GPUAdapter | null = null;
 	try {
-		highPerformanceAdapter = await navigator.gpu.requestAdapter({
-			powerPreference: "high-performance",
+		preferredAdapter = await navigator.gpu.requestAdapter({
+			powerPreference,
 		});
 	} catch {}
-	return highPerformanceAdapter ?? navigator.gpu.requestAdapter();
+	return preferredAdapter ?? navigator.gpu.requestAdapter();
 }
 
-export async function isWebGPUSupported(): Promise<boolean> {
+export async function isWebGPUSupported(
+	powerPreference: GPUPowerPreference = "high-performance",
+): Promise<boolean> {
 	if (typeof navigator === "undefined" || !navigator.gpu) {
 		return false;
 	}
 	try {
-		const adapter = await requestWebGPUAdapter();
+		const adapter = await requestWebGPUAdapter(powerPreference);
 		return adapter !== null;
 	} catch {
 		return false;
@@ -118,8 +122,9 @@ export async function isWebGPUSupported(): Promise<boolean> {
 
 export async function initWebGPU(
 	canvas: OffscreenCanvas,
+	powerPreference: GPUPowerPreference = "high-performance",
 ): Promise<WebGPURenderer> {
-	const adapter = await requestWebGPUAdapter();
+	const adapter = await requestWebGPUAdapter(powerPreference);
 	if (!adapter) {
 		throw new Error("No WebGPU adapter available");
 	}
