@@ -227,6 +227,7 @@ pub fn spawn_cursor_recorder(
         });
         return CursorActor {
             stop: None,
+            stop_wakeup: None,
             thread: None,
             rx: rx.shared(),
         };

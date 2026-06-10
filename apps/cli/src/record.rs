@@ -637,6 +637,7 @@ impl ActorHandle {
             Self::Studio(actor) => actor
                 .stop()
                 .await
+                .map(Box::new)
                 .map(CompletedRecording::Studio)
                 .map_err(|e| e.to_string()),
             Self::Instant(actor) => actor
@@ -649,7 +650,7 @@ impl ActorHandle {
 }
 
 enum CompletedRecording {
-    Studio(studio_recording::CompletedRecording),
+    Studio(Box<studio_recording::CompletedRecording>),
     Instant(instant_recording::CompletedRecording),
 }
 

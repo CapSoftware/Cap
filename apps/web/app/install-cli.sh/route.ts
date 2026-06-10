@@ -313,7 +313,7 @@ install_cap_desktop_linux_deb() {
 	trap cleanup_desktop_install EXIT HUP INT TERM
 
 	echo "Downloading Cap Desktop Debian package..."
-	curl -fL "https://cap.so/download/linux-deb" -o "$DEB_PATH"
+	curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 -fL "https://cap.so/download/linux-deb" -o "$DEB_PATH"
 
 	if command -v apt-get >/dev/null 2>&1; then
 		run_as_root apt-get install -y "$DEB_PATH"
@@ -341,7 +341,7 @@ install_cap_desktop_linux_rpm() {
 	trap cleanup_desktop_install EXIT HUP INT TERM
 
 	echo "Downloading Cap Desktop RPM package..."
-	curl -fL "https://cap.so/download/linux-rpm" -o "$RPM_PATH"
+	curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 -fL "https://cap.so/download/linux-rpm" -o "$RPM_PATH"
 
 	if command -v dnf >/dev/null 2>&1; then
 		run_as_root dnf install -y "$RPM_PATH"
