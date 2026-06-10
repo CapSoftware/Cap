@@ -50,10 +50,26 @@ function readNv12Metadata(buffer: ArrayBuffer): Nv12Metadata | null {
 
 	const metadataOffset = buffer.byteLength - NV12_METADATA_SIZE;
 	const meta = new DataView(buffer, metadataOffset, NV12_METADATA_SIZE);
+	const yStride = meta.getUint32(0, true);
+	const height = meta.getUint32(4, true);
+	const width = meta.getUint32(8, true);
+
+	const ySize = yStride * height;
+	const uvSize = yStride * Math.floor(height / 2);
+	const totalSize = ySize + uvSize;
+	if (
+		yStride === 0 ||
+		height === 0 ||
+		width === 0 ||
+		buffer.byteLength - NV12_METADATA_SIZE < totalSize
+	) {
+		return null;
+	}
+
 	return {
-		yStride: meta.getUint32(0, true),
-		height: meta.getUint32(4, true),
-		width: meta.getUint32(8, true),
+		yStride,
+		height,
+		width,
 		fullRange: magic === NV12_FULL_MAGIC,
 	};
 }

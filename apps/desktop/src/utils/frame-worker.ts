@@ -236,10 +236,10 @@ function parseFrameMetadata(bytes: Uint8Array): FrameMetadata | null {
 			const frameNumber = meta.getUint32(12, true);
 			const targetTimeNs = meta.getBigUint64(16, true);
 
-			if (!width || !height) return null;
+			if (!width || !height || !yStride) return null;
 
 			const ySize = yStride * height;
-			const uvSize = yStride * (height / 2);
+			const uvSize = yStride * Math.floor(height / 2);
 			const totalSize = ySize + uvSize;
 
 			if (bytes.byteLength - 28 < totalSize) {
