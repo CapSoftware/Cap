@@ -18,6 +18,8 @@ pub enum AsFFmpegError {
     },
     #[error("MJPEG decode error: {0}")]
     MjpegDecodeError(String),
+    #[error("Invalid camera frame stride for {format}: {stride}")]
+    InvalidFrameStride { format: String, stride: usize },
 }
 
 struct MjpegDecoder {
@@ -159,6 +161,12 @@ fn copy_yuv420(
     let y_stride = format.stride.max(width);
     let chroma_width = width / 2;
     let chroma_height = height / 2;
+    if y_stride % 2 != 0 {
+        return Err(AsFFmpegError::InvalidFrameStride {
+            format: fourcc_str(format.fourcc),
+            stride: y_stride,
+        });
+    }
     let chroma_stride = y_stride / 2;
     let y_size = y_stride * height;
     let chroma_size = chroma_stride * chroma_height;

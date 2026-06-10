@@ -152,6 +152,7 @@ prepare_appimage_cli() {
 	APP_TMP=""
 	rm -rf "$TMP_ROOT"
 	TMP_ROOT=""
+	trap - EXIT HUP INT TERM
 
 	find_cli_in_dir "$APPDIR_PATH"
 }
@@ -296,7 +297,7 @@ install_cap_desktop_linux_appimage() {
 	mkdir -p "$APP_DIR"
 
 	echo "Downloading Cap Desktop AppImage..."
-	curl -fL "https://cap.so/download/linux-appimage" -o "$APPIMAGE_PATH"
+	curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 -fL "https://cap.so/download/linux-appimage" -o "$APPIMAGE_PATH"
 	chmod +x "$APPIMAGE_PATH"
 
 	if ! prepare_appimage_cli; then

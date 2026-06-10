@@ -15,7 +15,11 @@ export async function GET(request: NextRequest) {
 	if (clientPlatform.includes("windows") || userAgent.includes("windows")) {
 		platform = "windows";
 	} else if (clientPlatform.includes("macos") || userAgent.includes("mac")) {
-		if (userAgent.includes("intel")) {
+		if (
+			userAgent.includes("intel") ||
+			userAgent.includes("x86_64") ||
+			userAgent.includes("amd64")
+		) {
 			platform = "apple-intel";
 		} else {
 			platform = "apple-silicon";

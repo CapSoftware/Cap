@@ -204,7 +204,7 @@ jobs:
         if: ${{ runner.os == 'macOS' }}
         run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
 
-      - uses: apple-actions/import-codesign-certs@v2
+      - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93 # v2
         if: ${{ runner.os == 'macOS' }}
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}

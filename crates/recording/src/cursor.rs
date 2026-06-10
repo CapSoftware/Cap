@@ -34,6 +34,7 @@ pub struct CursorActorResponse {
 
 pub struct CursorActor {
     stop: Option<DropGuard>,
+    stop_wakeup: Option<std::sync::mpsc::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
     pub rx: Shared<oneshot::Receiver<CursorActorResponse>>,
 }
@@ -46,6 +47,9 @@ pub struct IncrementalCaptureOutputs {
 impl CursorActor {
     pub fn stop(&mut self) {
         drop(self.stop.take());
+        if let Some(stop_wakeup) = self.stop_wakeup.take() {
+            let _ = stop_wakeup.send(());
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -235,6 +239,7 @@ pub fn spawn_cursor_recorder(
 
     let stop_token = CancellationToken::new();
     let (tx, rx) = oneshot::channel();
+    let (stop_wakeup_tx, stop_wakeup_rx) = std::sync::mpsc::channel();
 
     let stop_token_child = stop_token.child_token();
     let thread = std::thread::spawn(move || {
@@ -263,7 +268,12 @@ pub fn spawn_cursor_recorder(
                 break;
             }
 
-            std::thread::sleep(Duration::from_millis(16));
+            if stop_wakeup_rx
+                .recv_timeout(Duration::from_millis(16))
+                .is_ok()
+            {
+                break;
+            }
 
             let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
@@ -415,6 +425,7 @@ pub fn spawn_cursor_recorder(
 
     CursorActor {
         stop: Some(stop_token.drop_guard()),
+        stop_wakeup: Some(stop_wakeup_tx),
         thread: Some(thread),
         rx: rx.shared(),
     }

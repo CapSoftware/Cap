@@ -154,30 +154,34 @@ export const DownloadPage = () => {
 								Linux AppImage
 							</a>
 						)}
-						<a
-							href="/download/linux-deb"
-							onClick={() =>
-								trackDownloadClick(
-									"other_option_linux_deb",
-									"/download/linux-deb",
-								)
-							}
-							className="text-sm transition-all text-gray-10 hover:underline"
-						>
-							Debian/Ubuntu
-						</a>
-						<a
-							href="/download/linux-rpm"
-							onClick={() =>
-								trackDownloadClick(
-									"other_option_linux_rpm",
-									"/download/linux-rpm",
-								)
-							}
-							className="text-sm transition-all text-gray-10 hover:underline"
-						>
-							Fedora/RHEL
-						</a>
+						{platform === "linux" && (
+							<>
+								<a
+									href="/download/linux-deb"
+									onClick={() =>
+										trackDownloadClick(
+											"other_option_linux_deb",
+											"/download/linux-deb",
+										)
+									}
+									className="text-sm transition-all text-gray-10 hover:underline"
+								>
+									Debian/Ubuntu
+								</a>
+								<a
+									href="/download/linux-rpm"
+									onClick={() =>
+										trackDownloadClick(
+											"other_option_linux_rpm",
+											"/download/linux-rpm",
+										)
+									}
+									className="text-sm transition-all text-gray-10 hover:underline"
+								>
+									Fedora/RHEL
+								</a>
+							</>
+						)}
 						{platform === "macos" && isIntel && (
 							<a
 								href="/download/apple-silicon"

@@ -484,7 +484,7 @@ fn windows_capture_settings(target: &ScreenCaptureTarget) -> anyhow::Result<(Set
 
     let mut cropped = false;
 
-    if let ScreenCaptureTarget::Area { bounds, screen: _ } = target {
+    if let ScreenCaptureTarget::Area { bounds, screen } = target {
         let display =
             scap_targets::Display::from_id(screen).ok_or_else(|| anyhow!("Display not found"))?;
         let physical = display
