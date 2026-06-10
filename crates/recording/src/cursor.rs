@@ -34,6 +34,8 @@ pub struct CursorActorResponse {
 
 pub struct CursorActor {
     stop: Option<DropGuard>,
+    stop_wakeup: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
     pub rx: Shared<oneshot::Receiver<CursorActorResponse>>,
 }
 
@@ -45,10 +47,27 @@ pub struct IncrementalCaptureOutputs {
 impl CursorActor {
     pub fn stop(&mut self) {
         drop(self.stop.take());
+        if let Some(stop_wakeup) = self.stop_wakeup.take() {
+            let _ = stop_wakeup.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
 const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
+
+#[cfg(target_os = "linux")]
+fn prefers_wayland_portal_cursor() -> bool {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return false;
+    }
+
+    std::env::var_os("DISPLAY").is_none()
+        || std::env::var("XDG_SESSION_TYPE")
+            .is_ok_and(|session| session.eq_ignore_ascii_case("wayland"))
+}
 
 fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[CursorClickEvent]) {
     let events = CursorEvents {
@@ -196,18 +215,35 @@ pub fn spawn_cursor_recorder(
     start_time: Timestamps,
     incremental_outputs: IncrementalCaptureOutputs,
 ) -> CursorActor {
-    use cap_utils::spawn_actor;
+    #[cfg(target_os = "linux")]
+    if prefers_wayland_portal_cursor() {
+        let (tx, rx) = oneshot::channel();
+        let _ = tx.send(CursorActorResponse {
+            cursors: prev_cursors,
+            next_cursor_id,
+            moves: vec![],
+            clicks: vec![],
+            keyboard_presses: vec![],
+        });
+        return CursorActor {
+            stop: None,
+            stop_wakeup: None,
+            thread: None,
+            rx: rx.shared(),
+        };
+    }
+
     use device_query::{DeviceQuery, DeviceState};
-    use futures::future::Either;
     use sha2::{Digest, Sha256};
-    use std::{pin::pin, time::Duration};
+    use std::time::Duration;
     use tracing::{error, info};
 
     let stop_token = CancellationToken::new();
     let (tx, rx) = oneshot::channel();
+    let (stop_wakeup_tx, stop_wakeup_rx) = std::sync::mpsc::channel();
 
     let stop_token_child = stop_token.child_token();
-    spawn_actor(async move {
+    let thread = std::thread::spawn(move || {
         let device_state = DeviceState::new();
         let mut last_mouse_state = device_state.get_mouse();
         let mut last_keys: Vec<device_query::Keycode> = device_state.get_keys();
@@ -229,12 +265,16 @@ pub fn spawn_cursor_recorder(
         let mut last_cursor_id: Option<String> = None;
 
         loop {
-            let sleep = tokio::time::sleep(Duration::from_millis(16));
-            let Either::Right(_) =
-                futures::future::select(pin!(stop_token_child.cancelled()), pin!(sleep)).await
-            else {
+            if stop_token_child.is_cancelled() {
                 break;
-            };
+            }
+
+            if stop_wakeup_rx
+                .recv_timeout(Duration::from_millis(16))
+                .is_ok()
+            {
+                break;
+            }
 
             let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
@@ -386,6 +426,8 @@ pub fn spawn_cursor_recorder(
 
     CursorActor {
         stop: Some(stop_token.drop_guard()),
+        stop_wakeup: Some(stop_wakeup_tx),
+        thread: Some(thread),
         rx: rx.shared(),
     }
 }
@@ -423,6 +465,96 @@ fn get_cursor_data() -> Option<CursorData> {
             shape: shape.map(Into::into),
         })
     })
+}
+
+#[cfg(target_os = "linux")]
+fn get_cursor_data() -> Option<CursorData> {
+    get_x11_cursor_data().or_else(fallback_cursor_data)
+}
+
+#[cfg(target_os = "linux")]
+fn get_x11_cursor_data() -> Option<CursorData> {
+    use x11rb::protocol::xfixes::ConnectionExt as _;
+
+    let (conn, _) = x11rb::connect(None).ok()?;
+    conn.xfixes_query_version(5, 0).ok()?.reply().ok()?;
+    let cursor = conn.xfixes_get_cursor_image().ok()?.reply().ok()?;
+
+    let width = u32::from(cursor.width);
+    let height = u32::from(cursor.height);
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let pixel_count = usize::from(cursor.width).checked_mul(usize::from(cursor.height))?;
+    if cursor.cursor_image.len() != pixel_count {
+        return None;
+    }
+
+    let mut rgba = Vec::with_capacity(pixel_count.checked_mul(4)?);
+    for pixel in cursor.cursor_image {
+        rgba.push(((pixel >> 16) & 0xff) as u8);
+        rgba.push(((pixel >> 8) & 0xff) as u8);
+        rgba.push((pixel & 0xff) as u8);
+        rgba.push(((pixel >> 24) & 0xff) as u8);
+    }
+
+    let image = image::RgbaImage::from_raw(width, height, rgba)?;
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .ok()?;
+
+    Some(CursorData {
+        image: bytes.into_inner(),
+        hotspot: XY::new(
+            f64::from(cursor.xhot) / f64::from(width),
+            f64::from(cursor.yhot) / f64::from(height),
+        ),
+        shape: None,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn fallback_cursor_data() -> Option<CursorData> {
+    use std::sync::OnceLock;
+
+    static CURSOR_PNG: OnceLock<Vec<u8>> = OnceLock::new();
+
+    let image = CURSOR_PNG.get_or_init(linux_cursor_png).clone();
+    if image.is_empty() {
+        return None;
+    }
+
+    Some(CursorData {
+        image,
+        hotspot: XY::new(0.0, 0.0),
+        shape: None,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_cursor_png() -> Vec<u8> {
+    let mut image = image::RgbaImage::new(24, 24);
+    for y in 0..18 {
+        for x in 0..=y.min(10) {
+            image.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+        }
+    }
+    for y in 2..15 {
+        for x in 1..=y.min(8) {
+            image.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
+        }
+    }
+
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    if image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .is_err()
+    {
+        return Vec::new();
+    }
+    bytes.into_inner()
 }
 
 #[cfg(windows)]
