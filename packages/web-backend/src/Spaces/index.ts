@@ -28,6 +28,7 @@ export class Spaces extends Effect.Service<Spaces>()("Spaces", {
 							createdById: Db.spaces.createdById,
 							iconUrl: Db.spaces.iconUrl,
 							settings: Db.spaces.settings,
+							public: Db.spaces.public,
 							hasPassword: Dz.sql`${Db.spaces.password} IS NOT NULL`.mapWith(
 								Boolean,
 							),

@@ -5,6 +5,7 @@ import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { OrganisationId } from "./Organisation.ts";
 import { PolicyDeniedError } from "./Policy.ts";
+import { PublicPageSettingsUpdate } from "./PublicCollection.ts";
 import { SpaceIdOrOrganisationId } from "./Space.ts";
 import { UserId } from "./User.ts";
 
@@ -38,6 +39,7 @@ export class Folder extends Schema.Class<Folder>("Folder")({
 	id: FolderId,
 	name: Schema.String,
 	color: FolderColor,
+	public: Schema.Boolean,
 	organizationId: OrganisationId,
 	createdById: UserId,
 	spaceId: Schema.OptionFromNullOr(SpaceIdOrOrganisationId),
@@ -48,6 +50,9 @@ export const FolderUpdate = Schema.Struct({
 	id: FolderId,
 	name: Schema.optional(Schema.String),
 	color: Schema.optional(FolderColor),
+	public: Schema.optional(Schema.Boolean),
+	/** Partial patch merged into the stored `settings.publicPage`. */
+	publicPage: Schema.optional(PublicPageSettingsUpdate),
 	parentId: Schema.optional(Schema.Option(FolderId)),
 });
 export type FolderUpdate = Schema.Schema.Type<typeof FolderUpdate>;
@@ -61,6 +66,7 @@ export class FolderRpcs extends RpcGroup.make(
 		payload: Schema.Struct({
 			name: Schema.String,
 			color: FolderColor,
+			public: Schema.optional(Schema.Boolean),
 			spaceId: Schema.OptionFromUndefinedOr(SpaceIdOrOrganisationId),
 			parentId: Schema.OptionFromUndefinedOr(FolderId),
 		}),

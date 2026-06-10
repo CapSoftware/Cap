@@ -98,6 +98,16 @@ const nextConfig = {
 					},
 				],
 			},
+			{
+				source: "/c/:collectionId",
+				destination: "/c/:collectionId",
+				has: [
+					{
+						type: "host",
+						value: "(?!cap.so|cap.link).*",
+					},
+				],
+			},
 		];
 	},
 	async redirects() {

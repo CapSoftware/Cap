@@ -58,6 +58,7 @@ async function fetchFolders(
 			id: folders.id,
 			name: folders.name,
 			color: folders.color,
+			public: folders.public,
 			parentId: folders.parentId,
 			spaceId: folders.spaceId,
 			videoCount: sql<number>`(
