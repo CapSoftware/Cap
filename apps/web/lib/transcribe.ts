@@ -115,6 +115,11 @@ export async function transcribeVideo(
 			`[transcribeVideo] Triggering transcription workflow for video ${videoId}`,
 		);
 
+		await db()
+			.update(videos)
+			.set({ transcriptionStatus: "PROCESSING" })
+			.where(eq(videos.id, videoId));
+
 		await start(transcribeVideoWorkflow, [
 			{
 				videoId,
