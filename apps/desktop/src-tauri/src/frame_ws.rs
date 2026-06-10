@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, watch};
@@ -104,8 +105,17 @@ fn record_ws_frame_stats(
     MAX_CREATED_TO_SENT_NS.fetch_max(created_to_sent_ns, Ordering::Relaxed);
 }
 
+struct SubscriberCountGuard(Arc<AtomicUsize>);
+
+impl Drop for SubscriberCountGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 pub async fn create_watch_frame_ws(
     frame_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
+    subscribers: Arc<AtomicUsize>,
 ) -> (u16, CancellationToken) {
     use axum::{
         extract::{
@@ -116,22 +126,29 @@ pub async fn create_watch_frame_ws(
         routing::get,
     };
 
-    type RouterState = watch::Receiver<Option<std::sync::Arc<WSFrame>>>;
+    type RouterState = (
+        watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
+        Arc<AtomicUsize>,
+    );
 
     #[axum::debug_handler]
     async fn ws_handler(
         ws: WebSocketUpgrade,
-        State(state): State<RouterState>,
+        State((state, subscribers)): State<RouterState>,
     ) -> impl IntoResponse {
-        ws.on_upgrade(move |socket| handle_socket(socket, state))
+        ws.on_upgrade(move |socket| handle_socket(socket, state, subscribers))
     }
 
     async fn handle_socket(
         mut socket: WebSocket,
         mut camera_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
+        subscribers: Arc<AtomicUsize>,
     ) {
         tracing::info!("Socket connection established");
         let now = std::time::Instant::now();
+
+        subscribers.fetch_add(1, Ordering::AcqRel);
+        let _subscriber_guard = SubscriberCountGuard(subscribers);
 
         {
             let packed = {
@@ -237,7 +254,7 @@ pub async fn create_watch_frame_ws(
 
     let router = axum::Router::new()
         .route("/", get(ws_handler))
-        .with_state(frame_rx);
+        .with_state((frame_rx, subscribers));
 
     let cancel_token = CancellationToken::new();
     let cancel_token_child = cancel_token.child_token();
