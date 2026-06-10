@@ -469,6 +469,23 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
     });
 }
 
+pub fn cancel_fake_window_listener(app: &AppHandle, label: &str) {
+    if let Some(listeners) = app.try_state::<FakeWindowListeners>() {
+        listeners.cancel(label);
+    }
+}
+
+pub fn cancel_all_fake_window_listeners(app: &AppHandle) {
+    if let Some(listeners) = app.try_state::<FakeWindowListeners>() {
+        listeners.cancel_all();
+    }
+}
+
+pub fn init(app: &AppHandle) {
+    app.manage(FakeWindowBounds(Default::default()));
+    app.manage(FakeWindowListeners::default());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,21 +602,4 @@ mod tests {
             2.0,
         ));
     }
-}
-
-pub fn cancel_fake_window_listener(app: &AppHandle, label: &str) {
-    if let Some(listeners) = app.try_state::<FakeWindowListeners>() {
-        listeners.cancel(label);
-    }
-}
-
-pub fn cancel_all_fake_window_listeners(app: &AppHandle) {
-    if let Some(listeners) = app.try_state::<FakeWindowListeners>() {
-        listeners.cancel_all();
-    }
-}
-
-pub fn init(app: &AppHandle) {
-    app.manage(FakeWindowBounds(Default::default()));
-    app.manage(FakeWindowListeners::default());
 }

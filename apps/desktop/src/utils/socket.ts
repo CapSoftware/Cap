@@ -30,6 +30,34 @@ const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
 let mainThreadNv12Buffer: Uint8ClampedArray | null = null;
 let mainThreadNv12BufferSize = 0;
 
+const NV12_VIDEO_MAGIC = 0x4e563132;
+const NV12_FULL_MAGIC = 0x4e563146;
+const NV12_METADATA_SIZE = 28;
+
+type Nv12Metadata = {
+	yStride: number;
+	height: number;
+	width: number;
+	fullRange: boolean;
+};
+
+function readNv12Metadata(buffer: ArrayBuffer): Nv12Metadata | null {
+	if (buffer.byteLength < NV12_METADATA_SIZE) return null;
+
+	const formatCheck = new DataView(buffer, buffer.byteLength - 4, 4);
+	const magic = formatCheck.getUint32(0, true);
+	if (magic !== NV12_VIDEO_MAGIC && magic !== NV12_FULL_MAGIC) return null;
+
+	const metadataOffset = buffer.byteLength - NV12_METADATA_SIZE;
+	const meta = new DataView(buffer, metadataOffset, NV12_METADATA_SIZE);
+	return {
+		yStride: meta.getUint32(0, true),
+		height: meta.getUint32(4, true),
+		width: meta.getUint32(8, true),
+		fullRange: magic === NV12_FULL_MAGIC,
+	};
+}
+
 export type FpsStats = {
 	fps: number;
 	renderFps: number;
@@ -67,6 +95,7 @@ function convertNv12ToRgbaMainThread(
 	width: number,
 	height: number,
 	yStride: number,
+	fullRange = false,
 ): Uint8ClampedArray {
 	const rgbaSize = width * height * 4;
 	if (!mainThreadNv12Buffer || mainThreadNv12BufferSize < rgbaSize) {
@@ -92,11 +121,20 @@ function convertNv12ToRgbaMainThread(
 			const d = u;
 			const e = v;
 
-			const y0 = yPlane[yRowOffset + col] - 16;
-			const c0 = 298 * y0;
-			let r = (c0 + 409 * e + 128) >> 8;
-			let g = (c0 - 100 * d - 208 * e + 128) >> 8;
-			let b = (c0 + 516 * d + 128) >> 8;
+			const y0 = yPlane[yRowOffset + col];
+			let r: number;
+			let g: number;
+			let b: number;
+			if (fullRange) {
+				r = y0 + ((359 * e + 128) >> 8);
+				g = y0 - ((88 * d + 183 * e + 128) >> 8);
+				b = y0 + ((454 * d + 128) >> 8);
+			} else {
+				const c0 = 298 * (y0 - 16);
+				r = (c0 + 409 * e + 128) >> 8;
+				g = (c0 - 100 * d - 208 * e + 128) >> 8;
+				b = (c0 + 516 * d + 128) >> 8;
+			}
 
 			r = r < 0 ? 0 : r > 255 ? 255 : r;
 			g = g < 0 ? 0 : g > 255 ? 255 : g;
@@ -110,11 +148,20 @@ function convertNv12ToRgbaMainThread(
 
 			const nextCol = col + 1;
 			if (nextCol < width) {
-				const y1 = yPlane[yRowOffset + nextCol] - 16;
-				const c1 = 298 * y1;
-				let nextR = (c1 + 409 * e + 128) >> 8;
-				let nextG = (c1 - 100 * d - 208 * e + 128) >> 8;
-				let nextB = (c1 + 516 * d + 128) >> 8;
+				const y1 = yPlane[yRowOffset + nextCol];
+				let nextR: number;
+				let nextG: number;
+				let nextB: number;
+				if (fullRange) {
+					nextR = y1 + ((359 * e + 128) >> 8);
+					nextG = y1 - ((88 * d + 183 * e + 128) >> 8);
+					nextB = y1 + ((454 * d + 128) >> 8);
+				} else {
+					const c1 = 298 * (y1 - 16);
+					nextR = (c1 + 409 * e + 128) >> 8;
+					nextG = (c1 - 100 * d - 208 * e + 128) >> 8;
+					nextB = (c1 + 516 * d + 128) >> 8;
+				}
 
 				nextR = nextR < 0 ? 0 : nextR > 255 ? 255 : nextR;
 				nextG = nextG < 0 ? 0 : nextG > 255 ? 255 : nextG;
@@ -278,6 +325,7 @@ export function createImageDataWS(
 		height: number;
 		yStride: number;
 		isNv12: boolean;
+		nv12FullRange: boolean;
 	} | null = null;
 
 	function storeRenderedFrame(
@@ -286,6 +334,7 @@ export function createImageDataWS(
 		height: number,
 		yStride: number,
 		isNv12: boolean,
+		nv12FullRange = false,
 	) {
 		lastRenderedFrameData = {
 			data: frameData,
@@ -293,6 +342,7 @@ export function createImageDataWS(
 			height,
 			yStride,
 			isNv12,
+			nv12FullRange,
 		};
 		if (!hasRenderedFrame()) {
 			setHasRenderedFrame(true);
@@ -381,17 +431,10 @@ export function createImageDataWS(
 		const { buffer, receivedAt } = pendingNv12Frame;
 		pendingNv12Frame = null;
 
-		const NV12_MAGIC = 0x4e563132;
-		if (buffer.byteLength < 28) return;
+		const metadata = readNv12Metadata(buffer);
+		if (!metadata) return;
 
-		const formatCheck = new DataView(buffer, buffer.byteLength - 4, 4);
-		if (formatCheck.getUint32(0, true) !== NV12_MAGIC) return;
-
-		const metadataOffset = buffer.byteLength - 28;
-		const meta = new DataView(buffer, metadataOffset, 28);
-		const yStride = meta.getUint32(0, true);
-		const height = meta.getUint32(4, true);
-		const width = meta.getUint32(8, true);
+		const { yStride, height, width, fullRange } = metadata;
 
 		if (width > 0 && height > 0) {
 			const ySize = yStride * height;
@@ -412,9 +455,10 @@ export function createImageDataWS(
 				width,
 				height,
 				yStride,
+				fullRange,
 			);
 
-			storeRenderedFrame(frameData, width, height, yStride, true);
+			storeRenderedFrame(frameData, width, height, yStride, true, fullRange);
 			recordRender(
 				performance.now() - renderStart,
 				"webgpu",
@@ -495,6 +539,7 @@ export function createImageDataWS(
 		width: number,
 		height: number,
 		yStride: number,
+		fullRange: boolean,
 		receivedAt?: number,
 	) {
 		if (!directCanvas || !directCtx) return;
@@ -506,7 +551,13 @@ export function createImageDataWS(
 			directCanvas.height = height;
 		}
 
-		const rgba = convertNv12ToRgbaMainThread(frameData, width, height, yStride);
+		const rgba = convertNv12ToRgbaMainThread(
+			frameData,
+			width,
+			height,
+			yStride,
+			fullRange,
+		);
 
 		if (
 			!cachedDirectImageData ||
@@ -520,7 +571,7 @@ export function createImageDataWS(
 		cachedDirectImageData.data.set(rgba);
 		directCtx.putImageData(cachedDirectImageData, 0, 0);
 
-		storeRenderedFrame(frameData, width, height, yStride, true);
+		storeRenderedFrame(frameData, width, height, yStride, true, fullRange);
 		recordRender(
 			performance.now() - renderStart,
 			"canvas2d",
@@ -536,17 +587,10 @@ export function createImageDataWS(
 		const { buffer, receivedAt } = pendingNv12Frame;
 		pendingNv12Frame = null;
 
-		const NV12_MAGIC = 0x4e563132;
-		if (buffer.byteLength < 28) return;
+		const metadata = readNv12Metadata(buffer);
+		if (!metadata) return;
 
-		const formatCheck = new DataView(buffer, buffer.byteLength - 4, 4);
-		if (formatCheck.getUint32(0, true) !== NV12_MAGIC) return;
-
-		const metadataOffset = buffer.byteLength - 28;
-		const meta = new DataView(buffer, metadataOffset, 28);
-		const yStride = meta.getUint32(0, true);
-		const height = meta.getUint32(4, true);
-		const width = meta.getUint32(8, true);
+		const { yStride, height, width, fullRange } = metadata;
 
 		if (width > 0 && height > 0) {
 			const ySize = yStride * height;
@@ -554,7 +598,14 @@ export function createImageDataWS(
 			const totalSize = ySize + uvSize;
 
 			const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
-			renderNv12FrameCanvas2D(frameData, width, height, yStride, receivedAt);
+			renderNv12FrameCanvas2D(
+				frameData,
+				width,
+				height,
+				yStride,
+				fullRange,
+				receivedAt,
+			);
 		}
 	}
 
@@ -814,10 +865,17 @@ export function createImageDataWS(
 			if (!lastRenderedFrameData) {
 				return null;
 			}
-			const { data, width, height, yStride, isNv12 } = lastRenderedFrameData;
+			const { data, width, height, yStride, isNv12, nv12FullRange } =
+				lastRenderedFrameData;
 			let imageData: ImageData;
 			if (isNv12) {
-				const rgba = convertNv12ToRgbaMainThread(data, width, height, yStride);
+				const rgba = convertNv12ToRgbaMainThread(
+					data,
+					width,
+					height,
+					yStride,
+					nv12FullRange,
+				);
 				imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
 			} else {
 				const expectedRowBytes = width * 4;
@@ -1060,8 +1118,6 @@ export function createImageDataWS(
 	globalFpsStatsGetter = getLocalFpsStats;
 	(globalThis as Record<string, unknown>).__capFpsStats = getLocalFpsStats;
 
-	const NV12_MAGIC = 0x4e563132;
-
 	ws.binaryType = "arraybuffer";
 	ws.onmessage = (event) => {
 		const buffer = event.data as ArrayBuffer;
@@ -1071,11 +1127,7 @@ export function createImageDataWS(
 		}
 		totalBytesReceived += buffer.byteLength;
 
-		let isNv12Format = false;
-		if (buffer.byteLength >= 28) {
-			const formatCheck = new DataView(buffer, buffer.byteLength - 4, 4);
-			isNv12Format = formatCheck.getUint32(0, true) === NV12_MAGIC;
-		}
+		const nv12Metadata = readNv12Metadata(buffer);
 
 		if (lastFrameTime > 0) {
 			const delta = now - lastFrameTime;
@@ -1086,12 +1138,9 @@ export function createImageDataWS(
 		}
 		lastFrameTime = now;
 
-		if (isNv12Format) {
+		if (nv12Metadata) {
 			if (mainThreadWebGPU && directCanvas) {
-				const metadataOffset = buffer.byteLength - 28;
-				const meta = new DataView(buffer, metadataOffset, 28);
-				const height = meta.getUint32(4, true);
-				const width = meta.getUint32(8, true);
+				const { height, width } = nv12Metadata;
 
 				if (width > 0 && height > 0) {
 					if (directCanvas.width !== width || directCanvas.height !== height) {
@@ -1106,10 +1155,7 @@ export function createImageDataWS(
 
 			if (mainThreadWebGPUInitializing || !directCanvas) {
 				pendingNv12Frame = { buffer, receivedAt: now };
-				const metadataOffset = buffer.byteLength - 28;
-				const meta = new DataView(buffer, metadataOffset, 28);
-				const height = meta.getUint32(4, true);
-				const width = meta.getUint32(8, true);
+				const { height, width } = nv12Metadata;
 				if (width > 0 && height > 0) {
 					onmessage({ width, height });
 				}
@@ -1135,11 +1181,7 @@ export function createImageDataWS(
 					}
 				}
 
-				const metadataOffset = buffer.byteLength - 28;
-				const meta = new DataView(buffer, metadataOffset, 28);
-				const yStride = meta.getUint32(0, true);
-				const height = meta.getUint32(4, true);
-				const width = meta.getUint32(8, true);
+				const { yStride, height, width } = nv12Metadata;
 
 				if (width > 0 && height > 0) {
 					const ySize = yStride * height;
@@ -1164,10 +1206,7 @@ export function createImageDataWS(
 			}
 
 			pendingNv12Frame = { buffer, receivedAt: now };
-			const metadataOffset = buffer.byteLength - 28;
-			const meta = new DataView(buffer, metadataOffset, 28);
-			const height = meta.getUint32(4, true);
-			const width = meta.getUint32(8, true);
+			const { height, width } = nv12Metadata;
 			if (width > 0 && height > 0) {
 				onmessage({ width, height });
 			}

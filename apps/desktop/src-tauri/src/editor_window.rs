@@ -35,7 +35,7 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
             let ws_frame = match output {
                 cap_editor::EditorFrameOutput::Nv12(frame) => {
                     let ws_format = match frame.format {
-                        GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                        GpuOutputFormat::Nv12 => WSFrameFormat::Nv12 { full_range: false },
                         GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
                     };
                     WSFrame {
@@ -353,7 +353,9 @@ impl EditorInstances {
                         let ws_frame = match output {
                             cap_editor::EditorFrameOutput::Nv12(frame) => {
                                 let ws_format = match frame.format {
-                                    GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                                    GpuOutputFormat::Nv12 => {
+                                        WSFrameFormat::Nv12 { full_range: false }
+                                    }
                                     GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
                                 };
                                 WSFrame {

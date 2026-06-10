@@ -975,6 +975,7 @@ async fn setup_camera(
     settings: Option<CameraDeviceSettings>,
     recipient: Recipient<NewFrame>,
     _native_recipient: Recipient<NewNativeFrame>,
+    _ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     _native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;

@@ -56,11 +56,33 @@ fn fs(@location(0) texCoord: vec2f) -> @location(0) vec4f {
 }
 `;
 
+const NV12_FULL_FRAGMENT_SHADER = `
+@group(0) @binding(0) var frameSampler: sampler;
+@group(0) @binding(1) var yTexture: texture_2d<f32>;
+@group(0) @binding(2) var uvTexture: texture_2d<f32>;
+
+@fragment
+fn fs(@location(0) texCoord: vec2f) -> @location(0) vec4f {
+	let y = textureSample(yTexture, frameSampler, texCoord).r;
+	let uv = textureSample(uvTexture, frameSampler, texCoord).rg;
+
+	let u = uv.r - 0.5;
+	let v = uv.g - 0.5;
+
+	let r = clamp(y + 1.402 * v, 0.0, 1.0);
+	let g = clamp(y - 0.344136 * u - 0.714136 * v, 0.0, 1.0);
+	let b = clamp(y + 1.772 * u, 0.0, 1.0);
+
+	return vec4f(r, g, b, 1.0);
+}
+`;
+
 export interface WebGPURenderer {
 	device: GPUDevice;
 	context: GPUCanvasContext;
 	pipeline: GPURenderPipeline;
 	nv12Pipeline: GPURenderPipeline;
+	nv12FullPipeline: GPURenderPipeline;
 	sampler: GPUSampler;
 	frameTexture: GPUTexture | null;
 	bindGroup: GPUBindGroup | null;
@@ -200,6 +222,9 @@ export async function initWebGPU(
 	const nv12FragmentModule = device.createShaderModule({
 		code: NV12_FRAGMENT_SHADER,
 	});
+	const nv12FullFragmentModule = device.createShaderModule({
+		code: NV12_FULL_FRAGMENT_SHADER,
+	});
 
 	const pipeline = device.createRenderPipeline({
 		layout: pipelineLayout,
@@ -233,6 +258,22 @@ export async function initWebGPU(
 		},
 	});
 
+	const nv12FullPipeline = device.createRenderPipeline({
+		layout: nv12PipelineLayout,
+		vertex: {
+			module: vertexModule,
+			entryPoint: "vs",
+		},
+		fragment: {
+			module: nv12FullFragmentModule,
+			entryPoint: "fs",
+			targets: [{ format }],
+		},
+		primitive: {
+			topology: "triangle-list",
+		},
+	});
+
 	const sampler = device.createSampler({
 		magFilter: "linear",
 		minFilter: "linear",
@@ -245,6 +286,7 @@ export async function initWebGPU(
 		context,
 		pipeline,
 		nv12Pipeline,
+		nv12FullPipeline,
 		sampler,
 		frameTexture: null,
 		bindGroup: null,
@@ -370,6 +412,7 @@ export function renderNv12FrameWebGPU(
 	width: number,
 	height: number,
 	yStride: number,
+	fullRange = false,
 ): WebGPURenderTiming {
 	const totalStart = performance.now();
 	let resizeMs = 0;
@@ -380,6 +423,7 @@ export function renderNv12FrameWebGPU(
 		device,
 		context,
 		nv12Pipeline,
+		nv12FullPipeline,
 		sampler,
 		nv12BindGroupLayout,
 		canvas,
@@ -482,7 +526,7 @@ export function renderNv12FrameWebGPU(
 		],
 	});
 
-	pass.setPipeline(nv12Pipeline);
+	pass.setPipeline(fullRange ? nv12FullPipeline : nv12Pipeline);
 	pass.setBindGroup(0, renderer.nv12BindGroup);
 	pass.draw(3);
 	pass.end();
