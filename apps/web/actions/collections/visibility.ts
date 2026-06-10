@@ -8,7 +8,7 @@ import { eq, type SQL, sql } from "drizzle-orm";
 import { Either, Schema } from "effect";
 import { revalidatePath } from "next/cache";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
-import { requireSpaceManager } from "../organization/space-authorization";
+import { getSpaceAccess } from "../organization/space-authorization";
 
 const decodeSettingsPatch = Schema.decodeUnknownEither(
 	PublicCollection.PublicPageSettingsUpdate,
@@ -50,6 +50,9 @@ export async function setSpaceCollectionVisibility(input: {
 
 	const id = Space.SpaceId.make(input.spaceId);
 
+	// getSpaceAccess returns null for the expected denials (missing space, no
+	// membership) and only throws on genuine failures, which must propagate
+	// instead of being misreported as "Unauthorized".
 	const [[space], access] = await Promise.all([
 		db()
 			.select({
@@ -59,11 +62,11 @@ export async function setSpaceCollectionVisibility(input: {
 			.from(spaces)
 			.where(eq(spaces.id, id))
 			.limit(1),
-		requireSpaceManager(user.id, id).catch(() => null),
+		getSpaceAccess(user.id, id),
 	]);
 
 	if (!space) return { success: false, error: "Space not found" };
-	if (!access) return { success: false, error: "Unauthorized" };
+	if (!access?.canManage) return { success: false, error: "Unauthorized" };
 
 	const enablingPublic = input.public === true && !space.public;
 	const changingSettings = settingsPatch !== undefined;

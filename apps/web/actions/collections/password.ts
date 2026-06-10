@@ -41,7 +41,7 @@ export async function verifyCollectionPassword(
 ) {
 	try {
 		if (!collectionId || typeof password !== "string") {
-			throw new Error("Missing data");
+			return { success: false, error: "Failed to verify password" };
 		}
 
 		if (await isRateLimited()) {
@@ -51,11 +51,16 @@ export async function verifyCollectionPassword(
 			};
 		}
 
+		// Missing hash and wrong password are expected outcomes (typos, links to
+		// collections whose password was since removed) — return without logging
+		// so console.error stays reserved for genuine failures.
 		const passwordHash = await getPublicCollectionPasswordHash(collectionId);
-		if (!passwordHash) throw new Error("No password set");
-
-		const valid = await verifyPlainPassword(passwordHash, password);
-		if (!valid) throw new Error("Invalid password");
+		const valid = passwordHash
+			? await verifyPlainPassword(passwordHash, password)
+			: false;
+		if (!passwordHash || !valid) {
+			return { success: false, error: "Failed to verify password" };
+		}
 
 		await setVerifiedPasswordCookie(passwordHash);
 		revalidatePath(`/c/${encodeURIComponent(collectionId)}`);

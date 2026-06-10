@@ -85,7 +85,7 @@ function makeDeps(config: {
 function runCanView(
 	deps: VideosPolicyDeps,
 	user: Option.Option<CurrentUser["Type"]>,
-	attachedPassword: Option.Option<string> = Option.none(),
+	attachedPasswords: ReadonlyArray<string> = [],
 ): Promise<"allowed" | "denied" | "password"> {
 	const policy = buildCanView(deps, TEST_VIDEO_ID);
 
@@ -99,13 +99,12 @@ function runCanView(
 		),
 	);
 
-	const withPassword = Option.match(attachedPassword, {
-		onNone: () => program,
-		onSome: (password) =>
-			Effect.provideService(program, Video.VideoPasswordAttachment, {
-				password: Option.some(password),
-			}),
-	});
+	const withPassword =
+		attachedPasswords.length === 0
+			? program
+			: Effect.provideService(program, Video.VideoPasswordAttachment, {
+					passwords: attachedPasswords,
+				});
 
 	const withUser = user.pipe(
 		Option.match({
@@ -272,9 +271,9 @@ describe("VideosPolicy.canView", () => {
 				spacePasswords: ["space-one-hash", "space-two-hash"],
 			});
 
-			expect(
-				await runCanView(deps, noUser, Option.some("space-two-hash")),
-			).toBe("allowed");
+			expect(await runCanView(deps, noUser, ["space-two-hash"])).toBe(
+				"allowed",
+			);
 		});
 
 		it("allows access with either video or space password hash", async () => {
@@ -284,11 +283,29 @@ describe("VideosPolicy.canView", () => {
 				spacePasswords: ["space-hash"],
 			});
 
-			expect(await runCanView(deps, noUser, Option.some("video-hash"))).toBe(
-				"allowed",
-			);
-			expect(await runCanView(deps, noUser, Option.some("space-hash"))).toBe(
-				"allowed",
+			expect(await runCanView(deps, noUser, ["video-hash"])).toBe("allowed");
+			expect(await runCanView(deps, noUser, ["space-hash"])).toBe("allowed");
+		});
+
+		it("allows access when the matching hash sits alongside other verified hashes", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				password: Option.some("video-hash"),
+			});
+
+			expect(
+				await runCanView(deps, noUser, ["collection-hash", "video-hash"]),
+			).toBe("allowed");
+		});
+
+		it("requires a password when no verified hash matches", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				password: Option.some("video-hash"),
+			});
+
+			expect(await runCanView(deps, noUser, ["collection-hash"])).toBe(
+				"password",
 			);
 		});
 	});

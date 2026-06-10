@@ -55,12 +55,12 @@ export function resolvePublicCollectionAccess({
 	allowedEmailDomain,
 	viewerEmail,
 	passwordHash,
-	verifiedPasswordHash,
+	verifiedPasswordHashes,
 }: {
 	allowedEmailDomain?: string | null;
 	viewerEmail?: string | null;
 	passwordHash?: string | null;
-	verifiedPasswordHash?: string | null;
+	verifiedPasswordHashes?: readonly string[];
 }): PublicCollectionAccess {
 	const restriction = allowedEmailDomain?.trim() ?? "";
 
@@ -72,7 +72,7 @@ export function resolvePublicCollectionAccess({
 		}
 	}
 
-	if (passwordHash && passwordHash !== verifiedPasswordHash) {
+	if (passwordHash && !verifiedPasswordHashes?.includes(passwordHash)) {
 		return { state: "password_required" };
 	}
 

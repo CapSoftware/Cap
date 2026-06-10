@@ -102,7 +102,9 @@ async function setSpaceLogo(
 
 	if (!space) return { success: false, error: "Space not found" };
 
-	const access = await getSpaceAccess(userId, id).catch(() => null);
+	// getSpaceAccess returns null for expected denials; genuine failures must
+	// propagate instead of being misreported as "Unauthorized".
+	const access = await getSpaceAccess(userId, id);
 	if (!access?.canManage) return { success: false, error: "Unauthorized" };
 
 	if (!(await isOrganizationOwnerPro(space.organizationId))) {
@@ -170,14 +172,11 @@ async function setFolderLogo(
 		: folder.spaceId === folder.organizationId
 			? canManageSpace({
 					organizationRole: (
-						await getOrganizationAccess(userId, folder.organizationId).catch(
-							() => null,
-						)
+						await getOrganizationAccess(userId, folder.organizationId)
 					)?.role,
 					spaceRole: null,
 				})
-			: ((await getSpaceAccess(userId, folder.spaceId).catch(() => null))
-					?.canManage ?? false);
+			: ((await getSpaceAccess(userId, folder.spaceId))?.canManage ?? false);
 	if (!canManage) return { success: false, error: "Unauthorized" };
 
 	if (!(await isOrganizationOwnerPro(folder.organizationId))) {

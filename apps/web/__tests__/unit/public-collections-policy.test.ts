@@ -76,7 +76,7 @@ describe("public collections policy", () => {
 				allowedEmailDomain: "company.com",
 				viewerEmail: null,
 				passwordHash: "hash",
-				verifiedPasswordHash: null,
+				verifiedPasswordHashes: [],
 			}),
 		).toEqual({ state: "email_restriction_login_required" });
 
@@ -85,7 +85,7 @@ describe("public collections policy", () => {
 				allowedEmailDomain: "company.com",
 				viewerEmail: "person@example.com",
 				passwordHash: "hash",
-				verifiedPasswordHash: null,
+				verifiedPasswordHashes: [],
 			}),
 		).toEqual({ state: "email_restriction_denied" });
 	});
@@ -95,7 +95,7 @@ describe("public collections policy", () => {
 			resolvePublicCollectionAccess({
 				viewerEmail: "person@company.com",
 				passwordHash: "space-hash",
-				verifiedPasswordHash: null,
+				verifiedPasswordHashes: [],
 			}),
 		).toEqual({ state: "password_required" });
 
@@ -103,8 +103,26 @@ describe("public collections policy", () => {
 			resolvePublicCollectionAccess({
 				viewerEmail: "person@company.com",
 				passwordHash: "space-hash",
-				verifiedPasswordHash: "space-hash",
+				verifiedPasswordHashes: ["space-hash"],
 			}),
 		).toEqual({ state: "allowed" });
+	});
+
+	it("matches the collection password against any verified hash", () => {
+		expect(
+			resolvePublicCollectionAccess({
+				viewerEmail: "person@company.com",
+				passwordHash: "space-hash",
+				verifiedPasswordHashes: ["video-hash", "space-hash"],
+			}),
+		).toEqual({ state: "allowed" });
+
+		expect(
+			resolvePublicCollectionAccess({
+				viewerEmail: "person@company.com",
+				passwordHash: "space-hash",
+				verifiedPasswordHashes: ["video-hash"],
+			}),
+		).toEqual({ state: "password_required" });
 	});
 });

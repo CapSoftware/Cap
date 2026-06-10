@@ -89,14 +89,14 @@ export async function verifyVideoPassword(
 ) {
 	try {
 		if (!videoId || typeof password !== "string")
-			throw new Error("Missing data");
+			return { success: false, error: "Failed to verify password" };
 
 		const [video] = await db()
 			.select()
 			.from(videos)
 			.where(eq(videos.id, videoId));
 
-		if (!video) throw new Error("No password set");
+		if (!video) return { success: false, error: "Failed to verify password" };
 
 		const spacePasswords = await db()
 			.select({ password: spaces.password })
@@ -109,8 +109,6 @@ export async function verifyVideoPassword(
 			spacePasswords,
 		});
 
-		if (passwordHashes.length === 0) throw new Error("No password set");
-
 		for (const passwordHash of passwordHashes) {
 			const valid = await verifyPlainPassword(passwordHash, password);
 			if (valid) {
@@ -119,7 +117,9 @@ export async function verifyVideoPassword(
 			}
 		}
 
-		throw new Error("Invalid password");
+		// Wrong passwords and links whose password was since removed are expected
+		// outcomes — return without logging so console.error stays signal.
+		return { success: false, error: "Failed to verify password" };
 	} catch (error) {
 		console.error("Error verifying video password:", error);
 		return { success: false, error: "Failed to verify password" };

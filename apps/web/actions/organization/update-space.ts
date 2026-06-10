@@ -19,7 +19,7 @@ import { revalidatePath } from "next/cache";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
 import { normalizeSpaceRole } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
-import { requireSpaceManager } from "./space-authorization";
+import { getSpaceAccess } from "./space-authorization";
 import {
 	getSpaceSettingsFromFormData,
 	preserveProSpaceSettings,
@@ -60,8 +60,10 @@ export async function updateSpace(formData: FormData) {
 		return { success: false, error: "Space not found" };
 	}
 
-	const access = await requireSpaceManager(user.id, id).catch(() => null);
-	if (!access) {
+	// getSpaceAccess returns null for expected denials; genuine failures must
+	// propagate instead of being misreported as "Unauthorized".
+	const access = await getSpaceAccess(user.id, id);
+	if (!access?.canManage) {
 		return { success: false, error: "Unauthorized" };
 	}
 

@@ -2,7 +2,6 @@ import "server-only";
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { decrypt } from "@cap/database/crypto";
 import {
 	comments,
 	folders,
@@ -27,8 +26,8 @@ import {
 } from "@cap/web-domain";
 import { and, desc, eq, inArray, isNull, type SQL, sql } from "drizzle-orm";
 import { Effect } from "effect";
-import { cookies } from "next/headers";
 import { cache } from "react";
+import { getVerifiedPasswordHashes } from "@/lib/password-cookie";
 import {
 	PUBLIC_COLLECTION_PAGE_SIZE,
 	type PublicCollectionAccess,
@@ -109,7 +108,7 @@ export type PublicCollectionPageData = {
 function videoPasswordPredicate(
 	videoId: SQL,
 	videoPassword: SQL,
-	verifiedPasswordHash: string | null,
+	verifiedPasswordHashes: readonly string[],
 ) {
 	const noPassword = sql`(${videoPassword} IS NULL AND NOT EXISTS (
 		SELECT 1 FROM space_videos sv_password
@@ -118,15 +117,20 @@ function videoPasswordPredicate(
 			AND s_password.password IS NOT NULL
 	))`;
 
-	if (!verifiedPasswordHash) return noPassword;
+	if (verifiedPasswordHashes.length === 0) return noPassword;
+
+	const verifiedHashes = sql.join(
+		verifiedPasswordHashes.map((hash) => sql`${hash}`),
+		sql`, `,
+	);
 
 	return sql`(${noPassword}
-		OR ${videoPassword} = ${verifiedPasswordHash}
+		OR ${videoPassword} IN (${verifiedHashes})
 		OR EXISTS (
 			SELECT 1 FROM space_videos sv_password
 			INNER JOIN spaces s_password ON sv_password.spaceId = s_password.id
 			WHERE sv_password.videoId = ${videoId}
-				AND s_password.password = ${verifiedPasswordHash}
+				AND s_password.password IN (${verifiedHashes})
 		)
 	)`;
 }
@@ -140,20 +144,6 @@ function hasPasswordExpression(videoId: SQL, videoPassword: SQL) {
 	)`;
 }
 
-async function getVerifiedPasswordHash() {
-	const cookieValue = (await cookies()).get("x-cap-password")?.value;
-	if (!cookieValue) return null;
-
-	try {
-		// decrypt is async — without the await its rejection (corrupt or stale
-		// cookie, rotated encryption key) would escape this catch and crash the
-		// page instead of falling back to the password prompt.
-		return await decrypt(cookieValue);
-	} catch {
-		return null;
-	}
-}
-
 export async function getPublicCollectionMetadata(collectionId: string) {
 	return resolvePublicCollection(collectionId);
 }
@@ -162,10 +152,10 @@ export async function getPublicCollectionPageData(
 	collectionId: string,
 	page: number,
 ): Promise<PublicCollectionPageData | null> {
-	const [collection, user, verifiedPasswordHash] = await Promise.all([
+	const [collection, user, verifiedPasswordHashes] = await Promise.all([
 		resolvePublicCollection(collectionId),
 		getCurrentUser(),
-		getVerifiedPasswordHash(),
+		getVerifiedPasswordHashes(),
 	]);
 
 	if (!collection) return null;
@@ -174,7 +164,7 @@ export async function getPublicCollectionPageData(
 		allowedEmailDomain: collection.allowedEmailDomain,
 		viewerEmail: user?.email,
 		passwordHash: collection.passwordHash,
-		verifiedPasswordHash,
+		verifiedPasswordHashes,
 	});
 
 	if (access.state !== "allowed") {
@@ -191,8 +181,8 @@ export async function getPublicCollectionPageData(
 	}
 
 	const [childFolders, videoPage] = await Promise.all([
-		getPublicChildFolders(collection, verifiedPasswordHash),
-		getPublicCollectionVideos(collection, page, verifiedPasswordHash),
+		getPublicChildFolders(collection, verifiedPasswordHashes),
+		getPublicCollectionVideos(collection, page, verifiedPasswordHashes),
 	]);
 
 	return {
@@ -274,126 +264,107 @@ function resolveEffectivePublicPage(
 
 const resolvePublicCollection = cache(
 	async (collectionId: string): Promise<PublicCollection | null> => {
-		// Fetched by primary key, then gated in `resolvePublicCollectionCandidate`
+		// Fetched by primary key — both lookups in parallel since the id's kind
+		// isn't known up front — then gated in `resolvePublicCollectionCandidate`
 		// so the public/tombstone policy lives in one tested place.
-		const [folderRow] = await db()
-			.select({
-				id: folders.id,
-				name: folders.name,
-				color: folders.color,
-				public: folders.public,
-				settings: folders.settings,
-				spaceId: folders.spaceId,
-				organizationId: folders.organizationId,
-				organizationName: organizations.name,
-				organizationTombstoneAt: organizations.tombstoneAt,
-				allowedEmailDomain: organizations.allowedEmailDomain,
-				organizationIconUrl: organizations.iconUrl,
-				ownerStripeSubscriptionStatus: users.stripeSubscriptionStatus,
-				ownerThirdPartyStripeSubscriptionId:
-					users.thirdPartyStripeSubscriptionId,
-				passwordHash: spaces.password,
-			})
-			.from(folders)
-			.innerJoin(organizations, eq(folders.organizationId, organizations.id))
-			.innerJoin(users, eq(organizations.ownerId, users.id))
-			.leftJoin(spaces, eq(folders.spaceId, spaces.id))
-			.where(eq(folders.id, collectionId as Folder.FolderId))
-			.limit(1);
+		const [[folderRow], [spaceRow]] = await Promise.all([
+			db()
+				.select({
+					id: folders.id,
+					name: folders.name,
+					color: folders.color,
+					public: folders.public,
+					settings: folders.settings,
+					spaceId: folders.spaceId,
+					organizationId: folders.organizationId,
+					organizationName: organizations.name,
+					organizationTombstoneAt: organizations.tombstoneAt,
+					allowedEmailDomain: organizations.allowedEmailDomain,
+					organizationIconUrl: organizations.iconUrl,
+					ownerStripeSubscriptionStatus: users.stripeSubscriptionStatus,
+					ownerThirdPartyStripeSubscriptionId:
+						users.thirdPartyStripeSubscriptionId,
+					passwordHash: spaces.password,
+				})
+				.from(folders)
+				.innerJoin(organizations, eq(folders.organizationId, organizations.id))
+				.innerJoin(users, eq(organizations.ownerId, users.id))
+				.leftJoin(spaces, eq(folders.spaceId, spaces.id))
+				.where(eq(folders.id, collectionId as Folder.FolderId))
+				.limit(1),
+			db()
+				.select({
+					id: spaces.id,
+					name: spaces.name,
+					description: spaces.description,
+					public: spaces.public,
+					settings: spaces.settings,
+					organizationId: spaces.organizationId,
+					organizationName: organizations.name,
+					organizationTombstoneAt: organizations.tombstoneAt,
+					allowedEmailDomain: organizations.allowedEmailDomain,
+					organizationIconUrl: organizations.iconUrl,
+					ownerStripeSubscriptionStatus: users.stripeSubscriptionStatus,
+					ownerThirdPartyStripeSubscriptionId:
+						users.thirdPartyStripeSubscriptionId,
+					passwordHash: spaces.password,
+				})
+				.from(spaces)
+				.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+				.innerJoin(users, eq(organizations.ownerId, users.id))
+				.where(eq(spaces.id, collectionId as Space.SpaceIdOrOrganisationId))
+				.limit(1),
+		]);
 
-		const folder = resolvePublicCollectionCandidate(
+		const candidate = resolvePublicCollectionCandidate(
 			folderRow ? { kind: "folder" as const, ...folderRow } : null,
-			null,
-		);
-
-		if (folder) {
-			const publicPage = resolveEffectivePublicPage(
-				userIsPro({
-					stripeSubscriptionStatus: folder.ownerStripeSubscriptionStatus,
-					thirdPartyStripeSubscriptionId:
-						folder.ownerThirdPartyStripeSubscriptionId,
-				}),
-				folder.settings?.publicPage,
-			);
-			const icons = await resolveIconUrls({
-				...publicPageIconKeys(publicPage, {
-					organizationIconUrl: folder.organizationIconUrl,
-				}),
-			});
-
-			return {
-				id: folder.id,
-				kind: "folder",
-				name: folder.name,
-				color: folder.color,
-				description: null,
-				spaceId: folder.spaceId,
-				organizationId: folder.organizationId,
-				organizationName: folder.organizationName,
-				allowedEmailDomain: folder.allowedEmailDomain,
-				passwordHash: folder.passwordHash,
-				publicPage,
-				...icons,
-			};
-		}
-
-		const [spaceRow] = await db()
-			.select({
-				id: spaces.id,
-				name: spaces.name,
-				description: spaces.description,
-				public: spaces.public,
-				settings: spaces.settings,
-				organizationId: spaces.organizationId,
-				organizationName: organizations.name,
-				organizationTombstoneAt: organizations.tombstoneAt,
-				allowedEmailDomain: organizations.allowedEmailDomain,
-				organizationIconUrl: organizations.iconUrl,
-				ownerStripeSubscriptionStatus: users.stripeSubscriptionStatus,
-				ownerThirdPartyStripeSubscriptionId:
-					users.thirdPartyStripeSubscriptionId,
-				passwordHash: spaces.password,
-			})
-			.from(spaces)
-			.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-			.innerJoin(users, eq(organizations.ownerId, users.id))
-			.where(eq(spaces.id, collectionId as Space.SpaceIdOrOrganisationId))
-			.limit(1);
-
-		const space = resolvePublicCollectionCandidate(
-			null,
 			spaceRow ? { kind: "space" as const, ...spaceRow } : null,
 		);
 
-		if (!space) return null;
+		if (!candidate) return null;
 
 		const publicPage = resolveEffectivePublicPage(
 			userIsPro({
-				stripeSubscriptionStatus: space.ownerStripeSubscriptionStatus,
+				stripeSubscriptionStatus: candidate.ownerStripeSubscriptionStatus,
 				thirdPartyStripeSubscriptionId:
-					space.ownerThirdPartyStripeSubscriptionId,
+					candidate.ownerThirdPartyStripeSubscriptionId,
 			}),
-			space.settings?.publicPage,
+			candidate.settings?.publicPage,
 		);
-		const icons = await resolveIconUrls({
-			...publicPageIconKeys(publicPage, {
-				organizationIconUrl: space.organizationIconUrl,
+		const icons = await resolveIconUrls(
+			publicPageIconKeys(publicPage, {
+				organizationIconUrl: candidate.organizationIconUrl,
 			}),
-		});
+		);
 
-		return {
-			id: space.id,
-			kind: "space",
-			name: space.name,
-			color: null,
-			description: space.description,
-			spaceId: space.id,
-			organizationId: space.organizationId,
-			organizationName: space.organizationName,
-			allowedEmailDomain: space.allowedEmailDomain,
-			passwordHash: space.passwordHash,
+		const shared = {
+			name: candidate.name,
+			organizationId: candidate.organizationId,
+			organizationName: candidate.organizationName,
+			allowedEmailDomain: candidate.allowedEmailDomain,
+			passwordHash: candidate.passwordHash,
 			publicPage,
 			...icons,
+		};
+
+		if (candidate.kind === "folder") {
+			return {
+				...shared,
+				id: candidate.id,
+				kind: "folder",
+				color: candidate.color,
+				description: null,
+				spaceId: candidate.spaceId,
+			};
+		}
+
+		return {
+			...shared,
+			id: candidate.id,
+			kind: "space",
+			color: null,
+			description: candidate.description,
+			spaceId: candidate.id,
 		};
 	},
 );
@@ -425,21 +396,21 @@ function isOrgLevelFolder(collection: PublicCollection) {
 async function getPublicCollectionVideos(
 	collection: PublicCollection,
 	page: number,
-	verifiedPasswordHash: string | null,
+	verifiedPasswordHashes: readonly string[],
 ) {
 	if (collection.kind === "space") {
-		return getPublicSpaceVideos(collection, page, verifiedPasswordHash);
+		return getPublicSpaceVideos(collection, page, verifiedPasswordHashes);
 	}
 
 	if (isOrgLevelFolder(collection)) {
-		return getPublicOrgFolderVideos(collection, page, verifiedPasswordHash);
+		return getPublicOrgFolderVideos(collection, page, verifiedPasswordHashes);
 	}
 
 	if (collection.spaceId) {
-		return getPublicSpaceFolderVideos(collection, page, verifiedPasswordHash);
+		return getPublicSpaceFolderVideos(collection, page, verifiedPasswordHashes);
 	}
 
-	return getPublicUserFolderVideos(collection, page, verifiedPasswordHash);
+	return getPublicUserFolderVideos(collection, page, verifiedPasswordHashes);
 }
 
 const videoSelect = {
@@ -498,7 +469,7 @@ function toPublicCollectionVideos(
 async function getPublicSpaceVideos(
 	collection: PublicCollection,
 	page: number,
-	verifiedPasswordHash: string | null,
+	verifiedPasswordHashes: readonly string[],
 ) {
 	const offset = (page - 1) * PUBLIC_COLLECTION_PAGE_SIZE;
 	const where = and(
@@ -508,7 +479,7 @@ async function getPublicSpaceVideos(
 		videoPasswordPredicate(
 			sql`${videos.id}`,
 			sql`${videos.password}`,
-			verifiedPasswordHash,
+			verifiedPasswordHashes,
 		),
 	);
 
@@ -543,7 +514,7 @@ async function getPublicSpaceVideos(
 async function getPublicSpaceFolderVideos(
 	collection: PublicCollection,
 	page: number,
-	verifiedPasswordHash: string | null,
+	verifiedPasswordHashes: readonly string[],
 ) {
 	const offset = (page - 1) * PUBLIC_COLLECTION_PAGE_SIZE;
 	const where = and(
@@ -553,7 +524,7 @@ async function getPublicSpaceFolderVideos(
 		videoPasswordPredicate(
 			sql`${videos.id}`,
 			sql`${videos.password}`,
-			verifiedPasswordHash,
+			verifiedPasswordHashes,
 		),
 	);
 
@@ -588,7 +559,7 @@ async function getPublicSpaceFolderVideos(
 async function getPublicOrgFolderVideos(
 	collection: PublicCollection,
 	page: number,
-	verifiedPasswordHash: string | null,
+	verifiedPasswordHashes: readonly string[],
 ) {
 	const offset = (page - 1) * PUBLIC_COLLECTION_PAGE_SIZE;
 	const where = and(
@@ -598,7 +569,7 @@ async function getPublicOrgFolderVideos(
 		videoPasswordPredicate(
 			sql`${videos.id}`,
 			sql`${videos.password}`,
-			verifiedPasswordHash,
+			verifiedPasswordHashes,
 		),
 	);
 
@@ -633,7 +604,7 @@ async function getPublicOrgFolderVideos(
 async function getPublicUserFolderVideos(
 	collection: PublicCollection,
 	page: number,
-	verifiedPasswordHash: string | null,
+	verifiedPasswordHashes: readonly string[],
 ) {
 	const offset = (page - 1) * PUBLIC_COLLECTION_PAGE_SIZE;
 	const where = and(
@@ -643,7 +614,7 @@ async function getPublicUserFolderVideos(
 		videoPasswordPredicate(
 			sql`${videos.id}`,
 			sql`${videos.password}`,
-			verifiedPasswordHash,
+			verifiedPasswordHashes,
 		),
 	);
 
@@ -675,7 +646,7 @@ async function getPublicUserFolderVideos(
 
 async function getPublicChildFolders(
 	collection: PublicCollection,
-	verifiedPasswordHash: string | null,
+	verifiedPasswordHashes: readonly string[],
 ): Promise<PublicCollectionFolder[]> {
 	const where =
 		collection.kind === "space"
@@ -707,10 +678,10 @@ async function getPublicChildFolders(
 
 	const folderIds = childFolders.map((folder) => folder.id);
 	const counts = isOrgLevelFolder(collection)
-		? await getPublicOrgFolderVideoCounts(folderIds, verifiedPasswordHash)
+		? await getPublicOrgFolderVideoCounts(folderIds, verifiedPasswordHashes)
 		: collection.kind === "space" || Boolean(collection.spaceId)
-			? await getPublicSpaceFolderVideoCounts(folderIds, verifiedPasswordHash)
-			: await getPublicUserFolderVideoCounts(folderIds, verifiedPasswordHash);
+			? await getPublicSpaceFolderVideoCounts(folderIds, verifiedPasswordHashes)
+			: await getPublicUserFolderVideoCounts(folderIds, verifiedPasswordHashes);
 	const countByFolderId = new Map(
 		counts.map((row) => [row.folderId, row.videoCount]),
 	);
@@ -723,7 +694,7 @@ async function getPublicChildFolders(
 
 async function getPublicSpaceFolderVideoCounts(
 	folderIds: Folder.FolderId[],
-	verifiedPasswordHash: string | null,
+	verifiedPasswordHashes: readonly string[],
 ) {
 	return db()
 		.select({
@@ -741,7 +712,7 @@ async function getPublicSpaceFolderVideoCounts(
 				videoPasswordPredicate(
 					sql`${videos.id}`,
 					sql`${videos.password}`,
-					verifiedPasswordHash,
+					verifiedPasswordHashes,
 				),
 			),
 		)
@@ -750,7 +721,7 @@ async function getPublicSpaceFolderVideoCounts(
 
 async function getPublicOrgFolderVideoCounts(
 	folderIds: Folder.FolderId[],
-	verifiedPasswordHash: string | null,
+	verifiedPasswordHashes: readonly string[],
 ) {
 	return db()
 		.select({
@@ -768,7 +739,7 @@ async function getPublicOrgFolderVideoCounts(
 				videoPasswordPredicate(
 					sql`${videos.id}`,
 					sql`${videos.password}`,
-					verifiedPasswordHash,
+					verifiedPasswordHashes,
 				),
 			),
 		)
@@ -777,7 +748,7 @@ async function getPublicOrgFolderVideoCounts(
 
 async function getPublicUserFolderVideoCounts(
 	folderIds: Folder.FolderId[],
-	verifiedPasswordHash: string | null,
+	verifiedPasswordHashes: readonly string[],
 ) {
 	return db()
 		.select({
@@ -794,7 +765,7 @@ async function getPublicUserFolderVideoCounts(
 				videoPasswordPredicate(
 					sql`${videos.id}`,
 					sql`${videos.password}`,
-					verifiedPasswordHash,
+					verifiedPasswordHashes,
 				),
 			),
 		)
