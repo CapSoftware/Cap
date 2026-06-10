@@ -1,10 +1,14 @@
 use anyhow::{Context, anyhow};
-use cap_recording::{
-    FFmpegVideoFrame,
-    feeds::{self, camera::CameraFeed},
-};
+#[cfg(not(target_os = "macos"))]
+use cap_recording::FFmpegVideoFrame;
+#[cfg(target_os = "macos")]
+use cap_recording::NativeCameraFrame;
+use cap_recording::feeds::{self, camera::CameraFeed};
 #[cfg(target_os = "macos")]
 use cap_utils::macos_qos::{MacOsQosClass, set_current_thread_qos};
+
+#[cfg(target_os = "macos")]
+use crate::camera_native::{NativeFrameConverter, classify_frame};
 use ffmpeg::{
     format::{self, Pixel},
     frame,
@@ -14,6 +18,7 @@ use kameo::actor::ActorRef;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
+    mem::ManuallyDrop,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -32,15 +37,82 @@ use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
 static TOOLBAR_HEIGHT: f32 = 56.0;
 
-static GPU_SURFACE_SCALE: u32 = 2;
-const CAMERA_PREVIEW_TARGET_FRAME_INTERVAL: Duration = Duration::from_micros(33_333);
-const CAMERA_PREVIEW_FRAME_INTERVAL_SLACK: Duration = Duration::from_millis(3);
+const DEFAULT_SURFACE_SCALE: f64 = 2.0;
+// Quantizing the target texture width stops drag-resizing from rebuilding the
+// scaler, preview texture, and bind group on every 1px size change.
+const CAMERA_PREVIEW_TEXTURE_WIDTH_BUCKET: u32 = 64;
+const CAMERA_PREVIEW_MIN_TEXTURE_WIDTH: u32 = 320;
+const CAMERA_PREVIEW_MAX_TEXTURE_WIDTH: u32 = 960;
+const CAMERA_PREVIEW_MAX_TEXTURE_HEIGHT: u32 = 540;
+const CAMERA_PREVIEW_BLUR_MAX_TEXTURE_WIDTH: u32 = 640;
+const CAMERA_PREVIEW_BLUR_MAX_TEXTURE_HEIGHT: u32 = 360;
+const CAMERA_PREVIEW_TARGET_FRAME_INTERVAL: Duration = Duration::from_micros(16_666);
+const CAMERA_PREVIEW_FRAME_INTERVAL_SLACK: Duration = Duration::from_millis(1);
 const CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(150);
 
 pub const MIN_CAMERA_SIZE: f32 = 150.0;
 pub const MAX_CAMERA_SIZE: f32 = 600.0;
 pub const DEFAULT_CAMERA_SIZE: f32 = 230.0;
 pub const WIDE_CAMERA_ASPECT_RATIO: f32 = 16.0 / 9.0;
+
+// On macOS the preview consumes retained CMSampleBuffers and renders them via
+// a zero-copy IOSurface->Metal->wgpu import; everywhere else it consumes the
+// CPU-converted ffmpeg frames.
+#[cfg(target_os = "macos")]
+type PreviewCameraFrame = NativeCameraFrame;
+#[cfg(not(target_os = "macos"))]
+type PreviewCameraFrame = FFmpegVideoFrame;
+
+#[derive(Clone)]
+pub enum CameraPreviewSender {
+    #[cfg(not(target_os = "macos"))]
+    Ffmpeg(flume::Sender<FFmpegVideoFrame>),
+    #[cfg(target_os = "macos")]
+    Native(flume::Sender<NativeCameraFrame>),
+}
+
+impl CameraPreviewSender {
+    fn from_tx(tx: flume::Sender<PreviewCameraFrame>) -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self::Native(tx)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self::Ffmpeg(tx)
+        }
+    }
+
+    pub async fn attach(&self, feed: &ActorRef<CameraFeed>) -> Result<(), String> {
+        match self {
+            #[cfg(not(target_os = "macos"))]
+            Self::Ffmpeg(tx) => feed
+                .ask(feeds::camera::AddSender(tx.clone()))
+                .await
+                .map_err(|err| err.to_string()),
+            #[cfg(target_os = "macos")]
+            Self::Native(tx) => feed
+                .ask(feeds::camera::AddNativeSender(tx.clone()))
+                .await
+                .map_err(|err| err.to_string()),
+        }
+    }
+
+    pub async fn detach(&self, feed: &ActorRef<CameraFeed>) -> Result<(), String> {
+        match self {
+            #[cfg(not(target_os = "macos"))]
+            Self::Ffmpeg(tx) => feed
+                .ask(feeds::camera::RemoveSender(tx.clone()))
+                .await
+                .map_err(|err| err.to_string()),
+            #[cfg(target_os = "macos")]
+            Self::Native(tx) => feed
+                .ask(feeds::camera::RemoveNativeSender(tx.clone()))
+                .await
+                .map_err(|err| err.to_string()),
+        }
+    }
+}
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -96,8 +168,41 @@ fn camera_preview_frame_due(last_render_at: Option<Instant>, now: Instant) -> bo
     })
 }
 
+fn camera_preview_texture_dimensions(
+    source_width: u32,
+    source_height: u32,
+    window_px: u32,
+    blur_enabled: bool,
+) -> (u32, u32) {
+    let source_width = source_width.max(1);
+    let source_height = source_height.max(1);
+    let (max_width, max_height) = if blur_enabled {
+        (
+            CAMERA_PREVIEW_BLUR_MAX_TEXTURE_WIDTH,
+            CAMERA_PREVIEW_BLUR_MAX_TEXTURE_HEIGHT,
+        )
+    } else {
+        (
+            CAMERA_PREVIEW_MAX_TEXTURE_WIDTH,
+            CAMERA_PREVIEW_MAX_TEXTURE_HEIGHT,
+        )
+    };
+    let requested_width = window_px
+        .max(CAMERA_PREVIEW_MIN_TEXTURE_WIDTH)
+        .div_ceil(CAMERA_PREVIEW_TEXTURE_WIDTH_BUCKET)
+        .saturating_mul(CAMERA_PREVIEW_TEXTURE_WIDTH_BUCKET)
+        .min(max_width);
+    let scale = (requested_width as f64 / source_width as f64)
+        .min(max_height as f64 / source_height as f64)
+        .min(1.0);
+    let target_width = ((source_width as f64 * scale).round() as u32).max(1);
+    let target_height = ((source_height as f64 * scale).round() as u32).max(1);
+    (target_width, target_height)
+}
+
 pub struct CameraPreviewManager {
     store: Result<Arc<tauri_plugin_store::Store<tauri::Wry>>, String>,
+    store_save_generation: Arc<AtomicU64>,
     preview: Option<InitializedCameraPreview>,
     preview_session_id: Arc<AtomicU64>,
     wgpu_instance: wgpu::Instance,
@@ -109,6 +214,7 @@ impl CameraPreviewManager {
             store: tauri_plugin_store::StoreBuilder::new(app, "cameraPreview")
                 .build()
                 .map_err(|err| format!("Error initializing camera preview store: {err}")),
+            store_save_generation: Arc::new(AtomicU64::new(0)),
             preview: None,
             preview_session_id: Arc::new(AtomicU64::new(0)),
             wgpu_instance: wgpu::Instance::default(),
@@ -137,7 +243,20 @@ impl CameraPreviewManager {
 
         let store = self.store.as_ref().map_err(|err| anyhow!("{err}"))?;
         store.set("state", serde_json::to_value(&state)?);
-        store.save()?;
+
+        // set_state fires per mousemove during a size drag; debounce the disk
+        // write so only the post-drag state is persisted.
+        let generation = self.store_save_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let save_generation = self.store_save_generation.clone();
+        let store = store.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            if save_generation.load(Ordering::Acquire) == generation
+                && let Err(err) = store.save()
+            {
+                error!("Error saving camera preview store: {err}");
+            }
+        });
 
         if let Some(preview) = &self.preview {
             preview
@@ -160,8 +279,10 @@ impl CameraPreviewManager {
             .is_some_and(|preview| preview.is_paused)
     }
 
-    pub fn sender(&self) -> Option<flume::Sender<FFmpegVideoFrame>> {
-        self.preview.as_ref().map(|p| p.camera_tx.clone())
+    pub fn sender(&self) -> Option<CameraPreviewSender> {
+        self.preview
+            .as_ref()
+            .map(|p| CameraPreviewSender::from_tx(p.camera_tx.clone()))
     }
 
     pub fn notify_window_resized(&self, width: u32, height: u32) {
@@ -210,10 +331,10 @@ impl CameraPreviewManager {
         actor: ActorRef<CameraFeed>,
     ) -> anyhow::Result<()> {
         if let Some(preview) = &mut self.preview {
-            actor
-                .ask(feeds::camera::AddSender(preview.camera_tx.clone()))
+            CameraPreviewSender::from_tx(preview.camera_tx.clone())
+                .attach(&actor)
                 .await
-                .context("Error re-attaching camera feed consumer")?;
+                .map_err(|err| anyhow!("Error re-attaching camera feed consumer: {err}"))?;
 
             if preview.is_paused {
                 preview.is_paused = false;
@@ -238,19 +359,22 @@ impl CameraPreviewManager {
 
         let session_id = self.preview_session_id.fetch_add(1, Ordering::AcqRel) + 1;
 
-        let (camera_tx, camera_rx) = flume::bounded(4);
+        let (camera_tx, camera_rx) = flume::bounded::<PreviewCameraFrame>(1);
 
-        actor
-            .ask(feeds::camera::AddSender(camera_tx.clone()))
+        CameraPreviewSender::from_tx(camera_tx.clone())
+            .attach(&actor)
             .await
-            .context("Error attaching camera feed consumer")?;
+            .map_err(|err| anyhow!("Error attaching camera feed consumer: {err}"))?;
 
         let default_state = self
             .get_state()
             .map_err(|err| error!("Error getting camera preview state: {err}"))
             .unwrap_or_default();
 
-        let (reconfigure, reconfigure_rx) = broadcast::channel(1);
+        // Capacity must absorb bursts of control events (State spam during a
+        // size drag interleaved with Pause/Resume); a lagged capacity-1 channel
+        // could drop a Resume and leave the preview stuck hidden.
+        let (reconfigure, reconfigure_rx) = broadcast::channel(8);
         let mut renderer = InitializedCameraPreview::init_wgpu(
             window.clone(),
             &default_state,
@@ -291,9 +415,10 @@ impl CameraPreviewManager {
             );
 
             let (drop_tx, drop_rx) = oneshot::channel();
+            let renderer = ManuallyDrop::new(renderer);
             window
                 .run_on_main_thread(move || {
-                    drop(renderer);
+                    drop(ManuallyDrop::into_inner(renderer));
                     let _ = drop_tx.send(());
                 })
                 .ok();
@@ -337,7 +462,7 @@ struct InitializedCameraPreview {
     reconfigure: broadcast::Sender<ReconfigureEvent>,
     session_id: u64,
     shutdown_complete: oneshot::Receiver<()>,
-    camera_tx: flume::Sender<FFmpegVideoFrame>,
+    camera_tx: flume::Sender<PreviewCameraFrame>,
     is_paused: bool,
 }
 
@@ -353,9 +478,10 @@ impl InitializedCameraPreview {
             1.0
         };
 
-        let size = resize_window(&window, default_state, aspect, false)
-            .await
-            .context("Error resizing Tauri window")?;
+        let (window_width, window_height, surface_scale) =
+            resize_window(&window, default_state, aspect, false)
+                .await
+                .context("Error resizing Tauri window")?;
 
         let (tx, rx) = oneshot::channel();
         window
@@ -376,7 +502,7 @@ impl InitializedCameraPreview {
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
+                power_preference: wgpu::PowerPreference::LowPower,
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
             })
@@ -549,12 +675,12 @@ impl InitializedCameraPreview {
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: swapchain_format,
-            width: size.0,
-            height: size.1,
+            width: window_width,
+            height: window_height,
             present_mode,
             alpha_mode,
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 1,
         };
 
         surface.configure(&device, &surface_config);
@@ -572,6 +698,7 @@ impl InitializedCameraPreview {
         let mut renderer = Renderer {
             surface: Some(surface),
             surface_config,
+            surface_scale,
             render_pipeline,
             device,
             queue,
@@ -586,13 +713,17 @@ impl InitializedCameraPreview {
             blur_processor: None,
             blur_processor_init_attempted: false,
             blur_source_texture: None,
+            #[cfg(target_os = "macos")]
+            native_converter: None,
+            #[cfg(target_os = "macos")]
+            native_converter_init_attempted: false,
         };
 
         renderer.update_state_uniforms(default_state);
         renderer
             .sync_ratio_uniform_and_resize_window_to_it(&window, default_state, aspect)
             .await;
-        renderer.reconfigure_gpu_surface(size.0, size.1);
+        renderer.reconfigure_gpu_surface(window_width, window_height);
 
         let initial_surface = renderer.acquire_surface_texture();
         if let Some(surface) = initial_surface {
@@ -623,6 +754,7 @@ impl InitializedCameraPreview {
 struct Renderer {
     surface: Option<wgpu::Surface<'static>>,
     surface_config: wgpu::SurfaceConfiguration,
+    surface_scale: f64,
     render_pipeline: wgpu::RenderPipeline,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -637,6 +769,10 @@ struct Renderer {
     blur_processor: Option<cap_camera_effects::BlurProcessor>,
     blur_processor_init_attempted: bool,
     blur_source_texture: Option<wgpu::Texture>,
+    #[cfg(target_os = "macos")]
+    native_converter: Option<NativeFrameConverter>,
+    #[cfg(target_os = "macos")]
+    native_converter_init_attempted: bool,
 }
 
 impl Renderer {
@@ -645,7 +781,7 @@ impl Renderer {
         window: WebviewWindow,
         default_state: CameraPreviewState,
         mut reconfigure: broadcast::Receiver<ReconfigureEvent>,
-        camera_rx: flume::Receiver<FFmpegVideoFrame>,
+        camera_rx: flume::Receiver<PreviewCameraFrame>,
     ) {
         let mut resampler_frame = Cached::default();
         let Ok(mut scaler) = scaling::Context::get(
@@ -662,6 +798,16 @@ impl Renderer {
         };
         let mut source_dimensions = Cached::default();
         let mut last_render_at = None;
+
+        // The camera's pixel buffer pool only recycles an IOSurface once its
+        // CVPixelBuffer is released; holding the last couple of sample buffers
+        // keeps the camera from writing into a surface the GPU is still
+        // sampling.
+        #[cfg(target_os = "macos")]
+        let mut inflight_frames: std::collections::VecDeque<NativeCameraFrame> =
+            std::collections::VecDeque::new();
+        #[cfg(target_os = "macos")]
+        let mut native_fallback_logged = false;
 
         let start_time = Instant::now();
         let startup_timeout = Duration::from_secs(5);
@@ -689,6 +835,8 @@ impl Renderer {
                         Ok(ReconfigureEvent::Resume) => {
                             is_paused = false;
                             while camera_rx.try_recv().is_ok() {}
+                            #[cfg(target_os = "macos")]
+                            inflight_frames.clear();
                             if let Some(texture) = self.acquire_surface_texture() {
                                 let (buffer, stride) =
                                     render_solid_frame([0x11, 0x11, 0x11, 0xFF], 5, 5);
@@ -719,8 +867,12 @@ impl Renderer {
                             self.reconfigure_gpu_surface(width, height);
                         }
                         Ok(ReconfigureEvent::Pause) => {}
-                        Err(_) => {
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
                             continue;
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            self.cleanup_for_shutdown(&window).await;
+                            return;
                         }
                     }
                 }
@@ -729,6 +881,9 @@ impl Renderer {
             if needs_full_reconfigure {
                 needs_full_reconfigure = false;
                 self.update_state_uniforms(&state);
+                if state.background_blur == cap_project::BackgroundBlurMode::Off {
+                    self.release_blur_resources();
+                }
                 source_dimensions = Cached::default();
                 last_render_at = None;
                 let aspect_ratio = self.aspect_ratio.get_latest_key().copied().unwrap_or(
@@ -739,12 +894,14 @@ impl Renderer {
                     },
                 );
                 self.aspect_ratio = Cached::default();
-                if let Ok((width, height)) = resize_window(&window, &state, aspect_ratio, false)
-                    .await
-                    .map_err(|err| {
-                        error!("Error resizing camera preview window after resume: {err}")
-                    })
+                if let Ok((width, height, scale)) =
+                    resize_window(&window, &state, aspect_ratio, false)
+                        .await
+                        .map_err(|err| {
+                            error!("Error resizing camera preview window after resume: {err}")
+                        })
                 {
+                    self.surface_scale = scale;
                     self.reconfigure_gpu_surface(width, height);
                 }
             }
@@ -776,10 +933,12 @@ impl Renderer {
                         }
                     },
                     result = reconfigure.recv() => {
-                        if let Ok(result) = result {
-                            break Err(result)
-                        } else {
-                            continue;
+                        match result {
+                            Ok(result) => break Err(result),
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => {
+                                break Err(ReconfigureEvent::Shutdown);
+                            }
                         }
                     },
                     _ = tokio::time::sleep(frame_timeout) => {
@@ -806,8 +965,16 @@ impl Renderer {
                     }
                     last_render_at = Some(now);
 
-                    let source_width = frame.inner.width();
-                    let source_height = frame.inner.height();
+                    #[cfg(target_os = "macos")]
+                    let (source_width, source_height) = {
+                        let Some(image_buf) = frame.sample_buf.image_buf() else {
+                            continue 'main_loop;
+                        };
+                        (image_buf.width() as u32, image_buf.height() as u32)
+                    };
+                    #[cfg(not(target_os = "macos"))]
+                    let (source_width, source_height) = (frame.inner.width(), frame.inner.height());
+
                     let aspect_ratio = source_width as f32 / source_height as f32;
                     if source_dimensions.update_key_and_should_init((source_width, source_height)) {
                         self.sync_ratio_uniform_and_resize_window_to_it(
@@ -820,100 +987,78 @@ impl Renderer {
 
                     let surface_result = self.acquire_surface_texture();
                     if let Some(surface) = surface_result {
-                        let window_px = (clamp_size(state.size) as u32) * GPU_SURFACE_SCALE;
-                        let output_width = window_px.max(320).min(source_width);
-                        let output_height = (output_width as f32 / aspect_ratio) as u32;
-
-                        let already_preview_rgba = frame.inner.format() == Pixel::RGBA
-                            && output_width == source_width
-                            && output_height == source_height;
-                        let (frame_data, frame_stride) = if already_preview_rgba {
-                            (frame.inner.data(0), frame.inner.stride(0) as u32)
-                        } else {
-                            let resampler_frame = resampler_frame
-                                .get_or_init((output_width, output_height), frame::Video::empty);
-
-                            scaler.cached(
-                                frame.inner.format(),
-                                source_width,
-                                source_height,
-                                format::Pixel::RGBA,
-                                output_width,
-                                output_height,
-                                ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
-                            );
-
-                            if let Err(err) = scaler.run(&frame.inner, resampler_frame) {
-                                error!("Error rescaling frame with ffmpeg: {err:?}");
-                                continue 'main_loop;
-                            }
-
-                            (resampler_frame.data(0), resampler_frame.stride(0) as u32)
-                        };
-
+                        let window_px = (clamp_size(state.size) as f64
+                            * self.surface_scale.max(1.0))
+                        .round() as u32;
                         let blur_mode = blur_mode_from_project(state.background_blur);
-                        let blurred = if let Some(mode) = blur_mode {
-                            self.run_background_blur(
-                                frame_data,
-                                frame_stride,
+                        let (output_width, output_height) = camera_preview_texture_dimensions(
+                            source_width,
+                            source_height,
+                            window_px,
+                            blur_mode.is_some(),
+                        );
+
+                        #[cfg(target_os = "macos")]
+                        {
+                            match self.render_native_frame(
+                                &frame,
                                 output_width,
                                 output_height,
-                                mode,
-                            )
-                        } else {
-                            false
-                        };
-
-                        let prepared =
-                            self.texture.get_or_init((output_width, output_height), || {
-                                PreparedTexture::init(
-                                    self.device.clone(),
-                                    self.queue.clone(),
-                                    &self.sampler,
-                                    &self.bind_group_layout,
-                                    self.uniform_bind_group.clone(),
-                                    self.render_pipeline.clone(),
-                                    output_width,
-                                    output_height,
-                                )
-                            });
-
-                        if blurred {
-                            let blur_output = self
-                                .blur_processor
-                                .as_mut()
-                                .and_then(|p| p.process_returning_output())
-                                .expect("blurred flag guarantees output");
-                            let mut encoder = self.device.create_command_encoder(
-                                &wgpu::CommandEncoderDescriptor {
-                                    label: Some("Blur Copy"),
-                                },
-                            );
-                            encoder.copy_texture_to_texture(
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: blur_output,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: &prepared.texture,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::Extent3d {
-                                    width: output_width,
-                                    height: output_height,
-                                    depth_or_array_layers: 1,
-                                },
-                            );
-                            self.queue.submit(std::iter::once(encoder.finish()));
-                            prepared.render_no_upload(&surface);
-                        } else {
-                            prepared.render(&surface, frame_data, frame_stride);
+                                blur_mode,
+                                &surface,
+                            ) {
+                                Ok(()) => {
+                                    surface.present();
+                                    inflight_frames.push_back(frame);
+                                    while inflight_frames.len() > 2 {
+                                        inflight_frames.pop_front();
+                                    }
+                                }
+                                Err(err) => {
+                                    if !native_fallback_logged {
+                                        native_fallback_logged = true;
+                                        warn!(
+                                            "Camera GPU-native preview unavailable ({err}); using CPU conversion"
+                                        );
+                                    }
+                                    match cap_camera_ffmpeg::sample_buf_as_ffmpeg(&frame.sample_buf)
+                                    {
+                                        Ok(inner) => {
+                                            if self.render_cpu_frame(
+                                                &inner,
+                                                output_width,
+                                                output_height,
+                                                blur_mode,
+                                                &surface,
+                                                &mut scaler,
+                                                &mut resampler_frame,
+                                            ) {
+                                                surface.present();
+                                            }
+                                        }
+                                        Err(err) => {
+                                            error!(
+                                                "Camera preview CPU fallback conversion failed: {err}"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        surface.present();
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            if self.render_cpu_frame(
+                                &frame.inner,
+                                output_width,
+                                output_height,
+                                blur_mode,
+                                &surface,
+                                &mut scaler,
+                                &mut resampler_frame,
+                            ) {
+                                surface.present();
+                            }
+                        }
                     }
                 }
                 Err(ReconfigureEvent::State(new_state)) => {
@@ -932,10 +1077,15 @@ impl Renderer {
                     self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio)
                         .await;
                     self.update_state_uniforms(&state);
-                    if let Ok((width, height)) = resize_window(&window, &state, aspect_ratio, false)
-                        .await
-                        .map_err(|err| error!("Error resizing camera preview window: {err}"))
+                    if state.background_blur == cap_project::BackgroundBlurMode::Off {
+                        self.release_blur_resources();
+                    }
+                    if let Ok((width, height, scale)) =
+                        resize_window(&window, &state, aspect_ratio, false)
+                            .await
+                            .map_err(|err| error!("Error resizing camera preview window: {err}"))
                     {
+                        self.surface_scale = scale;
                         self.reconfigure_gpu_surface(width, height);
                     }
                 }
@@ -952,6 +1102,8 @@ impl Renderer {
                     // instead of panel.order_front_regardless() - see the comment there
                     // for why this is critical to avoid macOS crashes.
                     is_paused = true;
+                    #[cfg(target_os = "macos")]
+                    inflight_frames.clear();
                     window
                         .run_on_main_thread({
                             let window = window.clone();
@@ -963,6 +1115,8 @@ impl Renderer {
                 }
                 Err(ReconfigureEvent::Resume) => {
                     while camera_rx.try_recv().is_ok() {}
+                    #[cfg(target_os = "macos")]
+                    inflight_frames.clear();
                     if let Some(texture) = self.acquire_surface_texture() {
                         let (buffer, stride) = render_solid_frame([0x11, 0x11, 0x11, 0xFF], 5, 5);
                         PreparedTexture::init(
@@ -985,6 +1139,224 @@ impl Renderer {
                 }
             }
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_cpu_frame(
+        &mut self,
+        inner: &frame::Video,
+        output_width: u32,
+        output_height: u32,
+        blur_mode: Option<cap_camera_effects::BlurMode>,
+        surface: &SurfaceTexture,
+        scaler: &mut scaling::Context,
+        resampler_frame: &mut Cached<(u32, u32), frame::Video>,
+    ) -> bool {
+        let source_width = inner.width();
+        let source_height = inner.height();
+
+        let already_preview_rgba = inner.format() == Pixel::RGBA
+            && output_width == source_width
+            && output_height == source_height;
+        let (frame_data, frame_stride) = if already_preview_rgba {
+            (inner.data(0), inner.stride(0) as u32)
+        } else {
+            let resampler_frame =
+                resampler_frame.get_or_init((output_width, output_height), frame::Video::empty);
+
+            scaler.cached(
+                inner.format(),
+                source_width,
+                source_height,
+                format::Pixel::RGBA,
+                output_width,
+                output_height,
+                ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
+            );
+
+            if let Err(err) = scaler.run(inner, resampler_frame) {
+                error!("Error rescaling frame with ffmpeg: {err:?}");
+                return false;
+            }
+
+            (resampler_frame.data(0), resampler_frame.stride(0) as u32)
+        };
+
+        let blurred = if let Some(mode) = blur_mode {
+            self.run_background_blur(frame_data, frame_stride, output_width, output_height, mode)
+        } else {
+            false
+        };
+
+        let prepared = self.texture.get_or_init((output_width, output_height), || {
+            PreparedTexture::init(
+                self.device.clone(),
+                self.queue.clone(),
+                &self.sampler,
+                &self.bind_group_layout,
+                self.uniform_bind_group.clone(),
+                self.render_pipeline.clone(),
+                output_width,
+                output_height,
+            )
+        });
+
+        if blurred {
+            let blur_output = self
+                .blur_processor
+                .as_mut()
+                .and_then(|p| p.process_returning_output())
+                .expect("blurred flag guarantees output");
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Blur Copy"),
+                });
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: blur_output,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &prepared.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: output_width,
+                    height: output_height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.queue.submit(std::iter::once(encoder.finish()));
+            prepared.render_no_upload(surface);
+        } else {
+            prepared.render(surface, frame_data, frame_stride);
+        }
+        true
+    }
+
+    #[cfg(target_os = "macos")]
+    fn ensure_native_converter(&mut self) -> bool {
+        if self.native_converter.is_some() {
+            return true;
+        }
+        if self.native_converter_init_attempted {
+            return false;
+        }
+        self.native_converter_init_attempted = true;
+        self.native_converter = NativeFrameConverter::new(&self.device);
+        if self.native_converter.is_some() {
+            info!("Camera GPU-native frame converter initialized");
+            true
+        } else {
+            warn!("Failed to initialize camera GPU-native frame converter");
+            false
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn render_native_frame(
+        &mut self,
+        frame: &NativeCameraFrame,
+        output_width: u32,
+        output_height: u32,
+        blur_mode: Option<cap_camera_effects::BlurMode>,
+        surface: &SurfaceTexture,
+    ) -> Result<(), String> {
+        let kind = classify_frame(frame).map_err(|err| err.to_string())?;
+        if !self.ensure_native_converter() {
+            return Err("GPU-native converter unavailable".to_string());
+        }
+
+        let use_blur = blur_mode.is_some() && self.ensure_blur_processor();
+
+        if use_blur {
+            self.ensure_blur_source_texture(output_width, output_height);
+            let src_tex = self.blur_source_texture.as_ref().expect("just ensured");
+            let dst_view = src_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            self.native_converter
+                .as_ref()
+                .expect("ensured above")
+                .render_frame(&self.device, &self.queue, frame, &kind, &dst_view)
+                .map_err(|err| err.to_string())?;
+
+            if let (Some(mode), Some(processor)) = (blur_mode, self.blur_processor.as_mut()) {
+                processor.process(&self.device, &self.queue, src_tex, mode);
+            }
+
+            let prepared = self.texture.get_or_init((output_width, output_height), || {
+                PreparedTexture::init(
+                    self.device.clone(),
+                    self.queue.clone(),
+                    &self.sampler,
+                    &self.bind_group_layout,
+                    self.uniform_bind_group.clone(),
+                    self.render_pipeline.clone(),
+                    output_width,
+                    output_height,
+                )
+            });
+
+            let blur_output = self
+                .blur_processor
+                .as_mut()
+                .and_then(|p| p.process_returning_output())
+                .ok_or_else(|| "blur output missing".to_string())?;
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Blur Copy"),
+                });
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: blur_output,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &prepared.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: output_width,
+                    height: output_height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.queue.submit(std::iter::once(encoder.finish()));
+            prepared.render_no_upload(surface);
+        } else {
+            let prepared = self.texture.get_or_init((output_width, output_height), || {
+                PreparedTexture::init(
+                    self.device.clone(),
+                    self.queue.clone(),
+                    &self.sampler,
+                    &self.bind_group_layout,
+                    self.uniform_bind_group.clone(),
+                    self.render_pipeline.clone(),
+                    output_width,
+                    output_height,
+                )
+            });
+            let dst_view = prepared
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.native_converter
+                .as_ref()
+                .expect("ensured above")
+                .render_frame(&self.device, &self.queue, frame, &kind, &dst_view)
+                .map_err(|err| err.to_string())?;
+            prepared.render_no_upload(surface);
+        }
+
+        Ok(())
     }
 
     fn run_background_blur(
@@ -1032,6 +1404,18 @@ impl Renderer {
         true
     }
 
+    // The blur processor owns an ONNX session plus several GPU textures, so it
+    // is dropped as soon as blur is switched off instead of living for the
+    // window's lifetime; turning blur back on re-runs the lazy init.
+    fn release_blur_resources(&mut self) {
+        if self.blur_processor.is_some() || self.blur_source_texture.is_some() {
+            self.blur_processor = None;
+            self.blur_source_texture = None;
+            info!("Released camera background blur resources");
+        }
+        self.blur_processor_init_attempted = false;
+    }
+
     fn ensure_blur_processor(&mut self) -> bool {
         if self.blur_processor.is_some() {
             return true;
@@ -1077,7 +1461,8 @@ impl Renderer {
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_DST
-                    | wgpu::TextureUsages::COPY_SRC,
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             }));
         }
@@ -1092,11 +1477,11 @@ impl Renderer {
         drop(std::mem::take(&mut self.texture));
         self.aspect_ratio = Cached::default();
 
-        let surface = self.surface.take();
+        let surface = ManuallyDrop::new(self.surface.take());
         let (drop_tx, drop_rx) = oneshot::channel();
         window
             .run_on_main_thread(move || {
-                drop(surface);
+                drop(ManuallyDrop::into_inner(surface));
                 let _ = drop_tx.send(());
             })
             .ok();
@@ -1136,25 +1521,32 @@ impl Renderer {
     }
 
     fn reconfigure_gpu_surface(&mut self, window_width: u32, window_height: u32) {
-        self.surface_config.width = if window_width > 0 {
-            window_width * GPU_SURFACE_SCALE
+        let scale = self.surface_scale.max(1.0);
+        let surface_width = if window_width > 0 {
+            ((window_width as f64 * scale).round() as u32).max(1)
         } else {
             1
         };
-        self.surface_config.height = if window_height > 0 {
-            window_height * GPU_SURFACE_SCALE
+        let surface_height = if window_height > 0 {
+            ((window_height as f64 * scale).round() as u32).max(1)
         } else {
             1
         };
-        if let Some(surface) = &self.surface {
-            surface.configure(&self.device, &self.surface_config);
+
+        if self.surface_config.width != surface_width
+            || self.surface_config.height != surface_height
+        {
+            self.surface_config.width = surface_width;
+            self.surface_config.height = surface_height;
+            if let Some(surface) = &self.surface {
+                surface.configure(&self.device, &self.surface_config);
+            }
         }
 
         let window_uniforms = WindowUniforms {
             window_height: window_height as f32,
             window_width: window_width as f32,
-            toolbar_percentage: (TOOLBAR_HEIGHT * GPU_SURFACE_SCALE as f32)
-                / self.surface_config.height as f32,
+            toolbar_percentage: (TOOLBAR_HEIGHT * scale as f32) / self.surface_config.height as f32,
             _padding: 0.0,
         };
         self.queue.write_buffer(
@@ -1203,10 +1595,11 @@ impl Renderer {
                 bytemuck::cast_slice(&[camera_uniforms]),
             );
 
-            if let Ok((width, height)) = resize_window(window, state, aspect_ratio, false)
+            if let Ok((width, height, scale)) = resize_window(window, state, aspect_ratio, false)
                 .await
                 .map_err(|err| error!("Error resizing camera preview window: {err}"))
             {
+                self.surface_scale = scale;
                 self.reconfigure_gpu_surface(width, height);
             }
         }
@@ -1218,7 +1611,7 @@ async fn resize_window(
     state: &CameraPreviewState,
     aspect: f32,
     should_move: bool,
-) -> anyhow::Result<(u32, u32)> {
+) -> anyhow::Result<(u32, u32, f64)> {
     trace!("CameraPreview/resize_window");
 
     let base = clamp_size(state.size);
@@ -1238,7 +1631,7 @@ async fn resize_window(
         .run_on_main_thread({
             let window = window.clone();
             move || {
-                let result: tauri::Result<(u32, u32)> = (|| {
+                let result: tauri::Result<(u32, u32, f64)> = (|| {
                     if should_move {
                         let (monitor_size, monitor_offset, monitor_scale_factor): (
                             PhysicalSize<u32>,
@@ -1301,7 +1694,13 @@ async fn resize_window(
 
                     window.set_size(LogicalSize::new(window_width, window_height))?;
 
-                    Ok((window_width, window_height))
+                    let scale_factor = window
+                        .scale_factor()
+                        .ok()
+                        .filter(|scale| *scale > 0.0)
+                        .unwrap_or(DEFAULT_SURFACE_SCALE);
+
+                    Ok((window_width, window_height, scale_factor))
                 })();
 
                 tx.send(result).ok();
@@ -1430,7 +1829,9 @@ impl PreparedTexture {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
 
