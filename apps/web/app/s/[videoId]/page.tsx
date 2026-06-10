@@ -425,6 +425,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					storageIntegrationId: videos.storageIntegrationId,
 					metadata: videos.metadata,
 					public: videos.public,
+					publicSourcedFromFolderShare: videos.publicSourcedFromFolderShare,
 					videoStartTime: videos.videoStartTime,
 					audioStartTime: videos.audioStartTime,
 					awsRegion: videos.awsRegion,

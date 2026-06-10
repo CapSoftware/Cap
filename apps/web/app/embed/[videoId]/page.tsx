@@ -163,6 +163,7 @@ export default async function EmbedVideoPage(
 					transcriptionStatus: videos.transcriptionStatus,
 					source: videos.source,
 					folderId: videos.folderId,
+					publicSourcedFromFolderShare: videos.publicSourcedFromFolderShare,
 					width: videos.width,
 					height: videos.height,
 					duration: videos.duration,

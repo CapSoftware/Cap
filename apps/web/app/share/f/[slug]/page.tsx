@@ -2,6 +2,7 @@ import { db } from "@cap/database";
 import { folders, s3Buckets, videos } from "@cap/database/schema";
 import { Logo } from "@cap/ui";
 import { S3Buckets } from "@cap/web-backend";
+import type { S3Bucket } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Option } from "effect";
 import type { Metadata } from "next";
@@ -47,16 +48,14 @@ const formatDuration = (s: number | null) => {
 async function resolveThumbnailUrl(
 	videoId: string,
 	ownerId: string,
-	bucketId: string | null,
+	bucketId: S3Bucket.S3BucketId | null,
 ): Promise<string | null> {
 	try {
 		const [bucket] = await S3Buckets.getBucketAccess(
 			Option.fromNullable(bucketId),
 		).pipe(runPromise);
 		const thumbnailKey = `${ownerId}/${videoId}/screenshot/screen-capture.jpg`;
-		const url = await bucket
-			.getSignedObjectUrl(thumbnailKey)
-			.pipe(runPromise);
+		const url = await bucket.getSignedObjectUrl(thumbnailKey).pipe(runPromise);
 		return url;
 	} catch {
 		return null;
@@ -123,8 +122,7 @@ export default async function SharedFolderPage(props: {
 					<h1 className="text-2xl font-semibold text-gray-12">{folder.name}</h1>
 				</div>
 				<p className="text-sm text-gray-10 mb-8">
-					{folderVideos.length}{" "}
-					{folderVideos.length === 1 ? "video" : "videos"}
+					{folderVideos.length} {folderVideos.length === 1 ? "video" : "videos"}
 				</p>
 
 				{folderVideos.length === 0 ? (
@@ -134,8 +132,7 @@ export default async function SharedFolderPage(props: {
 				) : (
 					<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
 						{videosWithThumbs.map((v) => {
-							const aspect =
-								v.width && v.height ? v.width / v.height : 16 / 9;
+							const aspect = v.width && v.height ? v.width / v.height : 16 / 9;
 							return (
 								<Link
 									key={v.id}
