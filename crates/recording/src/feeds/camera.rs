@@ -45,6 +45,7 @@ pub struct CameraFeed {
     setup_generation: u64,
     state: State,
     senders: Vec<flume::Sender<FFmpegVideoFrame>>,
+    ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     native_senders: Vec<flume::Sender<NativeCameraFrame>>,
     native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     on_ready: Vec<oneshot::Sender<()>>,
@@ -189,6 +190,7 @@ impl Default for CameraFeed {
                 attached: None,
             }),
             senders: Vec::new(),
+            ffmpeg_sender_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             native_senders: Vec::new(),
             native_sender_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             on_ready: Vec::new(),
@@ -337,6 +339,7 @@ struct CameraSetupArgs {
     actor_ref: ActorRef<CameraFeed>,
     new_frame_recipient: Recipient<NewFrame>,
     native_frame_recipient: Recipient<NewNativeFrame>,
+    ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     flow: CameraSetupFlow,
 }
@@ -351,6 +354,7 @@ fn spawn_camera_setup(
         actor_ref,
         new_frame_recipient,
         native_frame_recipient,
+        ffmpeg_sender_count,
         native_sender_count,
         flow,
     } = args;
@@ -401,6 +405,7 @@ fn spawn_camera_setup(
                     settings,
                     new_frame_recipient,
                     native_frame_recipient,
+                    ffmpeg_sender_count,
                     native_sender_count,
                 )
                 .await;
@@ -517,6 +522,11 @@ fn release_camera_thread(handle: std::thread::JoinHandle<()>) {
         let _ = handle.join();
     } else {
         warn!("Camera setup thread is still running after cancellation");
+        let _ = std::thread::Builder::new()
+            .name("camera-setup-reaper".to_string())
+            .spawn(move || {
+                let _ = handle.join();
+            });
     }
 }
 
@@ -759,6 +769,7 @@ async fn setup_camera(
     settings: Option<CameraDeviceSettings>,
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
+    ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
@@ -784,6 +795,15 @@ async fn setup_camera(
                         timestamp,
                     }))
                     .try_send();
+            }
+
+            // Until the ready signal fires the first frame must still be
+            // converted to derive VideoInfo; afterwards skip the full-frame
+            // copy entirely when nothing consumes ffmpeg frames.
+            if ready_signal.is_none()
+                && ffmpeg_sender_count.load(std::sync::atomic::Ordering::Relaxed) == 0
+            {
+                return;
             }
 
             let Ok(mut ff_frame) = frame.as_ffmpeg() else {
@@ -837,6 +857,7 @@ async fn setup_camera(
     settings: Option<CameraDeviceSettings>,
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
+    ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
@@ -889,6 +910,15 @@ async fn setup_camera(
                             .try_send();
                     }
                 }
+            }
+
+            // Until the ready signal fires the first frame must still be
+            // converted to derive VideoInfo; afterwards skip the full-frame
+            // copy entirely when nothing consumes ffmpeg frames.
+            if ready_signal.is_none()
+                && ffmpeg_sender_count.load(std::sync::atomic::Ordering::Relaxed) == 0
+            {
+                return;
             }
 
             let Ok(mut ff_frame) = frame.as_ffmpeg() else {
@@ -1049,6 +1079,7 @@ impl Message<SetInput> for CameraFeed {
                     actor_ref,
                     new_frame_recipient,
                     native_frame_recipient,
+                    ffmpeg_sender_count: self.ffmpeg_sender_count.clone(),
                     native_sender_count: self.native_sender_count.clone(),
                     flow: CameraSetupFlow::Open,
                 });
@@ -1086,6 +1117,7 @@ impl Message<SetInput> for CameraFeed {
                     actor_ref,
                     new_frame_recipient,
                     native_frame_recipient,
+                    ffmpeg_sender_count: self.ffmpeg_sender_count.clone(),
                     native_sender_count: self.native_sender_count.clone(),
                     flow: CameraSetupFlow::Locked,
                 });
@@ -1122,6 +1154,8 @@ impl Message<RemoveInput> for CameraFeed {
         }
 
         self.senders.clear();
+        self.ffmpeg_sender_count
+            .store(0, std::sync::atomic::Ordering::Release);
         self.native_senders.clear();
         self.native_sender_count
             .store(0, std::sync::atomic::Ordering::Release);
@@ -1152,6 +1186,8 @@ impl Message<AddSender> for CameraFeed {
 
         debug!("CameraFeed: Adding new sender");
         self.senders.push(msg.0);
+        self.ffmpeg_sender_count
+            .store(self.senders.len(), std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -1189,6 +1225,8 @@ impl Message<RemoveSender> for CameraFeed {
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.senders.retain(|sender| !sender.same_channel(&msg.0));
+        self.ffmpeg_sender_count
+            .store(self.senders.len(), std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -1251,6 +1289,19 @@ fn send_frame_to_camera_senders<T: Clone>(
     frame_num: u64,
     sender_label: &str,
 ) -> bool {
+    // A disconnected sender whose queue is still full would otherwise never be
+    // try_send'd again, leaving it (and its queued frames) retained forever.
+    let len_before_retain = senders.len();
+    senders.retain(|sender| !sender.is_disconnected());
+    let removed_disconnected = senders.len() != len_before_retain;
+    if removed_disconnected {
+        debug!(
+            "Removed {} disconnected {} senders before fanout",
+            len_before_retain - senders.len(),
+            sender_label
+        );
+    }
+
     let mut last_ready_sender = None;
 
     for (i, sender) in senders.iter().enumerate() {
@@ -1267,7 +1318,7 @@ fn send_frame_to_camera_senders<T: Clone>(
     }
 
     let Some(last_ready_sender) = last_ready_sender else {
-        return false;
+        return removed_disconnected;
     };
 
     let mut frame = Some(frame);
@@ -1311,7 +1362,7 @@ fn send_frame_to_camera_senders<T: Clone>(
     }
 
     if to_remove.is_empty() {
-        return false;
+        return removed_disconnected;
     }
 
     debug!(
@@ -1331,7 +1382,10 @@ impl Message<NewFrame> for CameraFeed {
     async fn handle(&mut self, msg: NewFrame, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let frame_num = CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        send_frame_to_camera_senders(&mut self.senders, msg.0, frame_num, "Camera");
+        if send_frame_to_camera_senders(&mut self.senders, msg.0, frame_num, "Camera") {
+            self.ffmpeg_sender_count
+                .store(self.senders.len(), std::sync::atomic::Ordering::Release);
+        }
     }
 }
 
