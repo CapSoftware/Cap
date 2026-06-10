@@ -566,7 +566,7 @@ pub async fn spawn_instant_recording_actor(
                 display,
                 crop_bounds,
                 true,
-                30,
+                crate::defaults::DEFAULT_INSTANT_MODE_FPS,
                 None,
                 timestamps.system_time(),
                 inputs.capture_system_audio,

@@ -33,6 +33,7 @@ import {
 	MediaPlayerLoading,
 	MediaPlayerPiP,
 	MediaPlayerPlay,
+	MediaPlayerPlaybackSpeedDial,
 	MediaPlayerSeek,
 	MediaPlayerSeekBackward,
 	MediaPlayerSeekForward,
@@ -100,6 +101,7 @@ interface Props {
 	hasCaptions?: boolean;
 	canRetryProcessing?: boolean;
 	duration?: number | null;
+	defaultPlaybackSpeed?: number;
 	previewMode?: "background";
 }
 
@@ -124,6 +126,7 @@ export function HLSVideoPlayer({
 	hasCaptions = false,
 	canRetryProcessing = false,
 	duration: fallbackDuration,
+	defaultPlaybackSpeed,
 	previewMode,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
@@ -763,6 +766,17 @@ export function HLSVideoPlayer({
 					/>
 				)}
 			</MediaPlayerVideo>
+			{videoLoaded &&
+				!hasActiveProgress &&
+				!hasFailedOrError &&
+				!hlsInitFailed &&
+				!isBackgroundPreview && (
+					<MediaPlayerPlaybackSpeedDial
+						defaultSpeed={defaultPlaybackSpeed}
+						fallbackDuration={playerDuration}
+						show={showPlayButton && !hasPlayedOnce}
+					/>
+				)}
 			{currentCue && toggleCaptions && (
 				<div
 					className={clsx(
@@ -780,7 +794,10 @@ export function HLSVideoPlayer({
 			<MediaPlayerError />
 			<MediaPlayerVolumeIndicator />
 			<MediaPlayerControls
-				className="flex-col items-start gap-2.5"
+				className={clsx(
+					"flex-col items-start gap-2.5",
+					showPlayButton && !hasPlayedOnce && "max-sm:hidden",
+				)}
 				isUploadingOrFailed={
 					isBackgroundPreview || hasActiveProgress || hasFailedOrError
 				}
@@ -790,8 +807,8 @@ export function HLSVideoPlayer({
 				<div className="flex gap-2 items-center w-full">
 					<div className="flex flex-1 gap-2 items-center">
 						<MediaPlayerPlay />
-						<MediaPlayerSeekBackward />
-						<MediaPlayerSeekForward />
+						<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
+						<MediaPlayerSeekForward className="hidden sm:inline-flex" />
 						<MediaPlayerVolume
 							expandable
 							// enhancedAudioEnabled={enhancedAudioEnabled}

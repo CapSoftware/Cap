@@ -34,7 +34,6 @@ const footerLinks = {
 		{ label: "FAQs", href: "/faq" },
 		{ label: "Self-hosting", href: "/self-hosting" },
 		{ label: "Email Support", href: "mailto:hello@cap.so" },
-		{ label: "Help Center", href: "https://help.cap.so" },
 		{ label: "Trust Portal", href: "https://trust.cap.so" },
 		{
 			label: "Chat Support",

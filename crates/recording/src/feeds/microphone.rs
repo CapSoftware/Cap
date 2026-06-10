@@ -34,6 +34,7 @@ const SAMPLE_RATE_ESTIMATE_MAX_DELTA: Duration = Duration::from_millis(250);
 const SAMPLE_RATE_ESTIMATE_MAX_PENDING: usize = 32;
 const SAMPLE_RATE_CONFIGURED_TOLERANCE: f64 = 0.05;
 const SAMPLE_RATE_STANDARD_TOLERANCE: f64 = 0.04;
+const PENDING_TIMESTAMP_STALE_MIN: Duration = Duration::from_millis(5);
 // A newly-inferred rate must be observed this many estimation windows in a row before
 // it replaces the active rate. Each window already averages
 // `SAMPLE_RATE_ESTIMATE_MIN_INTERVALS` callbacks, so a single slow/jittery callback
@@ -276,6 +277,100 @@ fn callback_frame_count(data_len: usize, sample_format: SampleFormat, channels: 
     }
 
     data_len / bytes_per_frame
+}
+
+fn timestamp_duration_since(current: Timestamp, start: Timestamp) -> Option<Duration> {
+    match (current, start) {
+        (Timestamp::Instant(current), Timestamp::Instant(start)) => {
+            current.checked_duration_since(start)
+        }
+        (Timestamp::SystemTime(current), Timestamp::SystemTime(start)) => {
+            current.duration_since(start).ok()
+        }
+        #[cfg(windows)]
+        (Timestamp::PerformanceCounter(current), Timestamp::PerformanceCounter(start)) => {
+            current.checked_duration_since(start)
+        }
+        #[cfg(target_os = "macos")]
+        (Timestamp::MachAbsoluteTime(current), Timestamp::MachAbsoluteTime(start)) => {
+            current.checked_duration_since(start)
+        }
+        _ => None,
+    }
+}
+
+fn pending_timestamp_stale_threshold(sample_duration: Duration) -> Duration {
+    let half_duration = Duration::from_secs_f64(sample_duration.as_secs_f64() * 0.5);
+    PENDING_TIMESTAMP_STALE_MIN.max(half_duration)
+}
+
+fn normalize_pending_timestamp(
+    timestamp: &mut Timestamp,
+    expected: Option<Timestamp>,
+    stale_threshold: Duration,
+) -> bool {
+    let Some(expected) = expected else {
+        return false;
+    };
+
+    if timestamp_duration_since(*timestamp, expected).is_some() {
+        return false;
+    }
+
+    let Some(stale_by) = timestamp_duration_since(expected, *timestamp) else {
+        return false;
+    };
+
+    if stale_by < stale_threshold {
+        return false;
+    }
+
+    *timestamp = expected;
+    true
+}
+
+fn microphone_sample_duration(samples: &MicrophoneSamples) -> Duration {
+    let frame_count = callback_frame_count(samples.data.len(), samples.format, samples.channels);
+    if frame_count == 0 || samples.sample_rate == 0 {
+        return Duration::ZERO;
+    }
+
+    Duration::from_secs_f64(frame_count as f64 / samples.sample_rate as f64)
+}
+
+fn normalize_pending_timestamps<'a>(
+    pending_timestamps: impl IntoIterator<Item = (&'a mut Timestamp, Duration)>,
+) -> u32 {
+    let mut next_timestamp = None;
+    let mut adjusted_frames = 0u32;
+
+    for (timestamp, sample_duration) in pending_timestamps {
+        if normalize_pending_timestamp(
+            timestamp,
+            next_timestamp,
+            pending_timestamp_stale_threshold(sample_duration),
+        ) {
+            adjusted_frames = adjusted_frames.saturating_add(1);
+        }
+        next_timestamp = Some(*timestamp + sample_duration);
+    }
+
+    adjusted_frames
+}
+
+fn prepare_pending_samples(pending_samples: &mut VecDeque<MicrophoneSamples>, sample_rate: u32) {
+    let adjusted_frames = normalize_pending_timestamps(pending_samples.iter_mut().map(|pending| {
+        pending.sample_rate = sample_rate;
+        let sample_duration = microphone_sample_duration(pending);
+        (&mut pending.timestamp, sample_duration)
+    }));
+
+    if adjusted_frames > 0 {
+        debug!(
+            adjusted_frames,
+            sample_rate, "Normalized stale pending microphone timestamps"
+        );
+    }
 }
 
 fn enqueue_microphone_samples(
@@ -578,8 +673,8 @@ impl MicrophoneFeed {
                                 pending_samples.push_back(samples);
                                 if pending_samples.len() >= SAMPLE_RATE_ESTIMATE_MAX_PENDING {
                                     let sample_rate = sample_rate_estimator.force_current();
-                                    while let Some(mut pending) = pending_samples.pop_front() {
-                                        pending.sample_rate = sample_rate;
+                                    prepare_pending_samples(&mut pending_samples, sample_rate);
+                                    while let Some(pending) = pending_samples.pop_front() {
                                         enqueue_microphone_samples(
                                             &actor_ref,
                                             &dropped_message_count,
@@ -590,8 +685,11 @@ impl MicrophoneFeed {
                                 return;
                             }
 
-                            while let Some(mut pending) = pending_samples.pop_front() {
-                                pending.sample_rate = effective_sample_rate.sample_rate;
+                            prepare_pending_samples(
+                                &mut pending_samples,
+                                effective_sample_rate.sample_rate,
+                            );
+                            while let Some(pending) = pending_samples.pop_front() {
                                 enqueue_microphone_samples(
                                     &actor_ref,
                                     &dropped_message_count,
@@ -1518,6 +1616,105 @@ mod tests {
             callback_frame_count(960 * 2 * std::mem::size_of::<f32>(), SampleFormat::F32, 2);
 
         assert_eq!(frames, 960);
+    }
+
+    #[test]
+    fn normalize_pending_timestamp_advances_stale_startup_timestamps() {
+        let base = Timestamp::Instant(Instant::now());
+        let expected = base + Duration::from_millis(35);
+        let mut timestamp = base;
+
+        assert!(normalize_pending_timestamp(
+            &mut timestamp,
+            Some(expected),
+            pending_timestamp_stale_threshold(Duration::from_millis(35))
+        ));
+
+        assert_eq!(
+            timestamp_duration_since(timestamp, expected),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn normalize_pending_timestamp_keeps_small_startup_jitter() {
+        let base = Timestamp::Instant(Instant::now());
+        let expected = base + Duration::from_millis(35);
+        let jittered = expected - Duration::from_millis(3);
+        let mut timestamp = jittered;
+
+        assert!(!normalize_pending_timestamp(
+            &mut timestamp,
+            Some(expected),
+            pending_timestamp_stale_threshold(Duration::from_millis(35))
+        ));
+
+        assert_eq!(
+            timestamp_duration_since(timestamp, jittered),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn normalize_pending_timestamp_keeps_forward_timestamps() {
+        let base = Timestamp::Instant(Instant::now());
+        let expected = base + Duration::from_millis(35);
+        let forward = expected + Duration::from_millis(2);
+        let mut timestamp = forward;
+
+        assert!(!normalize_pending_timestamp(
+            &mut timestamp,
+            Some(expected),
+            pending_timestamp_stale_threshold(Duration::from_millis(35))
+        ));
+
+        assert_eq!(
+            timestamp_duration_since(timestamp, forward),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn normalize_pending_timestamps_recovers_repeated_stale_startup_sequence() {
+        let base = Timestamp::Instant(Instant::now());
+        let sample_duration = Duration::from_millis(35);
+        let mut timestamps = [base; 8];
+
+        let adjusted_frames =
+            normalize_pending_timestamps(timestamps.iter_mut().map(|ts| (ts, sample_duration)));
+
+        assert_eq!(adjusted_frames, 7);
+        for (index, timestamp) in timestamps.iter().copied().enumerate() {
+            let expected = base + sample_duration * index as u32;
+            assert_eq!(
+                timestamp_duration_since(timestamp, expected),
+                Some(Duration::ZERO)
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_pending_timestamps_preserves_small_jitter_sequence() {
+        let base = Timestamp::Instant(Instant::now());
+        let sample_duration = Duration::from_millis(35);
+        let mut timestamps = vec![
+            base,
+            base + Duration::from_millis(32),
+            base + Duration::from_millis(64),
+            base + Duration::from_millis(96),
+        ];
+        let original = timestamps.clone();
+
+        let adjusted_frames =
+            normalize_pending_timestamps(timestamps.iter_mut().map(|ts| (ts, sample_duration)));
+
+        assert_eq!(adjusted_frames, 0);
+        for (timestamp, expected) in timestamps.into_iter().zip(original) {
+            assert_eq!(
+                timestamp_duration_since(timestamp, expected),
+                Some(Duration::ZERO)
+            );
+        }
     }
 
     #[test]

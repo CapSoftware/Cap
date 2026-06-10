@@ -68,12 +68,36 @@ describe("shouldReplaceVideoTitle", () => {
 		).toBe(true);
 	});
 
+	it("replaces source-derived desktop titles", () => {
+		expect(
+			shouldReplaceVideoTitle({
+				currentTitle: "Acme App",
+				sourceName: "Acme App",
+				nextAiTitle: "Quarterly Roadmap Review",
+			}),
+		).toBe(true);
+		expect(
+			shouldReplaceVideoTitle({
+				currentTitle: "Built-in Retina Display (Area) 2026-06-03 02:45 PM",
+				nextAiTitle: "Quarterly Roadmap Review",
+			}),
+		).toBe(true);
+	});
+
 	it("preserves manual titles", () => {
 		expect(
 			shouldReplaceVideoTitle({
 				currentTitle: "Customer Demo For Acme",
 				previousAiTitle: "Old Generated Title",
 				nextAiTitle: "New Generated Title",
+			}),
+		).toBe(false);
+		expect(
+			shouldReplaceVideoTitle({
+				currentTitle: "Acme App",
+				sourceName: "Acme App",
+				nextAiTitle: "New Generated Title",
+				titleManuallyEdited: true,
 			}),
 		).toBe(false);
 	});

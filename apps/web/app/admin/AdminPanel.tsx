@@ -572,6 +572,33 @@ export function AdminPanel({
 				</div>
 			</div>
 
+			<div className="mb-5 rounded-xl border border-gray-200 bg-white px-4 py-3">
+				<div className="flex flex-wrap items-center justify-between gap-3">
+					<div>
+						<div className="text-sm font-semibold text-gray-900">
+							Video tools
+						</div>
+						<div className="mt-0.5 text-xs text-gray-500">
+							Repair stored share-page media and replace existing files.
+						</div>
+					</div>
+					<div className="flex flex-wrap items-center gap-2">
+						<Link
+							href="/admin/reprocess-video"
+							className="rounded-lg bg-gray-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+						>
+							Reprocess video
+						</Link>
+						<Link
+							href="/admin/replace-video"
+							className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+						>
+							Replace video
+						</Link>
+					</div>
+				</div>
+			</div>
+
 			<div className="grid gap-5" style={{ gridTemplateColumns: "380px 1fr" }}>
 				{isLoadingList && conversations.length === 0 ? (
 					<div className="flex h-[75vh] items-center justify-center rounded-xl border border-gray-200 bg-white">

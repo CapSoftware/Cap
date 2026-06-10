@@ -8,7 +8,8 @@ use std::{
 use cap_desktop_lib::frame_ws::{WSFrame, WSFrameFormat, create_watch_frame_ws};
 use cap_editor::{
     EditorFrameOutput, Playback, PlaybackRenderOutputFormat, PlaybackSkipReason, PlaybackTelemetry,
-    PlaybackTelemetryEvent, Renderer, start_renderer_layers_creation,
+    PlaybackTelemetryEvent, Renderer, finish_renderer_layers_creation,
+    start_renderer_layers_creation,
 };
 use cap_project::{
     ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
@@ -229,7 +230,7 @@ async fn main() {
 
     tokio::time::sleep(Duration::from_millis(startup_delay_ms)).await;
 
-    let layers_rx = start_renderer_layers_creation(&render_constants);
+    let layers_rx = start_renderer_layers_creation(&render_constants, &project);
     let segment_medias =
         match cap_editor::create_segments(&recording_meta, meta.as_ref(), false).await {
             Ok(segments) => Arc::new(segments),
@@ -238,6 +239,7 @@ async fn main() {
                 std::process::exit(1);
             }
         };
+    let layers_rx = finish_renderer_layers_creation(layers_rx).await;
 
     let (telemetry, mut telemetry_rx) = PlaybackTelemetry::channel();
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<usize>();

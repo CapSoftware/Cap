@@ -855,6 +855,23 @@ pub struct StartRecordingInputs {
     pub organization_id: Option<String>,
 }
 
+fn desktop_recording_defaults(
+    general_settings: Option<&GeneralSettingsStore>,
+) -> cap_recording::RecordingDefaults {
+    match general_settings {
+        Some(settings) => cap_recording::RecordingDefaults {
+            custom_cursor_capture: settings.custom_cursor_capture,
+            capture_keyboard_events: settings.capture_keyboard_events,
+            crash_recovery_recording: settings.crash_recovery_recording,
+            max_fps: settings.max_fps,
+            studio_recording_quality: settings.studio_recording_quality.into(),
+            out_of_process_muxer: settings.out_of_process_muxer,
+            instant_mode_max_resolution: cap_recording::DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
+        },
+        None => cap_recording::RecordingDefaults::default(),
+    }
+}
+
 #[derive(Deserialize, Type, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingInputKind {
@@ -1263,58 +1280,62 @@ pub async fn start_recording(
         warn!(%error, "Failed to update camera window content protection");
     }
 
-    let video_upload_info = match inputs.mode {
+    let (video_upload_info, instant_mode_max_resolution) = match inputs.mode {
         RecordingMode::Instant => {
-            match AuthStore::get(&app).ok().flatten() {
-                Some(_) => {
-                    let upload_mode =
-                        if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
-                            "desktopMP4"
-                        } else {
-                            "desktopSegments"
-                        };
-
-                    let s3_config = match crate::upload::create_or_get_video_with_mode(
-                        &app,
-                        false,
-                        None,
-                        Some(project_name.clone()),
-                        None,
-                        inputs.organization_id.clone(),
-                        upload_mode,
-                    )
-                    .await
-                    {
-                        Ok(meta) => meta,
-                        Err(AuthedApiError::InvalidAuthentication) => {
-                            return Ok(RecordingAction::InvalidAuthentication);
-                        }
-                        Err(AuthedApiError::UpgradeRequired) => {
-                            return Ok(RecordingAction::UpgradeRequired);
-                        }
-                        Err(err) => {
-                            error!("Error creating instant mode video: {err}");
-                            return Err(err.to_string());
-                        }
-                    };
-
-                    let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
-                    info!("Pre-created shareable link: {}", link);
-
-                    Some(VideoUploadInfo {
-                        id: s3_config.id.to_string(),
-                        link: link.clone(),
-                        config: s3_config,
+            let Some(auth) = AuthStore::get(&app).ok().flatten() else {
+                return Err("Please sign in to use instant recording".to_string());
+            };
+            let instant_mode_max_resolution = if auth.is_upgraded() {
+                general_settings
+                    .map_or(cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION, |settings| {
+                        settings.instant_mode_max_resolution
                     })
+            } else {
+                cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
+            };
+            let upload_mode = if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+                "desktopMP4"
+            } else {
+                "desktopSegments"
+            };
+
+            let s3_config = match crate::upload::create_or_get_video_with_mode(
+                &app,
+                false,
+                None,
+                Some(project_name.clone()),
+                None,
+                inputs.organization_id.clone(),
+                upload_mode,
+            )
+            .await
+            {
+                Ok(meta) => meta,
+                Err(AuthedApiError::InvalidAuthentication) => {
+                    return Ok(RecordingAction::InvalidAuthentication);
                 }
-                // Allow the recording to proceed without error for any signed-in user
-                _ => {
-                    // User is not signed in
-                    return Err("Please sign in to use instant recording".to_string());
+                Err(AuthedApiError::UpgradeRequired) => {
+                    return Ok(RecordingAction::UpgradeRequired);
                 }
-            }
+                Err(err) => {
+                    error!("Error creating instant mode video: {err}");
+                    return Err(err.to_string());
+                }
+            };
+
+            let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
+            info!("Pre-created shareable link: {}", link);
+
+            (
+                Some(VideoUploadInfo {
+                    id: s3_config.id.to_string(),
+                    link: link.clone(),
+                    config: s3_config,
+                }),
+                instant_mode_max_resolution,
+            )
         }
-        RecordingMode::Studio => None,
+        RecordingMode::Studio => (None, cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION),
         RecordingMode::Screenshot => return Err("Use take_screenshot for screenshots".to_string()),
     };
 
@@ -1507,62 +1528,18 @@ pub async fn start_recording(
                         selected_mic_settings,
                     )
                     .await?;
+                    let defaults = desktop_recording_defaults(general_settings.as_ref());
 
                     match inputs.mode {
                         RecordingMode::Studio => {
-                            let max_fps =
-                                general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60);
-                            let max_fps = if camera_feed.is_some() {
-                                max_fps.min(30)
-                            } else {
-                                max_fps
-                            };
-                            let mut builder = studio_recording::Actor::builder(
-                                recording_dir.clone(),
-                                inputs.capture_target.clone(),
-                            )
-                            .with_system_audio(inputs.capture_system_audio)
-                            .with_custom_cursor(
-                                general_settings
-                                    .as_ref()
-                                    .map(|s| s.custom_cursor_capture)
-                                    .unwrap_or_default(),
-                            )
-                            .with_keyboard_capture(
-                                general_settings
-                                    .as_ref()
-                                    .map(|s| s.capture_keyboard_events)
-                                    .unwrap_or(true),
-                            )
-                            .with_fragmented(
-                                general_settings
-                                    .as_ref()
-                                    .map(|s| s.crash_recovery_recording)
-                                    .unwrap_or(true),
-                            )
-                            .with_out_of_process_muxer(
-                                general_settings
-                                    .as_ref()
-                                    .map(|s| s.out_of_process_muxer)
-                                    .unwrap_or(false),
-                            )
-                            .with_max_fps(max_fps)
-                            .with_quality(
-                                match general_settings
-                                    .as_ref()
-                                    .map(|s| s.studio_recording_quality)
-                                    .unwrap_or_default()
-                                {
-                                    crate::general_settings::StudioRecordingQuality::Compatibility => {
-                                        cap_recording::StudioQuality::Compatibility
-                                    }
-                                    crate::general_settings::StudioRecordingQuality::Balanced => {
-                                        cap_recording::StudioQuality::Balanced
-                                    }
-                                    crate::general_settings::StudioRecordingQuality::Ultra => {
-                                        cap_recording::StudioQuality::Ultra
-                                    }
-                                },
+                            let mut builder = defaults.apply_to_studio_builder(
+                                studio_recording::Actor::builder(
+                                    recording_dir.clone(),
+                                    inputs.capture_target.clone(),
+                                )
+                                .with_system_audio(inputs.capture_system_audio),
+                                camera_feed.is_some(),
+                                None,
                             );
 
                             #[cfg(target_os = "macos")]
@@ -1606,12 +1583,7 @@ pub async fn start_recording(
                                 inputs.capture_target.clone(),
                             )
                             .with_system_audio(inputs.capture_system_audio)
-                            .with_max_output_size(
-                                general_settings
-                                    .as_ref()
-                                    .map(|settings| settings.instant_mode_max_resolution)
-                                    .unwrap_or(1920),
-                            );
+                            .with_max_output_size(instant_mode_max_resolution);
 
                             #[cfg(target_os = "macos")]
                             {
@@ -3521,7 +3493,7 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
     use crate::posthog::{PostHogEvent, async_capture_event};
     use crate::recording_telemetry::{mode_label, target_kind_label};
 
-    let (mode, target_kind, has_camera, has_mic, has_system_audio) = {
+    let (mode, recording_mode, target_kind, has_camera, has_mic, has_system_audio) = {
         let state = state_mtx.read().await;
         let Some(recording) = state.current_recording() else {
             return;
@@ -3534,6 +3506,7 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
         };
         (
             mode_label(inputs.mode),
+            inputs.mode,
             target_kind,
             has_camera,
             state.selected_mic_label.is_some(),
@@ -3542,15 +3515,17 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
     };
 
     let general = GeneralSettingsStore::get(app).ok().flatten();
-    let fragmented = general
-        .as_ref()
-        .map(|s| s.crash_recovery_recording)
-        .unwrap_or(true);
-    let custom_cursor_capture = general
-        .as_ref()
-        .map(|s| s.custom_cursor_capture)
-        .unwrap_or(true);
-    let target_fps = general.as_ref().map(|s| s.max_fps).unwrap_or(60);
+    let defaults = desktop_recording_defaults(general.as_ref());
+    let fragmented = defaults.crash_recovery_recording;
+    let custom_cursor_capture = defaults.custom_cursor_capture;
+    // Studio applies the camera fps clamp via `apply_to_studio_builder`; Instant records screen at a
+    // fixed fps, so report the value each mode actually uses rather than the raw studio cap.
+    let target_fps = match recording_mode {
+        RecordingMode::Studio => defaults.studio_max_fps(has_camera, None),
+        RecordingMode::Instant | RecordingMode::Screenshot => {
+            cap_recording::DEFAULT_INSTANT_MODE_FPS
+        }
+    };
 
     async_capture_event(
         app,

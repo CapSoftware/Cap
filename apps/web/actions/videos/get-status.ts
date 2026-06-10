@@ -34,6 +34,7 @@ type AiGenerationStatus =
 export interface VideoStatusResult {
 	transcriptionStatus: TranscriptionStatus | null;
 	aiGenerationStatus: AiGenerationStatus | null;
+	name: string | null;
 	aiTitle: string | null;
 	summary: string | null;
 	chapters: { title: string; start: number }[] | null;
@@ -93,6 +94,7 @@ export async function getVideoStatus(
 				transcriptionStatus: null,
 				aiGenerationStatus:
 					(metadata.aiGenerationStatus as AiGenerationStatus) || null,
+				name: video.name,
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
@@ -114,6 +116,7 @@ export async function getVideoStatus(
 				transcriptionStatus: "PROCESSING",
 				aiGenerationStatus:
 					(metadata.aiGenerationStatus as AiGenerationStatus) || null,
+				name: video.name,
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
@@ -127,6 +130,7 @@ export async function getVideoStatus(
 				transcriptionStatus: "ERROR",
 				aiGenerationStatus:
 					(metadata.aiGenerationStatus as AiGenerationStatus) || null,
+				name: video.name,
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
@@ -140,6 +144,7 @@ export async function getVideoStatus(
 			transcriptionStatus: "ERROR",
 			aiGenerationStatus:
 				(metadata.aiGenerationStatus as AiGenerationStatus) || null,
+			name: video.name,
 			aiTitle: metadata.aiTitle || null,
 			summary: metadata.summary || null,
 			chapters: metadata.chapters || null,
@@ -181,6 +186,7 @@ export async function getVideoStatus(
 					transcriptionStatus:
 						(video.transcriptionStatus as TranscriptionStatus) || null,
 					aiGenerationStatus: "QUEUED" as AiGenerationStatus,
+					name: video.name,
 					aiTitle: metadata.aiTitle || null,
 					summary: metadata.summary || null,
 					chapters: metadata.chapters || null,
@@ -199,6 +205,7 @@ export async function getVideoStatus(
 			(video.transcriptionStatus as TranscriptionStatus) || null,
 		aiGenerationStatus:
 			(metadata.aiGenerationStatus as AiGenerationStatus) || null,
+		name: video.name,
 		aiTitle: metadata.aiTitle || null,
 		summary: metadata.summary || null,
 		chapters: metadata.chapters || null,

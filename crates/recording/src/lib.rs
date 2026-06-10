@@ -1,6 +1,7 @@
 pub mod benchmark;
 mod capture_pipeline;
 pub mod cursor;
+pub mod defaults;
 pub mod diagnostics;
 pub mod feeds;
 pub mod fragmentation;
@@ -20,6 +21,13 @@ pub use resolution_limits::{H264_MAX_DIMENSION, calculate_gpu_compatible_size};
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_sources;
 
+pub use defaults::{
+    CAMERA_ACTIVE_STUDIO_MAX_FPS, DEFAULT_CAPTURE_KEYBOARD_EVENTS,
+    DEFAULT_CRASH_RECOVERY_RECORDING, DEFAULT_CUSTOM_CURSOR_CAPTURE, DEFAULT_INSTANT_MODE_FPS,
+    DEFAULT_INSTANT_MODE_MAX_RESOLUTION, DEFAULT_OUT_OF_PROCESS_MUXER, DEFAULT_STUDIO_MAX_FPS,
+    FREE_INSTANT_MODE_MAX_RESOLUTION, PRO_INSTANT_MODE_MAX_RESOLUTION, RecordingDefaults,
+    default_studio_recording_quality,
+};
 pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};
 pub use output_pipeline::oop_muxer;
 pub use output_pipeline::*;

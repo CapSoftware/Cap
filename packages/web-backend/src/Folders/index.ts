@@ -1,4 +1,5 @@
 import * as Db from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
 import {
 	CurrentUser,
 	type DatabaseError,
@@ -21,6 +22,32 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 		const db = yield* Database;
 		const policy = yield* FoldersPolicy;
 		const repo = yield* FoldersRepo;
+
+		/**
+		 * Making a collection public is a Pro feature, gated on the organization
+		 * OWNER's plan (any manager can publish while the owner is Pro). Disabling
+		 * public never requires Pro, so a downgraded org can always un-publish.
+		 */
+		const requireOwnerPro = (organizationId: Organisation.OrganisationId) =>
+			Effect.gen(function* () {
+				const [owner] = yield* db.use((db) =>
+					db
+						.select({
+							stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
+							thirdPartyStripeSubscriptionId:
+								Db.users.thirdPartyStripeSubscriptionId,
+						})
+						.from(Db.organizations)
+						.innerJoin(Db.users, Dz.eq(Db.organizations.ownerId, Db.users.id))
+						.where(Dz.eq(Db.organizations.id, organizationId))
+						.limit(1),
+				);
+
+				if (!userIsPro(owner ?? null))
+					return yield* new Policy.PolicyDeniedError({
+						reason: "Upgrade to Cap Pro to create a public collection link",
+					});
+			});
 
 		const deleteFolder = (folder: {
 			id: Folder.FolderId;
@@ -75,10 +102,16 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 			create: Effect.fn("Folders.create")(function* (data: {
 				name: string;
 				color: Folder.FolderColor;
+				public?: boolean;
 				spaceId: Option.Option<Space.SpaceIdOrOrganisationId>;
 				parentId: Option.Option<Folder.FolderId>;
 			}) {
 				const user = yield* CurrentUser;
+
+				if (data.public === true)
+					yield* requireOwnerPro(
+						Organisation.OrganisationId.make(user.activeOrganizationId),
+					);
 
 				if (Option.isSome(data.spaceId)) {
 					yield* policy.canCreateIn(data.spaceId.value);
@@ -111,6 +144,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 						user.activeOrganizationId,
 					),
 					createdById: User.UserId.make(user.id),
+					public: data.public ?? false,
 					spaceId: data.spaceId,
 					parentId: data.parentId,
 				});
@@ -143,6 +177,24 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 						() => new Folder.NotFoundError(),
 					),
 				);
+
+				// Drizzle throws on an all-undefined .set(); a payload with only an
+				// id is a no-op, not an error.
+				if (
+					data.name === undefined &&
+					data.color === undefined &&
+					data.public === undefined &&
+					data.publicPage === undefined &&
+					data.parentId === undefined
+				)
+					return;
+
+				// Publishing, or customizing the public page, is Pro-gated on the
+				// org owner. Un-publishing (public: false) is always allowed.
+				if (data.public === true || data.publicPage !== undefined)
+					yield* requireOwnerPro(
+						Organisation.OrganisationId.make(folder.organizationId),
+					);
 
 				// If parentId is provided and not null, verify it exists and belongs to the same organization
 				if (data.parentId && Option.isSome(data.parentId)) {
@@ -191,6 +243,16 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 						.set({
 							name: data.name,
 							color: data.color,
+							public: data.public,
+							// Atomic merge so concurrent patches (and the logo upload
+							// action, which also writes settings.publicPage) can't
+							// overwrite each other's keys.
+							settings:
+								data.publicPage !== undefined
+									? Dz.sql`JSON_MERGE_PATCH(COALESCE(${Db.folders.settings}, '{}'), CAST(${JSON.stringify(
+											{ publicPage: data.publicPage },
+										)} AS JSON))`
+									: undefined,
 							parentId: data.parentId
 								? Option.getOrNull(data.parentId)
 								: undefined,
