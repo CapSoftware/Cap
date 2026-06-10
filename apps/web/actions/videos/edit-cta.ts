@@ -3,12 +3,14 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import type { VideoCta, VideoMetadata } from "@cap/database/types";
+import {
+	MAX_CTA_LABEL_LENGTH,
+	type VideoCta,
+	type VideoMetadata,
+} from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-
-const MAX_LABEL_LENGTH = 40;
 
 export async function editCta(videoId: Video.VideoId, cta: VideoCta | null) {
 	const user = await getCurrentUser();
@@ -33,7 +35,7 @@ export async function editCta(videoId: Video.VideoId, cta: VideoCta | null) {
 	let nextCta: VideoCta | undefined;
 
 	if (cta?.enabled) {
-		const label = cta.label.trim().slice(0, MAX_LABEL_LENGTH);
+		const label = cta.label.trim().slice(0, MAX_CTA_LABEL_LENGTH);
 		const url = cta.url.trim();
 
 		if (!label) {

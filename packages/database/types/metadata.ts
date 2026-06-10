@@ -44,6 +44,8 @@ export interface VideoCta {
 	url: string;
 }
 
+export const MAX_CTA_LABEL_LENGTH = 40;
+
 export type VideoEditRange = {
 	start: number;
 	end: number;

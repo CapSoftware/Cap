@@ -1,6 +1,6 @@
 "use client";
 
-import type { VideoCta } from "@cap/database/types";
+import { MAX_CTA_LABEL_LENGTH, type VideoCta } from "@cap/database/types";
 import {
 	Button,
 	Dialog,
@@ -19,8 +19,6 @@ import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { editCta } from "@/actions/videos/edit-cta";
-
-const MAX_LABEL_LENGTH = 40;
 
 export const CtaDialog = ({
 	isOpen,
@@ -97,7 +95,7 @@ export const CtaDialog = ({
 							id={labelId}
 							placeholder="Book a meeting"
 							value={label}
-							maxLength={MAX_LABEL_LENGTH}
+							maxLength={MAX_CTA_LABEL_LENGTH}
 							disabled={!enabled}
 							onChange={(e) => setLabel(e.target.value)}
 						/>
@@ -127,7 +125,10 @@ export const CtaDialog = ({
 						size="sm"
 						variant="dark"
 						onClick={handleSave}
-						disabled={isSaving || (enabled && (!label.trim() || !url.trim()))}
+						disabled={
+							isSaving ||
+							(enabled && (!label.trim() || !url.trim().startsWith("https://")))
+						}
 					>
 						{isSaving ? "Saving..." : "Save"}
 					</Button>
