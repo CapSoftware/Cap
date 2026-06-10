@@ -27,7 +27,7 @@ pub struct PendingEditorInstances(Arc<RwLock<HashMap<String, PendingReceiver>>>)
 async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
     let (frame_tx, frame_rx) = watch::channel(None);
 
-    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx, Default::default()).await;
     let (inner, render_frame_event_id) = create_editor_instance_impl(
         &app,
         path,
@@ -343,7 +343,8 @@ impl EditorInstances {
 
                 let (frame_tx, frame_rx) = watch::channel(None);
 
-                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+                let (ws_port, ws_shutdown_token) =
+                    create_watch_frame_ws(frame_rx, Default::default()).await;
                 let app_handle = window.app_handle().clone();
                 let (inner, render_frame_event_id) = create_editor_instance_impl(
                     window.app_handle(),
