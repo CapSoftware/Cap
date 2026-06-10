@@ -50,8 +50,8 @@ export const DownloadPage = () => {
 					Download Cap
 				</h1>
 				<p className="px-4 text-sm fade-in-down text-gray-11 animate-delay-2 md:text-base md:px-0">
-					The quickest way to share your screen. Pin to your dock and record in
-					seconds.
+					The quickest way to share your screen. Pin to your dock or taskbar and
+					record in seconds.
 				</p>
 				<div className="flex flex-col justify-center items-center space-y-4 fade-in-up animate-delay-2">
 					<div className="flex flex-col items-center space-y-4">
@@ -143,6 +143,41 @@ export const DownloadPage = () => {
 								Windows (Beta)
 							</a>
 						)}
+						{platform !== "linux" && (
+							<a
+								href="/download/linux"
+								onClick={() =>
+									trackDownloadClick("other_option_linux", "/download/linux")
+								}
+								className="text-sm transition-all text-gray-10 hover:underline"
+							>
+								Linux AppImage
+							</a>
+						)}
+						<a
+							href="/download/linux-deb"
+							onClick={() =>
+								trackDownloadClick(
+									"other_option_linux_deb",
+									"/download/linux-deb",
+								)
+							}
+							className="text-sm transition-all text-gray-10 hover:underline"
+						>
+							Debian/Ubuntu
+						</a>
+						<a
+							href="/download/linux-rpm"
+							onClick={() =>
+								trackDownloadClick(
+									"other_option_linux_rpm",
+									"/download/linux-rpm",
+								)
+							}
+							className="text-sm transition-all text-gray-10 hover:underline"
+						>
+							Fedora/RHEL
+						</a>
 						{platform === "macos" && isIntel && (
 							<a
 								href="/download/apple-silicon"

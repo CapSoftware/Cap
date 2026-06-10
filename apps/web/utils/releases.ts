@@ -2,7 +2,21 @@ export interface ReleaseDownloads {
 	"macos-arm64"?: string;
 	"macos-x64"?: string;
 	windows?: string;
+	"linux-appimage"?: string;
+	"linux-deb"?: string;
+	"linux-rpm"?: string;
 }
+
+export type ReleaseDownloadKey = keyof ReleaseDownloads;
+
+export const releaseDownloadKeys = [
+	"macos-arm64",
+	"macos-x64",
+	"windows",
+	"linux-appimage",
+	"linux-deb",
+	"linux-rpm",
+] satisfies ReleaseDownloadKey[];
 
 export interface Release {
 	version: string;
@@ -23,18 +37,23 @@ interface GitHubRelease {
 	prerelease: boolean;
 }
 
-function parseDownloadsFromBody(body: string): ReleaseDownloads {
+export function parseDownloadsFromBody(body: string): ReleaseDownloads {
 	const downloads: ReleaseDownloads = {};
 
 	const jsonMatch = body.match(/<!--\s*DOWNLOADS_JSON\s*(\{[^}]+\})\s*-->/);
 
 	if (jsonMatch?.[1]) {
 		try {
-			const parsed = JSON.parse(jsonMatch[1]);
-			if (parsed["macos-arm64"])
-				downloads["macos-arm64"] = parsed["macos-arm64"];
-			if (parsed["macos-x64"]) downloads["macos-x64"] = parsed["macos-x64"];
-			if (parsed.windows) downloads.windows = parsed.windows;
+			const parsed: unknown = JSON.parse(jsonMatch[1]);
+			if (!parsed || typeof parsed !== "object") return downloads;
+
+			const values = parsed as Partial<Record<ReleaseDownloadKey, unknown>>;
+			for (const key of releaseDownloadKeys) {
+				const value = values[key];
+				if (typeof value === "string" && value.length > 0) {
+					downloads[key] = value;
+				}
+			}
 		} catch {}
 	}
 
@@ -79,9 +98,5 @@ export async function getGitHubReleases(): Promise<Release[]> {
 }
 
 export function hasDownloads(downloads: ReleaseDownloads): boolean {
-	return !!(
-		downloads["macos-arm64"] ||
-		downloads["macos-x64"] ||
-		downloads.windows
-	);
+	return releaseDownloadKeys.some((key) => !!downloads[key]);
 }

@@ -1,7 +1,9 @@
 use cap_camera::CameraInfo;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 use cap_camera_ffmpeg::*;
 use cap_fail::fail_err;
 use cap_media_info::VideoInfo;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 use cap_timestamp::Timestamp;
 use futures::{
     FutureExt,
@@ -9,8 +11,9 @@ use futures::{
 };
 use kameo::prelude::*;
 use replace_with::replace_with_or_abort;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+use std::cmp::Ordering;
 use std::{
-    cmp::Ordering,
     ops::Deref,
     sync::{
         Arc, Weak,
@@ -562,6 +565,7 @@ pub enum SetInputError {
     Initialisation,
 }
 
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 fn find_camera(selected_camera: &DeviceOrModelID) -> Option<cap_camera::CameraInfo> {
     cap_camera::list_cameras().find(|c| match selected_camera {
         DeviceOrModelID::DeviceID(device_id) => c.device_id() == device_id,
@@ -575,13 +579,20 @@ struct SetupCameraResult {
     video_info: VideoInfo,
 }
 
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 static CAMERA_CALLBACK_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 const TARGET_CAMERA_WIDTH: u32 = 1280;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 const TARGET_CAMERA_HEIGHT: u32 = 720;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 const TARGET_CAMERA_FRAME_RATE: f32 = 30.0;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 const PREFERRED_CAMERA_FRAME_RATE: f32 = 29.0;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 const MIN_CAMERA_FRAME_RATE: f32 = 24.0;
 
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 fn select_preferred_camera_format(
     formats: &[cap_camera::Format],
     settings: CameraDeviceSettings,
@@ -626,6 +637,7 @@ fn select_preferred_camera_format(
     matches.into_iter().next()
 }
 
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 fn select_camera_format(
     camera: &cap_camera::CameraInfo,
     settings: Option<CameraDeviceSettings>,
@@ -819,7 +831,7 @@ async fn setup_camera(
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
 async fn setup_camera(
     id: &DeviceOrModelID,
     settings: Option<CameraDeviceSettings>,
@@ -878,6 +890,73 @@ async fn setup_camera(
                     }
                 }
             }
+
+            let Ok(mut ff_frame) = frame.as_ffmpeg() else {
+                return;
+            };
+
+            ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
+
+            if let Some(signal) = ready_signal.take() {
+                let video_info = VideoInfo::from_raw_ffmpeg(
+                    ff_frame.format(),
+                    ff_frame.width(),
+                    ff_frame.height(),
+                    frame_rate,
+                );
+
+                let _ = signal.send(video_info);
+            }
+
+            let send_result = recipient
+                .tell(NewFrame(FFmpegVideoFrame {
+                    inner: ff_frame,
+                    timestamp,
+                }))
+                .try_send();
+
+            if send_result.is_err() && callback_num.is_multiple_of(30) {
+                tracing::warn!(
+                    "Camera callback: failed to send frame {} to actor (mailbox full?)",
+                    callback_num
+                );
+            }
+        })
+        .map_err(|e| SetInputError::StartCapturing(e.to_string()))?;
+
+    let video_info = tokio::time::timeout(CAMERA_INIT_TIMEOUT, ready_rx)
+        .await
+        .map_err(|e| SetInputError::Timeout(e.to_string()))?
+        .map_err(|_| SetInputError::Initialisation)?;
+
+    Ok(SetupCameraResult {
+        handle: capture_handle,
+        camera_info: camera,
+        video_info,
+    })
+}
+
+#[cfg(target_os = "linux")]
+async fn setup_camera(
+    id: &DeviceOrModelID,
+    settings: Option<CameraDeviceSettings>,
+    recipient: Recipient<NewFrame>,
+    _native_recipient: Recipient<NewNativeFrame>,
+    _native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+) -> Result<SetupCameraResult, SetInputError> {
+    let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
+    let format = select_camera_format(&camera, settings)?;
+    let frame_rate = format.frame_rate().round().max(1.0) as u32;
+
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let mut ready_signal = Some(ready_tx);
+
+    let capture_handle = camera
+        .start_capturing(format.clone(), move |frame| {
+            let callback_num =
+                CAMERA_CALLBACK_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            let timestamp = Timestamp::Instant(std::time::Instant::now());
 
             let Ok(mut ff_frame) = frame.as_ffmpeg() else {
                 return;

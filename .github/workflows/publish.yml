@@ -184,6 +184,8 @@ jobs:
             runner: macos-latest-xlarge
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
@@ -194,17 +196,22 @@ jobs:
         with:
           ref: ${{ needs.draft.outputs.tag_name }}
 
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+
       - name: Create API Key File
+        if: ${{ runner.os == 'macOS' }}
         run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
 
       - uses: apple-actions/import-codesign-certs@v2
-        if: ${{ matrix.settings.runner == 'macos-latest-xlarge' }}
+        if: ${{ runner.os == 'macOS' }}
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Verify certificate
-        if: ${{ matrix.settings.runner == 'macos-latest-xlarge' }}
+        if: ${{ runner.os == 'macOS' }}
         run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
 
       - name: Rust setup
@@ -245,8 +252,8 @@ jobs:
         run: pnpm -w cap-setup
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_KEYCHAIN: ${{ runner.os == 'macOS' && format('{0}/build.keychain', runner.temp) || '' }}
 
       - name: Build desktop binaries
         shell: bash
@@ -260,14 +267,14 @@ jobs:
           CI: false
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # codesigning
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
           # notarization
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_PATH: ${{ github.workspace }}/api.p8
-          APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_KEY_PATH: ${{ runner.os == 'macOS' && format('{0}/api.p8', github.workspace) || '' }}
+          APPLE_KEYCHAIN: ${{ runner.os == 'macOS' && format('{0}/build.keychain', runner.temp) || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}

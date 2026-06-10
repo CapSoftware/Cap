@@ -262,12 +262,14 @@ pub(crate) fn trim_audio_frame_front(
     Some(new_frame)
 }
 
+#[cfg(any(test, target_os = "macos", windows))]
 pub(crate) enum BlockingThreadFinish {
     Clean,
     Failed(anyhow::Error),
     TimedOut(anyhow::Error),
 }
 
+#[cfg(any(test, target_os = "macos", windows))]
 fn join_blocking_thread(
     handle: std::thread::JoinHandle<anyhow::Result<()>>,
     label: &str,
@@ -279,6 +281,7 @@ fn join_blocking_thread(
     }
 }
 
+#[cfg(any(test, target_os = "macos", windows))]
 pub(crate) fn spawn_blocking_thread_timeout_cleanup(
     handle: std::thread::JoinHandle<anyhow::Result<()>>,
     label: &str,
@@ -555,6 +558,7 @@ pub(crate) fn send_with_stall_budget_flume<T>(
     }
 }
 
+#[cfg(any(test, target_os = "macos", windows))]
 pub(crate) fn wait_for_blocking_thread_finish(
     handle: std::thread::JoinHandle<anyhow::Result<()>>,
     timeout: Duration,
@@ -582,6 +586,7 @@ pub(crate) fn wait_for_blocking_thread_finish(
     }
 }
 
+#[cfg(any(target_os = "macos", windows))]
 pub(crate) fn combine_finish_errors(
     primary: anyhow::Error,
     secondary: anyhow::Error,

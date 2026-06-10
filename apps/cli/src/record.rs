@@ -1,10 +1,14 @@
+use cap_project::{
+    InstantRecordingMeta, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+};
 use cap_recording::{
     CameraFeed, MicrophoneFeed,
     feeds::{camera, microphone},
+    instant_recording,
     screen_capture::ScreenCaptureTarget,
-    studio_recording::{self, ActorHandle, CompletedRecording},
+    studio_recording::{self, ActorHandle as StudioActorHandle},
 };
-use clap::Args;
+use clap::{Args, ValueEnum};
 use futures::FutureExt;
 use kameo::Actor as _;
 use scap_targets::{DisplayId, WindowId};
@@ -33,6 +37,9 @@ use crate::{
 pub struct RecordParams {
     #[command(flatten)]
     target: RecordTargets,
+    /// Recording mode to use
+    #[arg(long, value_enum, default_value_t = RecordMode::Studio)]
+    mode: RecordMode,
     /// Capture from the camera with this device id (see `cap targets cameras`)
     #[arg(long)]
     camera: Option<String>,
@@ -77,6 +84,8 @@ impl RecordParams {
             args.push("--window".to_string());
             args.push(id.to_string());
         }
+        args.push("--mode".to_string());
+        args.push(self.mode.to_string());
         if let Some(camera) = &self.camera {
             args.push("--camera".to_string());
             args.push(camera.clone());
@@ -101,6 +110,21 @@ impl RecordParams {
             args.push(duration.to_string());
         }
         args
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum RecordMode {
+    Studio,
+    Instant,
+}
+
+impl std::fmt::Display for RecordMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Studio => f.write_str("studio"),
+            Self::Instant => f.write_str("instant"),
+        }
     }
 }
 
@@ -408,12 +432,15 @@ async fn session_worker(params: RecordParams, recording_id: &str) -> Result<(), 
 
     let stop_path = session::stop_file(recording_id)?;
     let completed = finalize(actor, params.duration, false, Some(&stop_path)).await?;
-    let recording_meta_exists = completed.project_path.join("recording-meta.json").exists();
+    let recording_meta_exists = completed
+        .project_path()
+        .join("recording-meta.json")
+        .exists();
 
     session::write_session(&Session {
         recording_id: recording_id.to_string(),
         pid: std::process::id(),
-        path: completed.project_path,
+        path: completed.project_path().to_path_buf(),
         status: SessionStatus::Stopped,
         started_at,
         recording_meta_exists: Some(recording_meta_exists),
@@ -599,13 +626,51 @@ pub fn status(format: OutputFormat) -> Result<(), String> {
     }
 }
 
+enum ActorHandle {
+    Studio(StudioActorHandle),
+    Instant(instant_recording::ActorHandle),
+}
+
+impl ActorHandle {
+    async fn stop(&self) -> Result<CompletedRecording, String> {
+        match self {
+            Self::Studio(actor) => actor
+                .stop()
+                .await
+                .map(CompletedRecording::Studio)
+                .map_err(|e| e.to_string()),
+            Self::Instant(actor) => actor
+                .stop()
+                .await
+                .map(CompletedRecording::Instant)
+                .map_err(|e| e.to_string()),
+        }
+    }
+}
+
+enum CompletedRecording {
+    Studio(studio_recording::CompletedRecording),
+    Instant(instant_recording::CompletedRecording),
+}
+
+impl CompletedRecording {
+    fn project_path(&self) -> &Path {
+        match self {
+            Self::Studio(recording) => &recording.project_path,
+            Self::Instant(recording) => &recording.project_path,
+        }
+    }
+}
+
 async fn start_recording(
     params: &RecordParams,
     target: ScreenCaptureTarget,
     path: PathBuf,
 ) -> Result<ActorHandle, String> {
-    let mut builder =
-        studio_recording::Actor::builder(path, target).with_system_audio(params.system_audio);
+    let mut studio_builder = studio_recording::Actor::builder(path.clone(), target.clone())
+        .with_system_audio(params.system_audio);
+    let mut instant_builder =
+        instant_recording::Actor::builder(path, target).with_system_audio(params.system_audio);
     let mut camera_active = false;
 
     // Feeds must be locked and attached before build(); the lock keeps the device open for the whole
@@ -635,7 +700,9 @@ async fn start_recording(
             .ask(camera::Lock)
             .await
             .map_err(|e| format!("Failed to lock camera feed: {e}"))?;
-        builder = builder.with_camera_feed(Arc::new(lock));
+        let lock = Arc::new(lock);
+        studio_builder = studio_builder.with_camera_feed(lock.clone());
+        instant_builder = instant_builder.with_camera_feed(lock);
         camera_active = true;
     }
 
@@ -665,28 +732,55 @@ async fn start_recording(
             .ask(microphone::Lock)
             .await
             .map_err(|e| format!("Failed to lock mic feed: {e}"))?;
-        builder = builder.with_mic_feed(Arc::new(lock));
+        let lock = Arc::new(lock);
+        studio_builder = studio_builder.with_mic_feed(lock.clone());
+        instant_builder = instant_builder.with_mic_feed(lock);
     }
 
-    // Reuse the desktop app's recording defaults rather than a CLI-specific config; `finalize`
-    // remuxes the resulting fragmented recording so the `.cap` stays directly exportable.
-    let builder = cap_recording::RecordingDefaults::default().apply_to_studio_builder(
-        builder,
-        camera_active,
-        params.fps,
-    );
+    match params.mode {
+        RecordMode::Studio => {
+            let builder = cap_recording::RecordingDefaults::default().apply_to_studio_builder(
+                studio_builder,
+                camera_active,
+                params.fps,
+            );
 
-    builder
-        .build(
-            #[cfg(target_os = "macos")]
-            Some(cap_recording::SendableShareableContent::from(
-                cidre::sc::ShareableContent::current()
-                    .await
-                    .map_err(|e| format!("Failed to read shareable content: {e}"))?,
-            )),
-        )
-        .await
-        .map_err(|e| e.to_string())
+            builder
+                .build(
+                    #[cfg(target_os = "macos")]
+                    Some(cap_recording::SendableShareableContent::from(
+                        cidre::sc::ShareableContent::current()
+                            .await
+                            .map_err(|e| format!("Failed to read shareable content: {e}"))?,
+                    )),
+                )
+                .await
+                .map(ActorHandle::Studio)
+                .map_err(|e| e.to_string())
+        }
+        RecordMode::Instant => {
+            let mut builder = instant_builder;
+            builder = builder.with_max_output_size(
+                cap_recording::RecordingDefaults::default().instant_mode_max_resolution,
+            );
+            if let Some(fps) = params.fps {
+                builder = builder.with_max_fps(fps);
+            }
+
+            builder
+                .build(
+                    #[cfg(target_os = "macos")]
+                    Some(cap_recording::SendableShareableContent::from(
+                        cidre::sc::ShareableContent::current()
+                            .await
+                            .map_err(|e| format!("Failed to read shareable content: {e}"))?,
+                    )),
+                )
+                .await
+                .map(ActorHandle::Instant)
+                .map_err(|e| e.to_string())
+        }
+    }
 }
 
 /// Wait for the stop trigger, then finalize the recording. A panic between start and stop would
@@ -720,30 +814,98 @@ async fn finalize(
             .map_err(|e| format!("recording panicked; finalize failed: {e}"))?,
     };
 
-    remux_fragmented(completed).await
+    finalize_completed(completed).await
 }
 
-/// Remux a freshly-stopped recording in place if it finalized as fragments (`NeedsRemux`). Reuses
-/// the shared `RecoveryManager` the desktop uses; `recover` is synchronous and ffmpeg-heavy, so it
-/// runs on a blocking thread. A no-op for recordings already stored as progressive mp4.
-async fn remux_fragmented(completed: CompletedRecording) -> Result<CompletedRecording, String> {
-    let project_path = completed.project_path.clone();
-    tokio::task::spawn_blocking(move || {
-        cap_recording::recovery::RecoveryManager::remux_if_needed(&project_path)
-    })
-    .await
-    .map_err(|e| format!("recording finalize task failed: {e}"))?
-    .map_err(|e| format!("Failed to remux recording: {e}"))?;
+async fn finalize_completed(completed: CompletedRecording) -> Result<CompletedRecording, String> {
+    match &completed {
+        CompletedRecording::Studio(recording) => {
+            let project_path = recording.project_path.clone();
+            tokio::task::spawn_blocking(move || {
+                cap_recording::recovery::RecoveryManager::remux_if_needed(&project_path)
+            })
+            .await
+            .map_err(|e| format!("recording finalize task failed: {e}"))?
+            .map_err(|e| format!("Failed to remux recording: {e}"))?;
+        }
+        CompletedRecording::Instant(recording) => {
+            finalize_instant_output(recording.project_path.clone()).await?;
+            persist_instant_recording_meta(recording)?;
+        }
+    }
 
     Ok(completed)
 }
 
+async fn finalize_instant_output(project_path: PathBuf) -> Result<(), String> {
+    let output_path = project_path.join("content/output.mp4");
+    let audio_dir = project_path.join("content/audio");
+    if std::fs::metadata(&output_path)
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false)
+        && !audio_dir.exists()
+    {
+        return Ok(());
+    }
+
+    let display_dir = project_path.join("content/display");
+    tokio::task::spawn_blocking(move || {
+        cap_recording::recovery::RecoveryManager::finalize_instant_output(
+            &display_dir,
+            &audio_dir,
+            &output_path,
+        )
+    })
+    .await
+    .map_err(|e| format!("instant recording finalize task failed: {e}"))?
+    .map_err(|e| format!("Failed to finalize instant recording: {e}"))?;
+
+    Ok(())
+}
+
+fn persist_instant_recording_meta(
+    recording: &instant_recording::CompletedRecording,
+) -> Result<(), String> {
+    let pretty_name = recording
+        .project_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Cap Recording")
+        .to_string();
+    let meta = match &recording.meta {
+        InstantRecordingMeta::Complete { .. } => recording.meta.clone(),
+        InstantRecordingMeta::InProgress { .. } => InstantRecordingMeta::Failed {
+            error: "instant recording stopped before completion".to_string(),
+        },
+        InstantRecordingMeta::Failed { .. } => recording.meta.clone(),
+    };
+
+    RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: recording.project_path.clone(),
+        pretty_name,
+        sharing: None,
+        inner: RecordingMetaInner::Instant(meta),
+        upload: None,
+    }
+    .save_for_project()
+    .map_err(|e| format!("Failed to save instant recording meta: {e}"))?;
+
+    ProjectConfiguration::default()
+        .write(&recording.project_path)
+        .map_err(|e| format!("Failed to save instant project config: {e}"))
+}
+
 fn emit_stopped(format: OutputFormat, completed: &CompletedRecording) -> Result<(), String> {
-    let recording_meta_exists = completed.project_path.join("recording-meta.json").exists();
+    let recording_meta_exists = completed
+        .project_path()
+        .join("recording-meta.json")
+        .exists();
     emit_record_event(
         format,
         &RecordEvent::Stopped {
-            path: &completed.project_path.display().to_string(),
+            path: &completed.project_path().display().to_string(),
             recording_meta_exists,
         },
     )

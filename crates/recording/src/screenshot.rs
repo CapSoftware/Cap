@@ -1,24 +1,31 @@
 use crate::sources::screen_capture::ScreenCaptureTarget;
+#[cfg(target_os = "linux")]
+use crate::sources::screen_capture::{X11InputConfig, frame_from_x11_packet, open_x11_input};
 #[cfg(target_os = "macos")]
+use anyhow::Context;
+#[cfg(target_os = "linux")]
 use anyhow::Context;
 use anyhow::anyhow;
 use image::{DynamicImage, RgbImage, RgbaImage};
 #[cfg(target_os = "macos")]
 use scap_ffmpeg::AsFFmpeg;
+#[cfg(not(target_os = "linux"))]
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_os = "linux"))]
 use std::time::Duration;
+#[cfg(not(target_os = "linux"))]
 use tokio::sync::oneshot;
+#[cfg(not(target_os = "linux"))]
 use tracing::debug;
 #[cfg(target_os = "macos")]
 use tracing::error;
 
 #[cfg(target_os = "macos")]
 use core_graphics::geometry::{CGPoint, CGRect, CGSize};
-#[cfg(target_os = "macos")]
-use scap_screencapturekit::{Capturer, StreamCfgBuilder};
-
 #[cfg(target_os = "windows")]
 use scap_direct3d::{Capturer, Frame, NewCapturerError, PixelFormat, Settings};
+#[cfg(target_os = "macos")]
+use scap_screencapturekit::{Capturer, StreamCfgBuilder};
 #[cfg(target_os = "windows")]
 use std::sync::OnceLock;
 #[cfg(target_os = "windows")]
@@ -44,6 +51,7 @@ fn unsupported_error() -> anyhow::Error {
     anyhow!(WINDOWS_CAPTURE_UNSUPPORTED)
 }
 
+#[cfg(not(target_os = "linux"))]
 #[derive(Clone, Copy)]
 enum ChannelOrder {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -51,6 +59,7 @@ enum ChannelOrder {
     Bgra,
 }
 
+#[cfg(not(target_os = "linux"))]
 fn rgb_from_rgba(
     data: &[u8],
     width: usize,
@@ -96,6 +105,7 @@ fn rgb_from_rgba(
     RgbImage::from_raw(width as u32, height as u32, rgb)
 }
 
+#[cfg(not(target_os = "linux"))]
 fn rgba_from_raw(
     data: &[u8],
     width: usize,
@@ -474,7 +484,7 @@ fn windows_capture_settings(target: &ScreenCaptureTarget) -> anyhow::Result<(Set
 
     let mut cropped = false;
 
-    if let ScreenCaptureTarget::Area { bounds, screen } = target {
+    if let ScreenCaptureTarget::Area { bounds, screen: _ } = target {
         let display =
             scap_targets::Display::from_id(screen).ok_or_else(|| anyhow!("Display not found"))?;
         let physical = display
@@ -807,6 +817,13 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
     Some(image)
 }
 
+#[cfg(target_os = "linux")]
+pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<DynamicImage> {
+    let image = capture_screenshot_x11(&target).await?;
+    Ok(finalize_screenshot(image, &target))
+}
+
+#[cfg(not(target_os = "linux"))]
 pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<DynamicImage> {
     #[cfg(target_os = "macos")]
     {
@@ -1091,6 +1108,7 @@ fn finalize_screenshot(image: RgbImage, target: &ScreenCaptureTarget) -> Dynamic
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn crop_area_if_needed(
     image: RgbImage,
     target: &ScreenCaptureTarget,
@@ -1100,6 +1118,9 @@ fn crop_area_if_needed(
         if skip_crop {
             return Ok(image);
         }
+
+        #[cfg(target_os = "linux")]
+        let _ = screen;
 
         #[cfg(target_os = "macos")]
         let scale = {
@@ -1116,6 +1137,9 @@ fn crop_area_if_needed(
             let logical_width = display.logical_size().map(|s| s.width()).unwrap_or(1.0);
             physical_width / logical_width
         };
+
+        #[cfg(target_os = "linux")]
+        let scale = 1.0;
 
         let x = (bounds.position().x() * scale) as u32;
         let y = (bounds.position().y() * scale) as u32;
@@ -1141,7 +1165,7 @@ fn crop_area_if_needed(
     Ok(image)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn convert_ffmpeg_frame_to_image(frame: &ffmpeg::frame::Video) -> anyhow::Result<RgbImage> {
     let mut scaler = ffmpeg::software::scaling::context::Context::get(
         frame.format(),
@@ -1184,4 +1208,102 @@ fn convert_ffmpeg_frame_to_image(frame: &ffmpeg::frame::Video) -> anyhow::Result
 
     RgbImage::from_raw(width as u32, height as u32, img_buffer)
         .ok_or_else(|| anyhow!("Failed to create image buffer"))
+}
+
+#[cfg(target_os = "linux")]
+async fn capture_screenshot_x11(target: &ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
+    let target = target.clone();
+    tokio::task::spawn_blocking(move || capture_screenshot_x11_blocking(&target))
+        .await
+        .context("Linux screenshot task failed")?
+}
+
+#[cfg(target_os = "linux")]
+fn capture_screenshot_x11_blocking(target: &ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
+    let (display_name, x, y, width, height) = linux_capture_geometry(target)?;
+    let config = X11InputConfig {
+        display_name,
+        x,
+        y,
+        width,
+        height,
+        fps: 1,
+        show_cursor: false,
+    };
+    let mut input = open_x11_input(&config)?;
+    let stream = input
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .ok_or_else(|| anyhow!("x11grab did not expose a video stream"))?;
+    let stream_index = stream.index();
+
+    for (stream, packet) in input.packets() {
+        if stream.index() != stream_index {
+            continue;
+        }
+        let frame = frame_from_x11_packet(&packet, config.width, config.height)?;
+        return convert_ffmpeg_frame_to_image(&frame);
+    }
+
+    Err(anyhow!("x11grab ended before producing a screenshot frame"))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_capture_geometry(
+    target: &ScreenCaptureTarget,
+) -> anyhow::Result<(String, i32, i32, u32, u32)> {
+    let display_name = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+    match target {
+        ScreenCaptureTarget::Display { id } => {
+            let display =
+                scap_targets::Display::from_id(id).ok_or_else(|| anyhow!("Display not found"))?;
+            let position = display
+                .raw_handle()
+                .physical_position()
+                .ok_or_else(|| anyhow!("Display position unavailable"))?;
+            let size = display
+                .physical_size()
+                .ok_or_else(|| anyhow!("Display size unavailable"))?;
+            Ok((
+                display_name,
+                position.x() as i32,
+                position.y() as i32,
+                size.width().max(1.0) as u32,
+                size.height().max(1.0) as u32,
+            ))
+        }
+        ScreenCaptureTarget::Window { id } => {
+            let window =
+                scap_targets::Window::from_id(id).ok_or_else(|| anyhow!("Window not found"))?;
+            let bounds = window
+                .raw_handle()
+                .physical_bounds()
+                .ok_or_else(|| anyhow!("Window bounds unavailable"))?;
+            Ok((
+                display_name,
+                bounds.position().x() as i32,
+                bounds.position().y() as i32,
+                bounds.size().width().max(1.0) as u32,
+                bounds.size().height().max(1.0) as u32,
+            ))
+        }
+        ScreenCaptureTarget::Area { screen, bounds } => {
+            let display = scap_targets::Display::from_id(screen)
+                .ok_or_else(|| anyhow!("Display not found"))?;
+            let position = display
+                .raw_handle()
+                .physical_position()
+                .ok_or_else(|| anyhow!("Display position unavailable"))?;
+            Ok((
+                display_name,
+                position.x() as i32 + bounds.position().x().max(0.0) as i32,
+                position.y() as i32 + bounds.position().y().max(0.0) as i32,
+                bounds.size().width().max(1.0) as u32,
+                bounds.size().height().max(1.0) as u32,
+            ))
+        }
+        ScreenCaptureTarget::CameraOnly => {
+            Err(anyhow!("Camera-only not supported for screenshots"))
+        }
+    }
 }

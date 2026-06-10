@@ -1,8 +1,10 @@
 const capAppPathParameter = "$" + "{CAP_APP_PATH:-}";
 const capCliInstallDirParameter = "$" + "{CAP_CLI_INSTALL_DIR:-}";
 const capDesktopInstallDirParameter = "$" + "{CAP_DESKTOP_INSTALL_DIR:-}";
+const capDesktopInstallFormatParameter = "$" + "{CAP_DESKTOP_INSTALL_FORMAT:-}";
 const capDesktopForceInstallParameter = "$" + "{CAP_DESKTOP_FORCE_INSTALL:-}";
 const homeParameter = "$" + "{HOME:-}";
+const xdgDataHomeParameter = "$" + "{XDG_DATA_HOME:-}";
 const capNoModifyPathParameter = "$" + "{CAP_NO_MODIFY_PATH:-}";
 const shellParameter = "$" + "{SHELL:-/bin/sh}";
 const tmpDirParameter = "$" + "{TMPDIR:-/tmp}";
@@ -13,15 +15,21 @@ set -eu
 APP_PATH="${capAppPathParameter}"
 CLI_INSTALL_DIR_OVERRIDE="${capCliInstallDirParameter}"
 DESKTOP_INSTALL_DIR_OVERRIDE="${capDesktopInstallDirParameter}"
+DESKTOP_INSTALL_FORMAT="${capDesktopInstallFormatParameter}"
 DESKTOP_FORCE_INSTALL="${capDesktopForceInstallParameter}"
 HOME_DIR="${homeParameter}"
+XDG_DATA_HOME_DIR="${xdgDataHomeParameter}"
 TMP_BASE="${tmpDirParameter}"
 TMP_ROOT=""
 MOUNT_DIR=""
 APP_TMP=""
+APPIMAGE_PATH=""
+APPDIR_PATH=""
+CLI_TARGET=""
 MOUNTED=0
+OS_NAME="$(uname -s)"
 
-find_cap_app() {
+find_cap_app_macos() {
 	for candidate in "/Applications/Cap.app" "$HOME_DIR/Applications/Cap.app"; do
 		if [ -d "$candidate" ]; then
 			APP_PATH="$candidate"
@@ -46,12 +54,181 @@ cleanup_desktop_install() {
 	fi
 }
 
-install_cap_desktop() {
-	if [ "$(uname -s)" != "Darwin" ]; then
-		echo "Cap Desktop auto-install is only supported on macOS. Install Cap from https://cap.so/download, then run this script again." >&2
+linux_app_data_dir() {
+	if [ -n "$DESKTOP_INSTALL_DIR_OVERRIDE" ]; then
+		printf '%s\n' "$DESKTOP_INSTALL_DIR_OVERRIDE"
+	elif [ -n "$XDG_DATA_HOME_DIR" ]; then
+		printf '%s\n' "$XDG_DATA_HOME_DIR/cap"
+	else
+		printf '%s\n' "$HOME_DIR/.local/share/cap"
+	fi
+}
+
+linux_require_supported_arch() {
+	case "$(uname -m)" in
+		x86_64|amd64)
+			;;
+		*)
+			echo "Cap for Linux currently ships x86_64 desktop builds. Unsupported architecture: $(uname -m)" >&2
+			exit 1
+			;;
+	esac
+}
+
+run_as_root() {
+	if [ "$(id -u)" = "0" ]; then
+		"$@"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo "$@"
+	else
+		echo "Installing this package requires root. Re-run with sudo installed, or use CAP_DESKTOP_INSTALL_FORMAT=appimage." >&2
+		exit 1
+	fi
+}
+
+find_cli_in_dir() {
+	root="$1"
+	if [ ! -d "$root" ]; then
+		return 1
+	fi
+
+	for dir in "$root" "$root/usr/bin" "$root/usr/lib/cap" "$root/usr/lib/Cap" "$root/usr/lib64/cap" "$root/opt/Cap" "$root/resources" "$root/Contents/MacOS"; do
+		for name in cap-cli cap-cli-x86_64-unknown-linux-gnu cap-cli-aarch64-unknown-linux-gnu; do
+			candidate="$dir/$name"
+			if [ -x "$candidate" ]; then
+				CLI_TARGET="$candidate"
+				return 0
+			fi
+		done
+	done
+
+	candidate="$(find "$root" -type f \( -name "cap-cli" -o -name "cap-cli-*linux*" \) -perm -111 2>/dev/null | head -n 1 || true)"
+	if [ -n "$candidate" ]; then
+		CLI_TARGET="$candidate"
+		return 0
+	fi
+
+	return 1
+}
+
+prepare_appimage_cli() {
+	if [ -z "$APPIMAGE_PATH" ] || [ ! -f "$APPIMAGE_PATH" ]; then
+		return 1
+	fi
+
+	if [ -z "$APPDIR_PATH" ]; then
+		APPDIR_PATH="$(linux_app_data_dir)/Cap.AppDir"
+	fi
+
+	if [ -d "$APPDIR_PATH" ] && find_cli_in_dir "$APPDIR_PATH"; then
+		if [ ! "$APPIMAGE_PATH" -nt "$CLI_TARGET" ]; then
+			return 0
+		fi
+	fi
+
+	chmod +x "$APPIMAGE_PATH"
+	TMP_ROOT="$(mktemp -d "$TMP_BASE/cap-cli-install.XXXXXX")"
+	EXTRACT_DIR="$TMP_ROOT/appimage"
+	APP_TMP="$APPDIR_PATH.installing"
+	mkdir -p "$EXTRACT_DIR" "$(dirname "$APPDIR_PATH")"
+
+	trap cleanup_desktop_install EXIT HUP INT TERM
+
+	echo "Extracting Cap Desktop AppImage..."
+	if ! (cd "$EXTRACT_DIR" && "$APPIMAGE_PATH" --appimage-extract >/dev/null); then
+		echo "Could not extract Cap Desktop AppImage." >&2
 		exit 1
 	fi
 
+	if [ ! -d "$EXTRACT_DIR/squashfs-root" ]; then
+		echo "Cap Desktop AppImage extraction did not produce an AppDir." >&2
+		exit 1
+	fi
+
+	rm -rf "$APP_TMP"
+	mv "$EXTRACT_DIR/squashfs-root" "$APP_TMP"
+	rm -rf "$APPDIR_PATH"
+	mv "$APP_TMP" "$APPDIR_PATH"
+	APP_TMP=""
+	rm -rf "$TMP_ROOT"
+	TMP_ROOT=""
+
+	find_cli_in_dir "$APPDIR_PATH"
+}
+
+find_linux_system_cli() {
+	for root in /usr/bin /usr/local/bin /usr/lib/cap /usr/lib/Cap /usr/lib64/cap /opt/Cap /opt/cap /usr/share/cap /usr/share/Cap; do
+		if find_cli_in_dir "$root"; then
+			return 0
+		fi
+	done
+
+	candidate="$(find /usr/lib /usr/lib64 /opt -type f \( -name "cap-cli" -o -name "cap-cli-*linux*" \) -perm -111 2>/dev/null | head -n 1 || true)"
+	if [ -n "$candidate" ]; then
+		CLI_TARGET="$candidate"
+		return 0
+	fi
+
+	return 1
+}
+
+find_linux_cli_target() {
+	if [ -n "$APP_PATH" ]; then
+		if [ -d "$APP_PATH" ]; then
+			if find_cli_in_dir "$APP_PATH"; then
+				return 0
+			fi
+		elif [ -f "$APP_PATH" ]; then
+			case "$APP_PATH" in
+				*.AppImage|*.appimage)
+					APPIMAGE_PATH="$APP_PATH"
+					APPDIR_PATH="$(dirname "$APP_PATH")/Cap.AppDir"
+					if prepare_appimage_cli; then
+						return 0
+					fi
+					;;
+				*)
+					if [ -x "$APP_PATH" ]; then
+						case "$(basename "$APP_PATH")" in
+							cap-cli|cap-cli-*linux*)
+								CLI_TARGET="$APP_PATH"
+								return 0
+								;;
+						esac
+					fi
+
+					if find_cli_in_dir "$(dirname "$APP_PATH")"; then
+						return 0
+					fi
+					;;
+			esac
+		fi
+	fi
+
+	if find_linux_system_cli; then
+		return 0
+	fi
+
+	DATA_DIR="$(linux_app_data_dir)"
+	APPDIR_PATH="$DATA_DIR/Cap.AppDir"
+	if [ -d "$APPDIR_PATH" ] && find_cli_in_dir "$APPDIR_PATH"; then
+		return 0
+	fi
+
+	for candidate in "$DATA_DIR/Cap.AppImage" "$HOME_DIR/Applications/Cap.AppImage" "$HOME_DIR/Cap.AppImage"; do
+		if [ -f "$candidate" ]; then
+			APPIMAGE_PATH="$candidate"
+			APPDIR_PATH="$(dirname "$candidate")/Cap.AppDir"
+			if prepare_appimage_cli; then
+				return 0
+			fi
+		fi
+	done
+
+	return 1
+}
+
+install_cap_desktop_macos() {
 	case "$(uname -m)" in
 		arm64|aarch64) DOWNLOAD_URL="https://cap.so/download/apple-silicon" ;;
 		x86_64|amd64) DOWNLOAD_URL="https://cap.so/download/apple-intel" ;;
@@ -111,36 +288,170 @@ install_cap_desktop() {
 	trap - EXIT HUP INT TERM
 }
 
-if [ -z "$HOME_DIR" ]; then
-	echo "Could not determine home directory. Set HOME, then run this script again." >&2
-	exit 1
-fi
+install_cap_desktop_linux_appimage() {
+	linux_require_supported_arch
+	APP_DIR="$(linux_app_data_dir)"
+	APPIMAGE_PATH="$APP_DIR/Cap.AppImage"
+	APPDIR_PATH="$APP_DIR/Cap.AppDir"
+	mkdir -p "$APP_DIR"
 
-if [ -z "$APP_PATH" ]; then
-	if ! find_cap_app; then
-		install_cap_desktop
+	echo "Downloading Cap Desktop AppImage..."
+	curl -fL "https://cap.so/download/linux-appimage" -o "$APPIMAGE_PATH"
+	chmod +x "$APPIMAGE_PATH"
+
+	if ! prepare_appimage_cli; then
+		echo "This Cap Desktop AppImage does not include the CLI." >&2
+		exit 1
 	fi
-elif [ ! -d "$APP_PATH" ]; then
-	echo "Cap Desktop was not found at $APP_PATH." >&2
-	exit 1
-fi
+}
 
-if [ -n "$DESKTOP_FORCE_INSTALL" ]; then
-	install_cap_desktop
-fi
+install_cap_desktop_linux_deb() {
+	linux_require_supported_arch
+	TMP_ROOT="$(mktemp -d "$TMP_BASE/cap-cli-install.XXXXXX")"
+	DEB_PATH="$TMP_ROOT/Cap.deb"
+	trap cleanup_desktop_install EXIT HUP INT TERM
 
-CLI_TARGET="$APP_PATH/Contents/MacOS/cap-cli"
+	echo "Downloading Cap Desktop Debian package..."
+	curl -fL "https://cap.so/download/linux-deb" -o "$DEB_PATH"
 
-if [ ! -x "$CLI_TARGET" ]; then
-	echo "This Cap Desktop install does not include the CLI. Reinstalling Cap Desktop..."
-	install_cap_desktop
-	CLI_TARGET="$APP_PATH/Contents/MacOS/cap-cli"
+	if command -v apt-get >/dev/null 2>&1; then
+		run_as_root apt-get install -y "$DEB_PATH"
+	elif command -v dpkg >/dev/null 2>&1; then
+		run_as_root dpkg -i "$DEB_PATH"
+	else
+		echo "Could not find apt-get or dpkg. Use CAP_DESKTOP_INSTALL_FORMAT=appimage on this system." >&2
+		exit 1
+	fi
+
+	rm -rf "$TMP_ROOT"
+	TMP_ROOT=""
+	trap - EXIT HUP INT TERM
+
+	if ! find_linux_cli_target; then
+		echo "This Cap Desktop package does not include the CLI." >&2
+		exit 1
+	fi
+}
+
+install_cap_desktop_linux_rpm() {
+	linux_require_supported_arch
+	TMP_ROOT="$(mktemp -d "$TMP_BASE/cap-cli-install.XXXXXX")"
+	RPM_PATH="$TMP_ROOT/Cap.rpm"
+	trap cleanup_desktop_install EXIT HUP INT TERM
+
+	echo "Downloading Cap Desktop RPM package..."
+	curl -fL "https://cap.so/download/linux-rpm" -o "$RPM_PATH"
+
+	if command -v dnf >/dev/null 2>&1; then
+		run_as_root dnf install -y "$RPM_PATH"
+	elif command -v yum >/dev/null 2>&1; then
+		run_as_root yum install -y "$RPM_PATH"
+	elif command -v zypper >/dev/null 2>&1; then
+		run_as_root zypper --non-interactive install "$RPM_PATH"
+	elif command -v rpm >/dev/null 2>&1; then
+		run_as_root rpm -Uvh "$RPM_PATH"
+	else
+		echo "Could not find dnf, yum, zypper, or rpm. Use CAP_DESKTOP_INSTALL_FORMAT=appimage on this system." >&2
+		exit 1
+	fi
+
+	rm -rf "$TMP_ROOT"
+	TMP_ROOT=""
+	trap - EXIT HUP INT TERM
+
+	if ! find_linux_cli_target; then
+		echo "This Cap Desktop package does not include the CLI." >&2
+		exit 1
+	fi
+}
+
+install_cap_desktop_linux() {
+	FORMAT="$(printf '%s' "$DESKTOP_INSTALL_FORMAT" | tr '[:upper:]' '[:lower:]')"
+	if [ -z "$FORMAT" ]; then
+		FORMAT="appimage"
+	fi
+
+	case "$FORMAT" in
+		appimage|app-image|linux)
+			install_cap_desktop_linux_appimage
+			;;
+		deb|debian|ubuntu)
+			install_cap_desktop_linux_deb
+			;;
+		rpm|fedora|rhel|redhat)
+			install_cap_desktop_linux_rpm
+			;;
+		*)
+			echo "Unsupported Linux install format: $DESKTOP_INSTALL_FORMAT. Use appimage, deb, or rpm." >&2
+			exit 1
+			;;
+	esac
+}
+
+install_cap_desktop() {
+	case "$OS_NAME" in
+		Darwin)
+			install_cap_desktop_macos
+			;;
+		Linux)
+			install_cap_desktop_linux
+			;;
+		*)
+			echo "Cap Desktop auto-install is only supported on macOS and Linux. Install Cap from https://cap.so/download, then run this script again." >&2
+			exit 1
+			;;
+	esac
+}
+
+resolve_cli_target() {
+	case "$OS_NAME" in
+		Darwin)
+			if [ -z "$APP_PATH" ]; then
+				if ! find_cap_app_macos; then
+					install_cap_desktop
+				fi
+			elif [ ! -d "$APP_PATH" ]; then
+				echo "Cap Desktop was not found at $APP_PATH." >&2
+				exit 1
+			fi
+
+			if [ -n "$DESKTOP_FORCE_INSTALL" ]; then
+				install_cap_desktop
+			fi
+
+			CLI_TARGET="$APP_PATH/Contents/MacOS/cap-cli"
+
+			if [ ! -x "$CLI_TARGET" ]; then
+				echo "This Cap Desktop install does not include the CLI. Reinstalling Cap Desktop..."
+				install_cap_desktop
+				CLI_TARGET="$APP_PATH/Contents/MacOS/cap-cli"
+			fi
+			;;
+		Linux)
+			if [ -n "$DESKTOP_FORCE_INSTALL" ]; then
+				install_cap_desktop
+			elif ! find_linux_cli_target; then
+				install_cap_desktop
+			fi
+			;;
+		*)
+			echo "Unsupported operating system: $OS_NAME" >&2
+			exit 1
+			;;
+	esac
 
 	if [ ! -x "$CLI_TARGET" ]; then
 		echo "This Cap Desktop install does not include the CLI." >&2
 		exit 1
 	fi
+}
+
+if [ -z "$HOME_DIR" ]; then
+	echo "Could not determine home directory. Set HOME, then run this script again." >&2
+	exit 1
 fi
+
+resolve_cli_target
 
 if [ -n "$CLI_INSTALL_DIR_OVERRIDE" ]; then
 	INSTALL_DIR="$CLI_INSTALL_DIR_OVERRIDE"
@@ -162,7 +473,7 @@ if [ -e "$SHIM_PATH" ] || [ -L "$SHIM_PATH" ]; then
 	EXISTING_TARGET="$(readlink "$SHIM_PATH" || true)"
 
 	case "$EXISTING_TARGET" in
-		"$CLI_TARGET"|*/Cap.app/Contents/MacOS/cap-cli)
+		"$CLI_TARGET"|*/Cap.app/Contents/MacOS/cap-cli|*/cap-cli|*/cap-cli-*linux*)
 			;;
 		*)
 			echo "$SHIM_PATH already exists and is not managed by Cap. Remove it or set CAP_CLI_INSTALL_DIR, then run this script again." >&2

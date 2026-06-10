@@ -20,14 +20,14 @@ const arch =
 	process.env.RUST_TARGET_TRIPLE?.split("-")[0] ??
 	(process.arch === "arm64" ? "aarch64" : "x86_64");
 
-const BASE_CARGO_TOML = `[env]
+const FFMPEG_CARGO_ENV = `[env]
 FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
 `;
 
 async function main() {
 	await fs.mkdir(targetDir, { recursive: true });
 
-	let cargoConfigContents = BASE_CARGO_TOML;
+	let cargoConfigContents = "";
 	let cargoBuildContents = "";
 	const sccachePath = await findExecutable("sccache");
 	const useSccache = env.CAP_USE_SCCACHE === "1";
@@ -43,6 +43,8 @@ async function main() {
 		);
 
 	if (process.platform === "darwin") {
+		cargoConfigContents += FFMPEG_CARGO_ENV;
+
 		const NATIVE_DEPS_VERSION = "v0.25";
 		const NATIVE_DEPS_URL = `https://github.com/spacedriveapp/native-deps/releases/download/${NATIVE_DEPS_VERSION}`;
 
@@ -120,6 +122,8 @@ async function main() {
 			onnxRuntimePath,
 		)}" }\n`;
 	} else if (process.platform === "win32") {
+		cargoConfigContents += FFMPEG_CARGO_ENV;
+
 		await ensureMsvcVersion();
 
 		const FFMPEG_VERSION = "7.1";

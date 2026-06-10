@@ -183,6 +183,7 @@ const diagnosticsSchema = z.object({
 				})
 				.optional(),
 			macosVersion: z.object({ displayName: z.string() }).optional(),
+			linuxVersion: z.object({ displayName: z.string() }).optional(),
 			gpuInfo: z
 				.object({
 					vendor: z.string(),
@@ -241,6 +242,8 @@ function formatDiagnosticsForDiscord(
 		lines.push(`**OS:** ${sys.windowsVersion.displayName}`);
 	} else if (sys?.macosVersion?.displayName) {
 		lines.push(`**OS:** ${sys.macosVersion.displayName}`);
+	} else if (sys?.linuxVersion?.displayName) {
+		lines.push(`**OS:** ${sys.linuxVersion.displayName}`);
 	}
 
 	if (sys?.gpuInfo) {
@@ -404,7 +407,7 @@ app.post(
 		"form",
 		z.object({
 			feedback: z.string(),
-			os: z.union([z.literal("macos"), z.literal("windows")]).optional(),
+			os: z.enum(["macos", "windows", "linux"]).optional(),
 			version: z.string().optional(),
 		}),
 	),
