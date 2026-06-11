@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { provideOptionalAuth, Tinybird } from "@cap/web-backend";
@@ -118,7 +119,7 @@ export async function POST(request: NextRequest) {
 							.limit(1),
 					).pipe(Effect.orElseSucceed(() => [] as { ownerId: string }[]));
 
-					if (videoRecord && userId === videoRecord.ownerId) return;
+					if (!videoRecord || userId === videoRecord.ownerId) return;
 
 					const tinybird = yield* Tinybird;
 					yield* tinybird.appendEvents([
@@ -126,7 +127,7 @@ export async function POST(request: NextRequest) {
 							timestamp: new Date().toISOString(),
 							action: "video_progress",
 							version: "1.0",
-							session_id: sessionId ?? "anon",
+							session_id: sessionId ?? randomUUID(),
 							video_id: body.videoId,
 							percent_watched: percentWatched,
 						},
