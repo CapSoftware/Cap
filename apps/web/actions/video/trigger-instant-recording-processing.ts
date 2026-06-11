@@ -23,7 +23,7 @@ export async function triggerInstantRecordingProcessing({
 	if (!video) throw new Error("Video not found");
 	if (video.ownerId !== user.id) throw new Error("Unauthorized");
 
-	const rawFileKey = `${video.ownerId}/${videoId}/result.mp4`;
+	const rawFileKey = `${user.id}/${videoId}/result.mp4`;
 
 	await startVideoProcessingWorkflow({
 		videoId,
