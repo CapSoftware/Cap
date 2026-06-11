@@ -9,7 +9,10 @@ use crate::output_pipeline::{MacOSFragmentedM4SMuxer, MacOSFragmentedM4SMuxerCon
 #[cfg(windows)]
 use crate::output_pipeline::{WindowsFragmentedM4SMuxer, WindowsFragmentedM4SMuxerConfig};
 use anyhow::anyhow;
+#[cfg(any(target_os = "macos", windows))]
 use cap_enc_ffmpeg::h264::H264EncoderBuilder;
+#[cfg(target_os = "linux")]
+use cap_enc_ffmpeg::h264::H264Preset;
 #[cfg(windows)]
 use cap_enc_ffmpeg::h264::H264Preset;
 use cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent;
@@ -353,11 +356,68 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     }
 }
 
+#[cfg(target_os = "linux")]
+impl MakeCapturePipeline for screen_capture::X11Capture {
+    async fn make_studio_mode_pipeline(
+        screen_capture: screen_capture::VideoSourceConfig,
+        output_path: PathBuf,
+        start_time: Timestamps,
+        _fragmented: bool,
+        _use_oop_muxer: bool,
+        shared_pause_state: Option<SharedPauseState>,
+        output_size: Option<(u32, u32)>,
+        quality: StudioQuality,
+    ) -> anyhow::Result<OutputPipeline> {
+        let fragments_dir = output_path
+            .parent()
+            .map(|p| p.join("display"))
+            .unwrap_or_else(|| output_path.with_file_name("display"));
+
+        let ultra = quality == StudioQuality::Ultra;
+        OutputPipeline::builder(fragments_dir)
+            .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_timestamps(start_time)
+            .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
+                segment_duration: std::time::Duration::from_secs(2),
+                preset: if ultra {
+                    H264Preset::Medium
+                } else {
+                    H264Preset::Ultrafast
+                },
+                output_size,
+                shared_pause_state,
+            })
+            .await
+    }
+
+    async fn make_instant_segmented_video_pipeline(
+        screen_capture: screen_capture::VideoSourceConfig,
+        segments_dir: PathBuf,
+        output_size: (u32, u32),
+        start_time: Timestamps,
+        _segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
+    ) -> anyhow::Result<OutputPipeline> {
+        OutputPipeline::builder(segments_dir)
+            .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_timestamps(start_time)
+            .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
+                segment_duration: std::time::Duration::from_secs(2),
+                preset: H264Preset::Ultrafast,
+                output_size: Some(output_size),
+                shared_pause_state: None,
+            })
+            .await
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub type ScreenCaptureMethod = screen_capture::CMSampleBufferCapture;
 
 #[cfg(windows)]
 pub type ScreenCaptureMethod = screen_capture::Direct3DCapture;
+
+#[cfg(target_os = "linux")]
+pub type ScreenCaptureMethod = screen_capture::X11Capture;
 
 pub fn target_to_display_and_crop(
     target: &ScreenCaptureTarget,
@@ -412,6 +472,26 @@ pub fn target_to_display_and_crop(
                     raw_window_bounds.size(),
                 ))
             }
+
+            #[cfg(target_os = "linux")]
+            {
+                let raw_display_position = display
+                    .raw_handle()
+                    .physical_position()
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
+                let raw_window_bounds = window
+                    .raw_handle()
+                    .physical_bounds()
+                    .ok_or_else(|| anyhow!("No window bounds"))?;
+
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        raw_window_bounds.position().x() - raw_display_position.x(),
+                        raw_window_bounds.position().y() - raw_display_position.y(),
+                    ),
+                    raw_window_bounds.size(),
+                ))
+            }
         }
         ScreenCaptureTarget::Area {
             bounds: relative_bounds,
@@ -423,6 +503,30 @@ pub fn target_to_display_and_crop(
             }
 
             #[cfg(windows)]
+            {
+                let raw_display_size = display
+                    .physical_size()
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
+                let logical_display_size = display
+                    .logical_size()
+                    .ok_or_else(|| anyhow!("No display logical size"))?;
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        (relative_bounds.position().x() / logical_display_size.width())
+                            * raw_display_size.width(),
+                        (relative_bounds.position().y() / logical_display_size.height())
+                            * raw_display_size.height(),
+                    ),
+                    PhysicalSize::new(
+                        (relative_bounds.size().width() / logical_display_size.width())
+                            * raw_display_size.width(),
+                        (relative_bounds.size().height() / logical_display_size.height())
+                            * raw_display_size.height(),
+                    ),
+                ))
+            }
+
+            #[cfg(target_os = "linux")]
             {
                 let raw_display_size = display
                     .physical_size()

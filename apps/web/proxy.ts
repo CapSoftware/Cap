@@ -44,6 +44,7 @@ export async function proxy(request: NextRequest) {
 		if (
 			!(
 				path.startsWith("/s/") ||
+				path.startsWith("/c/") ||
 				path.startsWith("/middleware") ||
 				path.startsWith("/dashboard") ||
 				path.startsWith("/onboarding") ||
@@ -69,7 +70,7 @@ export async function proxy(request: NextRequest) {
 	const webUrl = new URL(serverEnv().WEB_URL).hostname;
 
 	try {
-		if (!path.startsWith("/s/")) {
+		if (!(path.startsWith("/s/") || path.startsWith("/c/"))) {
 			const url = new URL(request.url);
 			url.hostname = webUrl;
 			return NextResponse.redirect(url);

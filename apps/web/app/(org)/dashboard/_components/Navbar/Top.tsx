@@ -227,11 +227,17 @@ const User = () => {
 				showCondition: true,
 			},
 			{
-				name: "Sign Out",
-				icon: <LogoutIcon />,
+				name: themeLabel,
+				icon: <ThemeMenuIcon />,
 				onClick: () => {
 					setMenuOpen(false);
-					signOut();
+					if (document.startViewTransition) {
+						document.startViewTransition(() => {
+							setThemeHandler(nextTheme);
+						});
+					} else {
+						setThemeHandler(nextTheme);
+					}
 				},
 				iconClassName: "text-gray-11 group-hover:text-gray-12",
 				showCondition: true,
@@ -245,17 +251,11 @@ const User = () => {
 				showCondition: true,
 			},
 			{
-				name: themeLabel,
-				icon: <ThemeMenuIcon />,
+				name: "Sign Out",
+				icon: <LogoutIcon />,
 				onClick: () => {
 					setMenuOpen(false);
-					if (document.startViewTransition) {
-						document.startViewTransition(() => {
-							setThemeHandler(nextTheme);
-						});
-					} else {
-						setThemeHandler(nextTheme);
-					}
+					signOut();
 				},
 				iconClassName: "text-gray-11 group-hover:text-gray-12",
 				showCondition: true,

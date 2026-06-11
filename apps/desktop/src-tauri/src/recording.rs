@@ -683,22 +683,63 @@ pub struct CameraWithFormats {
 }
 
 fn get_best_format(formats: &[CameraFormatInfo]) -> Option<CameraFormatInfo> {
-    formats
+    let preferred_rate = 59.0..=60.0;
+    let supported_rate = 24.0..=60.0;
+
+    let mut ideal_formats = formats
         .iter()
-        .filter(|f| f.frame_rate >= 24.0 && f.frame_rate <= 60.0)
-        .max_by(|a, b| {
-            let res_a = a.width * a.height;
-            let res_b = b.width * b.height;
-            res_a.cmp(&res_b)
-        })
-        .or_else(|| {
-            formats.iter().max_by(|a, b| {
-                let res_a = a.width * a.height;
-                let res_b = b.width * b.height;
-                res_a.cmp(&res_b)
+        .filter(|f| preferred_rate.contains(&f.frame_rate) && f.width <= 1280 && f.height <= 720)
+        .collect::<Vec<_>>();
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats
+            .iter()
+            .filter(|f| preferred_rate.contains(&f.frame_rate) && f.width < 2000 && f.height < 2000)
+            .collect();
+    }
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats
+            .iter()
+            .filter(|f| {
+                supported_rate.contains(&f.frame_rate) && f.width <= 1280 && f.height <= 720
             })
-        })
-        .cloned()
+            .collect();
+    }
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats
+            .iter()
+            .filter(|f| supported_rate.contains(&f.frame_rate) && f.width < 2000 && f.height < 2000)
+            .collect();
+    }
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats.iter().collect();
+    }
+
+    ideal_formats.sort_by(|a, b| {
+        let target_aspect_ratio = 16.0 / 9.0;
+        let aspect_ratio_a = a.width as f32 / a.height as f32;
+        let aspect_ratio_b = b.width as f32 / b.height as f32;
+        let aspect_cmp_a = (aspect_ratio_a - target_aspect_ratio).abs();
+        let aspect_cmp_b = (aspect_ratio_b - target_aspect_ratio).abs();
+        let resolution_cmp = (a.width * a.height).cmp(&(b.width * b.height));
+        let fr_cmp_a = (a.frame_rate - 60.0).abs();
+        let fr_cmp_b = (b.frame_rate - 60.0).abs();
+
+        aspect_cmp_a
+            .partial_cmp(&aspect_cmp_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(resolution_cmp.reverse())
+            .then(
+                fr_cmp_a
+                    .partial_cmp(&fr_cmp_b)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+
+    ideal_formats.into_iter().next().cloned()
 }
 
 #[tauri::command(async)]

@@ -20,6 +20,7 @@ import { useRouter } from "next/navigation";
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { PublicCollectionField } from "../../../_components/PublicCollectionField";
 import { useDashboardContext } from "../../../Contexts";
 import {
 	BlueFolder,
@@ -79,7 +80,9 @@ export const SubfolderDialog: React.FC<Props> = ({
 		(typeof FolderOptions)[number]["value"] | null
 	>(null);
 	const [folderName, setFolderName] = useState<string>("");
-	const { activeSpace } = useDashboardContext();
+	const [publicEnabled, setPublicEnabled] = useState(false);
+	const { activeSpace, activeOrganization, setUpgradeModalOpen } =
+		useDashboardContext();
 	const router = useRouter();
 
 	const { riveFile } = useRiveFile({
@@ -90,6 +93,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 		if (!open) {
 			setSelectedColor(null);
 			setFolderName("");
+			setPublicEnabled(false);
 		}
 	}, [open]);
 
@@ -109,10 +113,15 @@ export const SubfolderDialog: React.FC<Props> = ({
 	const rpc = useRpcClient();
 
 	const createSubfolder = useEffectMutation({
-		mutationFn: (data: { name: string; color: Folder.FolderColor }) =>
+		mutationFn: (data: {
+			name: string;
+			color: Folder.FolderColor;
+			public: boolean;
+		}) =>
 			rpc.FolderCreate({
 				name: data.name,
 				color: data.color,
+				public: data.public,
 				spaceId: Option.fromNullable(activeSpace?.id),
 				parentId: Option.some(parentFolderId),
 			}),
@@ -146,7 +155,8 @@ export const SubfolderDialog: React.FC<Props> = ({
 					<div className="flex flex-wrap gap-2 mt-3">
 						{FolderOptions.map((option) => {
 							return (
-								<div
+								<button
+									type="button"
 									className={clsx(
 										"flex flex-col flex-1 gap-1 items-center p-2 rounded-xl border transition-colors duration-200 cursor-pointer",
 										selectedColor === option.value
@@ -178,10 +188,19 @@ export const SubfolderDialog: React.FC<Props> = ({
 										riveFile as RiveFile,
 										folderRefs.current[option.value],
 									)}
-									<p className="text-xs text-gray-10">{option.label}</p>
-								</div>
+									<span className="text-xs text-gray-10">{option.label}</span>
+								</button>
 							);
 						})}
+					</div>
+					<div className="mt-4">
+						<PublicCollectionField
+							kind="folder"
+							enabled={publicEnabled}
+							onChange={setPublicEnabled}
+							isPro={Boolean(activeOrganization?.ownerIsPro)}
+							onUpgrade={() => setUpgradeModalOpen(true)}
+						/>
 					</div>
 				</div>
 				<DialogFooter>
@@ -194,6 +213,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 							createSubfolder.mutate({
 								name: folderName,
 								color: selectedColor,
+								public: publicEnabled,
 							});
 						}}
 						size="sm"

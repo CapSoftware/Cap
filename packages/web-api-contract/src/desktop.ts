@@ -126,7 +126,7 @@ const protectedContract = c.router(
 			contentType: "application/x-www-form-urlencoded",
 			body: z.object({
 				feedback: z.string(),
-				os: z.union([z.literal("macos"), z.literal("windows")]),
+				os: z.enum(["macos", "windows", "linux"]),
 				version: z.string(),
 			}),
 			responses: {

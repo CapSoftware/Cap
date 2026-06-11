@@ -6,6 +6,8 @@ mod audio_meter;
 mod auth;
 mod camera;
 mod camera_legacy;
+#[cfg(target_os = "macos")]
+mod camera_native;
 mod captions;
 mod cli;
 mod crash_sentinel;
@@ -47,7 +49,7 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, Plan};
-use camera::{CameraPreviewManager, CameraPreviewState};
+use camera::{CameraPreviewManager, CameraPreviewSender, CameraPreviewState};
 use cap_editor::{EditorInstance, EditorState};
 use cap_project::{
     InstantRecordingMeta, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
@@ -385,7 +387,7 @@ pub struct App {
     #[deprecated = "can be removed when native camera preview is ready"]
     camera_ws_sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
     camera_preview: CameraPreviewManager,
-    camera_blur_tx: tokio::sync::watch::Sender<cap_project::BackgroundBlurMode>,
+    camera_preview_state_tx: tokio::sync::watch::Sender<CameraPreviewState>,
     handle: AppHandle,
     recording_state: RecordingState,
     recording_logging_handle: LoggingHandle,
@@ -501,17 +503,21 @@ async fn remove_camera_preview_sender(
 async fn sync_camera_preview_sender(
     camera_feed: &ActorRef<CameraFeed>,
     camera_ws_sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
-    camera_preview_sender: Option<flume::Sender<cap_recording::FFmpegVideoFrame>>,
+    camera_preview_sender: Option<CameraPreviewSender>,
     use_ws_preview: bool,
 ) {
     if use_ws_preview {
-        if let Some(sender) = camera_preview_sender {
-            remove_camera_preview_sender(camera_feed, sender, "native preview").await;
+        if let Some(sender) = camera_preview_sender
+            && let Err(err) = sender.detach(camera_feed).await
+        {
+            warn!(error = %err, "Failed to remove native preview camera sender");
         }
 
         add_camera_preview_ws_sender(camera_feed, camera_ws_sender).await;
     } else if let Some(sender) = camera_preview_sender {
-        add_camera_preview_sender(camera_feed, sender, "native preview").await;
+        if let Err(err) = sender.attach(camera_feed).await {
+            warn!(error = %err, "Failed to add native preview camera sender");
+        }
         remove_camera_preview_sender(camera_feed, camera_ws_sender, "WebSocket").await;
     } else {
         add_camera_preview_ws_sender(camera_feed, camera_ws_sender).await;
@@ -1100,6 +1106,10 @@ async fn set_native_camera_preview_enabled(
     state: MutableState<'_, App>,
     enabled: bool,
 ) -> Result<(), String> {
+    if enabled && cfg!(not(target_os = "macos")) {
+        return Err("Native camera preview is only available on macOS".to_string());
+    }
+
     let operation_lock = app_handle.state::<CameraWindowOperationLock>();
     let _operation_guard = operation_lock.lock().await;
 
@@ -3821,13 +3831,13 @@ async fn set_camera_preview_state(
     state: CameraPreviewState,
 ) -> Result<(), String> {
     let app_guard = app.read().await;
-    let blur_mode = state.background_blur;
+    let state_for_ws = state.clone();
     app_guard
         .camera_preview
         .set_state(state)
         .map_err(|err| format!("Error saving camera window state: {err}"))?;
 
-    app_guard.camera_blur_tx.send(blur_mode).ok();
+    let _ = app_guard.camera_preview_state_tx.send(state_for_ws);
     drop(app_guard);
 
     Ok(())
@@ -3879,8 +3889,8 @@ async fn refresh_camera_feed(state: MutableState<'_, App>) -> Result<(), String>
 
     if use_ws_preview {
         if let Some(sender) = camera_preview_sender {
-            camera_feed
-                .ask(feeds::camera::RemoveSender(sender))
+            sender
+                .detach(&camera_feed)
                 .await
                 .map_err(|err| format!("error removing native preview sender: {err}"))?;
         }
@@ -3897,8 +3907,8 @@ async fn refresh_camera_feed(state: MutableState<'_, App>) -> Result<(), String>
             .await
             .map_err(|err| format!("error removing camera ws sender: {err}"))?;
 
-        camera_feed
-            .ask(feeds::camera::AddSender(sender))
+        sender
+            .attach(&camera_feed)
             .await
             .map_err(|err| format!("error re-adding camera preview sender: {err}"))?;
     } else {
@@ -4180,17 +4190,17 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .typ::<crate::window_exclusion::WindowExclusion>();
 
     #[cfg(debug_assertions)]
-    specta_builder
-        .export(
-            specta_typescript::Typescript::default(),
-            "../src/utils/tauri.ts",
-        )
-        .expect("Failed to export typescript bindings");
+    if let Err(err) = specta_builder.export(
+        specta_typescript::Typescript::default(),
+        "../src/utils/tauri.ts",
+    ) {
+        warn!(error = %err, "Failed to export TypeScript bindings");
+    }
 
-    let (camera_blur_tx, camera_blur_rx) =
-        tokio::sync::watch::channel(cap_project::BackgroundBlurMode::Off);
+    let (camera_preview_state_tx, camera_preview_state_rx) =
+        tokio::sync::watch::channel(CameraPreviewState::default());
     let (camera_tx, camera_ws_port, _shutdown) =
-        camera_legacy::create_camera_preview_ws(camera_blur_rx).await;
+        camera_legacy::create_camera_preview_ws(camera_preview_state_rx).await;
     let camera_ws_sender = camera_tx.clone();
 
     let (mic_samples_tx, mic_samples_rx) = flume::bounded(8);
@@ -4418,7 +4428,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     camera_ws_sender,
                     handle: app.clone(),
                     camera_preview,
-                    camera_blur_tx,
+                    camera_preview_state_tx,
                     recording_state: RecordingState::None,
                     recording_logging_handle,
                     mic_feed,

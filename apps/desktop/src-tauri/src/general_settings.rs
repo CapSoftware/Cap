@@ -217,7 +217,7 @@ pub struct GeneralSettingsStore {
 }
 
 fn default_enable_native_camera_preview() -> bool {
-    cfg!(all(debug_assertions, target_os = "macos"))
+    cfg!(target_os = "macos")
 }
 
 fn no(_: &bool) -> bool {
@@ -332,6 +332,20 @@ impl From<Appearance> for Option<tauri::Theme> {
 }
 
 impl GeneralSettingsStore {
+    // The effective value: the native preview is macOS-only; it is not
+    // reliable on Windows, so the stored setting is ignored there and the
+    // websocket preview is always used.
+    pub fn native_camera_preview_enabled(app: &AppHandle<Wry>) -> bool {
+        if cfg!(not(target_os = "macos")) {
+            return false;
+        }
+        Self::get(app)
+            .ok()
+            .flatten()
+            .map(|settings| settings.enable_native_camera_preview)
+            .unwrap_or_else(default_enable_native_camera_preview)
+    }
+
     pub fn get(app: &AppHandle<Wry>) -> Result<Option<Self>, String> {
         match app.store("store").map(|s| s.get("general_settings")) {
             Ok(Some(store)) => {
@@ -409,6 +423,22 @@ pub fn init(app: &AppHandle) {
     append_missing_default_excluded_windows(&mut store.excluded_windows);
     crate::posthog::set_telemetry_enabled(store.enable_telemetry);
     register_bundled_muxer_binary(app);
+
+    // One-time rollout of the native (GPU-surface) camera preview as the macOS
+    // default. The setting is always serialized, so existing users carry an
+    // explicit `false` from the old opt-in default; a raw marker key (outside
+    // the typed struct, so re-serialization never drops it) makes sure a user
+    // who explicitly turns it back off afterwards stays off.
+    #[cfg(target_os = "macos")]
+    {
+        const NATIVE_PREVIEW_MIGRATION_KEY: &str = "native_camera_preview_default_v1";
+        if let Ok(raw_store) = app.store("store")
+            && raw_store.get(NATIVE_PREVIEW_MIGRATION_KEY).is_none()
+        {
+            store.enable_native_camera_preview = true;
+            raw_store.set(NATIVE_PREVIEW_MIGRATION_KEY, json!(true));
+        }
+    }
 
     if let Err(e) = store.save(app) {
         error!("Failed to save general settings: {}", e);

@@ -4,6 +4,7 @@ import type {
 	Folder,
 	ImageUpload,
 	Organisation,
+	PublicCollection,
 	S3Bucket,
 	Space,
 	Storage,
@@ -290,6 +291,11 @@ export const folders = mysqlTable(
 		})
 			.notNull()
 			.default("normal"),
+		// Internet-facing public collection link (/c/[id]).
+		public: boolean("public").notNull().default(false),
+		settings: json("settings").$type<{
+			publicPage?: PublicCollection.PublicPageSettings;
+		}>(),
 		organizationId: nanoId("organizationId")
 			.notNull()
 			.$type<Organisation.OrganisationId>(),
@@ -304,6 +310,15 @@ export const folders = mysqlTable(
 		createdByIdIndex: index("created_by_id_idx").on(table.createdById),
 		parentIdIndex: index("parent_id_idx").on(table.parentId),
 		spaceIdIndex: index("space_id_idx").on(table.spaceId),
+		publicParentIdIndex: index("public_parent_id_idx").on(
+			table.public,
+			table.parentId,
+		),
+		publicSpaceParentIdIndex: index("public_space_parent_id_idx").on(
+			table.public,
+			table.spaceId,
+			table.parentId,
+		),
 	}),
 );
 
@@ -950,17 +965,26 @@ export const spaces = mysqlTable(
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
 			disableComments?: boolean;
+			publicPage?: PublicCollection.PublicPageSettings;
 		}>(),
 		password: encryptedTextNullable("password"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+		// Org-internal browsability: "Public" spaces are visible to all org
+		// members. Unrelated to the internet-facing `public` flag below.
 		privacy: varchar("privacy", { length: 255, enum: ["Public", "Private"] })
 			.notNull()
 			.default("Private"),
+		// Internet-facing public collection link (/c/[id]).
+		public: boolean("public").notNull().default(false),
 	},
 	(table) => ({
 		organizationIdIndex: index("organization_id_idx").on(table.organizationId),
 		createdByIdIndex: index("created_by_id_idx").on(table.createdById),
+		publicOrganizationIdIndex: index("public_organization_id_idx").on(
+			table.public,
+			table.organizationId,
+		),
 	}),
 );
 

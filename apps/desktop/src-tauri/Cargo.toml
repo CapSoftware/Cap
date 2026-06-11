@@ -143,11 +143,12 @@ objc2-app-kit = { version = "0.3.2", features = [
     "NSRunningApplication",
 ] }
 objc2-web-kit = "0.3.2"
+cocoa = "0.26.0"
+objc = "0.2.7"
 swift-rs = "1.0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
 cidre = { workspace = true }
-objc = "0.2.7"
-cocoa = "0.26.0"
+cap-camera-ffmpeg = { path = "../../../crates/camera-ffmpeg" }
 
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
 parakeet-rs = "0.3.4"
@@ -163,6 +164,7 @@ windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System",
     "Win32_System_Power",
+    "Win32_System_Threading",
     "Win32_System_WinRT",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",

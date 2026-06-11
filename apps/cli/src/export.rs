@@ -1,6 +1,6 @@
 use std::{
     io::{Write, stdout},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -8,7 +8,7 @@ use std::{
 };
 
 use cap_export::{ExporterBase, make_cursor_only_project};
-use cap_project::{RecordingMeta, XY};
+use cap_project::{RecordingMeta, RecordingMetaInner, XY};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -310,6 +310,20 @@ impl Export {
         let settings = self.resolve_settings()?;
 
         ensure_remuxed(self.project_path.clone()).await?;
+        let meta = RecordingMeta::load_for_project(&self.project_path)
+            .map_err(|e| format!("Failed to load recording meta: {e}"))?;
+
+        if matches!(&meta.inner, RecordingMetaInner::Instant(_)) {
+            return export_instant_project(
+                self.project_path,
+                output,
+                &settings,
+                progress_json,
+                completion_json,
+                stdout,
+            )
+            .await;
+        }
 
         let force_ffmpeg_decoder = self.force_ffmpeg_decoder || settings.force_ffmpeg_decoder();
         let mut builder = ExporterBase::builder(self.project_path.clone())
@@ -320,8 +334,6 @@ impl Export {
         }
 
         if settings.cursor_only() {
-            let meta = RecordingMeta::load_for_project(&self.project_path)
-                .map_err(|e| format!("Failed to load recording meta: {e}"))?;
             builder = builder.with_config(make_cursor_only_project(meta.project_config()));
         }
 
@@ -413,11 +425,157 @@ async fn ensure_remuxed(project_path: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+async fn prepare_instant_output(project_path: PathBuf) -> Result<PathBuf, String> {
+    let output_path = project_path.join("content/output.mp4");
+    let audio_dir = project_path.join("content/audio");
+    if std::fs::metadata(&output_path)
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false)
+        && !audio_dir.exists()
+    {
+        return Ok(output_path);
+    }
+
+    let display_dir = project_path.join("content/display");
+    tokio::task::spawn_blocking(move || {
+        cap_recording::recovery::RecoveryManager::finalize_instant_output(
+            &display_dir,
+            &audio_dir,
+            &output_path,
+        )
+    })
+    .await
+    .map_err(|e| format!("instant export finalize task failed: {e}"))?
+    .map_err(|e| format!("Failed to finalize instant recording before export: {e}"))
+}
+
+fn instant_export_settings_supported(settings: &CliExportSettings) -> bool {
+    match settings {
+        CliExportSettings::Mp4(settings) => {
+            settings.fps == 60
+                && settings.resolution_base == XY::new(1920, 1080)
+                && matches!(
+                    settings.compression,
+                    cap_export::mp4::ExportCompression::Maximum
+                )
+                && settings.custom_bpp.is_none()
+                && !settings.optimize_filesize
+        }
+        CliExportSettings::Gif(_) | CliExportSettings::Mov(_) => false,
+    }
+}
+
+fn validate_instant_output_path(path: &Path) -> Result<(), String> {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| !extension.eq_ignore_ascii_case("mp4"))
+    {
+        return Err("Instant recordings can only be exported as mp4 files".to_string());
+    }
+
+    Ok(())
+}
+
+fn copy_instant_output(source_path: &Path, output_path: PathBuf) -> Result<PathBuf, String> {
+    validate_instant_output_path(&output_path)?;
+
+    if source_path == output_path.as_path() {
+        return Ok(output_path);
+    }
+
+    if output_path.exists()
+        && let (Ok(source), Ok(output)) = (source_path.canonicalize(), output_path.canonicalize())
+        && source == output
+    {
+        return Ok(output_path);
+    }
+
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create output directory {}: {e}",
+                parent.display()
+            )
+        })?;
+    }
+
+    std::fs::copy(source_path, &output_path).map_err(|e| {
+        format!(
+            "Failed to copy instant recording from {} to {}: {e}",
+            source_path.display(),
+            output_path.display()
+        )
+    })?;
+
+    Ok(output_path)
+}
+
+async fn export_instant_project(
+    project_path: PathBuf,
+    output: Option<PathBuf>,
+    settings: &CliExportSettings,
+    progress_json: bool,
+    completion_json: bool,
+    stdout: &Arc<Mutex<std::io::Stdout>>,
+) -> Result<(), String> {
+    if !instant_export_settings_supported(settings) {
+        return Err(
+            "Instant recordings are already finalized MP4 files; export supports copying them to an mp4 output path"
+                .to_string(),
+        );
+    }
+
+    let source_path = prepare_instant_output(project_path).await?;
+    let output_path = output.unwrap_or_else(|| source_path.clone());
+
+    if progress_json {
+        emit_export_message(
+            stdout,
+            &ExportProgressMessage::Progress {
+                rendered_count: 0,
+                total_frames: 1,
+            },
+        )?;
+    }
+
+    let output_path = copy_instant_output(&source_path, output_path)?;
+
+    if progress_json {
+        emit_export_message(
+            stdout,
+            &ExportProgressMessage::Progress {
+                rendered_count: 1,
+                total_frames: 1,
+            },
+        )?;
+    }
+
+    if progress_json || completion_json {
+        emit_export_message(
+            stdout,
+            &ExportProgressMessage::Completed { path: &output_path },
+        )?;
+    } else {
+        println!("Exported video to {}", output_path.display());
+    }
+
+    info!("Exported instant video to '{}'", output_path.display());
+
+    Ok(())
+}
+
 /// Render a project to its default output path with default settings (mp4, 1080p60, Maximum). Used by
 /// `cap upload --export` to glue record -> export -> upload into one step.
 pub async fn export_project_default(project_path: PathBuf) -> Result<PathBuf, String> {
     let settings = settings_from_flags(&ExportFlags::default())?;
     ensure_remuxed(project_path.clone()).await?;
+    let meta = RecordingMeta::load_for_project(&project_path)
+        .map_err(|e| format!("Failed to load recording meta: {e}"))?;
+    if matches!(&meta.inner, RecordingMetaInner::Instant(_)) {
+        return prepare_instant_output(project_path).await;
+    }
+
     let exporter_base = ExporterBase::builder(project_path)
         .with_force_ffmpeg_decoder(settings.force_ffmpeg_decoder())
         .build()
