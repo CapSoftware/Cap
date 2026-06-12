@@ -451,7 +451,11 @@ fn open_video_encoder_inner(
         input_config.pixel_format
     } else {
         needs_pixel_conversion = true;
-        ffmpeg::format::Pixel::NV12
+        if codec.name() == "libx264" {
+            ffmpeg::format::Pixel::YUV420P
+        } else {
+            ffmpeg::format::Pixel::NV12
+        }
     };
 
     debug!(
@@ -539,44 +543,47 @@ fn open_video_encoder_inner(
         None
     };
 
-    let mut encoder_ctx = context::Context::new_with_codec(codec);
-
     let thread_count = thread::available_parallelism()
         .map(|v| v.get())
         .unwrap_or(1);
-    encoder_ctx.set_threading(Config::count(thread_count));
-    let mut encoder = encoder_ctx.encoder().video()?;
 
-    encoder.set_width(output_width);
-    encoder.set_height(output_height);
-    encoder.set_format(output_format);
-    encoder.set_time_base(input_config.time_base);
-    encoder.set_frame_rate(Some(input_config.frame_rate));
-    encoder.set_colorspace(color::Space::BT709);
-    encoder.set_color_range(color::Range::MPEG);
-    unsafe {
-        (*encoder.as_mut_ptr()).color_primaries = ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
-        (*encoder.as_mut_ptr()).color_trc =
-            ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
-        if global_header {
-            (*encoder.as_mut_ptr()).flags |= ffmpeg::ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+    let encoder = {
+        let mut encoder_ctx = context::Context::new_with_codec(codec);
+        encoder_ctx.set_threading(Config::count(thread_count));
+        let mut encoder = encoder_ctx.encoder().video()?;
+
+        encoder.set_width(output_width);
+        encoder.set_height(output_height);
+        encoder.set_format(output_format);
+        encoder.set_time_base(input_config.time_base);
+        encoder.set_frame_rate(Some(input_config.frame_rate));
+        encoder.set_colorspace(color::Space::BT709);
+        encoder.set_color_range(color::Range::MPEG);
+        unsafe {
+            (*encoder.as_mut_ptr()).color_primaries =
+                ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+            (*encoder.as_mut_ptr()).color_trc =
+                ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+            if global_header {
+                (*encoder.as_mut_ptr()).flags |= ffmpeg::ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+            }
         }
-    }
 
-    if crf.is_some() {
-        encoder.set_bit_rate(0);
-    } else {
-        let bitrate = get_bitrate(
-            output_width,
-            output_height,
-            input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
-            bpp,
-        );
-        encoder.set_bit_rate(bitrate);
-        encoder.set_max_bit_rate(bitrate * 3 / 2);
-    }
+        if crf.is_some() {
+            encoder.set_bit_rate(0);
+        } else {
+            let bitrate = get_bitrate(
+                output_width,
+                output_height,
+                input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
+                bpp,
+            );
+            encoder.set_bit_rate(bitrate);
+            encoder.set_max_bit_rate(bitrate * 3 / 2);
+        }
 
-    let encoder = encoder.open_with(encoder_options)?;
+        encoder.open_as_with(codec, encoder_options)?
+    };
 
     let converted_frame_pool = if converter.is_some() {
         Some(frame::Video::new(
@@ -743,18 +750,29 @@ impl H264Encoder {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const VIDEOTOOLBOX_4K_MAX_FPS: f64 = 55.0;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const VIDEOTOOLBOX_1080P_MAX_FPS: f64 = 190.0;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const NVENC_4K_MAX_FPS: f64 = 120.0;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const NVENC_1080P_MAX_FPS: f64 = 500.0;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const QSV_4K_MAX_FPS: f64 = 90.0;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const QSV_1080P_MAX_FPS: f64 = 300.0;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const AMF_4K_MAX_FPS: f64 = 100.0;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const AMF_1080P_MAX_FPS: f64 = 350.0;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const PIXELS_4K: f64 = 3840.0 * 2160.0;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const PIXELS_1080P: f64 = 1920.0 * 1080.0;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn estimate_hw_encoder_max_fps(encoder_name: &str, width: u32, height: u32) -> f64 {
     let pixels = (width as f64) * (height as f64);
 
@@ -785,10 +803,13 @@ fn requires_software_encoder(config: &VideoInfo, preset: H264Preset, is_export: 
         return true;
     }
 
-    let fps = config.frame_rate.numerator() as f64 / config.frame_rate.denominator().max(1) as f64;
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = config;
 
     #[cfg(target_os = "macos")]
     {
+        let fps =
+            config.frame_rate.numerator() as f64 / config.frame_rate.denominator().max(1) as f64;
         let max_hw_fps =
             estimate_hw_encoder_max_fps("h264_videotoolbox", config.width, config.height);
         let headroom_factor = 0.9;
@@ -808,6 +829,8 @@ fn requires_software_encoder(config: &VideoInfo, preset: H264Preset, is_export: 
     {
         use cap_frame_converter::{GpuVendor, detect_primary_gpu};
 
+        let fps =
+            config.frame_rate.numerator() as f64 / config.frame_rate.denominator().max(1) as f64;
         let encoder_name = match detect_primary_gpu().map(|info| info.vendor) {
             Some(GpuVendor::Nvidia) => "h264_nvenc",
             Some(GpuVendor::Amd) => "h264_amf",
@@ -1049,7 +1072,6 @@ fn get_codec_and_options(
                     options.set("preset", realtime_preset);
                     options.set("tune", "zerolatency");
                 }
-                options.set("vsync", "1");
                 options.set("g", &keyframe_interval_str);
                 options.set("keyint_min", &keyframe_interval_str);
             }

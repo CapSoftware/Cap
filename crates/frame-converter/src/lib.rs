@@ -185,7 +185,10 @@ pub fn create_converter_with_details(
         config.output_height
     );
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let mut fallback_reasons: Vec<String> = Vec::new();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let fallback_reasons: Vec<String> = Vec::new();
 
     #[cfg(target_os = "macos")]
     {

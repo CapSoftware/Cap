@@ -1373,16 +1373,6 @@ async fn create_segment_pipeline(
     #[cfg(not(target_os = "macos"))]
     let segment_fragmented = fragmented;
 
-    #[cfg(target_os = "macos")]
-    let shared_pause_state = if segment_fragmented {
-        Some(SharedPauseState::new(Arc::new(
-            std::sync::atomic::AtomicBool::new(false),
-        )))
-    } else {
-        None
-    };
-
-    #[cfg(windows)]
     let shared_pause_state = if segment_fragmented {
         Some(SharedPauseState::new(Arc::new(
             std::sync::atomic::AtomicBool::new(false),
@@ -1397,37 +1387,81 @@ async fn create_segment_pipeline(
     );
 
     let (screen, system_audio, cursor_display) = if camera_only {
-        let camera_feed = base_inputs.camera_feed.clone().ok_or_else(|| {
-            anyhow!(
-                "Camera-only recording requires a camera, but no camera is currently available. \
-                Please select a camera in the recording settings before starting. \
-                If you have already selected a camera, it may have been disconnected or \
-                failed to initialize. Try reconnecting your camera or selecting a different one."
-            )
-        })?;
+        #[cfg(target_os = "linux")]
+        {
+            let camera_feed = base_inputs.camera_feed.clone().ok_or_else(|| {
+                anyhow!(
+                    "Camera-only recording requires a camera, but no camera is currently available. \
+                    Please select a camera in the recording settings before starting. \
+                    If you have already selected a camera, it may have been disconnected or \
+                    failed to initialize. Try reconnecting your camera or selecting a different one."
+                )
+            })?;
 
-        #[cfg(target_os = "macos")]
-        let screen = OutputPipeline::builder(screen_output_path.clone())
-            .with_video::<sources::NativeCamera>(camera_feed.clone())
-            .with_timestamps(start_time)
-            .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
-            .instrument(error_span!("screen-out"))
-            .await
+            let builder = if segment_fragmented {
+                OutputPipeline::builder(dir.join("display"))
+            } else {
+                OutputPipeline::builder(screen_output_path.clone())
+            }
+            .with_video::<sources::Camera>(camera_feed)
+            .with_timestamps(start_time);
+
+            let screen = if segment_fragmented {
+                builder
+                    .build::<crate::ffmpeg::SegmentedVideoMuxer>(
+                        crate::ffmpeg::SegmentedVideoMuxerConfig {
+                            segment_duration: Duration::from_secs(2),
+                            shared_pause_state: shared_pause_state.clone(),
+                            ..Default::default()
+                        },
+                    )
+                    .instrument(error_span!("screen-out"))
+                    .await
+            } else {
+                builder
+                    .build::<crate::ffmpeg::Mp4Muxer>(())
+                    .instrument(error_span!("screen-out"))
+                    .await
+            }
             .context("camera-only screen pipeline setup")?;
 
-        #[cfg(windows)]
-        let screen = OutputPipeline::builder(screen_output_path.clone())
-            .with_video::<sources::NativeCamera>(camera_feed.clone())
-            .with_timestamps(start_time)
-            .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
-                encoder_preferences: encoder_preferences.clone(),
-                ..Default::default()
-            })
-            .instrument(error_span!("screen-out"))
-            .await
-            .context("camera-only screen pipeline setup")?;
+            (screen, None, None)
+        }
 
-        (screen, None, None)
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            let camera_feed = base_inputs.camera_feed.clone().ok_or_else(|| {
+                anyhow!(
+                    "Camera-only recording requires a camera, but no camera is currently available. \
+                    Please select a camera in the recording settings before starting. \
+                    If you have already selected a camera, it may have been disconnected or \
+                    failed to initialize. Try reconnecting your camera or selecting a different one."
+                )
+            })?;
+
+            #[cfg(target_os = "macos")]
+            let screen = OutputPipeline::builder(screen_output_path.clone())
+                .with_video::<sources::NativeCamera>(camera_feed.clone())
+                .with_timestamps(start_time)
+                .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
+                .instrument(error_span!("screen-out"))
+                .await
+                .context("camera-only screen pipeline setup")?;
+
+            #[cfg(windows)]
+            let screen = OutputPipeline::builder(screen_output_path.clone())
+                .with_video::<sources::NativeCamera>(camera_feed.clone())
+                .with_timestamps(start_time)
+                .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
+                    encoder_preferences: encoder_preferences.clone(),
+                    ..Default::default()
+                })
+                .instrument(error_span!("screen-out"))
+                .await
+                .context("camera-only screen pipeline setup")?;
+
+            (screen, None, None)
+        }
     } else {
         let capture_target = base_inputs.capture_target.clone();
 
@@ -1452,6 +1486,8 @@ async fn create_segment_pipeline(
             max_capture_size,
             start_time.system_time(),
             base_inputs.capture_system_audio,
+            #[cfg(target_os = "linux")]
+            sources::screen_capture::LinuxCaptureSource::from_target(&capture_target),
             #[cfg(windows)]
             d3d_device,
             #[cfg(target_os = "macos")]
@@ -1547,6 +1583,36 @@ async fn create_segment_pipeline(
                     encoder_preferences: encoder_preferences.clone(),
                     ..Default::default()
                 })
+                .instrument(error_span!("camera-out"))
+                .await
+        };
+        Some(pipeline.context("camera pipeline setup")?)
+    } else {
+        None
+    };
+
+    #[cfg(target_os = "linux")]
+    let camera = if camera_only {
+        None
+    } else if let Some(camera_feed) = base_inputs.camera_feed {
+        let pipeline = if segment_fragmented {
+            OutputPipeline::builder(dir.join("camera"))
+                .with_video::<sources::Camera>(camera_feed)
+                .with_timestamps(start_time)
+                .build::<crate::ffmpeg::SegmentedVideoMuxer>(
+                    crate::ffmpeg::SegmentedVideoMuxerConfig {
+                        segment_duration: Duration::from_secs(2),
+                        shared_pause_state: shared_pause_state.clone(),
+                        ..Default::default()
+                    },
+                )
+                .instrument(error_span!("camera-out"))
+                .await
+        } else {
+            OutputPipeline::builder(dir.join("camera.mp4"))
+                .with_video::<sources::Camera>(camera_feed)
+                .with_timestamps(start_time)
+                .build::<crate::ffmpeg::Mp4Muxer>(())
                 .instrument(error_span!("camera-out"))
                 .await
         };
