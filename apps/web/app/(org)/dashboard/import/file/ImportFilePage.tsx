@@ -286,8 +286,10 @@ async function uploadVideoForServerProcessing(
 			};
 
 			const getTotal = () => uploadState.total;
+			const didFinishSending = () =>
+				uploadState.total > 0 && uploadState.uploaded >= uploadState.total;
 
-			return { scheduleProgressUpdate, cleanup, getTotal };
+			return { scheduleProgressUpdate, cleanup, getTotal, didFinishSending };
 		};
 
 		const progressTracker = createProgressTracker();
@@ -309,13 +311,20 @@ async function uploadVideoForServerProcessing(
 					progressTracker.scheduleProgressUpdate(loaded, total);
 				},
 			});
-			progressTracker.cleanup();
-			const total = progressTracker.getTotal() || 1;
-			await sendProgressUpdate(uploadId, total, total);
 		} catch (uploadError) {
-			progressTracker.cleanup();
-			throw uploadError;
+			if (!progressTracker.didFinishSending()) {
+				progressTracker.cleanup();
+				throw uploadError;
+			}
+
+			console.warn(
+				"Upload request failed after all bytes were sent; verifying object before processing:",
+				uploadError,
+			);
 		}
+		progressTracker.cleanup();
+		const total = progressTracker.getTotal() || file.size || 1;
+		await sendProgressUpdate(uploadId, total, total);
 
 		setUploadStatus({
 			status: "serverProcessing",
