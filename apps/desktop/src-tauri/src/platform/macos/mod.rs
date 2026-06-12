@@ -98,6 +98,12 @@ unsafe fn remove_liquid_glass_subviews(
             let is_glass_view: bool = msg_send![view, isKindOfClass: glass_class];
             if is_glass_view {
                 let _: () = msg_send![view, removeFromSuperview];
+                // Balance the `alloc` ownership claim taken when this view was
+                // created in `apply_liquid_glass_background`. Without this,
+                // removing it from the hierarchy only drops the superview's
+                // retain, leaving it stuck at refcount 1 forever — a leaked
+                // GPU/IOSurface-backed NSGlassEffectView on every re-apply.
+                let _: () = msg_send![view, release];
                 continue;
             }
 
