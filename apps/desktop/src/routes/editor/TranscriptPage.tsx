@@ -443,7 +443,13 @@ export function TranscriptPanel() {
 					if (!seg.words) continue;
 					for (let wIdx = 0; wIdx < seg.words.length; wIdx++) {
 						const w = seg.words[wIdx] as CaptionWordExtended;
-						if (w && !w.deleted && (w.isFiller || isFillerWord(w.text))) {
+						if (
+							w &&
+							!w.deleted &&
+							(w.isFiller ||
+								isFillerWord(w.text) ||
+								(w.isPause && w.end - w.start >= threshold))
+						) {
 							seg.words[wIdx] = { ...w, deleted: true };
 						}
 					}

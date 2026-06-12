@@ -11,7 +11,12 @@ export function shiftCaptionTimesAfterCut(
 	segments: Array<{
 		start: number;
 		end: number;
-		words?: Array<{ start: number; end: number; deleted?: boolean }>;
+		words?: Array<{
+			start: number;
+			end: number;
+			deleted?: boolean;
+			isPause?: boolean;
+		}>;
 	}>,
 	cutStart: number,
 	cutDuration: number,
@@ -22,7 +27,7 @@ export function shiftCaptionTimesAfterCut(
 			for (let j = 0; j < seg.words.length; j++) {
 				const w = seg.words[j];
 
-				if (w.deleted) {
+				if (w.deleted || w.isPause) {
 					if (
 						w.start >= cutStart - 0.001 &&
 						w.end <= cutStart + cutDuration + 0.001
