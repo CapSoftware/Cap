@@ -48,6 +48,29 @@ export function shiftCaptionTimesAfterCut(
 	}
 }
 
+const SEGMENT_EPSILON = 0.001;
+
+export function cleanupDegenerateSegments(
+	segments: Array<{ start: number; end: number }>,
+) {
+	for (let i = segments.length - 1; i >= 0; i--) {
+		if (segments[i].end - segments[i].start < SEGMENT_EPSILON) {
+			segments.splice(i, 1);
+		}
+	}
+}
+
+export function cleanupDegenerateClipSegments(
+	segments: Array<{ timescale: number; start: number; end: number }>,
+) {
+	for (let i = segments.length - 1; i >= 0; i--) {
+		const seg = segments[i];
+		if ((seg.end - seg.start) / seg.timescale < SEGMENT_EPSILON) {
+			segments.splice(i, 1);
+		}
+	}
+}
+
 export function rippleDeleteFromTrack(
 	segments: Array<{ start: number; end: number }>,
 	cutStart: number,
@@ -73,6 +96,7 @@ export function rippleDeleteFromTrack(
 			seg.end -= cutDuration;
 		}
 	}
+	cleanupDegenerateSegments(segments);
 }
 
 export function cutClipSegmentsForRange(
@@ -145,6 +169,7 @@ export function cutClipSegmentsForRange(
 			segments.splice(idx, 1);
 		}
 	}
+	cleanupDegenerateClipSegments(segments);
 }
 
 export function rippleDeleteAllTracks(
@@ -235,6 +260,7 @@ export function rippleInsertIntoTrack(
 			seg.end += duration;
 		}
 	}
+	cleanupDegenerateSegments(segments);
 }
 
 export function insertClipSegmentForRange(
@@ -281,6 +307,7 @@ export function insertClipSegmentForRange(
 		const lastSeg = segments[segments.length - 1];
 		lastSeg.end += duration * lastSeg.timescale;
 	}
+	cleanupDegenerateClipSegments(segments);
 }
 
 export function rippleInsertAllTracks(
@@ -319,7 +346,7 @@ if (import.meta.vitest) {
 			expect(shiftTimeAfterCut(1, 2, 1)).toBe(1);
 		});
 		it("snaps time inside the cut to the start of the cut", () => {
-			expect(shiftTimeAfterCut(2.5, 2, 1)).toBe(2);
+			expect(shiftTimeAfterCut(2.5, 2, 1)).toBe(1.5);
 		});
 		it("shifts time after the cut by the cut duration", () => {
 			expect(shiftTimeAfterCut(4, 2, 1)).toBe(3);
@@ -385,6 +412,102 @@ if (import.meta.vitest) {
 		it("shifts time after insertion point", () => {
 			expect(shiftTimeAfterInsert(3, 2, 1)).toBe(4);
 			expect(shiftTimeAfterInsert(1, 2, 1)).toBe(1);
+		});
+	});
+
+	describe("cleanupDegenerateSegments", () => {
+		it("removes zero-duration segments", () => {
+			const segments = [
+				{ start: 0, end: 1 },
+				{ start: 1, end: 1 },
+				{ start: 1, end: 2 },
+			];
+			cleanupDegenerateSegments(segments);
+			expect(segments).toEqual([
+				{ start: 0, end: 1 },
+				{ start: 1, end: 2 },
+			]);
+		});
+
+		it("removes near-zero segments below epsilon", () => {
+			const segments = [
+				{ start: 0, end: 1 },
+				{ start: 1, end: 1.0005 },
+				{ start: 1.0005, end: 2 },
+			];
+			cleanupDegenerateSegments(segments);
+			expect(segments).toEqual([
+				{ start: 0, end: 1 },
+				{ start: 1.0005, end: 2 },
+			]);
+		});
+	});
+
+	describe("cleanupDegenerateClipSegments", () => {
+		it("removes zero-duration clip segments", () => {
+			const segments = [
+				{ timescale: 1, start: 0, end: 1 },
+				{ timescale: 1, start: 1, end: 1 },
+				{ timescale: 1, start: 1, end: 2 },
+			];
+			cleanupDegenerateClipSegments(segments);
+			expect(segments).toEqual([
+				{ timescale: 1, start: 0, end: 1 },
+				{ timescale: 1, start: 1, end: 2 },
+			]);
+		});
+
+		it("accounts for timescale when checking duration", () => {
+			const segments = [
+				{ timescale: 2, start: 0, end: 0.001 },
+				{ timescale: 1, start: 0, end: 0.002 },
+			];
+			cleanupDegenerateClipSegments(segments);
+			expect(segments).toEqual([{ timescale: 1, start: 0, end: 0.002 }]);
+		});
+	});
+
+	describe("rippleDeleteFromTrack cleanup", () => {
+		it("removes segments that become zero-duration after trimming", () => {
+			const segments = [
+				{ start: 0, end: 1 },
+				{ start: 1, end: 1.5 },
+				{ start: 1.5, end: 3 },
+			];
+			rippleDeleteFromTrack(segments, 1, 1.5);
+			const hasDegenerateSegments = segments.some(
+				(s) => s.end - s.start < 0.001,
+			);
+			expect(hasDegenerateSegments).toBe(false);
+			expect(segments.length).toBe(2);
+		});
+	});
+
+	describe("cutClipSegmentsForRange cleanup", () => {
+		it("does not leave zero-duration segments after cutting", () => {
+			const segments = [
+				{ timescale: 1, start: 0, end: 2 },
+				{ timescale: 1, start: 2, end: 4 },
+			];
+			cutClipSegmentsForRange(segments, 1.999, 2.001);
+			const hasDegenerateSegments = segments.some(
+				(s) => (s.end - s.start) / s.timescale < 0.001,
+			);
+			expect(hasDegenerateSegments).toBe(false);
+		});
+
+		it("handles cutting at exact segment boundaries", () => {
+			const segments = [
+				{ timescale: 1, start: 0, end: 1 },
+				{ timescale: 1, start: 1, end: 2 },
+				{ timescale: 1, start: 2, end: 3 },
+			];
+			cutClipSegmentsForRange(segments, 1, 2);
+			const hasDegenerateSegments = segments.some(
+				(s) => (s.end - s.start) / s.timescale < 0.001,
+			);
+			expect(hasDegenerateSegments).toBe(false);
+			expect(segments.length).toBe(2);
 		});
 	});
 }

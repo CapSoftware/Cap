@@ -24,6 +24,8 @@ import {
 	isFillerWord,
 } from "./filler-detection";
 import {
+	cleanupDegenerateClipSegments,
+	cleanupDegenerateSegments,
 	rippleDeleteAllTracks,
 	rippleInsertAllTracks,
 	shiftCaptionTimesAfterCut,
@@ -181,7 +183,37 @@ export function TranscriptPanel() {
 
 		if (wordsToDelete.length === 0) return;
 
-		const timeRanges = wordsToDelete
+		const deletingSet = new Set(
+			wordsToDelete.map((w) => `${w.segmentIndex}:${w.wordIndex}`),
+		);
+
+		const orphanedPauses: FlatWord[] = [];
+		for (const w of words) {
+			if (!w.isPause || w.deleted) continue;
+			if (deletingSet.has(`${w.segmentIndex}:${w.wordIndex}`)) continue;
+
+			const flatIdx = words.indexOf(w);
+			const prev = words[flatIdx - 1];
+			const next = words[flatIdx + 1];
+
+			const prevGone =
+				!prev ||
+				prev.deleted ||
+				deletingSet.has(`${prev.segmentIndex}:${prev.wordIndex}`);
+			const nextGone =
+				!next ||
+				next.deleted ||
+				deletingSet.has(`${next.segmentIndex}:${next.wordIndex}`);
+
+			if (prevGone && nextGone) {
+				orphanedPauses.push(w);
+				deletingSet.add(`${w.segmentIndex}:${w.wordIndex}`);
+			}
+		}
+
+		const allToDelete = [...wordsToDelete, ...orphanedPauses];
+
+		const timeRanges = allToDelete
 			.map((w) => ({
 				start: Math.max(0, w.start - (w.bufferStart || 0)),
 				end: w.storedEnd + (w.bufferEnd || 0),
@@ -191,7 +223,7 @@ export function TranscriptPanel() {
 		const mergedRanges: { start: number; end: number }[] = [];
 		for (const range of timeRanges) {
 			const last = mergedRanges[mergedRanges.length - 1];
-			if (last && range.start <= last.end) {
+			if (last && range.start <= last.end + 0.001) {
 				last.end = Math.max(last.end, range.end);
 			} else {
 				mergedRanges.push({ ...range });
@@ -202,7 +234,7 @@ export function TranscriptPanel() {
 			produce((p) => {
 				if (!p.captions?.segments) return;
 
-				for (const word of wordsToDelete) {
+				for (const word of allToDelete) {
 					const seg = p.captions.segments[word.segmentIndex];
 					if (seg?.words) {
 						const w = seg.words[word.wordIndex] as CaptionWordExtended;
@@ -226,6 +258,16 @@ export function TranscriptPanel() {
 					if (p.timeline) {
 						rippleDeleteAllTracks(p.timeline, range.start, range.end);
 					}
+				}
+
+				if (p.timeline) {
+					cleanupDegenerateClipSegments(p.timeline.segments);
+					if (p.timeline.zoomSegments)
+						cleanupDegenerateSegments(p.timeline.zoomSegments);
+					if (p.timeline.sceneSegments)
+						cleanupDegenerateSegments(p.timeline.sceneSegments);
+					if (p.timeline.captionSegments)
+						cleanupDegenerateSegments(p.timeline.captionSegments);
 				}
 
 				for (const seg of p.captions.segments) {
@@ -276,7 +318,6 @@ export function TranscriptPanel() {
 						b.segmentIndex - a.segmentIndex || b.wordIndex - a.wordIndex,
 				);
 
-				// Process earliest-to-latest so each word's stored position already reflects all prior restorations when we compute insertDuration.
 				const chronologicalWords = [...sortedByIndex].reverse();
 
 				for (const word of chronologicalWords) {
@@ -284,13 +325,9 @@ export function TranscriptPanel() {
 					if (!seg?.words) continue;
 					const w = seg.words[word.wordIndex] as CaptionWordExtended;
 
-					const insertDuration =
-						w.end +
-						(w.bufferEnd || 0) -
-						Math.max(0, w.start - (w.bufferStart || 0));
+					const insertDuration = w.end - w.start;
 					if (insertDuration <= 0.001) continue;
 
-					// Shift all words AFTER this word
 					for (let i = 0; i < p.captions.segments.length; i++) {
 						const s = p.captions.segments[i];
 						if (!s.words) continue;
@@ -308,11 +345,7 @@ export function TranscriptPanel() {
 					}
 
 					if (p.timeline) {
-						rippleInsertAllTracks(
-							p.timeline,
-							Math.max(0, w.start - (w.bufferStart || 0)),
-							insertDuration,
-						);
+						rippleInsertAllTracks(p.timeline, w.start, insertDuration);
 					}
 				}
 
@@ -325,6 +358,16 @@ export function TranscriptPanel() {
 						w.bufferStart = 0;
 						w.bufferEnd = 0;
 					}
+				}
+
+				if (p.timeline) {
+					cleanupDegenerateClipSegments(p.timeline.segments);
+					if (p.timeline.zoomSegments)
+						cleanupDegenerateSegments(p.timeline.zoomSegments);
+					if (p.timeline.sceneSegments)
+						cleanupDegenerateSegments(p.timeline.sceneSegments);
+					if (p.timeline.captionSegments)
+						cleanupDegenerateSegments(p.timeline.captionSegments);
 				}
 
 				for (const seg of p.captions.segments) {
@@ -498,7 +541,7 @@ export function TranscriptPanel() {
 				const mergedRanges: { start: number; end: number }[] = [];
 				for (const range of timeRanges) {
 					const last = mergedRanges[mergedRanges.length - 1];
-					if (last && range.start <= last.end) {
+					if (last && range.start <= last.end + 0.001) {
 						last.end = Math.max(last.end, range.end);
 					} else {
 						mergedRanges.push({ ...range });
@@ -519,6 +562,16 @@ export function TranscriptPanel() {
 					if (p.timeline) {
 						rippleDeleteAllTracks(p.timeline, range.start, range.end);
 					}
+				}
+
+				if (p.timeline) {
+					cleanupDegenerateClipSegments(p.timeline.segments);
+					if (p.timeline.zoomSegments)
+						cleanupDegenerateSegments(p.timeline.zoomSegments);
+					if (p.timeline.sceneSegments)
+						cleanupDegenerateSegments(p.timeline.sceneSegments);
+					if (p.timeline.captionSegments)
+						cleanupDegenerateSegments(p.timeline.captionSegments);
 				}
 
 				for (const seg of p.captions.segments) {
@@ -1211,6 +1264,12 @@ function TranscriptEditor(props: {
 					const newCutEnd = w.end + bufferEnd;
 					const newDuration = Math.max(0, newCutEnd - newCutStart);
 
+					if (Math.abs(oldDuration - newDuration) < 0.001) {
+						w.bufferStart = bufferStart;
+						w.bufferEnd = bufferEnd;
+						return;
+					}
+
 					w.bufferStart = bufferStart;
 					w.bufferEnd = bufferEnd;
 					if (oldDuration > 0.001) {
@@ -1222,7 +1281,7 @@ function TranscriptEditor(props: {
 									i < segmentIndex ||
 									(i === segmentIndex && j <= wordIndex)
 								) {
-									continue; // Do not shift words before or equal to the anchor
+									continue;
 								}
 								const cw = s.words[j] as CaptionWordExtended;
 								cw.start += oldDuration;
@@ -1247,7 +1306,7 @@ function TranscriptEditor(props: {
 									i < segmentIndex ||
 									(i === segmentIndex && j <= wordIndex)
 								) {
-									continue; // Do not shift words before or equal to the anchor
+									continue;
 								}
 								const cw = s.words[j] as CaptionWordExtended;
 
@@ -1262,6 +1321,16 @@ function TranscriptEditor(props: {
 						if (currentTime > newCutStart) {
 							appliedDelta -= newDuration;
 						}
+					}
+
+					if (p.timeline) {
+						cleanupDegenerateClipSegments(p.timeline.segments);
+						if (p.timeline.zoomSegments)
+							cleanupDegenerateSegments(p.timeline.zoomSegments);
+						if (p.timeline.sceneSegments)
+							cleanupDegenerateSegments(p.timeline.sceneSegments);
+						if (p.timeline.captionSegments)
+							cleanupDegenerateSegments(p.timeline.captionSegments);
 					}
 
 					for (const s of p.captions.segments) {
