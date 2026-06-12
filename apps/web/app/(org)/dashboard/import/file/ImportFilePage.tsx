@@ -1,6 +1,5 @@
 "use client";
 
-import { Button } from "@cap/ui";
 import type { Folder, Organisation } from "@cap/web-domain";
 import { faArrowLeft, faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -119,7 +118,10 @@ export const ImportFilePage = () => {
 				</p>
 			</div>
 
-			<div
+			<button
+				type="button"
+				disabled={isUploading}
+				onClick={handleBrowseClick}
 				onDragOver={(e) => {
 					e.preventDefault();
 					if (!isUploading) setIsDragOver(true);
@@ -135,46 +137,43 @@ export const ImportFilePage = () => {
 				}`}
 			>
 				{isUploading ? (
-					<div className="flex flex-col items-center gap-4">
-						<div className="flex items-center justify-center size-16 rounded-full bg-gray-3">
-							<div className="size-6 border-2 border-gray-8 border-t-blue-10 rounded-full animate-spin" />
-						</div>
-						<div className="flex flex-col items-center gap-1">
-							<p className="text-sm font-medium text-gray-12">{statusLabel}</p>
+					<span className="flex flex-col items-center gap-4">
+						<span className="flex items-center justify-center size-16 rounded-full bg-gray-3">
+							<span className="size-6 border-2 border-gray-8 border-t-blue-10 rounded-full animate-spin" />
+						</span>
+						<span className="flex flex-col items-center gap-1">
+							<span className="text-sm font-medium text-gray-12">
+								{statusLabel}
+							</span>
 							{progressPercent !== null && (
-								<div className="w-48 h-1.5 rounded-full bg-gray-4 mt-2 overflow-hidden">
-									<div
+								<span className="w-48 h-1.5 rounded-full bg-gray-4 mt-2 overflow-hidden">
+									<span
 										className="h-full rounded-full bg-blue-10 transition-all duration-300"
 										style={{ width: `${progressPercent}%` }}
 									/>
-								</div>
+								</span>
 							)}
-						</div>
-					</div>
+						</span>
+					</span>
 				) : (
-					<div className="flex flex-col items-center gap-4">
-						<div className="flex items-center justify-center size-16 rounded-full bg-gray-3 text-gray-10">
+					<span className="flex flex-col items-center gap-4">
+						<span className="flex items-center justify-center size-16 rounded-full bg-gray-3 text-gray-10">
 							<FontAwesomeIcon className="size-6" icon={faUpload} />
-						</div>
-						<div className="flex flex-col items-center gap-1">
-							<p className="text-sm font-medium text-gray-12">
+						</span>
+						<span className="flex flex-col items-center gap-1">
+							<span className="text-sm font-medium text-gray-12">
 								Drag and drop your video here
-							</p>
-							<p className="text-xs text-gray-10">
+							</span>
+							<span className="text-xs text-gray-10">
 								MP4, MOV, AVI, MKV, WebM up to any size
-							</p>
-						</div>
-						<Button
-							onClick={handleBrowseClick}
-							variant="dark"
-							size="sm"
-							className="mt-2"
-						>
+							</span>
+						</span>
+						<span className="inline-flex items-center justify-center mt-2 h-8 px-3 rounded-full bg-gray-12 text-sm font-medium text-gray-1">
 							Browse Files
-						</Button>
-					</div>
+						</span>
+					</span>
 				)}
-			</div>
+			</button>
 
 			<input
 				ref={inputRef}
@@ -312,7 +311,7 @@ async function uploadVideoForServerProcessing(
 			});
 			progressTracker.cleanup();
 			const total = progressTracker.getTotal() || 1;
-			sendProgressUpdate(uploadId, total, total);
+			await sendProgressUpdate(uploadId, total, total);
 		} catch (uploadError) {
 			progressTracker.cleanup();
 			throw uploadError;
