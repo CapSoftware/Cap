@@ -6,6 +6,7 @@ import { Cause, Exit, Option } from "effect";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { triggerInstantRecordingProcessing } from "@/actions/video/trigger-instant-recording-processing";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
@@ -1297,6 +1298,17 @@ export const useWebRecorder = ({
 						thumbnailPreviewUrl,
 						setUploadStatus,
 					);
+
+					try {
+						await triggerInstantRecordingProcessing({
+							videoId: creationResult.id,
+						});
+					} catch (processingError) {
+						console.error("Failed to start video processing", processingError);
+						toast.warning(
+							"Recording uploaded. Processing did not start yet, but the original recording is available.",
+						);
+					}
 
 					if (thumbnailBlob) {
 						try {
