@@ -1012,7 +1012,11 @@ function WordWithTooltip(props: {
 	);
 }
 
-function PauseBadge(props: { word: FlatWord; onDelete: () => void }) {
+function PauseBadge(props: {
+	word: FlatWord;
+	onDelete: () => void;
+	onContextMenu: (e: MouseEvent) => void;
+}) {
 	const duration = props.word.storedEnd - props.word.start;
 	return (
 		<span
@@ -1022,6 +1026,10 @@ function PauseBadge(props: { word: FlatWord; onDelete: () => void }) {
 					? "border-gray-4 text-gray-6 bg-gray-2/30 line-through opacity-40"
 					: "border-gray-6 text-gray-8 bg-gray-3/30",
 			)}
+			onContextMenu={(e) => {
+				e.preventDefault();
+				props.onContextMenu(e);
+			}}
 		>
 			⏸ {duration.toFixed(1)}s
 			<button
@@ -1224,7 +1232,7 @@ function TranscriptEditor(props: {
 	};
 
 	const handleContextMenu = (word: FlatWord, e: MouseEvent) => {
-		if (word.deleted) {
+		if (word.deleted || word.isPause) {
 			setBufferPopover({
 				word,
 				flatIndex: flatIndexOf(word),
@@ -1405,6 +1413,9 @@ function TranscriptEditor(props: {
 														handleWordDelete(word);
 													}
 												}}
+												onContextMenu={(e: MouseEvent) =>
+													handleContextMenu(word, e)
+												}
 											/>
 										);
 									}
