@@ -11,6 +11,8 @@ import {
 	type SegmentRecordings,
 	type TimelineSegment,
 } from "~/utils/tauri";
+import type { CaptionWordExtended } from "./caption-types";
+import { isFillerWord, PAUSE_DETECTION_THRESHOLD } from "./filler-detection";
 export const DEFAULT_CAPTION_MODEL = "best";
 export const DEFAULT_WHISPER_CAPTION_MODEL = "small";
 export const DEFAULT_CAPTION_LANGUAGE = "auto";
@@ -138,18 +140,20 @@ export function mapCaptionsToEditedTimeline(
 		const mappedCaptionSegments = mappings.flatMap((mapping) => {
 			if (caption.words && caption.words.length > 0) {
 				const mappedWords = caption.words.flatMap((word) => {
-					const wordMapped = mapTimeRangeWithinMapping(
-						word.start,
-						word.end,
-						mapping,
-					);
+					const w = word as CaptionWordExtended;
+					const wordMapped = mapTimeRangeWithinMapping(w.start, w.end, mapping);
 
 					return wordMapped
 						? [
 								{
-									text: word.text,
+									text: w.text,
 									start: wordMapped.start,
 									end: wordMapped.end,
+									deleted: w.deleted ?? false,
+									isFiller: w.isFiller || isFillerWord(w.text),
+									isPause: w.isPause ?? false,
+									bufferStart: w.bufferStart ?? 0,
+									bufferEnd: w.bufferEnd ?? 0,
 								},
 							]
 						: [];
@@ -209,19 +213,116 @@ export function mapCaptionsToEditedTimeline(
 export function createCaptionTrackSegments(
 	segments: CaptionSegment[],
 ): CaptionTrackSegment[] {
-	return segments.map((segment) => ({
-		id: segment.id,
-		start: segment.start,
-		end: segment.end,
-		text: segment.text,
-		words: segment.words ?? [],
-		fadeDurationOverride: null,
-		lingerDurationOverride: null,
-		positionOverride: null,
-		colorOverride: null,
-		backgroundColorOverride: null,
-		fontSizeOverride: null,
-	}));
+	return segments.map((segment) => {
+		const words = (segment.words ?? []) as CaptionWordExtended[];
+		const visibleText = words.some((w) => w.deleted || w.isPause)
+			? words
+					.filter((w) => !w.deleted && !w.isPause)
+					.map((w) => w.text.trim())
+					.filter((t) => t.length > 0)
+					.join(" ")
+			: segment.text;
+		return {
+			id: segment.id,
+			start: segment.start,
+			end: segment.end,
+			text: visibleText,
+			words,
+			fadeDurationOverride: null,
+			lingerDurationOverride: null,
+			positionOverride: null,
+			colorOverride: null,
+			backgroundColorOverride: null,
+			fontSizeOverride: null,
+		};
+	});
+}
+
+function cappedWordEnd(word: CaptionWord): number {
+	const duration = word.end - word.start;
+	const maxDuration = Math.max(0.5, Math.min(1.5, word.text.length * 0.1));
+	if (duration > maxDuration + 0.3) {
+		return word.start + maxDuration;
+	}
+	return word.end;
+}
+
+function insertPauseWordsIntoSegments(segments: CaptionSegment[]): void {
+	const allWords: { segIdx: number; wIdx: number; word: CaptionWord }[] = [];
+	for (let s = 0; s < segments.length; s++) {
+		const ws = (segments[s].words ?? []) as CaptionWordExtended[];
+		for (let w = 0; w < ws.length; w++) {
+			if (ws[w].isPause) continue;
+			allWords.push({ segIdx: s, wIdx: w, word: ws[w] });
+		}
+	}
+
+	const insertions: {
+		segIdx: number;
+		afterWIdx: number;
+		pause: CaptionWordExtended;
+	}[] = [];
+
+	if (allWords.length > 0) {
+		const first = allWords[0];
+		const hasPauseBefore =
+			first.wIdx > 0 &&
+			(segments[first.segIdx].words?.[first.wIdx - 1] as CaptionWordExtended)
+				?.isPause;
+		if (first.word.start >= PAUSE_DETECTION_THRESHOLD && !hasPauseBefore) {
+			insertions.push({
+				segIdx: first.segIdx,
+				afterWIdx: first.wIdx - 1,
+				pause: {
+					text: `[Pause ${first.word.start.toFixed(1)}s]`,
+					start: 0,
+					end: first.word.start,
+					isPause: true,
+					isFiller: false,
+				},
+			});
+		}
+	}
+
+	for (let i = 1; i < allWords.length; i++) {
+		const prev = allWords[i - 1];
+		const curr = allWords[i];
+		const prevEnd = cappedWordEnd(prev.word);
+		const gap = curr.word.start - prevEnd;
+		if (gap < PAUSE_DETECTION_THRESHOLD) continue;
+
+		let alreadyHasPause = false;
+		if (prev.segIdx === curr.segIdx) {
+			const ws = (segments[prev.segIdx].words ?? []) as CaptionWordExtended[];
+			for (let j = prev.wIdx + 1; j < curr.wIdx; j++) {
+				if (ws[j]?.isPause) {
+					alreadyHasPause = true;
+					break;
+				}
+			}
+		}
+		if (alreadyHasPause) continue;
+
+		insertions.push({
+			segIdx: prev.segIdx,
+			afterWIdx: prev.wIdx,
+			pause: {
+				text: `[Pause ${gap.toFixed(1)}s]`,
+				start: prevEnd,
+				end: curr.word.start,
+				isPause: true,
+				isFiller: false,
+			},
+		});
+	}
+
+	for (let i = insertions.length - 1; i >= 0; i--) {
+		const ins = insertions[i];
+		const seg = segments[ins.segIdx];
+		if (seg.words) {
+			seg.words.splice(ins.afterWIdx + 1, 0, ins.pause);
+		}
+	}
 }
 
 export function applyCaptionResultToProject<
@@ -276,6 +377,8 @@ export function applyCaptionResultToProject<
 		recordingSegments,
 	);
 
+	insertPauseWordsIntoSegments(mappedSegments);
+
 	captions.segments = mappedSegments;
 	timeline.captionSegments = createCaptionTrackSegments(mappedSegments);
 }
@@ -301,8 +404,9 @@ export async function transcribeEditorCaptions(
 	return await commands.transcribeAudio(videoPath, modelPath, language, engine);
 }
 
-export function getCaptionTextFromWords(words: CaptionWord[]) {
+export function getCaptionTextFromWords(words: CaptionWordExtended[]) {
 	return words
+		.filter((word) => !word.deleted && !word.isPause)
 		.map((word) => word.text.trim())
 		.filter((word) => word.length > 0)
 		.join(" ");
@@ -410,7 +514,18 @@ if (import.meta.vitest) {
 				start: 0.4,
 				end: 0.6,
 				text: "hello",
-				words: [{ text: "hello", start: 0.4, end: 0.6 }],
+				words: [
+					{
+						text: "hello",
+						start: 0.4,
+						end: 0.6,
+						deleted: false,
+						isFiller: false,
+						isPause: false,
+						bufferStart: 0,
+						bufferEnd: 0,
+					},
+				],
 			});
 			expect(result[1]?.id).toBe("caption-1");
 			expect(result[1]?.text).toBe("world");

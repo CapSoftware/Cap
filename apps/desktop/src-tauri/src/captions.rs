@@ -782,6 +782,15 @@ fn process_with_whisper(
 
         log::info!("  Segment {i} has {num_tokens} tokens");
 
+        let cap_word_end = |text: &str, start: f32, end: f32| -> f32 {
+            let max_duration = (text.len() as f32 * 0.1).clamp(0.5, 1.5);
+            if end - start > max_duration + 0.3 {
+                start + max_duration
+            } else {
+                end
+            }
+        };
+
         let mut current_word = String::new();
         let mut word_start: Option<f32> = None;
         let mut word_end: f32 = start_time;
@@ -812,16 +821,17 @@ fn process_with_whisper(
                     if !current_word.is_empty()
                         && let Some(ws) = word_start
                     {
+                        let text = current_word.trim().to_string();
+                        word_end = cap_word_end(&text, ws, word_end);
+
                         log::info!(
-                            "    -> Completing word: '{}' ({:.2}s - {:.2}s)",
-                            current_word.trim(),
-                            ws,
-                            word_end
+                            "    -> Completing word: '{text}' ({ws:.2}s - {word_end:.2}s)"
                         );
                         words.push(CaptionWord {
-                            text: current_word.trim().to_string(),
+                            text,
                             start: ws,
                             end: word_end,
+                            ..Default::default()
                         });
                     }
                     current_word = token_text.trim().to_string();
@@ -844,16 +854,16 @@ fn process_with_whisper(
         if !current_word.trim().is_empty()
             && let Some(ws) = word_start
         {
+            let text = current_word.trim().to_string();
+            word_end = cap_word_end(&text, ws, word_end);
             log::info!(
-                "    -> Final word: '{}' ({:.2}s - {:.2}s)",
-                current_word.trim(),
-                ws,
-                word_end
+                "    -> Final word: '{text}' ({ws:.2}s - {word_end:.2}s)"
             );
             words.push(CaptionWord {
-                text: current_word.trim().to_string(),
+                text,
                 start: ws,
                 end: word_end,
+                ..Default::default()
             });
         }
 
@@ -1000,6 +1010,7 @@ fn process_with_parakeet(
             text: t.text.trim().to_string(),
             start: t.start,
             end: t.end,
+            ..Default::default()
         })
         .collect();
 
@@ -1393,6 +1404,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                                         text: w_text.to_string(),
                                         start: w_start as f32,
                                         end: w_end as f32,
+                                        ..Default::default()
                                     });
                                 }
                             }

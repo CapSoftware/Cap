@@ -396,12 +396,24 @@ impl CaptionsLayer {
             active.segment.end as f32,
         );
 
-        let raw_caption_text = self.current_text.clone().unwrap_or_default();
+        let raw_caption_text = if active.segment.words.iter().any(|w| w.deleted) {
+            active
+                .segment
+                .words
+                .iter()
+                .filter(|w| !w.deleted)
+                .map(|w| w.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            self.current_text.clone().unwrap_or_default()
+        };
         let caption_text = wrap_text_by_words(&raw_caption_text, MAX_WORDS_PER_LINE);
         let caption_words: Vec<CaptionWord> = active
             .segment
             .words
             .iter()
+            .filter(|w| !w.deleted)
             .map(|w| CaptionWord {
                 text: w.text.clone(),
                 start: w.start,
