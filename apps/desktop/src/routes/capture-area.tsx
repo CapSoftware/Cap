@@ -8,7 +8,15 @@ import {
 	WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	onCleanup,
+	onMount,
+	Show,
+	untrack,
+} from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import {
@@ -72,12 +80,28 @@ export default function CaptureArea() {
 
 	const { rawOptions, setOptions } = createOptionsQuery();
 
-	const hasStoredSelection = createMemo(() => {
+	const activeScreenId = createMemo(() => {
 		const target = rawOptions.captureTarget;
-		if (target.variant !== "display") return false;
+		if (target.variant === "display") return target.id;
+		if (target.variant === "area") return target.screen;
+		return null;
+	});
+
+	// Frozen on first non-null value (from synchronous localStorage load) so that
+	// later async Tauri-store updates carrying stale data cannot reset it.
+	const [screenId, setScreenId] = createSignal<string | null>(
+		untrack(activeScreenId),
+	);
+	createEffect(() => {
+		const id = activeScreenId();
+		if (id && !untrack(screenId)) setScreenId(id);
+	});
+
+	const hasStoredSelection = createMemo(() => {
+		const id = screenId();
+		if (!id) return false;
 		return (
-			state.lastSelectedBounds?.some((entry) => entry.screenId === target.id) ??
-			false
+			state.lastSelectedBounds?.some((entry) => entry.screenId === id) ?? false
 		);
 	});
 
@@ -90,22 +114,22 @@ export default function CaptureArea() {
 		)
 			return;
 
-		const target = rawOptions.captureTarget;
-		if (target.variant !== "display") return;
+		const id = screenId();
+		if (!id) return;
 
 		const existingIndex = state.lastSelectedBounds?.findIndex(
-			(item) => item.screenId === target.id,
+			(item) => item.screenId === id,
 		);
 
 		if (existingIndex >= 0) {
 			setState("lastSelectedBounds", existingIndex, {
-				screenId: target.id,
+				screenId: id,
 				bounds: currentBounds,
 			});
 		} else {
 			setState("lastSelectedBounds", [
 				...state.lastSelectedBounds,
-				{ screenId: target.id, bounds: currentBounds },
+				{ screenId: id, bounds: currentBounds },
 			]);
 		}
 
@@ -114,7 +138,7 @@ export default function CaptureArea() {
 			"captureTarget",
 			reconcile({
 				variant: "area",
-				screen: target.id,
+				screen: id,
 				bounds: {
 					position: { x: b.x, y: b.y },
 					size: { width: b.width, height: b.height },
@@ -148,10 +172,10 @@ export default function CaptureArea() {
 		cropperRef?.reset();
 		setAspect(null);
 
-		const target = rawOptions.captureTarget;
-		if (target.variant !== "display") return;
+		const id = screenId();
+		if (!id) return;
 		setState("lastSelectedBounds", (values) =>
-			values?.filter((v) => v.screenId !== target.id),
+			values?.filter((v) => v.screenId !== id),
 		);
 	}
 
@@ -287,13 +311,22 @@ export default function CaptureArea() {
 						onCropChange={setCrop}
 						snapToRatioEnabled={state.snapToRatio}
 						initialCrop={() => {
-							const target = rawOptions.captureTarget;
-							if (target.variant === "display")
-								return (
-									state.lastSelectedBounds?.find(
-										(m) => m.screenId === target.id,
-									)?.bounds ?? CROP_ZERO
-								);
+							const id = screenId();
+							if (id) {
+								const stored = state.lastSelectedBounds?.find(
+									(m) => m.screenId === id,
+								)?.bounds;
+								if (stored) return stored;
+								const target = rawOptions.captureTarget;
+								if (target.variant === "area" && target.screen === id) {
+									return {
+										x: target.bounds.position.x,
+										y: target.bounds.position.y,
+										width: target.bounds.size.width,
+										height: target.bounds.size.height,
+									};
+								}
+							}
 							return CROP_ZERO;
 						}}
 						onContextMenu={(e) => showCropOptionsMenu(e, true)}
