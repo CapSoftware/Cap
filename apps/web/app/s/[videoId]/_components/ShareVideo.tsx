@@ -420,6 +420,7 @@ export const ShareVideo = forwardRef<
 							isCaptionLoading={captionContext.isTranslating}
 							hasCaptions={data.transcriptionStatus === "COMPLETE"}
 							canRetryProcessing={canRetryProcessing}
+							cta={data.metadata?.cta}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -443,6 +444,7 @@ export const ShareVideo = forwardRef<
 							isCaptionLoading={captionContext.isTranslating}
 							hasCaptions={data.transcriptionStatus === "COMPLETE"}
 							canRetryProcessing={canRetryProcessing}
+							cta={data.metadata?.cta}
 						/>
 					)}
 					{showFinalizeRecordingControl && (

@@ -1,5 +1,6 @@
 "use client";
 
+import type { VideoCta } from "@cap/database/types";
 import { LogoSpinner } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
@@ -14,6 +15,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import { CtaButton } from "./CtaButton";
 import { getActiveCaptionText } from "./caption-cues";
 import {
 	canRetryFailedProcessing,
@@ -103,6 +105,7 @@ interface Props {
 	duration?: number | null;
 	defaultPlaybackSpeed?: number;
 	previewMode?: "background";
+	cta?: VideoCta | null;
 }
 
 export function HLSVideoPlayer({
@@ -128,6 +131,7 @@ export function HLSVideoPlayer({
 	duration: fallbackDuration,
 	defaultPlaybackSpeed,
 	previewMode,
+	cta,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -620,6 +624,7 @@ export function HLSVideoPlayer({
 			)}
 			autoHide
 		>
+			{!isBackgroundPreview && <CtaButton cta={cta} />}
 			{hasFailedOrError && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
