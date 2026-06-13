@@ -9,14 +9,12 @@ use tracing::trace;
 use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum CaptureMode {
     Screen(String),
     Window(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum DeepLinkAction {
     StartRecording {
         capture_mode: CaptureMode,
@@ -26,6 +24,15 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    SwitchMicrophone {
+        label: String,
+    },
+    SwitchCamera {
+        label: String,
+    },
+    GetStatus,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -147,6 +154,37 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            // ---- NEW ACTIONS ----
+            DeepLinkAction::PauseRecording => {
+                let state = app.state::<ArcLock<App>>();
+                crate::recording::pause_recording(app.clone(), state).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                let state = app.state::<ArcLock<App>>();
+                crate::recording::resume_recording(app.clone(), state).await
+            }
+            DeepLinkAction::SwitchMicrophone { label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state.clone(), Some(label)).await
+            }
+            DeepLinkAction::SwitchCamera { label } => {
+                let state = app.state::<ArcLock<App>>();
+                let camera = Some(DeviceOrModelID::Label(label));
+                crate::set_camera_input(app.clone(), state.clone(), camera, None).await
+            }
+            DeepLinkAction::GetStatus => {
+                let state = app.state::<ArcLock<App>>();
+                let locked = state.read().await;
+                let status = if locked.current_recording.is_some() {
+                    "recording"
+                } else {
+                    "idle"
+                };
+                // Emit status to frontend as a tauri event so Raycast can poll it
+                app.emit("cap://status", serde_json::json!({ "status": status }))
+                    .map_err(|e| e.to_string())
+            }
+            // ---- END NEW ACTIONS ----
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
