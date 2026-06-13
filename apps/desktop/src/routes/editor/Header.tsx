@@ -435,7 +435,7 @@ export function Header() {
 						</Show>
 					</div>
 				</Show>
-				<Show when={hasTranscript()}>
+				<Show when={hasTranscript() || isTranscriptOpen()}>
 					<Button
 						variant={isTranscriptOpen() ? "white" : "gray"}
 						class="flex gap-1.5 justify-center h-[40px]"
