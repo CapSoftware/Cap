@@ -918,6 +918,9 @@ importers:
       sst:
         specifier: 3.17.14
         version: 3.17.14
+      vitest:
+        specifier: ~2.1.9
+        version: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(lightningcss@1.32.0)(terser@5.44.0)
 
   packages/config:
     dependencies:
