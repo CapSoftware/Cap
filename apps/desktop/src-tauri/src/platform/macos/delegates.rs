@@ -132,8 +132,13 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
                     (*this_mut).set_ivar("app_box", std::ptr::null_mut::<c_void>());
                 }
 
-                // NSWindow does not retain its delegate, so the `alloc` reference taken
-                // when this delegate was created is the only owning reference. Release
+                // Restore the previous delegate before releasing this one, so any
+                // further delegate callbacks during teardown don't hit a freed object.
+                let window: id = *this.get_ivar("window");
+                let _: () = msg_send![window, setDelegate: super_del];
+
+                // NSWindow does not retain its delegate, so the reference taken when
+                // this delegate was created (`new`) is the only owning one. Release
                 // it now that the window is closing.
                 let this_id = this as *const Object as id;
                 let _: () = msg_send![this_id, release];
@@ -347,6 +352,12 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         // Register the delegate class once and reuse it for every window. Previously a brand
         // new class was registered (with a randomized name) on every call to `setup`, which
         // permanently leaked Objective-C class metadata for the lifetime of the process.
+        //
+        // NOTE: `static CLASS` below is a single process-wide instance shared across every
+        // monomorphization of this function, not one per `R`. `setup` is only ever called
+        // with `R = tauri::Wry` in this app, so this is fine in practice; if it were ever
+        // called with a different `R`, the first call's `on_*::<R>` method pointers would
+        // be baked into the shared class for all `R`.
         fn get_or_register_delegate_class<R: Runtime>() -> &'static Class {
             static CLASS: std::sync::OnceLock<&'static Class> = std::sync::OnceLock::new();
             *CLASS.get_or_init(|| {
@@ -392,7 +403,7 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         let app_box = Box::into_raw(Box::new(app_state)) as *mut c_void;
 
         let delegate_class = get_or_register_delegate_class::<R>();
-        let delegate: id = msg_send![delegate_class, alloc];
+        let delegate: id = msg_send![delegate_class, new];
         (*delegate).set_ivar("window", ns_win_id);
         (*delegate).set_ivar("app_box", app_box);
         (*delegate).set_ivar("toolbar", cocoa::base::nil);
