@@ -3,6 +3,12 @@
 	"version": "0.0.0",
 	"private": true,
 	"license": "MIT",
+	"scripts": {
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"vitest": "~2.1.9"
+	},
 	"publishConfig": {
 		"access": "public"
 	}
