@@ -12,7 +12,6 @@ import {
 } from "solid-js";
 
 import { AbsoluteInsetLoader } from "~/components/Loader";
-import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { applyMacOSWindowMaterial } from "~/utils/macos-window-material";
 import { initializeTitlebar } from "~/utils/titlebar-state";
@@ -112,33 +111,16 @@ function Header() {
 				"cap-window-header flex items-center min-w-0 w-full h-9 select-none shrink-0 bg-gray-2",
 				isWindows ? "flex-row" : "flex-row-reverse",
 			)}
-			data-tauri-drag-region
+			data-tauri-drag-region="deep"
 		>
 			{ctx.state()?.items}
 			{isWindows && <CaptionControlsWindows11 class="ml-auto!" />}
-			{isMacOS && !isSettings() && (
-				<CaptionControlsMacOS
-					class="mr-auto! ml-3"
-					showMinimize={false}
-					showZoom={false}
-				/>
-			)}
+			{isMacOS && <div class="h-full w-[64px]" />}
 		</header>
 	);
 }
 
 function Inner(props: ParentProps) {
-	onMount(() => {
-		const initialTargetMode = (
-			window as typeof window & {
-				__CAP__?: { initialTargetMode?: unknown };
-			}
-		).__CAP__?.initialTargetMode;
-
-		if (location.pathname !== "/" || !initialTargetMode)
-			void getCurrentWindow().show();
-	});
-
 	return (
 		<div
 			data-tauri-drag-region="false"

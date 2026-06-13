@@ -8,10 +8,7 @@ import {
 } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import {
-	getAllWebviewWindows,
-	WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
+import { getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as shell from "@tauri-apps/plugin-shell";
@@ -34,6 +31,7 @@ import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
+import { showCapDebugWindow } from "~/routes/debug";
 import { Input } from "~/routes/editor/ui";
 import {
 	authStore,
@@ -2577,11 +2575,11 @@ function Page() {
 			<WindowChromeHeader hideMaximize>
 				<div
 					class="flex flex-1 gap-1 items-center mx-2 min-w-0"
-					data-tauri-drag-region
+					data-tauri-drag-region="deep"
 				>
 					<MainWindowHelpButton />
-					<div class="flex-1 min-h-9 min-w-0" data-tauri-drag-region />
-					<div class="flex gap-1 items-center shrink-0" data-tauri-drag-region>
+					<div class="flex-1 min-h-9 min-w-0" />
+					<div class="flex gap-1 items-center shrink-0">
 						<Tooltip content={<span>Settings</span>}>
 							<button
 								type="button"
@@ -2636,9 +2634,7 @@ function Page() {
 						{import.meta.env.DEV && (
 							<button
 								type="button"
-								onClick={() => {
-									new WebviewWindow("debug", { url: "/debug" });
-								}}
+								onClick={showCapDebugWindow}
 								class="flex justify-center items-center focus:outline-hidden"
 							>
 								<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />

@@ -25,7 +25,6 @@ export default function Titlebar() {
 			style={{
 				height: titlebarState.height,
 			}}
-			data-tauri-drag-region
 		>
 			{left() ? (
 				<>
@@ -55,7 +54,7 @@ export function WindowControls(props: ComponentProps<"div">) {
 				/>
 			</Match>
 			<Match when={ostype === "macos"}>
-				<div data-tauri-drag-region class="flex w-20 h-full" />
+				<div class="flex w-20 h-full" />
 			</Match>
 		</Switch>
 	);

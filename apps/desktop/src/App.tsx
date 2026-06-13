@@ -1,16 +1,18 @@
-import { Route, Router, useCurrentMatches } from "@solidjs/router";
-import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import {
-	getCurrentWebviewWindow,
-	type WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
+	Route,
+	Router,
+	useCurrentMatches,
+	useIsRouting,
+} from "@solidjs/router";
+import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { message } from "@tauri-apps/plugin-dialog";
 import {
+	children,
 	createEffect,
-	createSignal,
+	type JSX,
 	lazy,
-	onCleanup,
 	onMount,
+	type ParentProps,
 	Suspense,
 } from "solid-js";
 import { Toaster } from "solid-toast";
@@ -19,12 +21,12 @@ import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 
+import { createEventListener } from "@solid-primitives/event-listener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
 import WindowChromeLayout from "./routes/(window-chrome)";
 import SettingsLayout from "./routes/(window-chrome)/settings";
-import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
-import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
 const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
@@ -118,8 +120,11 @@ export default function App() {
 }
 
 function Inner() {
-	const currentWindow = getCurrentWebviewWindow();
-	createThemeListener(currentWindow);
+	const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+	const apply = () =>
+		document.documentElement.classList.toggle("dark", prefersDark.matches);
+	apply();
+	createEventListener(prefersDark, "change", apply);
 
 	onMount(() => {
 		initAnonymousUser();
@@ -147,29 +152,20 @@ function Inner() {
 			/>
 			<CapErrorBoundary>
 				<Router
-					root={(props) => {
-						const matches = useCurrentMatches();
-
-						onMount(() => {
-							for (const match of matches()) {
-								if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
-							}
-
-							if (
-								location.pathname !== "/" &&
-								location.pathname !== "/camera"
-							) {
-								void currentWindow.show();
-								void currentWindow.setFocus();
-							}
-						});
-
-						return <Suspense fallback={null}>{props.children}</Suspense>;
-					}}
+					root={(props) => (
+						<Suspense fallback={null}>
+							{props.children}
+							<AutoRevealWindowOnReady />
+						</Suspense>
+					)}
 				>
 					<Route path="/" component={WindowChromeLayout}>
 						<Route path="/" component={NewMainPage} />
-						<Route path="/settings" component={SettingsLayout}>
+						<Route
+							path="/settings"
+							component={SettingsLayout}
+							info={{ autoShow: false }}
+						>
 							<Route path="/" component={SettingsGeneralPage} />
 							<Route path="/general" component={SettingsGeneralPage} />
 							<Route path="/recordings" component={SettingsRecordingsPage} />
@@ -204,7 +200,11 @@ function Inner() {
 						<Route path="/upgrade" component={UpgradePage} />
 						<Route path="/update" component={UpdatePage} />
 					</Route>
-					<Route path="/camera" component={CameraPage} />
+					<Route
+						path="/camera"
+						component={CameraPage}
+						info={{ autoShow: false }}
+					/>
 					<Route path="/capture-area" component={CaptureAreaPage} />
 					<Route path="/debug" component={DebugPage} />
 					<Route path="/editor" component={EditorPage} />
@@ -219,6 +219,7 @@ function Inner() {
 					<Route
 						path="/target-select-overlay"
 						component={TargetSelectOverlayPage}
+						info={{ autoShow: false }}
 					/>
 					<Route
 						path="/window-capture-occluder"
@@ -230,81 +231,72 @@ function Inner() {
 	);
 }
 
-function createThemeListener(currentWindow: WebviewWindow) {
-	const [appTheme, setAppTheme] = createSignal<AppTheme | null | undefined>();
-	let disposed = false;
-	let stopSettingsListening: (() => void) | undefined;
-	let stopThemeListening: (() => void) | undefined;
+let windowShown = false;
+
+/**
+ * Delays showing the native window until the initial route tree has fully
+ * resolved and the app is no longer navigating.
+ * It waits for the router + suspense boundaries to
+ * 	settle before showing the window automatically.
+ *
+ * This prevents the window from flashing partially-loaded UI during startup.
+ *
+ * Routes can opt out of automatic reveal by setting:
+ * ```ts
+ * route.info.autoShow = false
+ * ```
+ *
+ * The window is revealed only once per app lifecycle via the shared
+ * `windowShown` guard.
+ */
+function AutoRevealWindowOnReady() {
+	const matches = useCurrentMatches();
+	const isRouting = useIsRouting();
 
 	createEffect(() => {
-		update(appTheme());
+		if (isRouting() || windowShown) return;
+		const shouldDefer = matches().some(
+			(match) => match.route.info?.autoShow === false,
+		);
+		if (shouldDefer) return;
+		windowShown = true;
+		getCurrentWindow().show();
 	});
 
-	onMount(() => {
-		void generalSettingsStore
-			.get()
-			.then((settings) => {
-				if (!disposed) setAppTheme(settings?.theme ?? null);
-			})
-			.catch((error) =>
-				console.error("Failed to load general settings:", error),
-			);
+	return null;
+}
 
-		void generalSettingsStore
-			.listen((settings) => {
-				setAppTheme(settings?.theme ?? null);
-			})
-			.then((unlisten) => {
-				if (disposed) {
-					unlisten();
-					return;
-				}
-				stopSettingsListening = unlisten;
-			})
-			.catch((error) =>
-				console.error("Failed to listen to general settings:", error),
-			);
+/**
+ * Suspense boundary that delays revealing the native window until its children
+ * have resolved at least once.
+ *
+ * Unlike a normal `Suspense`, the `fallback` is not shown during the initial
+ * application load because the window itself remains hidden until resolution
+ * completes. The fallback is only visible during subsequent suspensions after
+ * the window has already been revealed (for example, during route reloads or
+ * async updates).
+ *
+ * @param props.children Async content that must resolve before the window is shown.
+ * @param props.fallback Optional fallback UI displayed only after the initial
+ * window reveal if the subtree suspends again.
+ */
+export function RevealWindowWithSuspense(
+	props: ParentProps<{ fallback?: JSX.Element }>,
+) {
+	const resolved = children(() => props.children);
+	const isRouting = useIsRouting();
 
-		void currentWindow
-			.onThemeChanged(() => update(appTheme()))
-			.then((unlisten) => {
-				if (disposed) {
-					unlisten();
-					return;
-				}
-				stopThemeListening = unlisten;
-			})
-			.catch((error) =>
-				console.error("Failed to listen to window theme changes:", error),
-			);
+	createEffect(() => {
+		if (windowShown || !resolved() || isRouting()) return;
+		windowShown = true;
+		getCurrentWindow().show();
 	});
 
-	onCleanup(() => {
-		disposed = true;
-		stopSettingsListening?.();
-		stopThemeListening?.();
-	});
+	return <Suspense fallback={props.fallback}>{resolved()}</Suspense>;
+}
 
-	function update(appTheme: AppTheme | null | undefined) {
-		if (location.pathname === "/camera") return;
-
-		if (appTheme === undefined || appTheme === null) return;
-
-		const isDark =
-			appTheme === "dark" ||
-			(appTheme === "system" &&
-				window.matchMedia("(prefers-color-scheme: dark)").matches);
-
-		try {
-			if (appTheme === "system") {
-				localStorage.removeItem("cap-theme");
-			} else {
-				localStorage.setItem("cap-theme", appTheme);
-			}
-		} catch {}
-
-		commands.setTheme(appTheme).then(() => {
-			document.documentElement.classList.toggle("dark", isDark);
-		});
-	}
+export function maybeShowWindow() {
+	if (windowShown) return;
+	windowShown = true;
+	getCurrentWindow().show();
 }

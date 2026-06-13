@@ -17,22 +17,29 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize,
-    WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
+    AppHandle, Listener, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition,
+    PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
 use tauri_specta::Event;
 use tokio::sync::RwLock;
 use tracing::{debug, error, instrument, warn};
 
 #[cfg(target_os = "macos")]
-use crate::panel_manager::{PanelManager, PanelState, PanelWindowType, is_window_handle_valid};
+use crate::{
+    panel_manager::{
+        DefaultPanel, PanelManager, PanelState, PanelWindowType, is_window_handle_valid,
+    },
+    platform::WebviewWindowExt,
+};
 
 use crate::{
     App, ArcLock, CameraWindowCloseGate, CameraWindowPositionGuard, MainWindowReadyState,
-    NewNotification, RequestSetTargetMode, camera_preview_error_message,
+    NewNotification, RequestScreenCapturePrewarm, RequestSetTargetMode,
+    camera_preview_error_message,
+    display_utils::{CursorMonitorInfo, MonitorExt},
     editor_window::PendingEditorInstances,
     emit_camera_preview_clear, emit_camera_preview_error, fake_window,
-    general_settings::{self, AppTheme, GeneralSettingsStore},
+    general_settings::{self, Appearance, GeneralSettingsStore},
     permissions,
     recording::{RecordingEvent, RecordingInputKind},
     recording_settings::RecordingTargetMode,
@@ -43,49 +50,7 @@ use crate::{
 use cap_recording::{feeds, sources::screen_capture::ScreenCaptureTarget};
 
 #[cfg(target_os = "macos")]
-const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
-
-const DEFAULT_FALLBACK_DISPLAY_WIDTH: f64 = 1920.0;
-const DEFAULT_FALLBACK_DISPLAY_HEIGHT: f64 = 1080.0;
-
-#[cfg(target_os = "macos")]
-fn is_system_dark_mode() -> bool {
-    use cocoa::base::{id, nil};
-    use cocoa::foundation::NSString;
-    use objc::{class, msg_send, sel, sel_impl};
-
-    unsafe {
-        let app: id = msg_send![class!(NSApplication), sharedApplication];
-        let appearance: id = msg_send![app, effectiveAppearance];
-        if appearance == nil {
-            return false;
-        }
-        let name: id = msg_send![appearance, name];
-        if name == nil {
-            return false;
-        }
-        let dark_appearance = NSString::alloc(nil).init_str("NSAppearanceNameDarkAqua");
-        let vibrant_dark = NSString::alloc(nil).init_str("NSAppearanceNameVibrantDark");
-        let is_dark: bool = msg_send![name, isEqualToString: dark_appearance];
-        let is_vibrant_dark: bool = msg_send![name, isEqualToString: vibrant_dark];
-        is_dark || is_vibrant_dark
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn is_system_dark_mode() -> bool {
-    use winreg::RegKey;
-    use winreg::enums::HKEY_CURRENT_USER;
-
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    if let Ok(key) =
-        hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
-        && let Ok(value) = key.get_value::<u32, _>("AppsUseLightTheme")
-    {
-        return value == 0;
-    }
-    false
-}
+const DEFAULT_TRAFFIC_LIGHTS_POS: LogicalPosition<f64> = LogicalPosition::new(13.0, 16.0);
 
 pub fn hide_overlay(window: &WebviewWindow) {
     let _ = window.set_ignore_cursor_events(true);
@@ -469,8 +434,10 @@ pub(crate) async fn cleanup_camera_window(
             use tauri_nspanel::ManagerExt;
             for label in panel_labels {
                 if let Ok(panel) = app_for_close.get_webview_panel(&label) {
-                    panel.released_when_closed(false);
-                    panel.close();
+                    panel.set_released_when_closed(false);
+                    if let Some(window) = panel.to_window() {
+                        let _ = window.close();
+                    }
                 }
             }
             let _ = panel_close_tx.send(());
@@ -500,93 +467,6 @@ pub(crate) async fn cleanup_camera_window(
     app.state::<CameraWindowCloseGate>().set_allow_close(false);
 
     !still_exists
-}
-
-struct CursorMonitorInfo {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-}
-
-impl CursorMonitorInfo {
-    fn get() -> Self {
-        let display = Display::get_containing_cursor().unwrap_or_else(Display::primary);
-        let bounds = display.raw_handle().logical_bounds();
-        let (x, y, width, height) = bounds
-            .map(|b| {
-                (
-                    b.position().x(),
-                    b.position().y(),
-                    b.size().width(),
-                    b.size().height(),
-                )
-            })
-            .unwrap_or((
-                0.0,
-                0.0,
-                DEFAULT_FALLBACK_DISPLAY_WIDTH,
-                DEFAULT_FALLBACK_DISPLAY_HEIGHT,
-            ));
-
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    fn center_position(&self, window_width: f64, window_height: f64) -> (f64, f64) {
-        let pos_x = self.x + (self.width - window_width) / 2.0;
-        let pos_y = self.y + (self.height - window_height) / 2.0;
-        (pos_x, pos_y)
-    }
-
-    fn bottom_center_position(
-        &self,
-        window_width: f64,
-        window_height: f64,
-        offset_y: f64,
-    ) -> (f64, f64) {
-        let pos_x = self.x + (self.width - window_width) / 2.0;
-        let pos_y = self.y + self.height - window_height - offset_y;
-        (pos_x, pos_y)
-    }
-
-    fn from_window(window: &tauri::WebviewWindow) -> Self {
-        let window_pos = window
-            .outer_position()
-            .ok()
-            .map(|p| (p.x as f64, p.y as f64))
-            .unwrap_or((0.0, 0.0));
-
-        for display in Display::list() {
-            if let Some(bounds) = display.raw_handle().logical_bounds() {
-                let (x, y, width, height) = (
-                    bounds.position().x(),
-                    bounds.position().y(),
-                    bounds.size().width(),
-                    bounds.size().height(),
-                );
-
-                if window_pos.0 >= x
-                    && window_pos.0 < x + width
-                    && window_pos.1 >= y
-                    && window_pos.1 < y + height
-                {
-                    return Self {
-                        x,
-                        y,
-                        width,
-                        height,
-                    };
-                }
-            }
-        }
-
-        Self::get()
-    }
 }
 
 fn center_camera_window(app: &AppHandle, window: &WebviewWindow) {
@@ -698,19 +578,6 @@ fn is_position_on_any_screen(pos_x: f64, pos_y: f64) -> bool {
         }
     }
     false
-}
-
-fn ensure_settings_window_bounds(window: &WebviewWindow) {
-    const MIN_W: f64 = 780.0;
-    const MIN_H: f64 = 560.0;
-    let _ = window.set_min_size(Some(LogicalSize::new(MIN_W, MIN_H)));
-    if let (Ok(physical), Ok(scale)) = (window.inner_size(), window.scale_factor()) {
-        let width = physical.width as f64 / scale;
-        let height = physical.height as f64 / scale;
-        if width < MIN_W || height < MIN_H {
-            let _ = window.set_size(LogicalSize::new(width.max(MIN_W), height.max(MIN_H)));
-        }
-    }
 }
 
 #[derive(Clone, Deserialize, Type)]
@@ -837,24 +704,6 @@ impl CapWindowId {
         )
     }
 
-    pub fn is_transparent(&self) -> bool {
-        if matches!(self, Self::Settings) {
-            return cfg!(target_os = "macos");
-        }
-
-        matches!(
-            self,
-            Self::Main
-                | Self::Onboarding
-                | Self::Camera
-                | Self::WindowCaptureOccluder { .. }
-                | Self::CaptureArea
-                | Self::RecordingControls
-                | Self::RecordingsOverlay
-                | Self::TargetSelectOverlay { .. }
-        )
-    }
-
     pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
         if matches!(self, Self::Camera) {
             return current_camera_window(app);
@@ -868,11 +717,9 @@ impl CapWindowId {
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
             Self::Editor { .. } | Self::ScreenshotEditor { .. } => {
-                Some(Some(LogicalPosition::new(20.0, 32.0)))
+                Some(Some(LogicalPosition::new(20.0, 24.0)))
             }
             Self::Camera
-            | Self::Main
-            | Self::Onboarding
             | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
             | Self::RecordingsOverlay
@@ -881,6 +728,11 @@ impl CapWindowId {
             Self::Settings => Some(Some(LogicalPosition::new(22.0, 22.0))),
             _ => Some(None),
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn frame_autosaves(&self) -> bool {
+        matches!(self, Self::Main)
     }
 
     pub fn min_size(&self) -> Option<(f64, f64)> {
@@ -896,10 +748,17 @@ impl CapWindowId {
             _ => return None,
         })
     }
+
+    pub fn resizable(&self) -> bool {
+        matches!(
+            self,
+            Self::Debug | Self::Editor { .. } | Self::ScreenshotEditor { .. } | Self::Settings
+        )
+    }
 }
 
 #[derive(Debug, Clone, Type, Deserialize)]
-pub enum ShowCapWindow {
+pub enum CapWindow {
     Main {
         init_target_mode: Option<RecordingTargetMode>,
     },
@@ -936,7 +795,7 @@ pub enum ShowCapWindow {
     Onboarding,
 }
 
-impl ShowCapWindow {
+impl CapWindow {
     pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
         if let Self::Editor { project_path } = &self {
             let state = app.state::<EditorWindowIds>();
@@ -1334,10 +1193,6 @@ impl ShowCapWindow {
                 window.unminimize().ok();
                 window.set_focus().ok();
 
-                if let Self::Settings { .. } = self {
-                    ensure_settings_window_bounds(&window);
-                }
-
                 if let Self::Main { init_target_mode } = self {
                     emit_app_event(
                         app,
@@ -1364,7 +1219,6 @@ impl ShowCapWindow {
             return Ok(window);
         }
 
-        let _id = self.id(app);
         let cursor_monitor = CursorMonitorInfo::get();
 
         let window = match self {
@@ -1373,23 +1227,21 @@ impl ShowCapWindow {
                     return Box::pin(Self::Onboarding.show(app)).await;
                 }
 
-                let title = CapWindowId::Main.title();
-                let should_protect = should_protect_window(app, &title);
-
                 #[cfg(target_os = "macos")]
                 let panel_activation_guard = permissions::prepare_macos_panel_window(app);
 
+                let title = CapWindowId::Main.title();
+                let should_protect = should_protect_window(app, &title);
+
                 let window = self
                     .window_builder(app, "/")
-                    .resizable(false)
-                    .maximized(false)
                     .maximizable(false)
                     .minimizable(false)
+                    .resizable(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
                     .transparent(true)
-                    .visible(false)
                     .initialization_script(format!(
                         "
                         window.__CAP__ = window.__CAP__ ?? {{}};
@@ -1399,87 +1251,45 @@ impl ShowCapWindow {
                             .expect("Failed to serialize initial target mode")
                     ))
                     .build()?;
-                lock_window_text_scale(&window);
 
-                let saved_position = GeneralSettingsStore::get(app)
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.main_window_position)
-                    .filter(|pos| is_position_on_any_screen(pos.x, pos.y));
-
-                let (pos_x, pos_y) = if let Some(pos) = saved_position {
-                    (pos.x, pos.y)
-                } else {
-                    cursor_monitor.center_position(330.0, 395.0)
-                };
+                if let Err(e) = window.set_zoom(1.0) {
+                    warn!("Failed to lock Main window zoom to 1.0: {}", e);
+                }
 
                 #[cfg(target_os = "macos")]
-                {
-                    app.run_on_main_thread({
-                        let window = window.clone();
-                        let app = app.clone();
-                        let panel_activation_guard = panel_activation_guard;
-                        move || {
-                            let _panel_activation_guard = panel_activation_guard;
-                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::panel_delegate;
-                            use crate::panel_manager::try_to_panel;
+                window.with_nswindow_on_main({
+                    let window = window.clone();
+                    let app = app.clone();
+                    let panel_activation_guard = panel_activation_guard;
+                    move |_, nswindow| {
+                        use crate::panel_manager::try_to_panel;
+                        use objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
+                        use objc2_foundation::ns_string;
+                        use tauri_nspanel::{Panel, tauri_panel};
 
-                            const MAIN_PANEL_LEVEL: i32 = 100;
+                        let _panel_activation_guard = panel_activation_guard;
 
-                            let delegate = panel_delegate!(MainPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
+                        let panel = match DefaultPanel::from_window(&window) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                tracing::error!("Failed to convert main window to panel: {}", e);
+                                crate::permissions::sync_macos_dock_visibility(&app);
+                                return;
+                            }
+                        };
 
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
+                        panel.set_collection_behavior(
+                            NSWindowCollectionBehavior::CanJoinAllSpaces
+                                | NSWindowCollectionBehavior::FullScreenAuxiliary
+                                | NSWindowCollectionBehavior::Primary
+                                | NSWindowCollectionBehavior::FullScreenDisallowsTiling,
+                        );
 
-                            let panel = match try_to_panel(&window) {
-                                Ok(p) => p,
-                                Err(e) => {
-                                    tracing::error!("Failed to convert main window to panel: {}", e);
-                                    crate::permissions::sync_macos_dock_visibility(&app);
-                                    return;
-                                }
-                            };
+                        panel.set_level(100);
 
-                            panel.set_collection_behaviour(
-                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
-                            );
-
-                            panel.set_delegate(delegate);
-
-                            panel.set_level(MAIN_PANEL_LEVEL);
-
-                            let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
-
-                            crate::platform::apply_squircle_corners(&window, 16.0);
-
-                            crate::permissions::schedule_macos_dock_visibility_sync(&app);
-                        }
-                    })
-                    .ok();
-                }
-
-                #[cfg(not(target_os = "macos"))]
-                {
-                    let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
-
-                    #[cfg(windows)]
-                    {
-                        if let Err(e) = window.set_size(LogicalSize::new(330.0, 395.0)) {
-                            warn!("Failed to set Main window size on Windows: {}", e);
-                        }
-                        if let Err(e) =
-                            window.set_position(tauri::LogicalPosition::new(pos_x, pos_y))
-                        {
-                            warn!("Failed to position Main window on Windows: {}", e);
-                        }
+                        crate::permissions::schedule_macos_dock_visibility_sync(&app);
                     }
-
-                    window.show().ok();
-                }
+                })?;
 
                 window
             }
@@ -1525,8 +1335,6 @@ impl ShowCapWindow {
                         app,
                         format!("/target-select-overlay?displayId={display_id}&isHoveredDisplay={is_hovered_display}{target_mode_param}"),
                     )
-                    .maximized(false)
-                    .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
                     .content_protected(should_protect)
@@ -1534,7 +1342,6 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .transparent(true)
-                    .visible(false)
                     .initialization_script(format!(
                         "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.cameraWsPort = {camera_ws_port};"
                     ));
@@ -1555,7 +1362,6 @@ impl ShowCapWindow {
                 }
 
                 let window = window_builder.build()?;
-                lock_window_text_scale(&window);
 
                 #[cfg(windows)]
                 {
@@ -1590,9 +1396,8 @@ impl ShowCapWindow {
                         let panel_activation_guard = panel_activation_guard;
                         move || {
                             let _panel_activation_guard = panel_activation_guard;
-                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::panel_delegate;
-                            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
+                            use objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
+                            use tauri_nspanel::Panel;
 
                             #[link(name = "CoreGraphics", kind = "framework")]
                             unsafe extern "C" {
@@ -1602,35 +1407,27 @@ impl ShowCapWindow {
                             #[allow(non_upper_case_globals)]
                             const kCGMaximumWindowLevelKey: i32 = 10;
 
-                            let delegate = panel_delegate!(TargetSelectOverlayPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
-
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
-
-                            let panel = match window.to_panel() {
+                            let panel = match DefaultPanel::from_window(&window) {
                                 Ok(p) => p,
                                 Err(e) => {
-                                    tracing::error!("Failed to convert target select overlay to panel: {:?}", e);
+                                    tracing::error!(
+                                        "Failed to convert target select overlay to panel: {:?}",
+                                        e
+                                    );
                                     crate::permissions::sync_macos_dock_visibility(&app);
                                     return;
                                 }
                             };
 
-                            panel.set_collection_behaviour(
-                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                            panel.set_collection_behavior(
+                                NSWindowCollectionBehavior::FullScreenPrimary
+                                    | NSWindowCollectionBehavior::CanJoinAllSpaces,
                             );
 
-                            panel.set_delegate(delegate);
-
-                            #[allow(non_upper_case_globals)]
-                            const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
-                            panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
-
-                            let max_level = unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
-                            panel.set_level(max_level - 1);
+                            let max_level =
+                                unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
+                            panel.set_level(i64::from(max_level - 1));
+                            panel.set_style_mask(NSWindowStyleMask::NonactivatingPanel);
 
                             panel.order_front_regardless();
                             panel.show();
@@ -1655,9 +1452,6 @@ impl ShowCapWindow {
                         format!("/settings/{}", page.clone().unwrap_or_default()),
                     )
                     .inner_size(782.0, 775.0)
-                    .min_inner_size(780.0, 560.0)
-                    .resizable(true)
-                    .maximized(false)
                     .focused(true);
 
                 #[cfg(target_os = "macos")]
@@ -1665,25 +1459,7 @@ impl ShowCapWindow {
                     builder = builder.transparent(true);
                 }
 
-                let window = builder.build()?;
-                lock_window_text_scale(&window);
-
-                let (pos_x, pos_y) = cursor_monitor.center_position(782.0, 775.0);
-                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
-
-                #[cfg(windows)]
-                {
-                    if let Err(e) = window.set_size(LogicalSize::new(782.0, 775.0)) {
-                        warn!("Failed to set Settings window size on Windows: {}", e);
-                    }
-                    if let Err(e) = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y)) {
-                        warn!("Failed to position Settings window on Windows: {}", e);
-                    }
-                }
-
-                ensure_settings_window_bounds(&window);
-
-                window
+                builder.build()?
             }
             Self::Editor { .. } => {
                 hide_recording_windows(app);
@@ -1691,23 +1467,14 @@ impl ShowCapWindow {
                 let window = self
                     .window_builder(app, "/editor")
                     .maximizable(true)
-                    .inner_size(1275.0, 800.0)
-                    .min_inner_size(1275.0, 800.0)
                     .focused(true)
                     .build()?;
-                lock_window_text_scale(&window);
-
-                let (pos_x, pos_y) = cursor_monitor.center_position(1275.0, 800.0);
-                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 #[cfg(windows)]
                 {
                     use tauri::LogicalSize;
                     if let Err(e) = window.set_size(LogicalSize::new(1275.0, 800.0)) {
                         warn!("Failed to set Editor window size on Windows: {}", e);
-                    }
-                    if let Err(e) = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y)) {
-                        warn!("Failed to position Editor window on Windows: {}", e);
                     }
                 }
 
@@ -1729,7 +1496,6 @@ impl ShowCapWindow {
                     .window_builder(app, "/screenshot-editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
-                    .min_inner_size(800.0, 600.0)
                     .focused(true)
                     .build()
                 {
@@ -1739,10 +1505,6 @@ impl ShowCapWindow {
                         return Err(error);
                     }
                 };
-                lock_window_text_scale(&window);
-
-                let (pos_x, pos_y) = cursor_monitor.center_position(1240.0, 800.0);
-                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 #[cfg(windows)]
                 {
@@ -1761,9 +1523,6 @@ impl ShowCapWindow {
                     }
                 }
 
-                window.show().ok();
-                window.set_focus().ok();
-
                 window
             }
             Self::Upgrade => {
@@ -1773,15 +1532,10 @@ impl ShowCapWindow {
 
                 let window = self
                     .window_builder(app, "/upgrade")
-                    .inner_size(950.0, 850.0)
-                    .min_inner_size(950.0, 850.0)
-                    .resizable(false)
                     .focused(true)
                     .always_on_top(true)
-                    .maximized(false)
                     .shadow(true)
                     .build()?;
-                lock_window_text_scale(&window);
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(950.0, 850.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
@@ -1797,9 +1551,6 @@ impl ShowCapWindow {
                     }
                 }
 
-                window.show().ok();
-                window.set_focus().ok();
-
                 window
             }
             Self::ModeSelect => {
@@ -1809,15 +1560,10 @@ impl ShowCapWindow {
 
                 let window = self
                     .window_builder(app, "/mode-select")
-                    .inner_size(580.0, 340.0)
-                    .min_inner_size(580.0, 340.0)
-                    .resizable(false)
-                    .maximized(false)
                     .maximizable(false)
                     .focused(true)
                     .shadow(true)
                     .build()?;
-                lock_window_text_scale(&window);
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(580.0, 340.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
@@ -1833,9 +1579,6 @@ impl ShowCapWindow {
                     }
                 }
 
-                window.show().ok();
-                window.set_focus().ok();
-
                 window
             }
             Self::Onboarding => {
@@ -1849,15 +1592,11 @@ impl ShowCapWindow {
                 let window = self
                     .window_builder(app, "/onboarding")
                     .inner_size(width, height)
-                    .min_inner_size(860.0, 690.0)
-                    .resizable(false)
-                    .maximized(false)
                     .maximizable(false)
                     .transparent(true)
                     .focused(true)
                     .shadow(true)
                     .build()?;
-                lock_window_text_scale(&window);
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(width, height);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
@@ -1873,9 +1612,6 @@ impl ShowCapWindow {
                         warn!("Failed to position Onboarding window on Windows: {}", e);
                     }
                 }
-
-                window.show().ok();
-                window.set_focus().ok();
 
                 window
             }
@@ -1952,8 +1688,6 @@ impl ShowCapWindow {
                         .unwrap_or_else(|| CapWindowId::Camera.label());
                     let mut window_builder = self
                         .window_builder_with_label(app, "/camera", label)
-                        .maximized(false)
-                        .resizable(false)
                         .shadow(false)
                         .fullscreen(false)
                         .always_on_top(true)
@@ -1969,8 +1703,7 @@ impl ShowCapWindow {
                             state.camera_ws_port, centered, enable_native_camera_preview
                         ))
                         .content_protected(should_protect)
-                        .transparent(true)
-                        .visible(false);
+                        .transparent(true);
 
                     let window = match window_builder.build() {
                         Ok(w) => w,
@@ -1991,7 +1724,6 @@ impl ShowCapWindow {
                             return Err(e);
                         }
                     };
-                    lock_window_text_scale(&window);
 
                     #[cfg(target_os = "windows")]
                     log_window_content_protection(&window, should_protect, &title);
@@ -2078,9 +1810,9 @@ impl ShowCapWindow {
                             let panel_activation_guard = panel_activation_guard;
                             move || {
                                 let _panel_activation_guard = panel_activation_guard;
-                                use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                                use tauri_nspanel::panel_delegate;
                                 use crate::panel_manager::try_to_panel;
+                                use objc2_app_kit::NSWindowCollectionBehavior;
+                                use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
                                 #[link(name = "CoreGraphics", kind = "framework")]
                                 unsafe extern "C" {
@@ -2089,13 +1821,6 @@ impl ShowCapWindow {
 
                                 #[allow(non_upper_case_globals)]
                                 const kCGMaximumWindowLevelKey: i32 = 10;
-
-                                let delegate = panel_delegate!(CameraPanelDelegate {
-                                    window_did_become_key,
-                                    window_did_resign_key
-                                });
-
-                                delegate.set_listener(Box::new(|_delegate_name: String| {}));
 
                                 let panel = match try_to_panel(&window) {
                                     Ok(p) => p,
@@ -2107,16 +1832,14 @@ impl ShowCapWindow {
                                     }
                                 };
 
-                                panel.set_collection_behaviour(
-                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                                        | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                                panel.set_collection_behavior(
+                                    NSWindowCollectionBehavior::CanJoinAllSpaces
+                                        | NSWindowCollectionBehavior::FullScreenPrimary,
                                 );
-
-                                panel.set_delegate(delegate);
 
                                 let max_level =
                                     unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
-                                panel.set_level(max_level);
+                                panel.set_level(i64::from(max_level));
 
                                 if let Some(guard) = app.try_state::<CameraWindowPositionGuard>() {
                                     guard.ignore_for(1000);
@@ -2189,8 +1912,6 @@ impl ShowCapWindow {
 
                 let mut window_builder = self
                     .window_builder(app, "/window-capture-occluder")
-                    .maximized(false)
-                    .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
                     .always_on_top(true)
@@ -2202,14 +1923,20 @@ impl ShowCapWindow {
                     .transparent(true);
 
                 let window = window_builder.build()?;
-                lock_window_text_scale(&window);
 
                 window.set_ignore_cursor_events(true).unwrap();
 
                 #[cfg(target_os = "macos")]
-                {
-                    crate::platform::set_window_level(window.as_ref().window(), 900);
-                }
+                window.with_nswindow_on_main(|_, nswindow| {
+                    use objc2_app_kit::NSWindowCollectionBehavior;
+
+                    nswindow.setLevel(900);
+                    nswindow.setCollectionBehavior(
+                        NSWindowCollectionBehavior::CanJoinAllSpaces
+                            | NSWindowCollectionBehavior::FullScreenAuxiliary
+                            | NSWindowCollectionBehavior::IgnoresCycle,
+                    );
+                })?;
 
                 window
             }
@@ -2219,10 +1946,8 @@ impl ShowCapWindow {
 
                 let mut window_builder = self
                     .window_builder(app, "/capture-area")
-                    .maximized(false)
                     .fullscreen(false)
                     .shadow(false)
-                    .resizable(false)
                     .always_on_top(true)
                     .content_protected(should_protect)
                     .skip_taskbar(true)
@@ -2249,23 +1974,18 @@ impl ShowCapWindow {
                 }
 
                 let window = window_builder.build()?;
-                lock_window_text_scale(&window);
 
                 #[cfg(target_os = "macos")]
-                crate::platform::set_window_level(
-                    window.as_ref().window(),
-                    objc2_app_kit::NSPopUpMenuWindowLevel,
-                );
+                window.with_nswindow_on_main(|_, nswindow| {
+                    nswindow.setLevel(objc2_app_kit::NSPopUpMenuWindowLevel)
+                })?;
 
                 // Hide the main window if the target monitor is the same
                 if let Some(main_window) = CapWindowId::Main.get(app)
-                    && let (Ok(outer_pos), Ok(outer_size)) =
-                        (main_window.outer_position(), main_window.outer_size())
-                    && let Ok(scale_factor) = main_window.scale_factor()
-                    && display.intersects(outer_pos, outer_size, scale_factor)
+                    && display.intersects_window(window.as_ref().window())?
                 {
                     let _ = main_window.minimize();
-                };
+                }
 
                 window
             }
@@ -2285,8 +2005,6 @@ impl ShowCapWindow {
                 #[cfg(target_os = "macos")]
                 let window = {
                     self.window_builder(app, "/in-progress-recording")
-                        .maximized(false)
-                        .resizable(false)
                         .fullscreen(false)
                         .shadow(false)
                         .always_on_top(true)
@@ -2295,7 +2013,6 @@ impl ShowCapWindow {
                         .content_protected(should_protect)
                         .inner_size(width, height)
                         .skip_taskbar(true)
-                        .visible(false)
                         .initialization_script(format!(
                             "window.COUNTDOWN = {};",
                             countdown.unwrap_or_default()
@@ -2306,8 +2023,6 @@ impl ShowCapWindow {
                 #[cfg(windows)]
                 let window = self
                     .window_builder(app, "/in-progress-recording")
-                    .maximized(false)
-                    .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
                     .always_on_top(true)
@@ -2321,8 +2036,6 @@ impl ShowCapWindow {
                         countdown.unwrap_or_default()
                     ))
                     .build()?;
-
-                lock_window_text_scale(&window);
 
                 #[cfg(target_os = "windows")]
                 log_window_content_protection(&window, should_protect, &title);
@@ -2355,12 +2068,10 @@ impl ShowCapWindow {
                     app.run_on_main_thread({
                         let window = window.clone();
                         let app = app.clone();
-                        let panel_activation_guard = panel_activation_guard;
+                        let _panel_activation_guard = panel_activation_guard;
                         move || {
-                            let _panel_activation_guard = panel_activation_guard;
-                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::panel_delegate;
-                            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
+                            use objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
+                            use tauri_nspanel::{CollectionBehavior, Panel, StyleMask};
 
                             #[link(name = "CoreGraphics", kind = "framework")]
                             unsafe extern "C" {
@@ -2370,31 +2081,28 @@ impl ShowCapWindow {
                             #[allow(non_upper_case_globals)]
                             const kCGMaximumWindowLevelKey: i32 = 10;
 
-                            let delegate = panel_delegate!(RecordingControlsPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
-
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
-
-                            let panel = match window.to_panel() {
+                            let panel = match DefaultPanel::from_window(&window) {
                                 Ok(p) => p,
                                 Err(e) => {
-                                    tracing::error!("Failed to convert recording controls to panel: {:?}", e);
+                                    tracing::error!(
+                                        "Failed to convert recording controls to panel: {:?}",
+                                        e
+                                    );
                                     crate::permissions::sync_macos_dock_visibility(&app);
                                     return;
                                 }
                             };
 
-                            panel.set_collection_behaviour(
-                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                            panel.set_collection_behavior(
+                                NSWindowCollectionBehavior::CanJoinAllSpaces
+                                    | NSWindowCollectionBehavior::FullScreenPrimary,
                             );
 
-                            panel.set_delegate(delegate);
+                            panel.set_style_mask(NSWindowStyleMask::NonactivatingPanel);
 
-                            let max_level = unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
-                            panel.set_level(max_level);
+                            let max_level =
+                                unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
+                            panel.set_level(i64::from(max_level));
 
                             panel.order_front_regardless();
                             panel.show();
@@ -2427,8 +2135,6 @@ impl ShowCapWindow {
 
                 let window = self
                     .window_builder(app, "/recordings-overlay")
-                    .maximized(false)
-                    .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
                     .always_on_top(true)
@@ -2439,7 +2145,6 @@ impl ShowCapWindow {
                     .skip_taskbar(true)
                     .transparent(true)
                     .build()?;
-                lock_window_text_scale(&window);
 
                 let _ = window.set_position(tauri::LogicalPosition::new(
                     cursor_monitor.x,
@@ -2451,29 +2156,30 @@ impl ShowCapWindow {
                     app.run_on_main_thread({
                         let window = window.clone();
                         move || {
-                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                             use crate::panel_manager::try_to_panel;
+                            use objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
 
                             let panel = match try_to_panel(&window) {
                                 Ok(p) => p,
                                 Err(e) => {
-                                    tracing::error!("Failed to convert recordings overlay to panel: {}", e);
+                                    tracing::error!(
+                                        "Failed to convert recordings overlay to panel: {}",
+                                        e
+                                    );
                                     return;
                                 }
                             };
 
-                            panel.set_level(cocoa::appkit::NSMainMenuWindowLevel);
+                            panel.set_level(i64::from(objc2_app_kit::NSMainMenuWindowLevel as i32));
+                            panel.set_style_mask(NSWindowStyleMask::NonactivatingPanel);
 
-                            panel.set_collection_behaviour(
-                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
+                            panel.set_collection_behavior(
+                                NSWindowCollectionBehavior::Transient
+                                    | NSWindowCollectionBehavior::MoveToActiveSpace
+                                    | NSWindowCollectionBehavior::FullScreenAuxiliary
+                                    | NSWindowCollectionBehavior::IgnoresCycle
+                                    | NSWindowCollectionBehavior::FullScreenDisallowsTiling,
                             );
-
-                            #[allow(non_upper_case_globals)]
-                            const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
-                            panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
                         }
                     })
                     .ok();
@@ -2485,17 +2191,45 @@ impl ShowCapWindow {
             }
         };
 
-        // removing this for now as it causes windows to just stay hidden sometimes -_-
-        // window.hide().ok();
+        let id = self.id(app);
 
         #[cfg(target_os = "macos")]
-        if let Some(position) = _id.traffic_lights_position() {
-            add_traffic_lights(&window, position);
+        {
+            if id.activates_dock() {
+                crate::permissions::sync_macos_dock_visibility(app);
+            }
+
+            if id.frame_autosaves() {
+                let label = id.label();
+                window.with_nswindow_on_main(move |_, nswindow| {
+                    let autosave_name = objc2_foundation::NSString::from_str(&label);
+                    nswindow.setFrameAutosaveName(&autosave_name);
+                    nswindow.setFrameUsingName_force(&autosave_name, true);
+                })?;
+            }
         }
 
-        #[cfg(target_os = "macos")]
-        if _id.activates_dock() {
-            crate::permissions::sync_macos_dock_visibility(app);
+        if let Some(min) = id.min_size() {
+            let inner_size = window
+                .inner_size()?
+                .to_logical::<f64>(window.scale_factor()?);
+            if inner_size.width < min.0 || inner_size.height < min.1 {
+                window.set_size(LogicalSize::new(min.0, min.1))?;
+
+                // macOS center considers the height of menubar and dock
+                #[cfg(target_os = "macos")]
+                window.with_nswindow_on_main(|_, nswindow| nswindow.center())?;
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    window.center()?;
+                }
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            lock_window_text_scale(&window);
         }
 
         Ok(window)
@@ -2518,37 +2252,19 @@ impl ShowCapWindow {
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
         let id = self.id(app);
 
-        let theme = GeneralSettingsStore::get(app)
+        let theme: Option<tauri::Theme> = GeneralSettingsStore::get(app)
             .ok()
             .flatten()
-            .map(|s| match s.theme {
-                AppTheme::System => None,
-                AppTheme::Light => Some(tauri::Theme::Light),
-                AppTheme::Dark => Some(tauri::Theme::Dark),
-            })
-            .unwrap_or(None);
+            .and_then(|s| s.appearance.into());
 
         let mut builder = WebviewWindow::builder(app, label, WebviewUrl::App(url.into()))
             .title(id.title())
             .visible(false)
+            .resizable(id.resizable())
             .accept_first_mouse(true)
             .shadow(true)
             .theme(theme)
             .devtools(cfg!(debug_assertions));
-
-        if !id.is_transparent() {
-            let is_dark = match theme {
-                Some(tauri::Theme::Dark) => true,
-                Some(tauri::Theme::Light) => false,
-                None | Some(_) => is_system_dark_mode(),
-            };
-
-            let bg_color = if is_dark { "#141414" } else { "#ffffff" };
-            let init_script = format!(
-                r#"(function(){{var s=document.createElement('style');s.textContent='html,body{{background-color:{bg_color}}}';document.documentElement.appendChild(s);}})();"#
-            );
-            builder = builder.initialization_script(&init_script);
-        }
 
         if let Some(min) = id.min_size() {
             builder = builder
@@ -2558,10 +2274,11 @@ impl ShowCapWindow {
 
         #[cfg(target_os = "macos")]
         {
-            if id.traffic_lights_position().is_some() {
+            if let Some(pos) = id.traffic_lights_position() {
                 builder = builder
                     .hidden_title(true)
-                    .title_bar_style(tauri::TitleBarStyle::Overlay);
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .traffic_light_position(pos.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_POS));
             } else {
                 builder = builder.decorations(false)
             }
@@ -2575,35 +2292,31 @@ impl ShowCapWindow {
         builder
     }
 
-    pub fn id(&self, app: &AppHandle) -> CapWindowId {
+    pub fn id(&self, manager: &impl Manager<tauri::Wry>) -> CapWindowId {
         match self {
-            ShowCapWindow::Main { .. } => CapWindowId::Main,
-            ShowCapWindow::Settings { .. } => CapWindowId::Settings,
-            ShowCapWindow::Editor { project_path } => {
-                let state = app.state::<EditorWindowIds>();
+            CapWindow::Main { .. } => CapWindowId::Main,
+            CapWindow::Settings { .. } => CapWindowId::Settings,
+            CapWindow::Editor { project_path } => {
+                let state = manager.state::<EditorWindowIds>();
                 let s = state.ids.lock().unwrap();
                 let id = s.iter().find(|(path, _)| path == project_path).unwrap().1;
                 CapWindowId::Editor { id }
             }
-            ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
-            ShowCapWindow::TargetSelectOverlay { display_id, .. } => {
-                CapWindowId::TargetSelectOverlay {
-                    display_id: display_id.clone(),
-                }
-            }
-            ShowCapWindow::WindowCaptureOccluder { screen_id } => {
-                CapWindowId::WindowCaptureOccluder {
-                    screen_id: screen_id.clone(),
-                }
-            }
-            ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
-            ShowCapWindow::Camera { .. } => CapWindowId::Camera,
-            ShowCapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
-            ShowCapWindow::Upgrade => CapWindowId::Upgrade,
-            ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
-            ShowCapWindow::Onboarding => CapWindowId::Onboarding,
-            ShowCapWindow::ScreenshotEditor { path } => {
-                let state = app.state::<ScreenshotEditorWindowIds>();
+            CapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
+            CapWindow::TargetSelectOverlay { display_id, .. } => CapWindowId::TargetSelectOverlay {
+                display_id: display_id.clone(),
+            },
+            CapWindow::WindowCaptureOccluder { screen_id } => CapWindowId::WindowCaptureOccluder {
+                screen_id: screen_id.clone(),
+            },
+            CapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
+            CapWindow::Camera { .. } => CapWindowId::Camera,
+            CapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
+            CapWindow::Upgrade => CapWindowId::Upgrade,
+            CapWindow::ModeSelect => CapWindowId::ModeSelect,
+            CapWindow::Onboarding => CapWindowId::Onboarding,
+            CapWindow::ScreenshotEditor { path } => {
+                let state = manager.state::<ScreenshotEditorWindowIds>();
                 let s = state.ids.lock().unwrap();
                 let id = s.iter().find(|(p, _)| p == path).unwrap().1;
                 CapWindowId::ScreenshotEditor { id }
@@ -2612,120 +2325,41 @@ impl ShowCapWindow {
     }
 }
 
+#[cfg(windows)]
 fn lock_window_text_scale(_window: &WebviewWindow<Wry>) {
-    #[cfg(windows)]
-    {
-        let scale_factor = match _window.scale_factor() {
-            Ok(scale_factor) => scale_factor,
-            Err(e) => {
-                warn!("Failed to read window scale factor: {}", e);
-                return;
-            }
+    let scale_factor = match _window.scale_factor() {
+        Ok(scale_factor) => scale_factor,
+        Err(e) => {
+            warn!("Failed to read window scale factor: {}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = _window.with_webview(move |webview| unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller3;
+        use windows_core::Interface;
+
+        let controller = webview.controller();
+
+        if let Err(e) = controller.SetZoomFactor(1.0) {
+            warn!("Failed to lock WebView zoom factor: {}", e);
+        }
+
+        let Ok(controller3) = controller.cast::<ICoreWebView2Controller3>() else {
+            warn!("Failed to access WebView2 controller scale APIs");
+            return;
         };
 
-        if let Err(e) = _window.with_webview(move |webview| unsafe {
-            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller3;
-            use windows_core::Interface;
-
-            let controller = webview.controller();
-
-            if let Err(e) = controller.SetZoomFactor(1.0) {
-                warn!("Failed to lock WebView zoom factor: {}", e);
-            }
-
-            let Ok(controller3) = controller.cast::<ICoreWebView2Controller3>() else {
-                warn!("Failed to access WebView2 controller scale APIs");
-                return;
-            };
-
-            if let Err(e) = controller3.SetShouldDetectMonitorScaleChanges(false) {
-                warn!("Failed to disable WebView scale detection: {}", e);
-            }
-
-            if let Err(e) = controller3.SetRasterizationScale(scale_factor) {
-                warn!("Failed to lock WebView rasterization scale: {}", e);
-            }
-        }) {
-            warn!("Failed to access platform WebView: {}", e);
+        if let Err(e) = controller3.SetShouldDetectMonitorScaleChanges(false) {
+            warn!("Failed to disable WebView scale detection: {}", e);
         }
+
+        if let Err(e) = controller3.SetRasterizationScale(scale_factor) {
+            warn!("Failed to lock WebView rasterization scale: {}", e);
+        }
+    }) {
+        warn!("Failed to access platform WebView: {}", e);
     }
-}
-
-#[cfg(target_os = "macos")]
-fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<LogicalPosition<f64>>) {
-    use crate::platform::delegates;
-
-    let target_window = window.clone();
-    window
-        .run_on_main_thread(move || {
-            delegates::setup(
-                target_window.as_ref().window(),
-                controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-            );
-
-            let c_win = target_window.clone();
-            target_window.on_window_event(move |event| match event {
-                tauri::WindowEvent::ThemeChanged(..) | tauri::WindowEvent::Focused(..) => {
-                    position_traffic_lights_impl(&c_win.as_ref().window(), controls_inset);
-                }
-                _ => {}
-            });
-        })
-        .ok();
-}
-
-#[tauri::command]
-#[specta::specta]
-#[instrument(skip(window))]
-pub fn set_theme(window: tauri::Window, theme: AppTheme) {
-    let _ = window.set_theme(match theme {
-        AppTheme::System => None,
-        AppTheme::Light => Some(tauri::Theme::Light),
-        AppTheme::Dark => Some(tauri::Theme::Dark),
-    });
-
-    #[cfg(target_os = "macos")]
-    match CapWindowId::from_str(window.label()) {
-        Ok(win) if win.traffic_lights_position().is_some() => position_traffic_lights(window, None),
-        Ok(_) | Err(_) => {}
-    }
-}
-
-#[tauri::command]
-#[specta::specta]
-#[instrument(skip(_window))]
-pub fn position_traffic_lights(_window: tauri::Window, _controls_inset: Option<(f64, f64)>) {
-    #[cfg(target_os = "macos")]
-    position_traffic_lights_impl(
-        &_window,
-        _controls_inset.map(LogicalPosition::from).or_else(|| {
-            // Attempt to get the default inset from the window's traffic lights position
-            CapWindowId::from_str(_window.label())
-                .ok()
-                .and_then(|id| id.traffic_lights_position().flatten())
-        }),
-    );
-}
-
-#[cfg(target_os = "macos")]
-fn position_traffic_lights_impl(
-    window: &tauri::Window,
-    controls_inset: Option<LogicalPosition<f64>>,
-) {
-    use crate::platform::delegates::{UnsafeWindowHandle, position_window_controls};
-    let c_win = window.clone();
-    window
-        .run_on_main_thread(move || {
-            let ns_window = match c_win.ns_window() {
-                Ok(handle) => handle,
-                Err(_) => return,
-            };
-            position_window_controls(
-                UnsafeWindowHandle(ns_window),
-                &controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-            );
-        })
-        .ok();
 }
 
 fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
@@ -2852,73 +2486,6 @@ pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), Stri
     Ok(())
 }
 
-// Credits: tauri-plugin-window-state
-trait MonitorExt {
-    fn intersects(
-        &self,
-        position: PhysicalPosition<i32>,
-        size: PhysicalSize<u32>,
-        scale: f64,
-    ) -> bool;
-}
-
-impl MonitorExt for Display {
-    fn intersects(
-        &self,
-        position: PhysicalPosition<i32>,
-        size: PhysicalSize<u32>,
-        _scale: f64,
-    ) -> bool {
-        #[cfg(target_os = "macos")]
-        {
-            let Some(bounds) = self.raw_handle().logical_bounds() else {
-                return false;
-            };
-
-            let left = (bounds.position().x() * _scale) as i32;
-            let right = left + (bounds.size().width() * _scale) as i32;
-            let top = (bounds.position().y() * _scale) as i32;
-            let bottom = top + (bounds.size().height() * _scale) as i32;
-
-            [
-                (position.x, position.y),
-                (position.x + size.width as i32, position.y),
-                (position.x, position.y + size.height as i32),
-                (
-                    position.x + size.width as i32,
-                    position.y + size.height as i32,
-                ),
-            ]
-            .into_iter()
-            .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
-        }
-
-        #[cfg(windows)]
-        {
-            let Some(bounds) = self.raw_handle().physical_bounds() else {
-                return false;
-            };
-
-            let left = bounds.position().x() as i32;
-            let right = left + bounds.size().width() as i32;
-            let top = bounds.position().y() as i32;
-            let bottom = top + bounds.size().height() as i32;
-
-            [
-                (position.x, position.y),
-                (position.x + size.width as i32, position.y),
-                (position.x, position.y + size.height as i32),
-                (
-                    position.x + size.width as i32,
-                    position.y + size.height as i32,
-                ),
-            ]
-            .into_iter()
-            .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
-        }
-    }
-}
-
 #[specta::specta]
 #[tauri::command(async)]
 #[instrument(skip(_window))]
@@ -2948,23 +2515,6 @@ pub async fn apply_macos_liquid_glass_background(
     #[cfg(not(target_os = "macos"))]
     {
         Ok(false)
-    }
-}
-
-#[specta::specta]
-#[tauri::command(async)]
-#[instrument(skip(_window))]
-pub fn set_window_transparent(_window: tauri::Window, _value: bool) {
-    #[cfg(target_os = "macos")]
-    {
-        let ns_win = _window
-            .ns_window()
-            .expect("Failed to get native window handle")
-            as *const objc2_app_kit::NSWindow;
-
-        unsafe {
-            (*ns_win).setOpaque(!_value);
-        }
     }
 }
 

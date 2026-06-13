@@ -24,14 +24,6 @@ impl WindowPositionPersistence {
         })
     }
 
-    pub fn queue_main(&self, position: WindowPosition) {
-        {
-            let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-            guard.main = Some(position);
-        }
-        self.notify.notify_one();
-    }
-
     pub fn queue_camera(&self, x: f64, y: f64) {
         {
             let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
@@ -91,9 +83,6 @@ pub fn install(app: &AppHandle) {
             let write_app = app_handle.clone();
             let write_result = tokio::task::spawn_blocking(move || {
                 GeneralSettingsStore::update(&write_app, |settings| {
-                    if let Some(main) = pending.main {
-                        settings.main_window_position = Some(main);
-                    }
                     if let Some((x, y)) = pending.camera_position {
                         crate::update_camera_window_position_settings(settings, x, y);
                     }
@@ -110,12 +99,6 @@ pub fn install(app: &AppHandle) {
             last_flush = std::time::Instant::now();
         }
     });
-}
-
-pub fn queue_main_position(app: &AppHandle, position: WindowPosition) {
-    if let Some(persistence) = app.try_state::<Arc<WindowPositionPersistence>>() {
-        persistence.queue_main(position);
-    }
 }
 
 pub fn queue_camera_position(app: &AppHandle, x: f64, y: f64) {

@@ -51,6 +51,7 @@
 		"core:webview:default",
 		"core:webview:allow-create-webview-window",
 		"core:app:allow-version",
+		"core:app:allow-set-app-theme",
 		"shell:default",
 		"core:image:default",
 		"dialog:default",
@@ -68,7 +69,6 @@
 				{ "url": "http://localhost:*" }
 			]
 		},
-		"clipboard-manager:allow-write-text",
 		"opener:allow-reveal-item-in-dir"
 	]
 }

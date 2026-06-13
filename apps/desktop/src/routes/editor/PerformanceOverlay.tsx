@@ -1,4 +1,3 @@
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
 	createEffect,
 	createMemo,
@@ -8,6 +7,7 @@ import {
 	Show,
 } from "solid-js";
 import toast from "solid-toast";
+import { commands } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 
 type PerformanceOverlayProps = {
@@ -184,7 +184,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			.filter(Boolean)
 			.join("\n");
 
-		await writeText(statsText);
+		await commands.writeClipboardString(statsText);
 		toast.success("Performance stats copied to clipboard");
 	};
 

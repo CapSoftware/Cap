@@ -17,6 +17,7 @@ import {
 	Show,
 	Suspense,
 } from "solid-js";
+import { RevealWindowWithSuspense } from "~/App";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 
@@ -541,9 +542,9 @@ export default function Settings(props: RouteSectionProps) {
 			</div>
 			<div class="cap-settings-content overflow-y-hidden flex-1 animate-in min-w-0">
 				<CapErrorBoundary>
-					<Suspense fallback={<SettingsContentSkeleton />}>
+					<RevealWindowWithSuspense fallback={<SettingsContentSkeleton />}>
 						{props.children}
-					</Suspense>
+					</RevealWindowWithSuspense>
 				</CapErrorBoundary>
 			</div>
 		</div>

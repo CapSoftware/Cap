@@ -444,7 +444,7 @@ fn wait_for_shutdown_signal(runtime: &Runtime, receiver: oneshot::Receiver<()>, 
 // crashes after ~4-5 toggle cycles.
 //
 // Pause/Resume hide/show the window while keeping GPU resources alive.
-// See the comment in windows.rs ShowCapWindow::Camera for the critical detail
+// See the comment in windows.rs CapWindow::Camera for the critical detail
 // about avoiding order_front_regardless().
 #[derive(Clone)]
 enum ReconfigureEvent {

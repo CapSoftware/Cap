@@ -1785,7 +1785,7 @@ fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
     };
 
     meta.save_for_project()
-        .map_err(|e| anyhow!("Failed to save in-progress meta: {:?}", e))
+        .map_err(|e| anyhow!("Failed to save in-progress meta: {e}"))
 }
 
 #[cfg(test)]

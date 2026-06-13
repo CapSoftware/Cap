@@ -8,12 +8,12 @@ members = [
 ]
 
 [workspace.dependencies]
-anyhow = { version = "1.0.86" }
+anyhow = { version = "1.0.102" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
 # stopped and released on drop on macOS
 cpal = { git = "https://github.com/CapSoftware/cpal", rev = "3cc779a7b4ca" }
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
-tokio = { version = "1.39.3", features = [
+tokio = { version = "1.52.2", features = [
     "macros",
     "process",
     "fs",
@@ -22,7 +22,7 @@ tokio = { version = "1.39.3", features = [
     "rt-multi-thread",
     "time",
 ] }
-tauri = { version = "2.5.0", features = ["specta"] }
+tauri = { version = "2.11.1", features = ["specta"] }
 specta = { version = "=2.0.0-rc.20", features = [
     "derive",
     "serde_json",
@@ -37,18 +37,18 @@ nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", 
     "serialize",
 ] }
 nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2" }
-wgpu = { version = "25.0.0", features = ["wgpu-core"] }
-wgpu-hal = "25.0.0"
-wgpu-core = "25.0.0"
-flume = "0.11.0"
+wgpu = { version = "25.0.2", features = ["wgpu-core"] }
+wgpu-hal = "25.0.2"
+wgpu-core = "25.0.2"
+flume = "0.11.1"
 thiserror = "1.0"
 sentry = { version = "0.42.0", features = [
     "anyhow",
     "backtrace",
     "debug-images",
 ] }
-tracing = "0.1.41"
-futures = "0.3.31"
+tracing = "0.1.44"
+futures = "0.3.32"
 aho-corasick = "1.1.4"
 
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
@@ -72,7 +72,7 @@ windows = "0.60.0"
 windows-core = "0.60"
 windows-sys = "0.59.0"
 windows-capture = "1.5.0"
-percent-encoding = "2.3.1"
+percent-encoding = "2.3.2"
 sysinfo = "0.32"
 
 # TODO: Reenable these: https://github.com/CapSoftware/Cap/issues/859

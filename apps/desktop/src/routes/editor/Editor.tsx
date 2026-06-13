@@ -588,10 +588,7 @@ function Inner() {
 		<Show when={!fullscreenMode()} fallback={<ExportPage />}>
 			<div class="flex flex-col flex-1 min-h-0 animate-in fade-in duration-300">
 				<Header />
-				<div
-					class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5"
-					data-tauri-drag-region
-				>
+				<div class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5">
 					<div
 						ref={setLayoutRef}
 						class="flex overflow-hidden flex-col flex-1 min-h-0"
@@ -1148,6 +1145,7 @@ function Dialogs() {
 													variant="white"
 													size="xs"
 													class="flex items-center justify-center text-center rounded-full h-8 w-8 border focus:border-blue-9"
+													onMouseDown={showCropOptionsMenu}
 													onClick={showCropOptionsMenu}
 												>
 													<div class="relative pointer-events-none size-4">

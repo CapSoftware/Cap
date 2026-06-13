@@ -1099,7 +1099,7 @@ export function Cropper(
 				<Show when={props.showBounds && labelTransform()}>
 					{(transform) => (
 						<div
-							class="fixed z-50 pointer-events-none bg-gray-2 text-xs px-2 py-0.5 rounded-full shadow-lg border border-gray-5 font-mono scale-50"
+							class="fixed z-50 pointer-events-none bg-gray-2 text-xs px-2 py-0.5 rounded-full shadow-lg border border-gray-5 font-mono"
 							style={{
 								transform: `translate(${transform().x}px, ${transform().y}px)`,
 							}}

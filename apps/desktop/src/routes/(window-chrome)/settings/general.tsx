@@ -33,7 +33,7 @@ import {
 	type GeneralSettingsStore,
 } from "~/utils/general-settings";
 import {
-	type AppTheme,
+	type Appearance,
 	type CaptureWindow,
 	commands,
 	events,
@@ -133,14 +133,14 @@ export default function GeneralSettings() {
 }
 
 function AppearanceSection(props: {
-	currentTheme: AppTheme;
-	onThemeChange: (theme: AppTheme) => void;
+	currentTheme: Appearance;
+	onThemeChange: (theme: Appearance) => void;
 }) {
 	const options = [
 		{ id: "system", name: "System" },
 		{ id: "light", name: "Light" },
 		{ id: "dark", name: "Dark" },
-	] satisfies { id: AppTheme; name: string }[];
+	] satisfies { id: Appearance; name: string }[];
 
 	const previews = {
 		system: themePreviewAuto,
@@ -475,10 +475,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		>
 			<SettingsPageContent>
 				<AppearanceSection
-					currentTheme={settings.theme ?? "system"}
-					onThemeChange={(newTheme) => {
-						setSettings("theme", newTheme);
-						generalSettingsStore.set({ theme: newTheme });
+					currentTheme={settings.appearance ?? "system"}
+					onThemeChange={(newAppearance) => {
+						setSettings("appearance", newAppearance);
+						commands.setAppearance(newAppearance);
 					}}
 				/>
 

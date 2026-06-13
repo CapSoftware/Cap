@@ -672,7 +672,10 @@ function InProgressRecordingInner() {
 	};
 
 	return (
-		<div class="flex h-full w-full flex-col justify-end px-3 pb-3">
+		<div
+			data-tauri-drag-region="deep"
+			class="flex h-full w-full flex-col justify-end px-3 pb-3"
+		>
 			<div ref={setInteractiveAreaRef} class="flex w-full flex-col gap-2">
 				<Show when={hasRecordingIssue() && issuePanelVisible()}>
 					<div class="flex w-full flex-row items-start gap-3 rounded-2xl border border-red-8 bg-gray-1 px-4 py-3 text-[12px] leading-snug text-red-11 shadow-lg">
@@ -811,10 +814,7 @@ function InProgressRecordingInner() {
 												</>
 											)
 										) : (
-											<IconLucideMicOff
-												class="size-5 text-gray-7"
-												data-tauri-drag-region
-											/>
+											<IconLucideMicOff class="size-5 text-gray-7" />
 										)}
 									</div>
 									<Show when={hasCameraInput() && disconnectedInputs.camera}>
@@ -921,10 +921,7 @@ function InProgressRecordingInner() {
 								</div>
 							</div>
 						</div>
-						<div
-							class="non-styled-move flex cursor-move items-center justify-center border-l border-gray-5 p-1 hover:cursor-move transition-colors duration-100 hover:bg-gray-12/4 dark:hover:bg-white/6"
-							data-tauri-drag-region
-						>
+						<div class="non-styled-move flex cursor-move items-center justify-center border-l border-gray-5 p-1 hover:cursor-move transition-colors duration-100 hover:bg-gray-12/4 dark:hover:bg-white/6">
 							<IconCapMoreVertical class="pointer-events-none text-gray-10" />
 						</div>
 					</div>
