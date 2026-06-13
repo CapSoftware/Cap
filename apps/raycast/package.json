@@ -1,0 +1,46 @@
+{
+	"name": "cap-raycast",
+	"private": true,
+	"type": "module",
+	"title": "Cap",
+	"description": "Control Cap recordings and switch devices through deeplinks.",
+	"icon": "icon.png",
+	"author": "cap",
+	"license": "MIT",
+	"categories": [
+		"Productivity",
+		"Developer Tools"
+	],
+	"commands": [
+		{
+			"name": "cap-control",
+			"title": "Cap Control",
+			"subtitle": "Cap",
+			"description": "Start, stop, pause, and resume Cap recordings.",
+			"mode": "view",
+			"icon": "icon.png"
+		},
+		{
+			"name": "switch-device",
+			"title": "Switch Device",
+			"subtitle": "Cap",
+			"description": "Switch Cap microphone and camera inputs.",
+			"mode": "view",
+			"icon": "icon.png"
+		}
+	],
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"smoke:devices": "tsc scripts/device-parser-smoke.ts src/lib/devices.ts --outDir ../../target/raycast-device-smoke --module NodeNext --moduleResolution NodeNext --target es2022 --strict --esModuleInterop --skipLibCheck --types node && node ../../target/raycast-device-smoke/scripts/device-parser-smoke.js",
+		"lint": "npx @raycast/api@1.104.17 lint"
+	},
+	"dependencies": {
+		"@raycast/api": "1.104.17",
+		"react": "^19.2.0"
+	},
+	"devDependencies": {
+		"@types/node": "22.19.17",
+		"@types/react": "19.0.10",
+		"typescript": "^5.8.3"
+	}
+}
