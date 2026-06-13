@@ -59,6 +59,7 @@ export function SegmentRoot(
 		onMouseDown?: (
 			e: MouseEvent & { currentTarget: HTMLDivElement; target: Element },
 		) => void;
+		overflowVisible?: boolean;
 	},
 ) {
 	const { editorState } = useEditorContext();
@@ -84,7 +85,8 @@ export function SegmentRoot(
 			>
 				<div
 					class={cx(
-						"relative h-full flex flex-row rounded-xl overflow-hidden group",
+						"relative h-full flex flex-row rounded-xl group",
+						!props.overflowVisible && "overflow-hidden",
 						props.innerClass,
 					)}
 				>
