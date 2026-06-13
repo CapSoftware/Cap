@@ -1,9 +1,6 @@
 import { buildEnv, serverEnv } from "@cap/env";
 import type { JSXElementConstructor, ReactElement } from "react";
-import { Resend } from "resend";
-
-export const resend = () =>
-	serverEnv().RESEND_API_KEY ? new Resend(serverEnv().RESEND_API_KEY) : null;
+import { getEmailProvider } from "./providers";
 
 export const sendEmail = async ({
 	email,
@@ -26,27 +23,41 @@ export const sendEmail = async ({
 	replyTo?: string;
 	fromOverride?: string;
 }) => {
-	const r = resend();
-	if (!r) {
-		return Promise.resolve();
-	}
+	const provider = getEmailProvider();
+	if (!provider) return;
 
 	if (marketing && !buildEnv.NEXT_PUBLIC_IS_CAP) return;
-	let from: string;
 
+	let from: string;
 	if (fromOverride) from = fromOverride;
 	else if (marketing) from = "Richie from Cap <richie@send.cap.so>";
 	else if (buildEnv.NEXT_PUBLIC_IS_CAP)
 		from = "Cap Auth <no-reply@auth.cap.so>";
-	else from = `auth@${serverEnv().RESEND_FROM_DOMAIN}`;
+	else {
+		const env = serverEnv();
+		if (env.EMAIL_FROM) from = env.EMAIL_FROM;
+		else if (env.RESEND_FROM_DOMAIN) from = `auth@${env.RESEND_FROM_DOMAIN}`;
+		else {
+			console.warn(
+				"[email] No EMAIL_FROM or RESEND_FROM_DOMAIN configured — skipping send",
+			);
+			return;
+		}
+	}
 
-	return r.emails.send({
+	if (scheduledAt && provider.name !== "resend") {
+		console.warn(
+			`[email] scheduledAt requested but provider is ${provider.name} — sending immediately`,
+		);
+	}
+
+	return provider.send({
 		from,
-		to: test ? "delivered@resend.dev" : email,
+		to: test && provider.name === "resend" ? "delivered@resend.dev" : email,
 		subject,
 		react,
-		scheduledAt,
+		scheduledAt: provider.name === "resend" ? scheduledAt : undefined,
 		cc: test ? undefined : cc,
-		replyTo: replyTo,
+		replyTo,
 	});
 };
