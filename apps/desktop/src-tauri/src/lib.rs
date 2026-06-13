@@ -2185,6 +2185,36 @@ pub struct RequestScreenCapturePrewarm {
     pub force: bool,
 }
 
+pub(crate) async fn start_recording_from_saved_settings(
+    app: AppHandle,
+    mode: Option<RecordingMode>,
+) -> Result<recording::RecordingAction, String> {
+    let settings = RecordingSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let recording_mode = mode.or(settings.mode).unwrap_or_default();
+
+    let _ = set_mic_input(app.state(), settings.mic_name).await;
+    let _ = set_camera_input(app.clone(), app.state(), settings.camera_id, None).await;
+
+    start_recording(
+        app.clone(),
+        app.state(),
+        recording::StartRecordingInputs {
+            capture_target: settings
+                .target
+                .unwrap_or_else(|| ScreenCaptureTarget::Display {
+                    id: Display::primary().id(),
+                }),
+            mode: recording_mode,
+            capture_system_audio: settings.system_audio,
+            organization_id: settings.organization_id,
+        },
+    )
+    .await
+}
+
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct NewNotification {
     title: String,
@@ -4689,27 +4719,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             }
 
             RequestStartRecording::listen_any_spawn(&app, async |event, app| {
-                let settings = RecordingSettingsStore::get(&app)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-
-                let _ = set_mic_input(app.state(), settings.mic_name).await;
-                let _ = set_camera_input(app.clone(), app.state(), settings.camera_id, None).await;
-
-                let _ = start_recording(app.clone(), app.state(), {
-                    recording::StartRecordingInputs {
-                        capture_target: settings.target.unwrap_or_else(|| {
-                            ScreenCaptureTarget::Display {
-                                id: Display::primary().id(),
-                            }
-                        }),
-                        mode: event.mode,
-                        capture_system_audio: settings.system_audio,
-                        organization_id: settings.organization_id,
-                    }
-                })
-                .await;
+                let _ = start_recording_from_saved_settings(app.clone(), Some(event.mode)).await;
             });
 
             RequestOpenRecordingPicker::listen_any_spawn(&app, async |event, app| {
