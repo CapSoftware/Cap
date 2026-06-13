@@ -35,14 +35,28 @@ pub struct Credentials {
 fn load_desktop_store() -> Option<Value> {
     let data_dir = dirs::data_dir()?;
     DESKTOP_BUNDLE_IDS.into_iter().find_map(|id| {
-        let bytes = std::fs::read(data_dir.join(id).join("store")).ok()?;
-        let store: Value = serde_json::from_slice(&bytes).ok()?;
-        // Only accept a store that actually carries an auth secret.
-        store
-            .get("auth")
-            .and_then(|auth| auth.get("secret"))
-            .is_some()
-            .then_some(store)
+        let path = data_dir.join(id).join("store");
+        // Retry a few times: tauri-plugin-store flushes asynchronously, so a concurrent Desktop
+        // write can produce a truncated file on the first read.
+        for attempt in 0..3u8 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            match serde_json::from_slice::<Value>(&bytes) {
+                Ok(store) => {
+                    return store
+                        .get("auth")
+                        .and_then(|auth| auth.get("secret"))
+                        .is_some()
+                        .then_some(store);
+                }
+                Err(_) => continue,
+            }
+        }
+        None
     })
 }
 

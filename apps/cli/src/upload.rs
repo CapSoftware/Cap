@@ -1,13 +1,20 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use cap_project::RecordingMeta;
 use clap::Args;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use futures::StreamExt;
 use tokio_util::io::ReaderStream;
 
-use crate::{OutputFormat, credentials, export, resolve_format, write_json};
+use crate::{OutputFormat, credentials, export, resolve_format, write_json, write_json_line};
 
 #[derive(Args)]
 pub struct UploadArgs {
@@ -29,6 +36,7 @@ pub struct UploadArgs {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum UploadEvent<'a> {
+    Uploading { bytes_sent: u64, total_bytes: u64 },
     Uploaded { id: &'a str, link: &'a str },
 }
 
@@ -78,7 +86,7 @@ impl UploadArgs {
         let video_id =
             create_video(&http, &server, &auth, &self.name, self.video_id, &meta).await?;
         let put_url = presign_put(&http, &server, &auth, &video_id, &meta).await?;
-        upload_file(&http, &put_url, &file_path).await?;
+        upload_file(&http, &put_url, &file_path, format).await?;
 
         let link = format!("{server}/s/{video_id}");
         match format {
@@ -287,28 +295,64 @@ async fn presign_put(
         .map_err(|e| format!("Unexpected upload-URL response: {e}"))
 }
 
-async fn upload_file(http: &Client, put_url: &str, path: &Path) -> Result<(), String> {
-    // Stream the file rather than buffering it into memory — recordings can be gigabytes, so a
-    // `tokio::fs::read` would OOM on exactly the long unattended recordings agents produce. S3 PUT
-    // needs an explicit Content-Length for a streamed body (it rejects chunked transfer encoding),
-    // mirroring the desktop's singlepart uploader.
+async fn upload_file(
+    http: &Client,
+    put_url: &str,
+    path: &Path,
+    format: OutputFormat,
+) -> Result<(), String> {
     let file = tokio::fs::File::open(path)
         .await
         .map_err(|e| format!("Failed to open {}: {e}", path.display()))?;
-    let total_size = file
+    let total_bytes = file
         .metadata()
         .await
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?
         .len();
-    let body = reqwest::Body::wrap_stream(ReaderStream::new(file));
 
-    let response = http
+    let bytes_sent = Arc::new(AtomicU64::new(0));
+    let bytes_sent_stream = bytes_sent.clone();
+
+    let stream = ReaderStream::new(file).map(move |chunk| {
+        if let Ok(ref bytes) = chunk {
+            bytes_sent_stream.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        }
+        chunk
+    });
+
+    let progress_task = if format == OutputFormat::Json {
+        let bytes_sent_progress = bytes_sent.clone();
+        Some(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                let sent = bytes_sent_progress.load(Ordering::Relaxed);
+                let _ = write_json_line(&UploadEvent::Uploading {
+                    bytes_sent: sent,
+                    total_bytes,
+                });
+                if sent >= total_bytes {
+                    break;
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
+    let body = reqwest::Body::wrap_stream(stream);
+    let send_result = http
         .put(put_url)
-        .header(reqwest::header::CONTENT_LENGTH, total_size)
+        .header(reqwest::header::CONTENT_LENGTH, total_bytes)
         .body(body)
         .send()
         .await
-        .map_err(|e| format!("Upload failed: {e}"))?;
+        .map_err(|e| format!("Upload failed: {e}"));
+
+    if let Some(task) = progress_task {
+        task.abort();
+    }
+
+    let response = send_result?;
 
     if !response.status().is_success() {
         let status = response.status();

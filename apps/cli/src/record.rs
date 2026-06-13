@@ -68,8 +68,8 @@ impl RecordParams {
         }) {
             return Err("Duration must be a positive, finite number of seconds".to_string());
         }
-        if self.fps == Some(0) {
-            return Err("--fps must be greater than 0".to_string());
+        if self.fps.is_some_and(|fps| fps == 0 || fps > 120) {
+            return Err("--fps must be between 1 and 120".to_string());
         }
         Ok(())
     }
