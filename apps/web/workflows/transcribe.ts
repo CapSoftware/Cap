@@ -19,7 +19,9 @@ import {
 } from "@cap/web-domain";
 import { createClient } from "@deepgram/sdk";
 import { eq } from "drizzle-orm";
+import { toFile } from "openai";
 import { FatalError } from "workflow";
+import { getSttClient, getSttModel, isSttConfigured } from "@/lib/ai-provider";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
@@ -76,7 +78,7 @@ export async function transcribeVideoWorkflow(
 		}
 
 		const [transcription] = await Promise.all([
-			transcribeWithDeepgram(audioUrl, videoData.aiGenerationLanguage),
+			transcribeAudio(audioUrl, videoData.aiGenerationLanguage),
 		]);
 
 		await saveTranscription(videoId, userId, videoData.video, transcription);
@@ -98,8 +100,10 @@ export async function transcribeVideoWorkflow(
 async function validateVideo(videoId: string): Promise<VideoData> {
 	"use step";
 
-	if (!serverEnv().DEEPGRAM_API_KEY) {
-		throw new FatalError("Missing DEEPGRAM_API_KEY");
+	if (!isSttConfigured()) {
+		throw new FatalError(
+			"No transcription provider configured (set DEEPGRAM_API_KEY or STT_BASE_URL)",
+		);
 	}
 
 	const query = await db()
@@ -324,7 +328,7 @@ export function getDeepgramTranscriptionOptions(
 	};
 }
 
-async function transcribeWithDeepgram(
+async function transcribeAudio(
 	audioUrl: string,
 	language: AiGenerationLanguage,
 ): Promise<string> {
@@ -339,6 +343,16 @@ async function transcribeWithDeepgram(
 
 	const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
 
+	if (serverEnv().STT_BASE_URL) {
+		return transcribeViaSttProvider(audioBuffer, language);
+	}
+	return transcribeViaDeepgram(audioBuffer, language);
+}
+
+async function transcribeViaDeepgram(
+	audioBuffer: Buffer,
+	language: AiGenerationLanguage,
+): Promise<string> {
 	const deepgram = createClient(serverEnv().DEEPGRAM_API_KEY as string);
 
 	const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
@@ -353,6 +367,39 @@ async function transcribeWithDeepgram(
 	}
 
 	return formatToWebVTT(result as unknown as DeepgramResult);
+}
+
+async function transcribeViaSttProvider(
+	audioBuffer: Buffer,
+	language: AiGenerationLanguage,
+): Promise<string> {
+	const client = getSttClient();
+	if (!client) {
+		throw new Error("STT client not configured");
+	}
+
+	const file = await toFile(audioBuffer, "audio.mp3", {
+		type: "audio/mpeg",
+	});
+
+	const response = await client.audio.transcriptions.create({
+		file,
+		model: getSttModel(),
+		response_format: "vtt" as const,
+		language: language !== AI_GENERATION_LANGUAGE_AUTO ? language : undefined,
+	});
+
+	if (
+		typeof response !== "string" ||
+		!/^WEBVTT/m.test(response) ||
+		!response.includes("-->")
+	) {
+		throw new Error(
+			"STT provider did not return valid WebVTT (verify STT_MODEL supports response_format=vtt)",
+		);
+	}
+
+	return response;
 }
 
 const DEEPGRAM_DETECTABLE_LANGUAGES = [

@@ -12,9 +12,9 @@ vi.mock("@cap/web-backend", () => ({
 	Storage: {},
 }));
 
-vi.mock("@/lib/groq-client", () => ({
-	GROQ_MODEL: "test-model",
-	getGroqClient: vi.fn(() => null),
+vi.mock("@/lib/ai-provider", () => ({
+	getAiClient: vi.fn(() => null),
+	getAiModel: vi.fn(() => "test-model"),
 }));
 
 vi.mock("@/lib/server", () => ({
