@@ -1,6 +1,7 @@
 use crate::{
     RequestOpenRecordingPicker, RequestStartRecording, recording,
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+    screenshot_post_capture::{self, ScreenshotPostCaptureAction},
     tray,
     windows::ShowCapWindow,
 };
@@ -209,31 +210,27 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
 
             let display = Display::get_containing_cursor().unwrap_or_else(Display::primary);
             let target = ScreenCaptureTarget::Display { id: display.id() };
+            let action = ScreenshotPostCaptureAction::from_settings(&app);
 
-            match recording::take_screenshot(app.clone(), target).await {
-                Ok(path) => {
-                    let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
-                    Ok(())
-                }
-                Err(e) => Err(format!("Failed to take screenshot: {e}")),
-            }
+            let path = recording::take_screenshot(app.clone(), target)
+                .await
+                .map_err(|e| format!("Failed to take screenshot: {e}"))?;
+            screenshot_post_capture::handle(&app, path, action).await
         }
         HotkeyAction::ScreenshotWindow => {
             use scap_targets::Window;
 
+            let action = ScreenshotPostCaptureAction::from_settings(&app);
             let target = {
                 let window = Window::get_topmost_at_cursor()
                     .ok_or_else(|| "No window found under cursor".to_string())?;
                 ScreenCaptureTarget::Window { id: window.id() }
             };
 
-            match recording::take_screenshot(app.clone(), target).await {
-                Ok(path) => {
-                    let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
-                    Ok(())
-                }
-                Err(e) => Err(format!("Failed to take screenshot: {e}")),
-            }
+            let path = recording::take_screenshot(app.clone(), target)
+                .await
+                .map_err(|e| format!("Failed to take screenshot: {e}"))?;
+            screenshot_post_capture::handle(&app, path, action).await
         }
         HotkeyAction::ScreenshotArea => {
             RecordingSettingsStore::set_mode(&app, cap_recording::RecordingMode::Screenshot)

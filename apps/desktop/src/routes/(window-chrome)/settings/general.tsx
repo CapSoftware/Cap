@@ -8,7 +8,7 @@ import { type OsType, type } from "@tauri-apps/plugin-os";
 import "@total-typescript/ts-reset/filter-boolean";
 import { Collapsible } from "@kobalte/core/collapsible";
 import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -31,6 +31,8 @@ import { clientEnv } from "~/utils/env";
 import {
 	deriveGeneralSettings,
 	type GeneralSettingsStore,
+	type PostScreenshotCaptureBehaviour,
+	type ScreenshotSaveDestination,
 } from "~/utils/general-settings";
 import {
 	type AppTheme,
@@ -44,6 +46,7 @@ import {
 	type WindowExclusion,
 } from "~/utils/tauri";
 import IconLucideAlertTriangle from "~icons/lucide/alert-triangle";
+import IconLucideFolderOpen from "~icons/lucide/folder-open";
 import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideX from "~icons/lucide/x";
 import {
@@ -309,6 +312,28 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		}
 	};
 
+	const handleChooseScreenshotSaveDirectory = async () => {
+		const selected = await open({
+			directory: true,
+			multiple: false,
+			title: "Choose Screenshot Save Folder",
+			defaultPath: settings.screenshotSaveDirectory ?? undefined,
+		});
+
+		if (typeof selected !== "string") return;
+		await handleChange("screenshotSaveDirectory", selected);
+	};
+
+	const handleScreenshotSaveDestinationChange = async (
+		value: ScreenshotSaveDestination,
+	) => {
+		await handleChange("screenshotSaveDestination", value);
+
+		if (value === "chosenFolder" && !settings.screenshotSaveDirectory) {
+			await handleChooseScreenshotSaveDirectory();
+		}
+	};
+
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
 	const missingDefaultExclusions = createMemo(() =>
@@ -424,6 +449,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		T extends
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
+			| PostScreenshotCaptureBehaviour
+			| ScreenshotSaveDestination
 			| PostDeletionBehaviour
 			| StudioRecordingQuality
 			| number,
@@ -572,6 +599,91 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								{ text: "Open editor", value: "openEditor" },
 								{ text: "Show in overlay", value: "showOverlay" },
 							]}
+						/>
+						<SelectSettingItem
+							label="After a screenshot"
+							description="What happens after taking a display or window screenshot."
+							value={settings.postScreenshotCaptureBehaviour ?? "openEditor"}
+							onChange={(value) =>
+								handleChange("postScreenshotCaptureBehaviour", value)
+							}
+							options={[
+								{ text: "Ask every time", value: "askEveryTime" },
+								{ text: "Open editor", value: "openEditor" },
+								{ text: "Show in overlay", value: "showOverlay" },
+								{ text: "Copy image to clipboard", value: "copyToClipboard" },
+								{ text: "Copy file path", value: "copyFilePath" },
+								{ text: "Copy Markdown image", value: "copyMarkdownImage" },
+								{ text: "Reveal in Finder", value: "revealInFinder" },
+								{ text: "Upload link", value: "upload" },
+								{ text: "Do nothing", value: "doNothing" },
+							]}
+						/>
+						<SelectSettingItem
+							label="Save screenshots to"
+							description="Where Cap writes the PNG file after every screenshot."
+							value={settings.screenshotSaveDestination ?? "desktop"}
+							onChange={handleScreenshotSaveDestinationChange}
+							options={[
+								{ text: "Desktop", value: "desktop" },
+								{ text: "Choose folder", value: "chosenFolder" },
+								{ text: "App library only", value: "appLibraryOnly" },
+							]}
+						/>
+						<Show when={settings.screenshotSaveDestination === "chosenFolder"}>
+							<SettingItem
+								label="Screenshot save folder"
+								description="Folder used for automatic screenshot PNG files."
+							>
+								<div class="flex items-center gap-2 min-w-0 max-w-[22rem]">
+									<Show
+										when={settings.screenshotSaveDirectory}
+										fallback={
+											<span class="text-xs whitespace-nowrap text-gray-10">
+												Not set
+											</span>
+										}
+									>
+										{(directory) => (
+											<span
+												class="min-w-0 max-w-[12rem] truncate text-xs text-gray-10"
+												title={directory()}
+											>
+												{directory()}
+											</span>
+										)}
+									</Show>
+									<Button
+										size="sm"
+										variant="gray"
+										class="flex items-center gap-1.5"
+										onClick={handleChooseScreenshotSaveDirectory}
+									>
+										<IconLucideFolderOpen class="size-3.5" />
+										<span>Choose</span>
+									</Button>
+									<Show when={settings.screenshotSaveDirectory}>
+										<Button
+											size="sm"
+											variant="gray"
+											title="Clear screenshot save folder"
+											onClick={() =>
+												handleChange("screenshotSaveDirectory", null)
+											}
+										>
+											<IconLucideX class="size-3.5" />
+										</Button>
+									</Show>
+								</div>
+							</SettingItem>
+						</Show>
+						<ToggleSettingItem
+							label="Close editor after copying"
+							description="Close the screenshot editor after Copy to Clipboard succeeds."
+							value={settings.closeScreenshotEditorAfterCopy ?? false}
+							onChange={(value) =>
+								handleChange("closeScreenshotEditorAfterCopy", value)
+							}
 						/>
 						<SelectSettingItem
 							label="After deleting a recording"

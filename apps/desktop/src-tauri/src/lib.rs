@@ -35,6 +35,7 @@ mod recording_settings;
 mod recording_telemetry;
 mod recovery;
 mod screenshot_editor;
+mod screenshot_post_capture;
 mod target_select_overlay;
 mod thumbnails;
 mod tray;
@@ -3284,6 +3285,14 @@ async fn upload_screenshot(
     clipboard: MutableState<'_, ClipboardContext>,
     screenshot_path: PathBuf,
 ) -> Result<UploadResult, String> {
+    upload_screenshot_internal_with_clipboard(&app, screenshot_path, Some(clipboard)).await
+}
+
+async fn upload_screenshot_internal_with_clipboard(
+    app: &AppHandle,
+    screenshot_path: PathBuf,
+    clipboard: Option<MutableState<'_, ClipboardContext>>,
+) -> Result<UploadResult, String> {
     let Ok(Some(auth)) = AuthStore::get(&app) else {
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
         return Ok(UploadResult::NotAuthenticated);
@@ -3319,11 +3328,26 @@ async fn upload_screenshot(
 
     println!("Copying to clipboard: {share_link:?}");
 
-    let _ = clipboard.write().await.set_text(share_link.clone());
+    if let Some(clipboard) = clipboard {
+        let _ = clipboard.write().await.set_text(share_link.clone());
+    } else {
+        let _ = app
+            .state::<ArcLock<ClipboardContext>>()
+            .write()
+            .await
+            .set_text(share_link.clone());
+    }
 
     notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
 
     Ok(UploadResult::Success(share_link))
+}
+
+pub(crate) async fn upload_screenshot_internal(
+    app: &AppHandle,
+    screenshot_path: PathBuf,
+) -> Result<UploadResult, String> {
+    upload_screenshot_internal_with_clipboard(app, screenshot_path, None).await
 }
 
 #[tauri::command]
@@ -4189,6 +4213,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
+            screenshot_post_capture::take_screenshot_with_post_capture,
             recording::import_current_desktop_background,
             recording::list_cameras,
             recording::get_camera_formats,
@@ -4491,6 +4516,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(http_client::HttpClient::default());
             app.manage(http_client::RetryableHttpClient::default());
             app.manage(PendingScreenshots::default());
+            app.manage(screenshot_post_capture::PendingScreenshotPostCaptureAction::default());
             app.manage(FinalizingRecordings::default());
 
             #[cfg(unix)]
@@ -5425,6 +5451,13 @@ fn close_target_select_overlays(app: &AppHandle) {
     if !saw_overlay && let Some(focus_manager) = focus_manager {
         focus_manager.shutdown(app);
     }
+
+    screenshot_post_capture::clear_pending_action(app);
+
+    let app = app.clone();
+    spawn_on_runtime(async move {
+        deeplink_actions::restore_temporary_recording_mode(&app).await;
+    });
 }
 
 #[cfg(target_os = "windows")]

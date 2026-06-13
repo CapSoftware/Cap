@@ -12,6 +12,7 @@ use crate::exit_shutdown::{abort_join_handles, read_target_under_cursor};
 use crate::{
     App, ArcLock, general_settings,
     recording_settings::RecordingTargetMode,
+    screenshot_post_capture,
     window_exclusion::WindowExclusion,
     windows::{CapWindowId, ShowCapWindow, hide_overlay, show_overlay},
 };
@@ -325,6 +326,9 @@ pub async fn close_target_select_overlays(
     for display_id in closed_display_ids {
         state.destroy(&display_id, app.global_shortcut());
     }
+
+    screenshot_post_capture::clear_pending_action(&app);
+    crate::deeplink_actions::restore_temporary_recording_mode(&app).await;
 
     Ok(())
 }

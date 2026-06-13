@@ -1,7 +1,9 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { createSignal } from "solid-js";
 import toast from "solid-toast";
+import { generalSettingsStore } from "~/store";
 import { commands } from "~/utils/tauri";
 import { getArrowHeadPoints } from "./arrow";
 import { type Annotation, useScreenshotEditorContext } from "./context";
@@ -392,6 +394,11 @@ export function useScreenshotExport() {
 					}
 					toast.success("Screenshot copied to clipboard!");
 					setDialog({ ...dialog(), open: false });
+					if (
+						(await generalSettingsStore.get())?.closeScreenshotEditorAfterCopy
+					) {
+						await getCurrentWindow().close();
+					}
 				}
 			} finally {
 				if (shouldCloseRenderedBitmap) {
