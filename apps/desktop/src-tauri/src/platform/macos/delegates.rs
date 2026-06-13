@@ -88,10 +88,13 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         this: &Object,
         func: F,
     ) {
-        let ptr = unsafe {
-            let x: *mut c_void = *this.get_ivar("app_box");
-            &mut *(x as *mut WindowState<R>)
-        };
+        let x: *mut c_void = unsafe { *this.get_ivar("app_box") };
+        // `app_box` is nulled out in `windowWillClose:`; ignore any late
+        // callbacks that arrive after that instead of dereferencing null.
+        if x.is_null() {
+            return;
+        }
+        let ptr = unsafe { &mut *(x as *mut WindowState<R>) };
         func(ptr);
     }
 
