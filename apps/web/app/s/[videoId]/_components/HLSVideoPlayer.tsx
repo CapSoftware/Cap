@@ -14,7 +14,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
-import { getActiveCaptionText } from "./caption-cues";
+import { bindCaptionTrackCueText } from "./caption-tracks";
 import {
 	canRetryFailedProcessing,
 	getUploadFailureMessage,
@@ -466,71 +466,7 @@ export function HLSVideoPlayer({
 			return;
 		}
 
-		let captionTrack: TextTrack | null = null;
-
-		const handleCueChange = (): void => {
-			setCurrentCue(getActiveCaptionText(captionTrack?.activeCues));
-		};
-
-		const setupTracks = (): void => {
-			const tracks = video.textTracks;
-			for (let i = 0; i < tracks.length; i++) {
-				const track = tracks[i];
-				if (
-					track &&
-					(track.kind === "captions" || track.kind === "subtitles")
-				) {
-					captionTrack = track;
-					track.mode = "hidden";
-					track.addEventListener("cuechange", handleCueChange);
-					break;
-				}
-			}
-		};
-
-		const ensureTracksHidden = (): void => {
-			const tracks = video.textTracks;
-			for (let i = 0; i < tracks.length; i++) {
-				const track = tracks[i];
-				if (
-					track &&
-					(track.kind === "captions" || track.kind === "subtitles")
-				) {
-					if (track.mode !== "hidden") {
-						track.mode = "hidden";
-					}
-				}
-			}
-		};
-
-		const handleLoadedMetadata = (): void => {
-			setupTracks();
-		};
-
-		const handleTrackChange = () => {
-			ensureTracksHidden();
-			setupTracks();
-		};
-
-		video.addEventListener("loadedmetadata", handleLoadedMetadata);
-
-		video.textTracks.addEventListener("change", handleTrackChange);
-		video.textTracks.addEventListener("addtrack", handleTrackChange);
-		video.textTracks.addEventListener("removetrack", handleTrackChange);
-
-		if (video.readyState >= 1) {
-			setupTracks();
-		}
-
-		return () => {
-			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-			video.textTracks.removeEventListener("change", handleTrackChange);
-			video.textTracks.removeEventListener("addtrack", handleTrackChange);
-			video.textTracks.removeEventListener("removetrack", handleTrackChange);
-			if (captionTrack) {
-				captionTrack.removeEventListener("cuechange", handleCueChange);
-			}
-		};
+		return bindCaptionTrackCueText(video, setCurrentCue);
 	}, [captionsSrc, videoRef.current]);
 
 	const isErrorWhileHlsLoading =

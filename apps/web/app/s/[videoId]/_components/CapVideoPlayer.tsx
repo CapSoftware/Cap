@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import CommentStamp from "./CommentStamp";
-import { getActiveCaptionText } from "./caption-cues";
+import { bindCaptionTrackCueText } from "./caption-tracks";
 import {
 	AVC_LEVEL_IOS_HARDWARE_CEILING,
 	createLevelPatchedMp4ObjectUrl,
@@ -410,35 +410,7 @@ export function CapVideoPlayer({
 			setHasError(true);
 		};
 
-		let captionTrack: TextTrack | null = null;
-
-		const handleCueChange = (): void => {
-			setCurrentCue(getActiveCaptionText(captionTrack?.activeCues));
-		};
-
-		const setupTracks = (): void => {
-			const tracks = Array.from(video.textTracks);
-
-			for (const track of tracks) {
-				if (track.kind === "captions" || track.kind === "subtitles") {
-					captionTrack = track;
-					track.mode = "hidden";
-					track.addEventListener("cuechange", handleCueChange);
-					break;
-				}
-			}
-		};
-
-		const ensureTracksHidden = (): void => {
-			const tracks = Array.from(video.textTracks);
-			for (const track of tracks) {
-				if (track.kind === "captions" || track.kind === "subtitles") {
-					if (track.mode !== "hidden") {
-						track.mode = "hidden";
-					}
-				}
-			}
-		};
+		const cleanupCaptionTracks = bindCaptionTrackCueText(video, setCurrentCue);
 
 		const handleLoadedMetadataWithTracks = () => {
 			setVideoLoaded(true);
@@ -446,12 +418,6 @@ export function CapVideoPlayer({
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
 			}
-			setupTracks();
-		};
-
-		const handleTrackChange = () => {
-			ensureTracksHidden();
-			setupTracks();
 		};
 
 		video.addEventListener("loadeddata", handleLoadedData);
@@ -459,10 +425,6 @@ export function CapVideoPlayer({
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
-
-		video.textTracks.addEventListener("change", handleTrackChange);
-		video.textTracks.addEventListener("addtrack", handleTrackChange);
-		video.textTracks.addEventListener("removetrack", handleTrackChange);
 
 		if (video.readyState === 4) {
 			handleLoadedData();
@@ -477,12 +439,7 @@ export function CapVideoPlayer({
 				"loadedmetadata",
 				handleLoadedMetadataWithTracks,
 			);
-			video.textTracks.removeEventListener("change", handleTrackChange);
-			video.textTracks.removeEventListener("addtrack", handleTrackChange);
-			video.textTracks.removeEventListener("removetrack", handleTrackChange);
-			if (captionTrack) {
-				captionTrack.removeEventListener("cuechange", handleCueChange);
-			}
+			cleanupCaptionTracks();
 		};
 	}, [
 		hasPlayedOnce,
