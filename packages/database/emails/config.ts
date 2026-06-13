@@ -1,10 +1,6 @@
 import { buildEnv, serverEnv } from "@cap/env";
 import type { JSXElementConstructor, ReactElement } from "react";
-import { Resend } from "resend";
 import { getEmailProvider } from "./providers";
-
-export const resend = () =>
-	serverEnv().RESEND_API_KEY ? new Resend(serverEnv().RESEND_API_KEY) : null;
 
 export const sendEmail = async ({
 	email,
@@ -57,7 +53,7 @@ export const sendEmail = async ({
 
 	return provider.send({
 		from,
-		to: test ? "delivered@resend.dev" : email,
+		to: test && provider.name === "resend" ? "delivered@resend.dev" : email,
 		subject,
 		react,
 		scheduledAt: provider.name === "resend" ? scheduledAt : undefined,

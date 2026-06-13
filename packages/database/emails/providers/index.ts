@@ -11,6 +11,10 @@ export function getEmailProvider(): EmailProvider | null {
 	return cached;
 }
 
+export function resetEmailProvider(): void {
+	cached = undefined;
+}
+
 function build(): EmailProvider | null {
 	const env = serverEnv();
 	const requested =
@@ -22,6 +26,11 @@ function build(): EmailProvider | null {
 				"[email] EMAIL_PROVIDER=smtp but SMTP_HOST/SMTP_PORT missing — emails disabled",
 			);
 			return null;
+		}
+		if (Boolean(env.SMTP_USER) !== Boolean(env.SMTP_PASS)) {
+			console.warn(
+				"[email] Only one of SMTP_USER/SMTP_PASS is set: SMTP auth is disabled. Set both or neither.",
+			);
 		}
 		return new SmtpEmailProvider({
 			host: env.SMTP_HOST,
