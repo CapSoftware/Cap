@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { Tinybird } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
@@ -91,6 +92,67 @@ export async function getVideoAnalytics(
 						? Number(firstItem.views ?? 0)
 						: 0;
 			return { count: Number.isFinite(count) ? count : 0 };
+		}),
+	);
+}
+
+export async function getVideoEngagement(videoId: string) {
+	if (!videoId) throw new Error("Video ID is required");
+
+	const user = await getCurrentUser();
+	if (!user?.id) throw new Error("Unauthorized");
+
+	const [video] = await db()
+		.select({ ownerId: videos.ownerId })
+		.from(videos)
+		.where(eq(videos.id, Video.VideoId.make(videoId)))
+		.limit(1);
+
+	if (!video || video.ownerId !== user.id) throw new Error("Unauthorized");
+
+	if (!/^[0-9a-zA-Z_-]+$/.test(videoId))
+		throw new Error("Invalid video ID format");
+	const safeId = videoId;
+
+	return runPromise(
+		Effect.gen(function* () {
+			const tinybird = yield* Tinybird;
+
+			const result = yield* tinybird
+				.querySql<{
+					total: number;
+					reached_25: number;
+					reached_50: number;
+					reached_75: number;
+					reached_95: number;
+					avg_percent: number;
+				}>(
+					`SELECT count() as total, countIf(max_percent >= 25) as reached_25, countIf(max_percent >= 50) as reached_50, countIf(max_percent >= 75) as reached_75, countIf(max_percent >= 95) as reached_95, round(avg(max_percent)) as avg_percent FROM (SELECT session_id, max(toFloat32(percent_watched)) as max_percent FROM analytics_events WHERE action = 'video_progress' AND video_id = '${safeId}' GROUP BY session_id)`,
+				)
+				.pipe(
+					Effect.catchAll(() =>
+						Effect.succeed({
+							data: [] as {
+								total: number;
+								reached_25: number;
+								reached_50: number;
+								reached_75: number;
+								reached_95: number;
+								avg_percent: number;
+							}[],
+						}),
+					),
+				);
+
+			const row = result.data?.[0];
+			return {
+				total: Number(row?.total ?? 0),
+				reached25: Number(row?.reached_25 ?? 0),
+				reached50: Number(row?.reached_50 ?? 0),
+				reached75: Number(row?.reached_75 ?? 0),
+				reached95: Number(row?.reached_95 ?? 0),
+				avgPercent: Number(row?.avg_percent ?? 0),
+			};
 		}),
 	);
 }
