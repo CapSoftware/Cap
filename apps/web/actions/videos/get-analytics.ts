@@ -103,6 +103,9 @@ export async function getVideoAnalytics(
 export async function getVideoEngagement(videoId: string) {
 	if (!videoId) throw new Error("Video ID is required");
 
+	if (!/^[0-9a-zA-Z_-]+$/.test(videoId))
+		throw new Error("Invalid video ID format");
+
 	const user = await getCurrentUser();
 	if (!user?.id) throw new Error("Unauthorized");
 
@@ -114,8 +117,6 @@ export async function getVideoEngagement(videoId: string) {
 
 	if (!video || video.ownerId !== user.id) throw new Error("Unauthorized");
 
-	if (!/^[0-9a-zA-Z_-]+$/.test(videoId))
-		throw new Error("Invalid video ID format");
 	const safeId = videoId;
 
 	return runPromise(
