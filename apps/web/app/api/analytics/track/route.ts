@@ -124,6 +124,7 @@ export async function POST(request: NextRequest) {
 							action: "video_progress",
 							version: "1.0",
 							session_id: sessionId ?? randomUUID(),
+							tenant_id: videoRecord.ownerId,
 							video_id: body.videoId,
 							percent_watched: percentWatched,
 						},

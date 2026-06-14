@@ -135,8 +135,9 @@ export async function getVideoEngagement(videoId: string) {
 					`SELECT count() as total, countIf(max_percent >= 25) as reached_25, countIf(max_percent >= 50) as reached_50, countIf(max_percent >= 75) as reached_75, countIf(max_percent >= 95) as reached_95, round(avg(max_percent)) as avg_percent FROM (SELECT session_id, max(toFloat32(percent_watched)) as max_percent FROM analytics_events WHERE action = 'video_progress' AND video_id = '${safeId}' GROUP BY session_id)`,
 				)
 				.pipe(
-					Effect.catchAll(() =>
-						Effect.succeed({
+					Effect.catchAll((e) => {
+						console.error("tinybird engagement query error", e);
+						return Effect.succeed({
 							data: [] as {
 								total: number;
 								reached_25: number;
@@ -145,8 +146,8 @@ export async function getVideoEngagement(videoId: string) {
 								reached_95: number;
 								avg_percent: number;
 							}[],
-						}),
-					),
+						});
+					}),
 				);
 
 			const row = result.data?.[0];
