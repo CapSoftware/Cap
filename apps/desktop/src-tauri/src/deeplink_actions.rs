@@ -26,6 +26,14 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    SwitchCamera {
+        camera: Option<DeviceOrModelID>,
+    },
+    SwitchMicrophone {
+        mic_label: Option<String>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -89,7 +97,8 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
+            Some("action") => Ok(()),
+            Some(_) => Err(ActionParseFromUrlError::NotAction),
             _ => Err(ActionParseFromUrlError::Invalid),
         }?;
 
@@ -147,6 +156,20 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SwitchCamera { camera } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state, camera, None).await
+            }
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state, mic_label).await
+            }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
@@ -154,5 +177,106 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(value: &str) -> Result<DeepLinkAction, ActionParseFromUrlError> {
+        let url = Url::parse_with_params("cap-desktop://action", &[("value", value)])
+            .expect("test URL must parse");
+        DeepLinkAction::try_from(&url)
+    }
+
+    #[test]
+    fn parses_stop_recording() {
+        let action = parse(r#""stop_recording""#).expect("parses");
+        assert!(matches!(action, DeepLinkAction::StopRecording));
+    }
+
+    #[test]
+    fn parses_pause_recording() {
+        let action = parse(r#""pause_recording""#).expect("parses");
+        assert!(matches!(action, DeepLinkAction::PauseRecording));
+    }
+
+    #[test]
+    fn parses_resume_recording() {
+        let action = parse(r#""resume_recording""#).expect("parses");
+        assert!(matches!(action, DeepLinkAction::ResumeRecording));
+    }
+
+    #[test]
+    fn parses_switch_camera_with_label() {
+        let value = r#"{"switch_camera":{"camera":{"ModelID":"FaceTime HD Camera"}}}"#;
+        match parse(value).expect("parses") {
+            DeepLinkAction::SwitchCamera { camera } => {
+                assert!(camera.is_some());
+            }
+            other => panic!("expected SwitchCamera, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_switch_camera_to_none() {
+        let value = r#"{"switch_camera":{"camera":null}}"#;
+        match parse(value).expect("parses") {
+            DeepLinkAction::SwitchCamera { camera } => {
+                assert!(camera.is_none());
+            }
+            other => panic!("expected SwitchCamera, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_switch_microphone_with_label() {
+        let value = r#"{"switch_microphone":{"mic_label":"MacBook Pro Microphone"}}"#;
+        match parse(value).expect("parses") {
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                assert_eq!(mic_label.as_deref(), Some("MacBook Pro Microphone"));
+            }
+            other => panic!("expected SwitchMicrophone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_switch_microphone_to_none() {
+        let value = r#"{"switch_microphone":{"mic_label":null}}"#;
+        match parse(value).expect("parses") {
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                assert!(mic_label.is_none());
+            }
+            other => panic!("expected SwitchMicrophone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_non_action_domain() {
+        let url = Url::parse("cap-desktop://login?token=x").expect("test URL must parse");
+        assert!(matches!(
+            DeepLinkAction::try_from(&url),
+            Err(ActionParseFromUrlError::NotAction)
+        ));
+    }
+
+    #[test]
+    fn rejects_missing_value() {
+        let url = Url::parse("cap-desktop://action?other=x").expect("test URL must parse");
+        assert!(matches!(
+            DeepLinkAction::try_from(&url),
+            Err(ActionParseFromUrlError::Invalid)
+        ));
+    }
+
+    #[test]
+    fn rejects_malformed_json_value() {
+        let url =
+            Url::parse("cap-desktop://action?value=%7Bnot-json").expect("test URL must parse");
+        assert!(matches!(
+            DeepLinkAction::try_from(&url),
+            Err(ActionParseFromUrlError::ParseFailed(_))
+        ));
     }
 }
