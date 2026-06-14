@@ -122,10 +122,15 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
             })
         }
         extern "C" fn on_window_will_close<R: Runtime>(this: &Object, _cmd: Sel, notification: id) {
-            suppress_delegate_panic("windowWillClose:", (), || unsafe {
-                let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowWillClose: notification];
+            let super_del: id = unsafe { *this.get_ivar("super_delegate") };
 
+            // Forward to the previous delegate first, but don't let a panic there
+            // skip the cleanup below (which would bring back the leak).
+            suppress_delegate_panic("windowWillClose:", (), || unsafe {
+                let _: () = msg_send![super_del, windowWillClose: notification];
+            });
+
+            suppress_delegate_panic("windowWillClose:cleanup", (), || unsafe {
                 // Drop the boxed `WindowState<R>` (and the `Window<R>` handle it holds)
                 // that was leaked via `Box::into_raw` when this delegate was created.
                 let app_box: *mut c_void = *this.get_ivar("app_box");
@@ -373,26 +378,88 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
                 decl.add_ivar::<id>("super_delegate");
 
                 unsafe {
-                    decl.add_method(sel!(windowShouldClose:), on_window_should_close as extern "C" fn(&Object, Sel, id) -> BOOL);
-                    decl.add_method(sel!(windowWillClose:), on_window_will_close::<R> as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(windowDidResize:), on_window_did_resize::<R> as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(windowDidMove:), on_window_did_move as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(windowDidChangeBackingProperties:), on_window_did_change_backing_properties as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(windowDidBecomeKey:), on_window_did_become_key as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(windowDidResignKey:), on_window_did_resign_key as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(draggingEntered:), on_dragging_entered as extern "C" fn(&Object, Sel, id) -> BOOL);
-                    decl.add_method(sel!(prepareForDragOperation:), on_prepare_for_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL);
-                    decl.add_method(sel!(performDragOperation:), on_perform_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL);
-                    decl.add_method(sel!(concludeDragOperation:), on_conclude_drag_operation as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(draggingExited:), on_dragging_exited as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(window:willUseFullScreenPresentationOptions:), on_window_will_use_full_screen_presentation_options as extern "C" fn(&Object, Sel, id, NSUInteger) -> NSUInteger);
-                    decl.add_method(sel!(windowDidEnterFullScreen:), on_window_did_enter_full_screen::<R> as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(windowWillEnterFullScreen:), on_window_will_enter_full_screen::<R> as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(windowDidExitFullScreen:), on_window_did_exit_full_screen::<R> as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(windowWillExitFullScreen:), on_window_will_exit_full_screen::<R> as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(windowDidFailToEnterFullScreen:), on_window_did_fail_to_enter_full_screen as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(effectiveAppearanceDidChange:), on_effective_appearance_did_change as extern "C" fn(&Object, Sel, id));
-                    decl.add_method(sel!(effectiveAppearanceDidChangedOnMainThread:), on_effective_appearance_did_changed_on_main_thread as extern "C" fn(&Object, Sel, id));
+                    decl.add_method(
+                        sel!(windowShouldClose:),
+                        on_window_should_close as extern "C" fn(&Object, Sel, id) -> BOOL,
+                    );
+                    decl.add_method(
+                        sel!(windowWillClose:),
+                        on_window_will_close::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidResize:),
+                        on_window_did_resize::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidMove:),
+                        on_window_did_move as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidChangeBackingProperties:),
+                        on_window_did_change_backing_properties as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidBecomeKey:),
+                        on_window_did_become_key as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidResignKey:),
+                        on_window_did_resign_key as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(draggingEntered:),
+                        on_dragging_entered as extern "C" fn(&Object, Sel, id) -> BOOL,
+                    );
+                    decl.add_method(
+                        sel!(prepareForDragOperation:),
+                        on_prepare_for_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL,
+                    );
+                    decl.add_method(
+                        sel!(performDragOperation:),
+                        on_perform_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL,
+                    );
+                    decl.add_method(
+                        sel!(concludeDragOperation:),
+                        on_conclude_drag_operation as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(draggingExited:),
+                        on_dragging_exited as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(window:willUseFullScreenPresentationOptions:),
+                        on_window_will_use_full_screen_presentation_options
+                            as extern "C" fn(&Object, Sel, id, NSUInteger) -> NSUInteger,
+                    );
+                    decl.add_method(
+                        sel!(windowDidEnterFullScreen:),
+                        on_window_did_enter_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowWillEnterFullScreen:),
+                        on_window_will_enter_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidExitFullScreen:),
+                        on_window_did_exit_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowWillExitFullScreen:),
+                        on_window_will_exit_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidFailToEnterFullScreen:),
+                        on_window_did_fail_to_enter_full_screen as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(effectiveAppearanceDidChange:),
+                        on_effective_appearance_did_change as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(effectiveAppearanceDidChangedOnMainThread:),
+                        on_effective_appearance_did_changed_on_main_thread
+                            as extern "C" fn(&Object, Sel, id),
+                    );
                 }
 
                 decl.register()
