@@ -91,10 +91,6 @@ export async function POST(request: NextRequest) {
 	const action = body.action ?? "page_hit";
 
 	if (action === "video_progress") {
-		const sessionId =
-			typeof body.sessionId === "string"
-				? body.sessionId.trim().slice(0, 128) || null
-				: null;
 		const percentWatched =
 			typeof body.percentWatched === "number" &&
 			body.percentWatched >= 0 &&
@@ -124,7 +120,7 @@ export async function POST(request: NextRequest) {
 					const tinybird = yield* Tinybird;
 					yield* tinybird.appendEvents([
 						{
-							timestamp: new Date().toISOString(),
+							timestamp: timestamp.toISOString(),
 							action: "video_progress",
 							version: "1.0",
 							session_id: sessionId ?? randomUUID(),
