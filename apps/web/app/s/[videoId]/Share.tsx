@@ -435,18 +435,23 @@ export const Share = ({
 			}
 		};
 
+		let cleanup: (() => void) | null = null;
+
 		const attach = () => {
 			const video = playerRef.current;
-			if (!video) return null;
+			if (!video) return false;
 			video.addEventListener("timeupdate", onTimeUpdate);
-			return () => video.removeEventListener("timeupdate", onTimeUpdate);
+			cleanup = () => video.removeEventListener("timeupdate", onTimeUpdate);
+			return true;
 		};
 
-		const detach = attach();
-		if (detach) return detach;
+		let raf = 0;
+		if (!attach()) raf = requestAnimationFrame(() => attach());
 
-		const raf = requestAnimationFrame(() => attach());
-		return () => cancelAnimationFrame(raf);
+		return () => {
+			cancelAnimationFrame(raf);
+			cleanup?.();
+		};
 	}, [data.id, data.owner.id, viewerId]);
 
 	const isDisabled = (setting: ViewerSettingKey) =>
