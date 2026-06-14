@@ -1,0 +1,80 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap recording via deeplinks",
+  "icon": "command-icon.png",
+  "author": "cap",
+  "categories": [
+    "Productivity"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "description": "Start a Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "description": "Stop the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "description": "Pause the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "description": "Resume the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "switch-microphone",
+      "title": "Switch Microphone",
+      "description": "Switch the active microphone in Cap",
+      "mode": "no-view",
+      "arguments": [
+        {
+          "name": "mic",
+          "placeholder": "Microphone Name",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "description": "Switch the active camera in Cap",
+      "mode": "no-view",
+      "arguments": [
+        {
+          "name": "camera",
+          "placeholder": "Camera Name",
+          "type": "text",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.83.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.8.10",
+    "@types/react": "18.2.27",
+    "typescript": "^5.2.2"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "lint": "ray lint",
+    "fix-lint": "ray fix-lint"
+  }
+}

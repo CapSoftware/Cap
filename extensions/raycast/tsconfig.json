@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Node 20",
+  "include": ["src/**/*"],
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "module": "commonjs",
+    "target": "ES2022",
+    "strict": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "jsx": "react-jsx",
+    "resolveJsonModule": true,
+    "declaration": true,
+    "outDir": "out"
+  }
+}
