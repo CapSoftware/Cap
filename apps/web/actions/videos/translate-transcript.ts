@@ -6,7 +6,7 @@ import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
+import { getAiClient, getAiModel } from "@/lib/ai-provider";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import {
@@ -38,8 +38,8 @@ export async function translateTranscript(
 		};
 	}
 
-	const groq = getGroqClient();
-	if (!groq) {
+	const ai = getAiClient();
+	if (!ai) {
 		return {
 			success: false,
 			message: "Translation service not configured",
@@ -94,7 +94,7 @@ export async function translateTranscript(
 	const translatedVtt = await translateVttContent(
 		originalVtt.value,
 		targetLanguage,
-		groq,
+		ai,
 	);
 
 	if (!translatedVtt) {
@@ -124,7 +124,7 @@ export async function translateTranscript(
 async function translateVttContent(
 	vttContent: string,
 	targetLanguage: LanguageCode,
-	groq: NonNullable<ReturnType<typeof getGroqClient>>,
+	ai: NonNullable<ReturnType<typeof getAiClient>>,
 ): Promise<string | null> {
 	const targetLanguageName = SUPPORTED_LANGUAGES[targetLanguage];
 
@@ -144,8 +144,8 @@ VTT content to translate:
 ${vttContent}`;
 
 	try {
-		const response = await groq.chat.completions.create({
-			model: GROQ_MODEL,
+		const response = await ai.chat.completions.create({
+			model: getAiModel(),
 			messages: [{ role: "user", content: prompt }],
 			temperature: 0.3,
 			max_tokens: 8000,
