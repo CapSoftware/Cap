@@ -84,13 +84,15 @@ export default function CaptureArea() {
 	const hasStoredSelection = createMemo(() => {
 		const id = screenId();
 		if (!id) return false;
+
+		if (state.lastSelectedBounds?.some((entry) => entry.screenId === id))
+			return true;
+
 		const target = rawOptions.captureTarget;
 		if (target.variant === "area" && target.screen === id) {
 			return target.bounds.size.width > 1 && target.bounds.size.height > 1;
 		}
-		return (
-			state.lastSelectedBounds?.some((entry) => entry.screenId === id) ?? false
-		);
+		return false;
 	});
 
 	async function handleConfirm() {
