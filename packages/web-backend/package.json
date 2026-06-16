@@ -8,7 +8,8 @@
 		"main": "./dist/index.js"
 	},
 	"scripts": {
-		"build": "tsdown"
+		"build": "tsdown",
+		"test": "vitest run"
 	},
 	"dependencies": {
 		"@cap/env": "workspace:*",
@@ -30,5 +31,8 @@
 		"effect": "^3.18.4",
 		"next": "15.5.9",
 		"server-only": "^0.0.1"
+	},
+	"devDependencies": {
+		"vitest": "~2.1.9"
 	}
 }

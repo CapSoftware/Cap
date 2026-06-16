@@ -5,7 +5,8 @@
 	"main": "./index.ts",
 	"types": "./index.ts",
 	"scripts": {
-		"build": "tsdown"
+		"build": "tsdown",
+		"test": "vitest run"
 	},
 	"publishConfig": {
 		"main": "./dist/index.js"
@@ -15,6 +16,7 @@
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
-		"@types/node": "^22.15.14"
+		"@types/node": "^22.15.14",
+		"vitest": "~2.1.9"
 	}
 }

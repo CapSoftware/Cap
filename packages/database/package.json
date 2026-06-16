@@ -13,7 +13,8 @@
 		"db:studio": "drizzle-kit studio --config=drizzle.config.ts",
 		"db:check-integrity": "node scripts/check-migration-integrity.js",
 		"drizzle-kit": "pnpm dotenv -e ../../.env drizzle-kit --config=drizzle.config.ts",
-		"build": "tsdown"
+		"build": "tsdown",
+		"test": "vitest run"
 	},
 	"dependencies": {
 		"@cap/env": "workspace:*",
@@ -50,7 +51,8 @@
 		"react-dom": "^19.1.1",
 		"react-router-dom": "^6.18.0",
 		"tsconfig": "workspace:*",
-		"typescript": "^5.8.3"
+		"typescript": "^5.8.3",
+		"vitest": "~2.1.9"
 	},
 	"engines": {
 		"node": ">=20"
