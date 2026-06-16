@@ -317,22 +317,25 @@ export default function CaptureArea() {
 						snapToRatioEnabled={state.snapToRatio}
 						initialCrop={() => {
 							const id = screenId();
-							if (id) {
-								const stored = state.lastSelectedBounds?.find(
-									(m) => m.screenId === id,
-								)?.bounds;
-								if (stored) return stored;
-								const target = rawOptions.captureTarget;
-								if (target.variant === "area" && target.screen === id) {
+							if (!id) return CROP_ZERO;
+
+							const target = rawOptions.captureTarget;
+							if (target.variant === "area" && target.screen === id) {
+								const { width, height } = target.bounds.size;
+								if (width > 1 && height > 1) {
 									return {
 										x: target.bounds.position.x,
 										y: target.bounds.position.y,
-										width: target.bounds.size.width,
-										height: target.bounds.size.height,
+										width,
+										height,
 									};
 								}
 							}
-							return CROP_ZERO;
+
+							return (
+								state.lastSelectedBounds?.find((m) => m.screenId === id)
+									?.bounds ?? CROP_ZERO
+							);
 						}}
 						onContextMenu={(e) => showCropOptionsMenu(e, true)}
 					/>
