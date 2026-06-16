@@ -8,15 +8,7 @@ import {
 	WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import {
-	createEffect,
-	createMemo,
-	createSignal,
-	onCleanup,
-	onMount,
-	Show,
-	untrack,
-} from "solid-js";
+import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import {
@@ -87,19 +79,12 @@ export default function CaptureArea() {
 		return null;
 	});
 
-	// Frozen on first non-null value (from synchronous localStorage load) so that
-	// later async Tauri-store updates carrying stale data cannot reset it.
-	const [screenId, setScreenId] = createSignal<string | null>(
-		untrack(activeScreenId),
-	);
-	createEffect(() => {
-		const id = activeScreenId();
-		if (id && !untrack(screenId)) setScreenId(id);
-	});
+	const screenId = activeScreenId;
 
 	const hasStoredSelection = createMemo(() => {
 		const id = screenId();
 		if (!id) return false;
+		if (rawOptions.captureTarget.variant === "area") return true;
 		return (
 			state.lastSelectedBounds?.some((entry) => entry.screenId === id) ?? false
 		);
