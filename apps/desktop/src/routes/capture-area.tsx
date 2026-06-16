@@ -167,6 +167,21 @@ export default function CaptureArea() {
 		setState("lastSelectedBounds", (values) =>
 			values?.filter((v) => v.screenId !== id),
 		);
+
+		const target = rawOptions.captureTarget;
+		if (target.variant === "area" && target.screen === id) {
+			setOptions(
+				"captureTarget",
+				reconcile({
+					variant: "area",
+					screen: id,
+					bounds: {
+						position: { x: 0, y: 0 },
+						size: { width: 0, height: 0 },
+					},
+				}),
+			);
+		}
 	}
 
 	async function showCropOptionsMenu(e: UIEvent, positionAtCursor = false) {
