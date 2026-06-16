@@ -159,7 +159,6 @@ export default function CaptureArea() {
 	const [aspect, setAspect] = createSignal<Ratio | null>(null);
 
 	function reset() {
-		cropperRef?.reset();
 		setAspect(null);
 
 		const id = screenId();
@@ -170,18 +169,10 @@ export default function CaptureArea() {
 
 		const target = rawOptions.captureTarget;
 		if (target.variant === "area" && target.screen === id) {
-			setOptions(
-				"captureTarget",
-				reconcile({
-					variant: "area",
-					screen: id,
-					bounds: {
-						position: { x: 0, y: 0 },
-						size: { width: 0, height: 0 },
-					},
-				}),
-			);
+			setOptions("captureTarget", reconcile({ variant: "display", id }));
 		}
+
+		cropperRef?.reset();
 	}
 
 	async function showCropOptionsMenu(e: UIEvent, positionAtCursor = false) {
