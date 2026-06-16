@@ -243,11 +243,13 @@ function Inner() {
 			params.displayId &&
 			target.screen === params.displayId
 		) {
+			const { width, height } = target.bounds.size;
+			if (width <= 1 || height <= 1) return undefined;
 			return {
 				x: target.bounds.position.x,
 				y: target.bounds.position.y,
-				width: target.bounds.size.width,
-				height: target.bounds.size.height,
+				width,
+				height,
 			};
 		}
 		return undefined;
