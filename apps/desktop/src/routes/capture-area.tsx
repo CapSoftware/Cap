@@ -84,7 +84,10 @@ export default function CaptureArea() {
 	const hasStoredSelection = createMemo(() => {
 		const id = screenId();
 		if (!id) return false;
-		if (rawOptions.captureTarget.variant === "area") return true;
+		const target = rawOptions.captureTarget;
+		if (target.variant === "area" && target.screen === id) {
+			return target.bounds.size.width > 1 && target.bounds.size.height > 1;
+		}
 		return (
 			state.lastSelectedBounds?.some((entry) => entry.screenId === id) ?? false
 		);
