@@ -220,7 +220,8 @@ async fn main() {
     };
 
     let (frame_watch_tx, frame_watch_rx) = watch::channel(None);
-    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_watch_rx).await;
+    let (ws_port, ws_shutdown_token) =
+        create_watch_frame_ws(frame_watch_rx, Default::default()).await;
 
     println!("DISPLAY_WS_URL=ws://127.0.0.1:{ws_port}");
     println!(
@@ -248,7 +249,7 @@ async fn main() {
         let ws_frame = match output {
             EditorFrameOutput::Nv12(frame) => {
                 let ws_format = match frame.format {
-                    GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                    GpuOutputFormat::Nv12 => WSFrameFormat::Nv12 { full_range: false },
                     GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
                 };
                 let metadata_bytes = match frame.format {
@@ -292,8 +293,6 @@ async fn main() {
     let renderer = match Renderer::spawn_with_telemetry(
         render_constants.clone(),
         frame_cb,
-        &recording_meta,
-        meta.as_ref(),
         layers_rx,
         Some(telemetry.clone()),
     ) {

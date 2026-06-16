@@ -172,11 +172,15 @@ fn build_report(project_path: &Path, meta: &RecordingMeta) -> ValidationReport {
         project_path.join("project-config.json"),
     ));
 
-    if let RecordingMetaInner::Studio(studio) = &meta.inner {
-        checks.extend(studio_checks(meta, studio));
+    match &meta.inner {
+        RecordingMetaInner::Studio(studio) => {
+            checks.extend(studio_checks(meta, studio));
+            checks.push(optional_check("output", meta.output_path()));
+        }
+        RecordingMetaInner::Instant(_) => {
+            checks.push(required_check("output", meta.output_path()));
+        }
     }
-
-    checks.push(optional_check("output", meta.output_path()));
 
     let missing: Vec<PathBuf> = checks
         .iter()

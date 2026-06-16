@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 
 export async function updateVideoSettings(
 	videoId: Video.VideoId,
@@ -15,6 +16,7 @@ export async function updateVideoSettings(
 		disableReactions?: boolean;
 		disableTranscript?: boolean;
 		disableComments?: boolean;
+		defaultPlaybackSpeed?: number;
 	},
 ) {
 	const user = await getCurrentUser();
@@ -36,9 +38,19 @@ export async function updateVideoSettings(
 		throw new Error("You don't have permission to update this video settings");
 	}
 
+	const settingsToSave =
+		videoSettings.defaultPlaybackSpeed !== undefined
+			? {
+					...videoSettings,
+					defaultPlaybackSpeed: normalizePlaybackSpeed(
+						videoSettings.defaultPlaybackSpeed,
+					),
+				}
+			: videoSettings;
+
 	await db()
 		.update(videos)
-		.set({ settings: videoSettings })
+		.set({ settings: settingsToSave })
 		.where(eq(videos.id, videoId));
 
 	return { success: true };

@@ -3,7 +3,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
-	encrypt,
 	hashPassword,
 	verifyPassword as verifyPlainPassword,
 } from "@cap/database/crypto";
@@ -12,7 +11,7 @@ import { collectPasswordHashes } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { cookies } from "next/headers";
+import { setVerifiedPasswordCookie } from "@/lib/password-cookie";
 
 export async function setVideoPassword(
 	videoId: Video.VideoId,
@@ -90,14 +89,14 @@ export async function verifyVideoPassword(
 ) {
 	try {
 		if (!videoId || typeof password !== "string")
-			throw new Error("Missing data");
+			return { success: false, error: "Failed to verify password" };
 
 		const [video] = await db()
 			.select()
 			.from(videos)
 			.where(eq(videos.id, videoId));
 
-		if (!video) throw new Error("No password set");
+		if (!video) return { success: false, error: "Failed to verify password" };
 
 		const spacePasswords = await db()
 			.select({ password: spaces.password })
@@ -110,17 +109,17 @@ export async function verifyVideoPassword(
 			spacePasswords,
 		});
 
-		if (passwordHashes.length === 0) throw new Error("No password set");
-
 		for (const passwordHash of passwordHashes) {
 			const valid = await verifyPlainPassword(passwordHash, password);
 			if (valid) {
-				(await cookies()).set("x-cap-password", await encrypt(passwordHash));
+				await setVerifiedPasswordCookie(passwordHash);
 				return { success: true, value: "Password verified" };
 			}
 		}
 
-		throw new Error("Invalid password");
+		// Wrong passwords and links whose password was since removed are expected
+		// outcomes — return without logging so console.error stays signal.
+		return { success: false, error: "Failed to verify password" };
 	} catch (error) {
 		console.error("Error verifying video password:", error);
 		return { success: false, error: "Failed to verify password" };

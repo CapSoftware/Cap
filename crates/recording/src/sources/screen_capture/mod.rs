@@ -18,6 +18,11 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::*;
+
 pub struct StopCapturing;
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -66,6 +71,25 @@ pub enum ScreenCaptureTarget {
     AudioOnly,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug)]
+pub enum LinuxCaptureSource {
+    Display,
+    Window,
+    Area,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxCaptureSource {
+    pub fn from_target(target: &ScreenCaptureTarget) -> Self {
+        match target {
+            ScreenCaptureTarget::Window { .. } => Self::Window,
+            ScreenCaptureTarget::Area { .. } => Self::Area,
+            ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::CameraOnly => Self::Display,
+        }
+    }
+}
+
 impl ScreenCaptureTarget {
     pub fn display(&self) -> Option<Display> {
         match self {
@@ -102,6 +126,16 @@ impl ScreenCaptureTarget {
                 {
                     let display = self.display()?;
                     return Some(CursorCropBounds::new_windows(PhysicalBounds::new(
+                        PhysicalPosition::new(0.0, 0.0),
+                        display.raw_handle().physical_size()?,
+                    )));
+                }
+
+                #[cfg(target_os = "linux")]
+                #[allow(clippy::needless_return)]
+                {
+                    let display = self.display()?;
+                    return Some(CursorCropBounds::new_linux(PhysicalBounds::new(
                         PhysicalPosition::new(0.0, 0.0),
                         display.raw_handle().physical_size()?,
                     )));
@@ -143,6 +177,24 @@ impl ScreenCaptureTarget {
                         ),
                     )));
                 }
+
+                #[cfg(target_os = "linux")]
+                #[allow(clippy::needless_return)]
+                {
+                    let display_bounds = self.display()?.raw_handle().physical_bounds()?;
+                    let window_bounds = window.raw_handle().physical_bounds()?;
+
+                    return Some(CursorCropBounds::new_linux(PhysicalBounds::new(
+                        PhysicalPosition::new(
+                            window_bounds.position().x() - display_bounds.position().x(),
+                            window_bounds.position().y() - display_bounds.position().y(),
+                        ),
+                        PhysicalSize::new(
+                            window_bounds.size().width(),
+                            window_bounds.size().height(),
+                        ),
+                    )));
+                }
             }
             Self::Area { bounds, .. } => {
                 #[cfg(target_os = "macos")]
@@ -169,6 +221,15 @@ impl ScreenCaptureTarget {
                             bounds.size().width() * scale,
                             bounds.size().height() * scale,
                         ),
+                    )));
+                }
+
+                #[cfg(target_os = "linux")]
+                #[allow(clippy::needless_return)]
+                {
+                    return Some(CursorCropBounds::new_linux(PhysicalBounds::new(
+                        PhysicalPosition::new(bounds.position().x(), bounds.position().y()),
+                        PhysicalSize::new(bounds.size().width(), bounds.size().height()),
                     )));
                 }
             }
@@ -307,12 +368,17 @@ pub struct Config {
     crop_bounds: Option<CropBounds>,
     fps: u32,
     show_cursor: bool,
+    #[cfg(target_os = "linux")]
+    linux_source: LinuxCaptureSource,
 }
 
 #[cfg(target_os = "macos")]
 pub type CropBounds = LogicalBounds;
 
 #[cfg(windows)]
+pub type CropBounds = PhysicalBounds;
+
+#[cfg(target_os = "linux")]
 pub type CropBounds = PhysicalBounds;
 
 impl Config {
@@ -341,6 +407,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         max_capture_size: Option<(u32, u32)>,
         start_time: SystemTime,
         system_audio: bool,
+        #[cfg(target_os = "linux")] linux_source: LinuxCaptureSource,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
         #[cfg(target_os = "macos")] shareable_content: SendableShareableContent,
         #[cfg(target_os = "macos")] excluded_windows: Vec<WindowId>,
@@ -366,6 +433,11 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
             {
                 crop_bounds.map(|b| b.size().map(|v| (v / 2.0).floor() * 2.0))
             }
+
+            #[cfg(target_os = "linux")]
+            {
+                crop_bounds.map(|b| b.size().map(|v| (v / 2.0).floor() * 2.0))
+            }
         }
         .or_else(|| display.physical_size())
         .ok_or(ScreenCaptureInitError::NoBounds)?;
@@ -377,6 +449,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                 crop_bounds,
                 fps,
                 show_cursor,
+                #[cfg(target_os = "linux")]
+                linux_source,
             },
             video_info: VideoInfo::from_raw_ffmpeg(
                 TCaptureFormat::pixel_format(),

@@ -1,6 +1,5 @@
 import "server-only";
 
-import { decrypt } from "@cap/database/crypto";
 import { serverEnv } from "@cap/env";
 import {
 	AwsCredentials,
@@ -41,20 +40,15 @@ import {
 	Option,
 	Redacted,
 } from "effect";
-import { cookies } from "next/headers";
 import { allowedOrigins } from "@/utils/cors";
+import { getVerifiedPasswordHashes } from "./password-cookie";
 import { layerTracer } from "./tracing";
 
 const CookiePasswordAttachmentLive = Layer.effect(
 	Video.VideoPasswordAttachment,
 	Effect.gen(function* () {
-		const password = Option.fromNullable(
-			yield* Effect.promise(async () => {
-				const pw = (await cookies()).get("x-cap-password")?.value;
-				if (pw) return decrypt(pw);
-			}),
-		);
-		return { password };
+		const passwords = yield* Effect.promise(getVerifiedPasswordHashes);
+		return { passwords };
 	}),
 );
 

@@ -40,7 +40,11 @@ import {
 import { generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCameraMutation } from "~/utils/queries";
-import { createLazySignal } from "~/utils/socket";
+import {
+	type CanvasControls,
+	createImageDataWS,
+	type FrameData,
+} from "~/utils/socket";
 import { commands, events } from "~/utils/tauri";
 import { RecordingOptionsProvider } from "./(window-chrome)/OptionsContext";
 
@@ -406,14 +410,7 @@ function LegacyCameraPreviewPage(props: {
 
 	const [hasPositioned, setHasPositioned] = createSignal(isCameraOnlyMode());
 
-	const [latestFrame, setLatestFrame] = createLazySignal<{
-		width: number;
-		data: ImageData;
-	} | null>();
-	let reusableFrameData: ImageData | null = null;
-	let reusableFrameWidth = 0;
-	let reusableFrameHeight = 0;
-
+	const [hasFrame, setHasFrame] = createSignal(false);
 	const [frameDimensions, setFrameDimensions] = createSignal<{
 		width: number;
 		height: number;
@@ -449,67 +446,6 @@ function LegacyCameraPreviewPage(props: {
 		onCleanup(() => resizeObserver.disconnect());
 	});
 
-	function getReusableFrameData(width: number, height: number) {
-		if (
-			!reusableFrameData ||
-			reusableFrameWidth !== width ||
-			reusableFrameHeight !== height
-		) {
-			reusableFrameData = new ImageData(width, height);
-			reusableFrameWidth = width;
-			reusableFrameHeight = height;
-		}
-
-		return reusableFrameData;
-	}
-
-	let pendingRender = false;
-	let rafId: number | null = null;
-	let cachedCtx: CanvasRenderingContext2D | null = null;
-
-	function scheduleRender() {
-		if (rafId !== null) return;
-		rafId = requestAnimationFrame(() => {
-			rafId = null;
-			if (!pendingRender) return;
-			pendingRender = false;
-
-			if (!cachedCtx && cameraCanvasRef) {
-				cachedCtx = cameraCanvasRef.getContext("2d");
-			}
-			if (cachedCtx && reusableFrameData) {
-				cachedCtx.putImageData(reusableFrameData, 0, 0);
-			}
-		});
-	}
-
-	function imageDataHandler(imageData: { width: number; data: ImageData }) {
-		const currentFrame = latestFrame();
-		if (
-			!currentFrame ||
-			currentFrame.data !== imageData.data ||
-			currentFrame.data.width !== imageData.data.width ||
-			currentFrame.data.height !== imageData.data.height
-		) {
-			setLatestFrame(imageData);
-		}
-
-		const currentDimensions = frameDimensions();
-		if (
-			!currentDimensions ||
-			currentDimensions.width !== imageData.data.width ||
-			currentDimensions.height !== imageData.data.height
-		) {
-			setFrameDimensions({
-				width: imageData.data.width,
-				height: imageData.data.height,
-			});
-		}
-
-		pendingRender = true;
-		scheduleRender();
-	}
-
 	const STALL_TIMEOUT_MS = 2000;
 	const WS_INITIAL_BACKOFF_MS = 1000;
 	const WS_MAX_BACKOFF_MS = 30000;
@@ -517,13 +453,51 @@ function LegacyCameraPreviewPage(props: {
 
 	const { cameraWsPort } = window.__CAP__;
 	const [isWindowVisible, setIsWindowVisible] = createSignal(!document.hidden);
-	const [_isConnected, setIsConnected] = createSignal(false);
-	let ws: WebSocket | undefined;
+	let ws: Omit<WebSocket, "onmessage"> | undefined;
+	let canvasControls: CanvasControls | undefined;
 	let reconnectTimeout: ReturnType<typeof setTimeout> | undefined;
 	let stallCheckInterval: ReturnType<typeof setInterval> | undefined;
 	let retryCount = 0;
 	let isCleanedUp = false;
 	let lastFrameTime = 0;
+	let cameraCanvasRef: HTMLCanvasElement | undefined;
+
+	const closeSocket = () => {
+		const socket = ws;
+		const controls = canvasControls;
+		ws = undefined;
+		canvasControls = undefined;
+		controls?.dispose();
+		if (
+			socket &&
+			socket.readyState !== WebSocket.CLOSING &&
+			socket.readyState !== WebSocket.CLOSED
+		) {
+			socket.close();
+		}
+	};
+
+	const initCanvasControls = () => {
+		if (!canvasControls || !cameraCanvasRef) return;
+		canvasControls.initDirectCanvas(cameraCanvasRef);
+	};
+
+	const updateFrameState = (frame: FrameData) => {
+		retryCount = 0;
+		lastFrameTime = Date.now();
+
+		const currentDimensions = frameDimensions();
+		if (
+			!currentDimensions ||
+			currentDimensions.width !== frame.width ||
+			currentDimensions.height !== frame.height
+		) {
+			setFrameDimensions({ width: frame.width, height: frame.height });
+		}
+		if (canvasControls?.hasRenderedFrame()) {
+			setHasFrame(true);
+		}
+	};
 
 	onMount(() => {
 		const handleVisibilityChange = () => {
@@ -540,105 +514,34 @@ function LegacyCameraPreviewPage(props: {
 	});
 
 	const createSocket = () => {
-		const socket = new WebSocket(`ws://localhost:${cameraWsPort}`);
-		socket.binaryType = "arraybuffer";
+		const [socket, _isConnected, _isWorkerReady, controls] = createImageDataWS(
+			`ws://localhost:${cameraWsPort}`,
+			updateFrameState,
+			() => commands.refreshCameraFeed().catch(() => {}),
+			{ powerPreference: "low-power" },
+		);
+		canvasControls = controls;
+		initCanvasControls();
 
-		socket.onopen = () => {
-			setIsConnected(true);
+		socket.addEventListener("open", () => {
 			lastFrameTime = Date.now();
-			reusableFrameData = null;
-			reusableFrameWidth = 0;
-			reusableFrameHeight = 0;
-			if (cachedCtx && cameraCanvasRef) {
-				cachedCtx.clearRect(
-					0,
-					0,
-					cameraCanvasRef.width,
-					cameraCanvasRef.height,
-				);
-			}
-		};
+			setHasFrame(false);
+			setFrameDimensions(null);
+		});
 
-		socket.onclose = () => {
-			setIsConnected(false);
-			cleanupSocket(socket);
+		socket.addEventListener("close", () => {
+			if (canvasControls === controls) {
+				canvasControls = undefined;
+			}
 			if (ws === socket) ws = undefined;
 			scheduleReconnect();
-		};
+		});
 
-		socket.onerror = () => {
-			setIsConnected(false);
-			socket.close();
-		};
-
-		socket.onmessage = (event) => {
-			if (!isWindowVisible()) return;
-
-			retryCount = 0;
-			lastFrameTime = Date.now();
-			if (pendingRender) return;
-
-			const buffer = event.data as ArrayBuffer;
-			const clamped = new Uint8ClampedArray(buffer);
-			if (clamped.length < 24) {
-				console.error("Received frame too small to contain metadata");
-				return;
-			}
-
-			const metadataOffset = clamped.length - 24;
-			const meta = new DataView(buffer, metadataOffset, 24);
-			const strideBytes = meta.getUint32(0, true);
-			const height = meta.getUint32(4, true);
-			const width = meta.getUint32(8, true);
-
-			if (!width || !height) {
-				console.error("Received invalid frame dimensions", { width, height });
-				return;
-			}
-
-			const source = clamped.subarray(0, metadataOffset);
-			const expectedRowBytes = width * 4;
-			const expectedLength = expectedRowBytes * height;
-			const availableLength = strideBytes * height;
-
-			if (
-				strideBytes === 0 ||
-				strideBytes < expectedRowBytes ||
-				source.length < availableLength
-			) {
-				console.error("Received invalid frame stride", {
-					strideBytes,
-					expectedRowBytes,
-					height,
-					sourceLength: source.length,
-				});
-				return;
-			}
-
-			const imageData = getReusableFrameData(width, height);
-			if (strideBytes === expectedRowBytes) {
-				imageData.data.set(source.subarray(0, expectedLength));
-			} else {
-				for (let row = 0; row < height; row += 1) {
-					const srcStart = row * strideBytes;
-					const destStart = row * expectedRowBytes;
-					imageData.data.set(
-						source.subarray(srcStart, srcStart + expectedRowBytes),
-						destStart,
-					);
-				}
-			}
-			imageDataHandler({ width, data: imageData });
-		};
+		socket.addEventListener("error", () => {
+			controls.dispose();
+		});
 
 		return socket;
-	};
-
-	const cleanupSocket = (socket: WebSocket) => {
-		socket.onopen = null;
-		socket.onclose = null;
-		socket.onerror = null;
-		socket.onmessage = null;
 	};
 
 	const scheduleReconnect = () => {
@@ -677,13 +580,7 @@ function LegacyCameraPreviewPage(props: {
 			stallCheckInterval = undefined;
 		}
 
-		if (ws) {
-			cleanupSocket(ws);
-			ws.close();
-			ws = undefined;
-		}
-
-		setIsConnected(false);
+		closeSocket();
 	};
 
 	const startSocket = () => {
@@ -717,14 +614,6 @@ function LegacyCameraPreviewPage(props: {
 
 	onCleanup(() => {
 		isCleanedUp = true;
-		if (rafId !== null) {
-			cancelAnimationFrame(rafId);
-			rafId = null;
-		}
-		cachedCtx = null;
-		reusableFrameData = null;
-		reusableFrameWidth = 0;
-		reusableFrameHeight = 0;
 		stopSocket();
 	});
 
@@ -849,8 +738,6 @@ function LegacyCameraPreviewPage(props: {
 		},
 	);
 
-	let cameraCanvasRef: HTMLCanvasElement | undefined;
-
 	onMount(() => getCurrentWindow().show());
 
 	return (
@@ -888,13 +775,17 @@ function LegacyCameraPreviewPage(props: {
 				data-tauri-drag-region
 			>
 				<Suspense fallback={<CameraLoadingState />}>
-					<Show when={latestFrame() !== null && latestFrame() !== undefined}>
-						<Canvas
-							latestFrame={latestFrame}
-							state={state}
-							ref={cameraCanvasRef}
-							containerSize={externalContainerSize() ?? undefined}
-						/>
+					<Canvas
+						frameDimensions={frameDimensions}
+						state={state}
+						onCanvas={(canvas) => {
+							cameraCanvasRef = canvas;
+							initCanvasControls();
+						}}
+						containerSize={externalContainerSize() ?? undefined}
+					/>
+					<Show when={!hasFrame()}>
+						<CameraLoadingState />
 					</Show>
 				</Suspense>
 				<Show when={props.issue()}>
@@ -906,16 +797,18 @@ function LegacyCameraPreviewPage(props: {
 }
 
 function Canvas(props: {
-	latestFrame: Accessor<{ width: number; data: ImageData } | null | undefined>;
+	frameDimensions: Accessor<
+		{ width: number; height: number } | null | undefined
+	>;
 	state: CameraWindowState;
-	ref: HTMLCanvasElement | undefined;
+	onCanvas: (canvas: HTMLCanvasElement) => void;
 	containerSize?: { width: number; height: number };
 }) {
 	const style = () => {
-		const frame = props.latestFrame();
-		if (!frame) return {};
+		const dimensions = props.frameDimensions();
+		if (!dimensions) return {};
 
-		const aspectRatio = frame.data.width / frame.data.height;
+		const aspectRatio = dimensions.width / dimensions.height;
 
 		const targetSize =
 			props.containerSize ??
@@ -949,9 +842,7 @@ function Canvas(props: {
 			data-tauri-drag-region
 			class={cx("absolute")}
 			style={style()}
-			width={props.latestFrame()?.data.width}
-			height={props.latestFrame()?.data.height}
-			ref={props.ref}
+			ref={(canvas) => props.onCanvas(canvas)}
 		/>
 	);
 }

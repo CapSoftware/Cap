@@ -371,6 +371,7 @@ export const getChildFolders = Effect.fn(function* (
 				id: folders.id,
 				name: folders.name,
 				color: folders.color,
+				public: folders.public,
 				parentId: folders.parentId,
 				organizationId: folders.organizationId,
 				videoCount: sql<number>`(

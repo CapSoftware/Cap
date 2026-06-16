@@ -71,13 +71,17 @@ export function SectionRows(props: ParentProps) {
 }
 
 export function SettingItem(props: {
+	id?: string;
 	pro?: boolean;
 	label: string;
 	description?: string;
 	children: JSX.Element;
 }) {
 	return (
-		<div class="cap-setting-row flex flex-row gap-4 justify-between items-center px-4 py-3.5">
+		<div
+			id={props.id}
+			class="cap-setting-row flex flex-row gap-4 justify-between items-center px-4 py-3.5"
+		>
 			<div class="flex flex-col flex-1 min-w-0 gap-0.5">
 				<p class="text-[13px] text-gray-12">{props.label}</p>
 				<Show when={props.description}>

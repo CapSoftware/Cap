@@ -10,7 +10,7 @@ import {
 	users,
 } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
-import { eq, or, sql } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function patchAccountSettings(
@@ -30,29 +30,30 @@ export async function patchAccountSettings(
 	if (firstName !== undefined) updatePayload.name = firstName;
 	if (lastName !== undefined) updatePayload.lastName = lastName;
 	if (defaultOrgId !== undefined) {
-		const userOrganizations = await db()
+		const [userOrganization] = await db()
 			.select({
 				id: organizations.id,
 			})
 			.from(organizations)
 			.leftJoin(
 				organizationMembers,
-				eq(organizations.id, organizationMembers.organizationId),
-			)
-			.where(
-				or(
-					// User owns the organization
-					eq(organizations.ownerId, currentUser.id),
-					// User is a member of the organization
+				and(
+					eq(organizations.id, organizationMembers.organizationId),
 					eq(organizationMembers.userId, currentUser.id),
 				),
 			)
-			// Remove duplicates if user is both owner and member
-			.groupBy(organizations.id);
+			.where(
+				and(
+					eq(organizations.id, defaultOrgId),
+					or(
+						eq(organizations.ownerId, currentUser.id),
+						eq(organizationMembers.userId, currentUser.id),
+					),
+				),
+			)
+			.limit(1);
 
-		const userOrgIds = userOrganizations.map((org) => org.id);
-
-		if (!userOrgIds.includes(defaultOrgId))
+		if (!userOrganization)
 			throw new Error(
 				"Forbidden: User does not have access to the specified organization",
 			);

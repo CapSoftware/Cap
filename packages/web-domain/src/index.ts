@@ -12,6 +12,7 @@ export * as Loom from "./Loom.ts";
 export * as Organisation from "./Organisation.ts";
 export * from "./Organisation.ts";
 export * as Policy from "./Policy.ts";
+export * as PublicCollection from "./PublicCollection.ts";
 export { Rpcs } from "./Rpcs.ts";
 export * as S3Bucket from "./S3Bucket.ts";
 export { S3Error } from "./S3Bucket.ts";

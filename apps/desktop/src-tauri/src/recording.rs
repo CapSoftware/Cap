@@ -683,22 +683,63 @@ pub struct CameraWithFormats {
 }
 
 fn get_best_format(formats: &[CameraFormatInfo]) -> Option<CameraFormatInfo> {
-    formats
+    let preferred_rate = 59.0..=60.0;
+    let supported_rate = 24.0..=60.0;
+
+    let mut ideal_formats = formats
         .iter()
-        .filter(|f| f.frame_rate >= 24.0 && f.frame_rate <= 60.0)
-        .max_by(|a, b| {
-            let res_a = a.width * a.height;
-            let res_b = b.width * b.height;
-            res_a.cmp(&res_b)
-        })
-        .or_else(|| {
-            formats.iter().max_by(|a, b| {
-                let res_a = a.width * a.height;
-                let res_b = b.width * b.height;
-                res_a.cmp(&res_b)
+        .filter(|f| preferred_rate.contains(&f.frame_rate) && f.width <= 1280 && f.height <= 720)
+        .collect::<Vec<_>>();
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats
+            .iter()
+            .filter(|f| preferred_rate.contains(&f.frame_rate) && f.width < 2000 && f.height < 2000)
+            .collect();
+    }
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats
+            .iter()
+            .filter(|f| {
+                supported_rate.contains(&f.frame_rate) && f.width <= 1280 && f.height <= 720
             })
-        })
-        .cloned()
+            .collect();
+    }
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats
+            .iter()
+            .filter(|f| supported_rate.contains(&f.frame_rate) && f.width < 2000 && f.height < 2000)
+            .collect();
+    }
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats.iter().collect();
+    }
+
+    ideal_formats.sort_by(|a, b| {
+        let target_aspect_ratio = 16.0 / 9.0;
+        let aspect_ratio_a = a.width as f32 / a.height as f32;
+        let aspect_ratio_b = b.width as f32 / b.height as f32;
+        let aspect_cmp_a = (aspect_ratio_a - target_aspect_ratio).abs();
+        let aspect_cmp_b = (aspect_ratio_b - target_aspect_ratio).abs();
+        let resolution_cmp = (a.width * a.height).cmp(&(b.width * b.height));
+        let fr_cmp_a = (a.frame_rate - 60.0).abs();
+        let fr_cmp_b = (b.frame_rate - 60.0).abs();
+
+        aspect_cmp_a
+            .partial_cmp(&aspect_cmp_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(resolution_cmp.reverse())
+            .then(
+                fr_cmp_a
+                    .partial_cmp(&fr_cmp_b)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+
+    ideal_formats.into_iter().next().cloned()
 }
 
 #[tauri::command(async)]
@@ -858,9 +899,6 @@ pub struct StartRecordingInputs {
 fn desktop_recording_defaults(
     general_settings: Option<&GeneralSettingsStore>,
 ) -> cap_recording::RecordingDefaults {
-    // Build straight from the user's persisted settings when present so we don't run the RAM probe
-    // behind `RecordingDefaults::default()` only to immediately overwrite every field; fall back to
-    // the probing default (e.g. first launch before settings are written).
     match general_settings {
         Some(settings) => cap_recording::RecordingDefaults {
             custom_cursor_capture: settings.custom_cursor_capture,
@@ -869,7 +907,7 @@ fn desktop_recording_defaults(
             max_fps: settings.max_fps,
             studio_recording_quality: settings.studio_recording_quality.into(),
             out_of_process_muxer: settings.out_of_process_muxer,
-            instant_mode_max_resolution: settings.instant_mode_max_resolution,
+            instant_mode_max_resolution: cap_recording::DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
         },
         None => cap_recording::RecordingDefaults::default(),
     }
@@ -1286,60 +1324,62 @@ pub async fn start_recording(
         warn!(%error, "Failed to update camera window content protection");
     }
 
-    let video_upload_info = match inputs.mode {
+    let (video_upload_info, instant_mode_max_resolution) = match inputs.mode {
         RecordingMode::Instant => {
-            match AuthStore::get(&app).ok().flatten() {
-                Some(_) => {
-                    let upload_mode = if matches!(
-                            inputs.capture_target,
-                            ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
-                        ) {
-                            "desktopMP4"
-                        } else {
-                            "desktopSegments"
-                        };
-
-                    let s3_config = match crate::upload::create_or_get_video_with_mode(
-                        &app,
-                        false,
-                        None,
-                        Some(project_name.clone()),
-                        None,
-                        inputs.organization_id.clone(),
-                        upload_mode,
-                    )
-                    .await
-                    {
-                        Ok(meta) => meta,
-                        Err(AuthedApiError::InvalidAuthentication) => {
-                            return Ok(RecordingAction::InvalidAuthentication);
-                        }
-                        Err(AuthedApiError::UpgradeRequired) => {
-                            return Ok(RecordingAction::UpgradeRequired);
-                        }
-                        Err(err) => {
-                            error!("Error creating instant mode video: {err}");
-                            return Err(err.to_string());
-                        }
-                    };
-
-                    let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
-                    info!("Pre-created shareable link: {}", link);
-
-                    Some(VideoUploadInfo {
-                        id: s3_config.id.to_string(),
-                        link: link.clone(),
-                        config: s3_config,
+            let Some(auth) = AuthStore::get(&app).ok().flatten() else {
+                return Err("Please sign in to use instant recording".to_string());
+            };
+            let instant_mode_max_resolution = if auth.is_upgraded() {
+                general_settings
+                    .map_or(cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION, |settings| {
+                        settings.instant_mode_max_resolution
                     })
+            } else {
+                cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
+            };
+            let upload_mode = if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+                "desktopMP4"
+            } else {
+                "desktopSegments"
+            };
+
+            let s3_config = match crate::upload::create_or_get_video_with_mode(
+                &app,
+                false,
+                None,
+                Some(project_name.clone()),
+                None,
+                inputs.organization_id.clone(),
+                upload_mode,
+            )
+            .await
+            {
+                Ok(meta) => meta,
+                Err(AuthedApiError::InvalidAuthentication) => {
+                    return Ok(RecordingAction::InvalidAuthentication);
                 }
-                // Allow the recording to proceed without error for any signed-in user
-                _ => {
-                    // User is not signed in
-                    return Err("Please sign in to use instant recording".to_string());
+                Err(AuthedApiError::UpgradeRequired) => {
+                    return Ok(RecordingAction::UpgradeRequired);
                 }
-            }
+                Err(err) => {
+                    error!("Error creating instant mode video: {err}");
+                    return Err(err.to_string());
+                }
+            };
+
+            let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
+            info!("Pre-created shareable link: {}", link);
+
+            (
+                Some(VideoUploadInfo {
+                    id: s3_config.id.to_string(),
+                    link: link.clone(),
+                    config: s3_config,
+                }),
+                instant_mode_max_resolution,
+            )
         }
-        RecordingMode::Studio => None,
+        RecordingMode::Studio => (None, cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION),
         RecordingMode::Screenshot => return Err("Use take_screenshot for screenshots".to_string()),
     };
 
@@ -1588,7 +1628,7 @@ pub async fn start_recording(
                                 inputs.capture_target.clone(),
                             )
                             .with_system_audio(inputs.capture_system_audio)
-                            .with_max_output_size(defaults.instant_mode_max_resolution);
+                            .with_max_output_size(instant_mode_max_resolution);
 
                             #[cfg(target_os = "macos")]
                             {

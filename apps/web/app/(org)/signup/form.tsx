@@ -15,11 +15,12 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
 import { usePublicEnv } from "@/utils/public-env";
+import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
 
 const MotionInput = motion(Input);
 const MotionLogoBadge = motion(LogoBadge);
@@ -43,10 +44,7 @@ export function SignupForm() {
 	const theme = Cookies.get("theme") || "light";
 
 	useEffect(() => {
-		theme === "dark"
-			? (document.body.className = "dark")
-			: (document.body.className = "light");
-		//remove the dark mode when we leave the dashboard
+		document.body.className = theme === "dark" ? "dark" : "light";
 		return () => {
 			document.body.className = "light";
 		};
@@ -248,73 +246,46 @@ export function SignupForm() {
 											ease: "easeInOut",
 											opacity: { delay: 0.05 },
 										}}
+										noValidate
 										onSubmit={async (e) => {
 											e.preventDefault();
-											if (!email) return;
 
-											// Check if we're rate limited on the client side
-											if (lastEmailSentTime) {
-												const timeSinceLastRequest =
-													Date.now() - lastEmailSentTime;
-												const waitTime = 30000; // 30 seconds
-												if (timeSinceLastRequest < waitTime) {
-													const remainingSeconds = Math.ceil(
-														(waitTime - timeSinceLastRequest) / 1000,
-													);
-													toast.error(
-														`Please wait ${remainingSeconds} seconds before requesting a new code`,
-													);
-													return;
-												}
+											const remainingSeconds =
+												getEmailCodeCooldownSeconds(lastEmailSentTime);
+											if (remainingSeconds > 0) {
+												toast.error(
+													`Please wait ${remainingSeconds} seconds before requesting a new code.`,
+												);
+												return;
 											}
 
 											setLoading(true);
-											trackEvent("auth_started", {
-												method: "email",
-												is_signup: true,
-												auth_surface: "signup",
-											});
-											const normalizedEmail = email.trim().toLowerCase();
-											signIn("email", {
-												email: normalizedEmail,
-												redirect: false,
-												...(next && next.length > 0
-													? { callbackUrl: next }
-													: {}),
-											})
-												.then((res) => {
-													setLoading(false);
-
-													if (res?.ok && !res?.error) {
-														setEmailSent(true);
-														setLastEmailSentTime(Date.now());
-														trackEvent("auth_email_sent", {
-															method: "email",
-															is_signup: true,
-															auth_surface: "signup",
-															email_domain: normalizedEmail.split("@")[1],
-														});
-														const params = new URLSearchParams({
-															email: normalizedEmail,
-															...(next && { next }),
-															lastSent: Date.now().toString(),
-														});
-														router.push(`/verify-otp?${params.toString()}`);
-													} else {
-														// NextAuth always returns "EmailSignin" for all email provider errors
-														// Since we already check rate limiting on the client side before sending,
-														// if we get an error here, it's likely rate limiting from the server
-														toast.error(
-															"Please wait 30 seconds before requesting a new code",
-														);
-													}
-												})
-												.catch((_error) => {
-													setEmailSent(false);
-													setLoading(false);
-													// Catch block is rarely triggered with NextAuth
-													toast.error("Error sending email - try again?");
+											try {
+												const normalizedEmail = await requestEmailCode({
+													email,
+													next,
+													isSignup: true,
+													authSurface: "signup",
 												});
+												if (!normalizedEmail) return;
+
+												const sentAt = Date.now();
+												setEmailSent(true);
+												setLastEmailSentTime(sentAt);
+												const params = new URLSearchParams({
+													email: normalizedEmail,
+													...(next && { next }),
+													lastSent: sentAt.toString(),
+												});
+												router.push(`/verify-otp?${params.toString()}`);
+											} catch {
+												setEmailSent(false);
+												toast.error(
+													"Sign up is taking longer than expected. Check your connection or browser extensions, then try again.",
+												);
+											} finally {
+												setLoading(false);
+											}
 										}}
 										className="flex flex-col space-y-3"
 									>
@@ -384,6 +355,8 @@ const SignupWithSSO = ({
 	setOrganizationId: (organizationId: string) => void;
 	organizationName: string | null;
 }) => {
+	const organizationIdInputId = useId();
+
 	return (
 		<motion.form
 			layout
@@ -391,7 +364,7 @@ const SignupWithSSO = ({
 			className="relative space-y-2"
 		>
 			<MotionInput
-				id="organizationId"
+				id={organizationIdInputId}
 				placeholder="Enter your Organization ID..."
 				value={organizationId}
 				onChange={(e) => setOrganizationId(e.target.value)}
@@ -429,12 +402,13 @@ const NormalSignup = ({
 	handleGoogleSignIn: () => void;
 }) => {
 	const publicEnv = usePublicEnv();
+	const emailInputId = useId();
 
 	return (
 		<motion.div>
 			<motion.div layout className="flex flex-col space-y-3">
 				<MotionInput
-					id="email"
+					id={emailInputId}
 					name="email"
 					autoFocus
 					type="email"
@@ -451,9 +425,14 @@ const NormalSignup = ({
 					variant="dark"
 					type="submit"
 					disabled={loading || emailSent}
-					icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
+					spinner={loading}
+					icon={
+						loading ? undefined : (
+							<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />
+						)
+					}
 				>
-					Sign up with email
+					{loading ? "Sending code..." : "Sign up with email"}
 				</MotionButton>
 			</motion.div>
 			{(publicEnv.googleAuthAvailable || publicEnv.workosAuthAvailable) && (

@@ -8,6 +8,7 @@ import { motion } from "framer-motion";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { LinkifiedText } from "@/components/LinkifiedText";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import type { CommentType } from "../../../Share";
@@ -126,7 +127,9 @@ const CommentComponent: React.FC<{
 							)}
 						</div>
 					</div>
-					<p className="mt-2 text-sm text-gray-11">{comment.content}</p>
+					<p className="mt-2 text-sm text-gray-11">
+						<LinkifiedText text={comment.content} />
+					</p>
 					<div className="flex items-center pt-2 mt-2.5 space-x-3 border-t border-gray-3">
 						{user && !isReplying && canReply && (
 							<Tooltip content="Reply">

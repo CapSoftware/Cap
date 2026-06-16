@@ -6,10 +6,10 @@
 //! current executable, which is the bundled CLI for both callers.
 
 use serde::Serialize;
+#[cfg(unix)]
+use std::ffi::OsStr;
 use std::{
-    env,
-    ffi::OsStr,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 
@@ -177,6 +177,7 @@ fn current_target_triple() -> Option<&'static str> {
     }
 }
 
+#[cfg(unix)]
 fn cli_binary_file_name_is_cap_managed(name: &OsStr) -> bool {
     if name == CLI_BINARY_NAME {
         return true;

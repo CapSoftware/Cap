@@ -60,9 +60,20 @@ static FALLBACK_WARNING_LOGGED: AtomicBool = AtomicBool::new(false);
 
 impl CapturedFrameExt for CapturedFrame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
-        let native = self.native();
+        sample_buf_as_ffmpeg(self.native().sample_buf())
+    }
+}
 
-        let mut image_buf = native.image_buf().ok_or(AsFFmpegError::NoImageBuffer)?;
+// Standalone so consumers holding a bare retained CMSampleBuffer (e.g. the
+// native camera preview's CPU fallback) can reuse the same conversion.
+pub fn sample_buf_as_ffmpeg(
+    sample_buf: &cm::SampleBuf,
+) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
+    {
+        let mut image_buf = sample_buf
+            .image_buf()
+            .map(|b| b.retained())
+            .ok_or(AsFFmpegError::NoImageBuffer)?;
 
         let width = image_buf.width();
         let height = image_buf.height();
@@ -87,7 +98,9 @@ impl CapturedFrameExt for CapturedFrame {
             ),
         ];
 
-        let format_desc = native.sample_buf().format_desc().unwrap();
+        let format_desc = sample_buf
+            .format_desc()
+            .ok_or(AsFFmpegError::NoImageBuffer)?;
 
         let bytes_lock = ImageBufExt::base_addr_lock(
             image_buf.as_mut(),

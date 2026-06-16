@@ -10,9 +10,9 @@ import { commands, type SystemDiagnostics } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 import { Section, SettingsPageContent } from "./Setting";
 
-const getFeedbackOs = (): Extract<OsType, "macos" | "windows"> => {
+const getFeedbackOs = (): Extract<OsType, "macos" | "windows" | "linux"> => {
 	const os = ostype();
-	if (os === "macos" || os === "windows") return os;
+	if (os === "macos" || os === "windows" || os === "linux") return os;
 	throw new Error(`Unsupported OS for feedback submission: ${os}`);
 };
 
@@ -148,7 +148,9 @@ export default function FeedbackTab() {
 									? (d.macosVersion as { displayName: string } | null)
 									: "windowsVersion" in d
 										? (d.windowsVersion as { displayName: string } | null)
-										: null;
+										: "linuxVersion" in d
+											? (d.linuxVersion as { displayName: string } | null)
+											: null;
 							const captureSupported =
 								"screenCaptureSupported" in d
 									? (d.screenCaptureSupported as boolean)

@@ -14,7 +14,7 @@ import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
 import { ImageUploads } from "@cap/web-backend";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { type Context, Hono } from "hono";
 import { PostHog } from "posthog-node";
@@ -127,6 +127,18 @@ async function toDesktopOrganizations(
 	);
 }
 
+function mergeDesktopOrganizationRows(...rowSets: DesktopOrganizationRow[][]) {
+	const rowsById = new Map<string, DesktopOrganizationRow>();
+
+	for (const rows of rowSets) {
+		for (const row of rows) {
+			rowsById.set(row.id, row);
+		}
+	}
+
+	return Array.from(rowsById.values());
+}
+
 async function applyOrganizationLogoUpdate(
 	row: DesktopOrganizationRow,
 	logo: ReturnType<typeof decodeOrganizationLogoUpdate>,
@@ -171,6 +183,7 @@ const diagnosticsSchema = z.object({
 				})
 				.optional(),
 			macosVersion: z.object({ displayName: z.string() }).optional(),
+			linuxVersion: z.object({ displayName: z.string() }).optional(),
 			gpuInfo: z
 				.object({
 					vendor: z.string(),
@@ -229,6 +242,8 @@ function formatDiagnosticsForDiscord(
 		lines.push(`**OS:** ${sys.windowsVersion.displayName}`);
 	} else if (sys?.macosVersion?.displayName) {
 		lines.push(`**OS:** ${sys.macosVersion.displayName}`);
+	} else if (sys?.linuxVersion?.displayName) {
+		lines.push(`**OS:** ${sys.linuxVersion.displayName}`);
 	}
 
 	if (sys?.gpuInfo) {
@@ -392,7 +407,7 @@ app.post(
 		"form",
 		z.object({
 			feedback: z.string(),
-			os: z.union([z.literal("macos"), z.literal("windows")]).optional(),
+			os: z.enum(["macos", "windows", "linux"]).optional(),
 			version: z.string().optional(),
 		}),
 	),
@@ -526,33 +541,54 @@ app.get("/user/profile/image", async (c) => {
 app.get("/organizations", withAuth, async (c) => {
 	const user = c.get("user");
 
-	const rows = await db()
-		.select({
-			id: organizations.id,
-			name: organizations.name,
-			ownerId: organizations.ownerId,
-			tombstoneAt: organizations.tombstoneAt,
-			iconUrl: organizations.iconUrl,
-			metadata: organizations.metadata,
-			role: organizationMembers.role,
-		})
-		.from(organizations)
-		.leftJoin(
-			organizationMembers,
-			and(
-				eq(organizationMembers.organizationId, organizations.id),
-				eq(organizationMembers.userId, user.id),
-			),
-		)
-		.where(
-			and(
-				isNull(organizations.tombstoneAt),
-				or(
-					eq(organizations.ownerId, user.id),
+	const [ownedRows, memberRows] = await Promise.all([
+		db()
+			.select({
+				id: organizations.id,
+				name: organizations.name,
+				ownerId: organizations.ownerId,
+				tombstoneAt: organizations.tombstoneAt,
+				iconUrl: organizations.iconUrl,
+				metadata: organizations.metadata,
+				role: organizationMembers.role,
+			})
+			.from(organizations)
+			.leftJoin(
+				organizationMembers,
+				and(
+					eq(organizationMembers.organizationId, organizations.id),
 					eq(organizationMembers.userId, user.id),
 				),
+			)
+			.where(
+				and(
+					isNull(organizations.tombstoneAt),
+					eq(organizations.ownerId, user.id),
+				),
 			),
-		);
+		db()
+			.select({
+				id: organizations.id,
+				name: organizations.name,
+				ownerId: organizations.ownerId,
+				tombstoneAt: organizations.tombstoneAt,
+				iconUrl: organizations.iconUrl,
+				metadata: organizations.metadata,
+				role: organizationMembers.role,
+			})
+			.from(organizationMembers)
+			.innerJoin(
+				organizations,
+				eq(organizations.id, organizationMembers.organizationId),
+			)
+			.where(
+				and(
+					eq(organizationMembers.userId, user.id),
+					isNull(organizations.tombstoneAt),
+				),
+			),
+	]);
+	const rows = mergeDesktopOrganizationRows(ownedRows, memberRows);
 
 	return c.json(await toDesktopOrganizations(rows, user.id));
 });

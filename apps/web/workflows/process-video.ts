@@ -48,7 +48,11 @@ export async function processVideoWorkflow(
 		);
 
 		await saveMetadataAndComplete(videoId, result.metadata);
-		await cleanupRawUpload(videoId, rawFileKey);
+
+		const outputKey = `${userId}/${videoId}/result.mp4`;
+		if (rawFileKey !== outputKey) {
+			await cleanupRawUpload(videoId, rawFileKey);
+		}
 
 		return {
 			success: true,

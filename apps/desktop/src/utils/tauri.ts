@@ -491,6 +491,10 @@ export type AudioGapSummary = {
  */
 total_overlap_trimmed_ms: number; 
 /**
+ * Startup-window trim used for stale-startup repair, excluding mid-recording trims.
+ */
+startup_overlap_trimmed_ms?: number; 
+/**
  * Number of whole audio frames dropped because they fully overlapped the committed timeline.
  */
 overlap_dropped_frames: number; 
