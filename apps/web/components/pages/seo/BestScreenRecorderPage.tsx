@@ -249,7 +249,7 @@ export const bestScreenRecorderContent: SeoPageContent = {
 		{
 			question: "What is the best screen recorder for teams?",
 			answer:
-				"Cap is the best screen recorder for teams because of its built-in sharing and collaboration features. Instant shareable links work anywhere — Slack, email, Notion, Jira. Viewers can leave timestamped comments directly on recordings, making async feedback fast and structured. Cap Pro adds unlimited recording time, custom branding, and team management.",
+				"Cap is the best screen recorder for teams because of its built-in sharing and collaboration features. Instant shareable links work anywhere — Slack, email, Notion, Jira. Viewers can leave timestamped comments directly on recordings, making async feedback fast and structured. Pro adds unlimited recording time, custom branding, and team management.",
 		},
 	],
 

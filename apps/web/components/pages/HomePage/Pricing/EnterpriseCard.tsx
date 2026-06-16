@@ -62,7 +62,7 @@ export const EnterpriseCard = () => {
 
 			<div className="pt-8 mt-8 border-t border-gray-4">
 				<p className="mb-4 text-sm font-medium text-gray-12">
-					Everything in Cap Pro, plus:
+					Everything in Pro, plus:
 				</p>
 				<ul className="space-y-3">
 					{enterpriseFeatures.map((feature) => (

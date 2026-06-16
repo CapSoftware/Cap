@@ -248,7 +248,7 @@ export const obsAlternativeContent: SeoPageContent = {
 		{
 			question: "Is Cap free like OBS?",
 			answer:
-				"Yes. Cap's Studio Mode is completely free for personal use with no time limits and no watermarks. Instant Mode on the free plan supports recordings up to 5 minutes. Cap Pro ($9.99/month) removes Instant Mode time limits and adds team features. The core software is open source and free to use, just like OBS.",
+				"Yes. Cap's Studio Mode is completely free for personal use with no time limits and no watermarks. Instant Mode on the free plan supports recordings up to 5 minutes. Pro ($9.99/month) removes Instant Mode time limits and adds team features. The core software is open source and free to use, just like OBS.",
 		},
 		{
 			question: "Is Cap open source like OBS?",

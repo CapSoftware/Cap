@@ -29,14 +29,12 @@ export default function Page() {
 					<div class="flex justify-center items-center w-full h-screen">
 						<div class="flex flex-col items-center p-6 mx-auto space-y-3 w-full max-w-md text-white rounded-3xl border bg-gray-2 border-gray-3">
 							<div class="flex flex-col gap-2 items-center">
-								<h3 class="text-2xl font-medium text-gray-12">
-									Cap Pro License
-								</h3>
+								<h3 class="text-2xl font-medium text-gray-12">Pro License</h3>
 							</div>
 							<p class="text-center text-gray-11">
 								Your account is upgraded to{" "}
-								<span class="font-semibold text-blue-500">Cap Pro</span> and
-								already includes a commercial license.
+								<span class="font-semibold text-blue-500">Pro</span> and already
+								includes a commercial license.
 							</p>
 						</div>
 					</div>

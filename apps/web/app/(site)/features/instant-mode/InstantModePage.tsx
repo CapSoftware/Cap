@@ -13,7 +13,7 @@ const instantModeConfig: FeaturePageConfig = {
 			description:
 				"Cloud-powered screen recording for instant sharing and team collaboration. Perfect for quick updates, feedback sessions, and async communication that keeps teams moving fast.",
 			primaryCta: "Download for Free",
-			secondaryCta: "Upgrade to Cap Pro",
+			secondaryCta: "Upgrade to Pro",
 			features: [
 				"Instant shareable links",
 				"Upload during recording",
@@ -229,17 +229,17 @@ const instantModeConfig: FeaturePageConfig = {
 				{
 					question: "How long can I record for free in Instant Mode?",
 					answer:
-						"Free accounts can record up to 5 minutes per recording in Instant Mode. Upgrade to Cap Pro for unlimited recording length, unlimited storage, and advanced collaboration features.",
+						"Free accounts can record up to 5 minutes per recording in Instant Mode. Upgrade to Pro for unlimited recording length, unlimited storage, and advanced collaboration features.",
 				},
 				{
 					question: "Are my recordings secure in Instant Mode?",
 					answer:
-						"Yes, all recordings are encrypted in transit and at rest. You control who has access to your recordings, and you can delete them anytime. Cap Pro includes additional security features like password protection.",
+						"Yes, all recordings are encrypted in transit and at rest. You control who has access to your recordings, and you can delete them anytime. Pro includes additional security features like password protection.",
 				},
 				{
 					question: "Can viewers download my recordings?",
 					answer:
-						"By default, viewers can only watch recordings in the browser. Cap Pro allows you to control download permissions and add password protection for sensitive content.",
+						"By default, viewers can only watch recordings in the browser. Pro allows you to control download permissions and add password protection for sensitive content.",
 				},
 				{
 					question: "How fast are recordings processed?",
@@ -252,14 +252,14 @@ const instantModeConfig: FeaturePageConfig = {
 						"Instant Mode requires an internet connection for cloud processing and sharing. For offline recording, use Studio Mode which works completely locally.",
 				},
 				{
-					question: "What happens to my recordings if I upgrade to Cap Pro?",
+					question: "What happens to my recordings if I upgrade to Pro?",
 					answer:
 						"All existing recordings remain accessible, and you unlock unlimited recording length, advanced collaboration features, team workspaces, viewer analytics, and priority support.",
 				},
 				{
 					question: "Can I edit recordings made in Instant Mode?",
 					answer:
-						"Basic editing like trimming is available for all recordings. Cap Pro includes advanced editing features and the ability to download recordings for external editing.",
+						"Basic editing like trimming is available for all recordings. Pro includes advanced editing features and the ability to download recordings for external editing.",
 				},
 			],
 		},
@@ -275,7 +275,7 @@ const instantModeConfig: FeaturePageConfig = {
 			description:
 				"Join thousands of teams using Cap Instant Mode for faster communication and better collaboration. Get started free, upgrade for unlimited features.",
 			primaryButton: "Download for Free",
-			secondaryButton: "Upgrade to Cap Pro",
+			secondaryButton: "Upgrade to Pro",
 		},
 	},
 	customSections: {

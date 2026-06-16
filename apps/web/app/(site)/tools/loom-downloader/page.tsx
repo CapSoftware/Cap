@@ -61,7 +61,7 @@ const pageContent: ToolPageContent = {
 		"Download any public Loom video as an MP4 — or skip the one-by-one downloads and migrate your whole Loom library to Cap with 20% off using code MIGRATE20.",
 	featuresTitle: "Download Loom videos, then move your whole library to Cap",
 	featuresDescription:
-		"Cap's Loom downloader is free, fast, and requires zero setup. When you're ready to leave Loom for good, Cap Pro's built-in <a href=\"/loom-alternative\">Loom video importer</a> moves your entire workspace in one click.",
+		"Cap's Loom downloader is free, fast, and requires zero setup. When you're ready to leave Loom for good, Pro's built-in <a href=\"/loom-alternative\">Loom video importer</a> moves your entire workspace in one click.",
 	features: [
 		{
 			title: "Instant Downloads",
@@ -81,12 +81,12 @@ const pageContent: ToolPageContent = {
 		{
 			title: "Import Your Whole Loom Library",
 			description:
-				'Cap Pro includes a built-in <a href="/loom-alternative">Loom video importer</a> that transfers every Loom video you\'ve recorded — titles, transcripts, and chapters included — without manual re-uploads.',
+				'Pro includes a built-in <a href="/loom-alternative">Loom video importer</a> that transfers every Loom video you\'ve recorded — titles, transcripts, and chapters included — without manual re-uploads.',
 		},
 		{
 			title: "Half the Price of Loom",
 			description:
-				"Cap Pro starts from just $8.16/user/month vs Loom's $18/user/month. Use code <strong>MIGRATE20</strong> at checkout for an extra 20% off your first year.",
+				"Pro starts from just $8.16/user/month vs Loom's $18/user/month. Use code <strong>MIGRATE20</strong> at checkout for an extra 20% off your first year.",
 		},
 		{
 			title: "Open Source & Privacy-First",
@@ -108,12 +108,12 @@ const pageContent: ToolPageContent = {
 		{
 			question: "What is MIGRATE20 and how do I use it?",
 			answer:
-				'<strong>MIGRATE20</strong> is a 20% discount code for new Cap Pro subscribers who are switching from Loom. Just apply it at <a href="/pricing">checkout on the pricing page</a> to take 20% off your first year of Cap Pro — including the built-in Loom video importer.',
+				'<strong>MIGRATE20</strong> is a 20% discount code for new Pro subscribers who are switching from Loom. Just apply it at <a href="/pricing">checkout on the pricing page</a> to take 20% off your first year of Pro — including the built-in Loom video importer.',
 		},
 		{
 			question: "Can I import all my Loom videos into Cap at once?",
 			answer:
-				'Yes. Cap Pro\'s built-in <a href="/loom-alternative">Loom video importer</a> connects to your Loom workspace and transfers every video in one go — titles, transcripts, chapters, and all — without you having to download and re-upload anything manually.',
+				'Yes. Pro\'s built-in <a href="/loom-alternative">Loom video importer</a> connects to your Loom workspace and transfers every video in one go — titles, transcripts, chapters, and all — without you having to download and re-upload anything manually.',
 		},
 		{
 			question: "Why migrate from Loom to Cap?",
@@ -144,8 +144,8 @@ const pageContent: ToolPageContent = {
 	cta: {
 		title: "Ready to leave Loom for good?",
 		description:
-			"Skip the one-by-one downloads. Cap Pro imports your entire Loom library in one click — and costs half what Loom charges. Use MIGRATE20 at checkout for an extra 20% off your first year.",
-		buttonText: "Migrate to Cap Pro — save 20%",
+			"Skip the one-by-one downloads. Pro imports your entire Loom library in one click — and costs half what Loom charges. Use MIGRATE20 at checkout for an extra 20% off your first year.",
+		buttonText: "Migrate to Pro — save 20%",
 		buttonHref:
 			"/pricing?promo=MIGRATE20&utm_source=loom-downloader&utm_campaign=migrate20",
 		secondaryButtonText: "Download Cap free",
@@ -165,12 +165,9 @@ const breadcrumbSchema = createBreadcrumbSchema([
 export default function LoomDownloaderPage() {
 	return (
 		<>
-			<script
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{
-					__html: JSON.stringify(breadcrumbSchema),
-				}}
-			/>
+			<script type="application/ld+json">
+				{JSON.stringify(breadcrumbSchema)}
+			</script>
 			<ToolsPageTemplate
 				content={pageContent}
 				toolComponent={<LoomDownloader />}

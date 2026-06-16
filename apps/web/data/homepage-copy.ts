@@ -169,7 +169,7 @@ export const homepageCopy: HomePageCopy = {
 			{ label: "Open source", href: "/open-source-screen-recorder" },
 		],
 		cta: {
-			primaryButton: "Upgrade to Cap Pro",
+			primaryButton: "Upgrade to Pro",
 			secondaryButton: "View on GitHub",
 			freeVersionText:
 				"No credit card required. Record locally, share when you choose.",
@@ -325,7 +325,7 @@ export const homepageCopy: HomePageCopy = {
 		},
 		pro: {
 			badge: "Best value",
-			title: "Cap Pro",
+			title: "Pro",
 			description:
 				"Everything in Desktop plus unlimited cloud features for seamless sharing and collaboration.",
 			features: [
@@ -356,9 +356,9 @@ export const homepageCopy: HomePageCopy = {
 		title: "Questions? We've Got Answers.",
 		items: [
 			{
-				question: "What is the difference between Cap Pro and Desktop License?",
+				question: "What is the difference between Pro and Desktop License?",
 				answer:
-					"Cap Pro is a paid plan that includes all the features of the Desktop License plus cloud features for seamless sharing and collaboration. Desktop License grants you commercial usage rights for a single user.",
+					"Pro is a paid plan that includes all the features of the Desktop License plus cloud features for seamless sharing and collaboration. Desktop License grants you commercial usage rights for a single user.",
 			},
 			{
 				question: "Is there a free version?",
@@ -373,7 +373,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "How does Cap AI work?",
 				answer:
-					"Cap AI is a powerful tool that can be used to generate titles, summaries, clickable chapters, and transcriptions for your recordings. It's available for all Cap Pro users and has no usage limits.",
+					"Cap AI is a powerful tool that can be used to generate titles, summaries, clickable chapters, and transcriptions for your recordings. It's available for all Pro users and has no usage limits.",
 			},
 			{
 				question: "How is Cap different from Loom?",
@@ -388,7 +388,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "Do you offer team plans?",
 				answer:
-					"Yes! Cap Pro includes team workspaces where you can organize recordings, manage permissions, and collaborate. Volume discounts available for teams over 10 users. Contact us for custom enterprise features.",
+					"Yes! Pro includes team workspaces where you can organize recordings, manage permissions, and collaborate. Volume discounts available for teams over 10 users. Contact us for custom enterprise features.",
 			},
 			{
 				question: "Which platforms do you support?",
@@ -398,7 +398,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "Can I use Cap for commercial purposes?",
 				answer:
-					"Absolutely! Any paid plan (Desktop License or Cap Pro) includes full commercial usage rights. Use Cap for client work, sell courses, or embed recordings anywhere. The free version is for personal use only.",
+					"Absolutely! Any paid plan (Desktop License or Pro) includes full commercial usage rights. Use Cap for client work, sell courses, or embed recordings anywhere. The free version is for personal use only.",
 			},
 			{
 				question: "Is my data secure?",
@@ -408,14 +408,14 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "What about GDPR/HIPAA compliance?",
 				answer:
-					"Cap Pro supports custom S3 buckets in any region for GDPR compliance. For HIPAA and other regulations, our self-hosted option gives you complete control. We also offer signed BAAs for enterprise customers.",
+					"Pro supports custom S3 buckets in any region for GDPR compliance. For HIPAA and other regulations, our self-hosted option gives you complete control. We also offer signed BAAs for enterprise customers.",
 			},
 		],
 	},
 	readyToGetStarted: {
 		title: "Ready To Upgrade How You Communicate?",
 		buttons: {
-			primary: "Upgrade to Cap Pro",
+			primary: "Upgrade to Pro",
 			secondary: "Download For Free",
 		},
 	},

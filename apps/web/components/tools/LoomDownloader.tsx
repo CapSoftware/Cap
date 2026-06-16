@@ -122,7 +122,7 @@ function MigrationBanner() {
 					<span className="font-mono font-semibold text-blue-700">
 						{MIGRATE_PROMO_CODE}
 					</span>{" "}
-					at checkout for 20% off Cap Pro.
+					at checkout for 20% off Pro.
 				</p>
 			</div>
 			<div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
@@ -187,7 +187,7 @@ function MigrationSuccessState({
 						Bring your whole Loom library to Cap
 					</h3>
 					<p className="text-sm leading-relaxed text-gray-700 sm:text-base">
-						Skip the one-by-one downloads. Cap Pro's built-in Loom importer
+						Skip the one-by-one downloads. Pro's built-in Loom importer
 						transfers your entire Loom workspace to Cap in a single click —
 						titles, transcripts, and all. Use{" "}
 						<span className="font-mono font-semibold text-blue-700">
@@ -205,7 +205,7 @@ function MigrationSuccessState({
 							href={MIGRATE_CHECKOUT_HREF}
 							className="w-full sm:w-auto"
 						>
-							Migrate with Cap Pro — save 20%
+							Migrate with Pro — save 20%
 						</Button>
 						<Button
 							variant="white"
@@ -484,7 +484,7 @@ export function LoomDownloader() {
 					href={MIGRATE_CHECKOUT_HREF}
 					className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700 hover:underline"
 				>
-					Import Loom videos with Cap Pro
+					Import Loom videos with Pro
 					<svg
 						className="w-3 h-3"
 						fill="none"

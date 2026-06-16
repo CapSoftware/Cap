@@ -844,7 +844,7 @@ function InstantQualitySetting(props: {
 			(t) => (
 				<div class="flex gap-3 items-center px-4 py-3 rounded-xl border shadow-lg bg-gray-1 border-gray-4 text-gray-12">
 					<p class="text-sm">
-						Upgrade to Cap Pro to record Instant Mode videos above 720p.
+						Upgrade to Pro to record Instant Mode videos above 720p.
 					</p>
 					<button
 						type="button"
@@ -869,7 +869,7 @@ function InstantQualitySetting(props: {
 			description={
 				props.hasCapPro
 					? "Choose the maximum upload resolution for Instant recordings."
-					: "Instant recordings are locked to 720p. Cap Pro unlocks higher resolutions."
+					: "Instant recordings are locked to 720p. Pro unlocks higher resolutions."
 			}
 		>
 			<div class="flex flex-col items-end gap-1.5">
@@ -911,8 +911,8 @@ function CapProSection(props: {
 }) {
 	return (
 		<Section
-			title="Cap Pro"
-			description="Settings available with a Cap Pro license."
+			title="Pro"
+			description="Settings available with a Pro license."
 			pro
 		>
 			<SectionRows>

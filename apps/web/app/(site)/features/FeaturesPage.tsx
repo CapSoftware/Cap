@@ -33,9 +33,12 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
+import type { ComponentProps } from "react";
+
+type FeatureIcon = ComponentProps<typeof FontAwesomeIcon>["icon"];
 
 interface Feature {
-	icon: any;
+	icon: FeatureIcon;
 	title: string;
 	description: string;
 	category: "recording" | "ai" | "sharing" | "editing" | "platform" | "privacy";
@@ -375,7 +378,7 @@ export const FeaturesPage = () => {
 							size="lg"
 							className="flex justify-center items-center w-full font-medium text-md sm:w-auto"
 						>
-							Upgrade to Cap Pro
+							Upgrade to Pro
 						</Button>
 					</div>
 				</div>
@@ -383,7 +386,7 @@ export const FeaturesPage = () => {
 
 			<div className="pb-32 wrapper">
 				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 auto-rows-[minmax(200px,_auto)] grid-flow-dense">
-					{features.map((feature, index) => {
+					{features.map((feature) => {
 						const sizeClasses = {
 							small: "col-span-1",
 							medium: "col-span-1 md:col-span-2",
@@ -392,7 +395,7 @@ export const FeaturesPage = () => {
 
 						return (
 							<div
-								key={index}
+								key={feature.title}
 								className={`
                   ${sizeClasses[feature.size || "small"]}
                   group relative overflow-hidden rounded-xl border p-6
@@ -418,7 +421,7 @@ export const FeaturesPage = () => {
 											href="/pricing"
 											className="inline-flex items-center px-2 py-1 ml-2 text-xs font-medium text-white bg-gradient-to-br from-blue-400 to-blue-600 rounded-full transition-all duration-200 hover:from-blue-500 hover:to-blue-700"
 										>
-											Cap Pro
+											Pro
 										</Link>
 									)}
 									{feature.isComingSoon && (

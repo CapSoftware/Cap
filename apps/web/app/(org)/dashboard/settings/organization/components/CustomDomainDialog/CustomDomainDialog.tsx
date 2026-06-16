@@ -286,6 +286,20 @@ const CustomDomainDialog = ({
 		],
 	);
 
+	useEffect(() => {
+		if (stepState.currentIndex === 2) {
+			const timeoutId = setTimeout(() => {
+				handleClose();
+			}, 8000);
+
+			return () => clearTimeout(timeoutId);
+		}
+
+		if (isVerified) {
+			handleNext();
+		}
+	}, [isVerified, stepState.currentIndex, handleClose, handleNext]);
+
 	if (!currentStep) {
 		return null;
 	}
@@ -342,17 +356,6 @@ const CustomDomainDialog = ({
 			orgId: activeOrganization?.organization.id as string,
 		});
 	};
-
-	useEffect(() => {
-		//if current step is success, close dialog in 8 seconds
-		if (stepState.currentIndex === 2) {
-			setTimeout(() => {
-				handleClose();
-			}, 8000);
-		} else if (isVerified) {
-			handleNext();
-		}
-	}, [isVerified, stepState.currentIndex, handleClose, handleNext]);
 
 	return (
 		<>
@@ -466,7 +469,7 @@ const CustomDomainDialog = ({
 											handleClose();
 										}}
 									>
-										Upgrade To Cap Pro
+										Upgrade To Pro
 									</Button>
 								))}
 						</DialogFooter>

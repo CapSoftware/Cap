@@ -110,7 +110,7 @@ async function setSpaceLogo(
 	if (!(await isOrganizationOwnerPro(space.organizationId))) {
 		return {
 			success: false,
-			error: "Upgrade to Cap Pro to customize the collection logo",
+			error: "Upgrade to Pro to customize the collection logo",
 		};
 	}
 
@@ -182,7 +182,7 @@ async function setFolderLogo(
 	if (!(await isOrganizationOwnerPro(folder.organizationId))) {
 		return {
 			success: false,
-			error: "Upgrade to Cap Pro to customize the collection logo",
+			error: "Upgrade to Pro to customize the collection logo",
 		};
 	}
 

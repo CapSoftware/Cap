@@ -30,7 +30,7 @@ export const TermsPage = () => {
 							Cap provides a platform that allows users to record their screen
 							and webcam, edit their recordings, generate shareable links, and
 							collaborate with others through "Spaces." We offer a free plan
-							with usage limits and a paid "Cap Pro" plan.
+							with usage limits and a paid "Pro" plan.
 						</li>
 						<li>
 							<h3>User Accounts</h3>

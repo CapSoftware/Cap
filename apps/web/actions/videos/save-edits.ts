@@ -117,7 +117,7 @@ export async function saveVideoEdits(
 ) {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
-	if (!userIsPro(user)) throw new Error("Cap Pro is required to edit videos");
+	if (!userIsPro(user)) throw new Error("Pro is required to edit videos");
 
 	const [video] = await db()
 		.select()

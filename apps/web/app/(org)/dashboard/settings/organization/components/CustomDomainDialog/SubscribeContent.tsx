@@ -1,8 +1,26 @@
 import { motion } from "motion/react";
 
-const SubscribeContent = () => {
-	const capsDomainText = "caps.yourdomain.com";
+const capsDomainText = "caps.yourdomain.com";
+const capsDomainLetters = capsDomainText
+	.split("")
+	.reduce<{ delay: number; key: string; letter: string }[]>(
+		(letters, letter) => {
+			const occurrence = letters.filter(
+				(item) => item.letter === letter,
+			).length;
 
+			letters.push({
+				delay: 0.9 + letters.length * 0.075,
+				key: `${letter}-${occurrence}`,
+				letter,
+			});
+
+			return letters;
+		},
+		[],
+	);
+
+const SubscribeContent = () => {
 	return (
 		<div className="flex absolute z-10 flex-col gap-3 justify-center items-center w-full h-full backdrop-blur-md">
 			<div className="flex flex-col items-center mb-1">
@@ -12,7 +30,7 @@ const SubscribeContent = () => {
 					transition={{ duration: 0.3, ease: "easeOut" }}
 					className="text-lg text-center text-gray-12"
 				>
-					This feature requires Cap Pro
+					This feature requires Pro
 				</motion.p>
 				<motion.p
 					initial={{ y: -10, filter: "blur(5px)", opacity: 0 }}
@@ -34,7 +52,6 @@ const SubscribeContent = () => {
 						"linear-gradient(322deg,rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 1) 19%, rgba(199, 199, 199, 1) 29%, rgba(217, 217, 217, 1) 52%, rgba(255, 255, 255, 1) 62%, rgba(158, 158, 158, 1) 83%, rgba(163, 163, 163, 1) 93%)",
 				}}
 			>
-				{/* Moving shine overlay */}
 				<motion.div
 					className="absolute inset-0 z-10 rounded-xl"
 					initial={{ x: "-100%" }}
@@ -57,14 +74,14 @@ const SubscribeContent = () => {
 				/>
 
 				<div className="flex relative z-10">
-					{capsDomainText.split("").map((letter, idx) => (
+					{capsDomainLetters.map(({ delay, key, letter }) => (
 						<motion.span
-							key={idx}
+							key={key}
 							className="text-[13px] font-medium relative z-0 text-black/50 mix-blend-screen"
 							initial={{ opacity: 0, y: -5 }}
 							animate={{ opacity: 1, y: 0 }}
 							transition={{
-								delay: 0.9 + idx * 0.075,
+								delay,
 								duration: 0.2,
 								ease: "easeOut",
 							}}

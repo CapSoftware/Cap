@@ -21,13 +21,7 @@ const PlatformSupportArt = memo(() => {
 	return <PlatformSupportRive className="w-[120px] h-[80px]" />;
 });
 
-const FAQItem = ({
-	faq,
-	index,
-}: {
-	faq: { question: string; answer: string };
-	index: number;
-}) => {
+const FAQItem = ({ faq }: { faq: { question: string; answer: string } }) => {
 	const [isOpen, setIsOpen] = useState(false);
 
 	return (
@@ -265,7 +259,7 @@ export const agenciesContent: SeoPageContent = {
 		{
 			question: "How long can we record on the free version?",
 			answer:
-				"The free version supports recordings up to 5 minutes. For longer client presentations and unlimited recording time, upgrade to Cap Pro at $8.16/month (billed annually).",
+				"The free version supports recordings up to 5 minutes. For longer client presentations and unlimited recording time, upgrade to Pro at $8.16/month (billed annually).",
 		},
 		{
 			question: "Is Cap secure enough for confidential client work?",
@@ -275,12 +269,12 @@ export const agenciesContent: SeoPageContent = {
 		{
 			question: "Can we use our own branding with Cap?",
 			answer:
-				"Yes. Cap Pro includes custom domain support (cap.yourdomain.com) so share links reflect your agency's brand. You can also use your own S3 storage for complete data ownership.",
+				"Yes. Pro includes custom domain support (cap.yourdomain.com) so share links reflect your agency's brand. You can also use your own S3 storage for complete data ownership.",
 		},
 		{
 			question: "How does Cap pricing work for agency teams?",
 			answer:
-				"Cap Pro is $8.16/month per user (billed annually) and includes unlimited cloud storage, custom domains, team workspaces, and all collaboration features. Volume discounts are available for teams over 10 users.",
+				"Pro is $8.16/month per user (billed annually) and includes unlimited cloud storage, custom domains, team workspaces, and all collaboration features. Volume discounts are available for teams over 10 users.",
 		},
 	],
 
@@ -331,7 +325,7 @@ export const agenciesContent: SeoPageContent = {
 		title: "Getting Started with Cap for Your Agency",
 		steps: [
 			"Download Cap for all team members (available on Mac and Windows)",
-			"Set up Cap Pro with custom domain for professional share links",
+			"Set up Pro with custom domain for professional share links",
 			"Connect your own S3 storage for complete data ownership (optional)",
 			"Create agency guidelines for video updates (length, format, etc.)",
 			"Train team on Instant vs Studio Mode for different use cases",
@@ -341,7 +335,7 @@ export const agenciesContent: SeoPageContent = {
 
 	cta: {
 		title: "Ready to Transform Your Agency's Client Communication?",
-		buttonText: "Upgrade to Cap Pro",
+		buttonText: "Upgrade to Pro",
 	},
 };
 
@@ -391,7 +385,7 @@ export const AgenciesPage = () => {
 								size="lg"
 								className="relative z-[20] w-full sm:w-auto font-medium text-md"
 							>
-								Upgrade to Cap Pro
+								Upgrade to Pro
 							</Button>
 						</motion.div>
 					</div>
@@ -612,8 +606,8 @@ export const AgenciesPage = () => {
 					</div>
 					<div className="mx-auto mb-10 max-w-3xl">
 						<div className="space-y-4">
-							{agenciesContent.faqs.map((faq, index) => (
-								<FAQItem key={index} faq={faq} index={index} />
+							{agenciesContent.faqs.map((faq) => (
+								<FAQItem key={faq.question} faq={faq} />
 							))}
 						</div>
 					</div>

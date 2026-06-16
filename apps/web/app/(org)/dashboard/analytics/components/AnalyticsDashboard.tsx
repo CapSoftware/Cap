@@ -88,7 +88,7 @@ export function AnalyticsDashboard() {
 			}
 
 			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
+				toast.success("You are already on the Pro plan");
 				return;
 			}
 
@@ -314,7 +314,7 @@ export function AnalyticsDashboard() {
 									>
 										{proCheckoutMutation.isPending
 											? "Loading..."
-											: "Upgrade to Cap Pro"}
+											: "Upgrade to Pro"}
 									</Button>
 								</div>
 							</div>

@@ -20,7 +20,7 @@ const faqContent: FaqItem[] = [
 	{
 		title: "How much does it cost?",
 		answer:
-			"Cap offers a free version for personal use. You can upgrade to Cap Pro for just $8.16/month (when billed annually) to unlock unlimited cloud storage, unlimited recording length, custom domain support, advanced team features, password-protected videos, analytics, and priority support. We also offer commercial licenses and self-hosted options for businesses.",
+			"Cap offers a free version for personal use. You can upgrade to Pro for just $8.16/month (when billed annually) to unlock unlimited cloud storage, unlimited recording length, custom domain support, advanced team features, password-protected videos, analytics, and priority support. We also offer commercial licenses and self-hosted options for businesses.",
 	},
 	{
 		title: "Which platforms does Cap support?",
@@ -35,7 +35,7 @@ const faqContent: FaqItem[] = [
 	{
 		title: "Can I import my Loom videos to Cap?",
 		answer:
-			"Yes! Cap Pro includes a built-in Loom video importer that lets you seamlessly transfer your existing Loom recordings into Cap. Just paste your Loom video links and Cap handles the rest — keeping all your content organized in one place.",
+			"Yes! Pro includes a built-in Loom video importer that lets you seamlessly transfer your existing Loom recordings into Cap. Just paste your Loom video links and Cap handles the rest — keeping all your content organized in one place.",
 	},
 	{
 		title: "Can I self-host Cap?",

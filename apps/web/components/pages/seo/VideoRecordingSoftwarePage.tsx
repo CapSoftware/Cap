@@ -224,7 +224,7 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 		{
 			question: "Is Cap video recording software free?",
 			answer:
-				"Yes. Cap's Studio Mode is completely free for personal use with no time limits, no watermarks, and no hidden fees. Instant Mode is free for recordings up to 5 minutes. Cap Pro at $9.99/month removes Instant Mode limits and adds team features — but the core video recording software is free to use forever.",
+				"Yes. Cap's Studio Mode is completely free for personal use with no time limits, no watermarks, and no hidden fees. Instant Mode is free for recordings up to 5 minutes. Pro at $9.99/month removes Instant Mode limits and adds team features — but the core video recording software is free to use forever.",
 		},
 		{
 			question: "Does Cap video recording software work on Mac and Windows?",

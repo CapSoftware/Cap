@@ -140,6 +140,7 @@ export const Summary: React.FC<SummaryProps> = ({
 								viewBox="0 0 24 24"
 								stroke="currentColor"
 							>
+								<title>AI features</title>
 								<path
 									strokeLinecap="round"
 									strokeLinejoin="round"
@@ -152,9 +153,8 @@ export const Summary: React.FC<SummaryProps> = ({
 							Unlock Cap AI
 						</h3>
 						<p className="mb-4 text-sm leading-relaxed text-gray-600">
-							Upgrade to Cap Pro to access AI-powered features including
-							automatic titles, video summaries, and intelligent chapter
-							generation.
+							Upgrade to Pro to access AI-powered features including automatic
+							titles, video summaries, and intelligent chapter generation.
 						</p>
 						<Button
 							href="/pricing"
@@ -162,7 +162,7 @@ export const Summary: React.FC<SummaryProps> = ({
 							size="sm"
 							className="mx-auto"
 						>
-							Upgrade to Cap Pro
+							Upgrade to Pro
 						</Button>
 					</div>
 				</div>
@@ -251,16 +251,17 @@ export const Summary: React.FC<SummaryProps> = ({
 							<h3 className="mb-2 text-lg font-medium">Chapters</h3>
 							<div className="divide-y">
 								{aiData.chapters.map((chapter) => (
-									<div
+									<button
+										type="button"
 										key={chapter.start}
-										className="flex items-center p-2 rounded transition-colors cursor-pointer hover:bg-gray-100"
+										className="flex items-center p-2 w-full text-left rounded transition-colors cursor-pointer hover:bg-gray-100"
 										onClick={() => handleSeek(chapter.start)}
 									>
 										<span className="w-16 text-xs text-gray-500">
 											{formatTime(chapter.start)}
 										</span>
 										<span className="ml-2 text-sm">{chapter.title}</span>
-									</div>
+									</button>
 								))}
 							</div>
 						</div>

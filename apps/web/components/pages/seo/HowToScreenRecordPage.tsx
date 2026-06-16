@@ -204,7 +204,7 @@ export const howToScreenRecordContent: SeoPageContent = {
 		{
 			question: "How long can I screen record?",
 			answer:
-				"With Cap's desktop app, there are no time limits on screen recordings. You can record for as long as you need, whether it is a 30-second quick demo or a 2-hour training session. Cap's Instant Mode (browser-based) supports recordings up to 5 minutes on the free plan. For unlimited browser-based recording length, Cap Pro is available at an affordable monthly price. The macOS built-in recorder and Windows Game Bar also have no strict time limits, though they lack the sharing and editing features that Cap provides.",
+				"With Cap's desktop app, there are no time limits on screen recordings. You can record for as long as you need, whether it is a 30-second quick demo or a 2-hour training session. Cap's Instant Mode (browser-based) supports recordings up to 5 minutes on the free plan. For unlimited browser-based recording length, Pro is available at an affordable monthly price. The macOS built-in recorder and Windows Game Bar also have no strict time limits, though they lack the sharing and editing features that Cap provides.",
 		},
 		{
 			question: "What format do screen recordings save in?",

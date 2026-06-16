@@ -259,7 +259,7 @@ const studioModeConfig: FeaturePageConfig = {
 				{
 					question: "How does pricing work for Studio Mode?",
 					answer:
-						"Studio Mode is completely free for personal usage. For commercial usage, you need the Desktop License, which is included with Cap Pro or can be purchased separately.",
+						"Studio Mode is completely free for personal usage. For commercial usage, you need the Desktop License, which is included with Pro or can be purchased separately.",
 				},
 			],
 		},
@@ -275,7 +275,7 @@ const studioModeConfig: FeaturePageConfig = {
 			description:
 				"Download Cap and experience the power of Studio Mode for yourself. Create stunning, professional-quality recordings that engage your audience.",
 			primaryButton: "Download Cap Free",
-			secondaryButton: "Upgrade to Cap Pro",
+			secondaryButton: "Upgrade to Pro",
 		},
 	},
 	customSections: {

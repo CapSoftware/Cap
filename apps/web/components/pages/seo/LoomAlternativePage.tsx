@@ -1,7 +1,6 @@
 "use client";
 
 import { Clapperboard, Zap } from "lucide-react";
-import Script from "next/script";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -141,7 +140,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			question: "Can I import my existing Loom videos into Cap?",
 			answer:
-				"Yes! Cap Pro includes a built-in Loom video importer. Simply paste your Loom video links and Cap will import them directly into your library. It's the easiest way to migrate from Loom without losing any of your existing content.",
+				"Yes! Pro includes a built-in Loom video importer. Simply paste your Loom video links and Cap will import them directly into your library. It's the easiest way to migrate from Loom without losing any of your existing content.",
 		},
 	],
 
@@ -246,11 +245,7 @@ const createFaqStructuredData = () => {
 export const LoomAlternativePage = () => {
 	return (
 		<>
-			<Script
-				id="faq-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{ __html: createFaqStructuredData() }}
-			/>
+			<script type="application/ld+json">{createFaqStructuredData()}</script>
 			<SeoPageTemplate
 				showLogosInHeader
 				showLoomComparisonSlider

@@ -186,7 +186,7 @@ export const screenRecordingContent: SeoPageContent = {
 		{
 			question: "Does Cap screen recording have a time limit?",
 			answer:
-				"Studio Mode in Cap has no time limit on recordings — record as long as you need. Instant Mode on the free plan supports recordings up to 5 minutes. Cap Pro removes this limit for Instant Mode recordings as well.",
+				"Studio Mode in Cap has no time limit on recordings — record as long as you need. Instant Mode on the free plan supports recordings up to 5 minutes. Pro removes this limit for Instant Mode recordings as well.",
 		},
 	],
 

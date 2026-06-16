@@ -2,7 +2,7 @@ import { Button } from "@cap/ui";
 import { useRive } from "@rive-app/react-canvas";
 
 const UpgradeToPro = ({
-	text = "Upgrade To Cap Pro",
+	text = "Upgrade To Pro",
 	onClick,
 }: {
 	text?: string;
