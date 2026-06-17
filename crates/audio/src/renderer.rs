@@ -25,9 +25,9 @@ pub fn render_audio(
             .iter()
             .filter_map(|t| {
                 let track_samples = t.data.samples().len() / t.data.channels() as usize;
-                let available = track_samples as isize - offset as isize - t.offset;
+                let available = track_samples as i128 - offset as i128 - t.offset as i128;
                 if available > 0 {
-                    Some(available as usize)
+                    usize::try_from(available).ok()
                 } else {
                     None
                 }
@@ -41,7 +41,13 @@ pub fn render_audio(
         let mut right = 0.0;
 
         for track in tracks {
-            let i = i.wrapping_add_signed(track.offset);
+            let source_index = offset as i128 + i as i128 + track.offset as i128;
+            if source_index < 0 {
+                continue;
+            }
+            let Ok(source_index) = usize::try_from(source_index) else {
+                continue;
+            };
 
             let data = track.data;
             let gain = gain_for_db(track.gain);
@@ -51,12 +57,12 @@ pub fn render_audio(
             }
 
             if data.channels() == 1 {
-                if let Some(sample) = data.samples().get(offset + i) {
+                if let Some(sample) = data.samples().get(source_index) {
                     left += sample * 0.707 * gain;
                     right += sample * 0.707 * gain;
                 }
             } else if data.channels() == 2 {
-                let base_idx = offset * 2 + i * 2;
+                let base_idx = source_index.saturating_mul(2);
                 let Some(l_sample) = data.samples().get(base_idx) else {
                     continue;
                 };
@@ -138,6 +144,26 @@ mod tests {
         render_audio(&[track(&data, 2)], 3, 4, 0, &mut out);
         // cursor 3 + track offset 2 -> source frame 5 (value 0.06).
         assert!((out[0] - 0.06).abs() < 1e-6);
+    }
+
+    #[test]
+    fn negative_offset_delays_track_with_leading_silence() {
+        let mut samples = Vec::new();
+        for k in 0..4 {
+            let v = (k as f32 + 1.0) / 10.0;
+            samples.push(v);
+            samples.push(v);
+        }
+        let data = AudioData::from_raw_f32(samples, 2);
+
+        let mut out = vec![0.0; 6 * 2];
+        let rendered = render_audio(&[track(&data, -2)], 0, 6, 0, &mut out);
+
+        assert_eq!(rendered, 6);
+        assert_eq!(out[0], 0.0);
+        assert_eq!(out[2], 0.0);
+        assert!((out[4] - 0.1).abs() < 1e-6);
+        assert!((out[10] - 0.4).abs() < 1e-6);
     }
 
     // Regression guard for commit 2a6dce7: render mixes up to the LONGEST track

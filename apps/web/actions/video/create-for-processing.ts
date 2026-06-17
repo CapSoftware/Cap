@@ -65,6 +65,7 @@ export async function createVideoForServerProcessing({
 		rawFileKey,
 		{
 			contentType: "video/mp4",
+			method: "put",
 			fields: {
 				"x-amz-meta-userid": user.id,
 				"x-amz-meta-duration": duration?.toString() ?? "",
@@ -90,8 +91,10 @@ export async function createVideoForServerProcessing({
 
 	await db().insert(videoUploads).values({
 		videoId,
+		mode: "singlepart",
 		phase: "uploading",
 		processingProgress: 0,
+		rawFileKey,
 	});
 
 	if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {

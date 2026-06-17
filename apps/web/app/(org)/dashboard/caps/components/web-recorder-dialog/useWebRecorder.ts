@@ -1,30 +1,49 @@
 "use client";
 
+import {
+	InstantRecordingUploader,
+	initiateMultipartUpload,
+	MultipartCompletionUncertainError,
+} from "@cap/recorder-core/instant-mp4-uploader";
+import type {
+	ChunkUploadState,
+	RecorderPhase,
+	RecordingFailureDownload,
+	RecoveredRecordingDownload,
+	UploadTarget,
+	VideoId,
+} from "@cap/recorder-core/recorder-types";
+import {
+	detectCapabilities,
+	isUserCancellationError,
+	openShareUrlInNewTab,
+	type RecorderCapabilities,
+	type RecordingPipeline,
+	selectRecordingPipeline,
+	shouldRetryDisplayMediaWithoutPreferences,
+} from "@cap/recorder-core/recorder-utils";
+import {
+	canUseRecordingSpool,
+	deleteRecoveredRecordingSpool,
+	RECORDING_SPOOL_HEARTBEAT_INTERVAL_MS,
+	RecordingSpool,
+} from "@cap/recorder-core/recording-spool";
+import { moveRecordingSpoolToInMemoryBackup } from "@cap/recorder-core/recording-spool-fallback";
 import { Organisation } from "@cap/web-domain";
 import { useQueryClient } from "@tanstack/react-query";
 import { Cause, Exit, Option } from "effect";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { triggerInstantRecordingProcessing } from "@/actions/video/trigger-instant-recording-processing";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { uploadWithTarget } from "@/utils/upload-target";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
-import {
-	InstantRecordingUploader,
-	initiateMultipartUpload,
-	MultipartCompletionUncertainError,
-} from "./instant-mp4-uploader";
 import type { RecordingMode } from "./RecordingModeSelector";
 import { captureThumbnail, convertToMp4 } from "./recording-conversion";
-import {
-	canUseRecordingSpool,
-	deleteRecoveredRecordingSpool,
-	RecordingSpool,
-} from "./recording-spool";
-import { moveRecordingSpoolToInMemoryBackup } from "./recording-spool-fallback";
 import { uploadRecording } from "./recording-upload";
 import {
 	loadRecoveredRecordingSpools,
@@ -43,23 +62,6 @@ import {
 	FREE_PLAN_MAX_RECORDING_MS,
 	RECORDING_MODE_TO_DISPLAY_SURFACE,
 } from "./web-recorder-constants";
-import type {
-	ChunkUploadState,
-	RecorderPhase,
-	RecordingFailureDownload,
-	RecoveredRecordingDownload,
-	UploadTarget,
-	VideoId,
-} from "./web-recorder-types";
-import {
-	detectCapabilities,
-	isUserCancellationError,
-	openShareUrlInNewTab,
-	type RecorderCapabilities,
-	type RecordingPipeline,
-	selectRecordingPipeline,
-	shouldRetryDisplayMediaWithoutPreferences,
-} from "./web-recorder-utils";
 
 interface UseWebRecorderOptions {
 	organisationId: string | undefined;
@@ -251,6 +253,7 @@ export const useWebRecorder = ({
 	const recordingSpoolRef = useRef<RecordingSpool | null>(null);
 	const recordingSpoolDegradingRef = useRef(false);
 	const recordingSpoolWarningShownRef = useRef(false);
+	const recordingSpoolHeartbeatRef = useRef<number | null>(null);
 	const recoveredDownloadUrlsRef = useRef(new Map<string, string>());
 
 	const isStreamingPipelineActive = useCallback(
@@ -387,11 +390,39 @@ export const useWebRecorder = ({
 		};
 	}, [dismissRecoveredDownload]);
 
+	const stopRecordingSpoolHeartbeat = useCallback(() => {
+		if (recordingSpoolHeartbeatRef.current === null) return;
+		window.clearInterval(recordingSpoolHeartbeatRef.current);
+		recordingSpoolHeartbeatRef.current = null;
+	}, []);
+
+	// Chunk writes alone are not a liveness signal — a paused MediaRecorder
+	// produces no chunks, so without the heartbeat another dashboard tab's
+	// recovery sweep would offer a >RECORDING_SPOOL_LIVE_MIN_IDLE_MS pause as
+	// "recovered" and let the user delete the live session's backup (for the
+	// buffered pipeline, its upload source).
+	const startRecordingSpoolHeartbeat = useCallback(
+		(spool: RecordingSpool) => {
+			stopRecordingSpoolHeartbeat();
+			recordingSpoolHeartbeatRef.current = window.setInterval(() => {
+				if (recordingSpoolRef.current !== spool) {
+					stopRecordingSpoolHeartbeat();
+					return;
+				}
+				void spool.touch();
+			}, RECORDING_SPOOL_HEARTBEAT_INTERVAL_MS);
+		},
+		[stopRecordingSpoolHeartbeat],
+	);
+
+	useEffect(() => stopRecordingSpoolHeartbeat, [stopRecordingSpoolHeartbeat]);
+
 	const disposeRecordingSpool = useCallback(async () => {
 		const spool = recordingSpoolRef.current;
 		recordingSpoolRef.current = null;
 		recordingSpoolDegradingRef.current = false;
 		recordingSpoolWarningShownRef.current = false;
+		stopRecordingSpoolHeartbeat();
 		if (!spool) return;
 
 		try {
@@ -399,24 +430,28 @@ export const useWebRecorder = ({
 		} catch (error) {
 			console.error("Failed to dispose recording spool", error);
 		}
-	}, []);
+	}, [stopRecordingSpoolHeartbeat]);
 
-	const createRecordingSpool = useCallback(async (mimeType: string) => {
-		if (!canUseRecordingSpool()) {
-			return null;
-		}
+	const createRecordingSpool = useCallback(
+		async (mimeType: string) => {
+			if (!canUseRecordingSpool()) {
+				return null;
+			}
 
-		try {
-			const spool = await RecordingSpool.create({ mimeType });
-			recordingSpoolDegradingRef.current = false;
-			recordingSpoolWarningShownRef.current = false;
-			recordingSpoolRef.current = spool;
-			return spool;
-		} catch (error) {
-			console.error("Failed to initialize recording spool", error);
-			return null;
-		}
-	}, []);
+			try {
+				const spool = await RecordingSpool.create({ mimeType });
+				recordingSpoolDegradingRef.current = false;
+				recordingSpoolWarningShownRef.current = false;
+				recordingSpoolRef.current = spool;
+				startRecordingSpoolHeartbeat(spool);
+				return spool;
+			} catch (error) {
+				console.error("Failed to initialize recording spool", error);
+				return null;
+			}
+		},
+		[startRecordingSpoolHeartbeat],
+	);
 
 	const persistChunkToRecordingSpool = useCallback(
 		(chunk: Blob) => {
@@ -433,6 +468,7 @@ export const useWebRecorder = ({
 
 				recordingSpoolDegradingRef.current = true;
 				recordingSpoolRef.current = null;
+				stopRecordingSpoolHeartbeat();
 				await moveRecordingSpoolToInMemoryBackup({
 					spool,
 					setLocalRecordingStrategy,
@@ -460,7 +496,12 @@ export const useWebRecorder = ({
 				);
 			});
 		},
-		[recordedChunksRef, replaceLocalRecording, setLocalRecordingStrategy],
+		[
+			recordedChunksRef,
+			replaceLocalRecording,
+			setLocalRecordingStrategy,
+			stopRecordingSpoolHeartbeat,
+		],
 	);
 
 	const resolveFailureBlob = useCallback(async (blob: Blob | null) => {
@@ -1297,6 +1338,17 @@ export const useWebRecorder = ({
 						thumbnailPreviewUrl,
 						setUploadStatus,
 					);
+
+					try {
+						await triggerInstantRecordingProcessing({
+							videoId: creationResult.id,
+						});
+					} catch (processingError) {
+						console.error("Failed to start video processing", processingError);
+						toast.warning(
+							"Recording uploaded. Processing did not start yet, but the original recording is available.",
+						);
+					}
 
 					if (thumbnailBlob) {
 						try {

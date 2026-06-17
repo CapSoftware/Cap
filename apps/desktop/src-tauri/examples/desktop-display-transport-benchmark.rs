@@ -8,7 +8,8 @@ use std::{
 use cap_desktop_lib::frame_ws::{WSFrame, WSFrameFormat, create_watch_frame_ws};
 use cap_editor::{
     EditorFrameOutput, Playback, PlaybackRenderOutputFormat, PlaybackSkipReason, PlaybackTelemetry,
-    PlaybackTelemetryEvent, Renderer, start_renderer_layers_creation,
+    PlaybackTelemetryEvent, Renderer, finish_renderer_layers_creation,
+    start_renderer_layers_creation,
 };
 use cap_project::{
     ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
@@ -219,7 +220,8 @@ async fn main() {
     };
 
     let (frame_watch_tx, frame_watch_rx) = watch::channel(None);
-    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_watch_rx).await;
+    let (ws_port, ws_shutdown_token) =
+        create_watch_frame_ws(frame_watch_rx, Default::default()).await;
 
     println!("DISPLAY_WS_URL=ws://127.0.0.1:{ws_port}");
     println!(
@@ -229,7 +231,7 @@ async fn main() {
 
     tokio::time::sleep(Duration::from_millis(startup_delay_ms)).await;
 
-    let layers_rx = start_renderer_layers_creation(&render_constants);
+    let layers_rx = start_renderer_layers_creation(&render_constants, &project);
     let segment_medias =
         match cap_editor::create_segments(&recording_meta, meta.as_ref(), false).await {
             Ok(segments) => Arc::new(segments),
@@ -238,6 +240,7 @@ async fn main() {
                 std::process::exit(1);
             }
         };
+    let layers_rx = finish_renderer_layers_creation(layers_rx).await;
 
     let (telemetry, mut telemetry_rx) = PlaybackTelemetry::channel();
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<usize>();
@@ -246,7 +249,7 @@ async fn main() {
         let ws_frame = match output {
             EditorFrameOutput::Nv12(frame) => {
                 let ws_format = match frame.format {
-                    GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                    GpuOutputFormat::Nv12 => WSFrameFormat::Nv12 { full_range: false },
                     GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
                 };
                 let metadata_bytes = match frame.format {
@@ -290,8 +293,6 @@ async fn main() {
     let renderer = match Renderer::spawn_with_telemetry(
         render_constants.clone(),
         frame_cb,
-        &recording_meta,
-        meta.as_ref(),
         layers_rx,
         Some(telemetry.clone()),
     ) {

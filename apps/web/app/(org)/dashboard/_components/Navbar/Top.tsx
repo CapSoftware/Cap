@@ -15,15 +15,17 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
 import { AnimatePresence } from "framer-motion";
-import { MoreVertical } from "lucide-react";
+import { Moon, MoreVertical, Sun } from "lucide-react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import {
 	cloneElement,
+	forwardRef,
 	type MutableRefObject,
 	memo,
 	type RefObject,
+	useImperativeHandle,
 	useMemo,
 	useRef,
 	useState,
@@ -31,7 +33,6 @@ import {
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
-import { ThemeToggleIcon } from "@/components/theme-toggle-icon";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import {
@@ -45,13 +46,12 @@ import {
 } from "../AnimatedIcons";
 import type { DownloadIconHandle } from "../AnimatedIcons/Download";
 import type { ReferIconHandle } from "../AnimatedIcons/Refer";
+import { DashboardSearch } from "./DashboardSearch";
 
 const Top = () => {
-	const { activeSpace, anyNewNotifications, isDeveloperSection } =
-		useDashboardContext();
+	const { activeSpace, anyNewNotifications } = useDashboardContext();
 	const [toggleNotifications, setToggleNotifications] = useState(false);
-	const bellRef = useRef<HTMLDivElement>(null);
-	const { theme, setThemeHandler } = useTheme();
+	const bellRef = useRef<HTMLButtonElement>(null);
 	const queryClient = useQueryClient();
 
 	const pathname = usePathname();
@@ -67,6 +67,7 @@ const Top = () => {
 		"/dashboard/settings/organization/billing": "Organization Settings",
 		"/dashboard/settings/organization/members": "Organization Settings",
 		"/dashboard/settings/account": "Account Settings",
+		"/dashboard/settings/notifications": "Notification Settings",
 		"/dashboard/spaces": "Spaces",
 		"/dashboard/spaces/browse": "Browse Spaces",
 		"/dashboard/analytics": "Analytics",
@@ -107,7 +108,7 @@ const Top = () => {
 				"top-0 bg-gray-1",
 			)}
 		>
-			<div className="flex flex-col gap-0.5">
+			<div className="flex flex-col gap-0.5 min-w-0 shrink">
 				{activeSpace && <span className="text-xs text-gray-11">Space</span>}
 				<div className="flex gap-1.5 items-center">
 					{activeSpace && (
@@ -123,67 +124,51 @@ const Top = () => {
 					</p>
 				</div>
 			</div>
-			<div className="flex gap-4 items-center">
+			<div className="hidden flex-1 justify-start px-6 min-w-0 lg:flex">
+				<DashboardSearch />
+			</div>
+			<div className="flex gap-4 justify-end items-center shrink-0">
 				{buildEnv.NEXT_PUBLIC_IS_CAP && <ReferButton />}
-				<div
-					data-state={toggleNotifications ? "open" : "closed"}
-					ref={bellRef}
-					onClick={() => {
-						if (anyNewNotifications) {
-							markAllAsread.mutate();
-						}
-						setToggleNotifications(!toggleNotifications);
-					}}
-					onKeyDown={(e) => {
-						if (e.key === "Enter" || e.key === " ") {
-							e.preventDefault();
+				<div className="hidden relative lg:flex">
+					<button
+						type="button"
+						data-state={toggleNotifications ? "open" : "closed"}
+						ref={bellRef}
+						onClick={() => {
 							if (anyNewNotifications) {
 								markAllAsread.mutate();
 							}
 							setToggleNotifications(!toggleNotifications);
-						}
-					}}
-					tabIndex={0}
-					role="button"
-					aria-label={`Notifications${
-						anyNewNotifications ? " (new notifications available)" : ""
-					}`}
-					aria-expanded={toggleNotifications}
-					className="hidden relative justify-center data-[state=open]:hover:bg-gray-5 items-center bg-gray-3
+						}}
+						aria-label={`Notifications${
+							anyNewNotifications ? " (new notifications available)" : ""
+						}`}
+						aria-expanded={toggleNotifications}
+						className="relative justify-center data-[state=open]:hover:bg-gray-5 items-center bg-gray-3
                 rounded-full transition-colors cursor-pointer lg:flex
                 hover:bg-gray-5 data-[state=open]:bg-gray-5
                 focus:outline-none
                 size-9"
-				>
-					{anyNewNotifications && (
-						<div className="absolute right-0 top-1 z-10">
-							<div className="relative">
-								<div className="absolute inset-0 w-2 h-2 bg-red-400 rounded-full opacity-75 animate-ping" />
-								<div className="relative w-2 h-2 bg-red-400 rounded-full" />
+					>
+						{anyNewNotifications && (
+							<div className="absolute right-0 top-1 z-10">
+								<div className="relative">
+									<div className="absolute inset-0 w-2 h-2 bg-red-400 rounded-full opacity-75 animate-ping" />
+									<div className="relative w-2 h-2 bg-red-400 rounded-full" />
+								</div>
 							</div>
-						</div>
-					)}
-					<FontAwesomeIcon className="text-gray-12 size-3.5" icon={faBell} />
+						)}
+						<FontAwesomeIcon className="text-gray-12 size-3.5" icon={faBell} />
+					</button>
 					<AnimatePresence>
-						{toggleNotifications && <Notifications ref={notificationsRef} />}
+						{toggleNotifications && (
+							<Notifications
+								ref={notificationsRef}
+								onClose={() => setToggleNotifications(false)}
+							/>
+						)}
 					</AnimatePresence>
 				</div>
-				{!isDeveloperSection && (
-					<div
-						onClick={() => {
-							if (document.startViewTransition) {
-								document.startViewTransition(() => {
-									setThemeHandler(theme === "light" ? "dark" : "light");
-								});
-							} else {
-								setThemeHandler(theme === "light" ? "dark" : "light");
-							}
-						}}
-						className="hidden justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 lg:flex hover:bg-gray-5 size-9"
-					>
-						<ThemeToggleIcon />
-					</div>
-				)}
 				<User />
 			</div>
 		</div>
@@ -194,6 +179,10 @@ const User = () => {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const { user } = useDashboardContext();
+	const { theme, setThemeHandler } = useTheme();
+	const nextTheme = theme === "light" ? "dark" : "light";
+	const themeLabel =
+		theme === "light" ? "Toggle Dark Mode" : "Toggle Light Mode";
 
 	const menuItems = useMemo(
 		() => [
@@ -224,14 +213,6 @@ const User = () => {
 				showCondition: buildEnv.NEXT_PUBLIC_IS_CAP,
 			},
 			{
-				name: "Settings",
-				icon: <SettingsGearIcon />,
-				href: "/dashboard/settings/account",
-				onClick: () => setMenuOpen(false),
-				iconClassName: "text-gray-11 group-hover:text-gray-12",
-				showCondition: true,
-			},
-			{
 				name: "Chat Support",
 				icon: <MessageCircleMoreIcon />,
 				onClick: () => window.open("https://cap.link/discord", "_blank"),
@@ -246,14 +227,41 @@ const User = () => {
 				showCondition: true,
 			},
 			{
+				name: themeLabel,
+				icon: <ThemeMenuIcon />,
+				onClick: () => {
+					setMenuOpen(false);
+					if (document.startViewTransition) {
+						document.startViewTransition(() => {
+							setThemeHandler(nextTheme);
+						});
+					} else {
+						setThemeHandler(nextTheme);
+					}
+				},
+				iconClassName: "text-gray-11 group-hover:text-gray-12",
+				showCondition: true,
+			},
+			{
+				name: "Settings",
+				icon: <SettingsGearIcon />,
+				href: "/dashboard/settings/account",
+				onClick: () => setMenuOpen(false),
+				iconClassName: "text-gray-11 group-hover:text-gray-12",
+				showCondition: true,
+			},
+			{
 				name: "Sign Out",
 				icon: <LogoutIcon />,
-				onClick: () => signOut(),
+				onClick: () => {
+					setMenuOpen(false);
+					signOut();
+				},
 				iconClassName: "text-gray-11 group-hover:text-gray-12",
 				showCondition: true,
 			},
 		],
-		[user.isPro],
+		[nextTheme, setThemeHandler, themeLabel, user.isPro],
 	);
 
 	return (
@@ -295,7 +303,7 @@ const User = () => {
 										key={index.toString()}
 										icon={item.icon}
 										name={item.name}
-										href={item.href ?? "#"}
+										href={"href" in item ? item.href : undefined}
 										onClick={item.onClick}
 										iconClassName={item.iconClassName}
 									/>
@@ -322,6 +330,19 @@ interface Props {
 
 const MenuItem = memo(({ icon, name, href, onClick, iconClassName }: Props) => {
 	const iconRef = useRef<DownloadIconHandle>(null);
+	const content = (
+		<>
+			<div className="flex flex-shrink-0 justify-center items-center w-3.5 h-3.5">
+				{cloneElement(icon, {
+					ref: iconRef,
+					className: iconClassName,
+					size: 14,
+				})}
+			</div>
+			<p className={clsx("text-sm text-gray-12")}>{name}</p>
+		</>
+	);
+
 	return (
 		<CommandItem
 			key={name}
@@ -334,24 +355,38 @@ const MenuItem = memo(({ icon, name, href, onClick, iconClassName }: Props) => {
 				iconRef.current?.stopAnimation();
 			}}
 		>
-			<Link
-				className="flex gap-2 items-center w-full"
-				href={href ?? "#"}
-				prefetch={true}
-				onClick={onClick}
-			>
-				<div className="flex-shrink-0 flex items-center justify-center w-3.5 h-3.5">
-					{cloneElement(icon, {
-						ref: iconRef,
-						className: iconClassName,
-						size: 14,
-					})}
-				</div>
-				<p className={clsx("text-sm text-gray-12")}>{name}</p>
-			</Link>
+			{href ? (
+				<Link
+					className="flex gap-2 items-center w-full"
+					href={href}
+					prefetch={true}
+					onClick={onClick}
+				>
+					{content}
+				</Link>
+			) : (
+				<div className="flex gap-2 items-center w-full">{content}</div>
+			)}
 		</CommandItem>
 	);
 });
+
+const ThemeMenuIcon = forwardRef<
+	DownloadIconHandle,
+	{ className?: string; size?: number }
+>(({ className, size = 14 }, ref) => {
+	const { theme } = useTheme();
+	const Icon = theme === "light" ? Moon : Sun;
+
+	useImperativeHandle(ref, () => ({
+		startAnimation: () => undefined,
+		stopAnimation: () => undefined,
+	}));
+
+	return <Icon className={className} size={size} />;
+});
+
+ThemeMenuIcon.displayName = "ThemeMenuIcon";
 
 const ReferButton = () => {
 	const iconRef = useRef<ReferIconHandle>(null);
@@ -359,7 +394,19 @@ const ReferButton = () => {
 		useDashboardContext();
 
 	return (
-		<Link href="/dashboard/refer" className="hidden relative lg:block">
+		<Link
+			href="/dashboard/refer"
+			className="hidden relative lg:block"
+			onClick={() => {
+				setReferClickedStateHandler(true);
+			}}
+			onMouseEnter={() => {
+				iconRef.current?.startAnimation();
+			}}
+			onMouseLeave={() => {
+				iconRef.current?.stopAnimation();
+			}}
+		>
 			{!referClickedState && (
 				<div className="absolute right-0 top-1 z-10">
 					<div className="relative">
@@ -369,18 +416,7 @@ const ReferButton = () => {
 				</div>
 			)}
 
-			<div
-				onClick={() => {
-					setReferClickedStateHandler(true);
-				}}
-				onMouseEnter={() => {
-					iconRef.current?.startAnimation();
-				}}
-				onMouseLeave={() => {
-					iconRef.current?.stopAnimation();
-				}}
-				className="flex justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 hover:bg-gray-5 size-9"
-			>
+			<div className="flex justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 hover:bg-gray-5 size-9">
 				{cloneElement(<ReferIcon />, {
 					ref: iconRef,
 					className: "text-gray-12 size-3.5",

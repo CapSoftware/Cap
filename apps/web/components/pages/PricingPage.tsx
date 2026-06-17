@@ -25,7 +25,7 @@ const fadeIn = {
 };
 
 const fadeInFromBottom = {
-	hidden: { opacity: 0, y: 50 },
+	hidden: { opacity: 0, y: 40 },
 	visible: (custom: number = 0) => ({
 		opacity: 1,
 		y: 0,
@@ -67,25 +67,26 @@ export const PricingPage = () => {
 
 	return (
 		<motion.div initial="hidden" animate="visible" variants={staggerContainer}>
-			<div className="py-32 space-y-[100px] md:py-40 wrapper">
+			<div className="py-32 space-y-[120px] md:py-40 wrapper">
 				<div>
 					<motion.div
-						className="mb-16 text-center"
+						className="mb-12 text-center"
 						variants={fadeIn}
 						custom={0}
 					>
 						<motion.h1
-							className="text-4xl md:text-5xl"
+							className="mt-3 text-4xl font-medium tracking-tight md:text-5xl text-gray-12"
 							variants={fadeIn}
-							custom={1}
+							custom={2}
 						>
-							Simple, Flexible Pricing
+							Simple, flexible pricing
 						</motion.h1>
-						<motion.div
+						<motion.button
+							type="button"
 							onClick={scrollToTestimonials}
 							className="hidden sm:flex justify-center cursor-pointer items-center px-5 py-2.5 gap-2 mx-auto mt-6 rounded-full border bg-gray-1 border-gray-5 w-fit hover:bg-gray-2 transition-colors"
 							variants={fadeIn}
-							custom={3}
+							custom={4}
 							whileHover={{ scale: 1.03 }}
 							whileTap={{ scale: 0.98 }}
 						>
@@ -93,22 +94,20 @@ export const PricingPage = () => {
 								className="text-red-500 size-3.5"
 								icon={faHeart}
 							/>
-							<p className="font-medium text-gray-12">
+							<span className="text-sm font-medium text-gray-12">
 								Trusted by 40,000+ teams, builders and creators
-							</p>
-						</motion.div>
+							</span>
+						</motion.button>
 					</motion.div>
 
 					<motion.div
-						className="w-full max-w-[1400px] mx-auto"
+						className="grid gap-6 items-stretch mx-auto w-full max-w-[1080px] pt-3 lg:grid-cols-3"
 						variants={fadeInFromBottom}
 						custom={0}
 					>
-						<div className="flex flex-col gap-8 justify-center items-stretch lg:flex-row">
-							<CommercialCard />
-							<ProCard />
-							<EnterpriseCard />
-						</div>
+						<CommercialCard />
+						<ProCard />
+						<EnterpriseCard />
 					</motion.div>
 				</div>
 

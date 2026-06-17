@@ -1,4 +1,3 @@
-import { serverEnv } from "@cap/env";
 import { STRIPE_PLAN_IDS } from "@cap/utils";
 import {
 	DeferredHomepageClosingSections,
@@ -14,7 +13,7 @@ interface HomePageProps {
 
 export function HomePage({ serverHomepageCopyVariant = "" }: HomePageProps) {
 	const plans =
-		serverEnv().VERCEL_ENV === "production"
+		process.env.VERCEL_ENV === "production"
 			? STRIPE_PLAN_IDS.production
 			: STRIPE_PLAN_IDS.development;
 

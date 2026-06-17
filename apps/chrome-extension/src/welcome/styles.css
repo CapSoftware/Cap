@@ -1,0 +1,237 @@
+@import "../shared/paper.css";
+
+.corner {
+	position: fixed;
+	top: 74px;
+	right: 36px;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 2px;
+	pointer-events: none;
+}
+
+.corner-arrow {
+	width: 120px;
+	height: auto;
+	overflow: visible;
+}
+
+.corner-boil {
+	filter: url(#boil-corner);
+}
+
+.corner-nudge {
+	animation: nudge 2s ease-in-out 1.6s infinite;
+}
+
+.corner-arrow-path {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: draw 0.8s ease 0.5s forwards;
+}
+
+.corner-arrow-head {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: draw 0.3s ease 1.2s forwards;
+}
+
+.corner-hint {
+	margin-right: 8px;
+	font-size: 14px;
+	font-style: italic;
+	color: var(--ink-soft);
+	opacity: 0;
+	transform: rotate(-4deg);
+	animation: fade-in 0.5s ease 1.3s forwards;
+}
+
+.doodle-pin {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: pin-press 0.45s ease 1.45s;
+}
+
+.pin-body {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: draw 0.9s ease 0.15s forwards;
+}
+
+.pin-needle {
+	stroke: var(--accent);
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: draw 0.35s ease 1.05s forwards;
+}
+
+.spark-1 {
+	animation-delay: 1.5s;
+}
+
+.spark-2 {
+	animation-delay: 1.65s;
+}
+
+.spark-3 {
+	animation-delay: 1.8s;
+}
+
+.steps {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 14px;
+	width: min(680px, calc(100vw - 48px));
+	margin: 36px 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+.step {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	padding: 20px 16px 18px;
+	border: 1.5px solid var(--track);
+	border-radius: 16px;
+	background: rgba(255, 255, 255, 0.65);
+	animation: fade-up 0.5s ease both;
+}
+
+.step:nth-child(1) {
+	animation-delay: 0.2s;
+}
+
+.step:nth-child(2) {
+	animation-delay: 0.3s;
+}
+
+.step:nth-child(3) {
+	animation-delay: 0.4s;
+}
+
+.step-doodle {
+	width: 44px;
+	height: 44px;
+	overflow: visible;
+}
+
+.doodle-stroke-sm {
+	fill: none;
+	stroke: var(--ink);
+	stroke-width: 3;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.record-dot {
+	fill: var(--accent);
+	animation: record-pulse 1.8s ease-in-out 1.4s infinite;
+}
+
+.step-count {
+	font-size: 12px;
+	font-weight: 500;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--ink-soft);
+}
+
+.step p {
+	font-size: 13.5px;
+	line-height: 1.45;
+	color: var(--ink);
+}
+
+.cta-row {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	margin-top: 32px;
+	min-height: 44px;
+	animation: fade-up 0.5s ease 0.5s both;
+}
+
+.cta-note {
+	margin-top: 14px;
+	font-size: 13px;
+	color: var(--ink-soft);
+	animation: fade-up 0.3s ease both;
+}
+
+.footnote {
+	animation-delay: 0.55s;
+}
+
+@keyframes nudge {
+	0%,
+	100% {
+		transform: translate(0, 0);
+	}
+	50% {
+		transform: translate(4px, -6px);
+	}
+}
+
+@keyframes pin-press {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	45% {
+		transform: translateY(5px);
+	}
+}
+
+@keyframes record-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.35;
+	}
+}
+
+@media (max-width: 720px) {
+	.steps {
+		grid-template-columns: 1fr;
+	}
+
+	.corner {
+		right: 16px;
+	}
+
+	.corner-arrow {
+		width: 88px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.corner-boil {
+		filter: none;
+	}
+
+	.corner-nudge,
+	.record-dot,
+	.doodle-pin {
+		animation: none;
+	}
+
+	.corner-hint {
+		animation: fade-in 0.01ms forwards;
+	}
+
+	.step,
+	.cta-row,
+	.cta-note,
+	.corner-arrow-path,
+	.corner-arrow-head,
+	.pin-body,
+	.pin-needle {
+		animation-duration: 0.01ms;
+		animation-delay: 0s;
+	}
+}

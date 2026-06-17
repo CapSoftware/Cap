@@ -10,10 +10,11 @@ import {
 } from "@cap/web-domain";
 import { useDebounce } from "@uidotdev/usehooks";
 import clsx from "clsx";
-import { ChevronDown, Globe } from "lucide-react";
+import { ChevronDown, Gauge, Globe } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { updateOrganizationSettings } from "@/actions/organization/settings";
+import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from "@/lib/playback-speed";
 import { useDashboardContext } from "../../../Contexts";
 import type { OrganizationSettings } from "../../../dashboard-data";
 
@@ -27,6 +28,7 @@ const defaultSettings: OrganizationSettings = {
 	hideShareableLinkCapLogo: false,
 	shareableLinkUseOrganizationIcon: false,
 	aiGenerationLanguage: AI_GENERATION_LANGUAGE_AUTO,
+	defaultPlaybackSpeed: DEFAULT_PLAYBACK_SPEED,
 };
 
 type BooleanOrganizationSettingKey = Exclude<
@@ -165,6 +167,16 @@ const CapSettingsCard = () => {
 							return;
 						}
 
+						if (changedKey === "defaultPlaybackSpeed") {
+							toast.success(
+								`Default playback speed set to ${
+									debouncedUpdateSettings.defaultPlaybackSpeed ??
+									DEFAULT_PLAYBACK_SPEED
+								}×`,
+							);
+							return;
+						}
+
 						const option = options.find((opt) => opt.value === changedKey);
 						if (changedKey === "hideShareableLinkCapLogo") {
 							toast.success(
@@ -213,6 +225,15 @@ const CapSettingsCard = () => {
 			};
 		});
 	};
+
+	const handleSpeedChange = (speed: number) => {
+		setSettings((prev) => ({
+			...prev,
+			defaultPlaybackSpeed: speed,
+		}));
+	};
+
+	const selectedSpeed = settings.defaultPlaybackSpeed ?? DEFAULT_PLAYBACK_SPEED;
 
 	const handleLanguageChange = (language: AiGenerationLanguage) => {
 		if (!isAiGenerationLanguage(language)) {
@@ -269,6 +290,37 @@ const CapSettingsCard = () => {
 						/>
 					</div>
 				))}
+			</div>
+
+			<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3 sm:flex-row sm:justify-between sm:items-center">
+				<div className="flex flex-col flex-1 gap-1">
+					<div className="flex gap-1.5 items-center">
+						<Gauge className="w-3.5 h-3.5 text-gray-9" />
+						<p className="text-sm text-gray-12">Default playback speed</p>
+					</div>
+					<p className="text-xs text-gray-10">
+						The speed caps start playing at on shareable links. Viewers can
+						still change it.
+					</p>
+				</div>
+				<div className="flex flex-wrap gap-1 items-center p-1 rounded-lg border bg-gray-1 border-gray-3">
+					{PLAYBACK_SPEEDS.map((speed) => (
+						<button
+							key={speed}
+							type="button"
+							onClick={() => handleSpeedChange(speed)}
+							aria-pressed={selectedSpeed === speed}
+							className={clsx(
+								"min-w-10 rounded-md px-2 py-1 text-xs font-medium tabular-nums transition-colors",
+								selectedSpeed === speed
+									? "text-white bg-blue-11"
+									: "text-gray-11 hover:bg-gray-3",
+							)}
+						>
+							{speed}×
+						</button>
+					))}
+				</div>
 			</div>
 
 			<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3 sm:flex-row sm:justify-between sm:items-center">

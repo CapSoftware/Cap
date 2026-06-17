@@ -5,6 +5,8 @@ import { and, eq, notInArray } from "drizzle-orm";
 import { start } from "workflow/api";
 import { finalizeDesktopRecordingWorkflow } from "@/workflows/finalize-desktop-recording";
 
+export { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
+
 export type DesktopSegmentsFinalizationStatus = "queued" | "already-processing";
 
 const PROCESSING_MESSAGE = "Muxing segments into MP4...";
@@ -18,26 +20,6 @@ const getAffectedRows = (result: unknown) => {
 
 	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
-
-export function isRetryableDesktopSegmentsFinalizationError(
-	error: string | null | undefined,
-) {
-	if (!error) return false;
-
-	return (
-		error.includes("Mux failed: 500") ||
-		error.includes("Mux failed: 502") ||
-		error.includes("Mux failed: 503") ||
-		error.includes("Mux failed: 504") ||
-		error.includes("Application failed to respond") ||
-		error.includes("SERVER_BUSY") ||
-		error.includes("Server is at capacity") ||
-		error.includes("Failed to start segment muxing") ||
-		error.includes("fetch failed") ||
-		error.includes("timed out") ||
-		error.includes("timeout")
-	);
-}
 
 export async function queueDesktopSegmentsFinalization({
 	videoId,

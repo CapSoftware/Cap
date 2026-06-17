@@ -19,7 +19,11 @@ use lru::LruCache;
 use std::{
     collections::{HashSet, VecDeque},
     num::NonZeroUsize,
-    sync::{Arc, RwLock, mpsc as std_mpsc},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+        mpsc as std_mpsc,
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::watch;
@@ -91,6 +95,10 @@ fn precision_sleep_sync(deadline: Instant) {
     {
         std::thread::sleep(remaining);
     }
+}
+
+fn valid_playback_duration(duration: f64) -> Option<f64> {
+    (duration.is_finite() && duration > 0.0).then_some(duration)
 }
 
 #[derive(Debug)]
@@ -215,17 +223,19 @@ impl Playback {
         let prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
         let prefetch_segment_medias = self.segment_medias.clone();
-        let (prefetch_duration, has_timeline) =
-            if let Some(timeline) = &self.project.borrow().timeline {
-                (timeline.duration(), true)
-            } else {
-                (f64::MAX, false)
-            };
+        let (prefetch_duration, has_timeline) = self
+            .project
+            .borrow()
+            .timeline
+            .as_ref()
+            .and_then(|timeline| valid_playback_duration(timeline.duration()))
+            .map(|duration| (duration, true))
+            .unwrap_or((0.0, false));
         let segment_media_count = self.segment_medias.len();
 
         tokio::spawn(async move {
             if !has_timeline {
-                warn!("Prefetch: No timeline configuration found");
+                warn!("Prefetch: No valid timeline duration found");
             }
             if segment_media_count == 0 {
                 warn!("Prefetch: No segment media available");
@@ -455,10 +465,17 @@ impl Playback {
         let tokio_handle = tokio::runtime::Handle::current();
 
         let playback_body = move || {
-            let duration = if let Some(timeline) = &self.project.borrow().timeline {
-                timeline.duration()
-            } else {
-                f64::MAX
+            let duration = self
+                .project
+                .borrow()
+                .timeline
+                .as_ref()
+                .and_then(|timeline| valid_playback_duration(timeline.duration()));
+            let Some(duration) = duration else {
+                warn!("Playback: No valid timeline duration found");
+                stop_tx.send(true).ok();
+                event_tx.send(PlaybackEvent::Stop).ok();
+                return;
             };
 
             let (audio_playhead_tx, audio_playhead_rx) =
@@ -716,11 +733,11 @@ impl Playback {
             #[cfg(target_os = "windows")]
             let _timer_guard = WindowsTimerResolution::set_high_precision();
 
-            let start = Instant::now();
             let has_audio = {
                 let _guard = tokio_handle.enter();
                 audio_playback.spawn()
             };
+            let start = Instant::now();
 
             'playback: loop {
                 if self.project.has_changed().unwrap_or(false) {
@@ -1173,6 +1190,11 @@ impl PlaybackHandle {
     }
 }
 
+/// How long the audio thread waits for the output device's first callback before giving up and
+/// reporting "no audio". Slow transports (e.g. Bluetooth) can take several seconds.
+const AUDIO_FIRST_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
+const AUDIO_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
 struct AudioPlayback {
     segments: Vec<AudioSegment>,
     stop_rx: watch::Receiver<bool>,
@@ -1192,12 +1214,18 @@ impl AudioPlayback {
             return false;
         }
 
+        let (ready_tx, ready_rx) = std_mpsc::channel();
+        let mut stop_rx_before_ready = self.stop_rx.clone();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled_for_thread = Arc::clone(&cancelled);
+
         std::thread::spawn(move || {
             let host = cpal::default_host();
             let device = match host.default_output_device() {
                 Some(d) => d,
                 None => {
                     error!("No default output device found. Skipping audio playback.");
+                    let _ = ready_tx.send(false);
                     return;
                 }
             };
@@ -1208,36 +1236,57 @@ impl AudioPlayback {
                         "Failed to get default output config: {}. Skipping audio playback.",
                         e
                     );
+                    let _ = ready_tx.send(false);
                     return;
                 }
             };
 
             let duration_secs = self.duration_secs;
+            let (first_callback_tx, first_callback_rx) = std_mpsc::channel();
 
             let result = match supported_config.sample_format() {
-                SampleFormat::I16 => {
-                    self.create_stream_prerendered::<i16>(device, supported_config, duration_secs)
-                }
-                SampleFormat::I32 => {
-                    self.create_stream_prerendered::<i32>(device, supported_config, duration_secs)
-                }
-                SampleFormat::F32 => {
-                    self.create_stream_prerendered::<f32>(device, supported_config, duration_secs)
-                }
-                SampleFormat::I64 => {
-                    self.create_stream_prerendered::<i64>(device, supported_config, duration_secs)
-                }
-                SampleFormat::U8 => {
-                    self.create_stream_prerendered::<u8>(device, supported_config, duration_secs)
-                }
-                SampleFormat::F64 => {
-                    self.create_stream_prerendered::<f64>(device, supported_config, duration_secs)
-                }
+                SampleFormat::I16 => self.create_stream_prerendered::<i16>(
+                    device,
+                    supported_config,
+                    duration_secs,
+                    first_callback_tx,
+                ),
+                SampleFormat::I32 => self.create_stream_prerendered::<i32>(
+                    device,
+                    supported_config,
+                    duration_secs,
+                    first_callback_tx,
+                ),
+                SampleFormat::F32 => self.create_stream_prerendered::<f32>(
+                    device,
+                    supported_config,
+                    duration_secs,
+                    first_callback_tx,
+                ),
+                SampleFormat::I64 => self.create_stream_prerendered::<i64>(
+                    device,
+                    supported_config,
+                    duration_secs,
+                    first_callback_tx,
+                ),
+                SampleFormat::U8 => self.create_stream_prerendered::<u8>(
+                    device,
+                    supported_config,
+                    duration_secs,
+                    first_callback_tx,
+                ),
+                SampleFormat::F64 => self.create_stream_prerendered::<f64>(
+                    device,
+                    supported_config,
+                    duration_secs,
+                    first_callback_tx,
+                ),
                 format => {
                     error!(
                         "Unsupported sample format {:?} for simplified volume adjustment, skipping audio playback.",
                         format
                     );
+                    let _ = ready_tx.send(false);
                     return;
                 }
             };
@@ -1249,23 +1298,62 @@ impl AudioPlayback {
                         "Failed to create audio stream: {}. Skipping audio playback.",
                         e
                     );
+                    let _ = ready_tx.send(false);
                     return;
                 }
             };
+
+            if cancelled_for_thread.load(Ordering::Acquire) || *stop_rx.borrow() {
+                let _ = ready_tx.send(false);
+                return;
+            }
 
             if let Err(e) = stream.play() {
                 error!(
                     "Failed to play audio stream: {}. Skipping audio playback.",
                     e
                 );
+                let _ = ready_tx.send(false);
                 return;
+            }
+
+            if cancelled_for_thread.load(Ordering::Acquire) || *stop_rx.borrow() {
+                let _ = ready_tx.send(false);
+                return;
+            }
+
+            match first_callback_rx.recv_timeout(AUDIO_FIRST_CALLBACK_TIMEOUT) {
+                Ok(()) => {
+                    let _ = ready_tx.send(true);
+                }
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                    error!("Audio stream did not produce an output callback before playback start");
+                    let _ = ready_tx.send(false);
+                    return;
+                }
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                    error!("Audio stream ended before producing an output callback");
+                    let _ = ready_tx.send(false);
+                    return;
+                }
             }
 
             let _ = handle.block_on(stop_rx.changed());
             info!("Audio playback thread finished.");
         });
 
-        true
+        loop {
+            match ready_rx.recv_timeout(AUDIO_READY_POLL_INTERVAL) {
+                Ok(ready) => return ready,
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                    if *stop_rx_before_ready.borrow_and_update() {
+                        cancelled.store(true, Ordering::Release);
+                        return false;
+                    }
+                }
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -1274,6 +1362,7 @@ impl AudioPlayback {
         self,
         device: cpal::Device,
         supported_config: cpal::SupportedStreamConfig,
+        first_callback_tx: std_mpsc::Sender<()>,
     ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
     where
         T: FromSampleBytes + cpal::Sample,
@@ -1422,13 +1511,12 @@ impl AudioPlayback {
             let latency_config = LatencyCorrectionConfig::default();
             #[allow(unused_mut)]
             let mut latency_corrector = LatencyCorrector::new(static_latency_hint, latency_config);
-            let initial_compensation_secs = latency_corrector.initial_compensation_secs();
+            let initial_latency_secs = latency_corrector.initial_output_latency_secs();
             let device_sample_rate = sample_rate;
 
             {
                 let project_snapshot = project.borrow();
-                audio_renderer
-                    .set_playhead(playhead + initial_compensation_secs, &project_snapshot);
+                audio_renderer.set_playhead(playhead + initial_latency_secs, &project_snapshot);
 
                 #[cfg(target_os = "windows")]
                 let initial_prefill = headroom_samples * 4;
@@ -1461,6 +1549,7 @@ impl AudioPlayback {
             let headroom_for_stream = headroom_samples;
             let mut playhead_rx_for_stream = playhead_rx.clone();
             let mut last_video_playhead = playhead;
+            let mut first_callback_tx = Some(first_callback_tx.clone());
 
             #[cfg(target_os = "windows")]
             const FIXED_LATENCY_SECS: f64 = 0.08;
@@ -1503,16 +1592,14 @@ impl AudioPlayback {
                             let drift = (video_playhead - audio_playhead).abs();
 
                             if jump > HARD_SEEK_THRESHOLD_SECS {
-                                audio_renderer.set_playhead(
-                                    video_playhead + initial_compensation_secs,
-                                    &project,
-                                );
+                                audio_renderer
+                                    .set_playhead(video_playhead + FIXED_LATENCY_SECS, &project);
                                 callbacks_since_last_sync = 0;
                             } else if drift > SYNC_THRESHOLD_SECS
                                 && callbacks_since_last_sync >= MIN_SYNC_INTERVAL_CALLBACKS
                             {
                                 audio_renderer.set_playhead_smooth(
-                                    video_playhead + initial_compensation_secs,
+                                    video_playhead + FIXED_LATENCY_SECS,
                                     &project,
                                 );
                                 callbacks_since_last_sync = 0;
@@ -1529,10 +1616,8 @@ impl AudioPlayback {
                                 || (video_playhead - last_video_playhead).abs()
                                     > SYNC_THRESHOLD_SECS
                             {
-                                audio_renderer.set_playhead(
-                                    video_playhead + initial_compensation_secs,
-                                    &project,
-                                );
+                                audio_renderer
+                                    .set_playhead(video_playhead + latency_secs, &project);
                             }
                         }
 
@@ -1542,6 +1627,9 @@ impl AudioPlayback {
                     let playback_samples = buffer.len();
                     let min_headroom = headroom_for_stream.max(playback_samples * 2);
                     audio_renderer.fill(buffer, &project, min_headroom);
+                    if let Some(tx) = first_callback_tx.take() {
+                        let _ = tx.send(());
+                    }
                 },
                 |_err| eprintln!("Audio stream error: {_err}"),
                 None,
@@ -1573,6 +1661,7 @@ impl AudioPlayback {
         device: cpal::Device,
         supported_config: cpal::SupportedStreamConfig,
         duration_secs: f64,
+        first_callback_tx: std_mpsc::Sender<()>,
     ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
     where
         T: FromSampleBytes + cpal::Sample,
@@ -1602,6 +1691,12 @@ impl AudioPlayback {
         let buffer_size = output_info.buffer_size;
 
         let playhead = f64::from(start_frame_number) / f64::from(fps);
+
+        if valid_playback_duration(duration_secs).is_none() {
+            return Err(MediaError::TaskLaunch(format!(
+                "Invalid audio pre-render duration: {duration_secs}"
+            )));
+        }
 
         info!(
             duration_secs = duration_secs,
@@ -1639,14 +1734,15 @@ impl AudioPlayback {
             LatencyCorrector::new(hint, LatencyCorrectionConfig::default())
         };
         #[cfg(not(target_os = "windows"))]
-        let initial_compensation_secs = latency_corrector.initial_compensation_secs();
+        let initial_latency_secs = latency_corrector.initial_output_latency_secs();
         #[cfg(target_os = "windows")]
-        let initial_compensation_secs = 0.0;
+        let initial_latency_secs = 0.0;
 
-        audio_buffer.set_playhead(playhead + initial_compensation_secs);
+        audio_buffer.set_playhead(playhead + initial_latency_secs);
 
         let mut playhead_rx_for_stream = playhead_rx.clone();
         let mut last_video_playhead = playhead;
+        let mut first_callback_tx = Some(first_callback_tx);
 
         let stream = device
             .build_output_stream(
@@ -1674,6 +1770,9 @@ impl AudioPlayback {
                     }
 
                     audio_buffer.fill(buffer);
+                    if let Some(tx) = first_callback_tx.take() {
+                        let _ = tx.send(());
+                    }
                 },
                 |err| eprintln!("Audio stream error: {err}"),
                 None,

@@ -1,5 +1,5 @@
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
-import clsx from "clsx";
+import { classNames } from "@cap/utils";
+import { Alignment, Fit, Layout, useRive } from "@rive-app/react-canvas";
 import { forwardRef, memo, useImperativeHandle } from "react";
 
 export interface ProArtRef {
@@ -20,6 +20,7 @@ export const ProArt = memo(
 			autoplay: false,
 			layout: new Layout({
 				fit: Fit.Contain,
+				alignment: Alignment.CenterLeft,
 			}),
 		});
 
@@ -38,10 +39,8 @@ export const ProArt = memo(
 			},
 		}));
 
-		return (
-			<ProRive
-				className={clsx(className, "mx-auto w-full max-w-[100px] h-[80px]")}
-			/>
-		);
+		return <ProRive className={classNames("w-full h-full", className)} />;
 	}),
 );
+
+ProArt.displayName = "ProArt";

@@ -112,6 +112,14 @@ Cap is built with modern, performant technologies:
 - Access recordings at cap.link or your custom domain
 - No installation required for viewers
 
+## Command Line (for AI agents)
+
+Cap ships a `cap` CLI designed to be driven by AI coding agents (Claude Code, Codex, OpenCode, Cursor) and scripts. Install it from Cap Desktop (Settings → Command Line) or `curl -fsSL https://cap.so/install-cli.sh | sh` (PowerShell: `irm https://cap.so/install-cli.ps1 | iex`).
+- Add `--json` to any command for machine-readable JSON on stdout; stderr stays human-readable. Failures exit non-zero and, in `--json` mode, print a final object/event with an `error` field.
+- Discover the full contract with `cap guide --json` (capability + schema manifest) and `cap <command> --help`.
+- Typical flow: `cap doctor --json` → `cap targets --json` → `cap record start --screen <id> --json` → `cap record stop --id <recordingId> --json` → `cap export <path.cap> --json` → `cap upload <file> --json`. Uploads authenticate automatically by reusing the Cap Desktop login (`cap auth status --json`), or set `CAP_API_KEY` for headless use.
+- Recordings run in the background via `cap record start --detach`; stop them later with `cap record stop`. `cap screenshot`, `cap project validate/inspect`, and `cap recordings list` round out the surface.
+
 ## Open Source
 
 Cap is proudly open source under fair licensing:

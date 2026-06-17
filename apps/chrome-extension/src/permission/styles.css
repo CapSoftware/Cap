@@ -1,0 +1,133 @@
+@import "../shared/paper.css";
+
+#root {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+}
+
+.camera-body {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: draw 0.9s ease 0.15s forwards;
+}
+
+.camera-lens {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: draw 0.5s ease 0.9s forwards;
+}
+
+.lens-dot {
+	fill: var(--accent);
+	opacity: 0;
+	animation: fade-in 0.3s ease 1.2s forwards;
+}
+
+.flash-dot {
+	fill: var(--accent);
+	opacity: 0;
+	animation: fade-in 0.3s ease 1.35s forwards;
+}
+
+.stage[data-mode="requesting"] .lens-dot {
+	opacity: 1;
+	animation: lens-pulse 1.2s ease-in-out infinite;
+}
+
+.stage[data-mode="error"] .lens-dot {
+	fill: var(--error);
+}
+
+.spark {
+	display: none;
+}
+
+.stage[data-mode="ready"] .spark {
+	display: inline;
+}
+
+.spark-1 {
+	animation-delay: 0.05s;
+}
+
+.spark-2 {
+	animation-delay: 0.2s;
+}
+
+.spark-3 {
+	animation-delay: 0.35s;
+}
+
+.device-card {
+	width: min(420px, calc(100vw - 48px));
+	margin-top: 28px;
+	justify-items: start;
+}
+
+.device-card .field {
+	width: 100%;
+}
+
+.stage > .paper-pill.error {
+	margin-top: 24px;
+	max-width: 480px;
+}
+
+.cta-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-top: 28px;
+	animation: fade-up 0.5s ease 0.3s both;
+}
+
+.wait-squiggle {
+	display: none;
+	width: 200px;
+	height: 26px;
+	margin-top: 16px;
+	overflow: visible;
+}
+
+.stage[data-mode="requesting"] .wait-squiggle {
+	display: block;
+}
+
+.wait-squiggle-path {
+	fill: none;
+	stroke: var(--ink-soft);
+	stroke-width: 2.5;
+	stroke-linecap: round;
+	stroke-dasharray: 2 4.2;
+	animation: march 1.2s linear infinite;
+}
+
+@keyframes lens-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.3;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.camera-body,
+	.camera-lens,
+	.cta-row {
+		animation-duration: 0.01ms;
+		animation-delay: 0s;
+	}
+
+	.lens-dot,
+	.flash-dot,
+	.stage[data-mode="requesting"] .lens-dot {
+		animation: fade-in 0.01ms forwards;
+	}
+
+	.wait-squiggle-path {
+		animation: none;
+	}
+}

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use cap_project::{CursorEvents, RecordingMeta, StudioRecordingMeta};
+use cap_project::{CursorEvents, ProjectConfiguration};
 use cap_rendering::{
-    DecodedSegmentFrames, FrameRenderer, Nv12RenderedFrame, ProjectRecordingsMeta, ProjectUniforms,
-    RenderVideoConstants, RenderedFrame, RendererLayers,
+    DecodedSegmentFrames, FrameRenderer, Nv12RenderedFrame, ProjectUniforms, RenderVideoConstants,
+    RenderedFrame, RendererLayers,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -41,8 +41,6 @@ pub struct Renderer {
     render_constants: Arc<RenderVideoConstants>,
     layers_rx: RendererLayersReceiver,
     telemetry: Option<PlaybackTelemetry>,
-    #[allow(unused)]
-    total_frames: u32,
 }
 
 pub struct RendererHandle {
@@ -52,9 +50,12 @@ pub struct RendererHandle {
 
 pub fn start_renderer_layers_creation(
     render_constants: &Arc<RenderVideoConstants>,
+    project: &ProjectConfiguration,
 ) -> RendererLayersReceiver {
     let (layers_tx, layers_rx) = oneshot::channel();
     let constants = render_constants.clone();
+    let use_svg = project.cursor.use_svg;
+    let cursor_type = project.cursor.cursor_type().clone();
     std::thread::Builder::new()
         .name("renderer-layers-init".into())
         .spawn(move || {
@@ -63,59 +64,38 @@ pub fn start_renderer_layers_creation(
                 &constants.queue,
                 constants.is_software_adapter,
             );
-            let project = constants.recording_meta.project_config();
-            layers.preload_cursor_assets(
-                &constants,
-                project.cursor.use_svg,
-                project.cursor.cursor_type(),
-            );
+            layers.preload_cursor_assets(&constants, use_svg, &cursor_type);
             let _ = layers_tx.send(layers);
         })
         .expect("failed to spawn renderer layers init thread");
     layers_rx
 }
 
+pub async fn finish_renderer_layers_creation(
+    layers_rx: RendererLayersReceiver,
+) -> RendererLayersReceiver {
+    let (layers_tx, ready_layers_rx) = oneshot::channel();
+    if let Ok(layers) = layers_rx.await {
+        let _ = layers_tx.send(layers);
+    }
+    ready_layers_rx
+}
+
 impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
         frame_cb: Box<dyn FnMut(EditorFrameOutput) + Send>,
-        recording_meta: &RecordingMeta,
-        meta: &StudioRecordingMeta,
         layers_rx: RendererLayersReceiver,
     ) -> Result<RendererHandle, String> {
-        Self::spawn_with_telemetry(
-            render_constants,
-            frame_cb,
-            recording_meta,
-            meta,
-            layers_rx,
-            None,
-        )
+        Self::spawn_with_telemetry(render_constants, frame_cb, layers_rx, None)
     }
 
     pub fn spawn_with_telemetry(
         render_constants: Arc<RenderVideoConstants>,
         frame_cb: Box<dyn FnMut(EditorFrameOutput) + Send>,
-        recording_meta: &RecordingMeta,
-        meta: &StudioRecordingMeta,
         layers_rx: RendererLayersReceiver,
         telemetry: Option<PlaybackTelemetry>,
     ) -> Result<RendererHandle, String> {
-        let recordings = Arc::new(ProjectRecordingsMeta::new(
-            &recording_meta.project_path,
-            meta,
-        )?);
-        let mut max_duration = recordings.duration();
-
-        if let Some(camera_path) = meta.camera_path()
-            && let Ok(camera_duration) =
-                recordings.get_source_duration(&recording_meta.path(&camera_path))
-        {
-            max_duration = max_duration.max(camera_duration);
-        }
-
-        let total_frames = (30_f64 * max_duration).ceil() as u32;
-
         let (tx, rx) = mpsc::channel(64);
 
         let this = Self {
@@ -124,7 +104,6 @@ impl Renderer {
             render_constants,
             layers_rx,
             telemetry: telemetry.clone(),
-            total_frames,
         };
 
         tokio::spawn(this.run());
@@ -139,7 +118,6 @@ impl Renderer {
             render_constants,
             layers_rx,
             telemetry,
-            total_frames: _,
         } = self;
 
         let mut frame_renderer = FrameRenderer::new(&render_constants);

@@ -11,6 +11,7 @@ import {
 } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 import { requireOrganizationSettingsManager } from "./authorization";
 
 type OrganizationSettingsInput = {
@@ -23,6 +24,7 @@ type OrganizationSettingsInput = {
 	hideShareableLinkCapLogo?: boolean;
 	shareableLinkUseOrganizationIcon?: boolean;
 	aiGenerationLanguage?: AiGenerationLanguage;
+	defaultPlaybackSpeed?: number;
 };
 
 const proOrganizationSettingKeys = [
@@ -94,9 +96,19 @@ export async function updateOrganizationSettings(
 
 	await requireOrganizationSettingsManager(user.id, user.activeOrganizationId);
 
+	const sanitizedSettings =
+		settings.defaultPlaybackSpeed !== undefined
+			? {
+					...settings,
+					defaultPlaybackSpeed: normalizePlaybackSpeed(
+						settings.defaultPlaybackSpeed,
+					),
+				}
+			: settings;
+
 	const nextSettings = userIsPro(user)
-		? settings
-		: preserveProSettings(settings, organization.settings);
+		? sanitizedSettings
+		: preserveProSettings(sanitizedSettings, organization.settings);
 
 	await db()
 		.update(organizations)

@@ -1,0 +1,56 @@
+{
+	"manifest_version": 3,
+	"name": "Cap - Screen Recorder & Screen Capture",
+	"short_name": "Cap",
+	"description": "Free, open source screen recorder. Capture your screen, tab, camera & mic in Chrome and share a video link the moment you stop.",
+	"version": "0.1.0",
+	"homepage_url": "https://cap.so",
+	"minimum_chrome_version": "116",
+	"icons": {
+		"16": "icons/icon-16.png",
+		"32": "icons/icon-32.png",
+		"48": "icons/icon-48.png",
+		"128": "icons/icon-128.png"
+	},
+	"action": {
+		"default_title": "Record your screen with Cap",
+		"default_icon": {
+			"16": "icons/icon-16.png",
+			"32": "icons/icon-32.png",
+			"48": "icons/icon-48.png",
+			"128": "icons/icon-128.png"
+		}
+	},
+	"background": {
+		"service_worker": "assets/service-worker.js",
+		"type": "module"
+	},
+	"options_page": "options.html",
+	"permissions": [
+		"activeTab",
+		"identity",
+		"offscreen",
+		"scripting",
+		"storage",
+		"tabCapture"
+	],
+	"host_permissions": ["http://*/*", "https://*/*", "file:///*"],
+	"content_scripts": [
+		{
+			"matches": ["http://*/*", "https://*/*", "file:///*"],
+			"js": ["assets/content-bootstrap.js"],
+			"run_at": "document_idle"
+		}
+	],
+	"web_accessible_resources": [
+		{
+			"resources": ["icons/*", "content/overlay.js"],
+			"matches": ["http://*/*", "https://*/*", "file:///*"]
+		},
+		{
+			"resources": ["camera-preview.html", "popup.html"],
+			"matches": ["http://*/*", "https://*/*", "file:///*"],
+			"use_dynamic_url": true
+		}
+	]
+}

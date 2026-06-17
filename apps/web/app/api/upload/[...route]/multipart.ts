@@ -1,6 +1,7 @@
 import { updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { userIsPro } from "@cap/utils";
 import {
 	Database,
 	makeCurrentUserLayer,
@@ -30,6 +31,9 @@ export const app = new Hono().use(withAuth);
 
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
 const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
+// Clients stop at the cap and then finalize, so reported durations can land
+// slightly past the limit for honest recordings.
+const FREE_PLAN_DURATION_GRACE_SECONDS = 30;
 
 const runPromiseAnyEnv = runPromise as <A, E>(
 	effect: Effect.Effect<A, E, unknown>,
@@ -327,6 +331,73 @@ app.post(
 				return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
 			}
 			const [video] = maybeVideo.value;
+
+			// Server-side backstop for the free-plan recording cap. First-party
+			// recorders always report durationInSecs and self-stop at the limit
+			// (the grace covers stop/finalize latency). For free-plan orgs a raw
+			// recorder upload must report a duration, and any reported duration
+			// over the limit is rejected regardless of subpath — renaming the
+			// subpath alone does not skip the gate. The duration is still
+			// client-reported — a tampered client can understate it, or omit it
+			// on a non-raw subpath — so this raises the bar rather than
+			// enforcing authoritatively; that would require measuring the media
+			// server-side during processing. Gated on the org owner's plan to
+			// match the recorder bootstrap.
+			const reportedDuration =
+				typeof body.durationInSecs === "number" ? body.durationInSecs : null;
+			const missingRequiredDuration =
+				isRawRecorderUpload(subpath) && reportedDuration === null;
+			const exceedsFreePlanLimit =
+				reportedDuration !== null &&
+				reportedDuration >
+					Video.FREE_PLAN_MAX_RECORDING_SECONDS +
+						FREE_PLAN_DURATION_GRACE_SECONDS;
+
+			if (missingRequiredDuration || exceedsFreePlanLimit) {
+				const [orgOwner] = yield* db.use((db) =>
+					db
+						.select({
+							stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
+							thirdPartyStripeSubscriptionId:
+								Db.users.thirdPartyStripeSubscriptionId,
+						})
+						.from(Db.organizations)
+						.innerJoin(Db.users, eq(Db.organizations.ownerId, Db.users.id))
+						.where(eq(Db.organizations.id, video.orgId))
+						.limit(1),
+				);
+
+				if (!userIsPro(orgOwner)) {
+					// The uploaded parts must not linger as incomplete-MPU storage
+					// (S3 bills them until the upload is aborted), and the stale
+					// videoUploads row would otherwise keep the video in a phantom
+					// "uploading" state. Cleanup is best-effort: the 403 stands
+					// either way.
+					yield* Effect.gen(function* () {
+						const [bucket] = yield* Storage.getAccessForVideo(video);
+						yield* bucket.multipart.abort(fileKey, uploadId);
+						yield* db.use((db) =>
+							db
+								.delete(Db.videoUploads)
+								.where(eq(Db.videoUploads.videoId, videoId)),
+						);
+					}).pipe(
+						Effect.catchAll((error) =>
+							Effect.logError(
+								"Failed to clean up rejected free-plan multipart upload",
+								error,
+							),
+						),
+					);
+
+					c.status(403);
+					return c.text(
+						reportedDuration === null
+							? "Recording duration is required to complete a free plan upload."
+							: "Recording exceeds the free plan duration limit. Upgrade to Cap Pro to upload longer recordings.",
+					);
+				}
+			}
 
 			return yield* Effect.gen(function* () {
 				const [bucket] = yield* Storage.getAccessForVideo(video);
@@ -668,15 +739,9 @@ app.post("/abort", abortRequestValidator, (c) => {
 		const [video] = maybeVideo.value;
 
 		const [bucket] = yield* Storage.getAccessForVideo(video);
-		type MultipartWithAbort = typeof bucket.multipart & {
-			abort: (
-				...args: Parameters<typeof bucket.multipart.complete>
-			) => ReturnType<typeof bucket.multipart.complete>;
-		};
-		const multipart = bucket.multipart as MultipartWithAbort;
 
 		console.log(`Aborting multipart upload ${uploadId} for key: ${fileKey}`);
-		yield* multipart.abort(fileKey, uploadId);
+		yield* bucket.multipart.abort(fileKey, uploadId);
 
 		yield* db.use((db) =>
 			db.delete(Db.videoUploads).where(eq(Db.videoUploads.videoId, videoId)),

@@ -11,8 +11,7 @@
 /// (Hoppscotch) https://github.com/hoppscotch/hoppscotch/blob/286fcd2bb08a84f027b10308d1e18da368f95ebf/packages/hoppscotch-selfhost-desktop/src-tauri/src/mac/window.rs
 /// (Electron) https://github.com/electron/electron/blob/38512efd25a159ddc64a54c22ef9eb6dd60064ec/shell/browser/native_window_mac.mm#L1454
 ///
-use objc::{msg_send, sel, sel_impl};
-use rand::{Rng, distributions::Alphanumeric};
+use objc::{class, msg_send, sel, sel_impl};
 use tauri::{Emitter, LogicalPosition, Runtime, Window};
 
 pub struct UnsafeWindowHandle(pub *mut std::ffi::c_void);
@@ -72,7 +71,8 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
     use cocoa::appkit::NSWindow;
     use cocoa::base::{BOOL, id};
     use cocoa::foundation::NSUInteger;
-    use objc::runtime::{Object, Sel};
+    use objc::declare::ClassDecl;
+    use objc::runtime::{Class, Object, Sel};
     use std::ffi::c_void;
 
     let Ok(ns_win) = window.ns_window() else {
@@ -88,10 +88,13 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         this: &Object,
         func: F,
     ) {
-        let ptr = unsafe {
-            let x: *mut c_void = *this.get_ivar("app_box");
-            &mut *(x as *mut WindowState<R>)
-        };
+        let x: *mut c_void = unsafe { *this.get_ivar("app_box") };
+        // `app_box` is nulled out in `windowWillClose:`; ignore any late
+        // callbacks that arrive after that instead of dereferencing null.
+        if x.is_null() {
+            return;
+        }
+        let ptr = unsafe { &mut *(x as *mut WindowState<R>) };
         func(ptr);
     }
 
@@ -118,10 +121,35 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
                 msg_send![super_del, windowShouldClose: sender]
             })
         }
-        extern "C" fn on_window_will_close(this: &Object, _cmd: Sel, notification: id) {
+        extern "C" fn on_window_will_close<R: Runtime>(this: &Object, _cmd: Sel, notification: id) {
+            let super_del: id = unsafe { *this.get_ivar("super_delegate") };
+
+            // Forward to the previous delegate first, but don't let a panic there
+            // skip the cleanup below (which would bring back the leak).
             suppress_delegate_panic("windowWillClose:", (), || unsafe {
-                let super_del: id = *this.get_ivar("super_delegate");
                 let _: () = msg_send![super_del, windowWillClose: notification];
+            });
+
+            suppress_delegate_panic("windowWillClose:cleanup", (), || unsafe {
+                // Drop the boxed `WindowState<R>` (and the `Window<R>` handle it holds)
+                // that was leaked via `Box::into_raw` when this delegate was created.
+                let app_box: *mut c_void = *this.get_ivar("app_box");
+                if !app_box.is_null() {
+                    let this_mut = this as *const Object as *mut Object;
+                    (*this_mut).set_ivar("app_box", std::ptr::null_mut::<c_void>());
+                    drop(Box::from_raw(app_box as *mut WindowState<R>));
+                }
+
+                // Restore the previous delegate before releasing this one, so any
+                // further delegate callbacks during teardown don't hit a freed object.
+                let window: id = *this.get_ivar("window");
+                let _: () = msg_send![window, setDelegate: super_del];
+
+                // NSWindow does not retain its delegate, so the reference taken when
+                // this delegate was created (`new`) is the only owning one. Release
+                // it now that the window is closing.
+                let this_id = this as *const Object as id;
+                let _: () = msg_send![this_id, release];
             });
         }
         extern "C" fn on_window_did_resize<R: Runtime>(this: &Object, _cmd: Sel, notification: id) {
@@ -329,48 +357,137 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
             );
         }
 
-        let window_label = window.label().to_string();
+        // Register the delegate class once and reuse it for every window. Previously a brand
+        // new class was registered (with a randomized name) on every call to `setup`, which
+        // permanently leaked Objective-C class metadata for the lifetime of the process.
+        //
+        // NOTE: `static CLASS` below is a single process-wide instance shared across every
+        // monomorphization of this function, not one per `R`. `setup` is only ever called
+        // with `R = tauri::Wry` in this app, so this is fine in practice; if it were ever
+        // called with a different `R`, the first call's `on_*::<R>` method pointers would
+        // be baked into the shared class for all `R`.
+        fn get_or_register_delegate_class<R: Runtime>() -> &'static Class {
+            static CLASS: std::sync::OnceLock<&'static Class> = std::sync::OnceLock::new();
+            CLASS.get_or_init(|| {
+                if let Some(existing) = Class::get("CapWindowDelegate") {
+                    return existing;
+                }
+
+                let mut decl = match ClassDecl::new("CapWindowDelegate", class!(NSObject)) {
+                    Some(decl) => decl,
+                    None => {
+                        return Class::get("CapWindowDelegate")
+                            .expect("CapWindowDelegate should exist if already registered");
+                    }
+                };
+
+                decl.add_ivar::<id>("window");
+                decl.add_ivar::<*mut c_void>("app_box");
+                decl.add_ivar::<id>("toolbar");
+                decl.add_ivar::<id>("super_delegate");
+
+                unsafe {
+                    decl.add_method(
+                        sel!(windowShouldClose:),
+                        on_window_should_close as extern "C" fn(&Object, Sel, id) -> BOOL,
+                    );
+                    decl.add_method(
+                        sel!(windowWillClose:),
+                        on_window_will_close::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidResize:),
+                        on_window_did_resize::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidMove:),
+                        on_window_did_move as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidChangeBackingProperties:),
+                        on_window_did_change_backing_properties as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidBecomeKey:),
+                        on_window_did_become_key as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidResignKey:),
+                        on_window_did_resign_key as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(draggingEntered:),
+                        on_dragging_entered as extern "C" fn(&Object, Sel, id) -> BOOL,
+                    );
+                    decl.add_method(
+                        sel!(prepareForDragOperation:),
+                        on_prepare_for_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL,
+                    );
+                    decl.add_method(
+                        sel!(performDragOperation:),
+                        on_perform_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL,
+                    );
+                    decl.add_method(
+                        sel!(concludeDragOperation:),
+                        on_conclude_drag_operation as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(draggingExited:),
+                        on_dragging_exited as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(window:willUseFullScreenPresentationOptions:),
+                        on_window_will_use_full_screen_presentation_options
+                            as extern "C" fn(&Object, Sel, id, NSUInteger) -> NSUInteger,
+                    );
+                    decl.add_method(
+                        sel!(windowDidEnterFullScreen:),
+                        on_window_did_enter_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowWillEnterFullScreen:),
+                        on_window_will_enter_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidExitFullScreen:),
+                        on_window_did_exit_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowWillExitFullScreen:),
+                        on_window_will_exit_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(windowDidFailToEnterFullScreen:),
+                        on_window_did_fail_to_enter_full_screen as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(effectiveAppearanceDidChange:),
+                        on_effective_appearance_did_change as extern "C" fn(&Object, Sel, id),
+                    );
+                    decl.add_method(
+                        sel!(effectiveAppearanceDidChangedOnMainThread:),
+                        on_effective_appearance_did_changed_on_main_thread
+                            as extern "C" fn(&Object, Sel, id),
+                    );
+                }
+
+                decl.register()
+            })
+        }
 
         let app_state = WindowState {
             window,
             controls_inset,
         };
         let app_box = Box::into_raw(Box::new(app_state)) as *mut c_void;
-        let random_str: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(20)
-            .map(char::from)
-            .collect();
 
-        // We need to ensure we have a unique delegate name, otherwise we will panic while trying to create a duplicate
-        // delegate with the same name.
-        let delegate_name = format!("windowDelegate_cap_{window_label}_{random_str}");
+        let delegate_class = get_or_register_delegate_class::<R>();
+        let delegate: id = msg_send![delegate_class, new];
+        (*delegate).set_ivar("window", ns_win_id);
+        (*delegate).set_ivar("app_box", app_box);
+        (*delegate).set_ivar("toolbar", cocoa::base::nil);
+        (*delegate).set_ivar("super_delegate", current_delegate);
 
-        ns_win_id.setDelegate_(cocoa::delegate!(&delegate_name, {
-            window: id = ns_win_id,
-            app_box: *mut c_void = app_box,
-            toolbar: id = cocoa::base::nil,
-            super_delegate: id = current_delegate,
-            (windowShouldClose:) => on_window_should_close as extern "C" fn(&Object, Sel, id) -> BOOL,
-            (windowWillClose:) => on_window_will_close as extern "C" fn(&Object, Sel, id),
-            (windowDidResize:) => on_window_did_resize::<R> as extern "C" fn(&Object, Sel, id),
-            (windowDidMove:) => on_window_did_move as extern "C" fn(&Object, Sel, id),
-            (windowDidChangeBackingProperties:) => on_window_did_change_backing_properties as extern "C" fn(&Object, Sel, id),
-            (windowDidBecomeKey:) => on_window_did_become_key as extern "C" fn(&Object, Sel, id),
-            (windowDidResignKey:) => on_window_did_resign_key as extern "C" fn(&Object, Sel, id),
-            (draggingEntered:) => on_dragging_entered as extern "C" fn(&Object, Sel, id) -> BOOL,
-            (prepareForDragOperation:) => on_prepare_for_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL,
-            (performDragOperation:) => on_perform_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL,
-            (concludeDragOperation:) => on_conclude_drag_operation as extern "C" fn(&Object, Sel, id),
-            (draggingExited:) => on_dragging_exited as extern "C" fn(&Object, Sel, id),
-            (window:willUseFullScreenPresentationOptions:) => on_window_will_use_full_screen_presentation_options as extern "C" fn(&Object, Sel, id, NSUInteger) -> NSUInteger,
-            (windowDidEnterFullScreen:) => on_window_did_enter_full_screen::<R> as extern "C" fn(&Object, Sel, id),
-            (windowWillEnterFullScreen:) => on_window_will_enter_full_screen::<R> as extern "C" fn(&Object, Sel, id),
-            (windowDidExitFullScreen:) => on_window_did_exit_full_screen::<R> as extern "C" fn(&Object, Sel, id),
-            (windowWillExitFullScreen:) => on_window_will_exit_full_screen::<R> as extern "C" fn(&Object, Sel, id),
-            (windowDidFailToEnterFullScreen:) => on_window_did_fail_to_enter_full_screen as extern "C" fn(&Object, Sel, id),
-            (effectiveAppearanceDidChange:) => on_effective_appearance_did_change as extern "C" fn(&Object, Sel, id),
-            (effectiveAppearanceDidChangedOnMainThread:) => on_effective_appearance_did_changed_on_main_thread as extern "C" fn(&Object, Sel, id)
-        }))
+        ns_win_id.setDelegate_(delegate)
     }
 }

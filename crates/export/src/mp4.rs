@@ -252,12 +252,11 @@ impl Mp4ExportSettings {
                     let (pts, samples) =
                         audio_frame_budget(n, sample_rate, fps_u64, audio_sample_cursor)?;
                     audio_sample_cursor = pts as u64 + samples as u64;
-                    audio
+                    let mut frame = audio
                         .render_frame(samples, &project_for_audio)
-                        .map(|mut frame| {
-                            frame.set_pts(Some(pts));
-                            frame
-                        })
+                        .unwrap_or_else(|| silent_audio_frame(samples));
+                    frame.set_pts(Some(pts));
+                    Some(frame)
                 });
 
                 fill_nv12_frame_direct(
@@ -470,6 +469,19 @@ fn audio_frame_budget(
         return None;
     }
     Some((cursor as i64, (end - cursor) as usize))
+}
+
+fn silent_audio_frame(samples: usize) -> ffmpeg::frame::Audio {
+    let mut frame = ffmpeg::frame::Audio::new(
+        AudioRenderer::SAMPLE_FORMAT,
+        samples,
+        ffmpeg::ChannelLayout::STEREO,
+    );
+    frame.set_rate(AudioRenderer::SAMPLE_RATE);
+    for plane in 0..frame.planes() {
+        frame.data_mut(plane).fill(0);
+    }
+    frame
 }
 
 fn fill_nv12_frame_direct(
@@ -776,6 +788,22 @@ mod tests {
                 cursor = pts as u64 + samples as u64;
             }
             assert_eq!(cursor, (frames * sample_rate) / fps);
+        }
+    }
+
+    #[test]
+    fn silent_audio_frame_matches_renderer_format() {
+        ffmpeg::init().unwrap();
+
+        let samples = 1600usize;
+        let frame = silent_audio_frame(samples);
+
+        assert_eq!(frame.samples(), samples);
+        assert_eq!(frame.rate(), AudioRenderer::SAMPLE_RATE);
+        assert_eq!(frame.format(), AudioRenderer::SAMPLE_FORMAT);
+        assert_eq!(frame.channel_layout(), ffmpeg::ChannelLayout::STEREO);
+        for plane in 0..frame.planes() {
+            assert!(frame.data(plane).iter().all(|byte| *byte == 0));
         }
     }
 

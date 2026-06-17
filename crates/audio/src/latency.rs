@@ -15,9 +15,9 @@
 //! // Create corrector with default settings
 //! let mut corrector = LatencyCorrector::new(hint, LatencyCorrectionConfig::default());
 //!
-//! // Apply initial compensation to audio playhead
+//! // Apply initial output latency to audio playhead
 //! let base_playhead = 5.0; // Current playback position in seconds
-//! let compensated_playhead = base_playhead + corrector.initial_compensation_secs();
+//! let compensated_playhead = base_playhead + corrector.initial_output_latency_secs();
 //! // audio_renderer.set_playhead(compensated_playhead);
 //!
 //! // In audio callback, update latency estimate
@@ -140,6 +140,10 @@ impl LatencyCorrector {
     /// Get the initial latency compensation value (with safety multiplier applied)
     pub fn initial_compensation_secs(&self) -> f64 {
         self.estimator.current_secs().unwrap_or_default() * self.config.initial_safety_multiplier
+    }
+
+    pub fn initial_output_latency_secs(&self) -> f64 {
+        self.estimator.current_secs().unwrap_or_default()
     }
 
     /// Update latency estimate from audio callback and return corrected latency
@@ -1002,7 +1006,27 @@ mod tests {
         let corrector = LatencyCorrector::new(Some(hint), config);
 
         let initial = corrector.initial_compensation_secs();
-        assert_eq!(initial, 0.05 * 2.0); // Default multiplier is 2.0
+        assert_eq!(initial, 0.05 * 2.0);
+        assert_eq!(corrector.initial_output_latency_secs(), 0.05);
+    }
+
+    #[test]
+    fn latency_corrector_reports_floor_constrained_initial_latency() {
+        let hint = OutputLatencyHint::new(0.05, OutputTransportKind::Wireless);
+        let config = LatencyCorrectionConfig {
+            initial_safety_multiplier: 3.0,
+            ..Default::default()
+        };
+        let corrector = LatencyCorrector::new(Some(hint), config);
+
+        assert_eq!(
+            corrector.initial_output_latency_secs(),
+            WIRELESS_MIN_LATENCY_SECS
+        );
+        assert_eq!(
+            corrector.initial_compensation_secs(),
+            WIRELESS_MIN_LATENCY_SECS * 3.0
+        );
     }
 
     #[test]

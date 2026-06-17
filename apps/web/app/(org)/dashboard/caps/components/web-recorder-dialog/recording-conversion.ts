@@ -1,6 +1,6 @@
+import type { VideoId } from "@cap/recorder-core/recorder-types";
 import type { UploadStatus } from "../../UploadingContext";
 import { installAvcLevelClamp } from "./avc-level-clamp";
-import type { VideoId } from "./web-recorder-types";
 
 const MAX_THUMBNAIL_WIDTH = 1000;
 const MAX_THUMBNAIL_HEIGHT = 562;

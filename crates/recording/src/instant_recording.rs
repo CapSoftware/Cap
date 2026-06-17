@@ -414,6 +414,7 @@ pub struct ActorBuilder {
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<crate::feeds::camera::CameraFeedLock>>,
     max_output_size: Option<u32>,
+    max_fps: u32,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<scap_targets::WindowId>,
 }
@@ -427,6 +428,7 @@ impl ActorBuilder {
             mic_feed: None,
             camera_feed: None,
             max_output_size: None,
+            max_fps: crate::defaults::DEFAULT_INSTANT_MODE_FPS,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
         }
@@ -455,6 +457,11 @@ impl ActorBuilder {
         self
     }
 
+    pub fn with_max_fps(mut self, max_fps: u32) -> Self {
+        self.max_fps = max_fps.clamp(1, 120);
+        self
+    }
+
     #[cfg(target_os = "macos")]
     pub fn with_excluded_windows(mut self, excluded_windows: Vec<scap_targets::WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
@@ -478,6 +485,7 @@ impl ActorBuilder {
                 excluded_windows: self.excluded_windows,
             },
             self.max_output_size,
+            self.max_fps,
         )
         .await
     }
@@ -488,6 +496,7 @@ pub async fn spawn_instant_recording_actor(
     recording_dir: PathBuf,
     inputs: RecordingBaseInputs,
     max_output_size: Option<u32>,
+    max_fps: u32,
 ) -> anyhow::Result<ActorHandle> {
     ensure_dir(&recording_dir)?;
 
@@ -502,58 +511,101 @@ pub async fn spawn_instant_recording_actor(
 
     let (mut pipeline, video_info) = match inputs.capture_target {
         ScreenCaptureTarget::CameraOnly => {
-            let camera_feed = inputs.camera_feed.clone().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Camera-only recording requires a camera, but no camera is currently available. \
-                    Please select a camera in the recording settings before starting. \
-                    If you have already selected a camera, it may have been disconnected or \
-                    failed to initialize. Try reconnecting your camera or selecting a different one."
+            #[cfg(target_os = "linux")]
+            {
+                let camera_feed = inputs.camera_feed.clone().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Camera-only recording requires a camera, but no camera is currently available. \
+                        Please select a camera in the recording settings before starting. \
+                        If you have already selected a camera, it may have been disconnected or \
+                        failed to initialize. Try reconnecting your camera or selecting a different one."
+                    )
+                })?;
+
+                let output_path = content_dir.join("output.mp4");
+
+                let mut builder = OutputPipeline::builder(output_path.clone())
+                    .with_video::<crate::sources::Camera>(camera_feed.clone())
+                    .with_timestamps(timestamps);
+
+                if let Some(mic_feed) = inputs.mic_feed.clone() {
+                    builder = builder.with_audio_source::<crate::sources::Microphone>(mic_feed);
+                }
+
+                let cam_pipeline = builder
+                    .build::<output_pipeline::Mp4Muxer>(())
+                    .await
+                    .context("camera-only pipeline setup")?;
+
+                let video_info = *camera_feed.video_info();
+                (
+                    Pipeline {
+                        video: cam_pipeline,
+                        audio: None,
+                        video_info,
+                        segments_dir: content_dir.clone(),
+                        segment_rx: None,
+                    },
+                    video_info,
                 )
-            })?;
-
-            let output_path = content_dir.join("output.mp4");
-
-            let mut builder = OutputPipeline::builder(output_path.clone())
-                .with_video::<crate::sources::NativeCamera>(camera_feed.clone())
-                .with_timestamps(timestamps);
-
-            if let Some(mic_feed) = inputs.mic_feed.clone() {
-                builder = builder.with_audio_source::<crate::sources::Microphone>(mic_feed);
             }
 
-            #[cfg(target_os = "macos")]
-            let cam_pipeline = builder
-                .build::<output_pipeline::AVFoundationCameraMuxer>(
-                    output_pipeline::AVFoundationCameraMuxerConfig {
-                        instant_mode: true,
-                        ..Default::default()
-                    },
-                )
-                .await
-                .context("camera-only pipeline setup")?;
+            #[cfg(any(target_os = "macos", windows))]
+            {
+                let camera_feed = inputs.camera_feed.clone().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Camera-only recording requires a camera, but no camera is currently available. \
+                        Please select a camera in the recording settings before starting. \
+                        If you have already selected a camera, it may have been disconnected or \
+                        failed to initialize. Try reconnecting your camera or selecting a different one."
+                    )
+                })?;
 
-            #[cfg(windows)]
-            let cam_pipeline = builder
-                .build::<output_pipeline::WindowsCameraMuxer>(
-                    output_pipeline::WindowsCameraMuxerConfig {
-                        encoder_preferences: crate::capture_pipeline::EncoderPreferences::default(),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .context("camera-only pipeline setup")?;
+                let output_path = content_dir.join("output.mp4");
 
-            let video_info = *camera_feed.video_info();
-            (
-                Pipeline {
-                    video: cam_pipeline,
-                    audio: None,
+                let mut builder = OutputPipeline::builder(output_path.clone())
+                    .with_video::<crate::sources::NativeCamera>(camera_feed.clone())
+                    .with_timestamps(timestamps);
+
+                if let Some(mic_feed) = inputs.mic_feed.clone() {
+                    builder = builder.with_audio_source::<crate::sources::Microphone>(mic_feed);
+                }
+
+                #[cfg(target_os = "macos")]
+                let cam_pipeline = builder
+                    .build::<output_pipeline::AVFoundationCameraMuxer>(
+                        output_pipeline::AVFoundationCameraMuxerConfig {
+                            instant_mode: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .context("camera-only pipeline setup")?;
+
+                #[cfg(windows)]
+                let cam_pipeline = builder
+                    .build::<output_pipeline::WindowsCameraMuxer>(
+                        output_pipeline::WindowsCameraMuxerConfig {
+                            encoder_preferences:
+                                crate::capture_pipeline::EncoderPreferences::default(),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .context("camera-only pipeline setup")?;
+
+                let video_info = *camera_feed.video_info();
+                (
+                    Pipeline {
+                        video: cam_pipeline,
+                        audio: None,
+                        video_info,
+                        segments_dir: content_dir.clone(),
+                        segment_rx: None,
+                    },
                     video_info,
-                    segments_dir: content_dir.clone(),
-                    segment_rx: None,
-                },
-                video_info,
-            )
+                )
+            }
         }
         _ => {
             #[cfg(windows)]
@@ -566,10 +618,14 @@ pub async fn spawn_instant_recording_actor(
                 display,
                 crop_bounds,
                 true,
-                30,
+                max_fps,
                 None,
                 timestamps.system_time(),
                 inputs.capture_system_audio,
+                #[cfg(target_os = "linux")]
+                crate::sources::screen_capture::LinuxCaptureSource::from_target(
+                    &inputs.capture_target,
+                ),
                 #[cfg(windows)]
                 d3d_device,
                 #[cfg(target_os = "macos")]

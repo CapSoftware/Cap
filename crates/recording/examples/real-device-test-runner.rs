@@ -68,6 +68,14 @@ struct Cli {
         help = "Screen recording frame rate (e.g., 30 or 60)"
     )]
     fps: u32,
+
+    #[arg(
+        long,
+        global = true,
+        default_value = "5",
+        help = "Baseline scenario recording duration in seconds"
+    )]
+    duration: u64,
 }
 
 #[derive(Subcommand)]
@@ -147,10 +155,10 @@ struct TestScenario {
 }
 
 impl TestScenario {
-    fn baseline() -> Self {
+    fn baseline(duration: Duration) -> Self {
         Self {
             name: "Baseline".to_string(),
-            actions: vec![TestAction::Record(Duration::from_secs(5))],
+            actions: vec![TestAction::Record(duration)],
             expected_segments: 1,
         }
     }
@@ -2192,11 +2200,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let scenarios: Vec<TestScenario> = match cli.command {
-        Some(Commands::Baseline) => vec![TestScenario::baseline()],
+        Some(Commands::Baseline) => vec![TestScenario::baseline(Duration::from_secs(cli.duration))],
         Some(Commands::SinglePause) => vec![TestScenario::single_pause()],
         Some(Commands::MultiplePauses) => vec![TestScenario::multiple_pauses()],
         Some(Commands::Full) | None => vec![
-            TestScenario::baseline(),
+            TestScenario::baseline(Duration::from_secs(cli.duration)),
             TestScenario::single_pause(),
             TestScenario::multiple_pauses(),
         ],
@@ -2280,7 +2288,7 @@ async fn main() -> anyhow::Result<()> {
 
     if cli.benchmark_output {
         let command = format!(
-            "cargo run -p cap-recording --example real-device-test-runner -- {} {}{}{}{}--fps {}",
+            "cargo run -p cap-recording --example real-device-test-runner -- {} {}{}{}{}--fps {} --duration {}",
             match cli.command {
                 Some(Commands::Baseline) => "baseline",
                 Some(Commands::SinglePause) => "single-pause",
@@ -2301,6 +2309,7 @@ async fn main() -> anyhow::Result<()> {
             },
             if cli.mp4_only { "--mp4-only " } else { "" },
             cli.fps,
+            cli.duration,
         );
 
         let benchmark_md =

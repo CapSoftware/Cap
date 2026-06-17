@@ -1,0 +1,25 @@
+{
+	"name": "@cap/recorder-core",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./instant-mp4-uploader": "./src/instant-mp4-uploader.ts",
+		"./local-recording-backup": "./src/local-recording-backup.ts",
+		"./recorder-constants": "./src/recorder-constants.ts",
+		"./recorder-types": "./src/recorder-types.ts",
+		"./recorder-utils": "./src/recorder-utils.ts",
+		"./recording-spool": "./src/recording-spool.ts",
+		"./recording-spool-fallback": "./src/recording-spool-fallback.ts"
+	},
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc -b"
+	},
+	"devDependencies": {
+		"@cap/web-domain": "workspace:*",
+		"tsconfig": "workspace:*",
+		"typescript": "^5.8.3",
+		"vitest": "^3.2.0"
+	}
+}

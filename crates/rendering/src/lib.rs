@@ -1737,6 +1737,46 @@ fn lerp_bounds(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     ]
 }
 
+fn snap_bounds_to_output_pixels(bounds: [f32; 4], output_size: [f32; 2]) -> [f32; 4] {
+    let max_x = output_size[0].max(1.0);
+    let max_y = output_size[1].max(1.0);
+    let mut x0 = bounds[0].round().clamp(0.0, max_x);
+    let mut y0 = bounds[1].round().clamp(0.0, max_y);
+    let mut x1 = bounds[2].round().clamp(0.0, max_x);
+    let mut y1 = bounds[3].round().clamp(0.0, max_y);
+
+    if x1 <= x0 {
+        if x0 < max_x {
+            x1 = (x0 + 1.0).min(max_x);
+        } else {
+            x0 = (x1 - 1.0).max(0.0);
+        }
+    }
+
+    if y1 <= y0 {
+        if y0 < max_y {
+            y1 = (y0 + 1.0).min(max_y);
+        } else {
+            y0 = (y1 - 1.0).max(0.0);
+        }
+    }
+
+    [x0, y0, x1, y1]
+}
+
+fn inset_crop_bounds(bounds: [f32; 4], frame_size: [f32; 2], inset: f32) -> [f32; 4] {
+    let max_x = frame_size[0].max(1.0);
+    let max_y = frame_size[1].max(1.0);
+    let x0 = bounds[0].min(bounds[2]).clamp(0.0, max_x);
+    let y0 = bounds[1].min(bounds[3]).clamp(0.0, max_y);
+    let x1 = bounds[0].max(bounds[2]).clamp(0.0, max_x);
+    let y1 = bounds[1].max(bounds[3]).clamp(0.0, max_y);
+    let inset_x = inset.min(((x1 - x0) - 1.0).max(0.0) * 0.5);
+    let inset_y = inset.min(((y1 - y0) - 1.0).max(0.0) * 0.5);
+
+    [x0 + inset_x, y0 + inset_y, x1 - inset_x, y1 - inset_y]
+}
+
 /// Largest centred crop of `src` (origin+size, frame px) matching `target_aspect`
 /// (aspect-fill, no letterboxing), then tightened by `zoom` (>=1 zooms in) and
 /// recentred on the normalized `focal` point, clamped to stay inside `src`.
@@ -2050,6 +2090,7 @@ fn normalized_motion_amount(user_motion_blur: f32, fps: f32) -> f32 {
 }
 
 const CAMERA_PADDING: f32 = 50.0;
+const CAMERA_EDGE_CROP_INSET_PX: f32 = 2.0;
 
 /// Output aspect ratio at/above which split-screen lays the screen and camera
 /// side-by-side (left/right). Below it (portrait/narrow output) the panes stack
@@ -3076,18 +3117,24 @@ impl ProjectUniforms {
                 let position = position_for(size);
                 let prev_position = position_for(prev_size);
 
-                let target_bounds = [
-                    position[0],
-                    position[1],
-                    position[0] + size[0],
-                    position[1] + size[1],
-                ];
-                let prev_target_bounds = [
-                    prev_position[0],
-                    prev_position[1],
-                    prev_position[0] + prev_size[0],
-                    prev_position[1] + prev_size[1],
-                ];
+                let target_bounds = snap_bounds_to_output_pixels(
+                    [
+                        position[0],
+                        position[1],
+                        position[0] + size[0],
+                        position[1] + size[1],
+                    ],
+                    output_size,
+                );
+                let prev_target_bounds = snap_bounds_to_output_pixels(
+                    [
+                        prev_position[0],
+                        prev_position[1],
+                        prev_position[0] + prev_size[0],
+                        prev_position[1] + prev_size[1],
+                    ],
+                    output_size,
+                );
 
                 let current_bounds = MotionBounds::new(
                     Coord::new(XY::new(target_bounds[0] as f64, target_bounds[1] as f64)),
@@ -3131,12 +3178,19 @@ impl ProjectUniforms {
                 // source), at t == 1 it is the aspect-fill split crop.
                 let split_t = split_layout.as_ref().map_or(0.0, |s| s.factor as f32);
                 let split_fade = 1.0 - split_t;
-                let final_target_bounds = split_layout.as_ref().map_or(target_bounds, |s| {
-                    lerp_bounds(target_bounds, s.camera.target, split_t)
-                });
-                let final_crop_bounds = split_layout.as_ref().map_or(crop_bounds, |s| {
-                    s.camera.crop_for(final_target_bounds, split_t)
-                });
+                let final_target_bounds = snap_bounds_to_output_pixels(
+                    split_layout.as_ref().map_or(target_bounds, |s| {
+                        lerp_bounds(target_bounds, s.camera.target, split_t)
+                    }),
+                    output_size,
+                );
+                let final_crop_bounds = inset_crop_bounds(
+                    split_layout.as_ref().map_or(crop_bounds, |s| {
+                        s.camera.crop_for(final_target_bounds, split_t)
+                    }),
+                    frame_size,
+                    CAMERA_EDGE_CROP_INSET_PX,
+                );
                 let final_target_size = [
                     final_target_bounds[2] - final_target_bounds[0],
                     final_target_bounds[3] - final_target_bounds[1],
@@ -3205,12 +3259,15 @@ impl ProjectUniforms {
                     (output_size[1] - size[1]) / 2.0,
                 ];
 
-                let target_bounds = [
-                    position[0],
-                    position[1],
-                    position[0] + size[0],
-                    position[1] + size[1],
-                ];
+                let target_bounds = snap_bounds_to_output_pixels(
+                    [
+                        position[0],
+                        position[1],
+                        position[0] + size[0],
+                        position[1] + size[1],
+                    ],
+                    output_size,
+                );
 
                 // In camera-only mode, we ignore the camera shape setting (Square/Source)
                 // and just apply the minimum crop needed to fill the output aspect ratio.
@@ -3226,6 +3283,8 @@ impl ProjectUniforms {
                     let crop_y = (frame_size[1] - visible_height) / 2.0;
                     [0.0, crop_y, frame_size[0], frame_size[1] - crop_y]
                 };
+                let crop_bounds =
+                    inset_crop_bounds(crop_bounds, frame_size, CAMERA_EDGE_CROP_INSET_PX);
 
                 let camera_only_blur = (scene.camera_only_blur as f32
                     * CAMERA_ONLY_MULTIPLIER
@@ -3339,6 +3398,35 @@ mod tests {
             Coord::<FrameSpace>::new(start),
             Coord::<FrameSpace>::new(end),
         )
+    }
+
+    #[test]
+    fn snap_bounds_to_output_pixels_stabilizes_fractional_camera_bounds() {
+        let bounds = snap_bounds_to_output_pixels([10.4, 20.6, 110.49, 220.51], [1920.0, 1080.0]);
+
+        assert_eq!(bounds, [10.0, 21.0, 110.0, 221.0]);
+    }
+
+    #[test]
+    fn snap_bounds_to_output_pixels_preserves_minimum_size_at_edges() {
+        let bounds =
+            snap_bounds_to_output_pixels([1919.7, 1079.8, 1920.2, 1080.4], [1920.0, 1080.0]);
+
+        assert_eq!(bounds, [1919.0, 1079.0, 1920.0, 1080.0]);
+    }
+
+    #[test]
+    fn inset_crop_bounds_keeps_camera_sampling_away_from_source_edges() {
+        let bounds = inset_crop_bounds([0.0, 0.0, 640.0, 480.0], [640.0, 480.0], 2.0);
+
+        assert_eq!(bounds, [2.0, 2.0, 638.0, 478.0]);
+    }
+
+    #[test]
+    fn inset_crop_bounds_preserves_tiny_crops() {
+        let bounds = inset_crop_bounds([0.0, 0.0, 1.0, 1.0], [1.0, 1.0], 2.0);
+
+        assert_eq!(bounds, [0.0, 0.0, 1.0, 1.0]);
     }
 
     #[test]

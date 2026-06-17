@@ -1,5 +1,5 @@
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
-import clsx from "clsx";
+import { classNames } from "@cap/utils";
+import { Alignment, Fit, Layout, useRive } from "@rive-app/react-canvas";
 import { forwardRef, memo, useImperativeHandle } from "react";
 
 export interface EnterpriseArtRef {
@@ -20,6 +20,7 @@ export const EnterpriseArt = memo(
 			autoplay: false,
 			layout: new Layout({
 				fit: Fit.Contain,
+				alignment: Alignment.CenterLeft,
 			}),
 		});
 
@@ -37,9 +38,9 @@ export const EnterpriseArt = memo(
 		}));
 
 		return (
-			<EnterpriseRive
-				className={clsx(className, "mx-auto w-full max-w-[200px] h-[120px]")}
-			/>
+			<EnterpriseRive className={classNames("w-full h-full", className)} />
 		);
 	}),
 );
+
+EnterpriseArt.displayName = "EnterpriseArt";

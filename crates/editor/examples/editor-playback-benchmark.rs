@@ -8,7 +8,7 @@ use std::{
 use cap_editor::{
     EditorFrameOutput, Playback, PlaybackFrameSource, PlaybackRenderOutputFormat,
     PlaybackSkipReason, PlaybackTelemetry, PlaybackTelemetryEvent, Renderer,
-    start_renderer_layers_creation,
+    finish_renderer_layers_creation, start_renderer_layers_creation,
 };
 use cap_project::{
     ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
@@ -420,6 +420,14 @@ async fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(300u64);
     let resolution_base = parse_resolution(&args);
+    let start_frame_number = arg_value(&args, "--start-frame")
+        .and_then(|s| s.parse().ok())
+        .or_else(|| {
+            arg_value(&args, "--start-time")
+                .and_then(|s| s.parse::<f64>().ok())
+                .map(|seconds| (seconds * fps as f64).round() as u32)
+        })
+        .unwrap_or(0);
 
     println!("{}", "=".repeat(64));
     println!("  CAP EDITOR LIVE PLAYBACK BENCHMARK");
@@ -431,6 +439,7 @@ async fn main() {
         "Resolution base: {}x{}",
         resolution_base.x, resolution_base.y
     );
+    println!("Start frame: {start_frame_number}");
 
     let (recording_meta, meta, project, recordings) = match load_recording(&recording_path).await {
         Ok(recording) => recording,
@@ -460,7 +469,7 @@ async fn main() {
         render_constants.is_software_adapter
     );
 
-    let layers_rx = start_renderer_layers_creation(&render_constants);
+    let layers_rx = start_renderer_layers_creation(&render_constants, &project);
 
     let segment_medias =
         match cap_editor::create_segments(&recording_meta, meta.as_ref(), false).await {
@@ -470,6 +479,7 @@ async fn main() {
                 std::process::exit(1);
             }
         };
+    let layers_rx = finish_renderer_layers_creation(layers_rx).await;
 
     let (telemetry, mut telemetry_rx) = PlaybackTelemetry::channel();
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<usize>();
@@ -491,8 +501,6 @@ async fn main() {
     let renderer = match Renderer::spawn_with_telemetry(
         render_constants.clone(),
         frame_cb,
-        &recording_meta,
-        meta.as_ref(),
         layers_rx,
         Some(telemetry.clone()),
     ) {
@@ -507,7 +515,7 @@ async fn main() {
     let playback = Playback {
         renderer: renderer.clone(),
         render_constants,
-        start_frame_number: 0,
+        start_frame_number,
         project: project_rx,
         segment_medias,
         telemetry: Some(telemetry),

@@ -459,6 +459,7 @@ pub struct AsyncVideoDecoderHandle {
 
 impl AsyncVideoDecoderHandle {
     const INITIAL_SEEK_TIMEOUT_MS: u64 = 10000;
+    const INITIAL_MAX_FALLBACK_DISTANCE: u32 = 2;
 
     fn normal_timeout_ms(&self) -> u64 {
         let pixels = (self.status.video_width as u64) * (self.status.video_height as u64);
@@ -472,16 +473,26 @@ impl AsyncVideoDecoderHandle {
     }
 
     pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
-        self.get_frame_with_timeout(time, self.normal_timeout_ms())
+        self.get_frame_with_timeout(time, self.normal_timeout_ms(), self.max_fallback_distance)
             .await
     }
 
     pub async fn get_frame_initial(&self, time: f32) -> Option<DecodedFrame> {
-        self.get_frame_with_timeout(time, Self::INITIAL_SEEK_TIMEOUT_MS)
-            .await
+        self.get_frame_with_timeout(
+            time,
+            Self::INITIAL_SEEK_TIMEOUT_MS,
+            self.max_fallback_distance
+                .min(Self::INITIAL_MAX_FALLBACK_DISTANCE),
+        )
+        .await
     }
 
-    async fn get_frame_with_timeout(&self, time: f32, timeout_ms: u64) -> Option<DecodedFrame> {
+    async fn get_frame_with_timeout(
+        &self,
+        time: f32,
+        timeout_ms: u64,
+        max_fallback_distance: u32,
+    ) -> Option<DecodedFrame> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let adjusted_time = self.get_time(time);
 
@@ -489,7 +500,7 @@ impl AsyncVideoDecoderHandle {
             .sender
             .send(VideoDecoderMessage::GetFrame(
                 adjusted_time,
-                self.max_fallback_distance,
+                max_fallback_distance,
                 tx,
             ))
             .is_err()

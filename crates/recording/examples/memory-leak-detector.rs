@@ -176,6 +176,7 @@ async fn run_memory_test(
     include_camera: bool,
     include_mic: bool,
     fragmented: bool,
+    use_oop_muxer: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Cap Memory Leak Detector ===\n");
     println!("Configuration:");
@@ -183,6 +184,7 @@ async fn run_memory_test(
     println!("  Camera: {include_camera}");
     println!("  Microphone: {include_mic}");
     println!("  Fragmented MP4: {fragmented}");
+    println!("  Out-of-process muxer: {use_oop_muxer}");
     println!();
 
     let mut memory_tracker = MemoryTracker::new();
@@ -198,6 +200,7 @@ async fn run_memory_test(
         },
     )
     .with_fragmented(fragmented)
+    .with_out_of_process_muxer(use_oop_muxer)
     .with_system_audio(true);
 
     if include_camera {
@@ -364,6 +367,166 @@ async fn run_camera_only_test(duration_secs: u64) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+/// Runs `cycles` independent record-start/stop cycles in the same process,
+/// sampling Footprint right after each `handle.stop()` completes. This
+/// mirrors a user repeatedly hitting Start/Stop within one app session and
+/// surfaces leaks that only show up as resources accumulate across cycles
+/// (e.g. actors/sessions from a previous recording never torn down).
+async fn run_cycles_test(
+    cycles: usize,
+    cycle_duration_secs: u64,
+    include_camera: bool,
+    include_mic: bool,
+    fragmented: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("=== Repeated Record Start/Stop Cycle Test ===\n");
+    println!(
+        "Cycles: {cycles}, each {cycle_duration_secs}s, camera={include_camera}, mic={include_mic}, fragmented={fragmented}\n"
+    );
+
+    let mut tracker = MemoryTracker::new();
+    tracker.sample();
+    let baseline = tracker.samples[0].1.primary_metric();
+    println!("Baseline Footprint: {baseline:.1} MB");
+
+    let mut results = Vec::new();
+
+    for cycle in 1..=cycles {
+        println!("\n--- Cycle {cycle}/{cycles} ---");
+
+        let dir = tempfile::tempdir()?;
+
+        let mut builder = cap_recording::studio_recording::Actor::builder(
+            dir.path().into(),
+            ScreenCaptureTarget::Display {
+                id: Display::primary().id(),
+            },
+        )
+        .with_fragmented(fragmented)
+        .with_system_audio(true);
+
+        if include_camera {
+            match cap_camera::list_cameras().next() {
+                Some(camera_info) => {
+                    let feed = CameraFeed::spawn(CameraFeed::default());
+
+                    match feed
+                        .ask(camera::SetInput {
+                            settings: None,
+                            id: DeviceOrModelID::from_info(&camera_info),
+                        })
+                        .await?
+                        .await
+                    {
+                        Ok(_) => {
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            let lock = feed.ask(camera::Lock).await?;
+                            builder = builder.with_camera_feed(Arc::new(lock));
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Cycle {cycle}: camera SetInput failed ({e:?}) - recording without camera this cycle"
+                            );
+                        }
+                    }
+                }
+                None => warn!("No camera found"),
+            }
+        }
+
+        if include_mic {
+            if let Some((mic_name, _, _)) = MicrophoneFeed::default_device() {
+                let error_sender = flume::unbounded().0;
+                let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_sender));
+
+                match mic_feed
+                    .ask(microphone::SetInput {
+                        settings: None,
+                        label: mic_name.clone(),
+                    })
+                    .await?
+                    .await
+                {
+                    Ok(_) => {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        let mic_lock = mic_feed.ask(microphone::Lock).await?;
+                        builder = builder.with_mic_feed(Arc::new(mic_lock));
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Cycle {cycle}: mic SetInput failed ({e:?}) - recording without mic this cycle"
+                        );
+                    }
+                }
+            }
+        }
+
+        let handle = builder
+            .build(
+                #[cfg(target_os = "macos")]
+                Some(cap_recording::SendableShareableContent::from(
+                    cidre::sc::ShareableContent::current().await?,
+                )),
+            )
+            .await?;
+
+        tokio::time::sleep(Duration::from_secs(cycle_duration_secs)).await;
+
+        let stop_start = Instant::now();
+        let _result = handle.stop().await?;
+        let stop_duration = stop_start.elapsed();
+
+        // brief settle so any async teardown has a chance to release resources
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        tracker.sample();
+
+        let footprint = tracker.samples.last().unwrap().1.primary_metric();
+        let delta_from_baseline = footprint - baseline;
+        println!(
+            "[Cycle {cycle}] stop took {stop_duration:?}, Footprint: {footprint:.1} MB (delta from baseline: {delta_from_baseline:+.1} MB)"
+        );
+        results.push(footprint);
+
+        std::mem::forget(dir);
+    }
+
+    println!("\n=== Cycle Summary ===");
+    println!(
+        "{:>6} {:>14} {:>10}",
+        "Cycle", "Footprint(MB)", "Delta prev"
+    );
+    let mut prev = baseline;
+    for (i, f) in results.iter().enumerate() {
+        let delta = f - prev;
+        println!("{:>6} {:>14.1} {:>+10.1}", i + 1, f, delta);
+        prev = *f;
+    }
+
+    let final_footprint = *results.last().unwrap();
+    let total_growth = final_footprint - baseline;
+    let avg_per_cycle = total_growth / cycles as f64;
+    println!("\nBaseline: {baseline:.1} MB");
+    println!("Final: {final_footprint:.1} MB");
+    println!("Total growth over {cycles} cycles: {total_growth:.1} MB");
+    println!("Average growth per cycle: {avg_per_cycle:.2} MB/cycle");
+
+    if avg_per_cycle > 5.0 {
+        println!(
+            "\n*** PER-CYCLE LEAK: ~{avg_per_cycle:.1} MB retained per record cycle - at this rate, 20GB would take ~{:.0} cycles ***",
+            20000.0 / avg_per_cycle
+        );
+    } else if avg_per_cycle > 0.5 {
+        println!(
+            "\n*** POSSIBLE SLOW PER-CYCLE LEAK: ~{avg_per_cycle:.2} MB/cycle - 20GB would take ~{:.0} cycles ***",
+            20000.0 / avg_per_cycle
+        );
+    } else {
+        println!("\n[OK] No significant per-cycle growth detected (~{avg_per_cycle:.2} MB/cycle)");
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { std::env::set_var("RUST_LOG", "info,cap_recording=debug") };
@@ -387,16 +550,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let include_camera = !args.contains(&"--no-camera".to_string());
     let include_mic = !args.contains(&"--no-mic".to_string());
     let fragmented = !args.contains(&"--no-fragmented".to_string());
+    let use_oop_muxer = args.contains(&"--oop-muxer".to_string());
 
     match mode {
         "full" => {
-            run_memory_test(duration, include_camera, include_mic, fragmented).await?;
+            run_memory_test(
+                duration,
+                include_camera,
+                include_mic,
+                fragmented,
+                use_oop_muxer,
+            )
+            .await?;
         }
         "screen-only" => {
-            run_memory_test(duration, false, false, fragmented).await?;
+            run_memory_test(duration, false, false, fragmented, use_oop_muxer).await?;
         }
         "no-fragmented" => {
-            run_memory_test(duration, include_camera, include_mic, false).await?;
+            run_memory_test(duration, include_camera, include_mic, false, use_oop_muxer).await?;
         }
         "camera-only" => {
             run_camera_only_test(duration).await?;
@@ -404,11 +575,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "compare" => {
             println!("=== Comparison Test ===\n");
             println!("First: Testing WITHOUT fragmented MP4...\n");
-            run_memory_test(60, include_camera, include_mic, false).await?;
+            run_memory_test(60, include_camera, include_mic, false, use_oop_muxer).await?;
 
             println!("\n\n====================================\n");
             println!("Second: Testing WITH fragmented MP4...\n");
-            run_memory_test(60, include_camera, include_mic, true).await?;
+            run_memory_test(60, include_camera, include_mic, true, use_oop_muxer).await?;
+        }
+        "cycles" => {
+            let cycles = args
+                .iter()
+                .position(|a| a == "--cycles")
+                .and_then(|i| args.get(i + 1))
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(8);
+
+            let cycle_duration = args
+                .iter()
+                .position(|a| a == "--cycle-duration")
+                .and_then(|i| args.get(i + 1))
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(8);
+
+            run_cycles_test(
+                cycles,
+                cycle_duration,
+                include_camera,
+                include_mic,
+                fragmented,
+            )
+            .await?;
         }
         _ => {
             println!("Cap Memory Leak Detector");
@@ -423,9 +618,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("      no-fragmented   Full recording without fragmented MP4");
             println!("      camera-only     Camera feed only (no encoding)");
             println!("      compare         Run both fragmented and non-fragmented for comparison");
+            println!("      cycles          Run repeated record start/stop cycles in one process");
             println!("  --no-camera         Disable camera");
             println!("  --no-mic            Disable microphone");
             println!("  --no-fragmented     Disable fragmented MP4 encoding");
+            println!(
+                "  --cycles <n>        Number of record start/stop cycles (default: 8, cycles mode)"
+            );
+            println!(
+                "  --cycle-duration <secs>  Recording duration per cycle (default: 8, cycles mode)"
+            );
+            println!("  --oop-muxer         Use the out-of-process cap-muxer for fragmented MP4");
+            println!(
+                "                      (requires cap-muxer binary; set CAP_MUXER_BIN or build it)"
+            );
             println!();
             println!("Examples:");
             println!("  # Test full pipeline with camera, mic, fragmented MP4 for 2 minutes");

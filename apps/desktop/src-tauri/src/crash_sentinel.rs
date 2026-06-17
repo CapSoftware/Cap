@@ -29,6 +29,7 @@ struct SessionRecord {
 
 struct ActiveSession {
     path: PathBuf,
+    #[cfg(target_os = "macos")]
     record: SessionRecord,
 }
 
@@ -79,7 +80,11 @@ pub fn init(logs_dir: &Path, app_version: &str) {
         scope.set_tag("app.version", app_version);
     });
 
-    *SESSION.lock().unwrap() = Some(ActiveSession { path, record });
+    *SESSION.lock().unwrap() = Some(ActiveSession {
+        path,
+        #[cfg(target_os = "macos")]
+        record,
+    });
 }
 
 /// Record the result of the macOS Liquid Glass material attempt so that, if this

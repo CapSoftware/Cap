@@ -140,9 +140,9 @@ jobs:
         shell: bash
         run: node scripts/setup.js
 
-      - name: Build cap-muxer sidecar
+      - name: Build desktop binaries
         shell: bash
-        run: ./scripts/build-cap-muxer.sh ${{ matrix.settings.target }}
+        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-features --locked -- -D warnings
@@ -217,9 +217,9 @@ jobs:
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
-      - name: Build cap-muxer sidecar
+      - name: Build desktop binaries
         shell: bash
-        run: ./scripts/build-cap-muxer.sh ${{ matrix.settings.target }}
+        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
       - name: Build app
         working-directory: apps/desktop

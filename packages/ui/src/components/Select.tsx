@@ -50,7 +50,7 @@ const selectTriggerVariants = cva(
 
 const selectContentVariants = cva(
 	cx(
-		"rounded-xl border overflow-hidden",
+		"z-[1000] rounded-xl border overflow-hidden",
 		"[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
 		"data-[state=open]:animate-in data-[state=closed]:animate-out",
 		"data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",

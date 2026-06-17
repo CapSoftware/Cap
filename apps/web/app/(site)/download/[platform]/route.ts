@@ -1,9 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { getGitHubReleases } from "@/utils/releases";
+import { getGitHubReleases, type ReleaseDownloadKey } from "@/utils/releases";
 
 export const runtime = "edge";
-
-type FallbackPlatform = "macos-arm64" | "macos-x64" | "windows";
 
 async function checkCrabNebulaDownload(
 	url: string,
@@ -26,19 +24,13 @@ async function checkCrabNebulaDownload(
 }
 
 async function getGitHubFallbackDownloadUrl(
-	platform: FallbackPlatform,
+	platform: ReleaseDownloadKey,
 ): Promise<string | null> {
 	try {
 		const releases = await getGitHubReleases();
 
 		for (const release of releases) {
-			const url =
-				platform === "windows"
-					? release.downloads.windows
-					: platform === "macos-arm64"
-						? release.downloads["macos-arm64"]
-						: release.downloads["macos-x64"];
-
+			const url = release.downloads[platform];
 			if (url) return url;
 		}
 	} catch {}
@@ -55,7 +47,7 @@ export async function GET(
 
 	const downloadUrls: Record<
 		string,
-		{ url: string; fallback: FallbackPlatform }
+		{ url: string; fallback: ReleaseDownloadKey }
 	> = {
 		"apple-intel": {
 			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
@@ -92,6 +84,46 @@ export async function GET(
 		win: {
 			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64",
 			fallback: "windows",
+		},
+		linux: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/appimage-x86_64",
+			fallback: "linux-appimage",
+		},
+		"linux-appimage": {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/appimage-x86_64",
+			fallback: "linux-appimage",
+		},
+		appimage: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/appimage-x86_64",
+			fallback: "linux-appimage",
+		},
+		"linux-deb": {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/deb-x86_64",
+			fallback: "linux-deb",
+		},
+		deb: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/deb-x86_64",
+			fallback: "linux-deb",
+		},
+		debian: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/deb-x86_64",
+			fallback: "linux-deb",
+		},
+		ubuntu: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/deb-x86_64",
+			fallback: "linux-deb",
+		},
+		"linux-rpm": {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/rpm-x86_64",
+			fallback: "linux-rpm",
+		},
+		rpm: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/rpm-x86_64",
+			fallback: "linux-rpm",
+		},
+		fedora: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/rpm-x86_64",
+			fallback: "linux-rpm",
 		},
 	};
 

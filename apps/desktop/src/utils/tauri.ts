@@ -23,6 +23,15 @@ async uploadLogs() : Promise<null> {
 async getSystemDiagnostics() : Promise<SystemDiagnostics> {
     return await TAURI_INVOKE("get_system_diagnostics");
 },
+async getCliInstallStatus() : Promise<CliInstallStatus> {
+    return await TAURI_INVOKE("get_cli_install_status");
+},
+async installCli() : Promise<CliInstallStatus> {
+    return await TAURI_INVOKE("install_cli");
+},
+async uninstallCli() : Promise<CliInstallStatus> {
+    return await TAURI_INVOKE("uninstall_cli");
+},
 async startRecording(inputs: StartRecordingInputs) : Promise<RecordingAction> {
     return await TAURI_INVOKE("start_recording", { inputs });
 },
@@ -471,8 +480,31 @@ export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb: number; micStereoMode: StereoMode; systemVolumeDb: number }
+/**
+ * Overlap-trim accounting captured by the recorder's audio gap tracker, persisted so the
+ * editor can compensate for stale-startup audio drift from typed data instead of scraping
+ * the recording log. See `cap-editor`'s `audio_timing_repair_offset`.
+ */
+export type AudioGapSummary = { 
+/**
+ * Total audio trimmed from overlapping frames over the whole recording, in milliseconds.
+ */
+total_overlap_trimmed_ms: number; 
+/**
+ * Startup-window trim used for stale-startup repair, excluding mid-recording trims.
+ */
+startup_overlap_trimmed_ms?: number; 
+/**
+ * Number of whole audio frames dropped because they fully overlapped the committed timeline.
+ */
+overlap_dropped_frames: number; 
+/**
+ * Subset of `overlap_dropped_frames` that dropped within the first few frames — the
+ * signature of a stale buffered burst at capture start.
+ */
+startup_overlap_drops: number }
 export type AudioInputLevelChange = number
-export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null }
+export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null; gap_summary?: AudioGapSummary | null }
 export type AuthSecret = { api_key: string } | { token: string; expires: number }
 export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; organizations?: Organization[]; organizations_updated_at?: number | null }
 export type BackgroundBlurConfig = { mode: BackgroundBlurMode }
@@ -501,6 +533,12 @@ export type CaptureDisplay = { id: DisplayId; name: string; refresh_rate: number
 export type CaptureDisplayWithThumbnail = { id: DisplayId; name: string; refresh_rate: number; thumbnail: string | null }
 export type CaptureWindow = { id: WindowId; owner_name: string; name: string; bounds: LogicalBounds; refresh_rate: number; bundle_identifier: string | null }
 export type CaptureWindowWithThumbnail = { id: WindowId; owner_name: string; name: string; bounds: LogicalBounds; refresh_rate: number; thumbnail: string | null; app_icon: string | null; bundle_identifier: string | null }
+export type CliInstallStatus = { installDir: string; shimPath: string; targetPath: string; installed: boolean; onPath: boolean; conflict: string | null; pathEntry: string; shellCommand: string; 
+/**
+ * Whether the install dir is persisted to the user's shell PATH config (profile/registry),
+ * so `cap` will be available in a new terminal even though it is not on the current PATH.
+ */
+pathConfigured: boolean }
 export type ClickSpringConfig = { tension: number; mass: number; friction: number }
 export type ClipConfiguration = { index: number; offsets: ClipOffsets }
 export type ClipOffsets = { camera?: number; mic?: number; system_audio?: number }

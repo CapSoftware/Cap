@@ -23,8 +23,12 @@ import { SignInButton } from "~/components/SignInButton";
 import { authStore, userProfileStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
-import { clientEnv } from "~/utils/env";
-import { apiClient, protectedHeaders } from "~/utils/web-api";
+import {
+	apiClient,
+	getConfiguredServerUrl,
+	protectedHeaders,
+} from "~/utils/web-api";
+import IconLucideTerminal from "~icons/lucide/terminal";
 import IconLucideUserRound from "~icons/lucide/user-round";
 
 const USER_PROFILE_CACHE_GC_MS = 2 * 60 * 60 * 1000;
@@ -53,7 +57,7 @@ function isCachedProfileForUser(
 async function loadProfileImageObjectUrl(signal: AbortSignal) {
 	const imageUrl = new URL(
 		"/api/desktop/user/profile/image",
-		clientEnv.VITE_SERVER_URL,
+		await getConfiguredServerUrl(),
 	).toString();
 
 	const response = await tauriFetch(imageUrl, {
@@ -198,6 +202,11 @@ export default function Settings(props: RouteSectionProps) {
 			icon: IconCapHotkeys,
 		},
 		{
+			href: "cli",
+			name: "CLI",
+			icon: IconLucideTerminal,
+		},
+		{
 			href: "recordings",
 			name: "Recordings",
 			icon: IconLucideSquarePlay,
@@ -260,8 +269,8 @@ export default function Settings(props: RouteSectionProps) {
 	});
 	const accountImageUrl = createMemo(() => profileImageObjectUrl());
 	const openDashboard = () => {
-		void shell.open(
-			new URL("/dashboard", clientEnv.VITE_SERVER_URL).toString(),
+		void getConfiguredServerUrl().then((serverUrl) =>
+			shell.open(new URL("/dashboard", serverUrl).toString()),
 		);
 	};
 	const handleProfileClick = () => {

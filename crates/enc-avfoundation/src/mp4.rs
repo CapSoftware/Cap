@@ -295,7 +295,7 @@ impl MP4Encoder {
                 "recording bitrate: {bitrate}"
             );
 
-            let keyframe_interval = fps as i32;
+            let keyframe_interval = keyframe_interval_for_fps(fps);
 
             let allow_frame_reordering = ultra_quality && !instant_mode;
 
@@ -1051,6 +1051,10 @@ fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {
     1_500_000.0 + pixel_ratio * 1_500_000.0 + fps_ratio * 500_000.0
 }
 
+fn keyframe_interval_for_fps(fps: f32) -> i32 {
+    (fps * 0.75).floor().max(1.0) as i32
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
@@ -1059,6 +1063,13 @@ mod tests {
 
     fn valid_video_config() -> VideoInfo {
         VideoInfo::from_raw(RawVideoFormat::Bgra, 1920, 1080, 30)
+    }
+
+    #[test]
+    fn keyframe_interval_targets_three_quarter_second() {
+        assert_eq!(keyframe_interval_for_fps(30.0), 22);
+        assert_eq!(keyframe_interval_for_fps(60.0), 45);
+        assert_eq!(keyframe_interval_for_fps(1.0), 1);
     }
 
     #[test]
@@ -2119,7 +2130,7 @@ mod tests {
                         cidre::ns::Number::with_f32(bitrate).as_id_ref(),
                         cidre::ns::Number::with_bool(false).as_id_ref(),
                         cidre::ns::Number::with_f32(fps).as_id_ref(),
-                        cidre::ns::Number::with_i32(fps as i32).as_id_ref(),
+                        cidre::ns::Number::with_i32(keyframe_interval_for_fps(fps)).as_id_ref(),
                     ],
                 )
                 .as_id_ref(),
@@ -2432,7 +2443,7 @@ mod tests {
                         cidre::ns::Number::with_f32(bitrate).as_id_ref(),
                         cidre::ns::Number::with_bool(false).as_id_ref(),
                         cidre::ns::Number::with_f32(fps).as_id_ref(),
-                        cidre::ns::Number::with_i32(fps as i32).as_id_ref(),
+                        cidre::ns::Number::with_i32(keyframe_interval_for_fps(fps)).as_id_ref(),
                     ],
                 )
                 .as_id_ref(),

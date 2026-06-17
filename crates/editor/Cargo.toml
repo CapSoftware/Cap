@@ -18,6 +18,10 @@ path = "examples/playback-pipeline-benchmark.rs"
 name = "editor-playback-benchmark"
 path = "examples/editor-playback-benchmark.rs"
 
+[[example]]
+name = "editor-startup-benchmark"
+path = "examples/editor-startup-benchmark.rs"
+
 [dependencies]
 cap-media = { path = "../media" }
 cap-project = { path = "../project" }
