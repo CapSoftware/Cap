@@ -26,9 +26,29 @@ function createServerEnv() {
 					"32 byte hex string for encrypting values like AWS access keys",
 				),
 
-			// Cap uses Resend for email sending, including sending login code emails
+			EMAIL_PROVIDER: z
+				.enum(["resend", "smtp"])
+				.optional()
+				.describe(
+					"Email provider for transactional emails. Defaults to 'resend' if RESEND_API_KEY is set, otherwise emails are disabled.",
+				),
+			EMAIL_FROM: z
+				.string()
+				.optional()
+				.describe(
+					"Full from address (e.g. 'Cap <auth@example.com>') used by every provider. Falls back to 'auth@{RESEND_FROM_DOMAIN}' when unset.",
+				),
+
 			RESEND_API_KEY: z.string().optional(),
 			RESEND_FROM_DOMAIN: z.string().optional(),
+
+			SMTP_HOST: z.string().optional(),
+			SMTP_PORT: z.coerce.number().int().positive().optional(),
+			SMTP_SECURE: boolString(false).describe(
+				"Use TLS on connect (port 465). Leave false for STARTTLS on 587.",
+			),
+			SMTP_USER: z.string().optional(),
+			SMTP_PASS: z.string().optional(),
 
 			/// S3 configuration
 			// Though they are prefixed with `CAP_AWS`, these don't have to be
