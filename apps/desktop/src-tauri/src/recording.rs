@@ -3325,21 +3325,23 @@ fn project_config_from_recording(
         })
         .collect::<Vec<_>>();
 
-    let zoom_segments = if settings.auto_zoom_on_clicks {
-        generate_zoom_segments_from_clicks(completed_recording, recordings)
-    } else {
-        Vec::new()
-    };
+    if !timeline_segments.is_empty() {
+        let zoom_segments = if settings.auto_zoom_on_clicks {
+            generate_zoom_segments_from_clicks(completed_recording, recordings)
+        } else {
+            Vec::new()
+        };
 
-    config.timeline = Some(TimelineConfiguration {
-        segments: timeline_segments,
-        zoom_segments,
-        scene_segments: Vec::new(),
-        mask_segments: Vec::new(),
-        text_segments: Vec::new(),
-        caption_segments: Vec::new(),
-        keyboard_segments: Vec::new(),
-    });
+        config.timeline = Some(TimelineConfiguration {
+            segments: timeline_segments,
+            zoom_segments,
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+        });
+    }
 
     config
 }
