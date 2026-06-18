@@ -223,7 +223,7 @@ impl RecoveryManager {
                 display_init_segment = None;
             }
 
-            if display_fragments.is_empty() {
+            if display_fragments.is_empty() && !meta.audio_only {
                 debug!(
                     "No display fragments found for segment {} at {:?}",
                     index, segment_path

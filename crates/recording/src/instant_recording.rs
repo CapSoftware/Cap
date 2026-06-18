@@ -607,6 +607,34 @@ pub async fn spawn_instant_recording_actor(
                 )
             }
         }
+        ScreenCaptureTarget::AudioOnly => {
+            let mic_feed = inputs.mic_feed.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Audio-only recording requires a microphone, but none is available. \
+                    Please select a microphone in the recording settings."
+                )
+            })?;
+
+            let output_path = content_dir.join("output.mp4");
+
+            let audio_pipeline = OutputPipeline::builder(output_path)
+                .with_timestamps(timestamps)
+                .with_audio_source::<crate::sources::Microphone>(mic_feed)
+                .build::<output_pipeline::Mp4Muxer>(())
+                .await
+                .context("audio-only pipeline setup")?;
+
+            (
+                Pipeline {
+                    video: audio_pipeline,
+                    audio: None,
+                    video_info: None,
+                    segments_dir: content_dir.clone(),
+                    segment_rx: None,
+                },
+                None,
+            )
+        }
         _ => {
             #[cfg(windows)]
             let d3d_device = crate::capture_pipeline::create_d3d_device()?;

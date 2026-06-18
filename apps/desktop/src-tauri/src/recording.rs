@@ -3084,26 +3084,29 @@ async fn finalize_studio_recording(
         StudioRecordingMeta::SingleSegment { segment } => segment
             .display
             .as_ref()
-            .map(|d| d.path.clone())
-            .unwrap_or_default()
-            .to_path(&recording_dir),
-        StudioRecordingMeta::MultipleSegments { inner, .. } => inner.segments[0]
-            .display
-            .as_ref()
-            .map(|d| d.path.clone())
-            .unwrap_or_default()
-            .to_path(&recording_dir),
+            .map(|d| d.path.to_path(&recording_dir)),
+        StudioRecordingMeta::MultipleSegments { inner, .. } => inner
+            .segments
+            .first()
+            .and_then(|s| s.display.as_ref())
+            .map(|d| d.path.to_path(&recording_dir)),
     };
+    let has_display = display_output_path.is_some();
 
-    let display_screenshot = screenshots_dir.join("display.jpg");
-    tokio::spawn(create_screenshot(
-        display_output_path,
-        display_screenshot,
-        None,
-    ));
+    if let Some(display_path) = display_output_path {
+        tokio::spawn(create_screenshot(
+            display_path,
+            screenshots_dir.join("display.jpg"),
+            None,
+        ));
+    }
 
-    let recordings = ProjectRecordingsMeta::new(&recording_dir, &updated_studio_meta)
-        .map_err(|e| format!("Failed to create project recordings meta: {e}"))?;
+    let recordings = if has_display {
+        ProjectRecordingsMeta::new(&recording_dir, &updated_studio_meta)
+            .map_err(|e| format!("Failed to create project recordings meta: {e}"))?
+    } else {
+        ProjectRecordingsMeta { segments: vec![] }
+    };
 
     let config = project_config_from_recording(
         app,

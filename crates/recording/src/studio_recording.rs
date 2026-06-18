@@ -1488,6 +1488,8 @@ async fn create_segment_pipeline(
 
             (Some(screen), None, None)
         }
+    } else if audio_only {
+        (None, None, None)
     } else {
         let capture_target = base_inputs.capture_target.clone();
 
