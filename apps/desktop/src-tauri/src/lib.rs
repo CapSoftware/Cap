@@ -2918,12 +2918,27 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
 
             match &**meta {
                 StudioRecordingMeta::SingleSegment { segment } => {
-                    vec![recording_meta.path(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default())]
+                    vec![
+                        recording_meta.path(
+                            &segment
+                                .display
+                                .as_ref()
+                                .map(|d| d.path.clone())
+                                .unwrap_or_default(),
+                        ),
+                    ]
                 }
                 StudioRecordingMeta::MultipleSegments { inner } => inner
                     .segments
                     .iter()
-                    .map(|s| recording_meta.path(&s.display.as_ref().map(|d| d.path.clone()).unwrap_or_default()))
+                    .map(|s| {
+                        recording_meta.path(
+                            &s.display
+                                .as_ref()
+                                .map(|d| d.path.clone())
+                                .unwrap_or_default(),
+                        )
+                    })
                     .collect(),
             }
         }

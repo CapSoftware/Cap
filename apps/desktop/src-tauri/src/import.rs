@@ -315,7 +315,8 @@ fn full_timeline_for_segments(
         .iter()
         .enumerate()
         .map(|(index, segment)| {
-            let duration = get_video_duration_secs(&segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(project_path))?;
+            let display = segment.display.as_ref().ok_or("Missing display video")?;
+            let duration = get_video_duration_secs(&display.path.to_path(project_path))?;
             Ok(TimelineSegment {
                 recording_clip: index as u32,
                 timescale: 1.0,
@@ -596,7 +597,11 @@ fn copy_keyboard_path(
         return Ok(Some(target_relative_path));
     };
 
-    let Some(display_dir) = source_segment.display.as_ref().and_then(|d| d.path.parent()) else {
+    let Some(display_dir) = source_segment
+        .display
+        .as_ref()
+        .and_then(|d| d.path.parent())
+    else {
         return Ok(None);
     };
 
@@ -875,7 +880,10 @@ fn source_timeline_segments_for_import(
         } else {
             let duration = get_source_video_duration_secs(
                 source_meta,
-                source_segment.display.as_ref().ok_or("Missing display video")?,
+                source_segment
+                    .display
+                    .as_ref()
+                    .ok_or("Missing display video")?,
             )?;
             duration_cache.insert(source_index, duration);
             duration
@@ -1531,7 +1539,7 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                         },
                     )),
                     upload: None,
-                                audio_only: false,
+                    audio_only: false,
                 };
 
                 if let Err(e) = meta.save_for_project() {

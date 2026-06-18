@@ -542,11 +542,11 @@ pub async fn spawn_instant_recording_actor(
                     Pipeline {
                         video: cam_pipeline,
                         audio: None,
-                        video_info,
+                        video_info: Some(video_info),
                         segments_dir: content_dir.clone(),
                         segment_rx: None,
                     },
-                    video_info,
+                    Some(video_info),
                 )
             }
 
@@ -599,11 +599,11 @@ pub async fn spawn_instant_recording_actor(
                     Pipeline {
                         video: cam_pipeline,
                         audio: None,
-                        video_info,
+                        video_info: Some(video_info),
                         segments_dir: content_dir.clone(),
                         segment_rx: None,
                     },
-                    video_info,
+                    Some(video_info),
                 )
             }
         }

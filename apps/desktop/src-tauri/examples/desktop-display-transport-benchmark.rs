@@ -118,7 +118,11 @@ async fn load_recording(
     if project.timeline.is_none() {
         let timeline_segments = match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { segment } => {
-                let display_path = segment.display.as_ref().map(|d| recording_meta.path(&d.path)).unwrap_or_default();
+                let display_path = segment
+                    .display
+                    .as_ref()
+                    .map(|d| recording_meta.path(&d.path))
+                    .unwrap_or_default();
                 let duration = match Video::new(&display_path, 0.0) {
                     Ok(video) => video.duration,
                     Err(_) => 5.0,
@@ -135,7 +139,11 @@ async fn load_recording(
                 .iter()
                 .enumerate()
                 .filter_map(|(i, segment)| {
-                    let display_path = segment.display.as_ref().map(|d| recording_meta.path(&d.path)).unwrap_or_default();
+                    let display_path = segment
+                        .display
+                        .as_ref()
+                        .map(|d| recording_meta.path(&d.path))
+                        .unwrap_or_default();
                     let duration = match Video::new(&display_path, 0.0) {
                         Ok(video) => video.duration,
                         Err(_) => 5.0,

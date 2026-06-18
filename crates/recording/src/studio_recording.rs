@@ -608,9 +608,10 @@ impl Pipeline {
 
             let screen_done = self.screen.as_ref().map(|s| s.done_fut());
             tokio::spawn(async move {
-                if let Some(done) = screen_done {
-                    let _ = done.await;
-                }
+                let Some(done) = screen_done else {
+                    return;
+                };
+                let _ = done.await;
                 if let Some(token) = mic_cancel.as_ref() {
                     token.cancel();
                 }
@@ -998,9 +999,7 @@ async fn stop_recording(
                     raw_display
                 }
             } else {
-                mic_start_time
-                    .or(camera_start_time)
-                    .unwrap_or(s.start)
+                mic_start_time.or(camera_start_time).unwrap_or(s.start)
             };
 
             let diagnostics =
@@ -1011,16 +1010,17 @@ async fn stop_recording(
                     track_failures: s.pipeline.track_failures.clone(),
                 });
 
-            let display_fps = s
-                .pipeline
-                .screen
-                .video_info
-                .map(|v| v.fps())
+            let screen = s.pipeline.screen.as_ref();
+
+            let display_fps = screen
+                .and_then(|sc| sc.video_info.map(|v| v.fps()))
                 .unwrap_or_else(|| {
-                    tracing::warn!(
-                        "Screen video_info missing, using default fps: {}",
-                        DEFAULT_FPS
-                    );
+                    if screen.is_some() {
+                        tracing::warn!(
+                            "Screen video_info missing, using default fps: {}",
+                            DEFAULT_FPS
+                        );
+                    }
                     DEFAULT_FPS
                 });
             // Use the encoded display-media duration (frame_count / fps), not the wall-clock
@@ -1028,16 +1028,20 @@ async fn stop_recording(
             // recorder persists to project-config.json, so it is what un-edited recordings use; the
             // editor/export fallbacks only synthesize a timeline when none is present and read the
             // muxed container duration, which this closely (not bit-exactly) matches.
-            let display_media_duration = if display_fps > 0 {
-                s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
-            } else {
-                0.0
-            };
+            let display_media_duration = screen
+                .map(|sc| {
+                    if display_fps > 0 {
+                        sc.video_frame_count as f64 / f64::from(display_fps)
+                    } else {
+                        0.0
+                    }
+                })
+                .unwrap_or(0.0);
 
             SegmentOutput {
                 meta: MultipleSegment {
-                    display: VideoMeta {
-                        path: make_relative(&s.pipeline.screen.path),
+                    display: screen.map(|sc| VideoMeta {
+                        path: make_relative(&sc.path),
                         fps: display_fps,
                         start_time: Some(display_start_time),
                         device_id: None,
@@ -1482,7 +1486,7 @@ async fn create_segment_pipeline(
                 .await
                 .context("camera-only screen pipeline setup")?;
 
-            (screen, None, None)
+            (Some(screen), None, None)
         }
     } else {
         let capture_target = base_inputs.capture_target.clone();
@@ -2237,7 +2241,12 @@ mod tests {
             .expect("display success should still allow the recording to stop cleanly");
 
         assert_eq!(
-            finished.screen.as_ref().map(|s| s.video_frame_count).unwrap_or(0), 1,
+            finished
+                .screen
+                .as_ref()
+                .map(|s| s.video_frame_count)
+                .unwrap_or(0),
+            1,
             "display output should be preserved"
         );
         assert!(

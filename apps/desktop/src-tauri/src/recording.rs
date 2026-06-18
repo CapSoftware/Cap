@@ -2830,22 +2830,32 @@ async fn handle_recording_finish(
             let updated_studio_meta = recording.meta.clone();
 
             let display_output_path = match &updated_studio_meta {
-                StudioRecordingMeta::SingleSegment { segment } => {
-                    segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(&recording_dir)
-                }
-                StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                    inner.segments[0].display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(&recording_dir)
-                }
+                StudioRecordingMeta::SingleSegment { segment } => segment
+                    .display
+                    .as_ref()
+                    .map(|d| d.path.to_path(&recording_dir)),
+                StudioRecordingMeta::MultipleSegments { inner, .. } => inner
+                    .segments
+                    .first()
+                    .and_then(|s| s.display.as_ref())
+                    .map(|d| d.path.to_path(&recording_dir)),
             };
+            let has_display = display_output_path.is_some();
 
             let display_screenshot = screenshots_dir.join("display.jpg");
-            tokio::spawn(create_screenshot(
-                display_output_path,
-                display_screenshot.clone(),
-                None,
-            ));
+            if let Some(display_path) = display_output_path {
+                tokio::spawn(create_screenshot(
+                    display_path,
+                    display_screenshot.clone(),
+                    None,
+                ));
+            }
 
-            let recordings = ProjectRecordingsMeta::new(&recording_dir, &updated_studio_meta)?;
+            let recordings = if has_display {
+                ProjectRecordingsMeta::new(&recording_dir, &updated_studio_meta)?
+            } else {
+                ProjectRecordingsMeta { segments: vec![] }
+            };
 
             let config = project_config_from_recording(
                 app,
@@ -3074,12 +3084,18 @@ async fn finalize_studio_recording(
         .clone();
 
     let display_output_path = match &updated_studio_meta {
-        StudioRecordingMeta::SingleSegment { segment } => {
-            segment.display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(&recording_dir)
-        }
-        StudioRecordingMeta::MultipleSegments { inner, .. } => {
-            inner.segments[0].display.as_ref().map(|d| d.path.clone()).unwrap_or_default().to_path(&recording_dir)
-        }
+        StudioRecordingMeta::SingleSegment { segment } => segment
+            .display
+            .as_ref()
+            .map(|d| d.path.clone())
+            .unwrap_or_default()
+            .to_path(&recording_dir),
+        StudioRecordingMeta::MultipleSegments { inner, .. } => inner.segments[0]
+            .display
+            .as_ref()
+            .map(|d| d.path.clone())
+            .unwrap_or_default()
+            .to_path(&recording_dir),
     };
 
     let display_screenshot = screenshots_dir.join("display.jpg");
@@ -3405,7 +3421,11 @@ pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) ->
     };
 
     for segment in &inner.segments {
-        let Some(display_path) = segment.display.as_ref().map(|d| d.path.to_path(recording_dir)) else {
+        let Some(display_path) = segment
+            .display
+            .as_ref()
+            .map(|d| d.path.to_path(recording_dir))
+        else {
             continue;
         };
         if display_path.is_dir() {
@@ -3460,7 +3480,9 @@ pub fn remux_fragmented_recording_with_trigger(
                                     inner
                                         .segments
                                         .iter()
-                                        .filter_map(|seg| seg.display.as_ref().and_then(|d| d.start_time))
+                                        .filter_map(|seg| {
+                                            seg.display.as_ref().and_then(|d| d.start_time)
+                                        })
                                         .fold(0.0_f64, |acc, v| acc.max(v)),
                                 ),
                                 StudioRecordingMeta::SingleSegment { .. } => None,

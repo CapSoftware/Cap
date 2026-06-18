@@ -265,7 +265,11 @@ async fn load_recording(
     if project.timeline.is_none() {
         let timeline_segments = match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { segment } => {
-                let display_path = segment.display.as_ref().map(|d| recording_meta.path(&d.path)).unwrap_or_default();
+                let display_path = segment
+                    .display
+                    .as_ref()
+                    .map(|d| recording_meta.path(&d.path))
+                    .unwrap_or_default();
                 let duration = match cap_rendering::Video::new(&display_path, 0.0) {
                     Ok(v) => v.duration,
                     Err(_) => 5.0,
@@ -282,7 +286,11 @@ async fn load_recording(
                 .iter()
                 .enumerate()
                 .filter_map(|(i, segment)| {
-                    let display_path = segment.display.as_ref().map(|d| recording_meta.path(&d.path)).unwrap_or_default();
+                    let display_path = segment
+                        .display
+                        .as_ref()
+                        .map(|d| recording_meta.path(&d.path))
+                        .unwrap_or_default();
                     let duration = match cap_rendering::Video::new(&display_path, 0.0) {
                         Ok(v) => v.duration,
                         Err(_) => 5.0,
@@ -348,9 +356,11 @@ async fn run_decode_only_benchmark(
         StudioRecordingMeta::SingleSegment { segment } => {
             segment.display.as_ref().map(|d| d.fps).unwrap_or(0)
         }
-        StudioRecordingMeta::MultipleSegments { inner } => {
-            inner.segments[0].display.as_ref().map(|d| d.fps).unwrap_or(0)
-        }
+        StudioRecordingMeta::MultipleSegments { inner } => inner.segments[0]
+            .display
+            .as_ref()
+            .map(|d| d.fps)
+            .unwrap_or(0),
     };
 
     let decoder = match spawn_decoder(
