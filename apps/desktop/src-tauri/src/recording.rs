@@ -1232,10 +1232,7 @@ pub async fn start_recording(
     }
 
     let mut inputs = inputs;
-    if matches!(
-        inputs.capture_target,
-        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
-    ) {
+    if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
         inputs.capture_system_audio = false;
 
         {

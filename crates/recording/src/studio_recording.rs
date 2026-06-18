@@ -1772,6 +1772,10 @@ fn persist_final_recording_meta(recording_dir: &Path, studio_meta: &StudioRecord
     use chrono::Local;
 
     let pretty_name = Local::now().format("Cap %Y-%m-%d at %H.%M.%S").to_string();
+    let audio_only = RecordingMeta::load_for_project(recording_dir)
+        .ok()
+        .map(|m| m.audio_only)
+        .unwrap_or(false);
     let recording_meta = RecordingMeta {
         platform: Some(Platform::default()),
         project_path: recording_dir.to_path_buf(),
@@ -1779,7 +1783,7 @@ fn persist_final_recording_meta(recording_dir: &Path, studio_meta: &StudioRecord
         sharing: None,
         inner: RecordingMetaInner::Studio(Box::new(studio_meta.clone())),
         upload: None,
-        audio_only: false,
+        audio_only,
     };
 
     if let Err(err) = recording_meta.save_for_project() {
@@ -1795,6 +1799,10 @@ fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
     use chrono::Local;
 
     let pretty_name = Local::now().format("Cap %Y-%m-%d at %H.%M.%S").to_string();
+    let audio_only = RecordingMeta::load_for_project(recording_dir)
+        .ok()
+        .map(|m| m.audio_only)
+        .unwrap_or(false);
 
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
@@ -1809,7 +1817,7 @@ fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
             },
         })),
         upload: None,
-        audio_only: false,
+        audio_only,
     };
 
     meta.save_for_project()
