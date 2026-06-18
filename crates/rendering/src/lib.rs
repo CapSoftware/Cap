@@ -271,14 +271,16 @@ impl RecordingSegmentDecoders {
         };
 
         let screen_fps = match &meta {
-            StudioRecordingMeta::SingleSegment { segment } => {
-                segment.display.as_ref().map(|d| d.fps).unwrap_or(0)
-            }
+            StudioRecordingMeta::SingleSegment { segment } => segment
+                .display
+                .as_ref()
+                .map(|d| d.fps)
+                .ok_or_else(|| "Display metadata missing".to_string())?,
             StudioRecordingMeta::MultipleSegments { inner, .. } => inner.segments[segment_i]
                 .display
                 .as_ref()
                 .map(|d| d.fps)
-                .unwrap_or(0),
+                .ok_or_else(|| "Display metadata missing".to_string())?,
         };
 
         let camera_fps = match &meta {

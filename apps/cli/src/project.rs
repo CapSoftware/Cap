@@ -123,8 +123,12 @@ fn studio_checks(meta: &RecordingMeta, studio: &StudioRecordingMeta) -> Vec<File
 
     match studio {
         StudioRecordingMeta::SingleSegment { segment } => {
-            if let Some(display) = &segment.display {
-                checks.push(required_check("displayVideo", meta.path(&display.path)));
+            if !meta.audio_only {
+                let path = segment
+                    .display
+                    .as_ref()
+                    .map_or_else(PathBuf::new, |d| meta.path(&d.path));
+                checks.push(required_check("displayVideo", path));
             }
             if let Some(camera) = &segment.camera {
                 checks.push(required_check("camera", meta.path(&camera.path)));
@@ -138,8 +142,12 @@ fn studio_checks(meta: &RecordingMeta, studio: &StudioRecordingMeta) -> Vec<File
         }
         StudioRecordingMeta::MultipleSegments { inner } => {
             for segment in &inner.segments {
-                if let Some(display) = &segment.display {
-                    checks.push(required_check("displayVideo", meta.path(&display.path)));
+                if !meta.audio_only {
+                    let path = segment
+                        .display
+                        .as_ref()
+                        .map_or_else(PathBuf::new, |d| meta.path(&d.path));
+                    checks.push(required_check("displayVideo", path));
                 }
                 if let Some(camera) = &segment.camera {
                     checks.push(required_check("camera", meta.path(&camera.path)));
