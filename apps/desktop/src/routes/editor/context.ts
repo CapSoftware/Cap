@@ -792,6 +792,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				staleDismissed: false,
 			},
 			timeline: {
+				showZoomCurves: true,
 				interactMode: "seek" as "seek" | "split",
 				selection: null as
 					| null

@@ -45,7 +45,7 @@ import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
 import { TrackIcon, TrackManager } from "./TrackManager";
-import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
+import { type ZoomSegmentDragState, ZoomTrack, ZoomCurveTrack } from "./ZoomTrack";
 
 const TIMELINE_PADDING = 16;
 const TRACK_GUTTER = 64;
@@ -980,7 +980,15 @@ export function Timeline(props: {
 									</TrackRow>
 								)}
 							</For>
-							<TrackRow icon={trackIcons.zoom}>
+							<TrackRow 
+								icon={trackIcons.zoom} 
+								onIconClick={() => setEditorState("timeline", "showZoomCurves", (v) => !v)}
+								iconOverlay={() => 
+									editorState.timeline.showZoomCurves ? 
+										<IconLucideChevronUp class="size-5 text-gray-11" /> : 
+										<IconLucideChevronDown class="size-5 text-gray-11" />
+								}
+							>
 								<ZoomTrack
 									onDragStateChanged={(v) => {
 										zoomSegmentDragState = v;
@@ -988,6 +996,19 @@ export function Timeline(props: {
 									handleUpdatePlayhead={handleUpdatePlayhead}
 								/>
 							</TrackRow>
+							<div
+								class={cx(
+									"transition-all duration-300 ease-in-out overflow-hidden flex-shrink-0",
+									editorState.timeline.showZoomCurves ? "h-[3.25rem] opacity-100" : "h-0 opacity-0 -mt-1"
+								)}
+							>
+								<TrackRow 
+									icon={() => <IconLucideSpline class="size-4 text-blue-500" />}
+									subordinate={true}
+								>
+									<ZoomCurveTrack />
+								</TrackRow>
+							</div>
 							<Show when={sceneTrackVisible()}>
 								<TrackRow icon={trackIcons.scene}>
 									<SceneTrack
@@ -1011,18 +1032,26 @@ function TrackRow(props: {
 	children: JSX.Element;
 	onDelete?: () => void;
 	onContextMenu?: (e: MouseEvent) => void;
+	onIconClick?: () => void;
+	iconOverlay?: () => JSX.Element;
+	subordinate?: boolean;
+	class?: string;
 }) {
 	return (
 		<div
-			class="group/track flex items-stretch gap-2"
+			class={cx("group/track flex items-stretch gap-2", props.class)}
 			onContextMenu={props.onContextMenu}
 		>
-			<div class="relative">
+			<div class="relative group/icon">
 				<TrackIcon
 					icon={props.icon()}
+					onClick={props.onIconClick}
+					subordinate={props.subordinate}
 					class={
 						props.onDelete
 							? "transition-opacity group-hover/track:pointer-events-none group-hover/track:opacity-0"
+							: props.iconOverlay
+							? "transition-opacity group-hover/icon:pointer-events-none group-hover/icon:opacity-0"
 							: undefined
 					}
 				/>
@@ -1037,6 +1066,19 @@ function TrackRow(props: {
 						title="Delete track"
 					>
 						<IconCapTrash class="size-4" />
+					</button>
+				</Show>
+				<Show when={props.iconOverlay && !props.onDelete}>
+					<button
+						class="absolute inset-0 z-20 pointer-events-none flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/90 text-gray-12 opacity-0 transition-opacity group-hover/icon:pointer-events-auto group-hover/icon:opacity-100 dark:border-gray-4/60 dark:bg-gray-3/90 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)]"
+						onClick={(e) => {
+							e.stopPropagation();
+							props.onIconClick?.();
+						}}
+						onMouseDown={(e) => e.stopPropagation()}
+						title="Toggle"
+					>
+						{props.iconOverlay?.()}
 					</button>
 				</Show>
 			</div>

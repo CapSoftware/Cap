@@ -13,6 +13,7 @@ import {
 	Match,
 	Show,
 	Switch,
+	For,
 } from "solid-js";
 import { produce } from "solid-js/store";
 import { commands } from "~/utils/tauri";
@@ -519,6 +520,7 @@ export function ZoomTrack(props: {
 
 						return (
 							<SegmentRoot
+								overflowVisible={true}
 								class={cx(
 									"border duration-200 hover:border-gray-12 transition-colors group",
 									"bg-linear-to-r from-[#292929] via-[#434343] to-[#292929] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
@@ -640,7 +642,7 @@ export function ZoomTrack(props: {
 										const ctx = useSegmentContext();
 
 										return (
-											<Switch>
+												<Switch>
 												<Match when={ctx.width() < 40}>
 													<div class="flex justify-center items-center">
 														<IconLucideSearch class="size-3.5 text-gray-1 dark:text-gray-12" />
@@ -745,3 +747,170 @@ export function ZoomTrack(props: {
 		</TrackRoot>
 	);
 }
+
+export function ZoomCurveTrack() {
+	const { project, editorState } = useEditorContext();
+	const { secsPerPixel } = useTimelineContext();
+
+	const zoomSegments = () => project.timeline?.zoomSegments ?? [];
+
+	return (
+		<TrackRoot>
+			<div class="absolute inset-x-0 top-[5%] border-t border-gray-500/30 border-dashed" />
+			<div class="absolute inset-x-0 top-[90%] border-t border-gray-500/30 border-dashed" />
+
+			<div class="relative w-full h-full pointer-events-none">
+				<For each={zoomSegments()}>
+					{(segment, i) => {
+						const base = () => editorState.timeline.transform.position;
+						const translateX = () => (segment.start - base()) / secsPerPixel();
+						const width = () => (segment.end - segment.start) / secsPerPixel();
+
+						return (
+							<div
+								class="absolute top-0 bottom-0 overflow-visible"
+								style={{
+									transform: `translateX(${translateX()}px)`,
+									width: `${width()}px`,
+								}}
+							>
+								{(() => {
+									const isInstant = () => segment.instantAnimation;
+
+									const prev = () => i() > 0 ? zoomSegments()[i() - 1] : null;
+									const next = () => zoomSegments()[i() + 1];
+
+									const gapBeforeSecs = () => prev() ? segment.start - prev()!.end : Infinity;
+									const gapAfterSecs = () => next() ? next()!.start - segment.end : Infinity;
+
+									const isContiguousWithPrev = () => gapBeforeSecs() <= 0.001;
+									const isContiguousWithNext = () => gapAfterSecs() <= 0.001;
+
+									const rampDurationSecs = 1.0;
+
+									const prevAmt = () => {
+										const p = prev();
+										if (!p) return 1.0;
+										if (isContiguousWithPrev()) return p.amount;
+										if (gapBeforeSecs() >= rampDurationSecs) return 1.0;
+										const t = gapBeforeSecs() / rampDurationSecs;
+										return p.amount + (1.0 - p.amount) * t;
+									};
+
+									const currAmt = () => segment.amount;
+
+									const nextAmt = () => {
+										const n = next();
+										if (!n) return 1.0;
+										if (isContiguousWithNext()) return n.amount;
+										if (gapAfterSecs() >= rampDurationSecs) return 1.0;
+										const t = gapAfterSecs() / rampDurationSecs;
+										return segment.amount + (1.0 - segment.amount) * t;
+									};
+
+									// Map amount to Y coordinate linearly (1.0 -> 90, 4.5 -> 5)
+									const getY = (amt: number) => {
+										const minAmt = 1.0;
+										const maxAmt = 4.5;
+										const minY = 90;
+										const maxY = 5;
+										const clampedAmt = Math.min(maxAmt, Math.max(minAmt, amt));
+										return minY - ((clampedAmt - minAmt) / (maxAmt - minAmt)) * (minY - maxY);
+									};
+
+									const startY = () => getY(prevAmt());
+									const currY = () => getY(currAmt());
+									const endY = () => getY(nextAmt());
+
+									const W = () => Math.max(1, width());
+									const rampPixels = () => rampDurationSecs / secsPerPixel();
+									
+									const toPct = (px: number) => (px / W()) * 100;
+									const rampUpPct = () => isInstant() ? 0 : toPct(Math.min(rampPixels(), W() / 2));
+									const rampDownPct = () => isInstant() ? 0 : toPct(rampPixels());
+									
+									const actualRampDownPct = () => isInstant() ? 0 : toPct(Math.min(rampDurationSecs, gapAfterSecs()) / secsPerPixel());
+
+									const dGray = () => {
+										let parts = [];
+
+										// 1. Gap before
+										if (i() === 0) {
+											parts.push(`M -100000 ${getY(1.0)} L 0 ${getY(1.0)}`);
+										} else if (gapBeforeSecs() >= rampDurationSecs) {
+											const prevSeg = prev();
+											if (prevSeg) {
+												const prevEndOffset = (prevSeg.end - segment.start) / secsPerPixel();
+												const gapStartX = prevSeg.instantAnimation ? prevEndOffset : prevEndOffset + rampPixels();
+												if (gapStartX < 0) {
+													parts.push(`M ${toPct(gapStartX)} ${getY(1.0)} L 0 ${getY(1.0)}`);
+												}
+											}
+										}
+
+										// 2. Flat top
+										parts.push(`M ${rampUpPct()} ${currY()} L 100 ${currY()}`);
+
+										// 3. Gap after (if last)
+										if (i() === zoomSegments().length - 1) {
+											const afterXPct = 100 + (!isContiguousWithNext() ? rampDownPct() : 0);
+											parts.push(`M ${afterXPct} ${getY(1.0)} L 100000 ${getY(1.0)}`);
+										}
+
+										return parts.join(" ");
+									};
+
+									const dColored = () => {
+										let parts = [];
+
+										// 1. Ramp Up
+										if (isInstant()) {
+											parts.push(`M 0 ${startY()} L 0 ${currY()}`);
+										} else {
+											parts.push(`M 0 ${startY()} C ${rampUpPct() / 2} ${startY()}, ${rampUpPct() / 2} ${currY()}, ${rampUpPct()} ${currY()}`);
+										}
+
+										// 2. Ramp Down
+										if (!isContiguousWithNext()) {
+											if (isInstant()) {
+												parts.push(`M 100 ${currY()} L 100 ${endY()}`);
+											} else {
+												parts.push(`M 100 ${currY()} C ${100 + actualRampDownPct() / 2} ${currY()}, ${100 + actualRampDownPct() / 2} ${endY()}, ${100 + actualRampDownPct()} ${endY()}`);
+											}
+										}
+
+										return parts.join(" ");
+									};
+
+									return (
+										<svg
+											class="absolute inset-0 w-full h-full pointer-events-none overflow-visible z-0"
+											viewBox="0 0 100 100"
+											preserveAspectRatio="none"
+										>
+											<path
+												d={dGray()}
+												class="stroke-gray-400/30 dark:stroke-gray-500/60"
+												stroke-width="3"
+												fill="none"
+												vector-effect="non-scaling-stroke"
+											/>
+											<path
+												d={dColored()}
+												class="stroke-blue-500 dark:stroke-blue-400 dark:drop-shadow-[0_0_6px_rgba(96,165,250,0.8)]"
+												stroke-width="3"
+												fill="none"
+												vector-effect="non-scaling-stroke"
+											/>
+										</svg>
+									);
+								})()}
+							</div>
+						);
+					}}
+				</For>
+			</div>
+		</TrackRoot>
+	);
+}
+
