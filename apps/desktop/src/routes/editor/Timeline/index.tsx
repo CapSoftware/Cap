@@ -740,6 +740,7 @@ export function Timeline(props: {
 			await commands.importCapRecording(selected);
 		} catch (e) {
 			toast.error(String(e));
+		} finally {
 			setIsImporting(false);
 		}
 	};
