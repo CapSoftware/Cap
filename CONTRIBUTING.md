@@ -6,7 +6,7 @@
 
 Cap is an open source and privacy focused alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.
 
-The development of Cap is still in its early stages, so please bare with us as we build out this guide.
+The development of Cap is still in its early stages, so please bear with us as we build out this guide.
 
 ### What is this guide?
 
@@ -20,7 +20,7 @@ There are many ways to contribute to Cap. You can:
 - [Suggest a feature (via Discord)](https://discord.com/invite/y8gdQ3WRN3)
 - Submit a PR
 
-## Runing Cap
+## Running Cap
 
 ### Development Requirements
 
@@ -28,7 +28,7 @@ Before anything else, make sure you have the following installed:
 
 - Node Version 20+
 - Rust 1.88.0+
-- pnpm 8.10.5+
+- pnpm 10.5.2+
 - Docker ([OrbStack](https://orbstack.dev/) recommended)
 
 ### General Setup
@@ -36,7 +36,7 @@ Before anything else, make sure you have the following installed:
 Run `pnpm install`, then run `pnpm cap-setup` to install native dependencies such as FFmpeg.
 
 On Windows, llvm, clang, and VCPKG must be installed.
-On MacOS, cmake must be installed.
+On macOS, cmake must be installed.
 `pnpm cap-setup` does not yet install these dependencies for you.
 
 Run `pnpm env-setup` to generate a `.env` file configured for your environment.
@@ -61,4 +61,4 @@ and `%programfiles%/so.cap.desktop.dev/recordings` on Windows.
 ### `@cap/web` (cap.so website)
 
 When running `pnpm dev` or `pnpm dev:web`, a MySQL database and MinIO S3 server will also be using Docker.
-If you want to _only_ run the `@cap/web` NextJS app, `cd` into `./apps/web` and run `pnpm dev`.
+If you want to _only_ run the `@cap/web` Next.js app, `cd` into `./apps/web` and run `pnpm dev`.
