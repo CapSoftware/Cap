@@ -2587,6 +2587,29 @@ pub struct CapRecordingImported {
     pub project_path: String,
 }
 
+fn relative_path_from(base: &std::path::Path, target: &std::path::Path) -> PathBuf {
+    let base: Vec<_> = base.components().collect();
+    let target: Vec<_> = target.components().collect();
+    let common = base.iter().zip(&target).take_while(|(a, b)| a == b).count();
+    let mut rel = PathBuf::new();
+    for _ in 0..(base.len() - common) {
+        rel.push("..");
+    }
+    for c in &target[common..] {
+        rel.push(c);
+    }
+    rel
+}
+
+fn resolve_recording_path(stored: &str, project_path: &std::path::Path) -> PathBuf {
+    let p = std::path::Path::new(stored);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        project_path.join(p)
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result<(), String> {
@@ -2649,7 +2672,7 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
     if project_config
         .external_recordings
         .iter()
-        .any(|r| std::path::Path::new(&r.path) == recording_path)
+        .any(|r| resolve_recording_path(&r.path, &project_path) == recording_path)
     {
         return Err("This recording has already been imported".to_string());
     }
@@ -2659,7 +2682,7 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
         .iter()
         .enumerate()
         .map(|(i, r)| {
-            let p = std::path::PathBuf::from(&r.path);
+            let p = resolve_recording_path(&r.path, &project_path);
             let m = RecordingMeta::load_for_project(&p)
                 .map_err(|e| format!("existing external recording {i}: {e}"))?;
             Ok(m.studio_meta()
@@ -2681,7 +2704,9 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
     project_config
         .external_recordings
         .push(cap_project::ExternalRecordingReference {
-            path: recording_path.to_string_lossy().to_string(),
+            path: relative_path_from(&project_path, &recording_path)
+                .to_string_lossy()
+                .to_string(),
             label: Some(label),
         });
 

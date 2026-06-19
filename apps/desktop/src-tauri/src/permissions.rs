@@ -183,6 +183,14 @@ pub(crate) fn schedule_macos_dock_visibility_sync(app: &tauri::AppHandle) {
 
 #[cfg(target_os = "macos")]
 fn macos_permission_status(permission: &OSPermission, initial_check: bool) -> OSPermissionStatus {
+    #[cfg(debug_assertions)]
+    if matches!(
+        permission,
+        OSPermission::ScreenRecording | OSPermission::Accessibility
+    ) {
+        return OSPermissionStatus::Granted;
+    }
+
     match permission {
         OSPermission::ScreenRecording => {
             let granted = scap_screencapturekit::has_permission();

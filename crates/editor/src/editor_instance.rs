@@ -645,7 +645,10 @@ pub async fn create_all_segments(
 ) -> Result<Vec<SegmentMedia>, String> {
     let mut all = create_segments(recording_meta, meta, force_ffmpeg).await?;
     for (i, ext_ref) in external_recordings.iter().enumerate() {
-        let ext_path = std::path::PathBuf::from(&ext_ref.path);
+        let ext_path = {
+            let p = std::path::Path::new(&ext_ref.path);
+            if p.is_absolute() { p.to_path_buf() } else { recording_meta.project_path.join(p) }
+        };
         let ext_meta = cap_project::RecordingMeta::load_for_project(&ext_path)
             .map_err(|e| format!("external recording {i}: {e}"))?;
         let cap_project::RecordingMetaInner::Studio(ext_studio_meta) = &ext_meta.inner else {

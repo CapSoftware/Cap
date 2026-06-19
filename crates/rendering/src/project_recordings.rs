@@ -220,7 +220,10 @@ impl ProjectRecordingsMeta {
     ) -> Result<Self, String> {
         let mut this = Self::new(recording_path, meta)?;
         for (i, ext_ref) in external_recordings.iter().enumerate() {
-            let ext_path = PathBuf::from(&ext_ref.path);
+            let ext_path = {
+                let p = std::path::Path::new(&ext_ref.path);
+                if p.is_absolute() { p.to_path_buf() } else { recording_path.join(p) }
+            };
             let ext_meta = cap_project::RecordingMeta::load_for_project(&ext_path)
                 .map_err(|e| format!("external recording {i}: failed to load meta: {e}"))?;
             let cap_project::RecordingMetaInner::Studio(ext_studio_meta) = &ext_meta.inner else {
