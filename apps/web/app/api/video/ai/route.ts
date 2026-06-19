@@ -6,7 +6,6 @@ import type { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { startAiGeneration } from "@/lib/generate-ai";
-import * as EffectRuntime from "@/lib/server";
 import { isAiGenerationEnabled } from "@/utils/flags";
 
 export const dynamic = "force-dynamic";
@@ -28,18 +27,17 @@ export async function GET(request: NextRequest) {
 			);
 		}
 
-		const result = await db()
+		const [video] = await db()
 			.select()
 			.from(videos)
-			.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
-		if (result.length === 0 || !result[0]) {
+			.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)))
+			.limit(1);
+		if (!video) {
 			return Response.json(
 				{ error: true, message: "Video not found" },
 				{ status: 404 },
 			);
 		}
-
-		const video = result[0];
 		const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
 
 		if (metadata.summary || metadata.chapters) {
