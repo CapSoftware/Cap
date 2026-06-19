@@ -2632,6 +2632,17 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
         return Err("Not a valid Cap recording".to_string());
     }
 
+    let recording_path = recording_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve recording path: {e}"))?;
+    let project_path = project_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve project path: {e}"))?;
+
+    if recording_path == project_path {
+        return Err("Cannot import a recording into itself".to_string());
+    }
+
     let ext_meta = RecordingMeta::load_for_project(&recording_path)
         .map_err(|e| format!("Failed to load recording meta: {e}"))?;
     let RecordingMetaInner::Studio(ext_studio_meta) = &ext_meta.inner else {
