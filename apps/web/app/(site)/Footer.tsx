@@ -6,13 +6,13 @@ import {
 	faLinkedinIn,
 	faXTwitter,
 } from "@fortawesome/free-brands-svg-icons";
-
-type IconDefinition = typeof faDiscord;
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { useState } from "react";
+
+type IconDefinition = typeof faDiscord;
 
 type FooterLink = {
 	label: string;

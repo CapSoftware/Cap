@@ -28,7 +28,11 @@ export async function GET(request: NextRequest) {
 		}
 
 		const [video] = await db()
-			.select()
+			.select({
+				ownerId: videos.ownerId,
+				metadata: videos.metadata,
+				transcriptionStatus: videos.transcriptionStatus,
+			})
 			.from(videos)
 			.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)))
 			.limit(1);
