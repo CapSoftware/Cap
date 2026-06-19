@@ -1489,6 +1489,13 @@ async fn create_segment_pipeline(
             (Some(screen), None, None)
         }
     } else if audio_only {
+        base_inputs.mic_feed.clone().ok_or_else(|| {
+            anyhow!(
+                "Audio-only recording requires a microphone, but no microphone is currently \
+                available. Please select a microphone in the recording settings before starting."
+            )
+        })?;
+
         (None, None, None)
     } else {
         let capture_target = base_inputs.capture_target.clone();
@@ -1620,7 +1627,7 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(target_os = "linux")]
-    let camera = if camera_only {
+    let camera = if camera_only || audio_only {
         None
     } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if segment_fragmented {

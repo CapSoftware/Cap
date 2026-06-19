@@ -1276,14 +1276,18 @@ impl RecoveryManager {
                 };
 
                 MultipleSegment {
-                    display: Some(VideoMeta {
-                        path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
-                        fps,
-                        start_time: display_start_time,
-                        device_id: original_segment
-                            .and_then(|s| s.display.as_ref())
-                            .and_then(|d| d.device_id.clone()),
-                    }),
+                    display: if seg.display_fragments.is_empty() {
+                        None
+                    } else {
+                        Some(VideoMeta {
+                            path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
+                            fps,
+                            start_time: display_start_time,
+                            device_id: original_segment
+                                .and_then(|s| s.display.as_ref())
+                                .and_then(|d| d.device_id.clone()),
+                        })
+                    },
                     camera: if camera_path.exists() {
                         Some(VideoMeta {
                             path: RelativePathBuf::from(format!("{segment_base}/camera.mp4")),
@@ -1392,23 +1396,25 @@ impl RecoveryManager {
             .iter()
             .enumerate()
             .filter_map(|(i, segment)| {
-                let display_path = segment
-                    .display
-                    .as_ref()
-                    .map(|d| recording.project_path.join(d.path.as_str()))
-                    .unwrap_or_default();
-
-                let duration = get_media_duration(&display_path)
-                    .map(|d| d.as_secs_f64())
-                    .unwrap_or_else(|| {
-                        let fps = f64::from(segment.display.as_ref().map(|d| d.fps).unwrap_or(0));
-                        if fps > 0.0 {
+                let duration = if let Some(display) = segment.display.as_ref() {
+                    let display_path = recording.project_path.join(display.path.as_str());
+                    get_media_duration(&display_path)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or_else(|| {
                             recording.estimated_duration.as_secs_f64()
                                 / recording.recoverable_segments.len() as f64
-                        } else {
-                            5.0
-                        }
-                    });
+                        })
+                } else if let Some(mic) = segment.mic.as_ref() {
+                    let mic_path = recording.project_path.join(mic.path.as_str());
+                    get_media_duration(&mic_path)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or_else(|| {
+                            recording.estimated_duration.as_secs_f64()
+                                / recording.recoverable_segments.len() as f64
+                        })
+                } else {
+                    5.0
+                };
 
                 if duration <= 0.0 {
                     return None;

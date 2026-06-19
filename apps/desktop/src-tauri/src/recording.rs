@@ -105,7 +105,10 @@ fn spawn_current_desktop_background_snapshot(
     recording_dir: PathBuf,
     capture_target: ScreenCaptureTarget,
 ) {
-    if matches!(capture_target, ScreenCaptureTarget::CameraOnly) {
+    if matches!(
+        capture_target,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+    ) {
         return;
     }
 
@@ -1334,7 +1337,10 @@ pub async fn start_recording(
             } else {
                 cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
             };
-            let upload_mode = if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+            let upload_mode = if matches!(
+                inputs.capture_target,
+                ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+            ) {
                 "desktopMP4"
             } else {
                 "desktopSegments"
@@ -3382,7 +3388,10 @@ fn apply_screen_recording_presentation_defaults(
 ) {
     use cap_project::{BackgroundSource, ScreenMovementSpring};
 
-    if matches!(capture_target, Some(ScreenCaptureTarget::CameraOnly)) {
+    if matches!(
+        capture_target,
+        Some(ScreenCaptureTarget::CameraOnly) | Some(ScreenCaptureTarget::AudioOnly)
+    ) {
         return;
     }
 
@@ -3805,6 +3814,27 @@ mod tests {
         apply_screen_recording_presentation_defaults(
             &mut config,
             Some(&ScreenCaptureTarget::CameraOnly),
+            true,
+            Some("wallpaper.jpg".to_string()),
+        );
+
+        assert_eq!(config.background.padding, 0.0);
+        assert!(matches!(
+            config.background.source,
+            cap_project::BackgroundSource::Color {
+                value: [255, 255, 255],
+                alpha: 255,
+            }
+        ));
+    }
+
+    #[test]
+    fn skips_screen_presentation_defaults_for_audio_only_recordings() {
+        let mut config = ProjectConfiguration::default();
+
+        apply_screen_recording_presentation_defaults(
+            &mut config,
+            Some(&ScreenCaptureTarget::AudioOnly),
             true,
             Some("wallpaper.jpg".to_string()),
         );
