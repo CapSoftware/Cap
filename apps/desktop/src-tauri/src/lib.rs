@@ -2696,14 +2696,15 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
             let p = resolve_recording_path(&r.path, &project_path);
             let m = RecordingMeta::load_for_project(&p)
                 .map_err(|e| format!("existing external recording {i}: {e}"))?;
-            Ok(m.studio_meta()
-                .map(|s| match s {
-                    cap_project::StudioRecordingMeta::SingleSegment { .. } => 1usize,
-                    cap_project::StudioRecordingMeta::MultipleSegments { inner } => {
-                        inner.segments.len()
-                    }
-                })
-                .unwrap_or(0))
+            let studio = m.studio_meta().ok_or_else(|| {
+                format!("existing external recording {i}: not a studio recording")
+            })?;
+            Ok(match studio {
+                cap_project::StudioRecordingMeta::SingleSegment { .. } => 1usize,
+                cap_project::StudioRecordingMeta::MultipleSegments { inner } => {
+                    inner.segments.len()
+                }
+            })
         })
         .collect::<Result<Vec<_>, String>>()?;
 
