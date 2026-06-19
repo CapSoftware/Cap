@@ -1,12 +1,13 @@
 "use client";
 
 import { Logo } from "@cap/ui";
-import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import {
 	faDiscord,
 	faLinkedinIn,
 	faXTwitter,
 } from "@fortawesome/free-brands-svg-icons";
+
+type IconDefinition = typeof faDiscord;
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
