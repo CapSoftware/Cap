@@ -2851,6 +2851,17 @@ pub struct CapRecordingImported {
 }
 
 fn relative_path_from(base: &std::path::Path, target: &std::path::Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::Component;
+        if let (Some(Component::Prefix(a)), Some(Component::Prefix(b))) =
+            (base.components().next(), target.components().next())
+        {
+            if a != b {
+                return target.to_path_buf();
+            }
+        }
+    }
     let base: Vec<_> = base.components().collect();
     let target: Vec<_> = target.components().collect();
     let common = base.iter().zip(&target).take_while(|(a, b)| a == b).count();
@@ -2925,11 +2936,14 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
         cap_rendering::ProjectRecordingsMeta::new(&recording_path, ext_studio_meta)
             .map_err(|e| format!("Failed to load external recordings: {e}"))?;
 
-    if let (Some(primary_first), Some(ext_first)) = (
-        primary_recordings.segments.first(),
-        ext_recordings.segments.first(),
-    ) && (ext_first.display.width != primary_first.display.width
-        || ext_first.display.height != primary_first.display.height)
+    let Some(primary_first) = primary_recordings.segments.first() else {
+        return Err("Project has no segments".to_string());
+    };
+    let Some(ext_first) = ext_recordings.segments.first() else {
+        return Err("External recording has no segments".to_string());
+    };
+    if ext_first.display.width != primary_first.display.width
+        || ext_first.display.height != primary_first.display.height
     {
         return Err(format!(
             "Recording resolution {}x{} does not match project resolution {}x{}",

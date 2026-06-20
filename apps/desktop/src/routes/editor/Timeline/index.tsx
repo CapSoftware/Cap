@@ -1101,7 +1101,7 @@ function TrackRow(props: {
 				</Show>
 				<Show when={props.onImport}>
 					<button
-						class="absolute inset-0 z-20 flex items-center justify-center rounded-xl border border-blue-400/70 bg-blue-500/90 text-white disabled:opacity-50"
+						class="absolute inset-0 z-20 pointer-events-none flex items-center justify-center rounded-xl border border-blue-400/70 bg-blue-500/90 text-white opacity-0 transition-opacity group-hover/icon:pointer-events-auto group-hover/icon:opacity-100 disabled:opacity-50"
 						onClick={(e) => {
 							e.stopPropagation();
 							props.onImport?.();
