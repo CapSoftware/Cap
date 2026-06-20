@@ -101,8 +101,6 @@ export const authOptions = (): NextAuthOptions => {
 						return crypto.randomInt(100000, 1000000).toString();
 					},
 					async sendVerificationRequest({ identifier, token }) {
-						console.log("sendVerificationRequest");
-
 						if (!serverEnv().RESEND_API_KEY) {
 							console.log("\n");
 							console.log(
@@ -120,10 +118,8 @@ export const authOptions = (): NextAuthOptions => {
 							);
 							console.log("\n");
 						} else {
-							console.log({ identifier, token });
 							const { OTPEmail } = await import("../emails/otp-email");
 							const email = OTPEmail({ code: token, email: identifier });
-							console.log({ email });
 							await sendEmail({
 								email: identifier,
 								subject: `Your Cap Verification Code`,
