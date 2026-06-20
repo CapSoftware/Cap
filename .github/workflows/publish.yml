@@ -261,21 +261,26 @@ jobs:
 
       # The release profile uses fat LTO + full debuginfo, so the final link
       # peaks well above the 16GB stock Linux runner and gets OOM-killed
-      # ("runner received a shutdown signal"). Add swap so the link can spill
-      # to disk instead of dying. Linux-only; macOS/Windows are unaffected.
+      # ("runner received a shutdown signal"). The runner already ships an
+      # active /swapfile (resizing it fails with "Text file busy"), so add a
+      # large swapfile on the roomy /mnt disk on top of the existing swap.
+      # Linux-only; macOS/Windows are unaffected.
       - name: Increase swap space (Linux)
         if: ${{ runner.os == 'Linux' }}
         shell: bash
         run: |
-          sudo fallocate -l 10G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          sudo swapoff /mnt/swapfile 2>/dev/null || true
+          sudo rm -f /mnt/swapfile
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          swapon --show
           free -h
 
       - name: Build app
         working-directory: apps/desktop
-        run: pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json
+        run: pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Linux' && '--bundles deb,appimage' || '' }}
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false

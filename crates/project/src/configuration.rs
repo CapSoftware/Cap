@@ -992,6 +992,11 @@ pub struct CaptionSettings {
     pub active_word_highlight: bool,
     #[serde(alias = "manualPosition")]
     pub manual_position: Option<XY<f32>>,
+    pub preset: String,
+    pub animation: String,
+    #[serde(alias = "highlightStyle")]
+    pub highlight_style: String,
+    pub uppercase: bool,
 }
 
 impl CaptionSettings {
@@ -1018,6 +1023,18 @@ impl CaptionSettings {
     fn default_active_word_highlight() -> bool {
         false
     }
+
+    fn default_preset() -> String {
+        "classic".to_string()
+    }
+
+    fn default_animation() -> String {
+        "bounce".to_string()
+    }
+
+    fn default_highlight_style() -> String {
+        "color".to_string()
+    }
 }
 
 impl Default for CaptionSettings {
@@ -1041,6 +1058,10 @@ impl Default for CaptionSettings {
             word_transition_duration: Self::default_word_transition_duration(),
             active_word_highlight: Self::default_active_word_highlight(),
             manual_position: None,
+            preset: Self::default_preset(),
+            animation: Self::default_animation(),
+            highlight_style: Self::default_highlight_style(),
+            uppercase: false,
         }
     }
 }

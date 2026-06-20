@@ -7,6 +7,7 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
+	For,
 	on,
 	onMount,
 	Show,
@@ -16,6 +17,10 @@ import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
 import {
+	CAPTION_STYLE_PRESETS,
+	type CaptionAnimation,
+	type CaptionHighlightStyle,
+	type CaptionStylePreset,
 	defaultCaptionSettings,
 	type EditorCaptionSettings,
 } from "~/store/captions";
@@ -42,6 +47,8 @@ import {
 } from "./captions";
 import { useEditorContext } from "./context";
 import {
+	CAPTION_ANIMATION_OPTIONS,
+	CAPTION_HIGHLIGHT_STYLE_OPTIONS,
 	CAPTION_POSITION_OPTIONS,
 	FONT_OPTIONS,
 	getTextWeightLabel,
@@ -137,6 +144,93 @@ const LANGUAGE_OPTIONS: LanguageOption[] = [
 	{ code: "ta", label: "Tamil" },
 ];
 
+const STYLE_PRESET_KEYS = new Set<keyof EditorCaptionSettings>([
+	"font",
+	"fontWeight",
+	"size",
+	"color",
+	"backgroundColor",
+	"backgroundOpacity",
+	"outline",
+	"outlineColor",
+	"highlightColor",
+	"activeWordHighlight",
+	"highlightStyle",
+	"animation",
+	"uppercase",
+	"fadeDuration",
+]);
+
+function hexToRgba(hex: string, opacityPercent: number) {
+	const value = hex.replace("#", "");
+	const alpha = Math.min(Math.max(opacityPercent / 100, 0), 1);
+	if (value.length !== 6) return `rgba(0, 0, 0, ${alpha})`;
+	const r = Number.parseInt(value.slice(0, 2), 16);
+	const g = Number.parseInt(value.slice(2, 4), 16);
+	const b = Number.parseInt(value.slice(4, 6), 16);
+	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function CaptionPresetPreview(props: { preset: CaptionStylePreset }) {
+	const style = () => props.preset.style;
+	const words = ["Make", "it", "pop"];
+	const emphasizeIndex = 2;
+
+	const textShadow = () => {
+		const outlineColor = style().outlineColor;
+		return style().outline
+			? `-1px -1px 0 ${outlineColor}, 1px -1px 0 ${outlineColor}, -1px 1px 0 ${outlineColor}, 1px 1px 0 ${outlineColor}`
+			: "0 1px 2px rgba(0, 0, 0, 0.55)";
+	};
+
+	return (
+		<div
+			class="flex h-12 items-center justify-center overflow-hidden rounded-md"
+			style={{ background: "linear-gradient(135deg, #4b4f57, #232427)" }}
+		>
+			<div
+				class="flex items-center gap-1 rounded px-2 py-1"
+				style={{
+					background:
+						style().backgroundOpacity > 0
+							? hexToRgba(style().backgroundColor, style().backgroundOpacity)
+							: "transparent",
+				}}
+			>
+				<For each={words}>
+					{(word, index) => {
+						const isEmphasized = () =>
+							style().activeWordHighlight && index() === emphasizeIndex;
+						const usePill = () =>
+							isEmphasized() && style().highlightStyle === "pill";
+						const useColor = () =>
+							isEmphasized() && style().highlightStyle === "color";
+						return (
+							<span
+								style={{
+									"font-weight": `${style().fontWeight}`,
+									"font-size": "11px",
+									"line-height": "1.4",
+									"text-transform": style().uppercase ? "uppercase" : "none",
+									color: useColor() ? style().highlightColor : style().color,
+									"text-shadow": textShadow(),
+									background: usePill()
+										? style().highlightColor
+										: "transparent",
+									"border-radius": usePill() ? "4px" : undefined,
+									padding: usePill() ? "0 4px" : undefined,
+								}}
+							>
+								{word}
+							</span>
+						);
+					}}
+				</For>
+			</div>
+		</div>
+	);
+}
+
 export function CaptionsTab(props: {
 	brandColorSwatches: OrganizationBrandColorSwatch[];
 }) {
@@ -215,7 +309,31 @@ export function CaptionsTab(props: {
 	) => {
 		if (!project?.captions) return;
 
-		setProject("captions", "settings", key, value);
+		setProject(
+			"captions",
+			"settings",
+			produce((settings) => {
+				settings[key] = value;
+				if (STYLE_PRESET_KEYS.has(key)) {
+					settings.preset = "custom";
+				}
+			}),
+		);
+	};
+
+	const selectedPresetId = () => getSetting("preset");
+
+	const applyCaptionPreset = (preset: CaptionStylePreset) => {
+		if (!project?.captions) return;
+
+		setProject(
+			"captions",
+			"settings",
+			produce((settings) => {
+				Object.assign(settings, preset.style);
+				settings.preset = preset.id;
+			}),
+		);
 	};
 
 	const captionPositionCenter = (position: string) => {
@@ -737,6 +855,42 @@ export function CaptionsTab(props: {
 							!hasCaptions() && "opacity-50 pointer-events-none",
 						)}
 					>
+						<Field name="Style" icon={<IconCapMessageBubble />}>
+							<div class="grid grid-cols-2 gap-2">
+								<For each={CAPTION_STYLE_PRESETS}>
+									{(preset) => (
+										<button
+											type="button"
+											title={preset.description}
+											onClick={() => applyCaptionPreset(preset)}
+											disabled={!hasCaptions()}
+											class={cx(
+												"flex flex-col gap-1.5 rounded-lg border p-1.5 text-left transition-colors",
+												selectedPresetId() === preset.id
+													? "border-blue-9 ring-1 ring-blue-9"
+													: "border-gray-3 hover:border-gray-5",
+											)}
+										>
+											<CaptionPresetPreview preset={preset} />
+											<span class="px-0.5 text-xs font-medium text-gray-12">
+												{preset.label}
+											</span>
+										</button>
+									)}
+								</For>
+								<Show when={selectedPresetId() === "custom"}>
+									<div class="flex flex-col gap-1.5 rounded-lg border border-blue-9 p-1.5 text-left ring-1 ring-blue-9">
+										<div class="flex h-12 items-center justify-center rounded-md bg-gray-2 text-xs text-gray-10">
+											Custom
+										</div>
+										<span class="px-0.5 text-xs font-medium text-gray-12">
+											Custom
+										</span>
+									</div>
+								</Show>
+							</div>
+						</Field>
+
 						<Field name="Font Settings" icon={<IconCapMessageBubble />}>
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
@@ -802,6 +956,17 @@ export function CaptionsTab(props: {
 									/>
 								</div>
 
+								<div class="flex items-center justify-between">
+									<span class="text-gray-11 text-sm">Uppercase</span>
+									<Toggle
+										checked={getSetting("uppercase")}
+										onChange={(checked) =>
+											updateCaptionSetting("uppercase", checked)
+										}
+										disabled={!hasCaptions()}
+									/>
+								</div>
+
 								<div class="flex flex-col gap-2">
 									<div class="flex items-center justify-between">
 										<span class="text-gray-11 text-sm">
@@ -822,6 +987,63 @@ export function CaptionsTab(props: {
 										upcoming versions.
 									</p>
 								</div>
+
+								<Show when={getSetting("activeWordHighlight")}>
+									<div class="flex flex-col gap-2">
+										<span class="text-gray-11 text-sm">Highlight Style</span>
+										<KSelect<string>
+											options={CAPTION_HIGHLIGHT_STYLE_OPTIONS.map(
+												(o) => o.value,
+											)}
+											value={getSetting("highlightStyle")}
+											onChange={(value) => {
+												if (value === null) return;
+												updateCaptionSetting(
+													"highlightStyle",
+													value as CaptionHighlightStyle,
+												);
+											}}
+											disabled={!hasCaptions()}
+											itemComponent={(itemProps) => (
+												<MenuItem<typeof KSelect.Item>
+													as={KSelect.Item}
+													item={itemProps.item}
+												>
+													<KSelect.ItemLabel class="flex-1">
+														{
+															CAPTION_HIGHLIGHT_STYLE_OPTIONS.find(
+																(o) => o.value === itemProps.item.rawValue,
+															)?.label
+														}
+													</KSelect.ItemLabel>
+												</MenuItem>
+											)}
+										>
+											<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg px-3 py-2 bg-gray-2 border border-gray-3 text-gray-12 hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9 transition-colors">
+												<KSelect.Value<string>>
+													{(state) =>
+														CAPTION_HIGHLIGHT_STYLE_OPTIONS.find(
+															(o) => o.value === state.selectedOption(),
+														)?.label
+													}
+												</KSelect.Value>
+												<KSelect.Icon>
+													<IconCapChevronDown />
+												</KSelect.Icon>
+											</KSelect.Trigger>
+											<KSelect.Portal>
+												<PopperContent<typeof KSelect.Content>
+													as={KSelect.Content}
+													class={topLeftAnimateClasses}
+												>
+													<MenuItemList<typeof KSelect.Listbox>
+														as={KSelect.Listbox}
+													/>
+												</PopperContent>
+											</KSelect.Portal>
+										</KSelect>
+									</div>
+								</Show>
 
 								<div class="flex flex-col gap-2">
 									<span class="text-gray-11 text-sm">Text Color</span>
@@ -918,6 +1140,58 @@ export function CaptionsTab(props: {
 
 						<Field name="Animation" icon={<IconCapMessageBubble />}>
 							<div class="space-y-3">
+								<div class="flex flex-col gap-2">
+									<span class="text-gray-11 text-sm">Animation Style</span>
+									<KSelect<string>
+										options={CAPTION_ANIMATION_OPTIONS.map((o) => o.value)}
+										value={getSetting("animation")}
+										onChange={(value) => {
+											if (value === null) return;
+											updateCaptionSetting(
+												"animation",
+												value as CaptionAnimation,
+											);
+										}}
+										disabled={!hasCaptions()}
+										itemComponent={(itemProps) => (
+											<MenuItem<typeof KSelect.Item>
+												as={KSelect.Item}
+												item={itemProps.item}
+											>
+												<KSelect.ItemLabel class="flex-1">
+													{
+														CAPTION_ANIMATION_OPTIONS.find(
+															(o) => o.value === itemProps.item.rawValue,
+														)?.label
+													}
+												</KSelect.ItemLabel>
+											</MenuItem>
+										)}
+									>
+										<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg px-3 py-2 bg-gray-2 border border-gray-3 text-gray-12 hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9 transition-colors">
+											<KSelect.Value<string>>
+												{(state) =>
+													CAPTION_ANIMATION_OPTIONS.find(
+														(o) => o.value === state.selectedOption(),
+													)?.label
+												}
+											</KSelect.Value>
+											<KSelect.Icon>
+												<IconCapChevronDown />
+											</KSelect.Icon>
+										</KSelect.Trigger>
+										<KSelect.Portal>
+											<PopperContent<typeof KSelect.Content>
+												as={KSelect.Content}
+												class={topLeftAnimateClasses}
+											>
+												<MenuItemList<typeof KSelect.Listbox>
+													as={KSelect.Listbox}
+												/>
+											</PopperContent>
+										</KSelect.Portal>
+									</KSelect>
+								</div>
 								<div class="flex flex-col gap-2">
 									<span class="text-gray-11 text-sm">Highlight Color</span>
 									<HexColorInput

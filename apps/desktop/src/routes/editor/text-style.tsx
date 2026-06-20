@@ -39,6 +39,17 @@ export const TEXT_WEIGHT_OPTIONS = [
 	{ label: "Bold", value: 700 },
 ];
 
+export const CAPTION_ANIMATION_OPTIONS = [
+	{ value: "none", label: "None" },
+	{ value: "bounce", label: "Bounce" },
+	{ value: "pop", label: "Pop" },
+];
+
+export const CAPTION_HIGHLIGHT_STYLE_OPTIONS = [
+	{ value: "color", label: "Color" },
+	{ value: "pill", label: "Pill" },
+];
+
 export function getTextWeightLabel(weight: number | null | undefined) {
 	const option = TEXT_WEIGHT_OPTIONS.find((option) => option.value === weight);
 	if (option) return option.label;

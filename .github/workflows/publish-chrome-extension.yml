@@ -54,7 +54,7 @@ jobs:
           done
 
       - name: Typecheck
-        run: pnpm --filter @cap/chrome-extension typecheck
+        run: pnpm --filter "@cap/chrome-extension..." typecheck
 
       - name: Test
         run: pnpm --filter @cap/chrome-extension test

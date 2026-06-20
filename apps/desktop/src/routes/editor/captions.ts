@@ -17,6 +17,32 @@ export const DEFAULT_CAPTION_LANGUAGE = "auto";
 export const CAPTION_MODEL_FOLDER = "transcription_models";
 export const PARAKEET_DIR_MODELS = new Set(["best", "best-max"]);
 
+// Transcription can stretch a trailing word's end across a following silence,
+// which both keeps the rendered caption stuck on screen and duplicates the word
+// across timeline cuts once projected. Cap each spoken word so the projected
+// track reflects speech; this also repairs already-transcribed recordings when
+// the track is re-derived. Kept in sync with MAX_CAPTION_WORD_DURATION in the
+// Rust transcription and rendering layers.
+export const MAX_CAPTION_WORD_DURATION = 2.5;
+
+function clampCaptionSegmentWords(segment: CaptionSegment): CaptionSegment {
+	const words = segment.words;
+	if (!words || words.length === 0) return segment;
+
+	const clampedWords = words.map((word) => ({
+		...word,
+		end: Math.min(word.end, word.start + MAX_CAPTION_WORD_DURATION),
+	}));
+
+	const lastWordEnd = clampedWords[clampedWords.length - 1]?.end ?? segment.end;
+
+	return {
+		...segment,
+		end: Math.min(segment.end, lastWordEnd),
+		words: clampedWords,
+	};
+}
+
 export function supportsParakeetTranscription() {
 	return !(osType() === "macos" && arch() === "x86_64");
 }
@@ -135,8 +161,10 @@ export function mapCaptionsToEditedTimeline(
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
 ): CaptionSegment[] {
+	const sanitizedSegments = rawSegments.map(clampCaptionSegmentWords);
+
 	if (timelineSegments.length === 0 || recordingSegments.length === 0) {
-		return rawSegments;
+		return sanitizedSegments;
 	}
 
 	const mappings = buildSourceToEditedMappings(
@@ -146,7 +174,7 @@ export function mapCaptionsToEditedTimeline(
 
 	const result: CaptionSegment[] = [];
 
-	for (const caption of rawSegments) {
+	for (const caption of sanitizedSegments) {
 		const mappedCaptionSegments = mappings.flatMap((mapping) => {
 			if (caption.words && caption.words.length > 0) {
 				const mappedWords = caption.words.flatMap((word) => {
@@ -218,19 +246,22 @@ export function mapCaptionsToEditedTimeline(
 export function createCaptionTrackSegments(
 	segments: CaptionSegment[],
 ): CaptionTrackSegment[] {
-	return segments.map((segment) => ({
-		id: segment.id,
-		start: segment.start,
-		end: segment.end,
-		text: segment.text,
-		words: segment.words ?? [],
-		fadeDurationOverride: null,
-		lingerDurationOverride: null,
-		positionOverride: null,
-		colorOverride: null,
-		backgroundColorOverride: null,
-		fontSizeOverride: null,
-	}));
+	return segments.map((rawSegment) => {
+		const segment = clampCaptionSegmentWords(rawSegment);
+		return {
+			id: segment.id,
+			start: segment.start,
+			end: segment.end,
+			text: segment.text,
+			words: segment.words ?? [],
+			fadeDurationOverride: null,
+			lingerDurationOverride: null,
+			positionOverride: null,
+			colorOverride: null,
+			backgroundColorOverride: null,
+			fontSizeOverride: null,
+		};
+	});
 }
 
 type CaptionTrackOverrides = Pick<
@@ -620,6 +651,35 @@ if (import.meta.vitest) {
 			expect(result[1]?.words?.[0]?.text).toBe("world");
 			expect(result[1]?.words?.[0]?.start).toBeCloseTo(1.1);
 			expect(result[1]?.words?.[0]?.end).toBeCloseTo(1.3);
+		});
+
+		it("clamps an inflated trailing word so it neither sticks nor duplicates across cuts", () => {
+			const result = mapCaptionsToEditedTimeline(
+				[
+					{
+						id: "caption",
+						start: 0.4,
+						end: 16.4,
+						text: "a few seconds.",
+						words: [
+							{ text: "a", start: 0.4, end: 0.5 },
+							{ text: "few", start: 0.5, end: 0.8 },
+							{ text: "seconds.", start: 0.8, end: 16.4 },
+						],
+					},
+				],
+				[
+					{ start: 0, end: 1.5, timescale: 1, recordingSegment: 0 },
+					{ start: 10, end: 12, timescale: 1, recordingSegment: 0 },
+				],
+				[{ display: { duration: 20 } } as SegmentRecordings],
+			);
+
+			expect(result).toHaveLength(1);
+			expect(result[0]?.id).toBe("caption");
+			expect(result[0]?.text).toBe("a few seconds.");
+			expect(result[0]?.words?.[2]?.text).toBe("seconds.");
+			expect(result[0]?.words?.[2]?.end).toBeCloseTo(1.5);
 		});
 
 		it("splits captions without word timing across retained timeline ranges", () => {
