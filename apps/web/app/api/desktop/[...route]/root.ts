@@ -20,6 +20,7 @@ import { type Context, Hono } from "hono";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
 import { z } from "zod";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { withAuth, withOptionalAuth } from "../../utils";
 import {
@@ -335,6 +336,14 @@ app.post(
 	),
 	withOptionalAuth,
 	async (c) => {
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.DESKTOP_LOGS, {
+				headers: c.req.raw.headers,
+			})
+		) {
+			return c.json({ error: "Too many requests" }, { status: 429 });
+		}
+
 		const {
 			log,
 			os,

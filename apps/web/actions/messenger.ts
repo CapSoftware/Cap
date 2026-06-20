@@ -25,6 +25,7 @@ import {
 	storeConversationInSupermemory,
 	syncCapKnowledgeBase,
 } from "@/lib/messenger/supermemory";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 const normalizeContent = (content: string) => content.trim().slice(0, 6000);
 
@@ -172,6 +173,22 @@ export const sendMessengerUserMessage = async ({
 
 	if (!matchesUser && !matchesAnonymousAsVisitor && !shouldAttachUser) {
 		throw new Error("Unauthorized");
+	}
+
+	// Rate-limit BEFORE any DB writes so a limited request can't persist a
+	// message row or advance the conversation timestamp (DB spam) — not just
+	// skip the expensive agent reply.
+	const rateLimitSubject =
+		viewer.user?.id ??
+		conversation.userId ??
+		activeAnonymousId ??
+		conversation.anonymousId;
+	if (
+		await isRateLimited(RATE_LIMIT_IDS.MESSENGER_MESSAGE, {
+			...(rateLimitSubject ? { key: `messenger:${rateLimitSubject}` } : {}),
+		})
+	) {
+		throw new Error("Too many messages. Please wait a moment, then try again.");
 	}
 
 	const now = new Date();

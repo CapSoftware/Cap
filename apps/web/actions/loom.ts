@@ -32,6 +32,7 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { start } from "workflow/api";
 import { requireOrganizationAccess } from "@/actions/organization/authorization";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
@@ -254,6 +255,13 @@ export async function downloadLoomVideo(
 			success: false,
 			error:
 				"Invalid Loom URL. Please paste a valid Loom video link (e.g. https://www.loom.com/share/abc123).",
+		};
+	}
+
+	if (await isRateLimited(RATE_LIMIT_IDS.LOOM_DOWNLOAD)) {
+		return {
+			success: false,
+			error: "Too many requests. Please wait a moment, then try again.",
 		};
 	}
 

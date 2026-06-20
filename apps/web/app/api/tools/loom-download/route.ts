@@ -4,6 +4,7 @@ import {
 	fetchConvertedVideoViaMediaServer,
 	isMediaServerConfigured,
 } from "@/lib/media-client";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { convertRemoteVideoToMp4Buffer } from "@/lib/video-convert";
 
 function isHlsUrl(url: string): boolean {
@@ -160,6 +161,13 @@ async function tryMp4CandidateDownload(
 }
 
 export async function GET(request: NextRequest) {
+	if (await isRateLimited(RATE_LIMIT_IDS.LOOM_DOWNLOAD)) {
+		return NextResponse.json(
+			{ error: "Too many requests. Please try again in a moment." },
+			{ status: 429 },
+		);
+	}
+
 	const videoId = request.nextUrl.searchParams.get("id");
 	const videoName = request.nextUrl.searchParams.get("name");
 

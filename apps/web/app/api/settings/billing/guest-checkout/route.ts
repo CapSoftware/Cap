@@ -2,9 +2,18 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
 import { PostHog } from "posthog-node";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
 	console.log("Starting guest checkout process");
+
+	if (await isRateLimited(RATE_LIMIT_IDS.GUEST_CHECKOUT)) {
+		return Response.json(
+			{ error: "Too many requests. Please try again later." },
+			{ status: 429 },
+		);
+	}
+
 	const { priceId, quantity } = await request.json();
 
 	console.log("Received guest checkout request:", { priceId, quantity });
