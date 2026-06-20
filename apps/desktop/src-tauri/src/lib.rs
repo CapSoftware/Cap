@@ -2799,7 +2799,10 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
 
     let path = {
         let window_ids = EditorWindowIds::get(window.app_handle());
-        let window_ids = window_ids.ids.lock().unwrap();
+        let window_ids = window_ids
+            .ids
+            .lock()
+            .map_err(|_| "Failed to lock editor window ids".to_string())?;
 
         let Some((path, _)) = window_ids.iter().find(|(_, _id)| *_id == id) else {
             return Err("Editor instance not found".to_string());
@@ -2836,7 +2839,10 @@ async fn get_editor_project_path(window: Window) -> Result<PathBuf, String> {
     };
 
     let window_ids = EditorWindowIds::get(window.app_handle());
-    let window_ids = window_ids.ids.lock().unwrap();
+    let window_ids = window_ids
+        .ids
+        .lock()
+        .map_err(|_| "Failed to lock editor window ids".to_string())?;
 
     let Some((path, _)) = window_ids.iter().find(|(_, _id)| *_id == id) else {
         return Err("Editor instance not found".to_string());
@@ -2895,7 +2901,10 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
 
     let project_path = {
         let window_ids = EditorWindowIds::get(window.app_handle());
-        let window_ids = window_ids.ids.lock().unwrap();
+        let window_ids = window_ids
+            .ids
+            .lock()
+            .map_err(|_| "Failed to lock editor window ids".to_string())?;
         let Some((path, _)) = window_ids.iter().find(|(_, _id)| *_id == id) else {
             return Err("Editor instance not found".to_string());
         };
