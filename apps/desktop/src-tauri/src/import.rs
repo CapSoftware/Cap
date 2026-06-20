@@ -18,7 +18,7 @@ use ffmpeg::{
 };
 use image::ImageEncoder;
 use relative_path::{Component as RelativeComponent, RelativePathBuf};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
     collections::HashMap,
@@ -43,7 +43,7 @@ const KEYBOARD_IMPORT_EXTENSIONS: &[&str] = &["bin", "json"];
 const CURSOR_EVENTS_IMPORT_EXTENSIONS: &[&str] = &["json"];
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
 
-#[derive(Serialize, Type, Clone, Debug)]
+#[derive(Serialize, Deserialize, Type, Clone, Debug)]
 pub enum ImportStage {
     Probing,
     Converting,
@@ -52,7 +52,7 @@ pub enum ImportStage {
     Failed,
 }
 
-#[derive(Serialize, Type, tauri_specta::Event, Clone, Debug)]
+#[derive(Serialize, Deserialize, Type, tauri_specta::Event, Clone, Debug)]
 pub struct VideoImportProgress {
     pub project_path: String,
     pub stage: ImportStage,
@@ -322,6 +322,7 @@ fn full_timeline_for_segments(
                 timescale: 1.0,
                 start: 0.0,
                 end: duration,
+                name: None,
             })
         })
         .collect()
@@ -357,6 +358,7 @@ fn full_timeline_for_source_segments(
                 timescale: 1.0,
                 start: 0.0,
                 end: duration,
+                name: None,
             })
         })
         .collect()
@@ -918,6 +920,7 @@ fn source_timeline_segments_for_import(
             },
             start,
             end,
+            name: None,
         });
     }
 
@@ -1722,6 +1725,7 @@ async fn append_mp4_to_editor_project(
             timescale: 1.0,
             start: 0.0,
             end: duration,
+            name: None,
         });
     add_clip_configs(
         &mut config,
@@ -1851,6 +1855,7 @@ async fn append_cap_project_to_editor_project(
                 timescale: source_segment.timescale,
                 start: source_segment.start,
                 end: source_segment.end,
+                name: None,
             });
         }
     }
@@ -1883,6 +1888,7 @@ pub async fn add_existing_recording_to_editor(
     let imported_count = if is_mp4_import_path(&source_path) {
         append_mp4_to_editor_project(app, target_project_path, source_path).await?
     } else if is_cap_project_path(&source_path) {
+        crate::wait_for_recording_ready(&app, &source_path).await?;
         append_cap_project_to_editor_project(app, target_project_path, source_path).await?
     } else {
         return Err("Select an MP4 file or a Cap project folder".to_string());

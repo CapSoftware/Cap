@@ -2582,6 +2582,9 @@ function BackgroundConfig(props: {
 
 function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 	const { project, setProject } = useEditorContext();
+	const cameraPositionValue = createMemo(
+		() => `${project.camera.position.x}:${project.camera.position.y}`,
+	);
 
 	return (
 		<KTabs.Content
@@ -2593,7 +2596,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 					<div>
 						<Subfield name="Position" />
 						<KRadioGroup
-							value={`${project.camera.position.x}:${project.camera.position.y}`}
+							value={cameraPositionValue()}
 							onChange={(v) => {
 								const [x, y] = v.split(":");
 								const xPosition = CAMERA_X_POSITIONS.find(
@@ -2620,24 +2623,29 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 									{ x: "right", y: "bottom" } as const,
 								]}
 							>
-								{(item) => (
-									<RadioGroup.Item value={`${item.x}:${item.y}`}>
-										<RadioGroup.ItemInput class="peer" />
-										<RadioGroup.ItemControl
-											class={cx(
-												"cursor-pointer size-6 shrink-0 rounded-md bg-gray-5 absolute flex justify-center items-center data-checked:bg-blue-9 focus-visible:outline-solid peer-focus-visible:outline-solid outline-2 outline-blue-9 outline-offset-2 transition-colors duration-100",
-												item.x === "left"
-													? "left-2"
-													: item.x === "right"
-														? "right-2"
-														: "left-1/2 transform -translate-x-1/2",
-												item.y === "top" ? "top-2" : "bottom-2",
-											)}
-										>
-											<div class="size-2 shrink-0 bg-solid-white rounded-full" />
-										</RadioGroup.ItemControl>
-									</RadioGroup.Item>
-								)}
+								{(item) => {
+									const itemValue = `${item.x}:${item.y}`;
+									const selected = () => cameraPositionValue() === itemValue;
+									return (
+										<RadioGroup.Item value={itemValue}>
+											<RadioGroup.ItemInput class="peer" />
+											<RadioGroup.ItemControl
+												class={cx(
+													"cursor-pointer size-6 shrink-0 rounded-md absolute flex justify-center items-center focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-blue-9 focus-visible:outline-offset-2 peer-focus-visible:outline-solid peer-focus-visible:outline-2 peer-focus-visible:outline-blue-9 peer-focus-visible:outline-offset-2 transition-colors duration-100",
+													selected() ? "bg-blue-9" : "bg-gray-5",
+													item.x === "left"
+														? "left-2"
+														: item.x === "right"
+															? "right-2"
+															: "left-1/2 transform -translate-x-1/2",
+													item.y === "top" ? "top-2" : "bottom-2",
+												)}
+											>
+												<div class="size-2 shrink-0 bg-solid-white rounded-full" />
+											</RadioGroup.ItemControl>
+										</RadioGroup.Item>
+									);
+								}}
 							</For>
 						</KRadioGroup>
 					</div>

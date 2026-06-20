@@ -47,7 +47,11 @@ const ROLLING_RANGE_CONFIG: Record<
 
 const LIFETIME_FALLBACK_DAYS = 30;
 
-const escapeLiteral = (value: string) => value.replace(/'/g, "''");
+// Escape backslashes BEFORE quotes: ClickHouse honors C-style `\'` inside
+// single-quoted literals, so doubling quotes alone lets a trailing backslash
+// neutralise the doubled quote and break out of the string (SQL injection).
+const escapeLiteral = (value: string) =>
+	value.replace(/\\/g, "\\\\").replace(/'/g, "''");
 const toDateString = (date: Date) => date.toISOString().slice(0, 10);
 const toDateTimeString = (date: Date) =>
 	date.toISOString().slice(0, 19).replace("T", " ");

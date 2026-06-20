@@ -1,9 +1,11 @@
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
-import { Storage } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
+import { Policy, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Exit } from "effect";
 import type { NextRequest } from "next/server";
+import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { getHeaders } from "@/utils/helpers";
@@ -25,10 +27,28 @@ export async function GET(request: NextRequest) {
 			},
 		);
 
-	const [query] = await db()
-		.select()
-		.from(videos)
-		.where(eq(videos.id, Video.VideoId.make(videoId)));
+	const id = Video.VideoId.make(videoId);
+
+	// Gate on canView so private / password-protected videos' thumbnails are not
+	// exposed to unauthorized callers (owner, org/space members, public videos
+	// and password-protected videos with a valid cookie still pass).
+	const exit = await Effect.gen(function* () {
+		const videosPolicy = yield* VideosPolicy;
+		return yield* Effect.promise(() =>
+			db().select().from(videos).where(eq(videos.id, id)),
+		).pipe(Policy.withPublicPolicy(videosPolicy.canView(id)));
+	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
+
+	if (Exit.isFailure(exit))
+		return new Response(
+			JSON.stringify({ error: true, message: "Video not found" }),
+			{
+				status: 404,
+				headers: getHeaders(origin),
+			},
+		);
+
+	const [query] = exit.value;
 
 	if (!query)
 		return new Response(

@@ -111,10 +111,7 @@ async function markEditProcessing({
 		});
 }
 
-export async function saveVideoEdits(
-	videoId: Video.VideoId,
-	editSpec: VideoEditSpec,
-) {
+async function loadEditableVideo(videoId: Video.VideoId) {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
 	if (!userIsPro(user)) throw new Error("Cap Pro is required to edit videos");
@@ -145,6 +142,15 @@ export async function saveVideoEdits(
 					: "Video is already uploading or processing";
 		throw new Error(message);
 	}
+
+	return { user, video };
+}
+
+export async function saveVideoEdits(
+	videoId: Video.VideoId,
+	editSpec: VideoEditSpec,
+) {
+	const { user, video } = await loadEditableVideo(videoId);
 
 	const [existingEdit] = await db()
 		.select()
@@ -200,6 +206,67 @@ export async function saveVideoEdits(
 		throw error instanceof Error
 			? error
 			: new Error("Video edit could not start");
+	}
+
+	revalidatePath(`/s/${videoId}`);
+	revalidatePath(`/s/${videoId}/edit`);
+	revalidatePath("/dashboard/caps");
+
+	return { success: true };
+}
+
+export async function restoreVideoToOriginal(videoId: Video.VideoId) {
+	const { user, video } = await loadEditableVideo(videoId);
+
+	const [existingEdit] = await db()
+		.select()
+		.from(videoEdits)
+		.where(eq(videoEdits.videoId, videoId));
+
+	if (!existingEdit) {
+		revalidatePath(`/s/${videoId}/edit`);
+		return { success: true, skipped: true };
+	}
+
+	const previousSpec = existingEdit.editSpec;
+	const restoredSpec = createIdentityEditSpec(previousSpec.sourceDuration);
+
+	if (getEditSpecOutputDuration(restoredSpec) <= 0) {
+		throw new Error("Original video is no longer available");
+	}
+
+	if (areEditSpecsEquivalent(previousSpec, restoredSpec)) {
+		revalidatePath(`/s/${videoId}/edit`);
+		return { success: true, skipped: true };
+	}
+
+	const sourceKey = existingEdit.sourceKey;
+	const bucket = await getVideoBucket(video);
+	if (!(await objectExists(bucket, sourceKey))) {
+		throw new Error("Original video is no longer available");
+	}
+
+	const aiGenerationEnabled = await isAiGenerationEnabled(user);
+
+	await markEditProcessing({ videoId, sourceKey });
+
+	try {
+		await start(editVideoWorkflow, [
+			{
+				videoId,
+				userId: user.id,
+				sourceKey,
+				previousSpec,
+				editSpec: restoredSpec,
+				keepRanges: restoredSpec.keepRanges,
+				aiGenerationEnabled,
+			},
+		]);
+	} catch (error) {
+		await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
+		throw error instanceof Error
+			? error
+			: new Error("Video restore could not start");
 	}
 
 	revalidatePath(`/s/${videoId}`);

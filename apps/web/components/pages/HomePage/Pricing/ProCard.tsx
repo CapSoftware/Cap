@@ -6,6 +6,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
+import { WhenVisible } from "@/components/ui/WhenVisible";
 import { homepageCopy } from "../../../../data/homepage-copy";
 import { BillingToggle } from "./BillingToggle";
 import { PlanFeature } from "./PlanFeature";
@@ -90,7 +91,9 @@ export const ProCard = () => {
 			</span>
 
 			<div className="mb-4 size-14 -ml-3">
-				<ProArt ref={artRef} />
+				<WhenVisible className="size-full">
+					<ProArt ref={artRef} />
+				</WhenVisible>
 			</div>
 			<h3 className="text-lg font-semibold text-gray-12">{copy.title}</h3>
 			<p className="mt-1.5 text-sm leading-relaxed text-gray-10 min-h-[40px]">

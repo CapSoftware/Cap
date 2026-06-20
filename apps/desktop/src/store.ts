@@ -1,6 +1,7 @@
 import { createQuery } from "@tanstack/solid-query";
 import { Store } from "@tauri-apps/plugin-store";
 import { onCleanup } from "solid-js";
+import type { AutomationsStore } from "~/utils/automations";
 import type { GeneralSettingsStore } from "~/utils/general-settings";
 import type {
 	AuthStore,
@@ -73,6 +74,7 @@ function declareStore<T extends object>(name: string, defaults?: T) {
 
 export const presetsStore = declareStore<PresetsStore>("presets");
 export const authStore = declareStore<AuthStore>("auth");
+export const automationsStore = declareStore<AutomationsStore>("automations");
 export const userProfileStore = declareStore<UserProfileStore>("user_profile");
 export const hotkeysStore = declareStore<HotkeysStore>("hotkeys");
 export const generalSettingsStore =

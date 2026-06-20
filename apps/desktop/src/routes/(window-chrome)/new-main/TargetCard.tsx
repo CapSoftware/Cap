@@ -359,6 +359,11 @@ export default function TargetCard(props: TargetCardProps) {
 				</Show>
 				<div class="absolute inset-0 border opacity-60 pointer-events-none border-black/5" />
 				<div class="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t to-transparent pointer-events-none from-black/40" />
+				<Show when={(recordingTarget()?.clip_count ?? 0) > 1}>
+					<div class="absolute left-1 top-1 rounded-full bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white">
+						{recordingTarget()?.clip_count} clips
+					</div>
+				</Show>
 				<Show when={recordingFailed() || recordingUploadFailed()}>
 					<div class="absolute inset-0 flex items-center justify-center bg-black/75">
 						<div class="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-red-9/20 text-red-11">

@@ -9,6 +9,7 @@ import {
 	spaces,
 	spaceVideos,
 	users,
+	videoEdits,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
@@ -57,10 +58,15 @@ import {
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
 import { transcribeVideo } from "@/lib/transcribe";
+import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import {
 	isEditSourceKey,
 	reconcileStaleEditUpload,
 } from "@/lib/video-edit-processing";
+import {
+	areEditSpecsEquivalent,
+	createIdentityEditSpec,
+} from "@/lib/video-edits";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
@@ -837,8 +843,32 @@ async function AuthorizedContent({
 		video.orgSettings?.defaultPlaybackSpeed,
 	);
 
+	const canDownloadVideo = userId
+		? await canUserDownloadVideo({
+				userId,
+				ownerId: video.owner.id,
+				videoId,
+				orgId: video.orgId,
+			})
+		: false;
+
+	let videoHasEdits = false;
+	if (canDownloadVideo) {
+		const [videoEditRow] = await db()
+			.select({ editSpec: videoEdits.editSpec })
+			.from(videoEdits)
+			.where(eq(videoEdits.videoId, videoId));
+
+		videoHasEdits = videoEditRow
+			? !areEditSpecsEquivalent(
+					videoEditRow.editSpec,
+					createIdentityEditSpec(videoEditRow.editSpec.sourceDuration),
+				)
+			: false;
+	}
+
 	return (
-		<div className="container flex-1 px-4 mx-auto">
+		<div className="container flex-1 px-4 pb-8 mx-auto">
 			<ShareHeader
 				data={{
 					...videoWithOrganizationInfo,
@@ -856,6 +886,8 @@ async function AuthorizedContent({
 				spacesData={spacesData}
 				branding={getSharePageBranding(videoWithOrganizationInfo)}
 				canManageSharePageBranding={canManageSharePageBranding}
+				canDownload={canDownloadVideo}
+				hasEdits={videoHasEdits}
 			/>
 
 			<Share

@@ -1,11 +1,12 @@
 import { mergeRefs } from "@solid-primitives/refs";
 import { cx } from "cva";
-import { type ComponentProps, createMemo, createSignal } from "solid-js";
+import { type ComponentProps, createMemo, createSignal, Show } from "solid-js";
 import { useEditorContext } from "../context";
 import {
 	SegmentContextProvider,
 	TrackContextProvider,
 	useSegmentContext,
+	useTimelineContext,
 	useTrackContext,
 } from "./context";
 
@@ -62,36 +63,45 @@ export function SegmentRoot(
 	},
 ) {
 	const { editorState } = useEditorContext();
+	const { isSegmentVisible } = useTimelineContext();
 	const translateX = useSegmentTranslateX(() => props.segment);
 	const width = useSegmentWidth(() => props.segment);
+	// Virtualize off-screen segments: Solid memos are lazy, so gating the
+	// rendered element behind visibility means translateX/width never recompute
+	// for segments outside the timeline viewport during scroll/zoom.
+	const visible = createMemo(() =>
+		isSegmentVisible(props.segment.start, props.segment.end),
+	);
 
 	return (
-		<SegmentContextProvider width={width}>
-			<div
-				{...props}
-				class={cx(
-					"absolute overflow-visible border rounded-xl inset-y-0",
-					editorState.timeline.interactMode === "split" &&
-						"timeline-scissors-cursor",
-					props.class,
-				)}
-				style={{
-					"--segment-x": `${translateX()}px`,
-					transform: "translateX(var(--segment-x))",
-					width: `${width()}px`,
-				}}
-				ref={props.ref}
-			>
+		<Show when={visible()}>
+			<SegmentContextProvider width={width}>
 				<div
+					{...props}
 					class={cx(
-						"relative h-full flex flex-row rounded-xl overflow-hidden group",
-						props.innerClass,
+						"absolute overflow-visible border rounded-xl inset-y-0",
+						editorState.timeline.interactMode === "split" &&
+							"timeline-scissors-cursor",
+						props.class,
 					)}
+					style={{
+						"--segment-x": `${translateX()}px`,
+						transform: "translateX(var(--segment-x))",
+						width: `${width()}px`,
+					}}
+					ref={props.ref}
 				>
-					{props.children}
+					<div
+						class={cx(
+							"relative h-full flex flex-row rounded-xl overflow-hidden group",
+							props.innerClass,
+						)}
+					>
+						{props.children}
+					</div>
 				</div>
-			</div>
-		</SegmentContextProvider>
+			</SegmentContextProvider>
+		</Show>
 	);
 }
 

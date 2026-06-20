@@ -859,20 +859,35 @@ fn duration_to_sample_count(duration: Duration, sample_rate: u32) -> u64 {
 }
 
 struct VideoDriftTracker {
-    baseline_offset_secs: Option<f64>,
+    anchor: Option<(f64, f64)>,
     capped_frame_count: u64,
-    drift_warning_logged: bool,
+    clamp_warning_logged: bool,
 }
 
 impl VideoDriftTracker {
     fn new() -> Self {
         Self {
-            baseline_offset_secs: None,
+            anchor: None,
             capped_frame_count: 0,
-            drift_warning_logged: false,
+            clamp_warning_logged: false,
         }
     }
 
+    // Post-warmup video PTS are pinned to the wall clock, but anchored at the
+    // warmup boundary's *source content time* rather than rebased onto the
+    // absolute wall clock. The capture pipeline's startup latency makes the
+    // source content clock lag the pipeline wall clock by a fixed amount (the
+    // first frame arrives hundreds of ms after the pipeline starts). Rebasing the
+    // output onto the absolute wall clock therefore injects that startup latency
+    // as a one-time forward step at the boundary, freezing the video for the
+    // latency duration and leaving every later frame behind the audio leg — which
+    // is timestamped on its own content clock (samples since the first sample,
+    // zeroed at the first frame just like video) and never wall-rebased. Anchoring
+    // at the boundary keeps the output continuous with the warmup phase (which
+    // emits raw source content time) so video and audio keep their shared zero.
+    // The wall-clock *delta* from the anchor is still used, so collapsed capture
+    // gaps (e.g. a static screen where the OS stops delivering frames) are covered
+    // and long-run source-clock drift stays bounded to the wall clock.
     fn calculate_timestamp(
         &mut self,
         camera_duration: Duration,
@@ -882,7 +897,7 @@ impl VideoDriftTracker {
         let wall_clock_secs = wall_clock_elapsed.as_secs_f64();
         let max_allowed_secs = wall_clock_secs + VIDEO_WALL_CLOCK_TOLERANCE_SECS;
 
-        if wall_clock_secs < 2.0 || camera_secs < 2.0 {
+        if self.anchor.is_none() && (wall_clock_secs < 2.0 || camera_secs < 2.0) {
             let result_secs = camera_secs.min(max_allowed_secs);
             if result_secs < camera_secs {
                 self.capped_frame_count += 1;
@@ -890,54 +905,39 @@ impl VideoDriftTracker {
             return Duration::from_secs_f64(result_secs);
         }
 
-        if self.baseline_offset_secs.is_none() {
-            let offset = camera_secs - wall_clock_secs;
+        let (anchor_camera_secs, anchor_wall_secs) = *self.anchor.get_or_insert_with(|| {
             debug!(
                 wall_clock_secs,
                 camera_secs,
-                baseline_offset_secs = offset,
-                "Capturing video baseline offset after warmup"
+                baseline_offset_secs = camera_secs - wall_clock_secs,
+                "Anchoring video output timeline at warmup boundary"
             );
-            self.baseline_offset_secs = Some(offset);
-        }
+            (camera_secs, wall_clock_secs)
+        });
 
-        let baseline = self.baseline_offset_secs.unwrap_or(0.0);
-        let adjusted_camera_secs = (camera_secs - baseline).max(0.0);
-
-        let drift_ratio = if adjusted_camera_secs > 0.0 {
-            wall_clock_secs / adjusted_camera_secs
-        } else {
-            1.0
-        };
-
-        let corrected_secs = if !(0.95..=1.05).contains(&drift_ratio) {
-            if !self.drift_warning_logged {
-                warn!(
-                    drift_ratio,
-                    wall_clock_secs,
-                    adjusted_camera_secs,
-                    baseline,
-                    "Extreme video clock drift detected after baseline correction, clamping"
-                );
-                self.drift_warning_logged = true;
-            }
-            let clamped_ratio = drift_ratio.clamp(0.95, 1.05);
-            adjusted_camera_secs * clamped_ratio
-        } else {
-            adjusted_camera_secs * drift_ratio
-        };
+        let corrected_secs = anchor_camera_secs + (wall_clock_secs - anchor_wall_secs).max(0.0);
 
         let final_secs = corrected_secs.min(max_allowed_secs);
         if final_secs < corrected_secs {
             self.capped_frame_count += 1;
+            if !self.clamp_warning_logged {
+                warn!(
+                    corrected_secs,
+                    wall_clock_secs,
+                    anchor_camera_secs,
+                    anchor_wall_secs,
+                    "Video timestamp exceeded wall-clock bound, clamping"
+                );
+                self.clamp_warning_logged = true;
+            }
         }
 
         Duration::from_secs_f64(final_secs)
     }
 
-    fn reset_baseline(&mut self) {
-        self.baseline_offset_secs = None;
-        self.drift_warning_logged = false;
+    fn baseline_offset_secs(&self) -> Option<f64> {
+        self.anchor
+            .map(|(camera_secs, wall_secs)| camera_secs - wall_secs)
     }
 
     fn capped_frame_count(&self) -> u64 {
@@ -1946,7 +1946,6 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             "Master clock hard reset for video source (>2s jump)"
                         );
                         anomaly_tracker = TimestampAnomalyTracker::new("video");
-                        drift_tracker.reset_baseline();
                     }
 
                     if is_first_frame && let Some(gate) = &video_start_gate {
@@ -1974,9 +1973,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     if anomaly_tracker.take_resync_flag() {
                         info!(
                             raw_duration_ms = raw_duration.as_millis(),
-                            "Timeline resync detected, re-baselining drift tracker"
+                            "Timeline resync detected (anomaly collapsed jump); wall-clock anchor covers the gap"
                         );
-                        drift_tracker.reset_baseline();
                     }
 
                     let raw_wall_clock = timestamps.instant().elapsed();
@@ -1995,7 +1993,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             camera_secs = raw_duration.as_secs_f64(),
                             corrected_secs = duration.as_secs_f64(),
                             drift_ratio,
-                            baseline_offset = drift_tracker.baseline_offset_secs,
+                            baseline_offset = drift_tracker.baseline_offset_secs(),
                             total_pause_ms = total_pause_duration.as_millis(),
                             "Video drift correction status"
                         );
@@ -2045,7 +2043,6 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             source_clock.remap(&master_clock, timestamp, frame_duration_ns);
                         if matches!(remap.outcome, SourceClockOutcome::HardReset) {
                             anomaly_tracker = TimestampAnomalyTracker::new("video");
-                            drift_tracker.reset_baseline();
                         }
 
                         if is_first_frame && let Some(gate) = &video_start_gate {
@@ -2069,9 +2066,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                                 }
                             };
 
-                        if anomaly_tracker.take_resync_flag() {
-                            drift_tracker.reset_baseline();
-                        }
+                        let _ = anomaly_tracker.take_resync_flag();
 
                         let raw_wall_clock = timestamps.instant().elapsed();
                         let total_pause = shared_pause.total_pause_duration();
@@ -3315,7 +3310,7 @@ mod tests {
                 "During warmup: should return unmodified camera duration"
             );
             assert!(
-                tracker.baseline_offset_secs.is_none(),
+                tracker.baseline_offset_secs().is_none(),
                 "Baseline should not be set during warmup"
             );
         }
@@ -3329,8 +3324,8 @@ mod tests {
 
             tracker.calculate_timestamp(camera_duration, wall_clock);
 
-            assert!(tracker.baseline_offset_secs.is_some());
-            let baseline = tracker.baseline_offset_secs.unwrap();
+            assert!(tracker.baseline_offset_secs().is_some());
+            let baseline = tracker.baseline_offset_secs().unwrap();
             assert!(
                 (baseline - buffer_delay).abs() < 0.001,
                 "Baseline should be ~{buffer_delay:.3}s, got {baseline:.3}s"
@@ -3338,7 +3333,7 @@ mod tests {
         }
 
         #[test]
-        fn baseline_removes_initial_offset() {
+        fn keeps_source_content_clock_after_anchor() {
             let mut tracker = VideoDriftTracker::new();
             let buffer_delay = 0.05;
 
@@ -3350,11 +3345,13 @@ mod tests {
             let camera_2 = dur(10.0 + buffer_delay);
             let result = tracker.calculate_timestamp(camera_2, wall_clock_2);
 
-            let expected = wall_clock_2;
+            // Output stays continuous with the source content clock (anchored at
+            // the warmup boundary) instead of rebasing onto the wall clock, so the
+            // constant startup offset is preserved rather than injected as a step.
             assert!(
-                (result.as_secs_f64() - expected.as_secs_f64()).abs() < 0.1,
-                "With baseline correction: expected ~{:.3}s, got {:.3}s",
-                expected.as_secs_f64(),
+                (result.as_secs_f64() - camera_2.as_secs_f64()).abs() < 0.01,
+                "expected ~{:.3}s (source content time), got {:.3}s",
+                camera_2.as_secs_f64(),
                 result.as_secs_f64()
             );
         }
@@ -3383,18 +3380,43 @@ mod tests {
         }
 
         #[test]
-        fn clamps_extreme_drift() {
+        fn bounds_runaway_source_to_wall_clock() {
             let mut tracker = VideoDriftTracker::new();
 
             tracker.calculate_timestamp(dur(2.0), dur(2.0));
 
+            // Source content time races far ahead of real time; the output must
+            // stay pinned to the wall clock, never follow the runaway source.
             let camera = dur(100.0);
             let wall_clock = dur(80.0);
             let result = tracker.calculate_timestamp(camera, wall_clock);
             let max_allowed = 80.0 + VIDEO_WALL_CLOCK_TOLERANCE_SECS;
             assert!(
                 result.as_secs_f64() <= max_allowed + 0.001,
-                "Expected result to be capped at ~{:.3}s, got {:.3}s",
+                "Expected output bounded to ~{:.3}s, got {:.3}s",
+                max_allowed,
+                result.as_secs_f64()
+            );
+            assert!(
+                (result.as_secs_f64() - 80.0).abs() < 0.2,
+                "Expected output to track wall clock 80.0s, got {:.3}s",
+                result.as_secs_f64()
+            );
+        }
+
+        #[test]
+        fn clamps_output_to_wall_clock_bound() {
+            let mut tracker = VideoDriftTracker::new();
+
+            // Anchor with the source clock already ahead of the wall clock so a
+            // later frame's anchored time would exceed the wall-clock bound.
+            tracker.calculate_timestamp(dur(2.5), dur(2.0));
+
+            let result = tracker.calculate_timestamp(dur(3.0), dur(2.2));
+            let max_allowed = 2.2 + VIDEO_WALL_CLOCK_TOLERANCE_SECS;
+            assert!(
+                result.as_secs_f64() <= max_allowed + 0.001,
+                "Expected clamp to ~{:.3}s, got {:.3}s",
                 max_allowed,
                 result.as_secs_f64()
             );
@@ -3445,12 +3467,13 @@ mod tests {
             let mut tracker = VideoDriftTracker::new();
 
             tracker.calculate_timestamp(dur(2.1), dur(2.0));
-            let first_baseline = tracker.baseline_offset_secs;
+            let first_baseline = tracker.baseline_offset_secs();
 
             tracker.calculate_timestamp(dur(10.1), dur(10.0));
 
             assert_eq!(
-                first_baseline, tracker.baseline_offset_secs,
+                first_baseline,
+                tracker.baseline_offset_secs(),
                 "Baseline should not change after initial capture"
             );
         }
@@ -3476,23 +3499,207 @@ mod tests {
         }
 
         #[test]
-        fn caps_to_wall_clock_after_warmup() {
+        fn tracks_wall_clock_when_source_runs_ahead_after_warmup() {
             let mut tracker = VideoDriftTracker::new();
             tracker.calculate_timestamp(dur(2.0), dur(2.0));
 
+            // Source content time is ahead of the wall clock; anchored output
+            // tracks the wall clock rather than the runaway source.
             let wall_clock = dur(5.0);
             let camera_duration = dur(5.5);
             let result = tracker.calculate_timestamp(camera_duration, wall_clock);
-            let max_allowed = 5.0 + VIDEO_WALL_CLOCK_TOLERANCE_SECS;
             assert!(
-                result.as_secs_f64() <= max_allowed + 0.001,
-                "After warmup: expected ~{:.3}s (capped), got {:.3}s",
-                max_allowed,
+                (result.as_secs_f64() - 5.0).abs() < 0.001,
+                "After warmup: expected output to track wall clock 5.0s, got {:.3}s",
                 result.as_secs_f64()
             );
+        }
+    }
+
+    // End-to-end A/V sync gate: the software equivalent of a beep+flash
+    // clapperboard. It drives the real video timestamp logic (`VideoDriftTracker`)
+    // and the real audio timestamp logic (`AudioTimestampGenerator`) over one
+    // shared capture timeline and asserts that a flash and its co-timed beep
+    // resolve to the same output PTS — the property that guarantees lip-sync.
+    //
+    // It reproduces the two historically dangerous conditions:
+    //   1. a capture startup latency, where the source content clock lags the
+    //      pipeline wall clock (this is what previously injected a ~0.6s step at
+    //      the 2s warmup boundary and pushed video behind audio), and
+    //   2. a mid-recording static-screen gap that the anomaly tracker collapses.
+    // A regression in either leg surfaces here as a non-zero offset, exactly as
+    // it would on a real beep/flash recording analysed by `av-sync-check`.
+    mod av_sync_gate {
+        use super::*;
+
+        const FPS: u32 = 30;
+        const SAMPLE_RATE: u32 = 48_000;
+        // Lip-sync is imperceptible far below this; the bug we guard against was
+        // ~600ms, so a 5ms gate keeps enormous margin while staying strict.
+        const TOLERANCE_SECS: f64 = 0.005;
+
+        fn frame_dt() -> f64 {
+            1.0 / FPS as f64
+        }
+
+        // Output PTS the audio leg assigns to a beep captured `content_secs` after
+        // the first audio sample, driven through the real generator.
+        fn audio_beep_pts_secs(content_secs: f64) -> f64 {
+            let mut generator = AudioTimestampGenerator::new(SAMPLE_RATE);
+            let samples = (content_secs * SAMPLE_RATE as f64).round() as u64;
+            if samples > 0 {
+                generator.next_timestamp(samples);
+            }
+            generator.next_timestamp(0).as_secs_f64()
+        }
+
+        // Drives the real video timestamp logic over a capture timeline that
+        // begins `startup_secs` after the pipeline clock, optionally with a
+        // static-screen gap of `gap_len_secs` starting at real time `gap_at_secs`.
+        // Returns (real_capture_secs, output_pts_secs) for every emitted frame.
+        fn simulate_video(
+            startup_secs: f64,
+            gap: Option<(f64, f64)>,
+            total_real_secs: f64,
+        ) -> Vec<(f64, f64)> {
+            let dt = frame_dt();
+            let mut drift = VideoDriftTracker::new();
+            let (gap_at_secs, gap_len_secs) = gap.unwrap_or((f64::INFINITY, 0.0));
+            let mut frames = Vec::new();
+
+            let mut k = 0u64;
+            loop {
+                let real = startup_secs + k as f64 * dt;
+                if real > total_real_secs + 1e-9 {
+                    break;
+                }
+                k += 1;
+
+                // No frames are delivered while the screen is static.
+                if real > gap_at_secs && real <= gap_at_secs + gap_len_secs {
+                    continue;
+                }
+
+                // The wall clock advances in real time (including across the gap).
+                let wall = real;
+                // The anomaly tracker collapses a static-screen gap, so the raw
+                // source content time skips it.
+                let gap_removed = if real > gap_at_secs + gap_len_secs {
+                    gap_len_secs
+                } else {
+                    0.0
+                };
+                let raw = (real - startup_secs - gap_removed).max(0.0);
+
+                let pts = drift
+                    .calculate_timestamp(
+                        Duration::from_secs_f64(raw),
+                        Duration::from_secs_f64(wall),
+                    )
+                    .as_secs_f64();
+                frames.push((real, pts));
+            }
+
+            frames
+        }
+
+        fn video_pts_at_real(frames: &[(f64, f64)], real: f64) -> f64 {
+            frames
+                .iter()
+                .min_by(|a, b| {
+                    (a.0 - real)
+                        .abs()
+                        .partial_cmp(&(b.0 - real).abs())
+                        .expect("finite frame times")
+                })
+                .map(|(_, pts)| *pts)
+                .expect("at least one frame emitted")
+        }
+
+        // For a flash captured at real time `real`, its co-timed beep is at audio
+        // content time `real - startup` (audio is zeroed at the first sample, which
+        // arrives at the same instant as the first video frame). Asserts the video
+        // output PTS matches the beep PTS within tolerance.
+        fn assert_flash_beep_aligned(
+            frames: &[(f64, f64)],
+            startup_secs: f64,
+            real_markers: &[f64],
+        ) -> f64 {
+            let mut max_off = 0.0_f64;
+            for &real in real_markers {
+                let video = video_pts_at_real(frames, real);
+                let beep = audio_beep_pts_secs(real - startup_secs);
+                let off = (video - beep).abs();
+                max_off = max_off.max(off);
+                assert!(
+                    off < TOLERANCE_SECS,
+                    "A/V offset {off:.5}s at real {real:.3}s (video_pts={video:.5} beep_pts={beep:.5})"
+                );
+            }
+            max_off
+        }
+
+        #[test]
+        fn flash_and_beep_align_with_startup_latency() {
+            let startup = 0.5;
+            let frames = simulate_video(startup, None, 6.0);
+
+            // Markers on exact frame boundaries (1s..5s of content) so the
+            // measurement is pure A/V offset, free of frame quantisation. These
+            // straddle the 2s warmup boundary where the old bug appeared.
+            let markers: Vec<f64> = (1..=5).map(|n| startup + n as f64).collect();
+            let max_off = assert_flash_beep_aligned(&frames, startup, &markers);
+            assert!(max_off < TOLERANCE_SECS, "max A/V offset {max_off:.5}s");
+        }
+
+        #[test]
+        fn flash_and_beep_align_across_static_screen_gap() {
+            let startup = 0.5;
+            let gap_at = startup + 4.0;
+            let gap_len = 2.0;
+            let frames = simulate_video(startup, Some((gap_at, gap_len)), 10.0);
+
+            // Markers before the gap and after it resumes, all on frame boundaries.
+            let markers = [
+                startup + 1.0,
+                startup + 3.0,
+                gap_at + gap_len + 1.0,
+                gap_at + gap_len + 2.0,
+            ];
+            assert_flash_beep_aligned(&frames, startup, &markers);
+        }
+
+        #[test]
+        fn flash_and_beep_stay_aligned_over_long_recording() {
+            let startup = 0.5;
+            let frames = simulate_video(startup, None, 61.0);
+
+            let markers: Vec<f64> = (1..=60).map(|n| startup + n as f64).collect();
+            let max_off = assert_flash_beep_aligned(&frames, startup, &markers);
             assert!(
-                tracker.capped_frame_count() > 0,
-                "Should have capped at least one frame"
+                max_off < TOLERANCE_SECS,
+                "A/V offset must not accumulate over a minute, got {max_off:.5}s"
+            );
+        }
+
+        // Proves the gate is actually sensitive: a timeline that emits the old
+        // wall-clock-rebased PTS (video pts == wall clock, ignoring that audio is
+        // zeroed at the first sample) must be flagged as desynced.
+        #[test]
+        fn gate_detects_wall_clock_rebase_desync() {
+            let startup = 0.5;
+            let buggy_frames: Vec<(f64, f64)> = (0..200)
+                .map(|k| {
+                    let real = startup + k as f64 * frame_dt();
+                    (real, real)
+                })
+                .collect();
+
+            let video = video_pts_at_real(&buggy_frames, startup + 3.0);
+            let beep = audio_beep_pts_secs(3.0);
+            assert!(
+                (video - beep).abs() > 0.1,
+                "gate must flag the wall-clock-rebase desync (video={video:.4} beep={beep:.4})"
             );
         }
     }
@@ -3661,11 +3868,11 @@ mod tests {
             assert!(tracker.total_forward_skew_secs > 2.0);
         }
 
-        // Mirrors the mux-video task (core.rs ~1916-1936): a trusted/direct frame's remapped
-        // timestamp tracks real source time, the anomaly tracker collapses large source-clock
-        // jumps, and the drift tracker then re-pins the output to the real wall clock. The two
-        // stages must compose so that the muxed video PTS tracks the wall clock the audio leg
-        // is also reconciled against.
+        // Mirrors the mux-video task: a trusted/direct frame's remapped timestamp tracks real
+        // source time, the anomaly tracker collapses large source-clock jumps, and the drift
+        // tracker advances by the wall-clock delta from its boundary anchor. The two stages must
+        // compose so that the muxed video PTS tracks the wall clock the audio leg is also
+        // reconciled against, while keeping the boundary anchor stable.
         fn run_video_frame(
             anomaly: &mut TimestampAnomalyTracker,
             drift: &mut VideoDriftTracker,
@@ -3676,9 +3883,7 @@ mod tests {
             let remapped =
                 Timestamp::Instant(timestamps.instant() + Duration::from_secs_f64(source_secs));
             let raw = anomaly.process_timestamp(remapped, timestamps).unwrap();
-            if anomaly.take_resync_flag() {
-                drift.reset_baseline();
-            }
+            let _ = anomaly.take_resync_flag();
             drift
                 .calculate_timestamp(raw, Duration::from_secs_f64(wall_secs))
                 .as_secs_f64()
@@ -3686,12 +3891,12 @@ mod tests {
 
         // WGC / ScreenCaptureKit deliver no frames while the screen is static, so an idle
         // period longer than LARGE_FORWARD_JUMP_SECS arrives as a single forward jump once the
-        // screen changes again. The anomaly tracker collapses that jump (and flags a resync);
-        // the drift tracker re-baselines against the real wall clock. Because audio keeps
-        // recording through the gap, the resumed video frame MUST land at wall-clock time, not
-        // behind it — otherwise the held frame would under-cover the static period and every
-        // subsequent action would appear ahead of its audio. Regression guard against the
-        // anomaly-collapse and drift-rebaseline coupling being broken.
+        // screen changes again. The anomaly tracker collapses that jump; the drift tracker
+        // advances by the wall-clock delta from its anchor, which already includes the gap.
+        // Because audio keeps recording through the gap, the resumed video frame MUST land at
+        // wall-clock time, not behind it — otherwise the held frame would under-cover the static
+        // period and every subsequent action would appear ahead of its audio. Regression guard
+        // against the wall-clock-delta anchoring being broken.
         #[test]
         fn static_screen_gap_keeps_video_pinned_to_wall_clock() {
             let mut anomaly = TimestampAnomalyTracker::new("video");

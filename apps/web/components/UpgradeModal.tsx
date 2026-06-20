@@ -3,7 +3,6 @@
 import { buildEnv } from "@cap/env";
 import { Button, Dialog, DialogContent, Switch } from "@cap/ui";
 import NumberFlow from "@number-flow/react";
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import { useMutation } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -24,6 +23,7 @@ import { useRouter } from "next/navigation";
 import { memo, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
+import { Fit, Layout, useRive } from "@/lib/rive";
 
 interface UpgradeModalProps {
 	open: boolean;
@@ -111,7 +111,7 @@ const UpgradeModalImpl = ({
 		{
 			icon: <Database className={iconStyling} />,
 			title: "Custom storage",
-			description: "Connect your own S3 bucket",
+			description: "Connect your own Google Drive or S3 bucket",
 		},
 		{
 			icon: <Shield className={iconStyling} />,

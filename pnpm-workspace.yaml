@@ -4,3 +4,7 @@ packages:
   - "crates/tauri-plugin-*"
   - "infra"
   - "scripts/orgIdBackfill"
+
+peerDependencyRules:
+  allowedVersions:
+    next-auth>next: ">=16.0.0"

@@ -202,7 +202,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				title: "Your Storage, Your Rules",
 				description:
-					"Connect your own S3 bucket, use Cap Cloud, or keep everything local. You're never locked into our infrastructure — perfect for teams with compliance requirements or anyone who values data sovereignty.",
+					"Connect your own Google Drive or S3 bucket, use Cap Cloud, or keep everything local. You're never locked into our infrastructure, perfect for teams with compliance requirements or anyone who values data sovereignty.",
 			},
 			{
 				title: "Privacy by Default, Sharing by Choice",
@@ -251,7 +251,7 @@ export const homepageCopy: HomePageCopy = {
 				key: "storage",
 				title: "Bring Your Own Storage",
 				description:
-					"Plug in your own S3 bucket, route to Cap Cloud, or keep recordings entirely local. Your videos, your bucket, your bill — no vendor lock-in, ever.",
+					"Plug in your own Google Drive or S3 bucket, route to Cap Cloud, or keep recordings entirely local. Your videos, your storage, your bill, with no vendor lock-in, ever.",
 			},
 			{
 				key: "ai",
@@ -337,7 +337,7 @@ export const homepageCopy: HomePageCopy = {
 				"Viewer analytics & engagement",
 				"Team workspaces",
 				"Loom video importer",
-				"Custom S3 bucket support",
+				"Custom S3 bucket & Google Drive support",
 				"Priority support & early features",
 			],
 			cta: "Get Started",
@@ -408,7 +408,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "What about GDPR/HIPAA compliance?",
 				answer:
-					"Cap Pro supports custom S3 buckets in any region for GDPR compliance. For HIPAA and other regulations, our self-hosted option gives you complete control. We also offer signed BAAs for enterprise customers.",
+					"Cap Pro lets you bring your own storage, including custom S3 buckets in any region or your own Google Drive, for GDPR compliance. For HIPAA and other regulations, our self-hosted option gives you complete control. We also offer signed BAAs for enterprise customers.",
 			},
 		],
 	},

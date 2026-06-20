@@ -1,6 +1,6 @@
+import type { VideoId } from "@cap/recorder-core/recorder-types";
 import type { UploadStatus } from "../../UploadingContext";
 import { installAvcLevelClamp } from "./avc-level-clamp";
-import type { VideoId } from "./web-recorder-types";
 
 const MAX_THUMBNAIL_WIDTH = 1000;
 const MAX_THUMBNAIL_HEIGHT = 562;
@@ -92,6 +92,37 @@ export const captureThumbnail = (
 			{ once: true },
 		);
 	});
+
+// Firefox's WebCodecs ships no AAC encoder (and frequently no H.264 encoder),
+// so an in-browser MP4 conversion there can't produce the output and always
+// fails. Probe encoder support up front so callers can skip the doomed
+// conversion and hand the raw recording to the server instead.
+export const canConvertToMp4InBrowser = async (
+	hasAudio: boolean,
+): Promise<boolean> => {
+	if (typeof VideoEncoder === "undefined") return false;
+
+	try {
+		const video = await VideoEncoder.isConfigSupported({
+			codec: "avc1.42E01F",
+			width: 1280,
+			height: 720,
+		});
+		if (!video.supported) return false;
+
+		if (!hasAudio) return true;
+		if (typeof AudioEncoder === "undefined") return false;
+
+		const audio = await AudioEncoder.isConfigSupported({
+			codec: "mp4a.40.2",
+			sampleRate: 48000,
+			numberOfChannels: 2,
+		});
+		return audio.supported === true;
+	} catch {
+		return false;
+	}
+};
 
 export const convertToMp4 = async (
 	blob: Blob,

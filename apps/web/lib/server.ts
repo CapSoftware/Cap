@@ -4,6 +4,7 @@ import { serverEnv } from "@cap/env";
 import {
 	AwsCredentials,
 	Database,
+	Extensions,
 	Folders,
 	HttpAuthMiddlewareLive,
 	ImageUploads,
@@ -111,6 +112,7 @@ export const Dependencies = Layer.mergeAll(
 	VideosPolicy.Default,
 	VideosRepo.Default,
 	Tinybird.Default,
+	Extensions.Default,
 	Folders.Default,
 	SpacesPolicy.Default,
 	OrganisationsPolicy.Default,
@@ -162,7 +164,7 @@ export const runPromiseExit = <A, E>(
 const cors = HttpApiBuilder.middlewareCors({
 	allowedOrigins,
 	credentials: true,
-	allowedMethods: ["GET", "HEAD", "POST", "OPTIONS"],
+	allowedMethods: ["GET", "HEAD", "POST", "DELETE", "OPTIONS"],
 	allowedHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage"],
 });
 

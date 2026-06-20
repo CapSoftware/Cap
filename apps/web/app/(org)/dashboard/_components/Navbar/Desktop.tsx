@@ -48,7 +48,7 @@ export const DesktopNav = () => {
 			)}
 		>
 			<div className="flex flex-col mx-auto w-full h-full">
-				<div className="flex justify-between items-center px-3 pt-5 mb-3.5 w-full truncate min-h-8">
+				<div className="flex justify-between items-center px-3 pt-5 mb-3.5 w-full truncate shrink-0 min-h-8">
 					{isDeveloperSection ? (
 						<Link
 							href="/dashboard/caps"
@@ -99,8 +99,8 @@ export const DesktopNav = () => {
 						</Button>
 					</Tooltip>
 				</div>
-				<div className="flex overflow-y-auto flex-col flex-grow">
-					<div className="flex flex-col px-3 h-full">
+				<div className="flex overflow-hidden flex-col flex-grow min-h-0">
+					<div className="flex flex-col px-3 h-full min-h-0">
 						{isDeveloperSection ? (
 							<DeveloperSidebarContent />
 						) : (

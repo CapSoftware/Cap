@@ -941,6 +941,7 @@ mod tests {
         let options = crate::RenderOptions {
             camera_size: None,
             screen_size: XY::new(1080, 1080),
+            preserve_screen_alpha: false,
         };
         let mut project = ProjectConfiguration::default();
         project.background.padding = 0.0;

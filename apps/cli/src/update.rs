@@ -1,4 +1,7 @@
-use std::process::{Command, Output};
+use std::process::Command;
+
+#[cfg(not(windows))]
+use std::process::Output;
 
 use serde::Serialize;
 
@@ -34,7 +37,7 @@ pub fn run(format: OutputFormat) -> Result<(), String> {
     #[cfg(windows)]
     {
         start_windows_update()?;
-        return match format {
+        match format {
             OutputFormat::Json => write_json(&UpdateReport {
                 started: true,
                 completed: false,
@@ -44,7 +47,7 @@ pub fn run(format: OutputFormat) -> Result<(), String> {
                 println!("Cap update started. It will continue after this command exits.");
                 Ok(())
             }
-        };
+        }
     }
 
     #[cfg(not(windows))]
@@ -117,6 +120,7 @@ const fn installer_url() -> &'static str {
     ""
 }
 
+#[cfg(not(windows))]
 fn update_error(output: &Output) -> String {
     let stderr = text(&output.stderr);
     if !stderr.trim().is_empty() {
@@ -131,6 +135,7 @@ fn update_error(output: &Output) -> String {
     format!("Cap update installer exited with {}", output.status)
 }
 
+#[cfg(not(windows))]
 fn print_output(output: &Output) {
     let stdout = text(&output.stdout);
     if !stdout.is_empty() {
@@ -143,6 +148,7 @@ fn print_output(output: &Output) {
     }
 }
 
+#[cfg(not(windows))]
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }

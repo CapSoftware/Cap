@@ -170,11 +170,14 @@ fn camera_preview_frame_due(last_render_at: Option<Instant>, now: Instant) -> bo
 fn camera_preview_texture_dimensions(
     source_width: u32,
     source_height: u32,
-    window_px: u32,
+    region_width: u32,
+    region_height: u32,
     blur_enabled: bool,
 ) -> (u32, u32) {
     let source_width = source_width.max(1);
     let source_height = source_height.max(1);
+    let region_width = region_width.max(1);
+    let region_height = region_height.max(1);
     let (max_width, max_height) = if blur_enabled {
         (
             CAMERA_PREVIEW_BLUR_MAX_TEXTURE_WIDTH,
@@ -186,7 +189,9 @@ fn camera_preview_texture_dimensions(
             CAMERA_PREVIEW_MAX_TEXTURE_HEIGHT,
         )
     };
-    let requested_width = window_px
+    let source_aspect = source_width as f64 / source_height as f64;
+    let cover_width = (region_width as f64).max(region_height as f64 * source_aspect);
+    let requested_width = (cover_width.ceil() as u32)
         .max(CAMERA_PREVIEW_MIN_TEXTURE_WIDTH)
         .div_ceil(CAMERA_PREVIEW_TEXTURE_WIDTH_BUCKET)
         .saturating_mul(CAMERA_PREVIEW_TEXTURE_WIDTH_BUCKET)
@@ -984,14 +989,17 @@ impl Renderer {
 
                     let surface_result = self.acquire_surface_texture();
                     if let Some(surface) = surface_result {
-                        let window_px = (clamp_size(state.size) as f64
-                            * self.surface_scale.max(1.0))
-                        .round() as u32;
+                        let surface_scale = self.surface_scale.max(1.0);
+                        let toolbar_px = (TOOLBAR_HEIGHT as f64 * surface_scale).round() as u32;
+                        let region_width = self.surface_config.width.max(1);
+                        let region_height =
+                            self.surface_config.height.saturating_sub(toolbar_px).max(1);
                         let blur_mode = blur_mode_from_project(state.background_blur);
                         let (output_width, output_height) = camera_preview_texture_dimensions(
                             source_width,
                             source_height,
-                            window_px,
+                            region_width,
+                            region_height,
                             blur_mode.is_some(),
                         );
 
@@ -1713,10 +1721,30 @@ async fn resize_window(
 
 #[cfg(test)]
 mod tests {
-    use super::{preferred_alpha_mode, wait_for_shutdown_signal};
+    use super::{
+        CAMERA_PREVIEW_MAX_TEXTURE_HEIGHT, CAMERA_PREVIEW_MAX_TEXTURE_WIDTH,
+        camera_preview_texture_dimensions, preferred_alpha_mode, wait_for_shutdown_signal,
+    };
     use std::thread;
     use tokio::{runtime::Runtime, sync::oneshot, time::Duration};
     use wgpu::CompositeAlphaMode;
+
+    #[test]
+    fn texture_covers_square_region_without_upscaling() {
+        let (width, height) = camera_preview_texture_dimensions(1280, 720, 460, 460, false);
+        let cover_scale = (460.0 / width as f64).max(460.0 / height as f64);
+        assert!(
+            cover_scale <= 1.0,
+            "texture {width}x{height} would upscale to cover a 460x460 region (scale {cover_scale})"
+        );
+    }
+
+    #[test]
+    fn texture_dimensions_stay_within_caps() {
+        let (width, height) = camera_preview_texture_dimensions(1920, 1080, 4000, 2200, false);
+        assert!(width <= CAMERA_PREVIEW_MAX_TEXTURE_WIDTH);
+        assert!(height <= CAMERA_PREVIEW_MAX_TEXTURE_HEIGHT);
+    }
 
     #[test]
     fn preferred_alpha_mode_avoids_unsupported_inherit_fallback() {

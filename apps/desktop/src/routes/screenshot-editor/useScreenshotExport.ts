@@ -4,7 +4,11 @@ import { createSignal } from "solid-js";
 import toast from "solid-toast";
 import { commands } from "~/utils/tauri";
 import { getArrowHeadPoints } from "./arrow";
-import { type Annotation, useScreenshotEditorContext } from "./context";
+import {
+	type Annotation,
+	hasNoVisibleBackground,
+	useScreenshotEditorContext,
+} from "./context";
 
 export function useScreenshotExport() {
 	const editorCtx = useScreenshotEditorContext();
@@ -353,8 +357,10 @@ export function useScreenshotExport() {
 				outputCanvas.height = exportHeight;
 				const outputCtx = outputCanvas.getContext("2d");
 				if (!outputCtx) throw new Error("Could not get output canvas context");
-				outputCtx.fillStyle = "white";
-				outputCtx.fillRect(0, 0, exportWidth, exportHeight);
+				if (!hasNoVisibleBackground(project.background.source)) {
+					outputCtx.fillStyle = "white";
+					outputCtx.fillRect(0, 0, exportWidth, exportHeight);
+				}
 				outputCtx.drawImage(canvas, -minX, -minY);
 
 				const blob = await new Promise<Blob | null>((resolve) =>

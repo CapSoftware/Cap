@@ -30,6 +30,7 @@ const nextConfig = {
 		"@cap/web-domain",
 		"@cap/env",
 		"@cap/database",
+		"@cap/recorder-core",
 		"next-mdx-remote",
 	],
 	typescript: {

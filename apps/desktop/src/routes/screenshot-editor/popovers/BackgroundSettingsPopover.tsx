@@ -1,7 +1,7 @@
 import { Popover } from "@kobalte/core/popover";
 import { RadioGroup as KRadioGroup } from "@kobalte/core/radio-group";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
 import { BaseDirectory, writeFile } from "@tauri-apps/plugin-fs";
 import {
@@ -26,6 +26,18 @@ import { useScreenshotEditorContext } from "../context";
 import { EditorButton, Field, Slider } from "../ui";
 
 // Constants
+const DEFAULT_BACKGROUND_SHADOW = 73.6;
+
+const prewarmedBackgrounds = new Set<string>();
+
+function prewarmBackground(path: string | null | undefined) {
+	if (!path || prewarmedBackgrounds.has(path)) return;
+	prewarmedBackgrounds.add(path);
+	void invoke("prewarm_screenshot_background", { path }).catch(() => {
+		prewarmedBackgrounds.delete(path);
+	});
+}
+
 const BACKGROUND_SOURCES = {
 	wallpaper: "Wallpaper",
 	image: "Image",
@@ -194,6 +206,7 @@ export function BackgroundSettingsPopover() {
 		batch(() => {
 			const isPaddingZero = project.background.padding === 0;
 			const isRoundingZero = project.background.rounding === 0;
+			const isShadowZero = project.background.shadow === 0;
 
 			if (isPaddingZero) {
 				setProject("background", "padding", 10);
@@ -201,6 +214,10 @@ export function BackgroundSettingsPopover() {
 
 			if (isPaddingZero && isRoundingZero) {
 				setProject("background", "rounding", 8);
+			}
+
+			if (isShadowZero) {
+				setProject("background", "shadow", DEFAULT_BACKGROUND_SHADOW);
 			}
 		});
 	};
@@ -343,6 +360,8 @@ export function BackgroundSettingsPopover() {
 												<KRadioGroup.Item
 													value={photo.url}
 													class="relative aspect-square group"
+													onMouseEnter={() => prewarmBackground(photo.rawPath)}
+													onFocusIn={() => prewarmBackground(photo.rawPath)}
 												>
 													<KRadioGroup.ItemInput class="peer" />
 													<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition cursor-pointer not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">

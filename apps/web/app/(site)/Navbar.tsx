@@ -11,7 +11,7 @@ interface NavbarProps {
 export const Navbar = ({ stars }: NavbarProps) => {
 	return (
 		<header className="fixed left-0 right-0 z-[51] animate-in fade-in slide-in-from-top-4 duration-500 top-4 lg:top-6">
-			<nav className="relative p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md lg:max-w-fit border-zinc-200 h-fit">
+			<nav className="relative p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border lg:max-w-fit border-zinc-200 h-fit">
 				<div className="flex gap-12 justify-between items-center mx-auto max-w-5xl h-full transition-all">
 					<div className="flex items-center">
 						<Link passHref href="/home">
@@ -58,19 +58,9 @@ export const Navbar = ({ stars }: NavbarProps) => {
 							Sign Up
 						</Button>
 					</div>
-					<details className="group lg:hidden">
-						<summary
-							className="flex cursor-pointer list-none marker:hidden [&::-webkit-details-marker]:hidden"
-							aria-label="Open menu"
-						>
-							<span className="flex flex-col gap-[5px] mr-1" aria-hidden="true">
-								<span className="block w-6 h-0.5 bg-black transition-transform duration-200 group-open:translate-y-[7px] group-open:rotate-45" />
-								<span className="block w-6 h-0.5 bg-black transition duration-200 group-open:-translate-x-1 group-open:opacity-0" />
-								<span className="block w-6 h-0.5 bg-black transition-transform duration-200 group-open:-translate-y-[7px] group-open:-rotate-45" />
-							</span>
-						</summary>
+					<div className="lg:hidden">
 						<MobileMenu stars={stars} />
-					</details>
+					</div>
 				</div>
 			</nav>
 		</header>

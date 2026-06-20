@@ -57,8 +57,9 @@ use crate::general_settings;
 use crate::permissions;
 use crate::web_api::AuthedApiError;
 use crate::{
-    App, CameraWindowOperationLock, CurrentRecordingChanged, FinalizingRecordings, MutableState,
-    NewStudioRecordingAdded, RecordingStarted, RecordingState, RecordingStopped, VideoUploadInfo,
+    App, CameraWindowOperationLock, CurrentRecordingChanged, EditorRecordingAdded,
+    FinalizingRecordings, MutableState, NewStudioRecordingAdded, RecordingStarted, RecordingState,
+    RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
     audio::AppSounds,
     auth::AuthStore,
@@ -69,7 +70,9 @@ use crate::{
     thumbnails::*,
     upload::{InstantMultipartUpload, SegmentUploader, compress_image},
     web_api::ManagerExt,
-    windows::{CapWindowId, ShowCapWindow, hide_overlay},
+    windows::{
+        CapWindowId, EditorRecordingTarget, ShowCapWindow, editor_window_for_path, hide_overlay,
+    },
 };
 
 fn recording_stopped_share_url(link: &str) -> String {
@@ -83,6 +86,8 @@ fn recording_stopped_share_url(link: &str) -> String {
 const CURRENT_DESKTOP_BACKGROUND_BASENAME: &str = "current-desktop-background";
 const CURRENT_DESKTOP_BACKGROUND_FILENAME: &str = "current-desktop-background.jpg";
 const CURRENT_DESKTOP_BACKGROUND_PENDING_FILENAME: &str = "current-desktop-background.pending.jpg";
+const DESKTOP_BACKGROUND_MAX_DIMENSION: u32 = 2560;
+const DESKTOP_BACKGROUND_JPEG_QUALITY: u8 = 82;
 
 fn current_desktop_background_snapshot_path(recording_dir: &Path) -> PathBuf {
     recording_dir
@@ -371,11 +376,60 @@ fn desktop_background_source_requires_user_prompt_for_home(
 }
 
 #[cfg(target_os = "macos")]
+fn macos_image_pixel_dimensions(path: &Path) -> Option<(u32, u32)> {
+    let output = std::process::Command::new("sips")
+        .arg("-g")
+        .arg("pixelWidth")
+        .arg("-g")
+        .arg("pixelHeight")
+        .arg(path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut width = None;
+    let mut height = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("pixelWidth:") {
+            width = value.trim().parse::<u32>().ok();
+        } else if let Some(value) = line.strip_prefix("pixelHeight:") {
+            height = value.trim().parse::<u32>().ok();
+        }
+    }
+
+    Some((width?, height?))
+}
+
+#[cfg(target_os = "macos")]
 fn write_desktop_background_snapshot(source_path: &Path, output_path: &Path) -> Result<(), String> {
-    let sips_result = std::process::Command::new("sips")
+    // `sips -Z` resizes in both directions, so it upscales sources smaller than the
+    // target. Only cap dimensions when the source actually exceeds the limit.
+    let needs_downscale =
+        macos_image_pixel_dimensions(source_path).is_none_or(|(width, height)| {
+            width > DESKTOP_BACKGROUND_MAX_DIMENSION || height > DESKTOP_BACKGROUND_MAX_DIMENSION
+        });
+
+    let mut command = std::process::Command::new("sips");
+    command
         .arg("-s")
         .arg("format")
         .arg("jpeg")
+        .arg("-s")
+        .arg("formatOptions")
+        .arg(DESKTOP_BACKGROUND_JPEG_QUALITY.to_string());
+
+    if needs_downscale {
+        command
+            .arg("-Z")
+            .arg(DESKTOP_BACKGROUND_MAX_DIMENSION.to_string());
+    }
+
+    let sips_result = command
         .arg(source_path)
         .arg("--out")
         .arg(output_path)
@@ -399,12 +453,103 @@ fn write_desktop_background_snapshot_with_image_crate(
     source_path: &Path,
     output_path: &Path,
 ) -> Result<(), String> {
+    use image::ImageEncoder;
+    use std::io::Write;
+
     let image = image::open(source_path)
         .map_err(|err| format!("Failed to decode current desktop background: {err}"))?;
-    image
-        .to_rgb8()
-        .save_with_format(output_path, image::ImageFormat::Jpeg)
-        .map_err(|err| format!("Failed to save current desktop background: {err}"))
+
+    let image = if image.width() > DESKTOP_BACKGROUND_MAX_DIMENSION
+        || image.height() > DESKTOP_BACKGROUND_MAX_DIMENSION
+    {
+        image.resize(
+            DESKTOP_BACKGROUND_MAX_DIMENSION,
+            DESKTOP_BACKGROUND_MAX_DIMENSION,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        image
+    };
+
+    let rgb = image.to_rgb8();
+    let file = std::fs::File::create(output_path)
+        .map_err(|err| format!("Failed to create current desktop background: {err}"))?;
+    let mut writer = std::io::BufWriter::new(file);
+
+    image::codecs::jpeg::JpegEncoder::new_with_quality(
+        &mut writer,
+        DESKTOP_BACKGROUND_JPEG_QUALITY,
+    )
+    .write_image(
+        rgb.as_raw(),
+        rgb.width(),
+        rgb.height(),
+        image::ExtendedColorType::Rgb8,
+    )
+    .map_err(|err| format!("Failed to save current desktop background: {err}"))?;
+
+    writer
+        .flush()
+        .map_err(|err| format!("Failed to finalize current desktop background: {err}"))
+}
+
+pub fn spawn_heal_oversized_desktop_background_snapshots(recording_dir: PathBuf) {
+    tokio::task::spawn_blocking(move || {
+        heal_oversized_desktop_background_snapshots(&recording_dir);
+    });
+}
+
+fn heal_oversized_desktop_background_snapshots(recording_dir: &Path) {
+    let assets_dir = recording_dir.join("assets");
+    let Ok(entries) = std::fs::read_dir(&assets_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+
+        if !name.starts_with(CURRENT_DESKTOP_BACKGROUND_BASENAME)
+            || name.contains(".pending.")
+            || !name.ends_with(".jpg")
+        {
+            continue;
+        }
+
+        match downscale_background_snapshot_in_place(&path) {
+            Ok(true) => {
+                info!(path = %path.display(), "Recompressed oversized desktop background snapshot")
+            }
+            Ok(false) => {}
+            Err(error) => {
+                debug!(%error, path = %path.display(), "Failed to recompress desktop background snapshot")
+            }
+        }
+    }
+}
+
+fn downscale_background_snapshot_in_place(path: &Path) -> Result<bool, String> {
+    let (width, height) = image::image_dimensions(path)
+        .map_err(|err| format!("Failed to read background dimensions: {err}"))?;
+
+    if width <= DESKTOP_BACKGROUND_MAX_DIMENSION && height <= DESKTOP_BACKGROUND_MAX_DIMENSION {
+        return Ok(false);
+    }
+
+    let pending_path = path.with_extension("pending.jpg");
+    let _ = std::fs::remove_file(&pending_path);
+
+    if let Err(error) = write_desktop_background_snapshot_with_image_crate(path, &pending_path) {
+        let _ = std::fs::remove_file(&pending_path);
+        return Err(error);
+    }
+
+    std::fs::rename(&pending_path, path)
+        .map_err(|err| format!("Failed to replace desktop background snapshot: {err}"))?;
+
+    Ok(true)
 }
 
 #[derive(Clone)]
@@ -1235,6 +1380,11 @@ pub async fn start_recording(
     }
 
     let mut inputs = inputs;
+
+    if EditorRecordingTarget::current(&app).is_some() {
+        inputs.mode = RecordingMode::Studio;
+    }
+
     if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
         inputs.capture_system_audio = false;
 
@@ -1463,6 +1613,15 @@ pub async fn start_recording(
             .map(|v| v.main_window_recording_start_behaviour)
             .unwrap_or_default()
             .perform(&window);
+    }
+
+    crate::windows::apply_content_protection(&app, true);
+
+    if let Some(editor_target) = EditorRecordingTarget::current(&app)
+        && let Some(editor_window) = editor_window_for_path(&app, &editor_target)
+    {
+        let _ = editor_window.set_content_protected(true);
+        let _ = editor_window.minimize();
     }
 
     if let Some(countdown) = countdown {
@@ -2436,6 +2595,8 @@ pub async fn take_screenshot(
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
 
+    let automation_target = target.clone();
+
     let image = capture_screenshot(target)
         .await
         .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
@@ -2515,7 +2676,13 @@ pub async fn take_screenshot(
     meta.save_for_project()
         .map_err(|e| format!("Failed to save recording meta: {e}"))?;
 
-    cap_project::ProjectConfiguration::default()
+    let mut screenshot_config = cap_project::ProjectConfiguration::default();
+    screenshot_config.background.source = cap_project::BackgroundSource::Color {
+        value: [255, 255, 255],
+        alpha: 0,
+    };
+    screenshot_config.background.shadow = 0.0;
+    screenshot_config
         .write(&project_file_path)
         .map_err(|e| format!("Failed to save project config: {e}"))?;
 
@@ -2559,6 +2726,12 @@ pub async fn take_screenshot(
                     path: image_path_for_emit.clone(),
                 }
                 .emit(&app_handle);
+
+                crate::automation::run_screenshot_automations(
+                    app_handle.clone(),
+                    image_path_for_emit.clone(),
+                    &automation_target,
+                );
 
                 notifications::send_notification(
                     &app_handle,
@@ -2725,6 +2898,22 @@ async fn handle_recording_end(
         app.selected_camera_id = None;
     }
 
+    // Fallback for in-editor recordings that did NOT reach
+    // `apply_post_studio_editor_behaviour` (failed/cancelled recordings, or
+    // non-studio modes). On the studio success path `handle_recording_finish`
+    // — awaited above into `res` — already consumed the target and emitted
+    // `EditorRecordingAdded`, so this `take()` returns `None` and is a no-op.
+    // Using `take()` (not `current()`) here is deliberate: it restores the
+    // editor window AND clears any stale target so it can't leak into the next
+    // recording session.
+    if let Some(editor_path) = EditorRecordingTarget::take(&handle)
+        && let Some(editor_window) = editor_window_for_path(&handle, &editor_path)
+    {
+        let _ = editor_window.unminimize();
+        let _ = editor_window.show();
+        let _ = editor_window.set_focus();
+    }
+
     CurrentRecordingChanged.emit(&handle).ok();
 
     if let Some(res) = res {
@@ -2732,6 +2921,79 @@ async fn handle_recording_end(
     }
 
     Ok(())
+}
+
+fn compute_studio_duration_secs(recording_dir: &std::path::Path) -> f64 {
+    let Ok(meta) = RecordingMeta::load_for_project(recording_dir) else {
+        return 0.0;
+    };
+    let Some(studio_meta) = meta.studio_meta() else {
+        return 0.0;
+    };
+    ProjectRecordingsMeta::new(&recording_dir.to_path_buf(), studio_meta)
+        .map(|r| r.duration())
+        .unwrap_or(0.0)
+}
+
+async fn apply_post_studio_editor_behaviour(
+    app: &AppHandle,
+    recording_dir: PathBuf,
+    duration_secs: f64,
+) {
+    if let Some(editor_path) = EditorRecordingTarget::take(app) {
+        if let Some(editor_window) = editor_window_for_path(app, &editor_path) {
+            let _ = editor_window.unminimize();
+            let _ = editor_window.show();
+            let _ = editor_window.set_focus();
+        }
+
+        let _ = EditorRecordingAdded {
+            editor_path,
+            recording_path: recording_dir,
+        }
+        .emit(app);
+
+        return;
+    }
+
+    let default = GeneralSettingsStore::get(app)
+        .ok()
+        .flatten()
+        .map(|v| v.post_studio_recording_behaviour)
+        .unwrap_or(PostStudioRecordingBehaviour::OpenEditor);
+
+    match crate::automation::studio_recording_editor_behaviour(
+        app,
+        &recording_dir,
+        duration_secs,
+        default,
+    ) {
+        Some(PostStudioRecordingBehaviour::OpenEditor) => {
+            let _ = ShowCapWindow::Editor {
+                project_path: recording_dir,
+            }
+            .show(app)
+            .await;
+        }
+        Some(PostStudioRecordingBehaviour::ShowOverlay) => {
+            let _ = ShowCapWindow::RecordingsOverlay.show(app).await;
+
+            let app = AppHandle::clone(app);
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+                let _ = NewStudioRecordingAdded {
+                    path: recording_dir,
+                }
+                .emit(&app);
+            });
+        }
+        None => {
+            let _ = NewStudioRecordingAdded {
+                path: recording_dir,
+            }
+            .emit(app);
+        }
+    }
 }
 
 // runs when a recording successfully finishes
@@ -2769,34 +3031,8 @@ async fn handle_recording_finish(
                 let finalizing_state = app.state::<FinalizingRecordings>();
                 finalizing_state.start_finalizing(recording_dir.clone());
 
-                let post_behaviour = GeneralSettingsStore::get(app)
-                    .ok()
-                    .flatten()
-                    .map(|v| v.post_studio_recording_behaviour)
-                    .unwrap_or(PostStudioRecordingBehaviour::OpenEditor);
-
-                match post_behaviour {
-                    PostStudioRecordingBehaviour::OpenEditor => {
-                        let _ = ShowCapWindow::Editor {
-                            project_path: recording_dir.clone(),
-                        }
-                        .show(app)
-                        .await;
-                    }
-                    PostStudioRecordingBehaviour::ShowOverlay => {
-                        let _ = ShowCapWindow::RecordingsOverlay.show(app).await;
-
-                        let app_clone = AppHandle::clone(app);
-                        let recording_dir_clone = recording_dir.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(Duration::from_millis(1000)).await;
-                            let _ = NewStudioRecordingAdded {
-                                path: recording_dir_clone,
-                            }
-                            .emit(&app_clone);
-                        });
-                    }
-                }
+                let duration = compute_studio_duration_secs(&recording_dir);
+                apply_post_studio_editor_behaviour(app, recording_dir.clone(), duration).await;
 
                 AppSounds::StopRecording.play();
 
@@ -2819,8 +3055,17 @@ async fn handle_recording_finish(
                     )
                     .await;
 
-                    if let Err(e) = result {
-                        error!("Failed to finalize recording: {e}");
+                    match result {
+                        Ok(()) => {
+                            let duration =
+                                compute_studio_duration_secs(&recording_dir_for_finalize);
+                            crate::automation::run_studio_recording_automations(
+                                app.clone(),
+                                recording_dir_for_finalize.clone(),
+                                duration,
+                            );
+                        }
+                        Err(e) => error!("Failed to finalize recording: {e}"),
                     }
 
                     app.state::<FinalizingRecordings>()
@@ -2947,6 +3192,12 @@ async fn handle_recording_finish(
 
                     if upload_succeeded {
                         info!("Segment upload succeeded");
+                        crate::automation::run_upload_completed_automations(
+                            app.clone(),
+                            recording_dir.clone(),
+                            Some(video_upload_info.link.clone()),
+                            Some(video_upload_info.id.clone()),
+                        );
                     } else {
                         crate::upload::emit_upload_complete(&app, &video_upload_info.id);
                     }
@@ -3005,6 +3256,8 @@ async fn handle_recording_finish(
         }
     };
 
+    let instant_share = sharing.as_ref().map(|s| (s.link.clone(), s.id.clone()));
+
     if let RecordingMetaInner::Instant(_) = &meta_inner
         && let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
             error!("Failed to load recording meta while saving finished recording: {err}")
@@ -3016,34 +3269,27 @@ async fn handle_recording_finish(
             .map_err(|e| format!("Failed to save recording meta: {e}"))?;
     }
 
-    if let RecordingMetaInner::Studio(_) = meta_inner {
-        match GeneralSettingsStore::get(app)
-            .ok()
-            .flatten()
-            .map(|v| v.post_studio_recording_behaviour)
-            .unwrap_or(PostStudioRecordingBehaviour::OpenEditor)
-        {
-            PostStudioRecordingBehaviour::OpenEditor => {
-                let _ = ShowCapWindow::Editor {
-                    project_path: recording_dir,
-                }
-                .show(app)
-                .await;
-            }
-            PostStudioRecordingBehaviour::ShowOverlay => {
-                let _ = ShowCapWindow::RecordingsOverlay.show(app).await;
-
-                let app = AppHandle::clone(app);
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(1000)).await;
-
-                    let _ = NewStudioRecordingAdded {
-                        path: recording_dir.clone(),
-                    }
-                    .emit(&app);
-                });
-            }
+    if let RecordingMetaInner::Instant(_) = &meta_inner {
+        let (link, id) = match instant_share {
+            Some((link, id)) => (Some(link), Some(id)),
+            None => (None, None),
         };
+        crate::automation::run_instant_recording_automations(
+            app.clone(),
+            recording_dir.clone(),
+            link,
+            id,
+        );
+    }
+
+    if let RecordingMetaInner::Studio(_) = meta_inner {
+        let duration = compute_studio_duration_secs(&recording_dir);
+        crate::automation::run_studio_recording_automations(
+            app.clone(),
+            recording_dir.clone(),
+            duration,
+        );
+        apply_post_studio_editor_behaviour(app, recording_dir, duration).await;
     }
 
     // Play sound to indicate recording has stopped
@@ -3328,6 +3574,7 @@ fn project_config_from_recording(
             start: 0.0,
             end: segment.duration(),
             timescale: 1.0,
+            name: None,
         })
         .collect::<Vec<_>>();
 

@@ -1,0 +1,151 @@
+name: "Publish Chrome Extension"
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_target:
+        description: "Upload only, publish to trusted testers, or publish publicly"
+        required: true
+        type: choice
+        default: draft
+        options:
+          - draft
+          - trustedTesters
+          - default
+      run_e2e:
+        description: "Run Playwright extension E2E tests before upload"
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: chrome-extension-publish
+  cancel-in-progress: false
+
+env:
+  EXTENSION_DIR: apps/chrome-extension
+
+jobs:
+  publish:
+    name: Publish Chrome Extension
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Validate Chrome Web Store secrets
+        shell: bash
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          for name in CHROME_EXTENSION_ID CHROME_CLIENT_ID CHROME_CLIENT_SECRET CHROME_REFRESH_TOKEN; do
+            if [ -z "${!name}" ]; then
+              echo "$name is required"
+              exit 1
+            fi
+          done
+
+      - name: Typecheck
+        run: pnpm --filter "@cap/chrome-extension..." typecheck
+
+      - name: Test
+        run: pnpm --filter @cap/chrome-extension test
+
+      - name: Install Playwright browser
+        if: ${{ inputs.run_e2e }}
+        run: pnpm --filter @cap/chrome-extension test:e2e:install
+
+      - name: Test E2E
+        if: ${{ inputs.run_e2e }}
+        run: pnpm --filter @cap/chrome-extension test:e2e
+
+      - name: Build
+        run: pnpm --filter @cap/chrome-extension build
+
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -e "const fs = require('node:fs'); const manifest = JSON.parse(fs.readFileSync('${EXTENSION_DIR}/public/manifest.json', 'utf8')); console.log(manifest.version);")"
+          zip_path="${RUNNER_TEMP}/cap-chrome-extension-${version}.zip"
+          (cd "${EXTENSION_DIR}/dist" && zip -r "${zip_path}" . -x "*.DS_Store")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "zip_path=${zip_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cap-chrome-extension-${{ steps.package.outputs.version }}
+          path: ${{ steps.package.outputs.zip_path }}
+          if-no-files-found: error
+
+      - name: Create Chrome Web Store access token
+        id: chrome_auth
+        shell: bash
+        env:
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          response="$(curl -sS -f -X POST "https://oauth2.googleapis.com/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "client_id=${CHROME_CLIENT_ID}" \
+            --data-urlencode "client_secret=${CHROME_CLIENT_SECRET}" \
+            --data-urlencode "refresh_token=${CHROME_REFRESH_TOKEN}" \
+            --data-urlencode "grant_type=refresh_token")"
+          token="$(node -e "const fs = require('node:fs'); const response = JSON.parse(fs.readFileSync(0, 'utf8')); if (!response.access_token) process.exit(1); process.stdout.write(response.access_token);" <<< "$response")"
+          echo "::add-mask::$token"
+          echo "access_token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Chrome Web Store
+        shell: bash
+        env:
+          ACCESS_TOKEN: ${{ steps.chrome_auth.outputs.access_token }}
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          ZIP_PATH: ${{ steps.package.outputs.zip_path }}
+        run: |
+          set -euo pipefail
+          response="$(curl -sS -f -X PUT \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "x-goog-api-version: 2" \
+            -H "Content-Type: application/zip" \
+            --data-binary "@${ZIP_PATH}" \
+            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/${CHROME_EXTENSION_ID}")"
+          RESPONSE="$response" node <<'NODE'
+          const response = JSON.parse(process.env.RESPONSE ?? "{}");
+          console.log(JSON.stringify(response, null, 2));
+          if (response.uploadState !== "SUCCESS") {
+          	process.exit(1);
+          }
+          NODE
+
+      - name: Publish Chrome Web Store item
+        if: ${{ inputs.publish_target != 'draft' }}
+        shell: bash
+        env:
+          ACCESS_TOKEN: ${{ steps.chrome_auth.outputs.access_token }}
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          PUBLISH_TARGET: ${{ inputs.publish_target }}
+        run: |
+          set -euo pipefail
+          response="$(curl -sS -f -X POST \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "x-goog-api-version: 2" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/${CHROME_EXTENSION_ID}/publish?publishTarget=${PUBLISH_TARGET}")"
+          RESPONSE="$response" node <<'NODE'
+          const response = JSON.parse(process.env.RESPONSE ?? "{}");
+          console.log(JSON.stringify(response, null, 2));
+          if (!Array.isArray(response.status) || !response.status.includes("OK")) {
+          	process.exit(1);
+          }
+          NODE

@@ -1,6 +1,6 @@
 import { classNames } from "@cap/utils";
-import { Alignment, Fit, Layout, useRive } from "@rive-app/react-canvas";
 import { forwardRef, memo, useImperativeHandle } from "react";
+import { Alignment, Fit, Layout, useRive } from "@/lib/rive";
 
 export interface ProArtRef {
 	playHoverAnimation: () => void;

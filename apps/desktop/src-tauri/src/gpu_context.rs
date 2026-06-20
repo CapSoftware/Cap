@@ -44,6 +44,7 @@ pub struct SharedGpuContext {
     pub adapter: Arc<wgpu::Adapter>,
     pub instance: Arc<wgpu::Instance>,
     pub is_software_adapter: bool,
+    pub background_cache: Arc<cap_rendering::BackgroundTextureCache>,
 }
 
 static GPU: OnceCell<Option<SharedGpuContext>> = OnceCell::const_new();
@@ -120,6 +121,7 @@ async fn init_gpu_inner() -> Option<SharedGpuContext> {
         adapter: Arc::new(adapter),
         instance: Arc::new(instance),
         is_software_adapter,
+        background_cache: Arc::new(cap_rendering::BackgroundTextureCache::default()),
     })
 }
 

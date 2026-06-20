@@ -166,7 +166,7 @@ pub struct KeyboardLayer {
 
 impl KeyboardLayer {
     pub fn new(device: &Device, queue: &Queue) -> Self {
-        let font_system = FontSystem::new();
+        let font_system = super::new_font_system();
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);

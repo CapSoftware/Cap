@@ -1,0 +1,21 @@
+[package]
+name = "cap-automation"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cap-project = { path = "../project" }
+
+serde = { workspace = true }
+serde_json.workspace = true
+specta.workspace = true
+uuid = { version = "1.18.1", features = ["v4"] }
+tracing.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

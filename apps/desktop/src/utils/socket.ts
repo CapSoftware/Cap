@@ -208,6 +208,7 @@ export type CanvasControls = {
 	initDirectCanvas: (canvas: HTMLCanvasElement) => void;
 	resetFrameState: () => void;
 	captureFrame: () => Promise<Blob | null>;
+	drawLatestFrameToCanvas: (canvas: HTMLCanvasElement) => boolean;
 	dispose: () => void;
 };
 
@@ -344,6 +345,10 @@ export function createImageDataWS(
 		nv12FullRange: boolean;
 	} | null = null;
 
+	let mirrorCanvas: HTMLCanvasElement | null = null;
+	let mirrorCtx: CanvasRenderingContext2D | null = null;
+	let mirrorImageData: ImageData | null = null;
+
 	function storeRenderedFrame(
 		frameData: Uint8ClampedArray,
 		width: number,
@@ -430,6 +435,9 @@ export function createImageDataWS(
 		directCtx = null;
 
 		lastRenderedFrameData = null;
+		mirrorCanvas = null;
+		mirrorCtx = null;
+		mirrorImageData = null;
 		globalFpsStatsGetter =
 			globalFpsStatsGetter === getLocalFpsStats ? null : globalFpsStatsGetter;
 		if (
@@ -921,6 +929,61 @@ export function createImageDataWS(
 			return new Promise<Blob | null>((resolve) => {
 				canvas.toBlob((blob) => resolve(blob), "image/png");
 			});
+		},
+		drawLatestFrameToCanvas: (canvas: HTMLCanvasElement) => {
+			if (isCleanedUp || !lastRenderedFrameData) return false;
+
+			const { data, width, height, yStride, isNv12, nv12FullRange } =
+				lastRenderedFrameData;
+			if (width <= 0 || height <= 0) return false;
+
+			if (canvas !== mirrorCanvas) {
+				mirrorCanvas = canvas;
+				mirrorCtx = canvas.getContext("2d", { alpha: false });
+				mirrorImageData = null;
+			}
+			if (!mirrorCtx) return false;
+
+			if (canvas.width !== width || canvas.height !== height) {
+				canvas.width = width;
+				canvas.height = height;
+				mirrorImageData = null;
+			}
+			if (
+				!mirrorImageData ||
+				mirrorImageData.width !== width ||
+				mirrorImageData.height !== height
+			) {
+				mirrorImageData = new ImageData(width, height);
+			}
+
+			if (isNv12) {
+				const rgba = convertNv12ToRgbaMainThread(
+					data,
+					width,
+					height,
+					yStride,
+					nv12FullRange,
+				);
+				mirrorImageData.data.set(rgba);
+			} else {
+				const expectedRowBytes = width * 4;
+				if (yStride === expectedRowBytes) {
+					mirrorImageData.data.set(data.subarray(0, expectedRowBytes * height));
+				} else {
+					for (let row = 0; row < height; row++) {
+						const srcStart = row * yStride;
+						const destStart = row * expectedRowBytes;
+						mirrorImageData.data.set(
+							data.subarray(srcStart, srcStart + expectedRowBytes),
+							destStart,
+						);
+					}
+				}
+			}
+
+			mirrorCtx.putImageData(mirrorImageData, 0, 0);
+			return true;
 		},
 		dispose: () => {
 			cleanup();

@@ -106,6 +106,7 @@ impl ScreenshotEditorInstances {
         app_handle: &AppHandle,
         path: PathBuf,
     ) -> Result<Arc<ScreenshotEditorInstance>, String> {
+        let create_started = Instant::now();
         let (frame_tx, frame_rx) = watch::channel(None);
         let (ws_port, ws_shutdown_token) =
             create_watch_frame_ws(frame_rx, Default::default()).await;
@@ -194,6 +195,13 @@ impl ScreenshotEditorInstances {
             }
         };
 
+        tracing::info!(
+            elapsed_ms = create_started.elapsed().as_millis() as u64,
+            width,
+            height,
+            "screenshot_editor timing: source image ready"
+        );
+
         let cap_dir = if path.extension().and_then(|s| s.to_str()) == Some("cap") {
             Some(path.clone())
         } else if let Some(parent) = path.parent() {
@@ -246,14 +254,17 @@ impl ScreenshotEditorInstances {
             }
         };
 
-        let shared = if let Some(gpu) = gpu_context::get_shared_gpu().await {
-            cap_rendering::SharedWgpuDevice {
-                instance: (*gpu.instance).clone(),
-                adapter: (*gpu.adapter).clone(),
-                device: (*gpu.device).clone(),
-                queue: (*gpu.queue).clone(),
-                is_software_adapter: gpu.is_software_adapter,
-            }
+        let (shared, background_cache) = if let Some(gpu) = gpu_context::get_shared_gpu().await {
+            (
+                cap_rendering::SharedWgpuDevice {
+                    instance: (*gpu.instance).clone(),
+                    adapter: (*gpu.adapter).clone(),
+                    device: (*gpu.device).clone(),
+                    queue: (*gpu.queue).clone(),
+                    is_software_adapter: gpu.is_software_adapter,
+                },
+                gpu.background_cache.clone(),
+            )
         } else {
             let instance = cap_rendering::create_wgpu_instance().await;
             let adapter = instance
@@ -275,18 +286,22 @@ impl ScreenshotEditorInstances {
                 })
                 .await
                 .map_err(|e| e.to_string())?;
-            cap_rendering::SharedWgpuDevice {
-                instance,
-                adapter,
-                device,
-                queue,
-                is_software_adapter,
-            }
+            (
+                cap_rendering::SharedWgpuDevice {
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                    is_software_adapter,
+                },
+                Arc::new(cap_rendering::BackgroundTextureCache::default()),
+            )
         };
 
         let options = cap_rendering::RenderOptions {
             screen_size: cap_project::XY::new(width, height),
             camera_size: None,
+            preserve_screen_alpha: true,
         };
 
         let studio_meta = match &recording_meta.inner {
@@ -299,6 +314,12 @@ impl ScreenshotEditorInstances {
             options,
             *studio_meta,
             recording_meta.clone(),
+            background_cache,
+        );
+
+        tracing::info!(
+            elapsed_ms = create_started.elapsed().as_millis() as u64,
+            "screenshot_editor timing: gpu + render constants ready"
         );
 
         let (config_tx, mut config_rx) = watch::channel(ScreenshotConfigUpdate {
@@ -324,16 +345,23 @@ impl ScreenshotEditorInstances {
         let decoded_frame = DecodedFrame::new(source_rgba.as_ref().clone(), width, height);
 
         tokio::spawn(async move {
+            let layers_started = Instant::now();
             let mut frame_renderer = FrameRenderer::new(&constants);
             let mut layers = RendererLayers::new_with_options(
                 &constants.device,
                 &constants.queue,
                 constants.is_software_adapter,
             );
+            tracing::info!(
+                layers_init_ms = layers_started.elapsed().as_millis() as u64,
+                total_ms = create_started.elapsed().as_millis() as u64,
+                "screenshot_editor timing: renderer layers initialized"
+            );
             let shutdown_token = render_shutdown_token;
             let mut current_update = config_rx.borrow().clone();
             let mut current_config = current_update.config.clone();
             let mut current_revision = current_update.revision;
+            let mut first_frame_logged = false;
 
             loop {
                 if shutdown_token.is_cancelled() {
@@ -348,6 +376,7 @@ impl ScreenshotEditorInstances {
                     camera_frame: None,
                     segment_time: 0.0,
                     recording_time: 0.0,
+                    segment_has_camera: false,
                 };
 
                 let (base_w, base_h) =
@@ -379,6 +408,7 @@ impl ScreenshotEditorInstances {
                     &zoom_focus_interpolator,
                 );
 
+                let render_started = Instant::now();
                 let rendered_frame = frame_renderer
                     .render_immediate(
                         segment_frames,
@@ -391,6 +421,17 @@ impl ScreenshotEditorInstances {
 
                 match rendered_frame {
                     Ok(frame) => {
+                        if !first_frame_logged {
+                            first_frame_logged = true;
+                            tracing::info!(
+                                render_ms = render_started.elapsed().as_millis() as u64,
+                                total_ms = create_started.elapsed().as_millis() as u64,
+                                frame_width = frame.width,
+                                frame_height = frame.height,
+                                frame_bytes = frame.data.len(),
+                                "screenshot_editor timing: first frame rendered + sent"
+                            );
+                        }
                         let _ = frame_tx.send(Some(std::sync::Arc::new(WSFrame {
                             data: frame.data,
                             width: frame.width,
@@ -711,6 +752,159 @@ pub async fn create_screenshot_editor_instance(
     })
 }
 
+/// Renders one tiny throwaway frame on the shared GPU at startup so the Metal
+/// render pipelines are compiled before the user opens the editor. On Apple GPUs
+/// pipeline *creation* is cheap but the driver defers shader compilation to the
+/// first draw, which was costing ~3.5s on the first real frame. Doing it here moves
+/// that cost into background startup time; the compiled pipelines are cached on the
+/// shared device, so the first editor open renders immediately.
+pub async fn prewarm_screenshot_renderer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static PREWARMED: AtomicBool = AtomicBool::new(false);
+    if PREWARMED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let Some(gpu) = gpu_context::get_shared_gpu().await else {
+        return;
+    };
+
+    let _ = tokio::task::spawn_blocking(cap_rendering::prewarm_fonts).await;
+
+    let started = Instant::now();
+
+    let shared = cap_rendering::SharedWgpuDevice {
+        instance: (*gpu.instance).clone(),
+        adapter: (*gpu.adapter).clone(),
+        device: (*gpu.device).clone(),
+        queue: (*gpu.queue).clone(),
+        is_software_adapter: gpu.is_software_adapter,
+    };
+
+    let width = 64u32;
+    let height = 64u32;
+
+    let video_meta = VideoMeta {
+        path: RelativePathBuf::from("prewarm.png"),
+        fps: 30,
+        start_time: Some(0.0),
+        device_id: None,
+    };
+    let studio_meta = StudioRecordingMeta::SingleSegment {
+        segment: SingleSegment {
+            display: video_meta,
+            camera: None,
+            audio: None,
+            cursor: None,
+        },
+    };
+    let recording_meta = RecordingMeta {
+        platform: None,
+        project_path: std::env::temp_dir(),
+        pretty_name: "Prewarm".to_string(),
+        sharing: None,
+        inner: RecordingMetaInner::Studio(Box::new(studio_meta.clone())),
+        upload: None,
+    };
+
+    let options = cap_rendering::RenderOptions {
+        screen_size: cap_project::XY::new(width, height),
+        camera_size: None,
+        preserve_screen_alpha: true,
+    };
+
+    let constants = RenderVideoConstants::from_shared_device(
+        shared,
+        options,
+        studio_meta,
+        recording_meta,
+        Arc::new(cap_rendering::BackgroundTextureCache::default()),
+    );
+
+    let config = ProjectConfiguration::default();
+    let mut frame_renderer = FrameRenderer::new(&constants);
+    let mut layers = RendererLayers::new_with_options(
+        &constants.device,
+        &constants.queue,
+        constants.is_software_adapter,
+    );
+
+    let segment_frames = DecodedSegmentFrames {
+        screen_frame: Some(DecodedFrame::new(
+            vec![255u8; (width * height * 4) as usize],
+            width,
+            height,
+        )),
+        camera_frame: None,
+        segment_time: 0.0,
+        recording_time: 0.0,
+        segment_has_camera: false,
+    };
+
+    let (base_w, base_h) = ProjectUniforms::get_base_size(&constants.options, &config);
+    let cursor_events = cap_project::CursorEvents::default();
+    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+        &cursor_events,
+        None,
+        config.cursor.click_spring_config(),
+        config.screen_movement_spring,
+        0.0,
+        &[],
+    );
+    let uniforms = ProjectUniforms::new(
+        &constants,
+        &config,
+        0,
+        30,
+        cap_project::XY::new(base_w, base_h),
+        &cursor_events,
+        &segment_frames,
+        0.0,
+        &zoom_focus_interpolator,
+    );
+
+    match frame_renderer
+        .render_immediate(
+            segment_frames,
+            uniforms,
+            &cap_project::CursorEvents::default(),
+            true,
+            &mut layers,
+        )
+        .await
+    {
+        Ok(_) => {
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "screenshot_editor timing: render pipeline prewarm complete"
+            );
+        }
+        Err(e) => {
+            tracing::warn!("screenshot_editor render pipeline prewarm failed: {e}");
+        }
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn prewarm_screenshot_background(path: String) -> Result<(), String> {
+    let Some(gpu) = gpu_context::get_shared_gpu().await else {
+        return Ok(());
+    };
+
+    let Some(clean_path) = cap_rendering::clean_background_path(&path) else {
+        return Ok(());
+    };
+
+    let _ = gpu
+        .background_cache
+        .ensure(&gpu.device, &gpu.queue, &clean_path)
+        .await;
+
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn update_screenshot_config(
@@ -768,6 +962,35 @@ pub async fn recognize_screenshot_text(
     }
 
     Ok(result)
+}
+
+pub async fn recognize_text_from_image_path(path: &std::path::Path) -> Result<String, String> {
+    let dynamic = image::open(path).map_err(|e| format!("Failed to open image for OCR: {e}"))?;
+    let rgba = dynamic.to_rgba8();
+    let width = rgba.width();
+    let height = rgba.height();
+
+    if width == 0 || height == 0 {
+        return Err("Image is empty".to_string());
+    }
+
+    let rgba_bytes = rgba.into_raw();
+    let mut bgra = vec![0u8; rgba_bytes.len()];
+    for (src, dst) in rgba_bytes.chunks_exact(4).zip(bgra.chunks_exact_mut(4)) {
+        dst[0] = src[2];
+        dst[1] = src[1];
+        dst[2] = src[0];
+        dst[3] = src[3];
+    }
+
+    let image = ScreenshotOcrImage {
+        bgra,
+        width,
+        height,
+    };
+
+    let result = recognize_screenshot_ocr_image(image).await?;
+    Ok(result.text)
 }
 
 fn clamp_screenshot_ocr_region(
@@ -1271,14 +1494,17 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
         }
     };
 
-    let shared = if let Some(gpu) = gpu_context::get_shared_gpu().await {
-        cap_rendering::SharedWgpuDevice {
-            instance: (*gpu.instance).clone(),
-            adapter: (*gpu.adapter).clone(),
-            device: (*gpu.device).clone(),
-            queue: (*gpu.queue).clone(),
-            is_software_adapter: gpu.is_software_adapter,
-        }
+    let (shared, background_cache) = if let Some(gpu) = gpu_context::get_shared_gpu().await {
+        (
+            cap_rendering::SharedWgpuDevice {
+                instance: (*gpu.instance).clone(),
+                adapter: (*gpu.adapter).clone(),
+                device: (*gpu.device).clone(),
+                queue: (*gpu.queue).clone(),
+                is_software_adapter: gpu.is_software_adapter,
+            },
+            gpu.background_cache.clone(),
+        )
     } else {
         let instance = cap_rendering::create_wgpu_instance().await;
         let adapter = instance
@@ -1299,18 +1525,22 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
             })
             .await
             .map_err(|e| e.to_string())?;
-        cap_rendering::SharedWgpuDevice {
-            instance,
-            adapter,
-            device,
-            queue,
-            is_software_adapter,
-        }
+        (
+            cap_rendering::SharedWgpuDevice {
+                instance,
+                adapter,
+                device,
+                queue,
+                is_software_adapter,
+            },
+            Arc::new(cap_rendering::BackgroundTextureCache::default()),
+        )
     };
 
     let options = cap_rendering::RenderOptions {
         screen_size: cap_project::XY::new(width, height),
         camera_size: None,
+        preserve_screen_alpha: true,
     };
 
     let studio_meta = match &recording_meta.inner {
@@ -1323,6 +1553,7 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
         options,
         *studio_meta,
         recording_meta.clone(),
+        background_cache,
     );
 
     let (base_width, base_height) = ProjectUniforms::get_base_size(&constants.options, &config);
@@ -1369,6 +1600,7 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
         camera_frame: None,
         segment_time: 0.0,
         recording_time: 0.0,
+        segment_has_camera: false,
     };
     let cursor_events = cap_project::CursorEvents::default();
     let zoom_focus_interpolator = ZoomFocusInterpolator::new(

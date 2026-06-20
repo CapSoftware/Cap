@@ -42,6 +42,7 @@
 	"references": [
 		{ "path": "../../packages/database" },
 		{ "path": "../../packages/env" },
+		{ "path": "../../packages/recorder-core" },
 		{ "path": "../../packages/ui" },
 		{ "path": "../../packages/utils" },
 		{ "path": "../../packages/web-backend" },

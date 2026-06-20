@@ -82,6 +82,14 @@ export type CreateGoogleDriveUploadInput = {
 const normalizeContentType = (contentType?: string | null) =>
 	contentType?.trim() ? contentType : "application/octet-stream";
 
+const getGoogleDriveBrowserUploadOrigin = () => {
+	try {
+		return new URL(serverEnv().WEB_URL).origin;
+	} catch {
+		return null;
+	}
+};
+
 const appendDriveQuery = (
 	url: string,
 	params: Record<string, string | undefined>,
@@ -971,6 +979,12 @@ export const createGoogleDriveResumableUpload = (
 		if (input.contentLength !== undefined) {
 			headers["X-Upload-Content-Length"] = input.contentLength.toString();
 		}
+		// Google ties the resumable session's Access-Control-Allow-Origin to the
+		// Origin sent on this initiation request, so the browser's direct PUT to
+		// the returned session URL is CORS-blocked unless we set it here. Harmless
+		// for server-side uploads, which don't enforce CORS.
+		const browserUploadOrigin = getGoogleDriveBrowserUploadOrigin();
+		if (browserUploadOrigin) headers.Origin = browserUploadOrigin;
 
 		const response = yield* driveFetch(
 			config,

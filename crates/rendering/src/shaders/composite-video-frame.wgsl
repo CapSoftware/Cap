@@ -17,7 +17,10 @@ struct Uniforms {
     opacity: f32,
     border_enabled: f32,
     border_width: f32,
-    _padding1: vec4<f32>,
+    preserve_source_alpha: f32,
+    _padding1a: f32,
+    _padding1b: f32,
+    _padding1c: f32,
     border_color: vec4<f32>,
 };
 
@@ -305,7 +308,9 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
         let upscale_ratio = max(target_size.x / source_size.x, target_size.y / source_size.y);
         let is_upscaling = upscale_ratio > 1.05;
 
-        let center_color = textureSample(frame_texture, frame_sampler, cropped_uv).rgb;
+        let center_sample = textureSample(frame_texture, frame_sampler, cropped_uv);
+        let center_color = center_sample.rgb;
+        let out_alpha = select(1.0, center_sample.a, uniforms.preserve_source_alpha > 0.5);
 
         if is_downscaling {
             let texel_size = 1.0 / uniforms.frame_size;
@@ -339,7 +344,7 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             let sharpness = min(scale_ratio.x * 0.3, 0.7);
             let sharpened = center_color + (center_color - blurred) * sharpness;
 
-            return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+            return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);
         }
 
         if is_upscaling {
@@ -373,10 +378,10 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             let sharpness = min((upscale_ratio - 1.0) * 0.25, 0.45);
             let sharpened = center_color + (center_color - blurred) * sharpness;
 
-            return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+            return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);
         }
 
-        return vec4(center_color, 1.0);
+        return vec4(center_color, out_alpha);
     }
 
     return vec4(0.0);

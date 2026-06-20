@@ -71,6 +71,20 @@ cap upload out.mp4 --json                      # -> {"type":"uploaded","id","lin
 or set `CAP_API_KEY` (a Cap auth key from Settings) for headless use. `cap upload <path.cap> --export
 --json` exports then uploads in one step.
 
+## Automations
+
+Automations are `trigger -> (conditions) -> actions` rules authored in Cap Desktop (Settings →
+Automations) and shared with the CLI. After `cap screenshot`, a `cap record` finish, and `cap upload`,
+the CLI evaluates the matching rules and runs their actions (save to a folder, run a command, send a
+webhook, export, etc.).
+
+```sh
+cap automations list --json   # the rules the CLI will honor
+```
+
+Desktop-only actions (copy to clipboard, OCR, notifications, open editor) are skipped on the CLI; all
+others run. `cap doctor --json` reports the configured rule count under `automations`.
+
 ## Conventions to rely on
 
 - Add `--json` to any command; it overrides each command's `--format`.

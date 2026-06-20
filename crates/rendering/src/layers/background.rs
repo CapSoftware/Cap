@@ -3,9 +3,245 @@ use cap_project::BackgroundSource;
 use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
 use wgpu::{include_wgsl, util::DeviceExt};
 
 use crate::{ProjectUniforms, RenderVideoConstants, RenderingError, create_shader_render_pipeline};
+
+const MAX_BACKGROUND_DIMENSION: u32 = 2560;
+
+const DEFAULT_BACKGROUND_CACHE_CAPACITY: usize = 8;
+
+pub fn clean_background_path(path: &str) -> Option<String> {
+    if path.is_empty() {
+        return None;
+    }
+
+    let clean_path = path
+        .replace("asset://localhost/", "/")
+        .replace("asset://", "")
+        .replace("localhost//", "/");
+
+    std::path::Path::new(&clean_path)
+        .exists()
+        .then_some(clean_path)
+}
+
+fn decode_background_rgba(
+    path: &str,
+    max_dimension: u32,
+) -> Result<(Vec<u8>, u32, u32), image::ImageError> {
+    let img = image::open(path)?;
+    let (source_width, source_height) = img.dimensions();
+
+    let img = if source_width > max_dimension || source_height > max_dimension {
+        tracing::info!(
+            "Downscaling background image '{}' from {}x{} to fit within {}px",
+            path,
+            source_width,
+            source_height,
+            max_dimension
+        );
+        img.resize(
+            max_dimension,
+            max_dimension,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        img
+    };
+
+    let (width, height) = img.dimensions();
+    Ok((img.to_rgba8().into_raw(), width, height))
+}
+
+struct CachedBackgroundTexture {
+    texture: wgpu::Texture,
+    last_used: u64,
+}
+
+/// Process-wide cache of decoded background image textures keyed by resolved path.
+///
+/// Decoding and downscaling large wallpapers is CPU-heavy (tens of milliseconds),
+/// so this cache lets the screenshot editor reuse textures across re-selections,
+/// re-opens, export and ahead-of-time prewarming instead of paying the cost on
+/// every render. Eviction is least-recently-used; an entry that is still bound by
+/// a live render stays valid because wgpu keeps the underlying texture alive
+/// through the bind group that references it.
+pub struct BackgroundTextureCache {
+    inner: RwLock<BackgroundTextureCacheInner>,
+    in_flight: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    capacity: usize,
+}
+
+struct BackgroundTextureCacheInner {
+    entries: HashMap<String, CachedBackgroundTexture>,
+    counter: u64,
+}
+
+impl Default for BackgroundTextureCache {
+    fn default() -> Self {
+        Self::new(DEFAULT_BACKGROUND_CACHE_CAPACITY)
+    }
+}
+
+impl BackgroundTextureCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: RwLock::new(BackgroundTextureCacheInner {
+                entries: HashMap::new(),
+                counter: 0,
+            }),
+            in_flight: Mutex::new(HashMap::new()),
+            capacity: capacity.max(1),
+        }
+    }
+
+    async fn get(&self, path: &str) -> Option<wgpu::Texture> {
+        let mut inner = self.inner.write().await;
+        inner.counter += 1;
+        let counter = inner.counter;
+        let entry = inner.entries.get_mut(path)?;
+        entry.last_used = counter;
+        Some(entry.texture.clone())
+    }
+
+    async fn insert(&self, path: String, texture: wgpu::Texture) {
+        let mut inner = self.inner.write().await;
+        inner.counter += 1;
+        let counter = inner.counter;
+        inner.entries.insert(
+            path,
+            CachedBackgroundTexture {
+                texture,
+                last_used: counter,
+            },
+        );
+
+        while inner.entries.len() > self.capacity {
+            let Some(evict_key) = inner
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            inner.entries.remove(&evict_key);
+        }
+    }
+
+    /// Returns the cached texture for `path`, decoding and uploading it on a
+    /// blocking thread first if it is not already cached. Returns `None` when the
+    /// image cannot be loaded so callers can fall back gracefully.
+    ///
+    /// Concurrent calls for the same path (for example an ahead-of-time prewarm
+    /// racing the render that follows a click) are de-duplicated so the image is
+    /// decoded only once.
+    pub async fn ensure(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        path: &str,
+    ) -> Option<wgpu::Texture> {
+        if let Some(texture) = self.get(path).await {
+            return Some(texture);
+        }
+
+        let path_lock = {
+            let mut in_flight = self.in_flight.lock().await;
+            in_flight
+                .entry(path.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _guard = path_lock.lock().await;
+
+        if let Some(texture) = self.get(path).await {
+            self.clear_in_flight(path).await;
+            return Some(texture);
+        }
+
+        let texture = self.decode_and_upload(device, queue, path).await;
+        self.clear_in_flight(path).await;
+        texture
+    }
+
+    async fn clear_in_flight(&self, path: &str) {
+        self.in_flight.lock().await.remove(path);
+    }
+
+    async fn decode_and_upload(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        path: &str,
+    ) -> Option<wgpu::Texture> {
+        let max_dimension = MAX_BACKGROUND_DIMENSION.min(device.limits().max_texture_dimension_2d);
+        let path_owned = path.to_string();
+
+        let decoded =
+            tokio::task::spawn_blocking(move || decode_background_rgba(&path_owned, max_dimension))
+                .await;
+
+        let (rgba, width, height) = match decoded {
+            Ok(Ok(decoded)) => decoded,
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    "Failed to load background image '{}': {}. Falling back to solid color.",
+                    path,
+                    e
+                );
+                return None;
+            }
+            Err(e) => {
+                tracing::warn!("Background image decode task failed for '{}': {}", path, e);
+                return None;
+            }
+        };
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Background Image Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        self.insert(path.to_string(), texture.clone()).await;
+
+        Some(texture)
+    }
+}
 
 #[derive(PartialEq, Debug, Clone, Copy, Serialize, Deserialize, Type)]
 pub struct Gradient {
@@ -63,20 +299,32 @@ impl From<BackgroundSource> for Background {
                 noise_scale: noise_scale.unwrap_or(3.0),
             }),
             BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
-                if let Some(path) = path
-                    && !path.is_empty()
-                {
-                    let clean_path = path
-                        .replace("asset://localhost/", "/")
-                        .replace("asset://", "")
-                        .replace("localhost//", "/");
-
-                    if std::path::Path::new(&clean_path).exists() {
-                        return Background::Image { path: clean_path };
-                    }
+                if let Some(clean_path) = path.as_deref().and_then(clean_background_path) {
+                    Background::Image { path: clean_path }
+                } else {
+                    Background::Color([1.0, 1.0, 1.0, 1.0])
                 }
-                Background::Color([1.0, 1.0, 1.0, 1.0])
             }
+        }
+    }
+}
+
+fn background_source_is_empty(source: &BackgroundSource) -> bool {
+    match source {
+        BackgroundSource::Color { alpha, .. } => *alpha == 0,
+        BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
+            path.as_deref().map(str::is_empty).unwrap_or(true)
+        }
+        BackgroundSource::Gradient { .. } => false,
+    }
+}
+
+impl Background {
+    pub fn from_source(source: BackgroundSource, transparent_when_empty: bool) -> Self {
+        if transparent_when_empty && background_source_is_empty(&source) {
+            Background::Color([0.0, 0.0, 0.0, 0.0])
+        } else {
+            Background::from(source)
         }
     }
 }
@@ -125,73 +373,22 @@ impl BackgroundLayer {
                         path: current_path, ..
                     }) if current_path == &path => {}
                     _ => {
-                        let mut textures = constants.background_textures.write().await;
-                        let texture = match textures.entry(path.clone()) {
-                            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-                            std::collections::hash_map::Entry::Vacant(e) => {
-                                let img = match image::open(&path) {
-                                    Ok(img) => img,
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "Failed to load background image '{}': {}. Falling back to white.",
-                                            path,
-                                            e
-                                        );
-                                        let fallback_background =
-                                            Background::Color([1.0, 1.0, 1.0, 1.0]);
-                                        let buffer =
-                                            GradientOrColorUniforms::from(fallback_background)
-                                                .to_buffer(device);
-                                        self.inner = Some(Inner::ColorOrGradient {
-                                            value: ColorOrGradient::Color([1.0, 1.0, 1.0, 1.0]),
-                                            bind_group: self
-                                                .color_pipeline
-                                                .bind_group(device, &buffer),
-                                            buffer,
-                                        });
-                                        return Ok(());
-                                    }
-                                };
-                                let rgba = img.to_rgba8();
-                                let dimensions = img.dimensions();
-
-                                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                                    label: Some("Background Image Texture"),
-                                    size: wgpu::Extent3d {
-                                        width: dimensions.0,
-                                        height: dimensions.1,
-                                        depth_or_array_layers: 1,
-                                    },
-                                    mip_level_count: 1,
-                                    sample_count: 1,
-                                    dimension: wgpu::TextureDimension::D2,
-                                    format: wgpu::TextureFormat::Rgba8Unorm,
-                                    usage: wgpu::TextureUsages::TEXTURE_BINDING
-                                        | wgpu::TextureUsages::COPY_DST,
-                                    view_formats: &[],
+                        let texture = match constants
+                            .background_textures
+                            .ensure(device, queue, &path)
+                            .await
+                        {
+                            Some(texture) => texture,
+                            None => {
+                                let fallback_background = Background::Color([1.0, 1.0, 1.0, 1.0]);
+                                let buffer = GradientOrColorUniforms::from(fallback_background)
+                                    .to_buffer(device);
+                                self.inner = Some(Inner::ColorOrGradient {
+                                    value: ColorOrGradient::Color([1.0, 1.0, 1.0, 1.0]),
+                                    bind_group: self.color_pipeline.bind_group(device, &buffer),
+                                    buffer,
                                 });
-
-                                queue.write_texture(
-                                    wgpu::TexelCopyTextureInfo {
-                                        texture: &texture,
-                                        mip_level: 0,
-                                        origin: wgpu::Origin3d::ZERO,
-                                        aspect: wgpu::TextureAspect::All,
-                                    },
-                                    &rgba,
-                                    wgpu::TexelCopyBufferLayout {
-                                        offset: 0,
-                                        bytes_per_row: Some(4 * dimensions.0),
-                                        rows_per_image: Some(dimensions.1),
-                                    },
-                                    wgpu::Extent3d {
-                                        width: dimensions.0,
-                                        height: dimensions.1,
-                                        depth_or_array_layers: 1,
-                                    },
-                                );
-
-                                e.insert(texture)
+                                return Ok(());
                             }
                         };
 

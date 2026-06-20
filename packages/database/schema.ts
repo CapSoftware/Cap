@@ -735,11 +735,20 @@ export const notificationsRelations = relations(notifications, ({ one }) => ({
 	}),
 }));
 
-export const authApiKeys = mysqlTable("auth_api_keys", {
-	id: varchar("id", { length: 36 }).notNull().primaryKey(),
-	userId: nanoId("userId").notNull().$type<User.UserId>(),
-	createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+export const authApiKeys = mysqlTable(
+	"auth_api_keys",
+	{
+		id: varchar("id", { length: 36 }).notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		createdAt: timestamp("createdAt").defaultNow().notNull(),
+	},
+	(table) => ({
+		userIdCreatedAtIndex: index("user_id_created_at_idx").on(
+			table.userId,
+			table.createdAt,
+		),
+	}),
+);
 
 export const commentsRelations = relations(comments, ({ one }) => ({
 	author: one(users, {

@@ -77,6 +77,7 @@
 	"devDependencies": {
 		"@fontsource/geist-sans": "^5.0.3",
 		"@iconify/json": "^2.2.239",
+		"@solid-devtools/overlay": "^0.33.5",
 		"@tailwindcss/postcss": "^4.2.2",
 		"@tailwindcss/typography": "^0.5.9",
 		"@tauri-apps/cli": ">=2.1.0",
@@ -85,6 +86,7 @@
 		"@types/uuid": "^9.0.8",
 		"@webgpu/types": "^0.1.44",
 		"cross-env": "^7.0.3",
+		"solid-devtools": "^0.34.5",
 		"tailwind-scrollbar": "^3.1.0",
 		"typescript": "^5.8.3",
 		"vite": "^6.3.5",

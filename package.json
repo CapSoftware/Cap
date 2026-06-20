@@ -15,11 +15,12 @@
 		"db:generate": "dotenv -e .env -- pnpm --filter @cap/database db:generate",
 		"db:push": "dotenv -e .env -- pnpm --filter @cap/database db:push",
 		"db:studio": "dotenv -e .env -- pnpm --filter @cap/database db:studio",
-		"dev": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+		"dev": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --env-mode=loose --ui tui",
 		"dev:desktop": "pnpm run --filter=@cap/desktop dev",
-		"dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
+		"dev:extension": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/chrome-extension --env-mode=loose --ui tui",
+		"dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --filter=!@cap/chrome-extension --no-cache --concurrency 1",
 		"dev:web": "pnpm dev --filter=!@cap/desktop",
-		"dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+		"dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --env-mode=loose --ui tui",
 		"docker:clean": "turbo run docker:clean",
 		"docker:stop": "turbo run docker:stop",
 		"docker:up": "turbo run docker:up",
@@ -57,13 +58,6 @@
 		"tsdown": "^0.15.6",
 		"turbo": "^2.3.4",
 		"typescript": "^5.8.3"
-	},
-	"pnpm": {
-		"peerDependencyRules": {
-			"allowedVersions": {
-				"next-auth>next": ">=16.0.0"
-			}
-		}
 	},
 	"packageManager": "pnpm@10.5.2",
 	"name": "cap",

@@ -1089,11 +1089,13 @@ dependencies = [
 name = "cap"
 version = "0.1.0"
 dependencies = [
+ "cap-automation",
  "cap-camera",
  "cap-cli-install",
  "cap-export",
  "cap-project",
  "cap-recording",
+ "chrono",
  "cidre",
  "clap",
  "clap_complete",
@@ -1141,6 +1143,20 @@ dependencies = [
  "tracing",
  "windows 0.60.0",
  "workspace-hack",
+]
+
+[[package]]
+name = "cap-automation"
+version = "0.1.0"
+dependencies = [
+ "cap-project",
+ "serde",
+ "serde_json",
+ "specta",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1298,7 +1314,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1308,6 +1324,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "cap-audio",
+ "cap-automation",
  "cap-camera",
  "cap-camera-effects",
  "cap-camera-ffmpeg",

@@ -2,7 +2,6 @@
 import type { Folder, Space } from "@cap/web-domain";
 import { faGlobe, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -11,6 +10,7 @@ import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useCopyCollectionLink } from "@/lib/public-collection-client";
+import { Fit, Layout, useRive } from "@/lib/rive";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";

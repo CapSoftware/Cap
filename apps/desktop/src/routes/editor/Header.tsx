@@ -1,10 +1,6 @@
 import { Button } from "@cap/ui-solid";
-import { Dialog as KDialog } from "@kobalte/core/dialog";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { Menu, MenuItem } from "@tauri-apps/api/menu";
-import { ask, open } from "@tauri-apps/plugin-dialog";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
@@ -12,31 +8,22 @@ import {
 	type ComponentProps,
 	createEffect,
 	createMemo,
-	createResource,
 	createSignal,
-	For,
 	onCleanup,
 	onMount,
 	Show,
 } from "solid-js";
-import { produce } from "solid-js/store";
-import toast from "solid-toast";
 import Tooltip from "~/components/Tooltip";
+import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { trackEvent } from "~/utils/analytics";
-import { commands, type RecordingMetaWithMetadata } from "~/utils/tauri";
+import { commands } from "~/utils/tauri";
 import { initializeTitlebar } from "~/utils/titlebar-state";
-import IconLucideImport from "~icons/lucide/import";
-import {
-	applyCaptionResultToProject,
-	getSelectedTranscriptionSettings,
-	transcribeEditorCaptions,
-} from "./captions";
-import { serializeProjectConfiguration, useEditorContext } from "./context";
+import { useEditorContext } from "./context";
 import OrganizationDropdown from "./OrganizationDropdown";
 import PresetsDropdown from "./PresetsDropdown";
 import ShareButton from "./ShareButton";
-import { Dialog, EditorButton, Input } from "./ui";
+import { EditorButton } from "./ui";
 
 export type ResolutionOption = {
 	label: string;
@@ -57,23 +44,10 @@ export interface ExportEstimates {
 	estimated_size_mb: number;
 }
 
-type ImportableRecording = {
-	path: string;
-	meta: RecordingMetaWithMetadata;
-	thumbnailPath: string;
-};
-
-const normalizeImportPath = (path: string) =>
-	path.replace(/\\/g, "/").replace(/\/+$/, "");
-
-const recordingModeLabel = (mode: RecordingMetaWithMetadata["mode"]) =>
-	mode === "studio" ? "Studio Mode" : "Instant Mode";
-
 export function Header() {
 	const {
 		editorInstance,
 		project,
-		setProject,
 		projectHistory,
 		dialog,
 		setDialog,
@@ -85,131 +59,17 @@ export function Header() {
 		setEditorState,
 	} = useEditorContext();
 
-	const [importingRecording, setImportingRecording] = createSignal(false);
-	const [importDialogOpen, setImportDialogOpen] = createSignal(false);
-	const [importSearch, setImportSearch] = createSignal("");
-	const [recordings] = createResource(importDialogOpen, async (open) => {
-		if (!open) return [];
-		const result = await commands.listRecordings();
-		return result.map(([path, meta]) => ({
-			path,
-			meta,
-			thumbnailPath: `${path}/screenshots/display.jpg`,
-		}));
-	});
-
 	let unlistenTitlebar: UnlistenFn | undefined;
 	onMount(async () => {
 		unlistenTitlebar = await initializeTitlebar();
 	});
 	onCleanup(() => unlistenTitlebar?.());
 
-	createEffect(() => {
-		if (!importDialogOpen()) setImportSearch("");
-	});
-
 	const clearTimelineSelection = () => {
 		if (!editorState.timeline.selection) return false;
 		setEditorState("timeline", "selection", null);
 		return true;
 	};
-
-	const selectedPath = (result: string | string[] | null) =>
-		typeof result === "string" ? result : null;
-
-	const importRecordingPath = async (sourcePath: string) => {
-		if (importingRecording()) return;
-
-		clearTimelineSelection();
-		setImportingRecording(true);
-		const toastId = toast.loading("Importing recording...");
-
-		try {
-			if (editorState.playing) {
-				await commands.stopPlayback();
-				setEditorState("playing", false);
-			}
-
-			await commands.setProjectConfig(serializeProjectConfiguration(project));
-			const importedCount =
-				await commands.addExistingRecordingToEditor(sourcePath);
-			toast.success(
-				importedCount === 1
-					? "Recording imported"
-					: `${importedCount} recordings imported`,
-				{ id: toastId },
-			);
-			window.location.reload();
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			toast.error(`Failed to import recording: ${message}`, { id: toastId });
-		} finally {
-			setImportingRecording(false);
-		}
-	};
-
-	const pickMp4Recording = async () => {
-		const path = selectedPath(
-			await open({
-				filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
-				multiple: false,
-			}),
-		);
-		if (path) await importRecordingPath(path);
-	};
-
-	const openExistingRecordingImporter = () => {
-		if (importingRecording()) return;
-		clearTimelineSelection();
-		setImportDialogOpen(true);
-	};
-
-	const openImportMenu = async (event: MouseEvent) => {
-		if (importingRecording()) return;
-		clearTimelineSelection();
-
-		const menu = await Menu.new({
-			items: [
-				await MenuItem.new({
-					text: "Existing Cap Recording...",
-					action: openExistingRecordingImporter,
-				}),
-				await MenuItem.new({
-					text: "MP4 Video...",
-					action: () => void pickMp4Recording(),
-				}),
-			],
-		});
-
-		menu.popup(new LogicalPosition(event.clientX, event.clientY));
-	};
-
-	const importableRecordings = createMemo(() => {
-		const currentPath = normalizeImportPath(editorInstance.path);
-		const query = importSearch().trim().toLowerCase();
-
-		return (recordings() ?? []).filter((recording) => {
-			if (normalizeImportPath(recording.path) === currentPath) return false;
-			if (recording.meta.status.status !== "Complete") return false;
-			if (recording.meta.mode !== "instant" && recording.meta.mode !== "studio")
-				return false;
-			if (!query) return true;
-			return recording.meta.pretty_name.toLowerCase().includes(query);
-		});
-	});
-
-	const handleImportRecording = async (recording: ImportableRecording) => {
-		setImportDialogOpen(false);
-		await importRecordingPath(recording.path);
-	};
-
-	const showCaptionsStale = createMemo(
-		() =>
-			(editorState.captions.isStale || editorState.captions.isGenerating) &&
-			!editorState.captions.staleDismissed &&
-			((project.timeline?.captionSegments?.length ?? 0) > 0 ||
-				(project.captions?.segments?.length ?? 0) > 0),
-	);
 
 	const hasTranscript = createMemo(() => {
 		const segments = project.captions?.segments ?? [];
@@ -221,42 +81,10 @@ export function Header() {
 		return "type" in d && d.type === "transcript" && d.open;
 	});
 
-	const regenerateCaptions = async () => {
-		setEditorState("captions", "isGenerating", true);
-		try {
-			const { model, language } = getSelectedTranscriptionSettings();
-			const result = await transcribeEditorCaptions(
-				editorInstance.path,
-				model,
-				language,
-			);
-			if (result.segments.length < 1) {
-				toast.error(
-					"No captions were generated. The audio might be too quiet or unclear.",
-				);
-				return;
-			}
-
-			setProject(
-				produce((p) => {
-					applyCaptionResultToProject(
-						p,
-						result.segments,
-						editorInstance.recordings.segments,
-						editorInstance.recordingDuration,
-					);
-				}),
-			);
-
-			setEditorState("captions", "isStale", false);
-			toast.success("Captions regenerated!");
-		} catch (error) {
-			console.error("Error regenerating captions:", error);
-			toast.error("Failed to regenerate captions");
-		} finally {
-			setEditorState("captions", "isGenerating", false);
-		}
-	};
+	const isClipsOpen = createMemo(() => {
+		const d = dialog();
+		return "type" in d && d.type === "clips" && d.open;
+	});
 
 	return (
 		<div
@@ -268,6 +96,7 @@ export function Header() {
 				class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}
 			>
 				{ostype() === "macos" && <div class="h-full w-16" />}
+				{ostype() === "linux" && <CaptionControlsMacOS class="mr-1" />}
 				<EditorButton
 					onClick={async () => {
 						clearTimelineSelection();
@@ -289,23 +118,6 @@ export function Header() {
 					}}
 					tooltipText="Open recording bundle"
 					leftIcon={<IconLucideFolder class="w-5" />}
-				/>
-				<EditorButton
-					onClick={openImportMenu}
-					disabled={importingRecording()}
-					tooltipText="Import recording"
-					leftIcon={<IconLucideImport class="w-5" />}
-				/>
-				<ImportRecordingDialog
-					open={importDialogOpen()}
-					search={importSearch()}
-					recordings={importableRecordings()}
-					isLoading={recordings.loading}
-					isImporting={importingRecording()}
-					onOpenChange={setImportDialogOpen}
-					onSearch={setImportSearch}
-					onImport={handleImportRecording}
-					onImportMp4={pickMp4Recording}
 				/>
 
 				<div class="flex flex-row items-center">
@@ -374,67 +186,21 @@ export function Header() {
 				<Show when={customDomain.data}>
 					<ShareButton />
 				</Show>
-				<Show when={showCaptionsStale()}>
-					<div class="flex items-center h-[32px] rounded-lg bg-gray-3 overflow-hidden">
-						<button
-							class="h-full px-3 text-gray-11 text-xs font-medium transition-colors hover:bg-gray-4 flex items-center gap-1.5 disabled:opacity-70 disabled:cursor-not-allowed"
-							disabled={editorState.captions.isGenerating}
-							onClick={() => void regenerateCaptions()}
-						>
-							<Show
-								when={!editorState.captions.isGenerating}
-								fallback={
-									<svg
-										class="size-3.5 animate-spin"
-										viewBox="0 0 16 16"
-										fill="none"
-									>
-										<circle
-											cx="8"
-											cy="8"
-											r="6.5"
-											stroke="currentColor"
-											stroke-opacity="0.25"
-											stroke-width="2.5"
-										/>
-										<path
-											d="M14.5 8a6.5 6.5 0 00-6.5-6.5"
-											stroke="currentColor"
-											stroke-width="2.5"
-											stroke-linecap="round"
-										/>
-									</svg>
-								}
-							>
-								<IconCapCaptions class="size-3.5" />
-							</Show>
-							{editorState.captions.isGenerating
-								? "Regenerating..."
-								: "Regenerate captions"}
-						</button>
-						<Show when={!editorState.captions.isGenerating}>
-							<div class="w-px h-4 bg-gray-6" />
-							<button
-								class="h-full w-[30px] flex items-center justify-center text-gray-9 hover:text-gray-11 hover:bg-gray-4 transition-colors"
-								onClick={() =>
-									setEditorState("captions", "staleDismissed", true)
-								}
-							>
-								<svg
-									width="8"
-									height="8"
-									viewBox="0 0 10 10"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="1.5"
-									stroke-linecap="round"
-								>
-									<path d="M1 1l8 8M9 1l-8 8" />
-								</svg>
-							</button>
-						</Show>
-					</div>
-				</Show>
+				<Button
+					variant={isClipsOpen() ? "white" : "gray"}
+					class="flex gap-1.5 justify-center h-[40px]"
+					onClick={() => {
+						clearTimelineSelection();
+						if (isClipsOpen()) {
+							setDialog((d) => ({ ...d, open: false }));
+						} else {
+							setDialog({ type: "clips", open: true });
+						}
+					}}
+				>
+					<IconCapClapperboard class="size-4" />
+					Clips
+				</Button>
 				<Show when={hasTranscript()}>
 					<Button
 						variant={isTranscriptOpen() ? "white" : "gray"}
@@ -475,157 +241,6 @@ export function Header() {
 				{ostype() === "windows" && <CaptionControlsWindows11 />}
 			</div>
 		</div>
-	);
-}
-
-function ImportRecordingDialog(props: {
-	open: boolean;
-	search: string;
-	recordings: ImportableRecording[];
-	isLoading: boolean;
-	isImporting: boolean;
-	onOpenChange: (open: boolean) => void;
-	onSearch: (value: string) => void;
-	onImport: (recording: ImportableRecording) => void;
-	onImportMp4: () => void;
-}) {
-	return (
-		<Dialog.Root
-			open={props.open}
-			onOpenChange={props.onOpenChange}
-			size="lg"
-			contentClass="w-[34rem]"
-		>
-			<Dialog.Header>
-				<div class="flex flex-col gap-0.5 min-w-0">
-					<KDialog.Title class="text-sm font-medium text-gray-12">
-						Import recording
-					</KDialog.Title>
-					<KDialog.Description class="text-xs text-gray-10">
-						Newest to oldest
-					</KDialog.Description>
-				</div>
-			</Dialog.Header>
-			<Dialog.Content class="gap-3 max-h-[28rem]">
-				<Input
-					type="search"
-					value={props.search}
-					onInput={(event) => props.onSearch(event.currentTarget.value)}
-					onKeyDown={(event) => {
-						if (event.key === "Escape" && props.search) {
-							event.preventDefault();
-							props.onSearch("");
-						}
-					}}
-					placeholder="Search recordings"
-					autoCapitalize="off"
-					autocorrect="off"
-					autocomplete="off"
-					spellcheck={false}
-					aria-label="Search recordings"
-				/>
-				<div class="min-h-[12rem] max-h-[20rem] overflow-y-auto custom-scroll rounded-lg border border-gray-3 bg-gray-2">
-					<Show
-						when={!props.isLoading}
-						fallback={
-							<div class="flex h-48 items-center justify-center text-xs text-gray-10">
-								Loading recordings...
-							</div>
-						}
-					>
-						<Show
-							when={props.recordings.length > 0}
-							fallback={
-								<div class="flex h-48 items-center justify-center text-xs text-gray-10">
-									No importable recordings found
-								</div>
-							}
-						>
-							<ul class="flex flex-col">
-								<For each={props.recordings}>
-									{(recording) => (
-										<ImportRecordingItem
-											recording={recording}
-											disabled={props.isImporting}
-											onClick={() => props.onImport(recording)}
-										/>
-									)}
-								</For>
-							</ul>
-						</Show>
-					</Show>
-				</div>
-			</Dialog.Content>
-			<Dialog.Footer leftFooterContent={<Dialog.CloseButton />}>
-				<Button
-					variant="gray"
-					onClick={() => {
-						props.onOpenChange(false);
-						void props.onImportMp4();
-					}}
-					disabled={props.isImporting}
-				>
-					Import MP4
-				</Button>
-			</Dialog.Footer>
-		</Dialog.Root>
-	);
-}
-
-function ImportRecordingItem(props: {
-	recording: ImportableRecording;
-	disabled: boolean;
-	onClick: () => void;
-}) {
-	const [imageExists, setImageExists] = createSignal(true);
-
-	return (
-		<li class="border-b border-gray-3 last:border-b-0">
-			<button
-				type="button"
-				disabled={props.disabled}
-				onClick={props.onClick}
-				class="flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-gray-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 disabled:cursor-not-allowed disabled:opacity-60"
-			>
-				<Show
-					when={imageExists()}
-					fallback={
-						<div class="flex size-12 shrink-0 items-center justify-center rounded-md bg-gray-4 text-gray-10">
-							<IconLucideImport class="size-4" />
-						</div>
-					}
-				>
-					<img
-						class="size-12 shrink-0 rounded-md object-cover"
-						alt="Recording thumbnail"
-						src={convertFileSrc(props.recording.thumbnailPath)}
-						onError={() => setImageExists(false)}
-					/>
-				</Show>
-				<div class="min-w-0 flex-1">
-					<div class="truncate text-sm font-medium text-gray-12">
-						{props.recording.meta.pretty_name}
-					</div>
-					<div class="mt-1 flex items-center gap-1.5">
-						<div
-							class={cx(
-								"flex w-fit items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium text-gray-12",
-								props.recording.meta.mode === "instant"
-									? "bg-blue-100"
-									: "bg-gray-4",
-							)}
-						>
-							{props.recording.meta.mode === "instant" ? (
-								<IconCapInstant class="size-2.5 invert dark:invert-0" />
-							) : (
-								<IconCapFilmCut class="size-2.5 invert dark:invert-0" />
-							)}
-							<span>{recordingModeLabel(props.recording.meta.mode)}</span>
-						</div>
-					</div>
-				</div>
-			</button>
-		</li>
 	);
 }
 

@@ -210,9 +210,11 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
             let display = Display::get_containing_cursor().unwrap_or_else(Display::primary);
             let target = ScreenCaptureTarget::Display { id: display.id() };
 
-            match recording::take_screenshot(app.clone(), target).await {
+            match recording::take_screenshot(app.clone(), target.clone()).await {
                 Ok(path) => {
-                    let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                    if crate::automation::should_open_screenshot_editor(&app, &target) {
+                        let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                    }
                     Ok(())
                 }
                 Err(e) => Err(format!("Failed to take screenshot: {e}")),
@@ -227,9 +229,11 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
                 ScreenCaptureTarget::Window { id: window.id() }
             };
 
-            match recording::take_screenshot(app.clone(), target).await {
+            match recording::take_screenshot(app.clone(), target.clone()).await {
                 Ok(path) => {
-                    let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                    if crate::automation::should_open_screenshot_editor(&app, &target) {
+                        let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                    }
                     Ok(())
                 }
                 Err(e) => Err(format!("Failed to take screenshot: {e}")),

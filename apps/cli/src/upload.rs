@@ -81,6 +81,16 @@ impl UploadArgs {
         upload_file(&http, &put_url, &file_path).await?;
 
         let link = format!("{server}/s/{video_id}");
+
+        let is_project = self.file.is_dir()
+            || self
+                .file
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("cap"));
+        if is_project {
+            crate::automation::run_upload_completed(&self.file, &link, &video_id).await;
+        }
+
         match format {
             OutputFormat::Json => write_json(&UploadEvent::Uploaded {
                 id: &video_id,
@@ -131,6 +141,30 @@ impl UploadArgs {
             Err(format!("File not found: {}", input.display()))
         }
     }
+}
+
+/// Upload an existing MP4 video file and return its shareable link. Reuses the same credential
+/// resolution and signed-upload flow as `cap upload`, so automation-driven uploads behave identically.
+pub async fn upload_video_path(file_path: &Path, name: Option<String>) -> Result<String, String> {
+    if !is_mp4(file_path) {
+        return Err(format!(
+            "Automation upload only supports MP4 files; {} is not an .mp4",
+            file_path.display()
+        ));
+    }
+
+    let creds = credentials::resolve()?;
+    let server = creds.server.clone();
+    let meta = probe_video_meta(file_path)?;
+
+    let http = Client::new();
+    let auth = format!("Bearer {}", creds.api_key);
+
+    let video_id = create_video(&http, &server, &auth, &name, None, &meta).await?;
+    let put_url = presign_put(&http, &server, &auth, &video_id, &meta).await?;
+    upload_file(&http, &put_url, file_path).await?;
+
+    Ok(format!("{server}/s/{video_id}"))
 }
 
 fn probe_video_meta(path: &Path) -> Result<VideoMeta, String> {

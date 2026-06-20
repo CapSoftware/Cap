@@ -1,4 +1,9 @@
 "use client";
+import type {
+	ChunkUploadState,
+	RecorderPhase,
+	RecordingFailureDownload,
+} from "@cap/recorder-core/recorder-types";
 import clsx from "clsx";
 import {
 	Mic,
@@ -23,11 +28,6 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
-import type {
-	ChunkUploadState,
-	RecorderPhase,
-	RecordingFailureDownload,
-} from "./web-recorder-types";
 
 const phaseMessages: Partial<Record<RecorderPhase, string>> = {
 	recording: "Recording",

@@ -749,36 +749,42 @@ mod tests {
                         timescale: 1.0,
                         start: 0.0,
                         end: 1.0,
+                        name: None,
                     },
                     TimelineSegment {
                         recording_clip: 0,
                         timescale: 4.0,
                         start: 1.0,
                         end: 2.0,
+                        name: None,
                     },
                     TimelineSegment {
                         recording_clip: 0,
                         timescale: 1.0,
                         start: 2.0,
                         end: 3.0,
+                        name: None,
                     },
                     TimelineSegment {
                         recording_clip: 1,
                         timescale: 1.0,
                         start: 0.0,
                         end: 1.0,
+                        name: None,
                     },
                     TimelineSegment {
                         recording_clip: 1,
                         timescale: 2.0,
                         start: 1.0,
                         end: 2.0,
+                        name: None,
                     },
                     TimelineSegment {
                         recording_clip: 1,
                         timescale: 1.0,
                         start: 2.0,
                         end: 3.0,
+                        name: None,
                     },
                 ],
                 zoom_segments: Vec::new(),
@@ -901,6 +907,7 @@ mod tests {
             timescale,
             start,
             end,
+            name: None,
         }
     }
 

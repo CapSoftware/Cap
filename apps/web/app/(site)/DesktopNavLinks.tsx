@@ -86,6 +86,11 @@ const Links: NavItem[] = [
 		width: 480,
 		dropdown: [
 			{
+				label: "Support",
+				sub: "Get help via Discord, email, and more",
+				href: "/support",
+			},
+			{
 				label: "Documentation",
 				sub: "Documentation for using Cap",
 				href: "/docs",

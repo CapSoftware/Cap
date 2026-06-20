@@ -477,8 +477,20 @@ impl WindowFocusManager {
                     if window.is_visible().unwrap_or(false)
                         && let Some(cap_main) = cap_main
                     {
-                        let should_refocus = cap_main.is_focused().ok().unwrap_or_default()
-                            || window.is_focused().unwrap_or_default();
+                        // Every overlay window (one per display) runs this loop. Checking only
+                        // `window`/main focus made each inactive overlay steal focus from the
+                        // overlay the user is interacting with on multi-monitor setups, firing a
+                        // `blur` that cancelled the in-progress crop drag. Focus held by any
+                        // overlay is fine, so only refocus when nothing of ours is focused.
+                        let overlay_focused = app.webview_windows().iter().any(|(label, other)| {
+                            matches!(
+                                CapWindowId::from_str(label),
+                                Ok(CapWindowId::TargetSelectOverlay { .. })
+                            ) && other.is_focused().unwrap_or(false)
+                        });
+
+                        let should_refocus =
+                            overlay_focused || cap_main.is_focused().ok().unwrap_or_default();
 
                         if !should_refocus {
                             window.set_focus().ok();

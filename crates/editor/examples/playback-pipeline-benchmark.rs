@@ -279,6 +279,7 @@ async fn load_recording(
                     start: 0.0,
                     end: duration,
                     timescale: 1.0,
+                    name: None,
                 }]
             }
             StudioRecordingMeta::MultipleSegments { inner } => inner
@@ -303,6 +304,7 @@ async fn load_recording(
                         start: 0.0,
                         end: duration,
                         timescale: 1.0,
+                        name: None,
                     })
                 })
                 .collect(),

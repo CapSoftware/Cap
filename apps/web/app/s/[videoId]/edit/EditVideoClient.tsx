@@ -1,6 +1,14 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import {
+	Button,
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@cap/ui";
 import type { Video } from "@cap/web-domain";
 import {
 	ChevronLeft,
@@ -10,6 +18,7 @@ import {
 	Play,
 	Plus,
 	Redo2,
+	RotateCcw,
 	Scissors,
 	Trash2,
 	Undo2,
@@ -25,7 +34,10 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
-import { saveVideoEdits } from "@/actions/videos/save-edits";
+import {
+	restoreVideoToOriginal,
+	saveVideoEdits,
+} from "@/actions/videos/save-edits";
 import {
 	clearTimelineDraft,
 	getTimelineDraftKey,
@@ -65,6 +77,7 @@ import {
 } from "@/lib/video-edits";
 import { navigateWithTransition } from "@/utils/view-transition";
 import { CapVideoPlayer } from "../_components/CapVideoPlayer";
+import { VideoDownloadMenu } from "../_components/VideoDownloadMenu";
 import { captureVideoFrameDataUrl } from "../_components/video-frame-thumbnail";
 
 type EditableVideo = {
@@ -604,7 +617,13 @@ function useLazyTimelineThumbnails({
 	return frames;
 }
 
-export function EditVideoClient({ video }: { video: EditableVideo }) {
+export function EditVideoClient({
+	video,
+	hasExistingEdits,
+}: {
+	video: EditableVideo;
+	hasExistingEdits: boolean;
+}) {
 	const router = useRouter();
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -644,6 +663,8 @@ export function EditVideoClient({ video }: { video: EditableVideo }) {
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [zoom, setZoom] = useState(1);
 	const [isSaving, setIsSaving] = useState(false);
+	const [isRestoring, setIsRestoring] = useState(false);
+	const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
 	const [selectedSplitIndex, setSelectedSplitIndex] = useState<number | null>(
 		null,
 	);
@@ -1049,6 +1070,49 @@ export function EditVideoClient({ video }: { video: EditableVideo }) {
 		if (draftStorage) clearTimelineDraft(draftStorage, draftStorageKey);
 		navigateWithTransition("edit-exit", () => router.push(`/s/${video.id}`));
 	}, [draftStorageKey, router, video.id]);
+
+	const resetTimeline = useCallback(() => {
+		const draftStorage = getTimelineDraftStorage();
+		setDraftState(null);
+		dragDraftRef.current = null;
+		setHistory(createTimelineHistory(initialState));
+		setSelectedSplitIndex(null);
+		setPlayhead(initialState.trimStart);
+		if (draftStorage) clearTimelineDraft(draftStorage, draftStorageKey);
+	}, [draftStorageKey, initialState]);
+
+	const canRestore = hasExistingEdits || hasTimelineChanges;
+
+	const handleRestore = useCallback(async () => {
+		if (isRestoring || isSaving) return;
+
+		if (!hasExistingEdits) {
+			resetTimeline();
+			setShowRestoreConfirm(false);
+			return;
+		}
+
+		setIsRestoring(true);
+		try {
+			await restoreVideoToOriginal(video.id);
+			resetTimeline();
+			setShowRestoreConfirm(false);
+			router.push(`/s/${video.id}`);
+			router.refresh();
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Failed to restore video",
+			);
+			setIsRestoring(false);
+		}
+	}, [
+		hasExistingEdits,
+		isRestoring,
+		isSaving,
+		resetTimeline,
+		router,
+		video.id,
+	]);
 
 	const seekTo = useCallback(
 		(time: number, immediate = false) => {
@@ -1568,13 +1632,31 @@ export function EditVideoClient({ video }: { video: EditableVideo }) {
 		<div className="flex min-h-screen flex-col bg-gray-1 text-gray-12">
 			<header className="sticky top-0 z-30 border-b border-gray-4 bg-white/85 backdrop-blur">
 				<div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-2 px-3 sm:h-16 sm:px-5">
-					<button
-						type="button"
-						onClick={handleCancel}
-						className="inline-flex h-9 items-center rounded-full bg-gray-3 px-4 text-[14px] font-medium text-gray-12 shadow-[inset_0_1px_0_rgba(255,255,255,0.6),inset_0_-1px_0_rgba(0,0,0,0.02)] ring-1 ring-gray-5 transition hover:bg-gray-4 active:bg-gray-5"
-					>
-						Cancel
-					</button>
+					<div className="flex items-center gap-1.5">
+						<button
+							type="button"
+							onClick={handleCancel}
+							className="inline-flex h-9 items-center rounded-full bg-gray-3 px-4 text-[14px] font-medium text-gray-12 shadow-[inset_0_1px_0_rgba(255,255,255,0.6),inset_0_-1px_0_rgba(0,0,0,0.02)] ring-1 ring-gray-5 transition hover:bg-gray-4 active:bg-gray-5"
+						>
+							Cancel
+						</button>
+						<button
+							type="button"
+							aria-label="Restore original"
+							title="Restore original"
+							disabled={!canRestore || isSaving || isRestoring}
+							onClick={() => setShowRestoreConfirm(true)}
+							className="inline-flex h-9 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium text-gray-11 transition hover:bg-gray-3 hover:text-gray-12 active:bg-gray-4 disabled:pointer-events-none disabled:opacity-30 sm:px-3"
+						>
+							<RotateCcw className="size-4" aria-hidden />
+							<span className="hidden sm:inline">Restore</span>
+						</button>
+						<VideoDownloadMenu
+							videoId={video.id}
+							hasEdits={hasExistingEdits}
+							align="start"
+						/>
+					</div>
 					<div className="min-w-0 flex-1 px-2 text-center">
 						<h1 className="truncate text-[15px] font-semibold text-gray-12">
 							{video.name}
@@ -1599,7 +1681,7 @@ export function EditVideoClient({ video }: { video: EditableVideo }) {
 							variant="blue"
 							size="sm"
 							spinner={isSaving}
-							disabled={isSaving || keepRanges.length === 0}
+							disabled={isSaving || isRestoring || keepRanges.length === 0}
 							onClick={handleDone}
 							className="ml-1"
 						>
@@ -1994,6 +2076,43 @@ export function EditVideoClient({ video }: { video: EditableVideo }) {
 					/>
 				</div>
 			</main>
+
+			<Dialog
+				open={showRestoreConfirm}
+				onOpenChange={(open) => {
+					if (isRestoring) return;
+					setShowRestoreConfirm(open);
+				}}
+			>
+				<DialogContent className="max-w-sm p-0">
+					<DialogHeader icon={<RotateCcw className="size-5" />}>
+						<DialogTitle>Restore original video?</DialogTitle>
+					</DialogHeader>
+					<DialogDescription>
+						This discards your current edits and restores the video to its
+						original recording. This can't be undone.
+					</DialogDescription>
+					<DialogFooter>
+						<Button
+							variant="gray"
+							size="sm"
+							disabled={isRestoring}
+							onClick={() => setShowRestoreConfirm(false)}
+						>
+							Cancel
+						</Button>
+						<Button
+							variant="destructive"
+							size="sm"
+							spinner={isRestoring}
+							disabled={isRestoring}
+							onClick={handleRestore}
+						>
+							{isRestoring ? "Restoring" : "Restore original"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

@@ -11,9 +11,9 @@ const Pricing = () => {
 	return (
 		<div className="w-full max-w-[960px] mx-auto px-5">
 			<div className="px-5 mb-14 text-center">
-				<h1 className="mb-3 w-full text-4xl font-medium tracking-tight text-gray-12">
+				<h2 className="mb-3 w-full text-4xl font-medium tracking-tight text-gray-12">
 					{homepageCopy.pricing.title}
-				</h1>
+				</h2>
 				<p className="text-lg text-gray-10 max-w-[640px] mx-auto leading-[1.75rem] w-full">
 					{homepageCopy.pricing.subtitle}
 				</p>

@@ -102,6 +102,7 @@ function Header() {
 
 	const isWindows = ostype() === "windows";
 	const isMacOS = ostype() === "macos";
+	const isLinux = ostype() === "linux";
 	const isSettings = () => location.pathname.startsWith("/settings");
 
 	if (isMacOS && isSettings()) return null;
@@ -116,7 +117,7 @@ function Header() {
 		>
 			{ctx.state()?.items}
 			{isWindows && <CaptionControlsWindows11 class="ml-auto!" />}
-			{isMacOS && !isSettings() && (
+			{((isMacOS && !isSettings()) || isLinux) && (
 				<CaptionControlsMacOS
 					class="mr-auto! ml-3"
 					showMinimize={false}

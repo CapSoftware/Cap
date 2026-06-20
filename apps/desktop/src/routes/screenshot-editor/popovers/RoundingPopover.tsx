@@ -1,7 +1,7 @@
 import { Popover } from "@kobalte/core/popover";
 import { Select as KSelect } from "@kobalte/core/select";
 import { cx } from "cva";
-import { batch, Show, type ValidComponent } from "solid-js";
+import { Show, type ValidComponent } from "solid-js";
 import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCorners from "~icons/cap/corners";
 import { useScreenshotEditorContext } from "../context";
@@ -20,48 +20,12 @@ const CORNER_STYLE_OPTIONS = [
 	{ name: "Rounded", value: "rounded" },
 ] satisfies Array<{ name: string; value: CornerRoundingType }>;
 
-function hasNoVisibleBackground(source: {
-	type: string;
-	path?: string | null;
-	alpha?: number;
-}): boolean {
-	if (source.type === "color") {
-		return (source.alpha ?? 255) === 0;
-	}
-	if (source.type === "wallpaper" || source.type === "image") {
-		return !source.path;
-	}
-	return false;
-}
-
 export function RoundingPopover() {
 	const { project, setProject, activePopover, setActivePopover } =
 		useScreenshotEditorContext();
 
 	const handleRoundingChange = (v: number[]) => {
-		const value = v[0];
-		batch(() => {
-			if (
-				value > 0 &&
-				hasNoVisibleBackground(
-					project.background.source as {
-						type: string;
-						path?: string | null;
-						alpha?: number;
-					},
-				)
-			) {
-				setProject("background", "source", {
-					type: "color",
-					value: [255, 255, 255],
-					alpha: 255,
-				});
-				if (project.background.padding === 0) {
-					setProject("background", "padding", 10);
-				}
-			}
-			setProject("background", "rounding", value);
-		});
+		setProject("background", "rounding", v[0]);
 	};
 
 	return (

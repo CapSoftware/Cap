@@ -1567,10 +1567,13 @@ function createUpdateCheck() {
 			if (result) update = result;
 		} catch (e) {
 			console.error("Failed to check for updates:", e);
-			await dialog.message(
-				"Unable to check for updates. Please download the latest version manually from cap.so/download. Your data will not be lost.\n\nIf this issue persists, please contact support.",
-				{ title: "Update Error", kind: "error" },
-			);
+			const openDownload = await dialog
+				.confirm(
+					"Couldn't check for updates automatically. You can download the latest version of Cap from cap.so/download \u2014 your data won't be lost.",
+					{ title: "Update Cap", okLabel: "Download", cancelLabel: "Later" },
+				)
+				.catch(() => false);
+			if (openDownload) await shell.open("https://cap.so/download");
 			return;
 		}
 
@@ -2295,6 +2298,7 @@ function Page() {
 		mode: "display" | "window" | "area" | "camera",
 	) => {
 		if (isRecording()) return;
+		await commands.setEditorRecordingTarget(null);
 		const nextMode = rawOptions.targetMode === mode ? null : mode;
 		if (nextMode) {
 			if (nextMode === "camera") {

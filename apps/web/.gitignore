@@ -34,3 +34,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 pnpm-lock.yaml
+
+# workflow devkit (generated)
+public/.well-known/workflow/

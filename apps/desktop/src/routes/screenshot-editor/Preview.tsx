@@ -420,6 +420,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		if (frame?.bitmap && canvasRef) {
 			const ctx = canvasRef.getContext("2d");
 			if (ctx) {
+				ctx.clearRect(0, 0, canvasRef.width, canvasRef.height);
 				ctx.drawImage(frame.bitmap, 0, 0);
 			}
 		}

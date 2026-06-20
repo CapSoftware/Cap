@@ -138,10 +138,11 @@ export const AboutPage = () => {
 									servers.
 								</p>
 								<p>
-									You can connect your own S3-compatible storage and keep every
-									recording on infrastructure you control. No vendor lock-in, no
-									data hostage situations, no surprises. Your recordings stay
-									yours, stored where you decide, accessible on your terms.
+									You can connect your own Google Drive or S3-compatible storage
+									and keep every recording on infrastructure you control. No
+									vendor lock-in, no data hostage situations, no surprises. Your
+									recordings stay yours, stored where you decide, accessible on
+									your terms.
 								</p>
 							</div>
 						</section>

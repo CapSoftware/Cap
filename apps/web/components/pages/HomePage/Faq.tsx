@@ -10,16 +10,18 @@ const Faq = () => {
 						key={index.toString()}
 						className="group overflow-hidden rounded-xl border border-gray-5 bg-gray-1 text-gray-12 transition-colors duration-200 open:bg-blue-500 open:text-white hover:bg-gray-3 open:hover:bg-blue-500"
 					>
-						<summary className="flex cursor-pointer list-none items-center justify-between px-6 py-4 text-left marker:hidden [&::-webkit-details-marker]:hidden">
-							<p className="text-lg font-medium text-gray-12 group-open:text-gray-1">
-								{item.question}
-							</p>
-							<span className="ml-4 flex-shrink-0 text-2xl leading-none group-open:hidden">
-								+
-							</span>
-							<span className="ml-4 hidden flex-shrink-0 text-2xl leading-none text-gray-1 group-open:block">
-								-
-							</span>
+						<summary className="block cursor-pointer list-none px-6 py-4 text-left marker:hidden [&::-webkit-details-marker]:hidden">
+							<div className="flex items-center justify-between">
+								<p className="text-lg font-medium text-gray-12 group-open:text-gray-1">
+									{item.question}
+								</p>
+								<span className="ml-4 flex-shrink-0 text-2xl leading-none group-open:hidden">
+									+
+								</span>
+								<span className="ml-4 hidden flex-shrink-0 text-2xl leading-none text-gray-1 group-open:block">
+									-
+								</span>
+							</div>
 						</summary>
 						<p className="px-6 pb-4 text-gray-3">{item.answer}</p>
 					</details>

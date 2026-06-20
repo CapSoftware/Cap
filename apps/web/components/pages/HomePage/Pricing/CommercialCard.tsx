@@ -8,6 +8,7 @@ import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "@/components/Tooltip";
+import { WhenVisible } from "@/components/ui/WhenVisible";
 import { homepageCopy } from "../../../../data/homepage-copy";
 import { BillingToggle } from "./BillingToggle";
 import { CommercialArt, type CommercialArtRef } from "./CommercialArt";
@@ -65,7 +66,9 @@ export const CommercialCard = () => {
 			className="flex flex-col p-8 rounded-2xl border bg-gray-1 border-gray-5"
 		>
 			<div className="mb-4 size-14 -ml-3">
-				<CommercialArt ref={artRef} />
+				<WhenVisible className="size-full">
+					<CommercialArt ref={artRef} />
+				</WhenVisible>
 			</div>
 			<div className="flex gap-1.5 items-center">
 				<h3 className="text-lg font-semibold text-gray-12">{copy.title}</h3>

@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { getSafeNextPath } from "../safe-next";
 
 export function VerifyOTPForm({
 	email,
@@ -71,14 +72,17 @@ export function VerifyOTPForm({
 	};
 
 	const normalizedEmail = email.toLowerCase();
+	const getNextPath = () =>
+		next ? getSafeNextPath(next, window.location.origin) : "/dashboard";
 
 	const handleVerify = useMutation({
 		mutationFn: async (pastedCode?: string) => {
 			const otpCode = pastedCode ?? code.join("");
 			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
+			const nextPath = getNextPath();
 
 			await fetch(
-				`/api/auth/callback/email?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent(next || "/dashboard")}`,
+				`/api/auth/callback/email?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent(nextPath)}`,
 			);
 
 			const sessionRes = await fetch("/api/auth/session");
@@ -90,8 +94,9 @@ export function VerifyOTPForm({
 			}
 		},
 		onSuccess: async () => {
+			const nextPath = getNextPath();
 			router.refresh();
-			router.replace(next || "/dashboard");
+			router.replace(nextPath);
 		},
 		onError: (e) => {
 			if (typeof e === "string") {

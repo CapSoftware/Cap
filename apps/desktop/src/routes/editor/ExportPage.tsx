@@ -760,14 +760,6 @@ export function ExportPage() {
 					)}
 				>
 					{ostype() === "macos" && <div class="h-full w-16" />}
-					<Button
-						variant="gray"
-						onClick={handleBack}
-						class="flex items-center gap-1.5"
-					>
-						<IconLucideArrowLeft class="size-4" />
-						<span>Back to Editor</span>
-					</Button>
 					<div data-tauri-drag-region class="flex-1 h-full" />
 					{ostype() === "windows" && <CaptionControlsWindows11 />}
 				</div>
@@ -900,6 +892,14 @@ export function ExportPage() {
 				</div>
 
 				<div class="w-[400px] border-l border-gray-3 flex flex-col bg-gray-1 dark:bg-gray-2">
+					<button
+						type="button"
+						onClick={handleBack}
+						class="flex flex-none gap-2 items-center px-4 w-full h-16 text-sm font-medium border-b transition-colors text-gray-12 border-gray-3 hover:bg-gray-3"
+					>
+						<IconCapMoveLeft class="size-4 text-gray-11" />
+						Back to editor
+					</button>
 					<div class="flex-1 overflow-y-auto p-4 space-y-5">
 						<Field name="Destination" icon={<IconCapUpload class="size-4" />}>
 							<div class="flex gap-1.5">
@@ -1380,13 +1380,6 @@ export function ExportPage() {
 									<IconCapLink class="size-4" />
 									<span>Sign in to share</span>
 								</SignInButton>
-								<button
-									type="button"
-									class="text-xs font-medium text-gray-12 transition-colors hover:underline underline-offset-2"
-									onClick={handleBack}
-								>
-									Back to Editor
-								</button>
 							</div>
 						) : (
 							<div class="flex flex-col items-center gap-2.5">
@@ -1419,13 +1412,6 @@ export function ExportPage() {
 										</>
 									)}
 								</Button>
-								<button
-									type="button"
-									class="text-xs font-medium text-gray-12 transition-colors hover:underline underline-offset-2"
-									onClick={handleBack}
-								>
-									Back to Editor
-								</button>
 							</div>
 						)}
 					</div>
@@ -1708,8 +1694,8 @@ export function ExportPage() {
 											handleBack();
 										}}
 									>
-										<IconLucideArrowLeft class="size-4" />
-										Back to Editor
+										<IconCapMoveLeft class="size-4" />
+										Back to editor
 									</Button>
 								</div>
 							</Show>

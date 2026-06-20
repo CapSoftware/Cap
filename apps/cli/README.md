@@ -81,7 +81,18 @@ step.
 - `cap upload` — upload a `.cap` project or video file and get a shareable link.
 - `cap update` — download and install the latest Cap Desktop bundle, then repair the `cap` shim.
 - `cap doctor` / `version` / `guide` — diagnostics, version info, and the agent capability manifest.
+- `cap automations list` — list the automation rules configured in Cap Desktop that the CLI honors.
 - `cap desktop status|install-cli|uninstall-cli` — manage the `cap` shim on PATH.
 - `cap completions <shell>` — shell completion scripts (bash/zsh/fish/powershell).
+
+## Automations
+
+Automations are `trigger → (conditions) → actions` rules authored in Cap Desktop (Settings →
+Automations) and persisted to its store. Because the CLI shares that store (and the `cap-automation`
+engine), it runs the same rules automatically after `cap screenshot`, a `cap record` finish, and
+`cap upload` — e.g. "on screenshot, save a copy to `~/Shots` and POST a webhook". Clipboard, OCR,
+notification, and open-editor actions are desktop-only and are skipped on the CLI; everything else
+(save, export, upload, run command, webhook, reveal, apply preset, delete) runs. Inspect the active
+rules with `cap automations list --json`.
 
 Run `cap --help` or `cap <command> --help` for full flag documentation.

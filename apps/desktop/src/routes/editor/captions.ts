@@ -17,6 +17,32 @@ export const DEFAULT_CAPTION_LANGUAGE = "auto";
 export const CAPTION_MODEL_FOLDER = "transcription_models";
 export const PARAKEET_DIR_MODELS = new Set(["best", "best-max"]);
 
+// Transcription can stretch a trailing word's end across a following silence,
+// which both keeps the rendered caption stuck on screen and duplicates the word
+// across timeline cuts once projected. Cap each spoken word so the projected
+// track reflects speech; this also repairs already-transcribed recordings when
+// the track is re-derived. Kept in sync with MAX_CAPTION_WORD_DURATION in the
+// Rust transcription and rendering layers.
+export const MAX_CAPTION_WORD_DURATION = 2.5;
+
+function clampCaptionSegmentWords(segment: CaptionSegment): CaptionSegment {
+	const words = segment.words;
+	if (!words || words.length === 0) return segment;
+
+	const clampedWords = words.map((word) => ({
+		...word,
+		end: Math.min(word.end, word.start + MAX_CAPTION_WORD_DURATION),
+	}));
+
+	const lastWordEnd = clampedWords[clampedWords.length - 1]?.end ?? segment.end;
+
+	return {
+		...segment,
+		end: Math.min(segment.end, lastWordEnd),
+		words: clampedWords,
+	};
+}
+
 export function supportsParakeetTranscription() {
 	return !(osType() === "macos" && arch() === "x86_64");
 }
@@ -110,12 +136,24 @@ function mapTimeRangeWithinMapping(
 	};
 }
 
+const CAPTION_EDL_SEPARATOR = "::edl";
+
 function mappedCaptionSegmentId(
 	baseId: string,
 	index: number,
 	total: number,
 ): string {
-	return total === 1 ? baseId : `${baseId}-${index}`;
+	return total === 1 ? baseId : `${baseId}${CAPTION_EDL_SEPARATOR}${index}`;
+}
+
+/**
+ * Recovers the originating source caption id from a derived track segment id. A
+ * single source caption can be split into several track segments when it spans
+ * timeline cuts; they all share the same source id.
+ */
+export function sourceCaptionId(trackId: string): string {
+	const index = trackId.indexOf(CAPTION_EDL_SEPARATOR);
+	return index === -1 ? trackId : trackId.slice(0, index);
 }
 
 export function mapCaptionsToEditedTimeline(
@@ -123,8 +161,10 @@ export function mapCaptionsToEditedTimeline(
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
 ): CaptionSegment[] {
+	const sanitizedSegments = rawSegments.map(clampCaptionSegmentWords);
+
 	if (timelineSegments.length === 0 || recordingSegments.length === 0) {
-		return rawSegments;
+		return sanitizedSegments;
 	}
 
 	const mappings = buildSourceToEditedMappings(
@@ -134,7 +174,7 @@ export function mapCaptionsToEditedTimeline(
 
 	const result: CaptionSegment[] = [];
 
-	for (const caption of rawSegments) {
+	for (const caption of sanitizedSegments) {
 		const mappedCaptionSegments = mappings.flatMap((mapping) => {
 			if (caption.words && caption.words.length > 0) {
 				const mappedWords = caption.words.flatMap((word) => {
@@ -164,10 +204,7 @@ export function mapCaptionsToEditedTimeline(
 						...caption,
 						start: mappedWords[0]?.start ?? caption.start,
 						end: mappedWords[mappedWords.length - 1]?.end ?? caption.end,
-						text: mappedWords
-							.map((word) => word.text.trim())
-							.filter((text) => text.length > 0)
-							.join(" "),
+						text: getCaptionTextFromWords(mappedWords),
 						words: mappedWords,
 					},
 				];
@@ -209,19 +246,165 @@ export function mapCaptionsToEditedTimeline(
 export function createCaptionTrackSegments(
 	segments: CaptionSegment[],
 ): CaptionTrackSegment[] {
-	return segments.map((segment) => ({
-		id: segment.id,
-		start: segment.start,
-		end: segment.end,
-		text: segment.text,
-		words: segment.words ?? [],
-		fadeDurationOverride: null,
-		lingerDurationOverride: null,
-		positionOverride: null,
-		colorOverride: null,
-		backgroundColorOverride: null,
-		fontSizeOverride: null,
-	}));
+	return segments.map((rawSegment) => {
+		const segment = clampCaptionSegmentWords(rawSegment);
+		return {
+			id: segment.id,
+			start: segment.start,
+			end: segment.end,
+			text: segment.text,
+			words: segment.words ?? [],
+			fadeDurationOverride: null,
+			lingerDurationOverride: null,
+			positionOverride: null,
+			colorOverride: null,
+			backgroundColorOverride: null,
+			fontSizeOverride: null,
+		};
+	});
+}
+
+type CaptionTrackOverrides = Pick<
+	CaptionTrackSegment,
+	| "fadeDurationOverride"
+	| "lingerDurationOverride"
+	| "positionOverride"
+	| "colorOverride"
+	| "backgroundColorOverride"
+	| "fontSizeOverride"
+>;
+
+const EMPTY_CAPTION_OVERRIDES: CaptionTrackOverrides = {
+	fadeDurationOverride: null,
+	lingerDurationOverride: null,
+	positionOverride: null,
+	colorOverride: null,
+	backgroundColorOverride: null,
+	fontSizeOverride: null,
+};
+
+/**
+ * Projects the source-time caption master through the current edit list to
+ * produce the output-time render track. This is the single source of truth for
+ * `timeline.captionSegments`: deleting sections, trimming, reordering, or
+ * inserting clips keeps captions aligned 1:1 without re-transcription. Per
+ * source-caption style overrides are carried across by source id so manual
+ * styling survives re-derivation.
+ */
+export function deriveCaptionTrackSegments(
+	sourceSegments: CaptionSegment[],
+	timelineSegments: TimelineSegment[],
+	recordingSegments: SegmentRecordings[],
+	previousTrack: CaptionTrackSegment[] = [],
+): CaptionTrackSegment[] {
+	const overridesBySourceId = new Map<string, CaptionTrackOverrides>();
+	for (const segment of previousTrack) {
+		const id = sourceCaptionId(segment.id);
+		if (!overridesBySourceId.has(id)) {
+			overridesBySourceId.set(id, {
+				fadeDurationOverride: segment.fadeDurationOverride ?? null,
+				lingerDurationOverride: segment.lingerDurationOverride ?? null,
+				positionOverride: segment.positionOverride ?? null,
+				colorOverride: segment.colorOverride ?? null,
+				backgroundColorOverride: segment.backgroundColorOverride ?? null,
+				fontSizeOverride: segment.fontSizeOverride ?? null,
+			});
+		}
+	}
+
+	const mapped = mapCaptionsToEditedTimeline(
+		sourceSegments,
+		timelineSegments,
+		recordingSegments,
+	);
+
+	return mapped
+		.slice()
+		.sort((a, b) => a.start - b.start)
+		.map((segment) => ({
+			id: segment.id,
+			start: segment.start,
+			end: segment.end,
+			text: segment.text,
+			words: segment.words ?? [],
+			...(overridesBySourceId.get(sourceCaptionId(segment.id)) ??
+				EMPTY_CAPTION_OVERRIDES),
+		}));
+}
+
+/**
+ * Maps a point in source/recording time to the first output-time position where
+ * it appears in the edited timeline (used to seek from the transcript).
+ */
+export function mapSourceTimeToEdited(
+	sourceTime: number,
+	timelineSegments: TimelineSegment[],
+	recordingSegments: SegmentRecordings[],
+): number | null {
+	const mappings = buildSourceToEditedMappings(
+		timelineSegments,
+		recordingSegments,
+	);
+	for (const mapping of mappings) {
+		if (sourceTime >= mapping.sourceStart && sourceTime <= mapping.sourceEnd) {
+			return (
+				mapping.editedStart +
+				(sourceTime - mapping.sourceStart) / mapping.timescale
+			);
+		}
+	}
+	return null;
+}
+
+/**
+ * Maps a source/recording time range to the output-time ranges it occupies in
+ * the edited timeline. A single source range can map to zero ranges (fully cut)
+ * or several (split across non-contiguous clips).
+ */
+export function mapSourceRangeToEdited(
+	sourceStart: number,
+	sourceEnd: number,
+	timelineSegments: TimelineSegment[],
+	recordingSegments: SegmentRecordings[],
+): MappedTimeRange[] {
+	const mappings = buildSourceToEditedMappings(
+		timelineSegments,
+		recordingSegments,
+	);
+	const ranges: MappedTimeRange[] = [];
+	for (const mapping of mappings) {
+		const mapped = mapTimeRangeWithinMapping(sourceStart, sourceEnd, mapping);
+		if (mapped) ranges.push(mapped);
+	}
+	return ranges;
+}
+
+/**
+ * Maps a point in output/edited time back to source/recording time (used to
+ * translate edits made against the rendered timeline onto the source caption
+ * master).
+ */
+export function mapEditedTimeToSource(
+	editedTime: number,
+	timelineSegments: TimelineSegment[],
+	recordingSegments: SegmentRecordings[],
+): number | null {
+	const mappings = buildSourceToEditedMappings(
+		timelineSegments,
+		recordingSegments,
+	);
+	for (const mapping of mappings) {
+		const editedEnd =
+			mapping.editedStart +
+			(mapping.sourceEnd - mapping.sourceStart) / mapping.timescale;
+		if (editedTime >= mapping.editedStart && editedTime <= editedEnd) {
+			return (
+				mapping.sourceStart +
+				(editedTime - mapping.editedStart) * mapping.timescale
+			);
+		}
+	}
+	return null;
 }
 
 export function applyCaptionResultToProject<
@@ -270,14 +453,14 @@ export function applyCaptionResultToProject<
 	}
 	const timeline = currentProject.timeline;
 
-	const mappedSegments = mapCaptionsToEditedTimeline(
+	captions.segments = rawSegments;
+	captions.sourceTimed = true;
+	timeline.captionSegments = deriveCaptionTrackSegments(
 		rawSegments,
 		timeline.segments,
 		recordingSegments,
+		timeline.captionSegments ?? [],
 	);
-
-	captions.segments = mappedSegments;
-	timeline.captionSegments = createCaptionTrackSegments(mappedSegments);
 }
 
 export async function getModelPath(modelName: string): Promise<string> {
@@ -301,11 +484,47 @@ export async function transcribeEditorCaptions(
 	return await commands.transcribeAudio(videoPath, modelPath, language, engine);
 }
 
+const CAPTION_ATTACHING_PUNCTUATION = new Set([
+	",",
+	".",
+	"!",
+	"?",
+	";",
+	":",
+	"%",
+	")",
+	"]",
+	"}",
+	"'",
+	"’",
+	"、",
+	"。",
+	"！",
+	"？",
+	"；",
+	"：",
+	"，",
+]);
+
+function captionTokenAttachesToPrevious(text: string) {
+	const firstChar = text.trim().charAt(0);
+	return firstChar.length > 0 && CAPTION_ATTACHING_PUNCTUATION.has(firstChar);
+}
+
 export function getCaptionTextFromWords(words: CaptionWord[]) {
-	return words
-		.map((word) => word.text.trim())
-		.filter((word) => word.length > 0)
-		.join(" ");
+	let text = "";
+
+	for (const word of words) {
+		const wordText = word.text.trim();
+		if (wordText.length === 0) continue;
+
+		if (text.length > 0 && !captionTokenAttachesToPrevious(wordText)) {
+			text += " ";
+		}
+		text += wordText;
+	}
+
+	return text;
 }
 
 export function syncCaptionWordsWithText(
@@ -382,6 +601,19 @@ export function getCaptionGenerationErrorMessage(error: unknown) {
 if (import.meta.vitest) {
 	const { describe, expect, it } = import.meta.vitest;
 
+	describe("getCaptionTextFromWords", () => {
+		it("attaches punctuation tokens to the previous word", () => {
+			expect(
+				getCaptionTextFromWords([
+					{ text: "test", start: 0, end: 0.2 },
+					{ text: ",", start: 0.2, end: 0.3 },
+					{ text: "test", start: 0.3, end: 0.6 },
+					{ text: ".", start: 0.6, end: 0.7 },
+				]),
+			).toBe("test, test.");
+		});
+	});
+
 	describe("mapCaptionsToEditedTimeline", () => {
 		it("splits caption words across retained timeline ranges", () => {
 			const result = mapCaptionsToEditedTimeline(
@@ -406,19 +638,48 @@ if (import.meta.vitest) {
 
 			expect(result).toHaveLength(2);
 			expect(result[0]).toEqual({
-				id: "caption-0",
+				id: "caption::edl0",
 				start: 0.4,
 				end: 0.6,
 				text: "hello",
 				words: [{ text: "hello", start: 0.4, end: 0.6 }],
 			});
-			expect(result[1]?.id).toBe("caption-1");
+			expect(result[1]?.id).toBe("caption::edl1");
 			expect(result[1]?.text).toBe("world");
 			expect(result[1]?.start).toBeCloseTo(1.1);
 			expect(result[1]?.end).toBeCloseTo(1.3);
 			expect(result[1]?.words?.[0]?.text).toBe("world");
 			expect(result[1]?.words?.[0]?.start).toBeCloseTo(1.1);
 			expect(result[1]?.words?.[0]?.end).toBeCloseTo(1.3);
+		});
+
+		it("clamps an inflated trailing word so it neither sticks nor duplicates across cuts", () => {
+			const result = mapCaptionsToEditedTimeline(
+				[
+					{
+						id: "caption",
+						start: 0.4,
+						end: 16.4,
+						text: "a few seconds.",
+						words: [
+							{ text: "a", start: 0.4, end: 0.5 },
+							{ text: "few", start: 0.5, end: 0.8 },
+							{ text: "seconds.", start: 0.8, end: 16.4 },
+						],
+					},
+				],
+				[
+					{ start: 0, end: 1.5, timescale: 1, recordingSegment: 0 },
+					{ start: 10, end: 12, timescale: 1, recordingSegment: 0 },
+				],
+				[{ display: { duration: 20 } } as SegmentRecordings],
+			);
+
+			expect(result).toHaveLength(1);
+			expect(result[0]?.id).toBe("caption");
+			expect(result[0]?.text).toBe("a few seconds.");
+			expect(result[0]?.words?.[2]?.text).toBe("seconds.");
+			expect(result[0]?.words?.[2]?.end).toBeCloseTo(1.5);
 		});
 
 		it("splits captions without word timing across retained timeline ranges", () => {
@@ -441,20 +702,92 @@ if (import.meta.vitest) {
 
 			expect(result).toEqual([
 				{
-					id: "caption-0",
+					id: "caption::edl0",
 					start: 0.25,
 					end: 1,
 					text: "hello world",
 					words: [],
 				},
 				{
-					id: "caption-1",
+					id: "caption::edl1",
 					start: 1,
 					end: 1.5,
 					text: "hello world",
 					words: [],
 				},
 			]);
+		});
+	});
+
+	describe("deriveCaptionTrackSegments", () => {
+		const sourceSegments: CaptionSegment[] = [
+			{
+				id: "capA",
+				start: 1,
+				end: 2,
+				text: "a",
+				words: [{ text: "a", start: 1, end: 2 }],
+			},
+			{
+				id: "capB",
+				start: 6,
+				end: 7,
+				text: "b",
+				words: [{ text: "b", start: 6, end: 7 }],
+			},
+		];
+		const recordings = [{ display: { duration: 10 } } as SegmentRecordings];
+
+		it("follows clip reordering to keep captions on their content", () => {
+			const reordered: TimelineSegment[] = [
+				{ start: 5, end: 8, timescale: 1, recordingSegment: 0 },
+				{ start: 0, end: 3, timescale: 1, recordingSegment: 0 },
+			];
+
+			const track = deriveCaptionTrackSegments(
+				sourceSegments,
+				reordered,
+				recordings,
+			);
+
+			expect(track.map((s) => s.id)).toEqual(["capB", "capA"]);
+			expect(track[0]?.start).toBeCloseTo(1);
+			expect(track[0]?.end).toBeCloseTo(2);
+			expect(track[1]?.start).toBeCloseTo(4);
+			expect(track[1]?.end).toBeCloseTo(5);
+		});
+
+		it("drops captions whose content was cut out", () => {
+			const cut: TimelineSegment[] = [
+				{ start: 0, end: 3, timescale: 1, recordingSegment: 0 },
+			];
+
+			const track = deriveCaptionTrackSegments(sourceSegments, cut, recordings);
+
+			expect(track.map((s) => s.id)).toEqual(["capA"]);
+		});
+
+		it("carries style overrides across re-derivation by source id", () => {
+			const identity: TimelineSegment[] = [
+				{ start: 0, end: 10, timescale: 1, recordingSegment: 0 },
+			];
+
+			const previous = deriveCaptionTrackSegments(
+				sourceSegments,
+				identity,
+				recordings,
+			).map((segment) =>
+				segment.id === "capA" ? { ...segment, fontSizeOverride: 42 } : segment,
+			);
+
+			const rederived = deriveCaptionTrackSegments(
+				sourceSegments,
+				identity,
+				recordings,
+				previous,
+			);
+
+			expect(rederived.find((s) => s.id === "capA")?.fontSizeOverride).toBe(42);
 		});
 	});
 }

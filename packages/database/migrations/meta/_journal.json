@@ -218,6 +218,13 @@
 			"when": 1780940100362,
 			"tag": "0030_add_folder_settings",
 			"breakpoints": true
+		},
+		{
+			"idx": 31,
+			"version": "5",
+			"when": 1781271269353,
+			"tag": "0031_add_auth_api_keys_user_created_index",
+			"breakpoints": true
 		}
 	]
 }

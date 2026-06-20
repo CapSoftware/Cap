@@ -15,6 +15,7 @@ export const FONT_OPTIONS = [
 ];
 
 export const CAPTION_POSITION_OPTIONS = [
+	{ value: "manual", label: "Manual" },
 	{ value: "top-left", label: "Top Left" },
 	{ value: "top-center", label: "Top Center" },
 	{ value: "top-right", label: "Top Right" },
@@ -36,6 +37,17 @@ export const TEXT_WEIGHT_OPTIONS = [
 	{ label: "Normal", value: 400 },
 	{ label: "Medium", value: 500 },
 	{ label: "Bold", value: 700 },
+];
+
+export const CAPTION_ANIMATION_OPTIONS = [
+	{ value: "none", label: "None" },
+	{ value: "bounce", label: "Bounce" },
+	{ value: "pop", label: "Pop" },
+];
+
+export const CAPTION_HIGHLIGHT_STYLE_OPTIONS = [
+	{ value: "color", label: "Color" },
+	{ value: "pill", label: "Pill" },
 ];
 
 export function getTextWeightLabel(weight: number | null | undefined) {

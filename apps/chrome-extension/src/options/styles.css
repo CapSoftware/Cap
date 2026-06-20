@@ -1,0 +1,247 @@
+@import "../shared/paper.css";
+
+#root {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+}
+
+.slider-line {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+}
+
+.line-1 {
+	animation: draw 0.45s ease 0.15s forwards;
+}
+
+.line-2 {
+	animation: draw 0.45s ease 0.3s forwards;
+}
+
+.line-3 {
+	animation: draw 0.45s ease 0.45s forwards;
+}
+
+.knob-circle {
+	fill: var(--paper);
+	stroke: var(--ink);
+	stroke-width: 4.5;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.knob-accent {
+	stroke: var(--accent);
+}
+
+.slider-knob {
+	opacity: 0;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: spark-pop 0.4s ease forwards;
+}
+
+.knob-1 {
+	animation-delay: 0.7s;
+}
+
+.knob-2 {
+	animation:
+		spark-pop 0.4s ease 0.85s forwards,
+		knob-tune 5s ease-in-out 1.8s infinite;
+}
+
+.knob-3 {
+	animation-delay: 1s;
+}
+
+.sheet {
+	width: min(560px, calc(100vw - 48px));
+	margin-top: 32px;
+	display: grid;
+	gap: 14px;
+	justify-items: stretch;
+	text-align: left;
+}
+
+.card-1 {
+	animation-delay: 0.2s;
+}
+
+.card-2 {
+	animation-delay: 0.3s;
+}
+
+.card-3 {
+	animation-delay: 0.4s;
+}
+
+.recovery-lede {
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--ink-soft);
+}
+
+.recovery-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: grid;
+	gap: 10px;
+}
+
+.recovery-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 12px 14px;
+	border: 1.5px solid var(--track);
+	border-radius: 12px;
+	background: #ffffff;
+}
+
+.recovery-meta {
+	display: grid;
+	gap: 2px;
+	font-size: 13px;
+}
+
+.recovery-title {
+	font-weight: 500;
+	color: var(--ink);
+}
+
+.recovery-detail {
+	color: var(--ink-soft);
+}
+
+.recovery-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.cta.small {
+	min-height: 32px;
+	padding: 0 14px;
+	font-size: 13px;
+}
+
+.recovery-link {
+	color: inherit;
+	font-weight: 500;
+}
+
+.field-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 12px;
+}
+
+.checks {
+	display: grid;
+	gap: 12px;
+	padding-top: 4px;
+}
+
+.doodle-check {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 14px;
+	color: var(--ink);
+	cursor: pointer;
+}
+
+.doodle-check input {
+	position: absolute;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.doodle-check-box {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	flex: 0 0 auto;
+	border: 1.5px solid var(--ink);
+	border-radius: 7px;
+	background: #ffffff;
+}
+
+.doodle-check-box svg {
+	width: 14px;
+	height: 14px;
+	overflow: visible;
+}
+
+.doodle-check-mark {
+	fill: none;
+	stroke: var(--accent);
+	stroke-width: 3.5;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	transition: stroke-dashoffset 0.25s ease;
+}
+
+.doodle-check input:checked + .doodle-check-box .doodle-check-mark {
+	stroke-dashoffset: 0;
+}
+
+.doodle-check input:focus-visible + .doodle-check-box {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	animation: fade-up 0.5s ease 0.4s both;
+}
+
+.actions .paper-pill {
+	min-height: 36px;
+	padding: 4px 16px;
+}
+
+@keyframes knob-tune {
+	0%,
+	100% {
+		transform: translateX(0);
+	}
+	35% {
+		transform: translateX(-16px);
+	}
+	70% {
+		transform: translateX(8px);
+	}
+}
+
+@media (max-width: 560px) {
+	.field-grid {
+		grid-template-columns: 1fr;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.actions,
+	.slider-line {
+		animation-duration: 0.01ms;
+		animation-delay: 0s;
+	}
+
+	.slider-knob,
+	.knob-2 {
+		animation: fade-in 0.01ms forwards;
+	}
+}

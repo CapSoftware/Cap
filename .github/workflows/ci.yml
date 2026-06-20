@@ -35,6 +35,7 @@ jobs:
             rust:
               - '.cargo/**'
               - '.github/**'
+              - 'apps/cli/**'
               - 'crates/**'
               - 'apps/desktop/src-tauri/**'
               - 'Cargo.toml'

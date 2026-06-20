@@ -85,6 +85,25 @@
 				"dialogImagePath": "assets/wix-dialog.bmp"
 			}
 		},
+		"linux": {
+			"deb": {
+				"depends": [
+					"libwebkit2gtk-4.1-0",
+					"libgtk-3-0",
+					"libayatana-appindicator3-1"
+				],
+				"files": {
+					"/usr/lib/cap/libavcodec.so.61": "../../../target/native-deps/cap-deb-libs/libavcodec.so.61",
+					"/usr/lib/cap/libavformat.so.61": "../../../target/native-deps/cap-deb-libs/libavformat.so.61",
+					"/usr/lib/cap/libavutil.so.59": "../../../target/native-deps/cap-deb-libs/libavutil.so.59",
+					"/usr/lib/cap/libavfilter.so.10": "../../../target/native-deps/cap-deb-libs/libavfilter.so.10",
+					"/usr/lib/cap/libavdevice.so.61": "../../../target/native-deps/cap-deb-libs/libavdevice.so.61",
+					"/usr/lib/cap/libswscale.so.8": "../../../target/native-deps/cap-deb-libs/libswscale.so.8",
+					"/usr/lib/cap/libswresample.so.5": "../../../target/native-deps/cap-deb-libs/libswresample.so.5",
+					"/usr/lib/cap/libpostproc.so.58": "../../../target/native-deps/cap-deb-libs/libpostproc.so.58"
+				}
+			}
+		},
 		"fileAssociations": [
 			{
 				"ext": ["cap"],

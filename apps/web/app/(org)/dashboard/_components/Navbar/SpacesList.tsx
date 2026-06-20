@@ -205,124 +205,110 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 				</Link>
 			</Tooltip>
 
-			<div className="overflow-hidden">
-				<div
-					className={clsx(
-						"transition-all duration-300",
-						showAllSpaces && !sidebarCollapsed
-							? "max-h-[calc(100vh-450px)] overflow-y-auto"
-							: "max-h-max overflow-hidden",
-					)}
-					style={{
-						scrollbarWidth: "none",
-						msOverflowStyle: "none",
-						WebkitOverflowScrolling: "touch",
-					}}
-				>
-					{displayedSpaces.map((space: Spaces) => {
-						return (
-							<Tooltip
-								position="right"
-								disable={!sidebarCollapsed}
-								content={space.name}
-								key={space.id}
+			<div>
+				{displayedSpaces.map((space: Spaces) => {
+					return (
+						<Tooltip
+							position="right"
+							disable={!sidebarCollapsed}
+							content={space.name}
+							key={space.id}
+						>
+							<li
+								className={clsx(
+									"relative transition-colors border border-transparent overflow-visible duration-150 rounded-xl mb-1.5",
+									activeSpaceParams(space.id)
+										? "hover:bg-gray-3 cursor-default"
+										: "cursor-pointer",
+								)}
+								onDragOver={(e) => handleDragOver(e, space.id)}
+								onDragLeave={handleDragLeave}
+								onDrop={(e) => handleDrop(e, space.id)}
 							>
-								<li
-									className={clsx(
-										"relative transition-colors border border-transparent overflow-visible duration-150 rounded-xl mb-1.5",
-										activeSpaceParams(space.id)
-											? "hover:bg-gray-3 cursor-default"
-											: "cursor-pointer",
-									)}
-									onDragOver={(e) => handleDragOver(e, space.id)}
-									onDragLeave={handleDragLeave}
-									onDrop={(e) => handleDrop(e, space.id)}
-								>
-									{activeSpaceParams(space.id) && (
-										<motion.div
-											layoutId="navlinks"
-											className={clsx(
-												"absolute rounded-xl bg-gray-3",
-												sidebarCollapsed
-													? "inset-0 right-0 left-0 mx-auto"
-													: "inset-0",
-											)}
-											style={{ willChange: "transform" }}
-											transition={{
-												layout: {
-													type: "tween",
-													duration: 0.1,
-												},
-											}}
-										/>
-									)}
-									<AnimatePresence>
-										{activeDropTarget === space.id && (
-											<motion.div
-												className="absolute inset-0 z-10 rounded-xl border transition-all duration-200 pointer-events-none border-blue-10 bg-gray-4"
-												initial={{ opacity: 0 }}
-												animate={{ opacity: 1 }}
-												exit={{ opacity: 0 }}
-												transition={{ duration: 0.2 }}
-											/>
-										)}
-									</AnimatePresence>
-									<Link
-										href={`/dashboard/spaces/${space.id}`}
+								{activeSpaceParams(space.id) && (
+									<motion.div
+										layoutId="navlinks"
 										className={clsx(
-											"flex relative z-10 items-center px-2 py-2 truncate rounded-xl transition-colors group",
-											sidebarCollapsed ? "justify-center" : "",
-											activeSpaceParams(space.id)
-												? "hover:bg-gray-3"
-												: "hover:bg-gray-2",
-											space.primary ? "h-10" : "h-fit",
+											"absolute rounded-xl bg-gray-3",
+											sidebarCollapsed
+												? "inset-0 right-0 left-0 mx-auto"
+												: "inset-0",
 										)}
-									>
-										<SignedImageUrl
-											image={space.iconUrl}
-											name={space.name}
-											letterClass={clsx(
-												sidebarCollapsed ? "text-sm" : "text-[11px]",
-											)}
-											className={clsx(
-												"relative flex-shrink-0",
-												sidebarCollapsed ? "size-6" : "size-5",
-											)}
+										style={{ willChange: "transform" }}
+										transition={{
+											layout: {
+												type: "tween",
+												duration: 0.1,
+											},
+										}}
+									/>
+								)}
+								<AnimatePresence>
+									{activeDropTarget === space.id && (
+										<motion.div
+											className="absolute inset-0 z-10 rounded-xl border transition-all duration-200 pointer-events-none border-blue-10 bg-gray-4"
+											initial={{ opacity: 0 }}
+											animate={{ opacity: 1 }}
+											exit={{ opacity: 0 }}
+											transition={{ duration: 0.2 }}
 										/>
-										{!sidebarCollapsed && (
-											<>
-												<span className="ml-2.5 text-sm truncate transition-colors text-gray-11 group-hover:text-gray-12">
-													{space.name}
-												</span>
-												{space.hasPassword && (
-													<FontAwesomeIcon
-														icon={faLock}
-														className="ml-1.5 size-2.5 text-amber-600"
-													/>
-												)}
-												{!space.primary && space.currentUserCanManage && (
-													<button
-														type="button"
-														onClick={(e) => handleDeleteSpace(e, space)}
-														className={
-															"flex justify-center items-center ml-auto rounded-full opacity-0 transition-all group size-6 group-hover:opacity-100 hover:bg-gray-4"
-														}
-														aria-label={`Delete ${space.name} space`}
-													>
-														<FontAwesomeIcon
-															icon={faXmark}
-															className="size-3.5 text-gray-12"
-														/>
-													</button>
-												)}
-											</>
+									)}
+								</AnimatePresence>
+								<Link
+									href={`/dashboard/spaces/${space.id}`}
+									className={clsx(
+										"flex relative z-10 items-center px-2 py-2 truncate rounded-xl transition-colors group",
+										sidebarCollapsed ? "justify-center" : "",
+										activeSpaceParams(space.id)
+											? "hover:bg-gray-3"
+											: "hover:bg-gray-2",
+										space.primary ? "h-10" : "h-fit",
+									)}
+								>
+									<SignedImageUrl
+										image={space.iconUrl}
+										name={space.name}
+										letterClass={clsx(
+											sidebarCollapsed ? "text-sm" : "text-[11px]",
 										)}
-									</Link>
-								</li>
-							</Tooltip>
-						);
-					})}
-				</div>
+										className={clsx(
+											"relative flex-shrink-0",
+											sidebarCollapsed ? "size-6" : "size-5",
+										)}
+									/>
+									{!sidebarCollapsed && (
+										<>
+											<span className="ml-2.5 text-sm truncate transition-colors text-gray-11 group-hover:text-gray-12">
+												{space.name}
+											</span>
+											{space.hasPassword && (
+												<FontAwesomeIcon
+													icon={faLock}
+													className="ml-1.5 size-2.5 text-amber-600"
+												/>
+											)}
+											{!space.primary && space.currentUserCanManage && (
+												<button
+													type="button"
+													onClick={(e) => handleDeleteSpace(e, space)}
+													className={
+														"flex justify-center items-center ml-auto rounded-full opacity-0 transition-all group size-6 group-hover:opacity-100 hover:bg-gray-4"
+													}
+													aria-label={`Delete ${space.name} space`}
+												>
+													<FontAwesomeIcon
+														icon={faXmark}
+														className="size-3.5 text-gray-12"
+													/>
+												</button>
+											)}
+										</>
+									)}
+								</Link>
+							</li>
+						</Tooltip>
+					);
+				})}
 			</div>
 
 			<SpaceToggleControl

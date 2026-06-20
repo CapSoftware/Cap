@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.5.1"
+version = "0.5.2"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -87,6 +87,7 @@ cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
+cap-automation = { path = "../../../crates/automation" }
 cap-cli-install = { path = "../../../crates/cli-install", features = ["specta"] }
 cap-enc-ffmpeg = { path = "../../../crates/enc-ffmpeg" }
 cap-media-info = { path = "../../../crates/media-info" }

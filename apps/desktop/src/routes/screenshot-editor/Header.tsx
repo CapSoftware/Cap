@@ -6,6 +6,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { createEffect, onCleanup, Suspense } from "solid-js";
+import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import IconCapCrop from "~icons/cap/crop";
 import IconCapTrash from "~icons/cap/trash";
@@ -99,6 +100,7 @@ export function Header() {
 		>
 			<div class="flex items-center gap-4">
 				{ostype() === "macos" && <div class="w-14" />}
+				{ostype() === "linux" && <CaptionControlsMacOS />}
 			</div>
 
 			<div class="flex items-center gap-2 absolute left-1/2 -translate-x-1/2">

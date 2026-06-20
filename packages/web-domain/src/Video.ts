@@ -13,6 +13,8 @@ import { UserId } from "./User.ts";
 export const VideoId = Schema.String.pipe(Schema.brand("VideoId"));
 export type VideoId = typeof VideoId.Type;
 
+export const FREE_PLAN_MAX_RECORDING_SECONDS = 5 * 60;
+
 // Purposefully doesn't include password as this is a public class
 export class Video extends Schema.Class<Video>("Video")({
 	id: VideoId,

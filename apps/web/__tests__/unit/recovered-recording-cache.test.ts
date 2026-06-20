@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock(
-	"@/app/(org)/dashboard/caps/components/web-recorder-dialog/recording-spool",
-	() => ({
-		recoverOrphanedRecordingSpools: vi.fn(),
-	}),
-);
+vi.mock("@cap/recorder-core/recording-spool", () => ({
+	RECORDING_SPOOL_LIVE_MIN_IDLE_MS: 3 * 60 * 1000,
+	recoverOrphanedRecordingSpools: vi.fn(),
+}));
 
 describe("recovered recording cache", () => {
 	afterEach(async () => {
@@ -18,11 +16,8 @@ describe("recovered recording cache", () => {
 
 	it("keeps undismissed recovered recordings available across repeated loads", async () => {
 		const recoverOrphanedRecordingSpools = vi.mocked(
-			(
-				await import(
-					"@/app/(org)/dashboard/caps/components/web-recorder-dialog/recording-spool"
-				)
-			).recoverOrphanedRecordingSpools,
+			(await import("@cap/recorder-core/recording-spool"))
+				.recoverOrphanedRecordingSpools,
 		);
 		recoverOrphanedRecordingSpools.mockResolvedValue([
 			{

@@ -256,6 +256,12 @@ fn build() -> Guide {
                 &[],
             ),
             cmd(
+                "automations list",
+                "List the automation rules configured in Cap Desktop (Settings > Automations) that the CLI honors after screenshot/record/upload.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
                 "completions",
                 "Print a shell completion script for bash/zsh/fish/powershell.",
                 OutputMode::TextOnly,
@@ -267,6 +273,9 @@ fn build() -> Guide {
              ProjectConfiguration, export NDJSON) preserve their original field casing.",
             "`cap completions <shell>` prints a shell completion script.",
             "Recording without --duration requires either --detach or an interactive terminal.",
+            "Automations authored in Cap Desktop run automatically after `cap screenshot`, `cap record` \
+             finishes, and `cap upload`. Clipboard/OCR/notification/editor actions are desktop-only and \
+             are skipped on the CLI. List them with `cap automations list`.",
         ],
     }
 }

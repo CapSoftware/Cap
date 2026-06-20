@@ -1,15 +1,21 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
-import { type JSX, memo } from "react";
+import { memo } from "react";
+import { WhenVisible } from "@/components/ui/WhenVisible";
+import { Fit, Layout, useRive } from "@/lib/rive";
 import { homepageCopy } from "../../../data/homepage-copy";
+
+type FeatureArt = {
+	artboard: string;
+	className: string;
+};
 
 type Feature = {
 	title: string;
 	description: string;
-	rive: JSX.Element;
+	art: FeatureArt;
 	relative?: {
 		top?: number;
 		bottom?: number;
@@ -18,117 +24,50 @@ type Feature = {
 	};
 };
 
-const VideoCaptureArt = memo(() => {
-	const { RiveComponent: VideoCaptureRive } = useRive({
+const BentoRive = memo(({ artboard }: { artboard: string }) => {
+	const { RiveComponent } = useRive({
 		src: "/rive/bento.riv",
-		artboard: "videocapture",
+		artboard,
 		animations: ["in"],
 		autoplay: true,
 		layout: new Layout({
 			fit: Fit.Contain,
 		}),
 	});
-	return (
-		<VideoCaptureRive className="w-full max-w-[420px] mx-auto h-[244px]" />
-	);
+
+	return <RiveComponent className="w-full h-full" />;
 });
 
-const StorageOptionsArt = memo(() => {
-	const { RiveComponent: StorageOptionsRive } = useRive({
-		src: "/rive/bento.riv",
+const BentoArt = ({ artboard, className }: FeatureArt) => (
+	<WhenVisible className={className}>
+		<BentoRive artboard={artboard} />
+	</WhenVisible>
+);
+
+const featureArt: FeatureArt[] = [
+	{
 		artboard: "storageoptions",
-		animations: ["in"],
-		autoplay: true,
-		layout: new Layout({
-			fit: Fit.Contain,
-		}),
-	});
-	return (
-		<StorageOptionsRive className="w-full max-w-[350px] mx-auto h-[275px]" />
-	);
-});
-
-const CollabArt = memo(() => {
-	const { RiveComponent: CollabRive } = useRive({
-		src: "/rive/bento.riv",
-		artboard: "collab",
-		animations: ["in"],
-		autoplay: true,
-		layout: new Layout({
-			fit: Fit.Contain,
-		}),
-	});
-	return <CollabRive className="w-full max-w-[500px] mx-auto h-[280px]" />;
-});
-
-const PrivacyFirstArt = memo(() => {
-	const { RiveComponent: PrivacyFirstRive } = useRive({
-		src: "/rive/bento.riv",
+		className: "w-full max-w-[350px] mx-auto h-[275px]",
+	},
+	{
 		artboard: "privacyfirst",
-		animations: ["in"],
-		autoplay: true,
-		layout: new Layout({
-			fit: Fit.Contain,
-		}),
-	});
-	return (
-		<PrivacyFirstRive className="w-full max-w-[560px] mx-auto h-[250px]" />
-	);
-});
-
-const PlatformSupportArt = memo(() => {
-	const { RiveComponent: PlatformSupportRive } = useRive({
-		src: "/rive/bento.riv",
+		className: "w-full max-w-[560px] mx-auto h-[250px]",
+	},
+	{ artboard: "collab", className: "w-full max-w-[500px] mx-auto h-[280px]" },
+	{
 		artboard: "platformsupport",
-		animations: ["in"],
-		autoplay: true,
-		layout: new Layout({
-			fit: Fit.Contain,
-		}),
-	});
-	return (
-		<PlatformSupportRive className="w-full max-w-[500px] mx-auto h-[280px]" />
-	);
-});
-
-const EveryoneArt = memo(() => {
-	const { RiveComponent: EveryoneRive } = useRive({
-		src: "/rive/bento.riv",
-		artboard: "everyone",
-		animations: ["in"],
-		autoplay: true,
-		layout: new Layout({
-			fit: Fit.Contain,
-		}),
-	});
-	return <EveryoneRive className="w-full max-w-[600px] mx-auto h-[300px]" />;
-});
-
-const CapAIArt = memo(() => {
-	const { RiveComponent: CapAIArt } = useRive({
-		src: "/rive/bento.riv",
-		artboard: "capai",
-		animations: ["in"],
-		autoplay: true,
-		layout: new Layout({
-			fit: Fit.Contain,
-		}),
-	});
-	return <CapAIArt className="w-full max-w-[550px] mx-auto h-[300px]" />;
-});
+		className: "w-full max-w-[500px] mx-auto h-[280px]",
+	},
+	{
+		artboard: "videocapture",
+		className: "w-full max-w-[420px] mx-auto h-[244px]",
+	},
+	{ artboard: "everyone", className: "w-full max-w-[600px] mx-auto h-[300px]" },
+	{ artboard: "capai", className: "w-full max-w-[550px] mx-auto h-[300px]" },
+];
 
 const features: Feature[] = homepageCopy.features.features.map(
 	(feature, index) => {
-		const riveComponents: JSX.Element[] = [
-			<StorageOptionsArt key="storage" />,
-			<PrivacyFirstArt key="privacy" />,
-			<CollabArt key="collab" />,
-			<PlatformSupportArt key="platform" />,
-			<VideoCaptureArt key="video" />,
-			<EveryoneArt key="everyone" />,
-			<CapAIArt key="capai" />,
-		];
-
 		const relatives = [
 			{ top: 25 },
 			undefined,
@@ -142,7 +81,7 @@ const features: Feature[] = homepageCopy.features.features.map(
 		return {
 			title: feature.title,
 			description: feature.description,
-			rive: riveComponents[index] ?? <div />,
+			art: featureArt[index] ?? { artboard: "", className: "" },
 			relative: relatives[index],
 		};
 	},
@@ -151,9 +90,9 @@ const features: Feature[] = homepageCopy.features.features.map(
 const Features = () => {
 	return (
 		<div className="text-center max-w-[1440px] mx-auto px-5">
-			<h1 className="mb-3 text-4xl font-medium text-gray-12">
+			<h2 className="mb-3 text-4xl font-medium text-gray-12">
 				{homepageCopy.features.title}
-			</h1>
+			</h2>
 			<p className="text-lg text-gray-10 leading-[1.75rem] w-full max-w-[600px] mx-auto">
 				{homepageCopy.features.subtitle}
 			</p>
@@ -165,7 +104,7 @@ const Features = () => {
 							title={feature.title}
 							className="flex-1 min-w-full"
 							description={feature.description}
-							rive={feature.rive}
+							art={feature.art}
 							relative={feature.relative}
 						/>
 					))}
@@ -177,7 +116,7 @@ const Features = () => {
 							key={feature.title}
 							title={feature.title}
 							description={feature.description}
-							rive={feature.rive}
+							art={feature.art}
 							relative={feature.relative}
 						/>
 					))}
@@ -189,7 +128,7 @@ const Features = () => {
 							key={feature.title}
 							title={feature.title}
 							description={feature.description}
-							rive={feature.rive}
+							art={feature.art}
 							relative={feature.relative}
 						/>
 					))}
@@ -213,13 +152,13 @@ const Features = () => {
 const FeatureCard = ({
 	title,
 	description,
-	rive,
+	art,
 	relative,
 	className,
 }: {
 	title: string;
 	description: string;
-	rive?: JSX.Element;
+	art?: FeatureArt;
 	className?: string;
 	relative?: {
 		top?: number;
@@ -244,7 +183,9 @@ const FeatureCard = ({
 				}}
 				className="relative flex-1 flex-grow justify-center content-center"
 			>
-				{rive}
+				{art ? (
+					<BentoArt artboard={art.artboard} className={art.className} />
+				) : null}
 			</div>
 			<div className="flex flex-col gap-2 justify-end h-fit">
 				<h3 className="text-lg font-medium">{title}</h3>

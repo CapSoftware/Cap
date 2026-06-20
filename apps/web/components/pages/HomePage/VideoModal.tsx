@@ -2,10 +2,14 @@
 
 "use client";
 
-import MuxPlayer from "@mux/mux-player-react";
 import { useClickAway } from "@uidotdev/usehooks";
 import { motion } from "framer-motion";
+import dynamic from "next/dynamic";
 import type React from "react";
+
+const MuxPlayer = dynamic(() => import("@mux/mux-player-react"), {
+	ssr: false,
+});
 
 interface Props {
 	setVideoToggled: React.Dispatch<React.SetStateAction<boolean>>;

@@ -21,6 +21,7 @@ import { getOrganizationSSOData } from "@/actions/organization/get-organization-
 import { trackEvent } from "@/app/utils/analytics";
 import { usePublicEnv } from "@/utils/public-env";
 import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
+import { getSafeNextPath } from "../safe-next";
 
 const MotionInput = motion(Input);
 const MotionLogoBadge = motion(LogoBadge);
@@ -42,6 +43,8 @@ export function LoginForm() {
 		null,
 	);
 	const theme = Cookies.get("theme") || "light";
+	const getNextPath = () =>
+		next ? getSafeNextPath(next, window.location.origin) : null;
 
 	useEffect(() => {
 		document.body.className = theme === "dark" ? "dark" : "light";
@@ -103,13 +106,14 @@ export function LoginForm() {
 	}, [emailSent]);
 
 	const handleGoogleSignIn = () => {
+		const nextPath = getNextPath();
 		trackEvent("auth_started", {
 			method: "google",
 			is_signup: false,
 			auth_surface: "login",
 		});
 		signIn("google", {
-			...(next && next.length > 0 ? { callbackUrl: next } : {}),
+			...(nextPath ? { callbackUrl: nextPath } : {}),
 		});
 	};
 
@@ -261,9 +265,10 @@ export function LoginForm() {
 
 											setLoading(true);
 											try {
+												const nextPath = getNextPath();
 												const normalizedEmail = await requestEmailCode({
 													email,
-													next,
+													next: nextPath,
 													isSignup: false,
 													authSurface: "login",
 												});
@@ -274,7 +279,7 @@ export function LoginForm() {
 												setLastEmailSentTime(sentAt);
 												const params = new URLSearchParams({
 													email: normalizedEmail,
-													...(next && { next }),
+													...(nextPath && { next: nextPath }),
 													lastSent: sentAt.toString(),
 												});
 												router.push(`/verify-otp?${params.toString()}`);

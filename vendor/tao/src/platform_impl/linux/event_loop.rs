@@ -443,11 +443,12 @@ impl<T: 'static> EventLoop<T> {
           }
           WindowRequest::CursorIgnoreEvents(ignore) => {
             if ignore {
-              let empty_region = Region::create_rectangle(&RectangleInt::new(0, 0, 1, 1));
-              window
-                .window()
-                .unwrap()
-                .input_shape_combine_region(&empty_region, 0, 0);
+              // `window()` is `None` until the GDK window is realized; calling
+              // `set_ignore_cursor_events` before then must not abort the app.
+              if let Some(gdk_window) = window.window() {
+                let empty_region = Region::create_rectangle(&RectangleInt::new(0, 0, 1, 1));
+                gdk_window.input_shape_combine_region(&empty_region, 0, 0);
+              }
             } else {
               window.input_shape_combine_region(None)
             };

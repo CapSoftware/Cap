@@ -61,6 +61,15 @@ lazy_static::lazy_static! {
 }
 
 const WHISPER_SAMPLE_RATE: u32 = 16000;
+const TARGET_CAPTION_WORDS_PER_SEGMENT: usize = 6;
+const MAX_CAPTION_WORDS_PER_SEGMENT: usize = 8;
+const MIN_FINAL_CAPTION_WORDS: usize = 3;
+// Whisper/Parakeet sometimes stretch a trailing word's end across a following
+// silence (e.g. a 16s "seconds."), which leaves the rendered caption stuck on
+// screen and duplicates the word across timeline cuts once projected. Real
+// spoken words never approach this, so cap each word's duration to keep timing
+// tied to speech rather than silence.
+const MAX_CAPTION_WORD_DURATION: f32 = 2.5;
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 struct CachedParakeetContext {
@@ -299,12 +308,17 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             }
         }
 
-        let mixed_samples = final_samples;
+        let mut mixed_samples = final_samples;
         let channel_count = 1_usize;
 
         if mixed_samples.is_empty() {
             log::error!("No audio samples after processing all sources");
             return Err("Failed to process any audio sources".to_string());
+        }
+
+        let gain = normalize_audio_for_transcription(&mut mixed_samples);
+        if (gain - 1.0).abs() > 0.01 {
+            log::info!("Applied transcription audio gain: {gain:.2}x");
         }
 
         log::info!("Final mixed audio: {} samples", mixed_samples.len());
@@ -664,6 +678,186 @@ fn is_special_token(token_text: &str) -> bool {
     is_special
 }
 
+fn caption_token_attaches_to_previous(text: &str) -> bool {
+    let Some(first_char) = text.trim().chars().next() else {
+        return false;
+    };
+
+    caption_char_attaches_to_previous(first_char)
+}
+
+fn caption_char_attaches_to_previous(value: char) -> bool {
+    matches!(
+        value,
+        ',' | '.'
+            | '!'
+            | '?'
+            | ';'
+            | ':'
+            | '%'
+            | ')'
+            | ']'
+            | '}'
+            | '\''
+            | '’'
+            | '、'
+            | '。'
+            | '！'
+            | '？'
+            | '；'
+            | '：'
+            | '，'
+    )
+}
+
+fn caption_boundary_word_is_weak(word: &CaptionWord) -> bool {
+    let normalized = word
+        .text
+        .trim()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase();
+
+    normalized.len() <= 1
+        || matches!(
+            normalized.as_str(),
+            "an" | "as"
+                | "at"
+                | "be"
+                | "by"
+                | "do"
+                | "he"
+                | "if"
+                | "in"
+                | "is"
+                | "it"
+                | "me"
+                | "my"
+                | "of"
+                | "on"
+                | "or"
+                | "so"
+                | "to"
+                | "up"
+                | "we"
+        )
+}
+
+fn normalize_caption_words(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
+    let mut normalized: Vec<CaptionWord> = Vec::with_capacity(words.len());
+
+    for word in words {
+        let text = word.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+
+        if caption_token_attaches_to_previous(text)
+            && let Some(previous) = normalized.last_mut()
+        {
+            previous.text.push_str(text);
+            previous.end = word.end;
+        } else {
+            normalized.push(CaptionWord {
+                text: text.to_string(),
+                start: word.start,
+                end: word.end,
+            });
+        }
+    }
+
+    for word in &mut normalized {
+        word.end = word.end.min(word.start + MAX_CAPTION_WORD_DURATION);
+    }
+
+    normalized
+}
+
+fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWord>) -> String {
+    let mut text = String::new();
+
+    for word in words {
+        let word_text = word.text.trim();
+        if word_text.is_empty() {
+            continue;
+        }
+
+        if !text.is_empty() && !caption_token_attaches_to_previous(word_text) {
+            text.push(' ');
+        }
+        text.push_str(word_text);
+    }
+
+    text
+}
+
+fn caption_word_chunks(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+
+    while start < words.len() {
+        let remaining = words.len() - start;
+        if remaining <= TARGET_CAPTION_WORDS_PER_SEGMENT {
+            chunks.push(&words[start..]);
+            break;
+        }
+
+        let mut end = (start + TARGET_CAPTION_WORDS_PER_SEGMENT).min(words.len());
+        while end < words.len()
+            && caption_boundary_word_is_weak(&words[end - 1])
+            && end - start < MAX_CAPTION_WORDS_PER_SEGMENT
+        {
+            end += 1;
+        }
+
+        let remaining_after = words.len() - end;
+        if remaining_after > 0
+            && remaining_after < MIN_FINAL_CAPTION_WORDS
+            && caption_boundary_word_is_weak(&words[end])
+        {
+            end = words.len();
+        }
+
+        chunks.push(&words[start..end]);
+        start = end;
+    }
+
+    chunks
+}
+
+fn normalize_audio_for_transcription(samples: &mut [f32]) -> f32 {
+    if samples.is_empty() {
+        return 1.0;
+    }
+
+    let peak = samples
+        .iter()
+        .fold(0.0_f32, |max, sample| max.max(sample.abs()));
+    if peak <= f32::EPSILON {
+        return 1.0;
+    }
+
+    let rms =
+        (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt();
+    if rms <= f32::EPSILON {
+        return 1.0;
+    }
+
+    let target_rms = 0.08_f32;
+    let desired_gain = (target_rms / rms).clamp(1.0, 8.0);
+    let peak_limited_gain = 0.98 / peak;
+    let gain = desired_gain.min(peak_limited_gain);
+
+    if (gain - 1.0).abs() > 0.01 {
+        for sample in samples {
+            *sample = (*sample * gain).clamp(-0.98, 0.98);
+        }
+    }
+
+    gain
+}
+
 fn process_with_whisper(
     audio_path: &PathBuf,
     context: Arc<WhisperContext>,
@@ -674,7 +868,10 @@ fn process_with_whisper(
     log::info!("Processing audio file: {audio_path:?}");
     log::info!("Language setting: {language}");
 
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    let mut params = FullParams::new(SamplingStrategy::BeamSearch {
+        beam_size: 5,
+        patience: 1.0,
+    });
 
     params.set_translate(false);
     params.set_print_special(false);
@@ -688,7 +885,9 @@ fn process_with_whisper(
         params.set_initial_prompt(&initial_prompt);
     }
 
-    log::info!("Whisper params - translate: false, token_timestamps: true, max_len: MAX");
+    log::info!(
+        "Whisper params - translate: false, token_timestamps: true, beam_size: 5, max_len: MAX"
+    );
 
     let mut audio_file = File::open(audio_path)
         .map_err(|e| format!("Failed to open audio file: {e} at path: {audio_path:?}"))?;
@@ -705,6 +904,11 @@ fn process_with_whisper(
             let sample = i16::from_le_bytes([audio_data[i], audio_data[i + 1]]) as f32 / 32768.0;
             audio_data_f32.push(sample);
         }
+    }
+
+    let gain = normalize_audio_for_transcription(&mut audio_data_f32);
+    if (gain - 1.0).abs() > 0.01 {
+        log::info!("Applied Whisper input gain: {gain:.2}x");
     }
 
     let duration_seconds = audio_data_f32.len() as f32 / WHISPER_SAMPLE_RATE as f32;
@@ -857,6 +1061,8 @@ fn process_with_whisper(
             });
         }
 
+        let words = normalize_caption_words(words);
+
         log::info!("  Segment {} produced {} words", i, words.len());
         for (w_idx, word) in words.iter().enumerate() {
             log::info!(
@@ -873,19 +1079,8 @@ fn process_with_whisper(
             continue;
         }
 
-        const MAX_WORDS_PER_SEGMENT: usize = 6;
-
-        let word_chunks: Vec<Vec<CaptionWord>> = words
-            .chunks(MAX_WORDS_PER_SEGMENT)
-            .map(|chunk| chunk.to_vec())
-            .collect();
-
-        for (chunk_idx, chunk_words) in word_chunks.into_iter().enumerate() {
-            let segment_text = chunk_words
-                .iter()
-                .map(|word| word.text.clone())
-                .collect::<Vec<_>>()
-                .join(" ");
+        for (chunk_idx, chunk_words) in caption_word_chunks(&words).into_iter().enumerate() {
+            let segment_text = caption_text_from_words(chunk_words);
 
             let segment_start = chunk_words
                 .first()
@@ -898,7 +1093,7 @@ fn process_with_whisper(
                 start: segment_start,
                 end: segment_end,
                 text: segment_text,
-                words: chunk_words,
+                words: chunk_words.to_vec(),
             });
         }
     }
@@ -956,27 +1151,39 @@ fn process_with_parakeet(
     tracing::info!("Processing audio file: {audio_path:?}");
     tracing::info!("Model directory: {model_dir}");
 
-    let model_arc = {
+    let cached_model = {
+        let guard = PARAKEET_CONTEXT.blocking_lock();
+        guard.as_ref().and_then(|cached| {
+            if cached.model_dir == model_dir {
+                Some(Arc::clone(&cached.model))
+            } else {
+                None
+            }
+        })
+    };
+
+    let model_arc = if let Some(model) = cached_model {
+        tracing::info!("Reusing cached Parakeet TDT model");
+        model
+    } else {
+        tracing::info!("Loading Parakeet TDT model from: {model_dir}");
+        let model = ParakeetTDT::from_pretrained(model_dir, None).map_err(|e| format!("{e}"))?;
+        let loaded_model = Arc::new(std::sync::Mutex::new(model));
+
         let mut guard = PARAKEET_CONTEXT.blocking_lock();
-
-        let should_reload = guard
+        if let Some(cached) = guard
             .as_ref()
-            .is_none_or(|cached| cached.model_dir != model_dir);
-
-        if should_reload {
-            tracing::info!("Loading Parakeet TDT model from: {model_dir}");
-            let model =
-                ParakeetTDT::from_pretrained(model_dir, None).map_err(|e| format!("{e}"))?;
-            let model_arc = Arc::new(std::sync::Mutex::new(model));
+            .filter(|cached| cached.model_dir == model_dir)
+        {
+            tracing::info!("Reusing cached Parakeet TDT model");
+            Arc::clone(&cached.model)
+        } else {
             *guard = Some(CachedParakeetContext {
                 model_dir: model_dir.to_string(),
-                model: Arc::clone(&model_arc),
+                model: Arc::clone(&loaded_model),
             });
             tracing::info!("Parakeet TDT model loaded successfully");
-            model_arc
-        } else {
-            tracing::info!("Reusing cached Parakeet TDT model");
-            Arc::clone(&guard.as_ref().unwrap().model)
+            loaded_model
         }
     };
 
@@ -992,34 +1199,28 @@ fn process_with_parakeet(
     tracing::info!("Transcription text: {}", result.text);
     tracing::info!("Got {} timed tokens", result.tokens.len());
 
-    let words: Vec<CaptionWord> = result
-        .tokens
-        .iter()
-        .filter(|t| !t.text.trim().is_empty())
-        .map(|t| CaptionWord {
-            text: t.text.trim().to_string(),
-            start: t.start,
-            end: t.end,
-        })
-        .collect();
+    let words = normalize_caption_words(
+        result
+            .tokens
+            .iter()
+            .filter(|t| !t.text.trim().is_empty())
+            .map(|t| CaptionWord {
+                text: t.text.trim().to_string(),
+                start: t.start,
+                end: t.end,
+            })
+            .collect(),
+    );
 
     if words.is_empty() {
         tracing::warn!("Parakeet produced no words");
         return Err("No speech detected in the audio".to_string());
     }
 
-    const MAX_WORDS_PER_SEGMENT: usize = 6;
-
     let mut segments = Vec::new();
-    let word_chunks: Vec<&[CaptionWord]> = words.chunks(MAX_WORDS_PER_SEGMENT).collect();
 
-    for (chunk_idx, chunk) in word_chunks.iter().enumerate() {
-        let segment_text = chunk
-            .iter()
-            .map(|w| w.text.clone())
-            .collect::<Vec<_>>()
-            .join(" ");
-
+    for (chunk_idx, chunk) in caption_word_chunks(&words).into_iter().enumerate() {
+        let segment_text = caption_text_from_words(chunk);
         let segment_start = chunk.first().map(|w| w.start).unwrap_or(0.0);
         let segment_end = chunk.last().map(|w| w.end).unwrap_or(0.0);
 
@@ -1503,6 +1704,40 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
 
+                    let preset = settings_obj
+                        .get("preset")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("classic")
+                        .to_string();
+
+                    let animation = settings_obj
+                        .get("animation")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("bounce")
+                        .to_string();
+
+                    let highlight_style = settings_obj
+                        .get("highlightStyle")
+                        .or_else(|| settings_obj.get("highlight_style"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("color")
+                        .to_string();
+
+                    let uppercase = settings_obj
+                        .get("uppercase")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
+                    let manual_position = settings_obj
+                        .get("manualPosition")
+                        .or_else(|| settings_obj.get("manual_position"))
+                        .and_then(|value| {
+                            Some(cap_project::XY {
+                                x: value.get("x")?.as_f64()? as f32,
+                                y: value.get("y")?.as_f64()? as f32,
+                            })
+                        });
+
                     cap_project::CaptionSettings {
                         enabled,
                         font,
@@ -1521,12 +1756,21 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         linger_duration,
                         word_transition_duration,
                         active_word_highlight,
+                        manual_position,
+                        preset,
+                        animation,
+                        highlight_style,
+                        uppercase,
                     }
                 } else {
                     cap_project::CaptionSettings::default()
                 };
 
-                Ok(cap_project::CaptionsData { segments, settings })
+                Ok(cap_project::CaptionsData {
+                    segments,
+                    settings,
+                    ..Default::default()
+                })
             } else {
                 Err("Missing or invalid segments array in captions file".to_string())
             }
@@ -1831,6 +2075,82 @@ fn parakeet_model_files_for_dir(
     }
 }
 
+fn parakeet_staging_dir(validated_dir: &std::path::Path) -> PathBuf {
+    validated_dir.with_file_name(format!(
+        "{}.downloading",
+        validated_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("model")
+    ))
+}
+
+async fn parakeet_model_file_sizes(
+    http_client: &reqwest::Client,
+    model_files: &'static [(&'static str, &'static [&'static str])],
+) -> Result<Vec<(&'static str, u64)>, String> {
+    let mut sizes = Vec::with_capacity(model_files.len());
+    for (filename, urls) in model_files {
+        let mut file_size = 0_u64;
+        for url in *urls {
+            let resp = http_client
+                .head(*url)
+                .timeout(Duration::from_secs(30))
+                .send()
+                .await
+                .map_err(|e| format!("Failed to get size for {filename}: {e}"))?;
+
+            if !resp.status().is_success() {
+                return Err(format!(
+                    "Failed to get size for {filename}: HTTP {}",
+                    resp.status()
+                ));
+            }
+
+            file_size = file_size.saturating_add(resp.content_length().unwrap_or(0));
+        }
+        sizes.push((*filename, file_size));
+    }
+    Ok(sizes)
+}
+
+fn parakeet_model_files_match(dir: &std::path::Path, expected_files: &[(&str, u64)]) -> bool {
+    expected_files.iter().all(|(filename, expected_size)| {
+        let Ok(metadata) = std::fs::metadata(dir.join(filename)) else {
+            return false;
+        };
+
+        metadata.is_file() && (*expected_size == 0 || metadata.len() == *expected_size)
+    })
+}
+
+fn finalize_parakeet_model_download(
+    validated_dir: &std::path::Path,
+    staging_dir: &std::path::Path,
+    model_files: &'static [(&'static str, &'static [&'static str])],
+) -> Result<(), String> {
+    std::fs::create_dir_all(validated_dir)
+        .map_err(|e| format!("Failed to create model directory: {e}"))?;
+
+    for filename in PARAKEET_MODEL_CLEANUP_FILES {
+        let file_path = validated_dir.join(filename);
+        if file_path.exists() {
+            let _ = std::fs::remove_file(&file_path);
+        }
+    }
+
+    for (filename, _) in model_files {
+        let src = staging_dir.join(filename);
+        let dst = validated_dir.join(filename);
+        std::fs::rename(&src, &dst)
+            .map_err(|e| format!("Failed to move {filename} to final location: {e}"))?;
+    }
+
+    let _ = std::fs::remove_dir_all(staging_dir);
+
+    Ok(())
+}
+
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 #[tauri::command]
 #[specta::specta]
@@ -1841,13 +2161,18 @@ pub async fn download_parakeet_model(app: AppHandle, output_dir: String) -> Resu
     std::fs::create_dir_all(&validated_dir)
         .map_err(|e| format!("Failed to create model directory: {e}"))?;
 
-    let staging_dir = validated_dir.with_file_name(format!(
-        "{}.downloading",
-        validated_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("model")
-    ));
+    let http_client = app.state::<http_client::HttpClient>();
+    let model_files = parakeet_model_files_for_dir(&validated_dir);
+    let expected_file_sizes = parakeet_model_file_sizes(&http_client, model_files).await?;
+
+    let staging_dir = parakeet_staging_dir(&validated_dir);
+    if parakeet_model_files_match(&staging_dir, &expected_file_sizes) {
+        tracing::info!("Finalizing previously completed Parakeet model download");
+        finalize_parakeet_model_download(&validated_dir, &staging_dir, model_files)?;
+        invalidate_parakeet_cache_for_dir(&validated_dir).await;
+        return Ok(());
+    }
+
     if staging_dir.exists() {
         std::fs::remove_dir_all(&staging_dir)
             .map_err(|e| format!("Failed to clean staging directory: {e}"))?;
@@ -1855,21 +2180,9 @@ pub async fn download_parakeet_model(app: AppHandle, output_dir: String) -> Resu
     std::fs::create_dir_all(&staging_dir)
         .map_err(|e| format!("Failed to create staging directory: {e}"))?;
 
-    let http_client = app.state::<http_client::HttpClient>();
-    let model_files = parakeet_model_files_for_dir(&validated_dir);
-
-    let mut total_size: u64 = 0;
-    for (filename, urls) in model_files {
-        for url in *urls {
-            let resp = http_client
-                .head(*url)
-                .timeout(Duration::from_secs(30))
-                .send()
-                .await
-                .map_err(|e| format!("Failed to get size for {filename}: {e}"))?;
-            total_size = total_size.saturating_add(resp.content_length().unwrap_or(0));
-        }
-    }
+    let total_size = expected_file_sizes
+        .iter()
+        .fold(0_u64, |acc, (_, size)| acc.saturating_add(*size));
 
     let mut downloaded_total: u64 = 0;
 
@@ -1938,23 +2251,14 @@ pub async fn download_parakeet_model(app: AppHandle, output_dir: String) -> Resu
         return Err(e.clone());
     }
 
+    if !parakeet_model_files_match(&staging_dir, &expected_file_sizes) {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return Err("Downloaded model files did not match expected sizes".to_string());
+    }
+
+    finalize_parakeet_model_download(&validated_dir, &staging_dir, model_files)?;
+
     invalidate_parakeet_cache_for_dir(&validated_dir).await;
-
-    for filename in PARAKEET_MODEL_CLEANUP_FILES {
-        let file_path = validated_dir.join(filename);
-        if file_path.exists() {
-            let _ = std::fs::remove_file(&file_path);
-        }
-    }
-
-    for (filename, _) in model_files {
-        let src = staging_dir.join(filename);
-        let dst = validated_dir.join(filename);
-        std::fs::rename(&src, &dst)
-            .map_err(|e| format!("Failed to move {filename} to final location: {e}"))?;
-    }
-
-    let _ = std::fs::remove_dir_all(&staging_dir);
 
     Ok(())
 }
@@ -2121,8 +2425,19 @@ fn mix_samples(dest: &mut [f32], source: &[f32]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_path_with_base;
+    use super::{
+        CaptionWord, caption_text_from_words, caption_word_chunks, normalize_caption_words,
+        resolve_path_with_base,
+    };
     use tempfile::tempdir;
+
+    fn word(text: &str, index: usize) -> CaptionWord {
+        CaptionWord {
+            text: text.to_string(),
+            start: index as f32,
+            end: index as f32 + 0.5,
+        }
+    }
 
     #[test]
     fn resolve_path_with_base_rejects_parent_dir_escape() {
@@ -2154,6 +2469,62 @@ mod tests {
         let resolved = resolve_path_with_base(&base, target.to_string_lossy().as_ref()).unwrap();
 
         assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn normalize_caption_words_attaches_punctuation() {
+        let words = normalize_caption_words(vec![
+            word("test", 0),
+            word(",", 1),
+            word("test", 2),
+            word(".", 3),
+        ]);
+
+        assert_eq!(caption_text_from_words(&words), "test, test.");
+        assert_eq!(words.len(), 2);
+    }
+
+    #[test]
+    fn normalize_caption_words_clamps_inflated_trailing_word() {
+        let words = normalize_caption_words(vec![CaptionWord {
+            text: "seconds.".to_string(),
+            start: 53.92,
+            end: 70.16,
+        }]);
+
+        assert_eq!(words.len(), 1);
+        assert!((words[0].end - (53.92 + super::MAX_CAPTION_WORD_DURATION)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn normalize_caption_words_keeps_normal_word_durations() {
+        let words = normalize_caption_words(vec![CaptionWord {
+            text: "hello".to_string(),
+            start: 1.0,
+            end: 1.4,
+        }]);
+
+        assert_eq!(words.len(), 1);
+        assert!((words[0].end - 1.4).abs() < 1e-4);
+    }
+
+    #[test]
+    fn caption_word_chunks_do_not_end_on_short_connector_when_more_words_follow() {
+        let words = [
+            "This", "is", "where", "we", "record", "I", "want", "clean", "captions",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, text)| word(text, index))
+        .collect::<Vec<_>>();
+
+        let chunks = caption_word_chunks(&words);
+
+        assert_eq!(
+            caption_text_from_words(chunks[0]),
+            "This is where we record I want"
+        );
+        assert_eq!(caption_text_from_words(chunks[1]), "clean captions");
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]

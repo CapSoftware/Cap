@@ -87,7 +87,7 @@ PLATFORM SUPPORT:
 PRICING (early adopter beta pricing, locked in for lifetime of subscription):
 - Free plan: personal use, Studio Mode, unlimited local recordings, shareable links up to 5 minutes, export to MP4 or GIF, web recorder
 - Desktop License: $58 one-time (lifetime) or $29/year, commercial usage rights, Studio Mode with full editor, unlimited local recordings, shareable links up to 5 minutes, export to MP4 or GIF
-- Cap Pro: $8.16/mo per user (billed annually) or $12/mo per user (billed monthly), includes everything in Desktop License plus unlimited cloud storage and bandwidth, unlimited shareable links (no 5-minute limit), auto-generated AI titles/summaries/chapters/transcriptions, custom domain (cap.yourdomain.com), password-protected shares, viewer analytics, team workspaces, Loom video importer, custom S3 bucket support, priority support
+- Cap Pro: $8.16/mo per user (billed annually) or $12/mo per user (billed monthly), includes everything in Desktop License plus unlimited cloud storage and bandwidth, unlimited shareable links (no 5-minute limit), auto-generated AI titles/summaries/chapters/transcriptions, custom domain (cap.yourdomain.com), password-protected shares, viewer analytics, team workspaces, Loom video importer, custom S3 bucket and Google Drive support, priority support
 - Enterprise: custom pricing, contact via https://cal.com/cap.so/15min, includes SLAs, priority support, Loom video importer, bulk discounts, managed self-hosting, SAML SSO via WorkOS, advanced security controls
 - Early adopters keep their pricing forever, even after beta ends and regular prices change.
 - Student discount available at https://cap.so/student-discount
@@ -194,6 +194,14 @@ CUSTOM S3 BUCKET:
 - Credentials are encrypted and stored securely
 - Videos uploaded to your bucket instead of Cap cloud
 
+GOOGLE DRIVE STORAGE:
+- Bring your own Google Drive: connect in the desktop app under Settings > Integrations > Google Drive, or for a whole organization under Dashboard > Settings > Organization > Integrations
+- Connect with a single Google sign-in (OAuth), no access keys required
+- New shareable link uploads are stored in a private Cap folder in your Drive and served from there through Cap
+- Available for individual users and entire organizations (Cap Pro); organization storage applies to all members
+- Cap uses Google's drive.file scope, so it can only access files it creates, not the rest of your Drive
+- Marketing page: https://cap.so/google-drive-screen-recorder
+
 AUTHENTICATION:
 - Email magic link: enter email, receive a 6-digit code, verify to sign in (passwordless)
 - Google OAuth: sign in with Google account
@@ -251,7 +259,7 @@ VIDEO DELIVERY:
 - Captions served as VTT files alongside the video
 
 WHAT MAKES CAP DIFFERENT (VS COMPETITORS):
-- vs Loom: open source, self-hostable, own your data with custom S3, lifetime license option, built-in Loom importer, no Electron (lighter weight), privacy-first
+- vs Loom: open source, self-hostable, own your data with custom S3 or Google Drive, lifetime license option, built-in Loom importer, no Electron (lighter weight), privacy-first
 - vs OBS: much simpler interface for quick recordings, instant cloud sharing, AI features, no complex setup
 - vs Camtasia/ScreenFlow: free and open source, cloud sharing built-in, cross-platform, modern web-based viewer
 - vs CloudApp/Droplr: video-first, professional quality, AI transcription/summaries, team collaboration, self-hosting
@@ -273,7 +281,7 @@ COMMON USER TASKS:
 - To get student discount: go to https://cap.so/student-discount
 - To deactivate a license: go to https://cap.so/deactivate-license
 - To set up a custom domain: go to organization settings in the dashboard
-- To configure custom S3: go to Settings > Integrations in the desktop app
+- To configure custom storage (S3 or Google Drive): go to Settings > Integrations in the desktop app
 - To manage team: go to organization settings and invite members
 - To create a space: go to your dashboard sidebar and create a new space
 - To refer someone: go to https://cap.so/dashboard/refer

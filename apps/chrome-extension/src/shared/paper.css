@@ -1,0 +1,447 @@
+@font-face {
+	font-family: "Neue Montreal";
+	src: url("/fonts/NeueMontreal-Regular.otf") format("opentype");
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Neue Montreal";
+	src: url("/fonts/NeueMontreal-Italic.otf") format("opentype");
+	font-weight: 400;
+	font-style: italic;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Neue Montreal";
+	src: url("/fonts/NeueMontreal-Medium.otf") format("opentype");
+	font-weight: 500;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Neue Montreal";
+	src: url("/fonts/NeueMontreal-Bold.otf") format("opentype");
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+*,
+*:before,
+*:after {
+	box-sizing: border-box;
+}
+
+:root {
+	--paper: #fbfaf7;
+	--ink: #20242c;
+	--ink-soft: #8b8f98;
+	--accent: #4785ff;
+	--track: #dcdcd4;
+	--error: #e5484d;
+	--success: #2f9e69;
+}
+
+html,
+body {
+	height: 100%;
+}
+
+body {
+	margin: 0;
+	min-height: 100dvh;
+	display: flex;
+	flex-direction: column;
+	background: var(--paper);
+	color: var(--ink);
+	font-family:
+		"Neue Montreal", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+	-webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+p {
+	margin: 0;
+}
+
+.page-nav {
+	position: sticky;
+	top: 0;
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 64px;
+	flex: 0 0 64px;
+	border-bottom: 1.5px solid var(--track);
+	background: rgba(251, 250, 247, 0.92);
+	backdrop-filter: blur(10px);
+}
+
+.page-nav-inner {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	width: min(760px, calc(100vw - 48px));
+}
+
+.page-nav-brand {
+	display: flex;
+	align-items: center;
+	border-radius: 9px;
+	line-height: 0;
+}
+
+.page-nav-brand .page-nav-logo {
+	display: block;
+	height: 24px;
+	width: auto;
+	color: var(--ink);
+}
+
+.page-nav-brand:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 3px;
+}
+
+.page-nav-links {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px;
+	border: 1.5px solid var(--track);
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.65);
+}
+
+.page-nav-link {
+	display: inline-flex;
+	align-items: center;
+	padding: 5px 13px;
+	border-radius: 999px;
+	color: var(--ink-soft);
+	font-size: 13px;
+	font-weight: 500;
+	white-space: nowrap;
+	text-decoration: none;
+	transition:
+		background 0.18s ease,
+		color 0.18s ease;
+}
+
+.page-nav-link:hover {
+	color: var(--ink);
+}
+
+.page-nav-link:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+.page-nav-link.is-active {
+	background: var(--ink);
+	color: var(--paper);
+}
+
+.stage {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	padding: 48px 24px 24px;
+}
+
+.brand {
+	margin-bottom: 40px;
+	animation: fade-up 0.5s ease both;
+}
+
+.brand-logo {
+	height: 26px;
+	width: auto;
+	color: var(--ink);
+}
+
+.doodle {
+	width: 128px;
+	height: auto;
+	animation: fade-up 0.5s ease 0.05s both;
+}
+
+.doodle-boil {
+	filter: url(#boil);
+}
+
+.doodle-stroke {
+	fill: none;
+	stroke: var(--ink);
+	stroke-width: 4.5;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.spark {
+	fill: none;
+	stroke: var(--accent);
+	stroke-width: 3.5;
+	stroke-linecap: round;
+	opacity: 0;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: spark-pop 0.5s ease forwards;
+}
+
+.stage h1 {
+	margin-top: 26px;
+	font-size: 26px;
+	font-weight: 500;
+	letter-spacing: -0.01em;
+	animation: fade-up 0.5s ease 0.1s both;
+}
+
+.lede {
+	margin-top: 8px;
+	max-width: 440px;
+	font-size: 15px;
+	line-height: 1.5;
+	color: var(--ink-soft);
+	animation: fade-up 0.5s ease 0.15s both;
+}
+
+.card {
+	display: grid;
+	gap: 14px;
+	padding: 20px;
+	border: 1.5px solid var(--track);
+	border-radius: 16px;
+	background: rgba(255, 255, 255, 0.65);
+	text-align: left;
+	animation: fade-up 0.5s ease both;
+}
+
+.card h2 {
+	font-size: 12px;
+	font-weight: 500;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--ink-soft);
+}
+
+.cta {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 42px;
+	padding: 0 24px;
+	border: 1.5px solid var(--ink);
+	border-radius: 999px;
+	background: transparent;
+	color: var(--ink);
+	font-family: inherit;
+	font-size: 14px;
+	font-weight: 500;
+	cursor: pointer;
+	transition:
+		background 0.2s ease,
+		color 0.2s ease,
+		opacity 0.2s ease;
+}
+
+.cta:hover:not(:disabled) {
+	background: var(--ink);
+	color: var(--paper);
+}
+
+.cta:disabled {
+	cursor: not-allowed;
+	opacity: 0.45;
+}
+
+.cta.ghost {
+	border-color: var(--track);
+	color: var(--ink-soft);
+}
+
+.cta.ghost:hover:not(:disabled) {
+	background: transparent;
+	border-color: var(--ink-soft);
+	color: var(--ink);
+}
+
+.cta[hidden] {
+	display: none;
+}
+
+.paper-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 42px;
+	padding: 8px 20px;
+	border: 1.5px solid var(--ink);
+	border-radius: 999px;
+	color: var(--ink);
+	font-size: 14px;
+	font-weight: 500;
+	line-height: 1.4;
+	animation: fade-up 0.4s ease both;
+}
+
+.paper-pill.success {
+	border-color: var(--success);
+	color: var(--success);
+}
+
+.paper-pill.error {
+	border-color: var(--error);
+	border-radius: 16px;
+	color: var(--error);
+	text-align: left;
+}
+
+.paper-pill[hidden] {
+	display: none;
+}
+
+.check-mini {
+	width: 16px;
+	height: 16px;
+	flex: 0 0 auto;
+	overflow: visible;
+}
+
+.check-mini-path {
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 3;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: draw 0.4s ease 0.15s forwards;
+}
+
+.field {
+	display: grid;
+	gap: 6px;
+	text-align: left;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--ink);
+}
+
+.field > span {
+	color: var(--ink-soft);
+}
+
+.field input,
+.field select {
+	min-height: 40px;
+	padding: 0 12px;
+	border: 1.5px solid var(--track);
+	border-radius: 10px;
+	background: #ffffff;
+	color: var(--ink);
+	font: inherit;
+	font-size: 14px;
+	transition: border-color 0.15s ease;
+}
+
+.field input:focus,
+.field select:focus {
+	outline: none;
+	border-color: var(--ink);
+}
+
+.footnote {
+	padding: 0 24px 28px;
+	text-align: center;
+	font-size: 12.5px;
+	color: var(--ink-soft);
+	animation: fade-up 0.5s ease 0.25s both;
+}
+
+@keyframes draw {
+	to {
+		stroke-dashoffset: 0;
+	}
+}
+
+@keyframes fade-in {
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes fade-up {
+	from {
+		opacity: 0;
+		transform: translateY(10px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes bob {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(-4px);
+	}
+}
+
+@keyframes spark-pop {
+	from {
+		opacity: 0;
+		transform: scale(0.2);
+	}
+	60% {
+		opacity: 1;
+		transform: scale(1.2);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes march {
+	from {
+		stroke-dashoffset: 0;
+	}
+	to {
+		stroke-dashoffset: -6.2;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.doodle-boil {
+		filter: none;
+	}
+
+	.brand,
+	.doodle,
+	.stage h1,
+	.lede,
+	.card,
+	.paper-pill,
+	.check-mini-path,
+	.spark,
+	.footnote {
+		animation-duration: 0.01ms;
+		animation-delay: 0s;
+	}
+}

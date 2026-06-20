@@ -2,6 +2,7 @@ pub mod gif;
 pub mod mov;
 pub mod mp4;
 pub mod preview;
+pub mod settings;
 
 use cap_editor::SegmentMedia;
 use cap_project::{
@@ -115,6 +116,7 @@ impl ExporterBuilder {
                         start: 0.0,
                         end: duration,
                         timescale: 1.0,
+                        name: None,
                     })
                 })
                 .collect();

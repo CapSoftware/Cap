@@ -1,11 +1,15 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { videos, videoUploads } from "@cap/database/schema";
+import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { reconcileStaleEditUpload } from "@/lib/video-edit-processing";
+import {
+	areEditSpecsEquivalent,
+	createIdentityEditSpec,
+} from "@/lib/video-edits";
 import { EditUpgradeGate } from "./EditUpgradeGate";
 import { EditVideoClient } from "./EditVideoClient";
 
@@ -64,8 +68,21 @@ export default async function EditVideoPage(props: {
 		notFound();
 	}
 
+	const [existingEdit] = await db()
+		.select({ editSpec: videoEdits.editSpec })
+		.from(videoEdits)
+		.where(eq(videoEdits.videoId, videoId));
+
+	const hasExistingEdits = existingEdit
+		? !areEditSpecsEquivalent(
+				existingEdit.editSpec,
+				createIdentityEditSpec(existingEdit.editSpec.sourceDuration),
+			)
+		: false;
+
 	return (
 		<EditVideoClient
+			hasExistingEdits={hasExistingEdits}
 			video={{
 				id: video.id,
 				name: video.name,

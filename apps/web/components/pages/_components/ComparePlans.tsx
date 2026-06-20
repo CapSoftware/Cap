@@ -83,7 +83,7 @@ const sections: FeatureSection[] = [
 				pro: true,
 			},
 			{
-				label: "Custom S3 bucket support",
+				label: "Custom S3 bucket & Google Drive support",
 				free: false,
 				desktop: false,
 				pro: true,

@@ -474,6 +474,7 @@ async function getPublicSpaceVideos(
 	const offset = (page - 1) * PUBLIC_COLLECTION_PAGE_SIZE;
 	const where = and(
 		eq(spaceVideos.spaceId, collection.id as Space.SpaceIdOrOrganisationId),
+		isNull(spaceVideos.folderId),
 		eq(videos.public, true),
 		isNull(organizations.tombstoneAt),
 		videoPasswordPredicate(

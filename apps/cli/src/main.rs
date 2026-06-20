@@ -1,3 +1,4 @@
+mod automation;
 mod credentials;
 mod doctor;
 mod export;
@@ -128,6 +129,8 @@ enum Commands {
     Desktop(DesktopArgs),
     /// Print the machine-readable capability & JSON-schema manifest for agents
     Guide(FormatArgs),
+    /// List automation rules shared with Cap Desktop
+    Automations(AutomationsArgs),
     /// Generate shell completion scripts
     Completions(CompletionsArgs),
 }
@@ -299,6 +302,18 @@ enum AuthCommands {
 }
 
 #[derive(Args)]
+struct AutomationsArgs {
+    #[command(subcommand)]
+    command: AutomationsCommands,
+}
+
+#[derive(Subcommand)]
+enum AutomationsCommands {
+    /// List the automation rules configured in Cap Desktop
+    List(FormatArgs),
+}
+
+#[derive(Args)]
 struct CompletionsArgs {
     #[arg(value_enum)]
     shell: clap_complete::Shell,
@@ -435,6 +450,12 @@ async fn run(cli: Cli) -> Result<(), String> {
             let format = resolve_format(json, args.format);
             finish_json(format, guide::run(format))
         }
+        Commands::Automations(args) => match args.command {
+            AutomationsCommands::List(a) => {
+                let format = resolve_format(json, a.format);
+                finish_json(format, automation::list(format))
+            }
+        },
         Commands::Completions(args) => {
             args.run();
             Ok(())

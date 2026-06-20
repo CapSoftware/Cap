@@ -1115,6 +1115,7 @@ async fn stop_recording(
                 start: 0.0,
                 end: segment.duration,
                 timescale: 1.0,
+                name: None,
             })
         })
         .collect();

@@ -1,0 +1,269 @@
+# Cap — Open-Source Screen Recorder & Loom Alternative (Full Reference)
+
+> Cap is a free, open-source screen recorder and async video messaging platform — a privacy-first alternative to Loom, Vidyard, and OBS. Record your screen, camera, and audio, then share an instant link or edit locally in a professional studio editor. Native desktop apps for macOS and Windows (built on Tauri + Rust, not Electron), a Linux AppImage, and a web viewer. Bring your own storage (Google Drive, any S3-compatible bucket, or fully local) so you own every recording. Website: https://cap.so · Source: https://github.com/CapSoftware/Cap
+
+This is the full-detail reference for LLMs and agents. For a concise overview, see https://cap.so/llms.txt.
+
+## What is Cap?
+
+Cap (made by Cap Software, Inc.) is the open-source screen recording tool that combines Loom-style instant sharing with a professional local editor and a screenshot tool — all in one app. It is built for async communication, product demos, bug reports, tutorials, onboarding, code reviews, and customer support.
+
+Core principles:
+- **Open source** — AGPLv3 (camera/capture crates are MIT). Fully auditable and self-hostable; no vendor lock-in.
+- **Own your data** — store recordings in Cap Cloud, your own Google Drive, any S3-compatible bucket, or entirely on-device.
+- **Native performance** — desktop apps use Tauri + Rust, not Electron, for low CPU/RAM/battery usage.
+- **Privacy by default** — record locally and share only when you choose; password-protect or self-host sensitive content.
+
+## Three Modes, One App
+
+### Instant Mode
+- Records and uploads simultaneously; a shareable link is live the moment you stop.
+- Auto-generates a title, summary, clickable chapters, and a transcript.
+- Defaults to 30fps; free tier caps output at 720p, Cap Pro up to 4K.
+- Requires sign-in. Supports pause/resume; can auto-open the share link after stopping.
+- Best for quick feedback, bug reports, and async updates.
+
+### Studio Mode
+- Local, highest-quality recording saved as a `.cap` project for editing later.
+- Separate tracks: screen/display, optional camera, microphone, system audio, cursor data, and keypresses.
+- Default 60fps capture (selectable 30/60/120fps; capped to 30fps when the camera overlay is active, 24fps in Compatibility mode with camera).
+- Quality tiers: Compatibility (auto-selected on machines with <16GB RAM), Balanced (default), Ultra.
+- Crash-recovery recording via fragmented segments (on by default).
+- Best for polished demos, tutorials, and presentations. Free for personal use.
+
+### Screenshot Mode
+- Captures a still of a display, window, or custom area.
+- Dedicated editor: backgrounds, padding, shadow, border, and annotations (arrows, circles, rectangles, text, blur/pixelate masks).
+- Windows builds include OCR text recognition.
+- Copy to clipboard, save, or share.
+
+## Recording Capabilities
+
+- Capture targets: full display, specific window, custom area/region, or camera-only.
+- Audio: microphone (selectable device) and system audio. System-audio capture requires macOS 13.0+ (ScreenCaptureKit); Windows uses WASAPI loopback via the Direct3D pipeline.
+- Resolution: Studio captures at native resolution up to 4K (3840×2160), auto-downscaling anything beyond 4096px. Instant Mode output is plan-capped (720p free, up to 4K Pro).
+- Frame rate: capture at 30/60/120fps (default 60 Studio, 30 Instant).
+- Encoding: hardware-accelerated H.264 — VideoToolbox on macOS; NVENC / AMF / Quick Sync / Media Foundation on Windows (GPU-vendor aware) — with libx264 software fallback.
+- Capture APIs: ScreenCaptureKit (macOS), Direct3D/DXGI (Windows), X11 + Wayland portal/PipeWire (Linux).
+- Extras: pause/resume, countdown (0/3/5/10s), custom-cursor capture, keypress capture, automatic exclusion of Cap's own windows, and optional auto-zoom on clicks.
+
+## Studio Editor
+
+- Aspect ratios: Wide, Vertical, Square, Classic, Tall.
+- Backgrounds: desktop snapshot, built-in wallpapers, custom image, solid color (with alpha), or gradient (angle, noise, animation) — plus padding, rounding, inset, crop, blur, shadow, and border.
+- Camera overlay: 9-point positioning, size, mirror, hide, shape (square/source), rounding, shadow, scale-during-zoom, and AI background blur (on-device segmentation).
+- Cursor: hide / hide-when-idle, size, type (Auto/Pointer/Circle), smoothing presets (Slow/Smooth/Mellow/Fast/Custom), motion blur, rotation, and click spring animation.
+- Motion: screen motion blur and screen-movement spring, independent of cursor settings.
+- Timeline tracks:
+  - Clips — trim, split, reorder, speed (0.25x–3x), delete, multi-segment.
+  - Zoom — manual or auto segments (auto-generated from clicks); amount, focus, glide, edge snap.
+  - Scene — Default, Camera-only, Hide-camera, Split-screen (with split layout/position).
+  - Mask — sensitive/highlight masks with keyframed position/size/intensity.
+  - Text — multi-lane text overlays.
+  - Captions — word-level segments, generated from audio.
+  - Keyboard — keypress overlay segments (when captured).
+- Audio: mute, mic gain (dB), system-audio gain (dB), stereo/mono modes.
+- Captions: local transcription via Whisper and Parakeet models (Parakeet unavailable on Intel macOS); font/size/color/background/position/outline/word-highlight/animations/presets; export with subtitles or to SRT.
+- Presets: save/load reusable styling (background, camera, cursor).
+- Export destinations: file (save dialog), clipboard, or shareable cloud link.
+
+## AI Features (Cap Pro, no usage limits)
+
+- Auto-generated titles, summaries, and clickable chapters for every recording.
+- Automatic transcriptions and a fully searchable transcript; editable captions with translation support.
+- Providers: Deepgram (cloud transcription), Groq with model `openai/gpt-oss-120b` and OpenAI fallback (titles/summaries/chapters), Whisper + Parakeet (on-device desktop captions).
+- Marketed as "coming soon": Auto-Edit, Noise Reduction, AI Video Search.
+
+## Sharing & Collaboration
+
+- Instant shareable links and an embeddable iframe player (Notion, GitHub READMEs, etc.) with HLS playback.
+- Share page tabs: Activity, Transcript, Summary, Settings.
+- Threaded, timestamped comments and emoji reactions.
+- Viewer analytics and engagement (24h / 7d / 30d / lifetime).
+- Password-protected shares and custom domains (cap.yourdomain.com).
+- Organizations with member roles (Admin/Member), team workspaces, public/private spaces, and color-coded folders.
+- Built-in Loom video importer (single URL or CSV bulk import up to 500 videos).
+- Browser-based web recorder available in the dashboard; referral program at /dashboard/refer.
+
+## Storage & Privacy
+
+- Storage targets: Cap Cloud, your own Google Drive (OAuth), any S3-compatible bucket, or fully local.
+- S3-compatible providers: AWS S3, Cloudflare R2, Supabase, MinIO, DigitalOcean Spaces, Backblaze B2, Wasabi, and more.
+- Security: end-to-end encryption for cloud storage; GDPR-friendly via bring-your-own storage in any region; HIPAA via self-hosting plus signed BAAs for enterprise.
+- Compliance: SOC 2, HIPAA, and ISO 27001 (certifications in progress). Trust Portal: https://trust.cap.so.
+- Self-hosting documentation: https://cap.so/docs/self-hosting.
+
+## Export
+
+- Formats: MP4, GIF, and transparent cursor-only MOV; captions export to SRT.
+- Resolutions: 720p, 1080p, 4K. Frame rates: 15/30/60 (MP4/MOV), 10–30 (GIF).
+- Compression presets: Maximum, Social, Web, Potato (optional custom bits-per-pixel; MP4 file-size optimization). No watermarks on any plan.
+- Rendering: GPU NV12 pipeline with CPU fallback (WGPU compositor).
+
+## Desktop Automations
+
+- Triggers: screenshot taken, recording started, studio/instant recording finished, upload completed, video imported, recording deleted.
+- Actions: copy to clipboard, save to location, export (MP4/GIF with compression), upload, fire a webhook, send notifications, open in editor.
+
+## Command Line (for AI agents)
+
+Cap ships a `cap` CLI designed to be driven by AI coding agents (Claude Code, Codex, Cursor, OpenCode) and scripts.
+
+Install:
+- `curl -fsSL https://cap.so/install-cli.sh | sh` (PowerShell: `irm https://cap.so/install-cli.ps1 | iex`)
+- or `cap desktop install-cli`, or via Cap Desktop → Settings → Command Line.
+
+Design for agents:
+- Add `--json` to any command for machine-readable stdout; stderr stays human-readable.
+- Failures exit non-zero and, in JSON mode, emit a final object with an `error` field.
+- Exit codes: 0 success, 1 runtime failure, 2 usage/parse error; `project validate` is non-zero when invalid.
+- `record` and `export` stream NDJSON progress events.
+- Discover the full contract with `cap guide --json` (capability + schema manifest, schema version 1).
+
+Global flags:
+- `--json` (force JSON; overrides per-command `--format`)
+- `--log-level <trace|debug|info|warn|error>` (default `warn`, logs to stderr)
+
+Commands:
+- `record` — `start`, `stop`, `status`, `screens`, `windows`, `cameras`, `mics`
+- `targets` — `screens`, `windows`, `cameras`, `mics`
+- `export` — export a `.cap` project
+- `export-preview` — render a single preview frame
+- `screenshot` — capture a screen or window
+- `recordings list`
+- `project` — `inspect`, `validate`, `config get|set`
+- `upload` — upload a file or `.cap`
+- `auth status`
+- `automations list`
+- `doctor` — environment/readiness check
+- `desktop` — `status`, `install-cli`, `uninstall-cli`
+- `update`, `completions <shell>`, `guide`, `version`
+
+`record start` flags: `--screen <id>` | `--window <id>` (one required), `--mode <studio|instant>` (default studio), `--camera <id>`, `--mic <name>`, `--system-audio`, `--path <path>`, `--fps <1-120>`, `--duration <seconds>`, `--detach`, `--format <text|json>`.
+`record stop` flags: `--id <recordingId>` or `--path <.cap>`, `--timeout <seconds>` (default 30), `--format`.
+`export` flags: `--output/-o`, `--format <mp4|gif|mov>`, `--fps`, `--resolution <WxH>`, `--quality <maximum|social|web|potato>` (mp4), `--optimize-filesize` (mp4), `--settings-json`, `--force-ffmpeg-decoder`, `--progress-json`, `--completion-json`.
+
+Environment variables: `CAP_API_KEY` (headless/CI upload auth), `CAP_SERVER_URL` (default `https://cap.so`), `CAP_NO_MODIFY_PATH`, `CAP_DESKTOP_FORCE_INSTALL`.
+
+Canonical workflow:
+`cap doctor --json` → `cap targets --json` → `cap record start --screen <id> --json` (or `--detach`) → `cap record stop --id <recordingId> --json` → `cap project validate <path.cap> --json` → `cap export <path.cap> --json` → `cap upload <file> --json`.
+
+A REST API and webhooks are also available — see https://cap.so/docs/api/rest-api and https://cap.so/docs/api/webhooks. Usage-based developer API credits are billed at ~$0.05/min recording and ~$0.001/min/month storage, with auto top-up.
+
+## Platforms
+
+- macOS: Apple Silicon & Intel; recommended 13.1+ (system audio requires 13.0+).
+- Windows: Windows 10 (build 18362 / 1903+) and Windows 11.
+- Linux: x86_64 AppImage (X11/Wayland capture).
+- Web: shareable links and embeds play in any modern browser; no install for viewers.
+
+Current desktop app version: 0.5.2.
+
+## Pricing
+
+- **Free** — Personal use. Studio Mode with the full local editor, 4K/60fps export, export to any format, team workspaces, community support. Free recordings are limited to 5 minutes; a paid plan is required for commercial use.
+- **Desktop License** — Commercial license for the desktop app: $29/license billed yearly, or $58/license one-time (lifetime). Unlimited local recording & editing, Studio Mode, 20 cloud shareable links/month (up to 5 min each), export to any format, community support.
+- **Cap Pro** — $12/user/month, or $8.16/user/month billed annually (save 32%). Everything in Desktop License plus: unlimited cloud storage & bandwidth; auto-generated titles, summaries, clickable chapters, and transcriptions; custom domain; password-protected shares; viewer analytics & engagement; team workspaces; Loom video importer; custom S3 bucket & Google Drive support; priority support & early features.
+- **Enterprise** — Custom. SLAs & priority support, SAML SSO & SCIM provisioning, managed self-hosting, volume discounts, advanced security controls, dedicated onboarding.
+- **Discounts** — STUDENT50 (30% off, students), MIGRATE20 (20% off first year, Loom switchers); volume discounts for teams over 10 users.
+
+Early-adopter pricing is locked in for the lifetime of the subscription. Trusted by 40,000+ users, teams, and creators.
+
+## How Cap Compares
+
+- **vs Loom** — Open source and self-hostable; from $8.16/user/month vs Loom's $18/user/month; 4K on free & paid plans (Loom paid-only); custom domains on Pro (Loom enterprise-only); connect your own S3 or Google Drive (Loom: not available); built-in Loom importer; desktop app works offline.
+- **vs OBS Studio** — Simpler, no complex scene setup; instant cloud sharing and AI built in; native lightweight app.
+- **vs Camtasia / ScreenFlow** — Free and open source, cross-platform, cloud sharing built in, lighter weight.
+- **vs Vidyard / Panopto** — Open source, bring-your-own storage, transparent pricing, self-hosting option.
+- **vs Zoom recordings** — Purpose-built async video with editing, analytics, and HIPAA-friendly self-hosting.
+- **vs Scribe** — Real screen video with narration and chapters vs static step screenshots.
+
+## Use Cases & Solution Pages
+
+- Async team communication — replace status meetings; comments and reactions keep threads moving.
+- Bug reports & QA — capture reproductions with narration; share an instant link.
+- Product demos & sales — personalized walkthroughs without render/upload delays.
+- Engineering — async code reviews (https://cap.so/async-video-code-reviews) and developer documentation videos (https://cap.so/developer-documentation-videos); paste links into GitHub, GitLab, Linear, or Jira.
+- Education & training — lectures, courses, online classroom tools, employee onboarding.
+- Customer support — visual answers and help videos.
+- Dedicated solution pages:
+  - Remote team collaboration: https://cap.so/solutions/remote-team-collaboration
+  - Agencies: https://cap.so/solutions/agencies
+  - Daily standup software: https://cap.so/solutions/daily-standup-software
+  - Employee onboarding: https://cap.so/solutions/employee-onboarding-platform
+  - Online classroom tools: https://cap.so/solutions/online-classroom-tools
+
+## Technology Stack
+
+- Desktop: Tauri 2.5 (Rust) + SolidJS / SolidStart; WGPU rendering; FFmpeg; ScreenCaptureKit (macOS) and Direct3D / Media Foundation (Windows); whisper-rs and Parakeet for local captions; `@ts-rest/core` API client; Effect.
+- Web: Next.js 16, React 19, TypeScript; Effect (`@effect/platform` HttpApi) and `@ts-rest/core` (no tRPC); Drizzle ORM on MySQL (PlanetScale); NextAuth + WorkOS auth; TanStack Query.
+- Media: native hardware encoders, FFmpeg, WGPU compositor, WebCodecs; HLS playback via Mux.
+- Infrastructure: AWS S3 + CloudFront + MediaConvert, Mux, PlanetScale, Vercel, Stripe, PostHog, Resend; Deepgram + Groq/OpenAI for AI.
+- Runtime: Node 20, pnpm 10.5.2, Rust 1.88+, Turborepo monorepo.
+
+## Free Web Tools
+
+Cap offers free browser tools at https://cap.so/tools: WebM→MP4, MOV→MP4, AVI→MP4, MP4→GIF, MP4→MP3, MP4→WebM converters, a Video Speed Controller, Trim Video, and a Loom Video Downloader.
+
+## Installation
+
+- Desktop: https://cap.so/download (macOS Apple Silicon/Intel, Windows, Linux AppImage).
+- CLI: `curl -fsSL https://cap.so/install-cli.sh | sh` or `cap desktop install-cli`.
+- Self-host: https://cap.so/docs/self-hosting.
+- Viewers: open any Cap share link in a browser — no install required.
+
+## Open Source
+
+- Source code: https://github.com/CapSoftware/Cap
+- License: AGPLv3 (the `cap-camera*` and `scap-*` crates are MIT).
+- Community: https://discord.gg/y8gdQ3WRN3
+- Contributions and self-hosting are welcome.
+
+## Key Links
+
+- Home: https://cap.so
+- Pricing: https://cap.so/pricing
+- Features: https://cap.so/features
+- Download: https://cap.so/download
+- Docs: https://cap.so/docs
+- Quickstart: https://cap.so/docs/quickstart
+- Installation: https://cap.so/docs/installation
+- Instant Mode: https://cap.so/docs/recording/instant-mode
+- Studio Mode: https://cap.so/docs/recording/studio-mode
+- Camera & mic: https://cap.so/docs/recording/camera-and-mic
+- Keyboard shortcuts: https://cap.so/docs/recording/keyboard-shortcuts
+- Share a Cap: https://cap.so/docs/sharing/share-a-cap
+- Analytics: https://cap.so/docs/sharing/analytics
+- Comments: https://cap.so/docs/sharing/comments
+- Embeds: https://cap.so/docs/sharing/embeds
+- REST API: https://cap.so/docs/api/rest-api
+- Webhooks: https://cap.so/docs/api/webhooks
+- S3 config (AWS): https://cap.so/docs/s3-config/aws-s3
+- S3 config (Cloudflare R2): https://cap.so/docs/s3-config/cloudflare-r2
+- Commercial license: https://cap.so/docs/commercial-license
+- Self-hosting: https://cap.so/self-hosting
+- Loom alternative: https://cap.so/loom-alternative
+- Migrate from Loom: https://cap.so/migrate-from-loom
+- OBS alternative: https://cap.so/obs-alternative
+- Open-source screen recorder: https://cap.so/open-source-screen-recorder
+- Screen recorder for Mac: https://cap.so/screen-recorder-mac
+- Screen recorder for Windows: https://cap.so/screen-recorder-windows
+- HIPAA-compliant recording: https://cap.so/hipaa-compliant-screen-recording
+- Self-hosted screen recording: https://cap.so/self-hosted-screen-recording
+- Google Drive screen recorder: https://cap.so/google-drive-screen-recorder
+- Student discount: https://cap.so/student-discount
+- Tools: https://cap.so/tools
+- Blog: https://cap.so/blog
+- About: https://cap.so/about
+- Trust Portal: https://trust.cap.so
+- System status: https://cap.openstatus.dev
+
+## Common Questions
+
+- **Is Cap free?** Yes — 100% free for personal use with Studio Mode and the local editor. Paid plans add commercial rights and cloud features.
+- **Is Cap a good Loom alternative?** Yes — it's the leading open-source Loom alternative, with instant sharing, AI summaries, custom storage, and a built-in Loom importer at a lower price ($8.16 vs $18/user/month).
+- **Can I self-host Cap?** Yes — Cap is open source (AGPLv3) and fully self-hostable.
+- **Does Cap work on Mac and Windows?** Yes — native apps for macOS (Apple Silicon & Intel) and Windows, plus a Linux AppImage and a browser viewer.
+- **Can I use my own storage?** Yes — connect your own Google Drive or any S3-compatible bucket, use Cap Cloud, or keep recordings entirely local.
+- **Does Cap record system audio and 4K?** Yes — system audio plus screen, camera, and mic, up to 4K at 60fps.
+- **Is there an API/CLI?** Yes — a `cap` CLI built for AI agents (`--json`, `cap guide --json`), a REST API, and webhooks.
