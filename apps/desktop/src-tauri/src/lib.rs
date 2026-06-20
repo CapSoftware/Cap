@@ -2957,17 +2957,13 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
     let mut project_config = ProjectConfiguration::load(&project_path)
         .map_err(|e| format!("Failed to load project config: {e}"))?;
 
-    if project_config
-        .external_recordings
-        .iter()
-        .any(|r| {
-            resolve_recording_path(&r.path, &project_path)
-                .canonicalize()
-                .ok()
-                .as_deref()
-                == Some(recording_path.as_path())
-        })
-    {
+    if project_config.external_recordings.iter().any(|r| {
+        resolve_recording_path(&r.path, &project_path)
+            .canonicalize()
+            .ok()
+            .as_deref()
+            == Some(recording_path.as_path())
+    }) {
         return Err("This recording has already been imported".to_string());
     }
 
