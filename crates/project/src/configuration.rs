@@ -613,6 +613,8 @@ pub struct TimelineSegment {
     pub timescale: f64,
     pub start: f64,
     pub end: f64,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 impl TimelineSegment {

@@ -2732,6 +2732,7 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
             start: 0.0,
             end: duration,
             timescale: 1.0,
+            name: None,
         });
     }
 
