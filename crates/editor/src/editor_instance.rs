@@ -638,7 +638,11 @@ pub async fn create_all_segments(
     for (i, ext_ref) in external_recordings.iter().enumerate() {
         let ext_path = {
             let p = std::path::Path::new(&ext_ref.path);
-            if p.is_absolute() { p.to_path_buf() } else { recording_meta.project_path.join(p) }
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                recording_meta.project_path.join(p)
+            }
         };
         let ext_meta = cap_project::RecordingMeta::load_for_project(&ext_path)
             .map_err(|e| format!("external recording {i}: {e}"))?;
