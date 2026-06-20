@@ -3023,7 +3023,10 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
     EditorInstances::remove(window.clone()).await;
 
     CapRecordingImported {
-        project_path: project_path.to_string_lossy().to_string(),
+        project_path: project_path
+            .to_str()
+            .ok_or("Project path contains non-UTF-8 characters")?
+            .to_string(),
     }
     .emit(&window)
     .map_err(|e| format!("Failed to emit event: {e}"))?;
