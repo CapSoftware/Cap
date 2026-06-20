@@ -2946,7 +2946,13 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
     if project_config
         .external_recordings
         .iter()
-        .any(|r| resolve_recording_path(&r.path, &project_path) == recording_path)
+        .any(|r| {
+            resolve_recording_path(&r.path, &project_path)
+                .canonicalize()
+                .ok()
+                .as_deref()
+                == Some(recording_path.as_path())
+        })
     {
         return Err("This recording has already been imported".to_string());
     }
@@ -2980,7 +2986,8 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
         .external_recordings
         .push(cap_project::ExternalRecordingReference {
             path: relative_path_from(&project_path, &recording_path)
-                .to_string_lossy()
+                .to_str()
+                .ok_or("Recording path contains non-UTF-8 characters")?
                 .to_string(),
             label: Some(label),
         });
