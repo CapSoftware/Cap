@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui";
 import { faPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useRive } from "@rive-app/react-canvas";
+import { useRive } from "@/lib/rive";
 import { useTheme } from "../../../Contexts";
 
 interface EmptySharedCapStateProps {
@@ -14,6 +14,7 @@ interface EmptySharedCapStateProps {
 		createdById: string;
 	};
 	currentUserId?: string;
+	canAddVideos?: boolean;
 	onAddVideos?: () => void;
 }
 
@@ -22,6 +23,7 @@ export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
 	type = "organization",
 	spaceData,
 	currentUserId,
+	canAddVideos,
 	onAddVideos,
 }) => {
 	const { theme } = useTheme();
@@ -33,7 +35,7 @@ export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
 
 	const isSpaceOwner = spaceData?.createdById === currentUserId;
 	const showAddButton =
-		(type === "space" && isSpaceOwner && onAddVideos) ||
+		(type === "space" && (isSpaceOwner || canAddVideos) && onAddVideos) ||
 		(type === "organization" && onAddVideos);
 
 	return (

@@ -984,10 +984,17 @@ struct SystemAudioResampler {
 
 impl SystemAudioResampler {
     fn create(source_info: &AudioInfo, target_info: &AudioInfo) -> Option<Self> {
+        // The capture frames come from `scap_ffmpeg::DataExt::as_ffmpeg`, which tags
+        // them with `ChannelLayout::default(channels)`. swr revalidates each frame's
+        // layout against the context and silently drops it on a mismatch, so the
+        // context must use the same `default` layout — the named `channel_layout()`
+        // masks diverge for 3/4/5/6-channel devices (e.g. a 5.1 loopback output) and
+        // would silence system audio entirely.
+        let source_layout = source_info.packed_channel_layout();
         let context = ffmpeg::software::resampler(
             (
                 source_info.sample_format,
-                source_info.channel_layout(),
+                source_layout,
                 source_info.sample_rate,
             ),
             (
@@ -1028,6 +1035,10 @@ impl SystemAudioResampler {
         if output.samples() == 0 {
             return None;
         }
+        // Use the input frame's capture timestamp directly (no resampler-delay offset):
+        // the muxer reconciles the timeline via capture timestamps + sample counts, and
+        // subtracting the swr delay makes resampled frames overlap, causing the muxer to
+        // drop ~0.8s of audio up front (see the mic path for the same fix).
         Some(AudioFrame::new(output, timestamp))
     }
 }

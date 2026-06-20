@@ -27,7 +27,7 @@ pub struct PendingEditorInstances(Arc<RwLock<HashMap<String, PendingReceiver>>>)
 async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
     let (frame_tx, frame_rx) = watch::channel(None);
 
-    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx, Default::default()).await;
     let (inner, render_frame_event_id) = create_editor_instance_impl(
         &app,
         path,
@@ -35,7 +35,7 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
             let ws_frame = match output {
                 cap_editor::EditorFrameOutput::Nv12(frame) => {
                     let ws_format = match frame.format {
-                        GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                        GpuOutputFormat::Nv12 => WSFrameFormat::Nv12 { full_range: false },
                         GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
                     };
                     WSFrame {
@@ -253,9 +253,17 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowEditorInstance {
         let Some(instances) = window.try_state::<EditorInstances>() else {
             return Err("editor instance registry unavailable".into());
         };
-        let instance = futures::executor::block_on(instances.0.read());
 
-        let Some(instance) = instance.get(window.label()).cloned() else {
+        // Avoid `futures::executor::block_on` on a tokio RwLock here. That can deadlock or
+        // panic when the IPC handler runs from inside the tokio runtime (release builds hit
+        // this path much more aggressively than dev builds and silently terminate the process).
+        // `try_read` is sync and never blocks; if the lock is contended we surface a transient
+        // error and let the frontend retry.
+        let Ok(instance_guard) = instances.0.try_read() else {
+            return Err("editor instance registry busy".into());
+        };
+
+        let Some(instance) = instance_guard.get(window.label()).cloned() else {
             return Err("editor instance unavailable".into());
         };
 
@@ -291,8 +299,10 @@ impl<'de, R: Runtime> CommandArg<'de, R> for OptionalWindowEditorInstance {
             return Ok(Self(None));
         };
 
-        let instance = futures::executor::block_on(instances.0.read());
-        Ok(Self(instance.get(window.label()).cloned()))
+        match instances.0.try_read() {
+            Ok(instance_guard) => Ok(Self(instance_guard.get(window.label()).cloned())),
+            Err(_) => Ok(Self(None)),
+        }
     }
 }
 
@@ -333,7 +343,8 @@ impl EditorInstances {
 
                 let (frame_tx, frame_rx) = watch::channel(None);
 
-                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+                let (ws_port, ws_shutdown_token) =
+                    create_watch_frame_ws(frame_rx, Default::default()).await;
                 let app_handle = window.app_handle().clone();
                 let (inner, render_frame_event_id) = create_editor_instance_impl(
                     window.app_handle(),
@@ -342,7 +353,9 @@ impl EditorInstances {
                         let ws_frame = match output {
                             cap_editor::EditorFrameOutput::Nv12(frame) => {
                                 let ws_format = match frame.format {
-                                    GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                                    GpuOutputFormat::Nv12 => {
+                                        WSFrameFormat::Nv12 { full_range: false }
+                                    }
                                     GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
                                 };
                                 WSFrame {

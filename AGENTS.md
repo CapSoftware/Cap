@@ -6,7 +6,7 @@ These rules are enforced by CI (`cargo clippy -D warnings`, Biome). Fixing them 
 
 ### Zero-tolerance rules
 - **Default to no code comments. Add a comment only after solving a bug or working through a complex issue, and only when it captures non-obvious context that a future investigator or reviewer genuinely needs** — e.g. why the fix looks the way it does, the upstream/platform bug being worked around, a non-obvious invariant or trade-off chosen after investigation, or a link to the PR/issue that explains the decision. Bad cases that remain banned: narrating what the code does, restating types, JSDoc that paraphrases parameter names, "TODO: refactor" or "this should be cleaner" notes, and any comment that just describes the change you are currently making. When in doubt, prefer better naming/types over a comment. Applies to every language: Rust, TS, JS, Python, shell, SQL, TOML, etc.
-- **Never edit generated files**: `**/tauri.ts`, `**/queries.ts`, `apps/desktop/src-tauri/gen/**`, `packages/ui-solid/src/auto-imports.d.ts`, Drizzle migration SQL under `packages/database/migrations/`.
+- **Never edit generated files**: `**/tauri.ts`, `apps/desktop/src-tauri/gen/**`, `packages/ui-solid/src/auto-imports.d.ts`, Drizzle migration SQL under `packages/database/migrations/`. These are regenerated (e.g. `tauri.ts` only on debug desktop runs) but stay committed because CI typecheck and fresh clones depend on them; commit binding changes alongside the Rust change that produced them. Note: `apps/desktop/src/utils/queries.ts` is hand-written, not generated — edit it normally.
 - **Never start additional dev servers** (`pnpm dev`, `pnpm dev:web`, `pnpm dev:desktop`, Docker services). Assume they are already running.
 
 ### Post-edit checks (run before you say "done")
@@ -87,6 +87,18 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - Keep secrets out of VCS; configure via `.env` from `pnpm env-setup`.
 - macOS note: desktop permissions (screen/mic) apply to the terminal running `pnpm dev:desktop`.
 - All other agent-facing rules (comments policy, no editing generated files, clippy/Biome shape, post-edit gates) live in **Pre-Generation Invariants** at the top of this file.
+
+## Deep Investigation Default
+When asked to inspect, review, optimize, secure, or fix something, do not stop at the obvious local change. First trace the full path and run a second-pass blast-radius review:
+
+- identify the real root cause, not only the symptom
+- trace callers, side effects, async/runtime behavior, generated artifacts, caches, exports, old data, and platform-specific paths
+- compare old vs new behavior when reviewing a diff
+- call out what is verified vs merely plausible
+- consider likely follow-up reviewer or user reports before calling it done
+- verify the actual user-visible outcome where practical, not only compile/lint success
+
+Prefer the smallest correct fix, but only after checking whether the narrow fix misses related consequences.
 
 ## Effect Usage
 - Next.js API routes in `apps/web/app/api/*` are built with `@effect/platform`'s `HttpApi` builder; copy the existing class/group/endpoint pattern instead of ad-hoc handlers.

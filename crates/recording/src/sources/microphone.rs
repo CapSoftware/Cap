@@ -26,6 +26,20 @@ const SILENCE_CHUNK_DURATION: Duration = Duration::from_millis(20);
 const MIC_RECONNECT_AFTER: Duration = Duration::from_secs(2);
 const MIC_RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
+// A stalled callback usually means CoreAudio/cpal is delivering buffers late, not that
+// audio was lost: the real samples arrive with their original capture timestamps once the
+// thread resumes. Fabricating forward-timestamped silence for those transient stalls
+// double-counts the interval (synthetic silence *and* the late real samples both land on
+// the muxer timeline), which is what progressively pushed audio past video in long
+// recordings. Below this threshold we emit nothing and let the muxer's gap/overlap
+// reconciliation be the single owner of timeline length; only a sustained outage gets
+// keepalive silence so a genuinely dead device doesn't freeze the audio track.
+const STALL_SILENCE_KEEPALIVE_AFTER: Duration = Duration::from_secs(1);
+
+fn should_fabricate_stall_silence(stall_duration: Duration, keepalive_after: Duration) -> bool {
+    stall_duration >= keepalive_after
+}
+
 pub struct Microphone {
     info: AudioInfo,
     _lock: Arc<MicrophoneFeedLock>,
@@ -55,16 +69,20 @@ impl MicResampler {
         target_info: &AudioInfo,
     ) -> Option<Self> {
         let ffmpeg_fmt = ffmpeg_sample_format_for(source_format)?;
-        let source_info = AudioInfo::new_raw(
-            ffmpeg_fmt,
-            source_rate,
-            source_channels.min(AudioInfo::MAX_AUDIO_CHANNELS),
-        );
+        let source_info = AudioInfo::new_raw(ffmpeg_fmt, source_rate, source_channels);
+
+        // `resample` feeds frames built by `wrap_frame_with_max_channels`, which tag
+        // them with `ChannelLayout::default`. swr revalidates each frame's layout
+        // against the context and silently drops it on a mismatch, so the context must
+        // be configured with the identical layout. Using the named `channel_layout()`
+        // here instead diverges for 3/4/5/6-channel sources and silenced those mics.
+        let source_layout =
+            source_info.wrapped_frame_layout(AudioInfo::MAX_AUDIO_CHANNELS as usize);
 
         let context = ffmpeg::software::resampler(
             (
                 source_info.sample_format,
-                source_info.channel_layout(),
+                source_layout,
                 source_info.sample_rate,
             ),
             (
@@ -96,13 +114,10 @@ impl MicResampler {
         timestamp: cap_timestamp::Timestamp,
     ) -> Option<AudioFrame> {
         let ffmpeg_fmt = ffmpeg_sample_format_for(source_format)?;
-        let source_info = AudioInfo::new_raw(
-            ffmpeg_fmt,
-            source_rate,
-            source_channels.min(AudioInfo::MAX_AUDIO_CHANNELS),
-        );
+        let source_info = AudioInfo::new_raw(ffmpeg_fmt, source_rate, source_channels);
 
-        let input_frame = source_info.wrap_frame(data);
+        let input_frame =
+            source_info.wrap_frame_with_max_channels(data, AudioInfo::MAX_AUDIO_CHANNELS as usize);
         let input_samples = input_frame.samples();
 
         let target = *self.context.output();
@@ -131,6 +146,12 @@ impl MicResampler {
             return None;
         }
 
+        // Timestamp the output with the input frame's capture time, NOT capture minus
+        // the swr delay. The muxer builds the audio timeline from capture timestamps +
+        // sample counts and reconciles overlaps; subtracting the resampler's (pre-run)
+        // delay pulls each frame back so consecutive frames overlap, and the muxer then
+        // drops a full frame each tick — e.g. a 32k→48k mic lost ~0.8s up front and
+        // ran badly out of sync. Sample-count continuity already keeps duration correct.
         Some(AudioFrame::new(output, timestamp))
     }
 }
@@ -344,7 +365,9 @@ impl AudioSource for Microphone {
                                     warn!(
                                         is_wireless,
                                         timeout_ms = silence_timeout.as_millis(),
-                                        "Microphone data timeout, generating silence"
+                                        keepalive_after_ms =
+                                            STALL_SILENCE_KEEPALIVE_AFTER.as_millis(),
+                                        "Microphone data timeout, awaiting delivery before keepalive silence"
                                     );
                                     silence_mode = true;
                                 }
@@ -396,6 +419,13 @@ impl AudioSource for Microphone {
                                     silence_start = Some(Instant::now());
                                 }
 
+                                if !should_fabricate_stall_silence(
+                                    stall_duration,
+                                    STALL_SILENCE_KEEPALIVE_AFTER,
+                                ) {
+                                    continue;
+                                }
+
                                 let timestamp = match last_timestamp {
                                     Some(ts) => {
                                         let next = ts + last_frame_duration;
@@ -428,6 +458,7 @@ impl AudioSource for Microphone {
 
             tokio::spawn({
                 let cancel = cancel.clone();
+                let health_tx = health_tx.clone();
                 async move {
                     let frame_counter = mic_frame_counter;
                     let drop_counter = mic_drop_counter;
@@ -436,6 +467,7 @@ impl AudioSource for Microphone {
                     let mut prev_captured: u64 = 0;
                     let mut prev_dropped: u64 = 0;
                     let mut stale_count: u32 = 0;
+                    let mut high_drop_intervals: u32 = 0;
                     loop {
                         tokio::select! {
                             biased;
@@ -456,9 +488,39 @@ impl AudioSource for Microphone {
                                 0.0
                             };
 
+                            let captured_delta = captured.saturating_sub(prev_captured);
+                            let dropped_delta = dropped.saturating_sub(prev_dropped);
                             let data_changed = captured != prev_captured || dropped != prev_dropped;
                             prev_captured = captured;
                             prev_dropped = dropped;
+
+                            // Surface a *sustained* high drop rate as a health event, like
+                            // every other source/muxer. The case that matters most is a
+                            // resampler that rejects every frame → 100% drops → silent
+                            // track, which otherwise only appears in this log line.
+                            // Require two consecutive bad intervals so a single
+                            // stall→resume boundary (few captures vs accumulated
+                            // keepalive drops) doesn't trip a false alarm.
+                            let interval_total = captured_delta + dropped_delta;
+                            let interval_drop_pct = if interval_total > 0 {
+                                100.0 * dropped_delta as f64 / interval_total as f64
+                            } else {
+                                0.0
+                            };
+                            if interval_total > 0 && interval_drop_pct >= 50.0 {
+                                high_drop_intervals = high_drop_intervals.saturating_add(1);
+                            } else {
+                                high_drop_intervals = 0;
+                            }
+                            if high_drop_intervals >= 2 {
+                                emit_health(
+                                    &health_tx,
+                                    PipelineHealthEvent::FrameDropRateHigh {
+                                        source: "microphone".to_string(),
+                                        rate_pct: interval_drop_pct,
+                                    },
+                                );
+                            }
 
                             if !data_changed {
                                 stale_count = stale_count.saturating_add(1);
@@ -530,6 +592,41 @@ mod tests {
     use cap_media_info::{Sample, Type};
 
     #[test]
+    fn transient_stall_does_not_fabricate_silence() {
+        // The repro's worst mic stall was 293ms; none of its sub-second late-delivery
+        // stalls should produce synthetic silence (the muxer reconciles them instead).
+        for stall_ms in [0, 5, 54, 86, 100, 114, 200, 293, 500, 999] {
+            assert!(
+                !should_fabricate_stall_silence(
+                    Duration::from_millis(stall_ms),
+                    STALL_SILENCE_KEEPALIVE_AFTER,
+                ),
+                "{stall_ms}ms transient stall must not fabricate silence"
+            );
+        }
+    }
+
+    #[test]
+    fn sustained_stall_fabricates_keepalive_silence() {
+        for stall_ms in [1000, 1500, 2000, 5000] {
+            assert!(
+                should_fabricate_stall_silence(
+                    Duration::from_millis(stall_ms),
+                    STALL_SILENCE_KEEPALIVE_AFTER,
+                ),
+                "{stall_ms}ms sustained outage must emit keepalive silence"
+            );
+        }
+    }
+
+    #[test]
+    fn keepalive_threshold_exceeds_reconnect_free_window() {
+        // Keepalive must engage before the first reconnect attempt so a frozen device
+        // never leaves the audio track without forward progress.
+        assert!(STALL_SILENCE_KEEPALIVE_AFTER < MIC_RECONNECT_AFTER);
+    }
+
+    #[test]
     fn target_info_uses_output_rate_and_mono() {
         let device_info = AudioInfo {
             sample_format: Sample::F32(Type::Packed),
@@ -558,6 +655,7 @@ mod tests {
         assert!(MicResampler::create(32000, 1, SampleFormat::F32, &target).is_some());
         assert!(MicResampler::create(44100, 2, SampleFormat::I16, &target).is_some());
         assert!(MicResampler::create(96000, 2, SampleFormat::F32, &target).is_some());
+        assert!(MicResampler::create(48000, 16, SampleFormat::F32, &target).is_some());
     }
 
     #[test]
@@ -640,5 +738,134 @@ mod tests {
             "downsampling lost samples: produced={produced}, expected≈{expected_output_samples}, \
              lower_bound={lower_bound}"
         );
+    }
+
+    #[test]
+    fn resampler_accepts_more_than_eight_input_channels() {
+        use cap_timestamp::Timestamp;
+        use std::time::Instant;
+
+        let target = AudioInfo::new_raw(Sample::F32(Type::Packed), 48000, 1);
+        let mut resampler =
+            MicResampler::create(48000, 16, SampleFormat::F32, &target).expect("resampler");
+
+        const FRAME_SAMPLES: usize = 960;
+        const CHANNELS: usize = 16;
+
+        let payload_len_bytes = FRAME_SAMPLES * CHANNELS * std::mem::size_of::<f32>();
+        let payload = vec![0u8; payload_len_bytes];
+        let frame = resampler
+            .resample(
+                &payload,
+                48000,
+                CHANNELS as u16,
+                SampleFormat::F32,
+                Timestamp::Instant(Instant::now()),
+            )
+            .expect("frame");
+
+        assert_eq!(frame.rate(), 48000);
+        assert_eq!(frame.channels(), 1);
+        assert_eq!(frame.samples(), FRAME_SAMPLES);
+    }
+
+    #[test]
+    fn resampler_downmixes_surround_channel_counts_without_dropping() {
+        use cap_timestamp::Timestamp;
+        use std::time::Instant;
+
+        let target = AudioInfo::new_raw(Sample::F32(Type::Packed), 48000, 1);
+        const FRAME_SAMPLES: usize = 480;
+
+        // 3/4/5/6 are exactly the channel counts where `ChannelLayout::default` and the
+        // named `channel_layout()` masks diverge. Before the layout fix, swr rejected
+        // every frame for these counts and the mic track was silent.
+        for channels in [3u16, 4, 5, 6] {
+            let mut resampler = MicResampler::create(48000, channels, SampleFormat::F32, &target)
+                .unwrap_or_else(|| panic!("resampler for {channels}ch"));
+
+            // Distinct non-zero signal per channel so a correct downmix carries energy
+            // (a silent/dropped result is distinguishable from a real mixdown).
+            let mut payload = Vec::with_capacity(FRAME_SAMPLES * channels as usize * 4);
+            for _ in 0..FRAME_SAMPLES {
+                for ch in 0..channels {
+                    let value = 0.25f32 + 0.05 * ch as f32;
+                    payload.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+
+            let frame = resampler
+                .resample(
+                    &payload,
+                    48000,
+                    channels,
+                    SampleFormat::F32,
+                    Timestamp::Instant(Instant::now()),
+                )
+                .unwrap_or_else(|| panic!("{channels}ch frame must not be dropped"));
+
+            assert_eq!(frame.channels(), 1, "{channels}ch downmix should be mono");
+            assert_eq!(frame.samples(), FRAME_SAMPLES, "{channels}ch sample count");
+
+            let any_energy = frame
+                .data(0)
+                .chunks_exact(4)
+                .take(frame.samples())
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .any(|s| s.abs() > 0.01);
+            assert!(any_energy, "{channels}ch downmix produced silence");
+        }
+    }
+
+    #[test]
+    fn resampled_frame_timestamps_are_monotonic_and_unshifted() {
+        // Regression: timestamping resampled frames with `capture − swr_delay` pulled
+        // them backward, so consecutive frames overlapped and the muxer dropped ~0.8s of
+        // a 32k→48k mic up front → badly out of sync. Output frames must carry the input
+        // capture timestamp unchanged so the muxer timeline stays monotonic.
+        use cap_timestamp::Timestamp;
+        use std::time::{Duration, Instant};
+
+        let target = AudioInfo::new_raw(Sample::F32(Type::Packed), 48000, 1);
+        let mut resampler =
+            MicResampler::create(32000, 2, SampleFormat::F32, &target).expect("resampler");
+
+        const FRAME_SAMPLES: usize = 1120; // ~35ms at 32k
+        const CHANNELS: usize = 2;
+        let payload = vec![0u8; FRAME_SAMPLES * CHANNELS * std::mem::size_of::<f32>()];
+
+        let base = Instant::now();
+        let frame_dur = Duration::from_micros(FRAME_SAMPLES as u64 * 1_000_000 / 32_000);
+
+        let mut prev: Option<Instant> = None;
+        for n in 0..16u32 {
+            let input_instant = base + frame_dur * n;
+            let Some(frame) = resampler.resample(
+                &payload,
+                32000,
+                CHANNELS as u16,
+                SampleFormat::F32,
+                Timestamp::Instant(input_instant),
+            ) else {
+                continue;
+            };
+
+            let out_instant = match frame.timestamp {
+                Timestamp::Instant(i) => i,
+                other => panic!("expected Instant timestamp, got {other:?}"),
+            };
+
+            // No offset: output carries the exact input capture time.
+            assert_eq!(
+                out_instant, input_instant,
+                "frame {n} timestamp was shifted"
+            );
+            if let Some(p) = prev {
+                assert!(out_instant >= p, "frame {n} timestamp went backwards");
+            }
+            prev = Some(out_instant);
+        }
+
+        assert!(prev.is_some(), "resampler produced no frames");
     }
 }

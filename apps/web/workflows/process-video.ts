@@ -48,7 +48,11 @@ export async function processVideoWorkflow(
 		);
 
 		await saveMetadataAndComplete(videoId, result.metadata);
-		await cleanupRawUpload(videoId, rawFileKey);
+
+		const outputKey = `${userId}/${videoId}/result.mp4`;
+		if (rawFileKey !== outputKey) {
+			await cleanupRawUpload(videoId, rawFileKey);
+		}
 
 		return {
 			success: true,
@@ -287,8 +291,19 @@ async function processVideoOnMediaServer(
 		)
 		.pipe(runPromise);
 
-	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
+	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
+
+	await db()
+		.update(videoUploads)
+		.set({
+			phase: "processing",
+			processingProgress: 0,
+			processingMessage: "Starting video processing...",
+			processingError: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
 	await startMediaServerProcessJob(mediaServerUrl, {
 		videoId,
@@ -379,12 +394,12 @@ async function waitForProcessingCompletion(
 			return { metadata };
 		}
 
+		if (upload.processingError) {
+			throw new Error(upload.processingError);
+		}
+
 		if (upload.phase === "error") {
-			throw new Error(
-				upload.processingError ||
-					upload.processingMessage ||
-					"Video processing failed",
-			);
+			throw new Error(upload.processingMessage || "Video processing failed");
 		}
 
 		lastStatus = [

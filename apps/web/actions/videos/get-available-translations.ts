@@ -2,10 +2,11 @@
 
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
-import { Storage } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
+import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
+import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
+import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import {
@@ -37,10 +38,24 @@ export async function getAvailableTranslations(
 		};
 	}
 
-	const query = await db()
-		.select({ video: videos })
-		.from(videos)
-		.where(eq(videos.id, videoId));
+	const exit = await Effect.gen(function* () {
+		const videosPolicy = yield* VideosPolicy;
+
+		return yield* Effect.promise(() =>
+			db().select({ video: videos }).from(videos).where(eq(videos.id, videoId)),
+		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
+	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
+
+	if (Exit.isFailure(exit)) {
+		return {
+			success: false,
+			hasOriginal: false,
+			translations: [],
+			message: "Video not found",
+		};
+	}
+
+	const query = exit.value;
 
 	if (query.length === 0 || !query[0]?.video) {
 		return {

@@ -12,9 +12,78 @@ import { addCreditsToAccount } from "@/lib/developer-credits";
 
 const relevantEvents = new Set([
 	"checkout.session.completed",
+	"checkout.session.async_payment_succeeded",
 	"customer.subscription.updated",
 	"customer.subscription.deleted",
 ]);
+
+async function grantDeveloperCredits(
+	session: Stripe.Checkout.Session,
+): Promise<Response> {
+	const { accountId, amountCents } = session.metadata ?? {};
+	const paymentIntentId =
+		typeof session.payment_intent === "string" ? session.payment_intent : null;
+
+	if (!accountId || !amountCents || !paymentIntentId) {
+		console.error("Missing required metadata for developer credits:", {
+			accountId,
+			amountCents,
+			paymentIntentId,
+		});
+		return new Response("Missing metadata", { status: 400 });
+	}
+
+	// Only grant credits once the payment has actually settled. Without this
+	// guard a checkout session (e.g. an unpaid/async payment) could grant
+	// credits before money is captured.
+	if (session.payment_status !== "paid") {
+		console.log(
+			`Developer credits checkout not paid yet (payment_status=${session.payment_status}); skipping credit grant`,
+			{ accountId, paymentIntentId },
+		);
+		return NextResponse.json({ received: true });
+	}
+
+	console.log("Processing developer credits purchase:", {
+		accountId,
+		amountCents,
+		paymentIntentId,
+	});
+
+	const [existingTxn] = await db()
+		.select({ id: developerCreditTransactions.id })
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				eq(developerCreditTransactions.accountId, accountId),
+				eq(developerCreditTransactions.referenceId, paymentIntentId),
+				eq(developerCreditTransactions.referenceType, "stripe_payment_intent"),
+			),
+		)
+		.limit(1);
+
+	if (existingTxn) {
+		console.log(
+			"Duplicate webhook delivery — transaction already exists:",
+			existingTxn.id,
+		);
+		return NextResponse.json({ received: true });
+	}
+
+	await addCreditsToAccount({
+		accountId,
+		amountCents: Number(amountCents),
+		referenceId: paymentIntentId,
+		referenceType: "stripe_payment_intent",
+		metadata: {
+			amountCents: Number(amountCents),
+			stripeSessionId: session.id,
+		},
+	});
+
+	console.log("Developer credits added successfully");
+	return NextResponse.json({ received: true });
+}
 
 async function createGuestUser(
 	email: string,
@@ -146,63 +215,7 @@ export const POST = async (req: Request) => {
 				});
 
 				if (session.metadata?.type === "developer_credits") {
-					const { accountId, amountCents } = session.metadata;
-					const paymentIntentId =
-						typeof session.payment_intent === "string"
-							? session.payment_intent
-							: null;
-
-					if (!accountId || !amountCents || !paymentIntentId) {
-						console.error("Missing required metadata for developer credits:", {
-							accountId,
-							amountCents,
-							paymentIntentId,
-						});
-						return new Response("Missing metadata", { status: 400 });
-					}
-
-					console.log("Processing developer credits purchase:", {
-						accountId,
-						amountCents,
-						paymentIntentId,
-					});
-
-					const [existingTxn] = await db()
-						.select({ id: developerCreditTransactions.id })
-						.from(developerCreditTransactions)
-						.where(
-							and(
-								eq(developerCreditTransactions.accountId, accountId),
-								eq(developerCreditTransactions.referenceId, paymentIntentId),
-								eq(
-									developerCreditTransactions.referenceType,
-									"stripe_payment_intent",
-								),
-							),
-						)
-						.limit(1);
-
-					if (existingTxn) {
-						console.log(
-							"Duplicate webhook delivery — transaction already exists:",
-							existingTxn.id,
-						);
-						return NextResponse.json({ received: true });
-					}
-
-					await addCreditsToAccount({
-						accountId,
-						amountCents: Number(amountCents),
-						referenceId: paymentIntentId,
-						referenceType: "stripe_payment_intent",
-						metadata: {
-							amountCents: Number(amountCents),
-							stripeSessionId: session.id,
-						},
-					});
-
-					console.log("Developer credits added successfully");
-					return NextResponse.json({ received: true });
+					return await grantDeveloperCredits(session);
 				}
 
 				const customer = await stripe().customers.retrieve(
@@ -349,6 +362,17 @@ export const POST = async (req: Request) => {
 					console.log("Successfully tracked purchase event in PostHog");
 				} catch (error) {
 					console.error("Error tracking purchase in PostHog:", error);
+				}
+			}
+
+			if (event.type === "checkout.session.async_payment_succeeded") {
+				console.log(
+					"Processing checkout.session.async_payment_succeeded event",
+				);
+				const session = event.data.object as Stripe.Checkout.Session;
+
+				if (session.metadata?.type === "developer_credits") {
+					return await grantDeveloperCredits(session);
 				}
 			}
 

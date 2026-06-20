@@ -109,6 +109,10 @@ function makeCheckoutSession(overrides: Record<string, unknown> = {}) {
 		id: "cs_test_123",
 		customer: "cus_test",
 		subscription: null,
+		// Real Stripe `checkout.session.completed` events for a successful
+		// (synchronous) card payment carry payment_status: "paid"; the webhook
+		// only grants credits when paid.
+		payment_status: "paid",
 		payment_intent: "pi_test_abc",
 		metadata: {
 			type: "developer_credits",
@@ -193,6 +197,34 @@ describe("Stripe webhook — developer credits", () => {
 		await POST(makeWebhookRequest());
 		expect(mockAddCredits).toHaveBeenCalledWith(
 			expect.objectContaining({ amountCents: 5000 }),
+		);
+	});
+
+	it("does not grant credits when payment_status is not paid", async () => {
+		const session = makeCheckoutSession({ payment_status: "unpaid" });
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: session },
+		});
+		mockDbChain.limit.mockResolvedValueOnce([]);
+
+		const res = await POST(makeWebhookRequest());
+		expect(res.status).toBe(200);
+		expect(mockAddCredits).not.toHaveBeenCalled();
+	});
+
+	it("grants credits when an async payment later succeeds", async () => {
+		const session = makeCheckoutSession();
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.async_payment_succeeded",
+			data: { object: session },
+		});
+		mockDbChain.limit.mockResolvedValueOnce([]);
+
+		const res = await POST(makeWebhookRequest());
+		expect(res.status).toBe(200);
+		expect(mockAddCredits).toHaveBeenCalledWith(
+			expect.objectContaining({ accountId: "account-001", amountCents: 2500 }),
 		);
 	});
 

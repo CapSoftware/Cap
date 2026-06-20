@@ -76,7 +76,7 @@ const Mode = (props: ModeProps) => {
 				class="absolute -left-1.5 -top-2 p-1 rounded-full w-fit bg-gray-5 group focus:outline-none"
 				aria-label="Recording mode info"
 			>
-				<IconCapInfo class="invert transition-opacity duration-200 cursor-pointer size-2.5 dark:invert-0 group-hover:opacity-50" />
+				<IconCapInfo class="invert transition-opacity duration-200 size-2.5 dark:invert-0 group-hover:opacity-50" />
 			</button>
 
 			{MODE_BUTTONS.map((button) => {
@@ -90,13 +90,14 @@ const Mode = (props: ModeProps) => {
 						gutter={12}
 					>
 						<HoverCard.Trigger
-							as="div"
+							as="button"
+							type="button"
 							onClick={() => {
 								setOptions({ mode: button.mode });
 								commands.setRecordingMode(button.mode);
 							}}
 							class={cx(
-								"relative flex justify-center items-center rounded-full transition-all duration-200 cursor-pointer size-7",
+								"relative flex justify-center items-center rounded-full transition-all duration-200 size-7 focus:outline-none",
 								isSelected()
 									? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-7 hover:bg-gray-7 ring-blue-500"
 									: "bg-gray-3 hover:bg-gray-7",

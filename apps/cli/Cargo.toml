@@ -5,28 +5,46 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.5.23", features = ["derive"] }
-cap-utils = { path = "../../crates/utils" }
+clap_complete = "4.5.38"
 cap-project = { path = "../../crates/project" }
-cap-rendering = { path = "../../crates/rendering" }
-cap-editor = { path = "../../crates/editor" }
-cap-media = { path = "../../crates/media" }
-cap-flags = { path = "../../crates/flags" }
 cap-recording = { path = "../../crates/recording" }
 cap-export = { path = "../../crates/export" }
+cap-automation = { path = "../../crates/automation" }
 cap-camera = { path = "../../crates/camera" }
+cap-cli-install = { path = "../../crates/cli-install" }
 scap-targets = { path = "../../crates/scap-targets" }
 serde = { workspace = true }
 serde_json = "1.0.133"
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+tokio-util = { version = "0.7", features = ["io"] }
 uuid = { version = "1.11.1", features = ["v4"] }
 ffmpeg = { workspace = true }
+reqwest = { version = "0.12.24", features = ["json", "stream"] }
+kameo = "0.17.2"
+flume = { workspace = true }
+futures = { workspace = true }
+dirs = "6.0.0"
+image = "0.25.2"
+chrono = "0.4.31"
 tracing.workspace = true
 tracing-subscriber = "0.3.19"
-flume.workspace = true
 workspace-hack = { version = "0.1", path = "../../crates/workspace-hack" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
+scap-screencapturekit = { path = "../../crates/scap-screencapturekit" }
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

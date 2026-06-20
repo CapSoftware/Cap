@@ -21,6 +21,27 @@ var t_cursor: texture_2d<f32>;
 var s_cursor: sampler;
 
 const MAX_ROTATION_RADIANS: f32 = 0.34906584;
+const MAX_CURSOR_BLUR_UV: f32 = 0.24;
+
+fn cursor_velocity_uv() -> vec2<f32> {
+    let motion_vec = uniforms.motion_vector_strength.xy;
+    let blur_strength = uniforms.motion_vector_strength.z;
+    let cursor_size = uniforms.position_size.zw;
+    let motion_len = length(motion_vec);
+
+    if (motion_len < 0.5 || blur_strength < 0.001 || cursor_size.x <= 0.0 || cursor_size.y <= 0.0) {
+        return vec2<f32>(0.0, 0.0);
+    }
+
+    let raw_velocity_uv = motion_vec / cursor_size;
+    let raw_vel_len = length(raw_velocity_uv);
+
+    if (raw_vel_len < 0.005) {
+        return vec2<f32>(0.0, 0.0);
+    }
+
+    return raw_velocity_uv * min(1.0, MAX_CURSOR_BLUR_UV / raw_vel_len);
+}
 
 fn rotate_point(p: vec2<f32>, center: vec2<f32>, angle: f32) -> vec2<f32> {
     let cos_a = cos(angle);
@@ -34,21 +55,18 @@ fn rotate_point(p: vec2<f32>, center: vec2<f32>, angle: f32) -> vec2<f32> {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var positions = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(0.0, -1.0),
-        vec2<f32>(1.0, 0.0),
-        vec2<f32>(1.0, -1.0)
-    );
-
-    var uvs = array<vec2<f32>, 4>(
+    var corners = array<vec2<f32>, 4>(
         vec2<f32>(0.0, 0.0),
         vec2<f32>(0.0, 1.0),
         vec2<f32>(1.0, 0.0),
         vec2<f32>(1.0, 1.0)
     );
 
-    let pos = positions[vertex_index];
+    let blur_uv = cursor_velocity_uv();
+    let uv_min = min(vec2<f32>(0.0, 0.0), -blur_uv);
+    let uv_max = max(vec2<f32>(1.0, 1.0), vec2<f32>(1.0, 1.0) - blur_uv);
+    let local_uv = uv_min + (uv_max - uv_min) * corners[vertex_index];
+    let pos = vec2<f32>(local_uv.x, -local_uv.y);
     let screen_pos = uniforms.position_size.xy;
     let cursor_size = uniforms.position_size.zw;
 
@@ -68,42 +86,40 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
     var output: VertexOutput;
     output.position = vec4<f32>(final_pos, 0.0, 1.0);
-    output.uv = uvs[vertex_index];
+    output.uv = local_uv;
     return output;
+}
+
+fn sample_cursor(uv: vec2<f32>) -> vec4<f32> {
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    return textureSample(t_cursor, s_cursor, uv);
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let motion_vec = uniforms.motion_vector_strength.xy;
+    let velocity_uv = cursor_velocity_uv();
     let blur_strength = uniforms.motion_vector_strength.z;
     let opacity = uniforms.motion_vector_strength.w;
+    let base_color = sample_cursor(input.uv);
 
-    let motion_len = length(motion_vec);
-    if (motion_len < 0.5 || blur_strength < 0.001) {
-        return textureSample(t_cursor, s_cursor, input.uv) * opacity;
+    if (length(velocity_uv) < 0.005 || blur_strength < 0.001) {
+        return base_color * opacity;
     }
 
-    let cursor_size = uniforms.position_size.zw;
-    let velocity_uv = motion_vec / cursor_size;
-    let vel_len = length(velocity_uv);
+    let kernel_size = 21.0;
+    let k = kernel_size - 1.0;
+    var color = base_color;
 
-    if (vel_len < 0.005) {
-        return textureSample(t_cursor, s_cursor, input.uv) * opacity;
-    }
-
-    let kernel_size = 21;
-    let k = kernel_size - 1;
-    let offset_base = -vel_len / 2.0 / vel_len - 0.5;
-
-    var color = textureSample(t_cursor, s_cursor, input.uv);
-
-    for (var i = 0; i < 20; i++) {
-        let bias = velocity_uv * (f32(i) / f32(k) + offset_base);
+    for (var i = 1; i <= 20; i = i + 1) {
+        let bias = velocity_uv * (f32(i) / k);
         let sample_uv = input.uv + bias;
-        color += textureSample(t_cursor, s_cursor, sample_uv);
+        color += sample_cursor(sample_uv);
     }
 
-    color = color / f32(kernel_size);
-    color *= opacity;
-    return color;
+    color /= kernel_size;
+    let blur_mix = clamp(blur_strength, 0.0, 1.0);
+    return mix(base_color, color, blur_mix) * opacity;
 }

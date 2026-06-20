@@ -1,11 +1,24 @@
 import { Button, Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
 import { useState } from "react";
+import {
+	canManageOrganizationBilling,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
 import { useDashboardContext } from "../../../Contexts";
 import DeleteOrgDialog from "./DeleteOrgDialog";
 
 const DeleteOrg = () => {
 	const [toggleDeleteDialog, setToggleDeleteDialog] = useState(false);
-	const { organizationData, user } = useDashboardContext();
+	const { activeOrganization, organizationData, user } = useDashboardContext();
+	const currentMember = activeOrganization?.members.find(
+		(member) => member.userId === user.id,
+	);
+	const currentRole = getEffectiveOrganizationRole({
+		userId: user.id,
+		ownerId: activeOrganization?.organization.ownerId,
+		memberRole: currentMember?.role,
+	});
+	const canDeleteOrganization = canManageOrganizationBilling(currentRole);
 
 	return (
 		<>
@@ -22,7 +35,7 @@ const DeleteOrg = () => {
 				</CardHeader>
 				<Button
 					variant="destructive"
-					disabled={organizationData?.length === 1}
+					disabled={organizationData?.length === 1 || !canDeleteOrganization}
 					size="sm"
 					onClick={(e) => {
 						e.stopPropagation();

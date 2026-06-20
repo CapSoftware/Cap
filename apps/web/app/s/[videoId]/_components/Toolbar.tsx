@@ -15,22 +15,47 @@ interface ToolbarProps {
 	data: VideoData;
 	onOptimisticComment?: (comment: CommentType) => void;
 	onCommentSuccess?: (comment: CommentType) => void;
+	disableComments?: boolean;
 	disableReactions?: boolean;
 }
+
+interface EmojiButtonProps {
+	label: string;
+	emoji: string;
+	onClick: () => void;
+}
+
+const EmojiButton = ({ label, emoji, onClick }: EmojiButtonProps) => (
+	<motion.div layout className="relative size-10">
+		<motion.button
+			layout
+			className="inline-flex relative justify-center items-center p-1 text-xl leading-6 align-middle bg-transparent rounded-full transition-colors ease-in-out size-full font-emoji sm:text-2xl duration-600 hover:bg-gray-200 active:bg-blue-500 active:duration-0"
+			role="img"
+			aria-label={label ? label : ""}
+			aria-hidden={label ? "false" : "true"}
+			onClick={onClick}
+		>
+			{emoji}
+		</motion.button>
+	</motion.div>
+);
 
 export const Toolbar = ({
 	data,
 	onOptimisticComment,
 	onCommentSuccess,
+	disableComments,
 	disableReactions,
 }: ToolbarProps) => {
 	const user = useCurrentUser();
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
 	const [showAuthOverlay, setShowAuthOverlay] = useState(false);
+	const canComment = !disableComments;
+	const canReact = !disableReactions;
 
 	const handleEmojiClick = async (emoji: string) => {
-		if (!user) return;
+		if (!canReact || !user) return;
 		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
@@ -71,7 +96,7 @@ export const Toolbar = ({
 	};
 
 	const handleCommentSubmit = async () => {
-		if (comment.length === 0 || !user) {
+		if (!canComment || comment.length === 0 || !user) {
 			return;
 		}
 		const videoElement = document.querySelector("video") as HTMLVideoElement;
@@ -113,22 +138,9 @@ export const Toolbar = ({
 		}
 	};
 
-	const Emoji = ({ label, emoji }: { label: string; emoji: string }) => (
-		<motion.div layout className="relative size-10">
-			<motion.button
-				layout
-				className="inline-flex relative justify-center items-center p-1 text-xl leading-6 align-middle bg-transparent rounded-full transition-colors ease-in-out size-full font-emoji sm:text-2xl duration-600 hover:bg-gray-200 active:bg-blue-500 active:duration-0"
-				role="img"
-				aria-label={label ? label : ""}
-				aria-hidden={label ? "false" : "true"}
-				onClick={() => handleEmojiClick(emoji)}
-			>
-				{emoji}
-			</motion.button>
-		</motion.div>
-	);
-
 	useEffect(() => {
+		if (!canComment) return;
+
 		const handleKeyPress = (e: KeyboardEvent) => {
 			if (
 				e.key.toLowerCase() === "c" &&
@@ -161,9 +173,10 @@ export const Toolbar = ({
 		return () => {
 			window.removeEventListener("keydown", handleKeyPress);
 		};
-	}, [commentBoxOpen, user]);
+	}, [canComment, commentBoxOpen, user]);
 
 	const handleCommentClick = () => {
+		if (!canComment) return;
 		if (!user) {
 			setShowAuthOverlay(true);
 			return;
@@ -175,7 +188,7 @@ export const Toolbar = ({
 		setCommentBoxOpen(true);
 	};
 
-	if (disableReactions) {
+	if (!canComment && !canReact) {
 		return null;
 	}
 
@@ -186,7 +199,7 @@ export const Toolbar = ({
 				className="flex overflow-hidden p-2 mx-auto max-w-full bg-white rounded-full border border-gray-5 md:max-w-fit"
 			>
 				<AnimatePresence initial={false} mode="popLayout">
-					{commentBoxOpen ? (
+					{commentBoxOpen && canComment ? (
 						<motion.div
 							layout
 							key="comment-box"
@@ -252,33 +265,41 @@ export const Toolbar = ({
 							transition={{ duration: 0.2, ease: "easeInOut" }}
 							className="flex flex-col gap-2 items-center mx-auto w-full md:justify-center sm:grid sm:grid-flow-col md:w-fit min-h-[28px]"
 						>
-							{/* Emoji reactions row */}
-							<div className="flex gap-2 justify-evenly items-center w-full md:w-fit md:justify-center">
-								{REACTIONS.map((reaction) => (
-									<Emoji
-										key={reaction.emoji}
-										emoji={reaction.emoji}
-										label={reaction.label}
-									/>
-								))}
-							</div>
+							{canReact && (
+								<div className="flex gap-2 justify-evenly items-center w-full md:w-fit md:justify-center">
+									{REACTIONS.map((reaction) => (
+										<EmojiButton
+											key={reaction.emoji}
+											emoji={reaction.emoji}
+											label={reaction.label}
+											onClick={() => handleEmojiClick(reaction.emoji)}
+										/>
+									))}
+								</div>
+							)}
 
-							{/* Separator - hidden on mobile, visible on desktop */}
-							<motion.div className="hidden sm:block w-px bg-gray-5 h-[16px] mx-4" />
+							{canReact && canComment && (
+								<motion.div className="hidden sm:block w-px bg-gray-5 h-[16px] mx-4" />
+							)}
 
-							{/* Comment button - full width on mobile, normal on desktop */}
-							<div className="ml-auto w-full sm:w-auto">
-								<MotionButton
-									onClick={handleCommentClick}
-									variant="dark"
-									layout="position"
-									kbd="c"
-									size="sm"
-									className="mx-auto w-fit"
+							{canComment && (
+								<div
+									className={
+										canReact ? "ml-auto w-full sm:w-auto" : "w-full sm:w-auto"
+									}
 								>
-									Comment
-								</MotionButton>
-							</div>
+									<MotionButton
+										onClick={handleCommentClick}
+										variant="dark"
+										layout="position"
+										kbd="c"
+										size="sm"
+										className="mx-auto w-fit"
+									>
+										Comment
+									</MotionButton>
+								</div>
+							)}
 						</motion.div>
 					)}
 				</AnimatePresence>

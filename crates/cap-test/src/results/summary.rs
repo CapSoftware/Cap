@@ -41,7 +41,7 @@ impl TestResults {
         } else {
             self.summary.pass_rate.to_string().red()
         };
-        println!("  Pass Rate: {}%", pass_rate_color);
+        println!("  Pass Rate: {pass_rate_color}%");
         println!("  Duration: {:.1}s", self.summary.duration_secs);
 
         let failed_tests: Vec<_> = self
@@ -105,9 +105,9 @@ impl TestResults {
                 let avg_latency = test.avg_p95_latency();
 
                 println!("  Performance ({} iterations):", test.iterations.len());
-                println!("    Effective FPS: {:.1}", avg_fps);
-                println!("    Drop Rate: {:.2}%", avg_drop);
-                println!("    P95 Latency: {:.1}ms", avg_latency);
+                println!("    Effective FPS: {avg_fps:.1}");
+                println!("    Drop Rate: {avg_drop:.2}%");
+                println!("    P95 Latency: {avg_latency:.1}ms");
 
                 let target_fps = test
                     .iterations

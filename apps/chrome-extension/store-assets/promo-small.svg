@@ -1,0 +1,20 @@
+<svg width="440" height="280" viewBox="0 0 440 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+	<defs>
+		<linearGradient id="bg" x1="0" y1="0" x2="440" y2="280" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#0E1320"/>
+			<stop offset="1" stop-color="#1C2B47"/>
+		</linearGradient>
+		<radialGradient id="glow" cx="0.5" cy="0.42" r="0.65">
+			<stop stop-color="#4785FF" stop-opacity="0.22"/>
+			<stop offset="1" stop-color="#4785FF" stop-opacity="0"/>
+		</radialGradient>
+	</defs>
+	<rect width="440" height="280" fill="url(#bg)"/>
+	<rect width="440" height="280" fill="url(#glow)"/>
+	<circle cx="150" cy="112" r="38" fill="#4785FF"/>
+	<circle cx="150" cy="112" r="30.875" fill="#ADC9FF"/>
+	<circle cx="150" cy="112" r="23.75" fill="#FFFFFF"/>
+	<text x="206" y="136" font-family="Neue Montreal" font-weight="500" font-size="68" fill="#FFFFFF">Cap</text>
+	<text x="220" y="196" text-anchor="middle" font-family="Neue Montreal" font-weight="500" font-size="20" fill="#C7D4EA">Screen recording, owned by you</text>
+	<text x="220" y="231" text-anchor="middle" font-family="Neue Montreal" font-size="14" fill="#7E8DA8">Record your tab, screen, or camera. Share a link in seconds</text>
+</svg>

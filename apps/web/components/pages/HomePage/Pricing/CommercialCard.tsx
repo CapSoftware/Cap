@@ -1,36 +1,30 @@
-import { Button, Switch } from "@cap/ui";
-import {
-	faBriefcase,
-	faDownload,
-	faEdit,
-	faMinus,
-	faPlus,
-	faVideo,
-} from "@fortawesome/free-solid-svg-icons";
+"use client";
+
+import { Button } from "@cap/ui";
+import { faCircleInfo } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
-import clsx from "clsx";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { Tooltip } from "@/components/Tooltip";
+import { WhenVisible } from "@/components/ui/WhenVisible";
 import { homepageCopy } from "../../../../data/homepage-copy";
-import { QuestionMarkIcon } from "../../../icons/QuestionMarkIcon";
+import { BillingToggle } from "./BillingToggle";
 import { CommercialArt, type CommercialArtRef } from "./CommercialArt";
+import { PlanFeature } from "./PlanFeature";
+import { Stepper } from "./Stepper";
+
+const copy = homepageCopy.pricing.commercial;
 
 export const CommercialCard = () => {
 	const [licenses, setLicenses] = useState(1);
-	const [isYearly, setIsYearly] = useState(false);
+	const [isYearly, setIsYearly] = useState(true);
 	const [commercialLoading, setCommercialLoading] = useState(false);
-	const commercialArtRef = useRef<CommercialArtRef>(null);
+	const artRef = useRef<CommercialArtRef>(null);
 
-	const COMMERCIAL_LICENSE_YEARLY_PRICE =
-		homepageCopy.pricing.commercial.pricing.yearly;
-	const COMMERCIAL_LICENSE_LIFETIME_PRICE =
-		homepageCopy.pricing.commercial.pricing.lifetime;
-
-	const currentPrice = isYearly
-		? licenses * COMMERCIAL_LICENSE_YEARLY_PRICE
-		: licenses * COMMERCIAL_LICENSE_LIFETIME_PRICE;
-	const billingCycleText = isYearly ? "year" : "lifetime";
+	const perLicense = isYearly ? copy.pricing.yearly : copy.pricing.lifetime;
+	const total = licenses * perLicense;
 
 	const incrementLicenses = () => setLicenses((prev) => prev + 1);
 	const decrementLicenses = () =>
@@ -66,173 +60,99 @@ export const CommercialCard = () => {
 	};
 
 	return (
-		<div
-			onMouseEnter={() => commercialArtRef.current?.playHoverAnimation()}
-			onMouseLeave={() => commercialArtRef.current?.playDefaultAnimation()}
-			className="flex flex-col flex-1 justify-between p-8 rounded-2xl border shadow-lg bg-gray-1 border-gray-5"
+		<article
+			onMouseEnter={() => artRef.current?.playHoverAnimation()}
+			onMouseLeave={() => artRef.current?.playDefaultAnimation()}
+			className="flex flex-col p-8 rounded-2xl border bg-gray-1 border-gray-5"
 		>
-			<div>
-				<div>
-					<CommercialArt ref={commercialArtRef} />
-					<h3 className="mb-2 text-xl font-semibold text-center text-gray-12">
-						{homepageCopy.pricing.commercial.title}
-					</h3>
-					<p className="mb-3 text-base text-center text-gray-11 w-full max-w-[285px] mx-auto">
-						{homepageCopy.pricing.commercial.description}
-					</p>
-					<div className="mb-6 text-center">
-						<a
-							href="/docs/commercial-license"
-							className="text-sm underline text-gray-10 hover:text-gray-12"
+			<div className="mb-4 size-14 -ml-3">
+				<WhenVisible className="size-full">
+					<CommercialArt ref={artRef} />
+				</WhenVisible>
+			</div>
+			<div className="flex gap-1.5 items-center">
+				<h3 className="text-lg font-semibold text-gray-12">{copy.title}</h3>
+				<TooltipPrimitive.Provider delayDuration={150}>
+					<Tooltip
+						position="top"
+						className="max-w-[260px] items-start text-left leading-relaxed"
+						content="A commercial license to use Cap on your desktop — unlimited local recording and editing, plus 20 cloud shareable links per month. No cloud subscription required."
+					>
+						<button
+							type="button"
+							aria-label="What's included in the Desktop License?"
+							className="transition-colors text-gray-9 hover:text-gray-11"
 						>
-							Learn more about the commercial license here
-						</a>
-					</div>
-				</div>
+							<FontAwesomeIcon icon={faCircleInfo} className="size-3.5" />
+						</button>
+					</Tooltip>
+				</TooltipPrimitive.Provider>
+			</div>
+			<p className="mt-1.5 text-sm leading-relaxed text-gray-10 min-h-[40px]">
+				{copy.description}
+			</p>
 
-				<div className="mb-6 text-center">
-					<span className="text-3xl tabular-nums text-gray-12">
-						$<NumberFlow value={currentPrice} />
-					</span>
-					<span className="text-base tabular-nums text-gray-10">
-						{" "}
-						/ {billingCycleText}
-					</span>
-					{isYearly ? (
-						<p className="text-base tabular-nums text-gray-10">
-							or, $
-							<NumberFlow
-								value={licenses * COMMERCIAL_LICENSE_LIFETIME_PRICE}
-							/>{" "}
-							one-time payment
-						</p>
-					) : (
-						<p className="text-base tabular-nums text-gray-10">
-							or, $
-							<NumberFlow value={licenses * COMMERCIAL_LICENSE_YEARLY_PRICE} />{" "}
-							/ year
-						</p>
-					)}
-				</div>
+			<div className="flex gap-1.5 items-baseline mt-6">
+				<span className="text-4xl font-semibold tracking-tight tabular-nums text-gray-12">
+					$<NumberFlow value={perLicense} />
+				</span>
+				<span className="text-sm text-gray-10">/ license</span>
+			</div>
+			<p className="mt-1 text-sm text-gray-10">
+				{isYearly ? "billed yearly" : "one-time payment"}
+			</p>
 
-				<div className="flex flex-wrap gap-5 justify-center items-center p-5 my-8 w-full rounded-xl border xs:gap-3 xs:p-3 xs:rounded-full xs:justify-between bg-gray-3 border-gray-4">
-					<div className="flex gap-2 justify-center items-center">
-						<p className="text-sm text-gray-12">
-							{homepageCopy.pricing.commercial.labels.licenses}
-						</p>
-						<div className="flex items-center">
-							<Button
-								onClick={decrementLicenses}
-								className="p-1 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
-								aria-label="Decrease license count"
-							>
-								<FontAwesomeIcon
-									icon={faMinus}
-									className="text-gray-1 size-2"
-								/>
-							</Button>
-							<span className="w-5 font-medium tabular-nums text-center text-gray-12">
-								<NumberFlow value={licenses} />
-							</span>
-							<Button
-								onClick={incrementLicenses}
-								className="p-1 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
-								aria-label="Increase license count"
-							>
-								<FontAwesomeIcon icon={faPlus} className="text-gray-1 size-2" />
-							</Button>
-						</div>
-					</div>
-
-					<div className="flex justify-center items-center">
-						<div className="flex gap-2 items-center">
-							<span
-								className={clsx(
-									"text-sm",
-									isYearly ? "font-medium text-gray-12" : "text-gray-10",
-								)}
-							>
-								{homepageCopy.pricing.commercial.labels.yearly}
-							</span>
-							<Switch
-								checked={!isYearly}
-								onCheckedChange={(checked) => setIsYearly(!checked)}
-								aria-label="Billing Cycle For Commercial"
-								id="billing-cycle-commercial"
-							/>
-							<span
-								className={clsx(
-									"text-sm",
-									!isYearly ? "font-medium text-gray-12" : "text-gray-10",
-								)}
-							>
-								{homepageCopy.pricing.commercial.labels.lifetime}
-							</span>
-						</div>
-					</div>
-				</div>
+			<div className="mt-6 space-y-3 min-h-[120px]">
+				<BillingToggle
+					ariaLabel="Billing option for Desktop License"
+					value={isYearly ? "yearly" : "lifetime"}
+					onChange={(value) => setIsYearly(value === "yearly")}
+					options={[
+						{ value: "yearly", label: "Annual" },
+						{ value: "lifetime", label: "Lifetime" },
+					]}
+				/>
+				<Stepper
+					label="Licenses"
+					value={licenses}
+					onIncrement={incrementLicenses}
+					onDecrement={decrementLicenses}
+					decrementLabel="Decrease license count"
+					incrementLabel="Increase license count"
+				/>
+				<p className="text-sm text-gray-10">
+					<span className="font-medium text-gray-12">
+						$<NumberFlow value={total} />
+					</span>{" "}
+					{isYearly ? "billed yearly" : "one-time"}
+				</p>
 			</div>
 
-			<div className="space-y-6">
+			<Button
+				disabled={commercialLoading}
+				onClick={openCommercialCheckout}
+				variant="outline"
+				size="lg"
+				className="mt-6 w-full font-medium"
+				aria-label="Purchase Commercial License"
+			>
+				{commercialLoading ? "Loading..." : copy.cta}
+			</Button>
+
+			<div className="pt-8 mt-8 border-t border-gray-4">
+				<p className="mb-4 text-sm font-medium text-gray-12">What's included</p>
 				<ul className="space-y-3">
-					<li className="flex items-center text-sm text-gray-12">
-						<FontAwesomeIcon
-							icon={faEdit}
-							className="flex-shrink-0 mr-3 text-gray-12"
-							style={{ fontSize: "14px", minWidth: "14px" }}
-						/>
-						<span>Studio Mode with full editor</span>
-					</li>
-					<li className="flex items-center text-sm text-gray-12">
-						<FontAwesomeIcon
-							icon={faBriefcase}
-							className="flex-shrink-0 mr-3 text-gray-12"
-							style={{ fontSize: "14px", minWidth: "14px" }}
-						/>
-						<span>Commercial usage</span>
-						<a
-							href="/docs/commercial-license"
-							target="_blank"
-							rel="noopener noreferrer"
-							className="ml-1.5 text-gray-10 hover:text-gray-12 transition-colors"
-							aria-label="Learn more about commercial license"
-						>
-							<QuestionMarkIcon className="size-3.5" />
-						</a>
-					</li>
-					<li className="flex items-center text-sm text-gray-12">
-						<FontAwesomeIcon
-							icon={faVideo}
-							className="flex-shrink-0 mr-3 text-gray-12"
-							style={{ fontSize: "14px", minWidth: "14px" }}
-						/>
-						<span>
-							Unlimited local recordings, shareable links up to 5 minutes
-						</span>
-					</li>
-					<li className="flex items-center text-sm text-gray-12">
-						<FontAwesomeIcon
-							icon={faDownload}
-							className="flex-shrink-0 mr-3 text-gray-12"
-							style={{ fontSize: "14px", minWidth: "14px" }}
-						/>
-						<span>Export to MP4 or GIF</span>
-					</li>
+					{copy.features.map((feature) => (
+						<PlanFeature key={feature}>{feature}</PlanFeature>
+					))}
 				</ul>
-
-				<Button
-					disabled={commercialLoading}
-					onClick={openCommercialCheckout}
-					variant="dark"
-					size="lg"
-					className="w-full font-medium"
-					aria-label="Purchase Commercial License"
+				<a
+					href="/docs/commercial-license"
+					className="inline-block mt-5 text-sm underline transition-colors text-gray-10 hover:text-gray-12"
 				>
-					{commercialLoading
-						? "Loading..."
-						: homepageCopy.pricing.commercial.cta}
-				</Button>
+					Learn more about the commercial license
+				</a>
 			</div>
-		</div>
+		</article>
 	);
 };

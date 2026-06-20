@@ -1,4 +1,4 @@
-import { DatabaseError, Http, S3Error } from "@cap/web-domain";
+import { DatabaseError, Http, S3Error, StorageError } from "@cap/web-domain";
 import { Effect, Schema } from "effect";
 import { InvalidRpcAuth } from "../Workflows.ts";
 
@@ -10,6 +10,10 @@ export const handleDomainError = <A, E, R>(e: Effect.Effect<A, E, R>) =>
 		),
 		Effect.catchIf(
 			(e) => Schema.is(S3Error)(e),
+			() => new Http.InternalServerError({ cause: "s3" }),
+		),
+		Effect.catchIf(
+			(e) => Schema.is(StorageError)(e),
 			() => new Http.InternalServerError({ cause: "s3" }),
 		),
 		Effect.catchIf(

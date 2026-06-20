@@ -15,9 +15,11 @@ import { produce } from "solid-js/store";
 import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
-import { defaultCaptionSettings } from "~/store/captions";
+import {
+	defaultCaptionSettings,
+	type EditorCaptionSettings,
+} from "~/store/captions";
 import type { OrganizationBrandColorSwatch } from "~/utils/organization-branding";
-import type { CaptionSettings } from "~/utils/tauri";
 import { commands, events } from "~/utils/tauri";
 import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCircleCheck from "~icons/cap/circle-check";
@@ -30,8 +32,10 @@ import {
 	DEFAULT_WHISPER_CAPTION_MODEL,
 	getCaptionGenerationErrorMessage,
 	getModelPath,
+	mapEditedTimeToSource,
 	PARAKEET_DIR_MODELS,
 	resolveCaptionModel,
+	sourceCaptionId,
 	supportsParakeetTranscription,
 	syncCaptionWordsWithText,
 	transcribeEditorCaptions,
@@ -158,38 +162,94 @@ export function CaptionsTab(props: {
 
 		setProject(
 			produce((currentProject: typeof project) => {
-				const timelineSegment =
-					currentProject.timeline?.captionSegments?.[index];
-				if (!timelineSegment) return;
+				const timeline = currentProject.timeline;
+				const timelineSegment = timeline?.captionSegments?.[index];
+				if (!timeline || !timelineSegment) return;
 
+				// Apply the edit to the rendered (output-time) segment so style
+				// overrides take effect immediately and survive re-derivation.
 				update(timelineSegment);
 
-				const captionSegment = currentProject.captions?.segments?.[index];
-				if (!captionSegment) return;
+				// Route content/timing onto the source-time caption master so the
+				// edit persists across future clip changes. Style overrides stay on
+				// the track and are carried across by source id when re-derived.
+				const sourceId = sourceCaptionId(timelineSegment.id);
+				const source = currentProject.captions?.segments?.find(
+					(segment) => segment.id === sourceId,
+				);
+				if (!source) return;
 
-				captionSegment.start = timelineSegment.start;
-				captionSegment.end = timelineSegment.end;
-				captionSegment.text = timelineSegment.text;
-				captionSegment.words = timelineSegment.words?.map((word) => ({
-					...word,
-				}));
+				const recordingSegments = editorInstance.recordings.segments;
+				const start = mapEditedTimeToSource(
+					timelineSegment.start,
+					timeline.segments,
+					recordingSegments,
+				);
+				const end = mapEditedTimeToSource(
+					timelineSegment.end,
+					timeline.segments,
+					recordingSegments,
+				);
+				if (start !== null) source.start = start;
+				if (end !== null) source.end = end;
+				source.text = timelineSegment.text;
+				source.words = syncCaptionWordsWithText(
+					source.text,
+					source.words,
+					source.start,
+					source.end,
+				);
 			}),
 		);
 	};
 
-	const getSetting = <K extends keyof CaptionSettings>(
+	const getSetting = <K extends keyof EditorCaptionSettings>(
 		key: K,
-	): NonNullable<CaptionSettings[K]> =>
+	): NonNullable<EditorCaptionSettings[K]> =>
 		(project?.captions?.settings?.[key] ??
-			defaultCaptionSettings[key]) as NonNullable<CaptionSettings[K]>;
+			defaultCaptionSettings[key]) as NonNullable<EditorCaptionSettings[K]>;
 
-	const updateCaptionSetting = <K extends keyof CaptionSettings>(
+	const updateCaptionSetting = <K extends keyof EditorCaptionSettings>(
 		key: K,
-		value: CaptionSettings[K],
+		value: EditorCaptionSettings[K],
 	) => {
 		if (!project?.captions) return;
 
 		setProject("captions", "settings", key, value);
+	};
+
+	const captionPositionCenter = (position: string) => {
+		switch (position) {
+			case "top-left":
+				return { x: 0.05, y: 0.08 };
+			case "top-center":
+			case "top":
+				return { x: 0.5, y: 0.08 };
+			case "top-right":
+				return { x: 0.95, y: 0.08 };
+			case "bottom-left":
+				return { x: 0.05, y: 0.85 };
+			case "bottom-right":
+				return { x: 0.95, y: 0.85 };
+			default:
+				return { x: 0.5, y: 0.85 };
+		}
+	};
+
+	const updateCaptionPosition = (position: string) => {
+		if (!project?.captions) return;
+
+		const previousPosition = getSetting("position");
+		setProject(
+			"captions",
+			"settings",
+			produce((settings) => {
+				settings.position = position;
+				if (position === "manual" && !settings.manualPosition) {
+					settings.manualPosition = captionPositionCenter(previousPosition);
+				}
+			}),
+		);
 	};
 
 	const [selectedModel, setSelectedModel] = createSignal(
@@ -230,6 +290,7 @@ export function CaptionsTab(props: {
 					setProject("captions", {
 						segments: [],
 						settings: { ...defaultCaptionSettings },
+						sourceTimed: true,
 					});
 				}
 			},
@@ -540,7 +601,7 @@ export function CaptionsTab(props: {
 										</span>
 									</Show>
 									<KSelect.Icon>
-										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180" />
 									</KSelect.Icon>
 								</KSelect.Trigger>
 								<KSelect.Portal>
@@ -597,7 +658,7 @@ export function CaptionsTab(props: {
 										}}
 									</KSelect.Value>
 									<KSelect.Icon>
-										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180" />
 									</KSelect.Icon>
 								</KSelect.Trigger>
 								<KSelect.Portal>
@@ -808,7 +869,7 @@ export function CaptionsTab(props: {
 								value={getSetting("position")}
 								onChange={(value) => {
 									if (value === null) return;
-									updateCaptionSetting("position", value);
+									updateCaptionPosition(value);
 								}}
 								disabled={!hasCaptions()}
 								itemComponent={(props) => (
@@ -914,7 +975,7 @@ export function CaptionsTab(props: {
 									</MenuItem>
 								)}
 							>
-								<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-none focus:ring-1 focus:ring-blue-9">
+								<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-hidden focus:ring-1 focus:ring-blue-9">
 									<KSelect.Value<{
 										label: string;
 										value: number;
@@ -925,7 +986,7 @@ export function CaptionsTab(props: {
 										}
 									</KSelect.Value>
 									<KSelect.Icon>
-										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)" />
 									</KSelect.Icon>
 								</KSelect.Trigger>
 								<KSelect.Portal>

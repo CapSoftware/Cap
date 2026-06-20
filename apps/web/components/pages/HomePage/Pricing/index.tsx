@@ -9,12 +9,12 @@ export { ProCard } from "./ProCard";
 
 const Pricing = () => {
 	return (
-		<div className="w-full max-w-[1100px] mx-auto px-5">
-			<div className="px-5 mb-16 text-center">
-				<h1 className="mb-3 w-full text-4xl font-medium text-gray-12">
+		<div className="w-full max-w-[960px] mx-auto px-5">
+			<div className="px-5 mb-14 text-center">
+				<h2 className="mb-3 w-full text-4xl font-medium tracking-tight text-gray-12">
 					{homepageCopy.pricing.title}
-				</h1>
-				<p className="text-lg text-gray-10 max-w-[800px] mx-auto leading-[1.75rem] w-full">
+				</h2>
+				<p className="text-lg text-gray-10 max-w-[640px] mx-auto leading-[1.75rem] w-full">
 					{homepageCopy.pricing.subtitle}
 				</p>
 				<div className="flex justify-center items-center px-5 py-2.5 gap-2 mx-auto mt-6 rounded-full border bg-gray-1 border-gray-5 w-fit">
@@ -24,7 +24,7 @@ const Pricing = () => {
 					</p>
 				</div>
 			</div>
-			<div className="flex flex-col gap-8 justify-center items-stretch lg:flex-row">
+			<div className="grid gap-6 items-stretch pt-3 md:grid-cols-2">
 				<CommercialCard />
 				<ProCard />
 			</div>

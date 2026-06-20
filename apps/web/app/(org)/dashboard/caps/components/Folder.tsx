@@ -1,8 +1,7 @@
 "use client";
 import type { Folder, Space } from "@cap/web-domain";
-import { faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faGlobe, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -10,6 +9,8 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { useCopyCollectionLink } from "@/lib/public-collection-client";
+import { Fit, Layout, useRive } from "@/lib/rive";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";
@@ -19,6 +20,7 @@ export type FolderDataType = {
 	name: string;
 	id: Folder.FolderId;
 	color: "normal" | "blue" | "red" | "yellow";
+	public: boolean;
 	videoCount: number;
 	spaceId?: Space.SpaceIdOrOrganisationId | null;
 	parentId: Folder.FolderId | null;
@@ -27,6 +29,7 @@ export type FolderDataType = {
 const FolderCard = ({
 	name,
 	color,
+	public: isPublic,
 	id,
 	parentId,
 	videoCount,
@@ -37,19 +40,22 @@ const FolderCard = ({
 	const [confirmDeleteFolderOpen, setConfirmDeleteFolderOpen] = useState(false);
 	const [isRenaming, setIsRenaming] = useState(false);
 	const [updateName, setUpdateName] = useState(name);
+	const [publicEnabled, setPublicEnabled] = useState(isPublic);
 	const nameRef = useRef<HTMLTextAreaElement>(null);
-	const folderRef = useRef<HTMLDivElement>(null);
+	const folderRef = useRef<HTMLFieldSetElement>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMovingVideo, setIsMovingVideo] = useState(false);
-	const { activeOrganization } = useDashboardContext();
+	const { activeOrganization, setUpgradeModalOpen } = useDashboardContext();
+	const ownerIsPro = Boolean(activeOrganization?.ownerIsPro);
+	const folderHref = spaceId
+		? `/dashboard/spaces/${spaceId}/folder/${id}`
+		: `/dashboard/folder/${id}`;
 
-	// Use a ref to track drag state to avoid re-renders during animation
 	const dragStateRef = useRef({
 		isDragging: false,
 		isAnimating: false,
 	});
 
-	// Add a debounce timer ref to prevent animation stuttering
 	const animationTimerRef = useRef<NodeJS.Timeout | null>(null);
 
 	const artboard =
@@ -70,6 +76,7 @@ const FolderCard = ({
 	});
 
 	const rpc = useRpcClient();
+	const { copy: copyPublicLink } = useCopyCollectionLink(id);
 
 	const deleteFolder = useEffectMutation({
 		mutationFn: (id: Folder.FolderId) => rpc.FolderDelete(id),
@@ -86,10 +93,13 @@ const FolderCard = ({
 	const updateFolder = useEffectMutation({
 		mutationFn: (data: Folder.FolderUpdate) => rpc.FolderUpdate(data),
 		onSuccess: () => {
-			toast.success("Folder name updated successfully");
+			toast.success("Folder updated successfully");
 			router.refresh();
 		},
-		onError: () => toast.error("Failed to update folder name"),
+		onError: () => {
+			setPublicEnabled(isPublic);
+			toast.error("Failed to update folder");
+		},
 		onSettled: () => setIsRenaming(false),
 	});
 
@@ -100,13 +110,15 @@ const FolderCard = ({
 		}
 	}, [isRenaming]);
 
-	// Register this folder as a drop target for mobile drag and drop
+	useEffect(() => {
+		setPublicEnabled(isPublic);
+	}, [isPublic]);
+
 	useEffect(() => {
 		if (!folderRef.current) return;
 
 		const unregister = registerDropTarget(
 			folderRef.current,
-			// onDrop handler
 			async (data) => {
 				if (!data || !data.id) return;
 
@@ -193,7 +205,7 @@ const FolderCard = ({
 		spaceId,
 	]);
 
-	const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+	const handleDragOver = (e: React.DragEvent<HTMLFieldSetElement>) => {
 		e.preventDefault();
 		e.stopPropagation();
 
@@ -218,7 +230,7 @@ const FolderCard = ({
 		}
 	};
 
-	const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+	const handleDragLeave = (e: React.DragEvent<HTMLFieldSetElement>) => {
 		e.preventDefault();
 		e.stopPropagation();
 
@@ -240,7 +252,7 @@ const FolderCard = ({
 		}
 	};
 
-	const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+	const handleDrop = async (e: React.DragEvent<HTMLFieldSetElement>) => {
 		e.preventDefault();
 		e.stopPropagation();
 		setIsDragOver(false);
@@ -277,135 +289,142 @@ const FolderCard = ({
 	};
 
 	return (
-		<Link
-			prefetch={false}
-			href={
-				spaceId
-					? `/dashboard/spaces/${spaceId}/folder/${id}`
-					: `/dashboard/folder/${id}`
-			}
+		<fieldset
+			ref={folderRef}
+			onMouseEnter={() => {
+				if (dragStateRef.current.isDragging) return;
+				if (!rive) return;
+
+				if (animationTimerRef.current) {
+					clearTimeout(animationTimerRef.current);
+					animationTimerRef.current = null;
+				}
+
+				animationTimerRef.current = setTimeout(() => {
+					rive.stop();
+					rive.play("folder-open");
+				}, 50);
+			}}
+			onMouseLeave={() => {
+				if (dragStateRef.current.isDragging) return;
+				if (!rive) return;
+
+				if (animationTimerRef.current) {
+					clearTimeout(animationTimerRef.current);
+					animationTimerRef.current = null;
+				}
+
+				animationTimerRef.current = setTimeout(() => {
+					rive.stop();
+					rive.play("folder-close");
+				}, 50);
+			}}
+			onDragOver={handleDragOver}
+			onDragLeave={handleDragLeave}
+			onDrop={handleDrop}
+			className={clsx(
+				"flex justify-between items-center px-4 py-4 w-full h-auto min-w-0 rounded-lg border transition-all duration-200 bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
+				isDragOver ? "border-blue-10 bg-gray-4" : "border-gray-5",
+				isMovingVideo && "opacity-70",
+			)}
 		>
-			<div
-				ref={folderRef}
-				onMouseEnter={() => {
-					// Don't play mouse animations during drag operations
-					if (dragStateRef.current.isDragging) return;
-					if (!rive) return;
-
-					// Clear any pending animation timer
-					if (animationTimerRef.current) {
-						clearTimeout(animationTimerRef.current);
-						animationTimerRef.current = null;
-					}
-
-					// Use a small delay to prevent stuttering when moving the mouse quickly
-					animationTimerRef.current = setTimeout(() => {
-						rive.stop();
-						rive.play("folder-open");
-					}, 50);
-				}}
-				onMouseLeave={() => {
-					// Don't play mouse animations during drag operations
-					if (dragStateRef.current.isDragging) return;
-					if (!rive) return;
-
-					// Clear any pending animation timer
-					if (animationTimerRef.current) {
-						clearTimeout(animationTimerRef.current);
-						animationTimerRef.current = null;
-					}
-
-					// Use a small delay to prevent stuttering when moving the mouse quickly
-					animationTimerRef.current = setTimeout(() => {
-						rive.stop();
-						rive.play("folder-close");
-					}, 50);
-				}}
-				onDragOver={handleDragOver}
-				onDragLeave={handleDragLeave}
-				onDrop={handleDrop}
-				className={clsx(
-					"flex justify-between items-center px-4 py-4 w-full h-auto rounded-lg border transition-all duration-200 cursor-pointer bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
-					isDragOver ? "border-blue-10 bg-gray-4" : "border-gray-5",
-					isMovingVideo && "opacity-70",
-				)}
-			>
-				<div className="flex flex-1 gap-3 items-center">
+			<div className="flex flex-1 gap-3 items-center">
+				<Link href={folderHref} prefetch={false} className="shrink-0">
 					<FolderRive
 						key={`${theme}folder${id}`}
 						className="w-[50px] h-[50px]"
 					/>
-					<div
-						onClick={(e) => {
-							e.preventDefault();
-							e.stopPropagation();
-						}}
-						className="flex flex-col justify-center h-10"
-					>
-						{isRenaming ? (
-							<textarea
-								ref={nameRef}
-								rows={1}
-								value={updateName}
-								onChange={(e) => setUpdateName(e.target.value)}
-								onBlur={() => {
+				</Link>
+				<div className="flex flex-col justify-center h-10">
+					{isRenaming ? (
+						<textarea
+							ref={nameRef}
+							rows={1}
+							value={updateName}
+							onClick={(e) => {
+								e.preventDefault();
+								e.stopPropagation();
+							}}
+							onChange={(e) => setUpdateName(e.target.value)}
+							onBlur={() => {
+								setIsRenaming(false);
+								if (updateName.trim() !== name)
+									updateFolder.mutate({
+										id,
+										name: updateName.trim(),
+									});
+							}}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") {
 									setIsRenaming(false);
 									if (updateName.trim() !== name)
 										updateFolder.mutate({
 											id,
 											name: updateName.trim(),
 										});
-								}}
-								onKeyDown={(e) => {
-									if (e.key === "Enter") {
-										setIsRenaming(false);
-										if (updateName.trim() !== name)
-											updateFolder.mutate({
-												id,
-												name: updateName.trim(),
-											});
-									}
-								}}
-								className="w-full resize-none bg-transparent border-none focus:outline-none
+								}
+							}}
+							className="w-full resize-none bg-transparent border-none focus:outline-none
                  focus:ring-0 focus:border-none text-gray-12 text-[15px] max-w-[116px] truncate p-0 m-0 h-[22px] leading-[22px] overflow-hidden font-normal tracking-normal"
-							/>
-						) : (
-							<div
-								onClick={(e) => {
-									e.preventDefault();
-									e.stopPropagation();
-									setIsRenaming(true);
-								}}
-							>
-								<p className="text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal">
-									{updateName}
-								</p>
-							</div>
-						)}
+						/>
+					) : (
+						<Link
+							href={folderHref}
+							prefetch={false}
+							className="block text-left"
+						>
+							<span className="block text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal">
+								{updateName}
+							</span>
+						</Link>
+					)}
+					<div className="flex gap-2 items-center">
 						<p className="text-sm truncate text-gray-10 w-fit">{`${videoCount} ${
 							videoCount === 1 ? "video" : "videos"
 						}`}</p>
+						{publicEnabled && (
+							<span className="inline-flex gap-1 items-center text-[11px] font-medium text-blue-9">
+								<FontAwesomeIcon icon={faGlobe} className="size-2.5" />
+								Public
+							</span>
+						)}
 					</div>
 				</div>
-				<ConfirmationDialog
-					loading={deleteFolder.isPending}
-					open={confirmDeleteFolderOpen}
-					icon={<FontAwesomeIcon icon={faTrash} />}
-					onConfirm={() => deleteFolder.mutate(id)}
-					onCancel={() => setConfirmDeleteFolderOpen(false)}
-					confirmLabel={deleteFolder.isPending ? "Deleting..." : "Delete"}
-					title="Delete Folder"
-					description={`Are you sure you want to delete the folder "${name}"? This action cannot be undone.`}
-				/>
-				<FoldersDropdown
-					id={id}
-					parentId={parentId}
-					setIsRenaming={setIsRenaming}
-					setConfirmDeleteFolderOpen={setConfirmDeleteFolderOpen}
-					nameRef={nameRef}
-				/>
 			</div>
-		</Link>
+			<ConfirmationDialog
+				loading={deleteFolder.isPending}
+				open={confirmDeleteFolderOpen}
+				icon={<FontAwesomeIcon icon={faTrash} />}
+				onConfirm={() => deleteFolder.mutate(id)}
+				onCancel={() => setConfirmDeleteFolderOpen(false)}
+				confirmLabel={deleteFolder.isPending ? "Deleting..." : "Delete"}
+				title="Delete Folder"
+				description={`Are you sure you want to delete the folder "${name}"? This action cannot be undone.`}
+			/>
+			<FoldersDropdown
+				id={id}
+				parentId={parentId}
+				public={publicEnabled}
+				setIsRenaming={setIsRenaming}
+				setConfirmDeleteFolderOpen={setConfirmDeleteFolderOpen}
+				nameRef={nameRef}
+				onPublicToggle={() => {
+					const nextPublic = !publicEnabled;
+					if (nextPublic && !ownerIsPro) {
+						setUpgradeModalOpen(true);
+						return;
+					}
+					setPublicEnabled(nextPublic);
+					updateFolder.mutate({
+						id,
+						public: nextPublic,
+					});
+				}}
+				onCopyPublicLink={async () => {
+					await copyPublicLink();
+				}}
+			/>
+		</fieldset>
 	);
 };
 

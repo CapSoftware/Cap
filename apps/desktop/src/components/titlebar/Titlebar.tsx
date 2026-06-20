@@ -29,13 +29,13 @@ export default function Titlebar() {
 		>
 			{left() ? (
 				<>
-					<WindowControls class="!ml-0" />
-					<div class="!ml-auto">{titlebarState.items}</div>
+					<WindowControls class="ml-0!" />
+					<div class="ml-auto!">{titlebarState.items}</div>
 				</>
 			) : (
 				<>
 					{titlebarState.items}
-					<WindowControls class="!ml-auto" />
+					<WindowControls class="ml-auto!" />
 				</>
 			)}
 		</header>

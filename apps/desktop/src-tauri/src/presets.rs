@@ -57,6 +57,14 @@ impl PresetsStore {
         Ok(this.presets.get(default_i as usize).cloned())
     }
 
+    pub fn get_by_name(app: &AppHandle<Wry>, name: &str) -> Result<Option<Preset>, String> {
+        let Some(this) = Self::get(app)? else {
+            return Ok(None);
+        };
+
+        Ok(this.presets.into_iter().find(|p| p.name == name))
+    }
+
     #[allow(unused)]
     pub fn update(app: &AppHandle, update: impl FnOnce(&mut Self)) -> Result<(), String> {
         let Ok(store) = app.store("store") else {

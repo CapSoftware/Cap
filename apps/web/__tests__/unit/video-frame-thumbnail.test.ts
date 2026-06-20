@@ -101,6 +101,16 @@ describe("captureVideoFrameDataUrl", () => {
 		expect(ctx.drawImage).toHaveBeenCalledWith(video, 0, 0, 320, 180);
 	});
 
+	it("respects custom JPEG quality", () => {
+		const { canvas } = createMockCanvas();
+		captureVideoFrameDataUrl({
+			video: createMockVideo(),
+			createCanvas: () => canvas,
+			quality: 0.45,
+		});
+		expect(canvas.toDataURL).toHaveBeenCalledWith("image/jpeg", 0.45);
+	});
+
 	it("uses the injected createCanvas factory", () => {
 		const { canvas } = createMockCanvas();
 		const factory = vi.fn().mockReturnValue(canvas);

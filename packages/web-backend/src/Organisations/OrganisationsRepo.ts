@@ -37,17 +37,44 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 							db
 								.select({
 									membershipId: Db.organizationMembers.id,
+									ownerId: Db.organizations.ownerId,
 									role: Db.organizationMembers.role,
 								})
-								.from(Db.organizationMembers)
+								.from(Db.organizations)
+								.leftJoin(
+									Db.organizationMembers,
+									Dz.and(
+										Dz.eq(
+											Db.organizationMembers.organizationId,
+											Db.organizations.id,
+										),
+										Dz.eq(Db.organizationMembers.userId, userId),
+									),
+								)
 								.where(
 									Dz.and(
-										Dz.eq(Db.organizationMembers.userId, userId),
-										Dz.eq(Db.organizationMembers.organizationId, orgId),
+										Dz.eq(Db.organizations.id, orgId),
+										Dz.or(
+											Dz.eq(Db.organizations.ownerId, userId),
+											Dz.eq(Db.organizationMembers.userId, userId),
+										),
 									),
 								),
 						)
-						.pipe(Effect.map(Array.get(0))),
+						.pipe(
+							Effect.map(Array.get(0)),
+							Effect.map(
+								Option.map((row) => ({
+									membershipId: row.membershipId,
+									role:
+										row.ownerId === userId
+											? ("owner" as const)
+											: row.role === "owner"
+												? ("member" as const)
+												: row.role,
+								})),
+							),
+						),
 				allowedEmailDomain: (orgId: Organisation.OrganisationId) =>
 					db
 						.use((db) =>

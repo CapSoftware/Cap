@@ -1,9 +1,9 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
+import { makePersisted } from "@solid-primitives/storage";
 import { useSearchParams } from "@solidjs/router";
 import { createMutation, useQuery } from "@tanstack/solid-query";
-import { invoke } from "@tauri-apps/api/core";
 import {
 	LogicalPosition,
 	type PhysicalPosition,
@@ -33,6 +33,20 @@ import {
 import { createStore, reconcile } from "solid-js/store";
 import toast from "solid-toast";
 import {
+	CAMERA_DEFAULT_SIZE,
+	CAMERA_PRESET_LARGE,
+	CAMERA_WINDOW_STATE_STORAGE_KEY,
+	CameraPreviewToolbar,
+	CameraResizeHandles,
+	type CameraWindowState,
+	cameraBorderRadius,
+	cameraPreviewDimensions,
+	cameraToolbarScale,
+	clampCameraSize,
+	getDefaultCameraWindowState,
+	normalizeBackgroundBlurMode,
+} from "~/components/CameraPreviewChrome";
+import {
 	CROP_ZERO,
 	type CropBounds,
 	Cropper,
@@ -50,6 +64,11 @@ import {
 	createOptionsQuery,
 	createOrganizationsQuery,
 } from "~/utils/queries";
+import {
+	type CanvasControls,
+	createImageDataWS,
+	type FrameData,
+} from "~/utils/socket";
 import {
 	type CameraInfo,
 	commands,
@@ -315,10 +334,8 @@ function Inner() {
 							Record using only your camera and microphone
 						</span>
 					</div>
-					<div class="w-full max-w-[480px] px-6 mb-4">
-						<div class="w-full aspect-video rounded-2xl border border-gray-6 bg-black overflow-hidden">
-							<CameraPreviewInline />
-						</div>
+					<div class="flex justify-center w-full px-6 mb-4">
+						<CameraPreviewInline />
 					</div>
 					<RecordingControls
 						target={{ variant: "cameraOnly" } as ScreenCaptureTarget}
@@ -1055,10 +1072,12 @@ function Inner() {
 									}
 									await new Promise((resolve) => setTimeout(resolve, 50));
 
-									const path = await invoke<string>("take_screenshot", {
-										target,
-									});
-									await commands.showWindow({ ScreenshotEditor: { path } });
+									const path = await commands.takeScreenshot(target);
+									const shouldOpenEditor =
+										await commands.automationShouldOpenScreenshotEditor(target);
+									if (shouldOpenEditor) {
+										await commands.showWindow({ ScreenshotEditor: { path } });
+									}
 									await commands.closeTargetSelectOverlays();
 								} catch (e) {
 									const message = e instanceof Error ? e.message : String(e);
@@ -1108,7 +1127,7 @@ function Inner() {
 										/>
 									</Show>
 									<Show when={!isValid()}>
-										<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
+										<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-xs border-red-4 text-sm">
 											<p>
 												Minimum size is {minSize().width} x {minSize().height}
 											</p>
@@ -1169,74 +1188,102 @@ const WS_STALL_TIMEOUT_MS = 2000;
 
 function CameraPreviewInline() {
 	const { rawOptions } = useRecordingOptions();
-	const [frame, setFrame] = createSignal<ImageData | null>(null);
+	const [state, setState] = makePersisted(
+		createStore<CameraWindowState>(getDefaultCameraWindowState()),
+		{ name: CAMERA_WINDOW_STATE_STORAGE_KEY },
+	);
+	const [hasFrame, setHasFrame] = createSignal(false);
+	const [frameDimensions, setFrameDimensions] = createSignal<{
+		width: number;
+		height: number;
+	} | null>(null);
 	const [connectionFailed, setConnectionFailed] = createSignal(false);
+	const [chromeVisible, setChromeVisible] = createSignal(false);
+	const [viewportSize, setViewportSize] = createSignal({
+		width: window.innerWidth,
+		height: window.innerHeight,
+	});
 	let canvasRef: HTMLCanvasElement | undefined;
-	let containerRef: HTMLDivElement | undefined;
-	let ws: WebSocket | undefined;
+	let ws: Omit<WebSocket, "onmessage"> | undefined;
+	let canvasControls: CanvasControls | undefined;
 	let retryCount = 0;
 	let reconnectTimeoutId: ReturnType<typeof setTimeout> | undefined;
 	let stallCheckInterval: ReturnType<typeof setInterval> | undefined;
 	let isCleanedUp = false;
-	let reusableFrame: ImageData | null = null;
-	let reusableFrameWidth = 0;
-	let reusableFrameHeight = 0;
 	let lastFrameTime = 0;
 
 	const cameraWsPort = window.__CAP__?.cameraWsPort;
 	const hasCameraSelected = () => rawOptions.cameraID !== null;
 
-	const getReusableFrame = (width: number, height: number) => {
+	const closeSocket = () => {
+		const socket = ws;
+		const controls = canvasControls;
+		ws = undefined;
+		canvasControls = undefined;
+		controls?.dispose();
 		if (
-			!reusableFrame ||
-			reusableFrameWidth !== width ||
-			reusableFrameHeight !== height
+			socket &&
+			socket.readyState !== WebSocket.CLOSING &&
+			socket.readyState !== WebSocket.CLOSED
 		) {
-			reusableFrame = new ImageData(width, height);
-			reusableFrameWidth = width;
-			reusableFrameHeight = height;
+			socket.close();
+		}
+	};
+
+	const initCanvasControls = () => {
+		if (!canvasControls || !canvasRef) return;
+		canvasControls.initDirectCanvas(canvasRef);
+	};
+
+	const updateFrameState = (frame: FrameData) => {
+		resetBackoff();
+		lastFrameTime = Date.now();
+
+		const dimensions = frameDimensions();
+		if (
+			!dimensions ||
+			dimensions.width !== frame.width ||
+			dimensions.height !== frame.height
+		) {
+			setFrameDimensions({ width: frame.width, height: frame.height });
+		}
+		if (canvasControls?.hasRenderedFrame()) {
+			setHasFrame(true);
+		}
+	};
+
+	createEventListener(window, "resize", () => {
+		setViewportSize({
+			width: window.innerWidth,
+			height: window.innerHeight,
+		});
+	});
+
+	createEffect(() => {
+		let currentSize = state.size as number | string;
+		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
+			currentSize =
+				currentSize === "lg" ? CAMERA_PRESET_LARGE : CAMERA_DEFAULT_SIZE;
+			setState("size", currentSize);
+			return;
 		}
 
-		return reusableFrame;
-	};
+		const clampedSize = clampCameraSize(currentSize);
+		if (clampedSize !== currentSize) {
+			setState("size", clampedSize);
+			return;
+		}
 
-	let pendingRender = false;
-	let rafId: number | null = null;
-	let cachedCtx: CanvasRenderingContext2D | null = null;
-	let latestImageData: ImageData | null = null;
-
-	const scheduleRender = () => {
-		if (rafId !== null) return;
-		rafId = requestAnimationFrame(() => {
-			rafId = null;
-			if (!pendingRender || !latestImageData) return;
-			pendingRender = false;
-
-			const canvas = canvasRef;
-			if (!canvas) return;
-			if (
-				canvas.width !== latestImageData.width ||
-				canvas.height !== latestImageData.height
-			) {
-				canvas.width = latestImageData.width;
-				canvas.height = latestImageData.height;
-				cachedCtx = null;
-			}
-			if (!cachedCtx) {
-				cachedCtx = canvas.getContext("2d");
-			}
-			cachedCtx?.putImageData(latestImageData, 0, 0);
+		commands.setCameraPreviewState({
+			size: state.size,
+			shape: state.shape,
+			mirrored: state.mirrored,
+			background_blur: normalizeBackgroundBlurMode(state.backgroundBlur),
 		});
-	};
-
-	const drawFrame = (image: ImageData) => {
-		latestImageData = image;
-		pendingRender = true;
-		scheduleRender();
-	};
+	});
 
 	const scheduleReconnect = () => {
-		if (isCleanedUp) return;
+		if (isCleanedUp || reconnectTimeoutId !== undefined || ws) return;
 
 		if (retryCount >= WS_MAX_RETRIES) {
 			setConnectionFailed(true);
@@ -1251,7 +1298,8 @@ function CameraPreviewInline() {
 		);
 
 		reconnectTimeoutId = setTimeout(() => {
-			if (isCleanedUp) return;
+			reconnectTimeoutId = undefined;
+			if (isCleanedUp || ws || !hasCameraSelected()) return;
 			retryCount += 1;
 			ws = createSocket();
 		}, backoffMs);
@@ -1269,95 +1317,33 @@ function CameraPreviewInline() {
 	const createSocket = () => {
 		if (!cameraWsPort) return undefined;
 
-		const socket = new WebSocket(`ws://localhost:${cameraWsPort}`);
-		socket.binaryType = "arraybuffer";
+		const [socket, _isConnected, _isWorkerReady, controls] = createImageDataWS(
+			`ws://localhost:${cameraWsPort}`,
+			updateFrameState,
+			() => commands.refreshCameraFeed().catch(() => {}),
+			{ powerPreference: "low-power" },
+		);
+		canvasControls = controls;
+		initCanvasControls();
 
-		socket.onopen = () => {
-			resetBackoff();
+		socket.addEventListener("open", () => {
+			setConnectionFailed(false);
 			lastFrameTime = Date.now();
-		};
+			setHasFrame(false);
+			setFrameDimensions(null);
+		});
 
-		socket.onclose = () => {
-			if (!isCleanedUp) {
-				scheduleReconnect();
+		socket.addEventListener("close", () => {
+			if (canvasControls === controls) {
+				canvasControls = undefined;
 			}
-		};
+			if (ws === socket) ws = undefined;
+			if (!isCleanedUp && hasCameraSelected()) scheduleReconnect();
+		});
 
-		socket.onerror = () => {
-			socket.close();
-		};
-
-		socket.onmessage = (event) => {
-			lastFrameTime = Date.now();
-			if (pendingRender) return;
-
-			const buffer = event.data as ArrayBuffer;
-			const clamped = new Uint8ClampedArray(buffer);
-			if (clamped.length < 24) return;
-
-			const MAX_FRAME_DIMENSION = 8192;
-			const MAX_STRIDE_BYTES = MAX_FRAME_DIMENSION * 4 * 2;
-			const MAX_FRAME_SIZE = MAX_FRAME_DIMENSION * MAX_FRAME_DIMENSION * 4;
-
-			const metadataOffset = clamped.length - 24;
-			const meta = new DataView(buffer, metadataOffset, 24);
-			const strideBytes = meta.getUint32(0, true);
-			const height = meta.getUint32(4, true);
-			const width = meta.getUint32(8, true);
-
-			if (!width || !height || strideBytes === 0) return;
-
-			if (
-				width > MAX_FRAME_DIMENSION ||
-				height > MAX_FRAME_DIMENSION ||
-				strideBytes > MAX_STRIDE_BYTES
-			)
-				return;
-
-			const source = clamped.subarray(0, metadataOffset);
-			const expectedRowBytes = width * 4;
-			const availableLength = strideBytes * height;
-
-			if (
-				expectedRowBytes > MAX_STRIDE_BYTES ||
-				availableLength > MAX_FRAME_SIZE
-			)
-				return;
-
-			if (strideBytes < expectedRowBytes || source.length < availableLength)
-				return;
-
-			const expectedLength = expectedRowBytes * height;
-
-			if (expectedLength > MAX_FRAME_SIZE) return;
-
-			const imageData = getReusableFrame(width, height);
-
-			if (strideBytes === expectedRowBytes) {
-				imageData.data.set(source.subarray(0, expectedLength));
-			} else {
-				for (let row = 0; row < height; row += 1) {
-					const srcStart = row * strideBytes;
-					const destStart = row * expectedRowBytes;
-					imageData.data.set(
-						source.subarray(srcStart, srcStart + expectedRowBytes),
-						destStart,
-					);
-				}
-			}
-
-			drawFrame(imageData);
-
-			const currentFrame = frame();
-			if (
-				!currentFrame ||
-				currentFrame !== imageData ||
-				currentFrame.width !== imageData.width ||
-				currentFrame.height !== imageData.height
-			) {
-				setFrame(imageData);
-			}
-		};
+		socket.addEventListener("error", () => {
+			controls.dispose();
+		});
 
 		return socket;
 	};
@@ -1393,144 +1379,139 @@ function CameraPreviewInline() {
 					lastFrameTime = Date.now();
 					commands.refreshCameraFeed().catch(() => {});
 					ws?.close();
-					resetBackoff();
-					ws = createSocket();
 				}
 			}, WS_STALL_TIMEOUT_MS);
 		} else {
-			if (
-				ws &&
-				ws.readyState !== WebSocket.CLOSING &&
-				ws.readyState !== WebSocket.CLOSED
-			) {
-				ws.close();
-			}
-			ws = undefined;
-			setFrame(null);
-			reusableFrame = null;
-			reusableFrameWidth = 0;
-			reusableFrameHeight = 0;
+			setHasFrame(false);
+			setFrameDimensions(null);
+			closeSocket();
 			setConnectionFailed(false);
 		}
 	});
 
 	onCleanup(() => {
 		isCleanedUp = true;
-		if (rafId !== null) {
-			cancelAnimationFrame(rafId);
-			rafId = null;
-		}
-		cachedCtx = null;
-		latestImageData = null;
 		if (reconnectTimeoutId !== undefined) {
 			clearTimeout(reconnectTimeoutId);
+			reconnectTimeoutId = undefined;
 		}
 		if (stallCheckInterval !== undefined) {
 			clearInterval(stallCheckInterval);
+			stallCheckInterval = undefined;
 		}
-		reusableFrame = null;
-		reusableFrameWidth = 0;
-		reusableFrameHeight = 0;
-		ws?.close();
+		closeSocket();
 	});
 
-	const [containerSize, setContainerSize] = createSignal<{
-		width: number;
-		height: number;
-	} | null>(null);
-
-	onMount(() => {
-		if (!containerRef) return;
-		const observer = new ResizeObserver(() => {
-			if (!containerRef) return;
-			const rect = containerRef.getBoundingClientRect();
-			setContainerSize({ width: rect.width, height: rect.height });
-		});
-		observer.observe(containerRef);
-		onCleanup(() => observer.disconnect());
-	});
-
-	const canvasStyle = () => {
-		const f = frame();
-		const cs = containerSize();
-		if (!f || !cs || cs.width === 0 || cs.height === 0) return {};
-
-		const frameAspect = f.width / f.height;
-		const containerAspect = cs.width / cs.height;
-
-		let displayWidth: number;
-		let displayHeight: number;
-
-		if (frameAspect > containerAspect) {
-			displayWidth = cs.width;
-			displayHeight = cs.width / frameAspect;
-		} else {
-			displayHeight = cs.height;
-			displayWidth = cs.height * frameAspect;
-		}
+	const previewDimensions = () => {
+		const dimensions = frameDimensions();
+		const { width, height } = cameraPreviewDimensions(
+			state.size,
+			state.shape,
+			dimensions ? dimensions.width / dimensions.height : undefined,
+		);
+		const viewport = viewportSize();
+		const maxWidth = Math.max(160, viewport.width - 48);
+		const maxHeight = Math.max(160, viewport.height - 320);
+		const scale = Math.min(1, maxWidth / width, maxHeight / height);
 
 		return {
-			width: `${Math.round(displayWidth)}px`,
-			height: `${Math.round(displayHeight)}px`,
+			height: Math.round(height * scale),
+			width: Math.round(width * scale),
 		};
 	};
 
-	createEffect(() => {
-		const image = frame();
-		const canvas = canvasRef;
-		if (!image || !canvas) return;
-		if (canvas.width !== image.width || canvas.height !== image.height) {
-			canvas.width = image.width;
-			canvas.height = image.height;
-			cachedCtx = null;
-		}
-	});
+	const previewFrameStyle = () => {
+		const dimensions = previewDimensions();
+		return {
+			"border-radius": cameraBorderRadius(state),
+			height: `${dimensions.height}px`,
+			width: `${dimensions.width}px`,
+		};
+	};
+
+	const canvasStyle = () => {
+		return {
+			height: "100%",
+			"object-fit": "cover" as const,
+			opacity: hasFrame() ? "1" : "0",
+			transform: state.mirrored ? "scaleX(-1)" : "scaleX(1)",
+			width: "100%",
+		};
+	};
 
 	const handleRetryConnection = () => {
 		resetBackoff();
-		if (ws) {
-			ws.close();
-		}
+		closeSocket();
 		ws = createSocket();
 	};
 
 	return (
 		<div
-			ref={containerRef}
-			class="flex items-center justify-center w-full h-full bg-black"
+			class="flex flex-col items-center max-w-full"
+			onPointerMove={() => setChromeVisible(true)}
+			onPointerLeave={() => setChromeVisible(false)}
+			onPointerCancel={() => setChromeVisible(false)}
 		>
-			<Show
-				when={hasCameraSelected()}
-				fallback={
-					<div class="flex flex-col items-center gap-2 text-center px-4">
-						<IconCapCamera class="size-8 text-gray-9 mb-2" />
-						<div class="text-sm text-gray-11">Please select a camera</div>
-					</div>
-				}
-			>
-				<Show
-					when={!connectionFailed()}
-					fallback={
-						<div class="flex flex-col items-center gap-2 text-center px-4">
-							<div class="text-sm text-red-400">Camera connection failed</div>
-							<button
-								type="button"
-								onClick={handleRetryConnection}
-								class="text-xs text-blue-400 hover:text-blue-300 underline"
-							>
-								Try again
-							</button>
-						</div>
-					}
+			<div class="h-14 flex items-center justify-center">
+				<CameraPreviewToolbar
+					state={state}
+					setState={setState}
+					visible={chromeVisible()}
+					scale={cameraToolbarScale(state.size)}
+				/>
+			</div>
+			<div class="relative shadow-lg" style={previewFrameStyle()}>
+				<div
+					class="flex items-center justify-center w-full h-full overflow-hidden border border-gray-6 bg-black text-gray-11 relative"
+					style={{ "border-radius": "inherit" }}
 				>
 					<Show
-						when={frame()}
-						fallback={<div class="text-sm text-gray-11">Loading camera...</div>}
+						when={hasCameraSelected()}
+						fallback={
+							<div class="flex flex-col items-center gap-2 text-center px-4">
+								<IconCapCamera class="size-8 text-gray-9 mb-2" />
+								<div class="text-sm text-gray-11">Please select a camera</div>
+							</div>
+						}
 					>
-						<canvas ref={canvasRef} style={canvasStyle()} />
+						<Show
+							when={!connectionFailed()}
+							fallback={
+								<div class="flex flex-col items-center gap-2 text-center px-4">
+									<div class="text-sm text-red-400">
+										Camera connection failed
+									</div>
+									<button
+										type="button"
+										onClick={handleRetryConnection}
+										class="text-xs text-blue-400 hover:text-blue-300 underline"
+									>
+										Try again
+									</button>
+								</div>
+							}
+						>
+							<canvas
+								ref={(canvas) => {
+									canvasRef = canvas;
+									initCanvasControls();
+								}}
+								class="absolute inset-0"
+								style={canvasStyle()}
+							/>
+							<Show when={!hasFrame()}>
+								<div class="text-sm text-gray-11">Loading camera...</div>
+							</Show>
+						</Show>
 					</Show>
-				</Show>
-			</Show>
+				</div>
+				<CameraResizeHandles
+					state={state}
+					setState={setState}
+					toolbarHeight={0}
+					visible={chromeVisible()}
+				/>
+			</div>
 		</div>
 	);
 }
@@ -1677,7 +1658,7 @@ function RecordingControls(props: {
 
 	return (
 		<>
-			<div class="flex flex-col gap-2.5 items-stretch my-2.5 w-[26rem] max-w-[90vw]">
+			<div class="flex flex-col gap-2.5 items-stretch my-2.5 w-104 max-w-[90vw]">
 				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
 					<div class="flex gap-2.5 items-center">
 						<div
@@ -1686,6 +1667,7 @@ function RecordingControls(props: {
 									props.onClose();
 								} else {
 									setOptions("targetMode", null);
+									commands.setEditorRecordingTarget(null);
 									commands.closeTargetSelectOverlays();
 								}
 							}}
@@ -1696,7 +1678,7 @@ function RecordingControls(props: {
 						<div
 							data-inactive={rawOptions.mode === "instant" && !auth.data}
 							data-disabled={startDisabled()}
-							class="flex flex-1 min-w-0 max-w-[18rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 dark:from-blue-9 dark:via-blue-9 dark:to-blue-10 group"
+							class="flex flex-1 min-w-0 max-w-[18rem] overflow-hidden flex-row h-11 rounded-full text-white bg-linear-to-r from-blue-10 via-blue-10 to-blue-11 dark:from-blue-9 dark:via-blue-9 dark:to-blue-10 group"
 							onClick={async () => {
 								if (rawOptions.mode === "instant" && !auth.data) {
 									emit("start-sign-in");
@@ -1736,10 +1718,14 @@ function RecordingControls(props: {
 											}
 										}
 
-										const path = await invoke<string>("take_screenshot", {
-											target: props.target,
-										});
-										await commands.showWindow({ ScreenshotEditor: { path } });
+										const path = await commands.takeScreenshot(props.target);
+										const shouldOpenEditor =
+											await commands.automationShouldOpenScreenshotEditor(
+												props.target,
+											);
+										if (shouldOpenEditor) {
+											await commands.showWindow({ ScreenshotEditor: { path } });
+										}
 										await commands.closeTargetSelectOverlays();
 									} catch (e) {
 										const message = e instanceof Error ? e.message : String(e);
@@ -1765,13 +1751,13 @@ function RecordingControls(props: {
 							>
 								<Switch>
 									<Match when={rawOptions.mode === "studio"}>
-										<IconCapFilmCut class="size-4 flex-shrink-0" />
+										<IconCapFilmCut class="size-4 shrink-0" />
 									</Match>
 									<Match when={rawOptions.mode === "instant"}>
-										<IconCapInstant class="size-4 flex-shrink-0" />
+										<IconCapInstant class="size-4 shrink-0" />
 									</Match>
 									<Match when={(rawOptions.mode as string) === "screenshot"}>
-										<IconCapCamera class="size-4 flex-shrink-0" />
+										<IconCapCamera class="size-4 shrink-0" />
 									</Match>
 								</Switch>
 								<div class="flex flex-col mr-2 ml-3 min-w-0">

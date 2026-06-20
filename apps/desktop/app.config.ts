@@ -1,8 +1,11 @@
 import capUIPlugin from "@cap/ui-solid/vite";
 import { defineConfig } from "@solidjs/start/config";
+import devtools from "solid-devtools/vite";
 import topLevelAwait from "vite-plugin-top-level-await";
 import wasm from "vite-plugin-wasm";
 import tsconfigPaths from "vite-tsconfig-paths";
+
+const enableSolidDevtools = !!process.env.VITE_SOLID_DEVTOOLS;
 
 export default defineConfig({
 	ssr: false,
@@ -27,6 +30,7 @@ export default defineConfig({
 		envPrefix: ["VITE_", "TAURI_"],
 		assetsInclude: ["**/*.riv"],
 		plugins: [
+			...(enableSolidDevtools ? [devtools({ autoname: true })] : []),
 			wasm(),
 			topLevelAwait(),
 			capUIPlugin,

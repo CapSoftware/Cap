@@ -123,7 +123,7 @@ impl ChannelPressureTracker {
         let current = self
             .depth
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            + 1;
+            .saturating_add(1);
         let threshold = (self.capacity * 4) / 5;
         if current > threshold && self.last_warning.elapsed() >= Duration::from_secs(5) {
             self.last_warning = std::time::Instant::now();
@@ -134,6 +134,18 @@ impl ChannelPressureTracker {
                 "Encoder channel pressure high (>80%)"
             );
         }
+    }
+
+    fn on_recv(depth: &AtomicUsize) {
+        let _ = depth.fetch_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |value| Some(value.saturating_sub(1)),
+        );
+    }
+
+    fn on_send_failed(&self) {
+        Self::on_recv(&self.depth);
     }
 }
 
@@ -378,7 +390,7 @@ impl Muxer for AVFoundationMp4Muxer {
 
                 while let Ok(Some(msg)) = video_rx.recv() {
                     if let Some(ref depth) = channel_depth {
-                        depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        ChannelPressureTracker::on_recv(depth);
                     }
                     if fatal_error_message(&video_fatal_error).is_some() {
                         break;
@@ -390,8 +402,7 @@ impl Muxer for AVFoundationMp4Muxer {
                             && available_mb < DISK_SPACE_CRITICAL_MB
                         {
                             let message = format!(
-                                "Disk space critically low ({}MB), stopping recording to preserve output",
-                                available_mb
+                                "Disk space critically low ({available_mb}MB), stopping recording to preserve output"
                             );
                             set_fatal_error(&video_fatal_error, message.clone());
                             return Err(anyhow!(message));
@@ -523,7 +534,7 @@ impl Muxer for AVFoundationMp4Muxer {
 
                     while let Ok(Some(msg)) = audio_rx.recv() {
                         if let Some(ref depth) = audio_channel_depth_thread {
-                            depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                            ChannelPressureTracker::on_recv(depth);
                         }
                         if fatal_error_message(&audio_fatal_error).is_some() {
                             break;
@@ -811,20 +822,28 @@ impl VideoMuxer for AVFoundationMp4Muxer {
                 return Ok(());
             }
 
-            match state
+            if let Some(ref mut pressure) = self.channel_pressure {
+                pressure.on_send();
+            }
+
+            let send_result = state
                 .video_tx
-                .try_send(Some(VideoFrameMessage::Frame(frame.sample_buf, timestamp)))
-            {
+                .try_send(Some(VideoFrameMessage::Frame(frame.sample_buf, timestamp)));
+
+            match send_result {
                 Ok(()) => {
                     self.frame_drops.record_frame();
-                    if let Some(ref mut pressure) = self.channel_pressure {
-                        pressure.on_send();
-                    }
                 }
                 Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                    if let Some(ref pressure) = self.channel_pressure {
+                        pressure.on_send_failed();
+                    }
                     self.frame_drops.record_drop();
                 }
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    if let Some(ref pressure) = self.channel_pressure {
+                        pressure.on_send_failed();
+                    }
                     trace!("MP4 encoder video channel disconnected");
                 }
             }
@@ -853,16 +872,22 @@ impl AudioMuxer for AVFoundationMp4Muxer {
                 new_frame
             };
 
+            if let Some(ref mut pressure) = self.audio_channel_pressure {
+                pressure.on_send();
+            }
+
             match audio_tx.try_send(Some(AudioFrameMessage::Frame(owned_frame, timestamp))) {
-                Ok(()) => {
-                    if let Some(ref mut pressure) = self.audio_channel_pressure {
-                        pressure.on_send();
-                    }
-                }
+                Ok(()) => {}
                 Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                    if let Some(ref pressure) = self.audio_channel_pressure {
+                        pressure.on_send_failed();
+                    }
                     trace!("MP4 audio encoder buffer full, dropping frame");
                 }
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    if let Some(ref pressure) = self.audio_channel_pressure {
+                        pressure.on_send_failed();
+                    }
                     trace!("MP4 audio encoder channel disconnected");
                 }
             }
@@ -880,14 +905,19 @@ enum CameraFrameMessage {
 
 struct CameraEncoderState {
     video_tx: SyncSender<Option<CameraFrameMessage>>,
+    audio_tx: Option<SyncSender<Option<AudioFrameMessage>>>,
     encoder: Arc<Mutex<cap_enc_avfoundation::MP4Encoder>>,
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
+    audio_handle: Option<JoinHandle<anyhow::Result<()>>>,
+    audio_channel_depth: Option<Arc<AtomicUsize>>,
+    instant_mode: bool,
 }
 
 pub struct AVFoundationCameraMuxer {
     state: Option<CameraEncoderState>,
     pause_flag: Arc<AtomicBool>,
     frame_drops: FrameDropTracker,
+    audio_channel_pressure: Option<ChannelPressureTracker>,
     was_paused: bool,
     fatal_error: SharedFatalError,
 }
@@ -895,6 +925,7 @@ pub struct AVFoundationCameraMuxer {
 #[derive(Default)]
 pub struct AVFoundationCameraMuxerConfig {
     pub output_height: Option<u32>,
+    pub instant_mode: bool,
     pub compatibility_quality: bool,
 }
 
@@ -905,31 +936,43 @@ impl Muxer for AVFoundationCameraMuxer {
         config: Self::Config,
         output_path: PathBuf,
         video_config: Option<VideoInfo>,
-        _audio_config: Option<AudioInfo>,
+        audio_config: Option<AudioInfo>,
         pause_flag: Arc<AtomicBool>,
         _tasks: &mut TaskPool,
     ) -> anyhow::Result<Self> {
         let video_config =
             video_config.ok_or_else(|| anyhow!("Invariant: No video source provided"))?;
 
-        let buffer_size = get_mp4_muxer_buffer_size(false);
-        debug!(buffer_size, "Camera MP4 muxer encoder channel buffer size");
+        let is_instant = config.instant_mode;
+        let buffer_size = get_mp4_muxer_buffer_size(is_instant);
+        debug!(
+            buffer_size,
+            instant_mode = is_instant,
+            "Camera MP4 muxer encoder channel buffer size"
+        );
 
         let (video_tx, video_rx) = sync_channel::<Option<CameraFrameMessage>>(buffer_size);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
 
-        let encoder = if config.compatibility_quality {
+        let encoder = if is_instant {
+            cap_enc_avfoundation::MP4Encoder::init_instant_mode(
+                output_path.clone(),
+                video_config,
+                audio_config,
+                config.output_height,
+            )
+        } else if config.compatibility_quality {
             cap_enc_avfoundation::MP4Encoder::init_compatibility(
                 output_path.clone(),
                 video_config,
-                None,
+                audio_config,
                 config.output_height,
             )
         } else {
             cap_enc_avfoundation::MP4Encoder::init(
                 output_path.clone(),
                 video_config,
-                None,
+                audio_config,
                 config.output_height,
             )
         }
@@ -1053,6 +1096,117 @@ impl Muxer for AVFoundationCameraMuxer {
             .recv()
             .map_err(|_| anyhow!("Camera MP4 encoder thread ended unexpectedly"))??;
 
+        let (audio_channel_pressure, audio_channel_depth) = if is_instant && audio_config.is_some()
+        {
+            let (tracker, depth) = ChannelPressureTracker::new(buffer_size);
+            (Some(tracker), Some(depth))
+        } else {
+            (None, None)
+        };
+
+        let (audio_tx, audio_handle) = if audio_config.is_some() {
+            let (audio_tx, audio_rx) = sync_channel::<Option<AudioFrameMessage>>(buffer_size);
+            let encoder_clone = encoder.clone();
+            let audio_fatal_error = fatal_error.clone();
+            let (audio_ready_tx, audio_ready_rx) = sync_channel::<anyhow::Result<()>>(1);
+            let audio_channel_depth_thread = audio_channel_depth.clone();
+
+            let audio_handle = std::thread::Builder::new()
+                .name("mp4-camera-audio-encoder".to_string())
+                .spawn(move || {
+                    #[cfg(target_os = "macos")]
+                    boost_encoder_thread_qos();
+                    if audio_ready_tx.send(Ok(())).is_err() {
+                        return Err(anyhow!("Failed to send camera audio ready signal"));
+                    }
+
+                    let mut total_frames = 0u64;
+                    let mut encoder_busy_count = 0u64;
+
+                    while let Ok(Some(msg)) = audio_rx.recv() {
+                        if let Some(ref depth) = audio_channel_depth_thread {
+                            ChannelPressureTracker::on_recv(depth);
+                        }
+                        if fatal_error_message(&audio_fatal_error).is_some() {
+                            break;
+                        }
+
+                        match msg {
+                            AudioFrameMessage::Frame(frame, timestamp) => {
+                                let mut retry_count = 0;
+                                const MAX_RETRIES: u32 = 50;
+
+                                loop {
+                                    let queue_result = {
+                                        let mut encoder = match encoder_clone.lock() {
+                                            Ok(e) => e,
+                                            Err(_) => {
+                                                let message = "Camera MP4 audio encoder mutex poisoned".to_string();
+                                                set_fatal_error(&audio_fatal_error, message.clone());
+                                                return Err(anyhow!(message));
+                                            }
+                                        };
+                                        encoder.queue_audio_frame(&frame, timestamp)
+                                    };
+
+                                    match queue_result {
+                                        Ok(()) => break,
+                                        Err(QueueFrameError::NotReadyForMore) => {
+                                            retry_count += 1;
+                                            if retry_count >= MAX_RETRIES {
+                                                encoder_busy_count += 1;
+                                                break;
+                                            }
+                                            std::thread::sleep(Duration::from_micros(500));
+                                        }
+                                        Err(QueueFrameError::WriterFailed(err)) => {
+                                            let message = format!(
+                                                "Failed to encode camera audio frame: WriterFailed/{err} \
+                                                 (frame #{total_frames}, ts={timestamp:?})"
+                                            );
+                                            set_fatal_error(&audio_fatal_error, message.clone());
+                                            return Err(anyhow!(message));
+                                        }
+                                        Err(QueueFrameError::Failed) => {
+                                            let message = format!(
+                                                "Failed to encode camera audio frame: Failed \
+                                                 (frame #{total_frames}, ts={timestamp:?})"
+                                            );
+                                            set_fatal_error(&audio_fatal_error, message.clone());
+                                            return Err(anyhow!(message));
+                                        }
+                                        Err(QueueFrameError::Finished) => return Ok(()),
+                                        Err(e) => {
+                                            warn!("Failed to encode camera audio frame: {e}");
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                total_frames += 1;
+                            }
+                        }
+                    }
+
+                    if total_frames > 0 {
+                        debug!(
+                            total_frames,
+                            encoder_busy_count, "Camera MP4 audio encoder summary"
+                        );
+                    }
+
+                    Ok(())
+                })?;
+
+            audio_ready_rx
+                .recv()
+                .map_err(|_| anyhow!("Camera MP4 audio encoder thread ended unexpectedly"))??;
+
+            (Some(audio_tx), Some(audio_handle))
+        } else {
+            (None, None)
+        };
+
         info!(
             path = %output_path.display(),
             "Started non-blocking camera MP4 encoder"
@@ -1061,21 +1215,31 @@ impl Muxer for AVFoundationCameraMuxer {
         Ok(Self {
             state: Some(CameraEncoderState {
                 video_tx,
+                audio_tx,
                 encoder,
                 encoder_handle: Some(encoder_handle),
+                audio_handle,
+                audio_channel_depth,
+                instant_mode: is_instant,
             }),
             pause_flag,
             frame_drops: FrameDropTracker::new(None, "muxer:macos-mp4-camera"),
+            audio_channel_pressure,
             was_paused: false,
             fatal_error,
         })
     }
 
     fn stop(&mut self) {
-        if let Some(state) = &self.state
-            && let Err(e) = state.video_tx.send(None)
-        {
-            trace!("Camera MP4 encoder channel already closed during stop: {e}");
+        if let Some(state) = &self.state {
+            if let Err(e) = state.video_tx.send(None) {
+                trace!("Camera MP4 encoder channel already closed during stop: {e}");
+            }
+            if let Some(audio_tx) = &state.audio_tx
+                && let Err(e) = audio_tx.send(None)
+            {
+                trace!("Camera MP4 audio encoder channel already closed during stop: {e}");
+            }
         }
     }
 
@@ -1085,6 +1249,11 @@ impl Muxer for AVFoundationCameraMuxer {
         if let Some(mut state) = self.state.take() {
             if let Err(e) = state.video_tx.send(None) {
                 trace!("Camera MP4 encoder channel already closed during finish: {e}");
+            }
+            if let Some(audio_tx) = &state.audio_tx
+                && let Err(e) = audio_tx.send(None)
+            {
+                trace!("Camera MP4 audio encoder channel already closed during finish: {e}");
             }
 
             let mut can_finish_encoder = true;
@@ -1097,6 +1266,35 @@ impl Muxer for AVFoundationCameraMuxer {
                 can_finish_encoder = false;
                 if finish_error.is_none() {
                     finish_error = Some(e);
+                }
+            }
+
+            if let Some(handle) = state.audio_handle.take() {
+                let audio_finish_timeout = get_mp4_audio_finish_timeout(state.instant_mode);
+                match wait_for_blocking_thread_finish(
+                    handle,
+                    audio_finish_timeout,
+                    "Camera MP4 audio encoder thread",
+                ) {
+                    BlockingThreadFinish::Clean => {}
+                    BlockingThreadFinish::Failed(error) => {
+                        warn!("{error:#}");
+                        if finish_error.is_none() {
+                            finish_error = Some(error);
+                        }
+                    }
+                    BlockingThreadFinish::TimedOut(error) => {
+                        let pending_audio_frames_at_timeout = state
+                            .audio_channel_depth
+                            .as_ref()
+                            .map(|depth| depth.load(std::sync::atomic::Ordering::Relaxed));
+                        warn!(
+                            audio_finish_timeout_ms = audio_finish_timeout.as_millis() as u64,
+                            instant_mode = state.instant_mode,
+                            pending_audio_frames_at_timeout = ?pending_audio_frames_at_timeout,
+                            "{error:#}; finalizing camera MP4 to preserve the recording, tail audio may be truncated"
+                        );
+                    }
                 }
             }
 
@@ -1185,7 +1383,45 @@ impl VideoMuxer for AVFoundationCameraMuxer {
 }
 
 impl AudioMuxer for AVFoundationCameraMuxer {
-    fn send_audio_frame(&mut self, _frame: AudioFrame, _timestamp: Duration) -> anyhow::Result<()> {
+    fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
+        if let Some(message) = fatal_error_message(&self.fatal_error) {
+            return Err(anyhow!(message));
+        }
+
+        if let Some(state) = &self.state
+            && let Some(audio_tx) = &state.audio_tx
+        {
+            let owned_frame = {
+                let mut new_frame = ffmpeg::frame::Audio::new(
+                    frame.inner.format(),
+                    frame.inner.samples(),
+                    frame.inner.channel_layout(),
+                );
+                new_frame.clone_from(&frame.inner);
+                new_frame
+            };
+
+            if let Some(ref mut pressure) = self.audio_channel_pressure {
+                pressure.on_send();
+            }
+
+            match audio_tx.try_send(Some(AudioFrameMessage::Frame(owned_frame, timestamp))) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                    if let Some(ref pressure) = self.audio_channel_pressure {
+                        pressure.on_send_failed();
+                    }
+                    trace!("Camera MP4 audio encoder buffer full, dropping frame");
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    if let Some(ref pressure) = self.audio_channel_pressure {
+                        pressure.on_send_failed();
+                    }
+                    trace!("Camera MP4 audio encoder channel disconnected");
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -1203,9 +1439,7 @@ mod tests {
             let normal = DEFAULT_MP4_MUXER_BUFFER_SIZE;
             assert!(
                 instant > normal,
-                "Instant mode buffer ({}) should be larger than normal mode buffer ({})",
-                instant,
-                normal
+                "Instant mode buffer ({instant}) should be larger than normal mode buffer ({normal})"
             );
         }
 
@@ -1245,6 +1479,30 @@ mod tests {
             }
             assert_eq!(normal, DEFAULT_MP4_MUXER_BUFFER_SIZE);
             assert_eq!(instant, DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT);
+        }
+    }
+
+    mod channel_pressure_tracker {
+        use super::*;
+
+        #[test]
+        fn pressure_depth_handles_out_of_order_and_failed_sends() {
+            let (mut tracker, depth) = ChannelPressureTracker::new(1);
+
+            ChannelPressureTracker::on_recv(&depth);
+            assert_eq!(depth.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+            tracker.on_send();
+            assert_eq!(depth.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+            tracker.on_send_failed();
+            assert_eq!(depth.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+            tracker.on_send();
+            assert_eq!(depth.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+            ChannelPressureTracker::on_recv(&depth);
+            assert_eq!(depth.load(std::sync::atomic::Ordering::Relaxed), 0);
         }
     }
 

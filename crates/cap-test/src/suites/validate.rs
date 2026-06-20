@@ -139,8 +139,7 @@ fn validate_dash_display_dirs(
             if m4s_count > 0 {
                 total_duration = m4s_count as f64 * 3.0;
                 warnings.push(format!(
-                    "Estimated duration from {} m4s segments (no m3u8 found)",
-                    m4s_count
+                    "Estimated duration from {m4s_count} m4s segments (no m3u8 found)"
                 ));
             }
         }
@@ -460,7 +459,7 @@ async fn validate_video_file(
     let probe = match run_ffprobe(path) {
         Ok(p) => p,
         Err(e) => {
-            errors.push(format!("Failed to probe file: {}", e));
+            errors.push(format!("Failed to probe file: {e}"));
             return Ok((None, None, None, errors, warnings));
         }
     };

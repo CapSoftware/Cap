@@ -14,6 +14,7 @@ import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
+import { requireSpaceManager } from "./space-authorization";
 
 interface DeleteSpaceResponse {
 	success: boolean;
@@ -33,7 +34,6 @@ export async function deleteSpace(
 			};
 		}
 
-		// Check if the space exists and belongs to the user's organization
 		const space = await db()
 			.select()
 			.from(spaces)
@@ -47,28 +47,23 @@ export async function deleteSpace(
 			};
 		}
 
-		// Check if user has permission to delete the space
-		// Only the space creator or organization owner should be able to delete spaces
 		const spaceData = space[0];
-		if (!spaceData || spaceData.createdById !== user.id) {
+		const access = await requireSpaceManager(user.id, spaceId).catch(
+			() => null,
+		);
+		if (!spaceData || !access) {
 			return {
 				success: false,
 				error: "You don't have permission to delete this space",
 			};
 		}
 
-		// Delete in order to maintain referential integrity:
-
-		// 1. First delete all space videos
 		await db().delete(spaceVideos).where(eq(spaceVideos.spaceId, spaceId));
 
-		// 2. Delete all space members
 		await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
 
-		// 3. Delete all space folders
 		await db().delete(folders).where(eq(folders.spaceId, spaceId));
 
-		// 4. Delete space icons from S3
 		try {
 			await Effect.gen(function* () {
 				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
@@ -89,11 +84,8 @@ export async function deleteSpace(
 					);
 				}
 			}).pipe(runPromise);
-
-			// List all objects with the space prefix
 		} catch (error) {
 			console.error("Error deleting space icons from S3:", error);
-			// Continue with space deletion even if S3 deletion fails
 		}
 
 		await db().delete(spaces).where(eq(spaces.id, spaceId));

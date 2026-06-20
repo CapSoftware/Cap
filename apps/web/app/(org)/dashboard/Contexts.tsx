@@ -3,7 +3,13 @@
 import { buildEnv } from "@cap/env";
 import Cookies from "js-cookie";
 import { redirect, usePathname } from "next/navigation";
-import { createContext, useContext, useEffect, useState } from "react";
+import {
+	createContext,
+	useCallback,
+	useContext,
+	useEffect,
+	useState,
+} from "react";
 import { InviteDialog } from "@/app/(org)/dashboard/settings/organization/components/InviteDialog";
 import { type CurrentUser, useCurrentUser } from "@/app/Layout/AuthContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
@@ -41,12 +47,15 @@ type SharedContext = {
 };
 
 type ITheme = "light" | "dark";
+type SetThemeOptions = {
+	persist?: boolean;
+};
 
 const DashboardContext = createContext<SharedContext>({} as SharedContext);
 
 const ThemeContext = createContext<{
 	theme: ITheme;
-	setThemeHandler: (newTheme: ITheme) => void;
+	setThemeHandler: (newTheme: ITheme, options?: SetThemeOptions) => void;
 }>({
 	theme: "light",
 	setThemeHandler: () => {},
@@ -134,13 +143,18 @@ export function DashboardContexts({
 		}
 	}, [spacesData, pathname]);
 
-	const setThemeHandler = (newTheme: ITheme) => {
-		setTheme(newTheme);
-		document.body.className = newTheme;
-		Cookies.set("theme", newTheme, {
-			expires: 365,
-		});
-	};
+	const setThemeHandler = useCallback(
+		(newTheme: ITheme, options?: SetThemeOptions) => {
+			setTheme(newTheme);
+			document.body.className = newTheme;
+			if (options?.persist !== false) {
+				Cookies.set("theme", newTheme, {
+					expires: 365,
+				});
+			}
+		},
+		[],
+	);
 	useEffect(() => {
 		if (Cookies.get("theme")) {
 			document.body.className = Cookies.get("theme") as ITheme;

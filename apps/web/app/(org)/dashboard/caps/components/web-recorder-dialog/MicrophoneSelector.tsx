@@ -36,14 +36,16 @@ export const MicrophoneSelector = ({
 	onRefreshDevices,
 }: MicrophoneSelectorProps) => {
 	const micEnabled = selectedMicId !== null;
-	const { state: permissionState, requestPermission } = useMediaPermission(
-		"microphone",
-		dialogOpen,
-	);
+	const { requestPermission } = useMediaPermission("microphone", dialogOpen);
 
-	const permissionSupported = permissionState !== "unsupported";
-	const shouldRequestPermission =
-		permissionSupported && permissionState !== "granted";
+	// Device availability is the reliable cross-browser signal for microphone
+	// access: a deviceId is only exposed once permission is actually active.
+	// permissions.query state is not dependable here — Safari and Firefox < 118
+	// can't report it, and Firefox can report "granted" after a restart while
+	// still exposing no usable devices until access is re-requested. Driving the
+	// re-grant affordance off device availability keeps the user from getting
+	// stuck on "No Microphone" with no way to recover.
+	const shouldRequestPermission = availableMics.length === 0;
 
 	const statusPillDisabled =
 		disabled || (!shouldRequestPermission && !micEnabled);

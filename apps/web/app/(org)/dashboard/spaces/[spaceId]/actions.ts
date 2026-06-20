@@ -3,14 +3,28 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
-import { spaceMembers, spaces } from "@cap/database/schema";
-import { Space, User } from "@cap/web-domain";
-import { eq, inArray } from "drizzle-orm";
+import { organizationMembers, spaceMembers } from "@cap/database/schema";
+import { type Organisation, Space, User } from "@cap/web-domain";
+import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
+import { requireSpaceManager } from "@/actions/organization/space-authorization";
+import {
+	canRemoveSpaceMember,
+	normalizeSpaceRole,
+	type SpaceRole,
+} from "@/lib/permissions/roles";
 
-const spaceRole = z.union([z.literal("Admin"), z.literal("member")]);
+const spaceRole = z.preprocess(
+	(value) => (value === "Admin" ? "admin" : value),
+	z.union([z.literal("admin"), z.literal("member")]),
+);
+
+const spaceMemberRoleSchema = z.object({
+	userId: z.string().transform((v) => User.UserId.make(v)),
+	role: spaceRole,
+});
 
 const addSpaceMemberSchema = z.object({
 	spaceId: z.string().transform((v) => Space.SpaceId.make(v)),
@@ -23,6 +37,37 @@ const addSpaceMembersSchema = z.object({
 	userIds: z.array(z.string().transform((v) => User.UserId.make(v))),
 	role: spaceRole,
 });
+
+async function assertUsersBelongToOrganization(
+	organizationId: Organisation.OrganisationId,
+	organizationOwnerId: User.UserId,
+	userIds: User.UserId[],
+) {
+	const uniqueUserIds = Array.from(new Set(userIds));
+	if (uniqueUserIds.length === 0) return;
+
+	const rows = await db()
+		.select({ userId: organizationMembers.userId })
+		.from(organizationMembers)
+		.where(
+			and(
+				eq(organizationMembers.organizationId, organizationId),
+				inArray(
+					organizationMembers.userId,
+					uniqueUserIds.map((id) => User.UserId.make(id)),
+				),
+			),
+		);
+	const allowedUserIds = new Set([
+		organizationOwnerId,
+		...rows.map((row) => row.userId),
+	]);
+	const invalidUserIds = uniqueUserIds.filter((id) => !allowedUserIds.has(id));
+
+	if (invalidUserIds.length > 0) {
+		throw new Error("All space members must belong to the organization");
+	}
+}
 
 export async function addSpaceMember(
 	data: z.infer<typeof addSpaceMemberSchema>,
@@ -40,6 +85,12 @@ export async function addSpaceMember(
 	}
 
 	const { spaceId, userId, role } = validation.data;
+	const access = await requireSpaceManager(currentUser.id, spaceId);
+	await assertUsersBelongToOrganization(
+		access.organizationId,
+		access.organizationOwnerId,
+		[userId],
+	);
 
 	await db()
 		.insert(spaceMembers)
@@ -71,8 +122,13 @@ export async function addSpaceMembers(
 	}
 
 	const { spaceId, userIds, role } = validation.data;
+	const access = await requireSpaceManager(currentUser.id, spaceId);
+	await assertUsersBelongToOrganization(
+		access.organizationId,
+		access.organizationOwnerId,
+		userIds,
+	);
 
-	// Fetch existing members to avoid duplicates
 	const existing = await db()
 		.select({ userId: spaceMembers.userId })
 		.from(spaceMembers)
@@ -126,7 +182,7 @@ export async function removeSpaceMember(
 	const { memberId } = validation.data;
 
 	const member = await db()
-		.select({ spaceId: spaceMembers.spaceId })
+		.select({ spaceId: spaceMembers.spaceId, userId: spaceMembers.userId })
 		.from(spaceMembers)
 		.where(eq(spaceMembers.id, memberId))
 		.limit(1);
@@ -141,6 +197,17 @@ export async function removeSpaceMember(
 		throw new Error("Space ID not found");
 	}
 
+	const access = await requireSpaceManager(currentUser.id, spaceId);
+	if (
+		!canRemoveSpaceMember({
+			canManage: access.canManage,
+			targetUserId: member[0]?.userId,
+			createdById: access.createdById,
+		})
+	) {
+		throw new Error("You do not have permission to remove this space member");
+	}
+
 	await db().delete(spaceMembers).where(eq(spaceMembers.id, memberId));
 
 	revalidatePath(`/dashboard/spaces/${spaceId}`);
@@ -148,13 +215,13 @@ export async function removeSpaceMember(
 	return { success: true };
 }
 
-// Replace all members for a space
 const setSpaceMembersSchema = z.object({
 	spaceId: z
 		.string()
 		.transform((v) => Space.SpaceId.make(v) as Space.SpaceIdOrOrganisationId),
 	userIds: z.array(z.string().transform((v) => User.UserId.make(v))),
 	role: spaceRole.default("member"),
+	members: z.array(spaceMemberRoleSchema).optional(),
 });
 
 export async function setSpaceMembers(
@@ -168,39 +235,51 @@ export async function setSpaceMembers(
 	if (!currentUser) {
 		throw new Error("Unauthorized");
 	}
-	const { spaceId, userIds, role } = validation.data;
+	const { spaceId, userIds, role, members } = validation.data;
 
-	// Get the space creator to ensure they're always included
-	const [space] = await db()
-		.select({ createdById: spaces.createdById })
-		.from(spaces)
-		.where(eq(spaces.id, spaceId))
-		.limit(1);
+	const access = await requireSpaceManager(currentUser.id, spaceId);
 
-	if (!space) {
-		throw new Error("Space not found");
-	}
+	const submittedMembers =
+		members?.map((member) => ({
+			userId: member.userId,
+			role: normalizeSpaceRole(member.role) ?? "member",
+		})) ??
+		userIds.map((userId) => ({
+			userId,
+			role: normalizeSpaceRole(role) ?? "member",
+		}));
 
-	// Ensure creator is always included in the member list
-	const allMemberIds = Array.from(new Set([...userIds, space.createdById]));
+	await assertUsersBelongToOrganization(
+		access.organizationId,
+		access.organizationOwnerId,
+		submittedMembers.map((member) => member.userId),
+	);
 
-	// Remove all current members
-	await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
-
-	// Insert new members (always at least the creator)
+	const roleByUserId = new Map(
+		submittedMembers.map((member) => [member.userId, member.role]),
+	);
+	const allMemberIds = Array.from(
+		new Set([
+			...submittedMembers.map((member) => member.userId),
+			access.createdById,
+		]),
+	);
 	const now = new Date();
 	const values = allMemberIds.map((userId) => {
-		// Creator is always Admin, others get the specified role
-		const memberRole = userId === space.createdById ? "Admin" : role;
 		return {
-			id: User.UserId.make(uuidv4().substring(0, nanoIdLength)),
+			id: uuidv4().substring(0, nanoIdLength),
 			spaceId,
 			userId,
-			role: memberRole,
+			role:
+				userId === access.createdById
+					? ("admin" as const)
+					: ((roleByUserId.get(userId) as SpaceRole | undefined) ?? "member"),
 			createdAt: now,
 			updatedAt: now,
 		};
 	});
+
+	await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
 	await db().insert(spaceMembers).values(values);
 
 	revalidatePath(`/dashboard/spaces/${spaceId}`);
@@ -229,16 +308,39 @@ export async function batchRemoveSpaceMembers(
 		return { success: true, removed: [] };
 	}
 
-	// Get spaceId for revalidation (assume all memberIds are from the same space)
 	const members = await db()
-		.select({ spaceId: spaceMembers.spaceId })
+		.select({
+			id: spaceMembers.id,
+			spaceId: spaceMembers.spaceId,
+			userId: spaceMembers.userId,
+		})
 		.from(spaceMembers)
 		.where(inArray(spaceMembers.id, memberIds));
 	const spaceId = members[0]?.spaceId;
 
-	await db().delete(spaceMembers).where(inArray(spaceMembers.id, memberIds));
-	if (spaceId) {
-		revalidatePath(`/dashboard/spaces/${spaceId}`);
+	if (!spaceId) {
+		return { success: true, removed: [] };
 	}
+
+	if (members.some((member) => member.spaceId !== spaceId)) {
+		throw new Error("Cannot remove members from multiple spaces at once");
+	}
+
+	const access = await requireSpaceManager(currentUser.id, spaceId);
+	const protectedMember = members.find(
+		(member) =>
+			!canRemoveSpaceMember({
+				canManage: access.canManage,
+				targetUserId: member.userId,
+				createdById: access.createdById,
+			}),
+	);
+
+	if (protectedMember) {
+		throw new Error("You do not have permission to remove one or more members");
+	}
+
+	await db().delete(spaceMembers).where(inArray(spaceMembers.id, memberIds));
+	revalidatePath(`/dashboard/spaces/${spaceId}`);
 	return { success: true, removed: memberIds };
 }

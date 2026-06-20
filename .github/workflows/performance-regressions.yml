@@ -25,7 +25,7 @@ jobs:
           path: performance-fixtures
 
       - name: Rust setup
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.88.0
 
       - name: Rust cache
         uses: ./.github/actions/setup-rust-cache

@@ -34,8 +34,8 @@ pub async fn run_suite(hardware: &DiscoveredHardware, duration: u64) -> Result<T
             };
 
             let mut result = TestResult::new(
-                format!("encoding-{}-{}fps", label, fps),
-                format!("Encoding {} @{}fps", label, fps),
+                format!("encoding-{label}-{fps}fps"),
+                format!("Encoding {label} @{fps}fps"),
                 test_config,
             );
 

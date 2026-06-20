@@ -295,7 +295,7 @@ impl MP4Encoder {
                 "recording bitrate: {bitrate}"
             );
 
-            let keyframe_interval = fps as i32;
+            let keyframe_interval = keyframe_interval_for_fps(fps);
 
             let allow_frame_reordering = ultra_quality && !instant_mode;
 
@@ -1051,6 +1051,10 @@ fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {
     1_500_000.0 + pixel_ratio * 1_500_000.0 + fps_ratio * 500_000.0
 }
 
+fn keyframe_interval_for_fps(fps: f32) -> i32 {
+    (fps * 0.75).floor().max(1.0) as i32
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
@@ -1059,6 +1063,13 @@ mod tests {
 
     fn valid_video_config() -> VideoInfo {
         VideoInfo::from_raw(RawVideoFormat::Bgra, 1920, 1080, 30)
+    }
+
+    #[test]
+    fn keyframe_interval_targets_three_quarter_second() {
+        assert_eq!(keyframe_interval_for_fps(30.0), 22);
+        assert_eq!(keyframe_interval_for_fps(60.0), 45);
+        assert_eq!(keyframe_interval_for_fps(1.0), 1);
     }
 
     #[test]
@@ -1511,15 +1522,15 @@ mod tests {
                                     std::thread::sleep(Duration::from_micros(500));
                                 }
                                 Err(QueueFrameError::WriterFailed(err)) => {
-                                    errors.push(format!("WriterFailed at ts={:?}: {err}", ts));
+                                    errors.push(format!("WriterFailed at ts={ts:?}: {err}"));
                                     break;
                                 }
                                 Err(QueueFrameError::Failed) => {
-                                    errors.push(format!("Failed at ts={:?}", ts));
+                                    errors.push(format!("Failed at ts={ts:?}"));
                                     break;
                                 }
                                 Err(QueueFrameError::Finished) => {
-                                    errors.push(format!("Finished at ts={:?}", ts));
+                                    errors.push(format!("Finished at ts={ts:?}"));
                                     break;
                                 }
                                 Err(e) => {
@@ -1685,13 +1696,11 @@ mod tests {
 
         assert!(
             v_errors.is_empty(),
-            "Video encoding errors: {:?} (appended={v_appended}, dropped={v_dropped})",
-            v_errors
+            "Video encoding errors: {v_errors:?} (appended={v_appended}, dropped={v_dropped})"
         );
         assert!(
             a_errors.is_empty(),
-            "Audio encoding errors: {:?} (appended={a_appended}, dropped={a_dropped})",
-            a_errors
+            "Audio encoding errors: {a_errors:?} (appended={a_appended}, dropped={a_dropped})"
         );
 
         assert!(
@@ -1761,13 +1770,11 @@ mod tests {
 
         assert!(
             v_errors.is_empty(),
-            "Video errors during clock drift: {:?}",
-            v_errors
+            "Video errors during clock drift: {v_errors:?}"
         );
         assert!(
             a_errors.is_empty(),
-            "Audio errors during clock drift: {:?}",
-            a_errors
+            "Audio errors during clock drift: {a_errors:?}"
         );
         assert!(v_appended >= total_video_frames / 2);
         assert!(a_appended >= total_audio_frames / 2);
@@ -1845,13 +1852,11 @@ mod tests {
 
         assert!(
             v_errors.is_empty(),
-            "Video errors with frame drops: {:?} (appended={v_appended}, dropped={v_dropped})",
-            v_errors
+            "Video errors with frame drops: {v_errors:?} (appended={v_appended}, dropped={v_dropped})"
         );
         assert!(
             a_errors.is_empty(),
-            "Audio errors with frame drops: {:?}",
-            a_errors
+            "Audio errors with frame drops: {a_errors:?}"
         );
         assert!(
             v_appended >= video_timestamps.len() as u64 / 2,
@@ -1919,10 +1924,9 @@ mod tests {
 
         assert!(
             v_errors.is_empty(),
-            "Video errors with backward timestamps: {:?}",
-            v_errors
+            "Video errors with backward timestamps: {v_errors:?}"
         );
-        assert!(a_errors.is_empty(), "Audio errors: {:?}", a_errors);
+        assert!(a_errors.is_empty(), "Audio errors: {a_errors:?}");
         assert!(v_appended >= 50);
         assert!(a_appended >= 20);
 
@@ -1984,8 +1988,7 @@ mod tests {
 
         assert!(
             accepted_past_threshold > 0,
-            "Instant mode: video frames must be accepted past the {}s drift threshold",
-            MAX_AV_DRIFT_SECS,
+            "Instant mode: video frames must be accepted past the {MAX_AV_DRIFT_SECS}s drift threshold"
         );
 
         let _ = encoder.finish(Some(Duration::from_secs(7)));
@@ -2024,8 +2027,7 @@ mod tests {
 
         assert_eq!(
             accepted_past_threshold, 0,
-            "Non-instant mode: no video frames should be accepted past the {}s drift threshold",
-            MAX_AV_DRIFT_SECS,
+            "Non-instant mode: no video frames should be accepted past the {MAX_AV_DRIFT_SECS}s drift threshold"
         );
 
         let _ = encoder.finish(Some(Duration::from_secs(7)));
@@ -2062,16 +2064,8 @@ mod tests {
         let (v_appended, _, v_errors) = video_handle.join().unwrap();
         let (_a_appended, _, a_errors) = audio_handle.join().unwrap();
 
-        assert!(
-            v_errors.is_empty(),
-            "Video errors after gap: {:?}",
-            v_errors
-        );
-        assert!(
-            a_errors.is_empty(),
-            "Audio errors after gap: {:?}",
-            a_errors
-        );
+        assert!(v_errors.is_empty(), "Video errors after gap: {v_errors:?}");
+        assert!(a_errors.is_empty(), "Audio errors after gap: {a_errors:?}");
         assert!(v_appended >= 30);
 
         let result = harness
@@ -2136,7 +2130,7 @@ mod tests {
                         cidre::ns::Number::with_f32(bitrate).as_id_ref(),
                         cidre::ns::Number::with_bool(false).as_id_ref(),
                         cidre::ns::Number::with_f32(fps).as_id_ref(),
-                        cidre::ns::Number::with_i32(fps as i32).as_id_ref(),
+                        cidre::ns::Number::with_i32(keyframe_interval_for_fps(fps)).as_id_ref(),
                     ],
                 )
                 .as_id_ref(),
@@ -2357,17 +2351,14 @@ mod tests {
         for w in new_appended.windows(2) {
             assert!(
                 w[1] > w[0],
-                "NEW behavior must produce monotonic PTS: {:?}",
-                new_appended
+                "NEW behavior must produce monotonic PTS: {new_appended:?}"
             );
         }
 
         assert!(
             old_appended != new_appended,
             "Old and new should produce different PTS after failed append with offset. \
-             Old: {:?}, New: {:?}",
-            old_appended,
-            new_appended
+             Old: {old_appended:?}, New: {new_appended:?}"
         );
 
         let old_jump = old_appended[5] - old_appended[4];
@@ -2452,7 +2443,7 @@ mod tests {
                         cidre::ns::Number::with_f32(bitrate).as_id_ref(),
                         cidre::ns::Number::with_bool(false).as_id_ref(),
                         cidre::ns::Number::with_f32(fps).as_id_ref(),
-                        cidre::ns::Number::with_i32(fps as i32).as_id_ref(),
+                        cidre::ns::Number::with_i32(keyframe_interval_for_fps(fps)).as_id_ref(),
                     ],
                 )
                 .as_id_ref(),
@@ -3053,8 +3044,7 @@ mod tests {
 
         assert!(
             post_jump_errors.is_empty(),
-            "Post-jump video frames should succeed (drift guard or recovery): {:?}",
-            post_jump_errors
+            "Post-jump video frames should succeed (drift guard or recovery): {post_jump_errors:?}"
         );
     }
 
@@ -3102,13 +3092,11 @@ mod tests {
 
         assert!(
             v_errors.is_empty(),
-            "Video errors in max throughput: {:?}",
-            v_errors
+            "Video errors in max throughput: {v_errors:?}"
         );
         assert!(
             a_errors.is_empty(),
-            "Audio errors in max throughput: {:?}",
-            a_errors
+            "Audio errors in max throughput: {a_errors:?}"
         );
 
         let result = harness
@@ -3188,13 +3176,11 @@ mod tests {
 
         assert!(
             v_errors.is_empty(),
-            "Video errors in AV interleave stress: {:?}",
-            v_errors
+            "Video errors in AV interleave stress: {v_errors:?}"
         );
         assert!(
             a_errors.is_empty(),
-            "Audio errors in AV interleave stress: {:?}",
-            a_errors
+            "Audio errors in AV interleave stress: {a_errors:?}"
         );
 
         assert!(v_appended >= total_video_frames / 3);
@@ -3291,13 +3277,11 @@ mod tests {
 
         assert!(
             v_errors.is_empty(),
-            "Video encoding errors in 65s test: {:?} (appended={v_appended}, dropped={v_dropped})",
-            v_errors
+            "Video encoding errors in 65s test: {v_errors:?} (appended={v_appended}, dropped={v_dropped})"
         );
         assert!(
             a_errors.is_empty(),
-            "Audio encoding errors in 65s test: {:?} (appended={a_appended}, dropped={a_dropped})",
-            a_errors
+            "Audio encoding errors in 65s test: {a_errors:?} (appended={a_appended}, dropped={a_dropped})"
         );
 
         assert!(
@@ -3409,13 +3393,11 @@ mod tests {
 
         assert!(
             v_errors.is_empty(),
-            "Video errors in user-scenario test: {:?} (appended={v_appended}, dropped={v_dropped})",
-            v_errors
+            "Video errors in user-scenario test: {v_errors:?} (appended={v_appended}, dropped={v_dropped})"
         );
         assert!(
             a_errors.is_empty(),
-            "Audio errors in user-scenario test: {:?} (appended={a_appended}, dropped={a_dropped})",
-            a_errors
+            "Audio errors in user-scenario test: {a_errors:?} (appended={a_appended}, dropped={a_dropped})"
         );
 
         assert!(
@@ -3508,8 +3490,7 @@ mod tests {
 
         assert!(
             errors.is_empty(),
-            "Sandwich PTS frames should not trigger -16364: {:?}",
-            errors
+            "Sandwich PTS frames should not trigger -16364: {errors:?}"
         );
 
         let _ = encoder.finish(Some(Duration::from_secs(15)));
@@ -3549,8 +3530,7 @@ mod tests {
 
         assert!(
             errors.is_empty(),
-            "Tiny positive PTS steps should not reach AVFoundation: {:?}",
-            errors
+            "Tiny positive PTS steps should not reach AVFoundation: {errors:?}"
         );
 
         let result = encoder.finish(Some(Duration::from_micros(166_666)));
@@ -3675,15 +3655,13 @@ mod tests {
 
         assert!(
             v_errors.is_empty(),
-            "Video errors in repeated sandwich 65s test: {:?} \
-             (appended={v_appended}, dropped={v_dropped})",
-            v_errors
+            "Video errors in repeated sandwich 65s test: {v_errors:?} \
+             (appended={v_appended}, dropped={v_dropped})"
         );
         assert!(
             a_errors.is_empty(),
-            "Audio errors in repeated sandwich 65s test: {:?} \
-             (appended={a_appended}, dropped={a_dropped})",
-            a_errors
+            "Audio errors in repeated sandwich 65s test: {a_errors:?} \
+             (appended={a_appended}, dropped={a_dropped})"
         );
 
         assert!(

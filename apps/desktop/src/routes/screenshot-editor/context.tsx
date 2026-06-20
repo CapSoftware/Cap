@@ -27,6 +27,20 @@ import { calculateImageTransform } from "./layout";
 
 const NV12_FORMAT_MAGIC = 0x4e563132;
 
+export function hasNoVisibleBackground(source: {
+	type: string;
+	path?: string | null;
+	alpha?: number;
+}): boolean {
+	if (source.type === "color") {
+		return (source.alpha ?? 255) === 0;
+	}
+	if (source.type === "wallpaper" || source.type === "image") {
+		return !source.path;
+	}
+	return false;
+}
+
 type ScreenshotFrameData = FrameData & {
 	revision: number;
 };
@@ -141,7 +155,7 @@ const DEFAULT_PROJECT: ScreenshotProject = {
 		source: {
 			type: "color",
 			value: [255, 255, 255],
-			alpha: 255,
+			alpha: 0,
 		},
 		blur: 0,
 		padding: 20,
@@ -204,7 +218,12 @@ function createScreenshotEditorContext() {
 	let wsRef: WebSocket | null = null;
 
 	const [editorInstance] = createResource(async () => {
+		const perfStart = performance.now();
+		const sincePerfStart = () => Math.round(performance.now() - perfStart);
 		const instance = await commands.createScreenshotEditorInstance();
+		console.info(
+			`[screenshot-editor] createScreenshotEditorInstance resolved in ${sincePerfStart()}ms`,
+		);
 
 		if (instance.config) {
 			setProject(reconcile(instance.config));
@@ -246,6 +265,9 @@ function createScreenshotEditorContext() {
 							bitmap,
 							revision: 0,
 						});
+						console.info(
+							`[screenshot-editor] fallback image shown at ${sincePerfStart()}ms`,
+						);
 						setIsRenderReady(true);
 					} catch (e: unknown) {
 						console.error(
@@ -271,8 +293,10 @@ function createScreenshotEditorContext() {
 		const ws = new WebSocket(instance.framesSocketUrl);
 		wsRef = ws;
 		ws.binaryType = "arraybuffer";
+		const wsFirstFrame = { value: true };
 		ws.onmessage = async (event) => {
 			const buffer = event.data as ArrayBuffer;
+			const frameStart = performance.now();
 
 			let isNv12Format = false;
 			if (buffer.byteLength >= 28) {
@@ -348,6 +372,14 @@ function createScreenshotEditorContext() {
 					existing.bitmap.close();
 				}
 				setLatestFrame({ width, height, bitmap, revision });
+				if (wsFirstFrame.value) {
+					wsFirstFrame.value = false;
+					console.info(
+						`[screenshot-editor] first ws frame ${width}x${height} (${buffer.byteLength} bytes) shown at ${sincePerfStart()}ms, processed in ${Math.round(
+							performance.now() - frameStart,
+						)}ms`,
+					);
+				}
 			} catch {}
 		};
 

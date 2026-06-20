@@ -3,12 +3,13 @@ export interface CaptureVideoFrameDeps {
 	createCanvas?: () => HTMLCanvasElement;
 	width?: number;
 	height?: number;
+	quality?: number;
 }
 
 export function captureVideoFrameDataUrl(
 	deps: CaptureVideoFrameDeps,
 ): string | undefined {
-	const { video, width = 224, height = 128 } = deps;
+	const { video, width = 224, height = 128, quality = 0.8 } = deps;
 	if (!video) return undefined;
 	if (video.readyState < 2) return undefined;
 	const createCanvas =
@@ -20,7 +21,7 @@ export function captureVideoFrameDataUrl(
 	if (!ctx) return undefined;
 	try {
 		ctx.drawImage(video, 0, 0, width, height);
-		return canvas.toDataURL("image/jpeg", 0.8);
+		return canvas.toDataURL("image/jpeg", quality);
 	} catch {
 		return undefined;
 	}

@@ -1,5 +1,3 @@
-#![cfg(any(windows, target_os = "macos"))]
-
 use std::{
     fmt::{Debug, Display},
     ops::Deref,
@@ -15,6 +13,11 @@ use macos::*;
 mod windows;
 #[cfg(windows)]
 use windows::*;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::*;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -105,6 +108,10 @@ impl Debug for Format {
                         VideoFormatInner::MediaFoundation(_) => &"MediaFoundation",
                     }
                 }
+                #[cfg(target_os = "linux")]
+                {
+                    &"Linux"
+                }
             })
             .finish()
     }
@@ -185,6 +192,9 @@ pub enum StartCapturingError {
     #[cfg(windows)]
     #[error("{0}")]
     Native(windows_core::Error),
+    #[cfg(target_os = "linux")]
+    #[error("{0}")]
+    Native(String),
 }
 
 #[derive(Debug)]
@@ -209,12 +219,14 @@ impl CameraInfo {
     pub fn start_capturing(
         &self,
         format: Format,
-        callback: impl FnMut(CapturedFrame) + 'static,
+        callback: impl FnMut(CapturedFrame) + Send + 'static,
     ) -> Result<CaptureHandle, StartCapturingError> {
         Ok(CaptureHandle {
             #[cfg(target_os = "macos")]
             native: Some(start_capturing_impl(self, format, Box::new(callback))?),
             #[cfg(windows)]
+            native: Some(start_capturing_impl(self, format, Box::new(callback))?),
+            #[cfg(target_os = "linux")]
             native: Some(start_capturing_impl(self, format, Box::new(callback))?),
         })
     }

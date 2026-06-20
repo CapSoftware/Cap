@@ -22,15 +22,15 @@ export default function () {
 	});
 
 	return (
-		<div class="flex flex-col justify-center flex-1 items-center gap-[3rem] p-[1rem] text-[0.875rem] font-[400] h-full">
+		<div class="flex flex-col justify-center flex-1 items-center gap-12 p-4 text-[0.875rem] font-normal h-full">
 			<Show when={updateError()}>
 				<div class="flex flex-col gap-4 items-center text-center max-w-md">
-					<p class="text-[--text-primary]">{updateError()}</p>
-					<p class="text-[--text-tertiary]">
+					<p class="text-(--text-primary)">{updateError()}</p>
+					<p class="text-(--text-tertiary)">
 						Please download the latest version manually from cap.so/download.
 						Your data will not be lost.
 					</p>
-					<p class="text-[--text-tertiary] text-xs">
+					<p class="text-(--text-tertiary) text-xs">
 						If this issue persists, please contact support.
 					</p>
 					<Button onClick={() => navigate("/")}>Go Back</Button>
@@ -40,7 +40,7 @@ export default function () {
 				when={!updateError() && update()}
 				fallback={
 					!updateError() && (
-						<span class="text-[--text-tertiary]">No update available</span>
+						<span class="text-(--text-tertiary)">No update available</span>
 					)
 				}
 				keyed
@@ -95,12 +95,12 @@ export default function () {
 						<div>
 							<Switch
 								fallback={
-									<IconCapLogo class="animate-spin size-4 text-[--text-primary]" />
+									<IconCapLogo class="animate-spin size-4 text-(--text-primary)" />
 								}
 							>
 								<Match when={updateStatus()?.type === "done"}>
 									<div class="flex flex-col gap-4 items-center">
-										<p class="text-[--text-tertiary]">
+										<p class="text-(--text-tertiary)">
 											Update has been installed. Restart Cap to finish updating.
 										</p>
 										<Button onClick={() => relaunch()}>Restart Now</Button>
@@ -119,7 +119,7 @@ export default function () {
 								>
 									{(status) => (
 										<>
-											<h1 class="text-[--text-primary] mb-4">
+											<h1 class="text-(--text-primary) mb-4">
 												Installing Update
 											</h1>
 

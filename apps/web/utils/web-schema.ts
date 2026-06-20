@@ -98,7 +98,7 @@ export const createSoftwareApplicationSchema = (
 			"Studio mode for professional editing",
 			"Built-in thread commenting",
 			"Custom domain support",
-			"Own S3 storage integration",
+			"Bring your own storage (Google Drive & S3)",
 			"Cross-platform (Mac & Windows)",
 			"Open source",
 			"Privacy-focused",

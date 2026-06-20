@@ -27,6 +27,7 @@ export const updatePreferences = async ({
 			.update(users)
 			.set({
 				preferences: {
+					...(currentUser.preferences ?? {}),
 					notifications,
 				},
 			})

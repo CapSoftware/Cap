@@ -7,12 +7,16 @@ import { notFound } from "next/navigation";
 import {
 	getChildFolders,
 	getFolderBreadcrumb,
+	getFolderById,
 	getVideosByFolderId,
 } from "@/lib/folder";
+import { isOrganizationOwnerPro } from "@/lib/org-pro";
 import { runPromise } from "@/lib/server";
 
+import { CollectionShareControl } from "../../_components/CollectionShareControl";
 import { UploadCapButton } from "../../caps/components";
 import FolderCard from "../../caps/components/Folder";
+import { WebRecorderDialog } from "../../caps/components/web-recorder-dialog/web-recorder-dialog";
 import {
 	BreadcrumbItem,
 	ClientMyCapsLink,
@@ -28,21 +32,51 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 	if (!user || !user.activeOrganizationId) return notFound();
 
 	return Effect.gen(function* () {
-		const [childFolders, breadcrumb, videosData] = yield* Effect.all([
-			getChildFolders(folderId, { variant: "user" }),
-			getFolderBreadcrumb(folderId),
-			getVideosByFolderId(folderId, {
-				variant: "user",
-			}),
-		]);
+		const [childFolders, breadcrumb, videosData, share] = yield* Effect.all(
+			[
+				getChildFolders(folderId, { variant: "user" }),
+				getFolderBreadcrumb(folderId),
+				getVideosByFolderId(folderId, {
+					variant: "user",
+				}),
+				Effect.gen(function* () {
+					const folder = yield* getFolderById(folderId);
+					// Mirrors FoldersPolicy.canEdit for personal folders: only the
+					// creator may manage sharing; the Pro gate uses the folder's own
+					// organization, which is what the server enforces on writes.
+					const canManage =
+						folder.spaceId === null && folder.createdById === user.id;
+					const ownerIsPro = canManage
+						? yield* Effect.promise(() =>
+								isOrganizationOwnerPro(folder.organizationId),
+							)
+						: false;
+					return { folder, canManage, ownerIsPro };
+				}),
+			],
+			{ concurrency: "unbounded" },
+		);
 
 		return (
 			<div>
-				<div className="flex gap-2 items-center mb-10">
+				<div className="flex flex-wrap gap-2 items-center mb-10">
 					<NewSubfolderButton parentFolderId={folderId} />
 					<UploadCapButton size="sm" />
+					<WebRecorderDialog />
+					<CollectionShareControl
+						kind="folder"
+						collectionId={folderId}
+						isPublic={share.folder.public}
+						canManage={share.canManage}
+						isPro={share.ownerIsPro}
+						settings={
+							share.canManage
+								? (share.folder.settings?.publicPage ?? null)
+								: null
+						}
+					/>
 				</div>
-				<div className="flex justify-between items-center mb-6 w-full">
+				<div className="flex flex-wrap gap-3 items-center mb-6 w-full">
 					<div className="flex overflow-x-auto items-center font-medium">
 						<ClientMyCapsLink />
 
@@ -72,6 +106,7 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 									key={folder.id}
 									name={folder.name}
 									color={folder.color}
+									public={folder.public}
 									id={folder.id}
 									parentId={folder.parentId}
 									videoCount={folder.videoCount}

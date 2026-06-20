@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import CommentStamp from "./CommentStamp";
+import { bindCaptionTrackCueText } from "./caption-tracks";
 import {
 	AVC_LEVEL_IOS_HARDWARE_CEILING,
 	createLevelPatchedMp4ObjectUrl,
@@ -42,6 +43,7 @@ import {
 	MediaPlayerLoading,
 	MediaPlayerPiP,
 	MediaPlayerPlay,
+	MediaPlayerPlaybackSpeedDial,
 	MediaPlayerSeek,
 	MediaPlayerSeekBackward,
 	MediaPlayerSeekForward,
@@ -88,8 +90,10 @@ interface Props {
 	autoplay?: boolean;
 	enableCrossOrigin?: boolean;
 	hasActiveUpload: boolean | undefined;
+	blockPlaybackDuringProcessing?: boolean;
 	disableCommentStamps?: boolean;
 	disableReactionStamps?: boolean;
+	disablePreviewGif?: boolean;
 	comments?: Array<{
 		id: string;
 		timestamp: number | null;
@@ -107,7 +111,10 @@ interface Props {
 	hasCaptions?: boolean;
 	canRetryProcessing?: boolean;
 	duration?: number | null;
+	defaultPlaybackSpeed?: number;
 	showPlaybackStatusBadge?: boolean;
+	showFloatingVolumeControl?: boolean;
+	onUploadComplete?: () => void;
 }
 
 export function CapVideoPlayer({
@@ -122,9 +129,11 @@ export function CapVideoPlayer({
 	autoplay = false,
 	enableCrossOrigin = false,
 	hasActiveUpload,
+	blockPlaybackDuringProcessing = false,
 	comments = [],
 	disableCommentStamps = false,
 	disableReactionStamps = false,
+	disablePreviewGif = false,
 	onSeek,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
@@ -135,7 +144,10 @@ export function CapVideoPlayer({
 	hasCaptions = false,
 	canRetryProcessing = false,
 	duration: fallbackDuration,
+	defaultPlaybackSpeed,
 	showPlaybackStatusBadge = false,
+	showFloatingVolumeControl = false,
+	onUploadComplete,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -170,7 +182,11 @@ export function CapVideoPlayer({
 		videoId,
 		hasActiveUpload || false,
 	);
-	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
+	const uploadProgress = blockPlaybackDuringProcessing
+		? uploadProgressRaw
+		: videoLoaded
+			? null
+			: uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
 	const isProcessing = uploadProgress?.status === "processing";
 	const isGeneratingThumbnail =
@@ -346,6 +362,12 @@ export function CapVideoPlayer({
 	]);
 
 	useEffect(() => {
+		if (!captionsSrc) {
+			setCurrentCue("");
+		}
+	}, [captionsSrc]);
+
+	useEffect(() => {
 		const video = videoRef.current;
 		if (!video || resolvedSrc.isPending) return;
 
@@ -388,43 +410,7 @@ export function CapVideoPlayer({
 			setHasError(true);
 		};
 
-		// Caption track setup
-		let captionTrack: TextTrack | null = null;
-
-		const handleCueChange = (): void => {
-			if (captionTrack?.activeCues && captionTrack.activeCues.length > 0) {
-				const cue = captionTrack.activeCues[0] as VTTCue;
-				const plainText = cue.text.replace(/<[^>]*>/g, "");
-				setCurrentCue(plainText);
-			} else {
-				setCurrentCue("");
-			}
-		};
-
-		const setupTracks = (): void => {
-			const tracks = Array.from(video.textTracks);
-
-			for (const track of tracks) {
-				if (track.kind === "captions" || track.kind === "subtitles") {
-					captionTrack = track;
-					track.mode = "hidden";
-					track.addEventListener("cuechange", handleCueChange);
-					break;
-				}
-			}
-		};
-
-		// Ensure all caption tracks remain hidden
-		const ensureTracksHidden = (): void => {
-			const tracks = Array.from(video.textTracks);
-			for (const track of tracks) {
-				if (track.kind === "captions" || track.kind === "subtitles") {
-					if (track.mode !== "hidden") {
-						track.mode = "hidden";
-					}
-				}
-			}
-		};
+		const cleanupCaptionTracks = bindCaptionTrackCueText(video, setCurrentCue);
 
 		const handleLoadedMetadataWithTracks = () => {
 			setVideoLoaded(true);
@@ -432,12 +418,6 @@ export function CapVideoPlayer({
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
 			}
-			setupTracks();
-		};
-
-		const handleTrackChange = () => {
-			ensureTracksHidden();
-			setupTracks();
 		};
 
 		video.addEventListener("loadeddata", handleLoadedData);
@@ -445,10 +425,6 @@ export function CapVideoPlayer({
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
-
-		video.textTracks.addEventListener("change", handleTrackChange);
-		video.textTracks.addEventListener("addtrack", handleTrackChange);
-		video.textTracks.addEventListener("removetrack", handleTrackChange);
 
 		if (video.readyState === 4) {
 			handleLoadedData();
@@ -463,12 +439,7 @@ export function CapVideoPlayer({
 				"loadedmetadata",
 				handleLoadedMetadataWithTracks,
 			);
-			video.textTracks.removeEventListener("change", handleTrackChange);
-			video.textTracks.removeEventListener("addtrack", handleTrackChange);
-			video.textTracks.removeEventListener("removetrack", handleTrackChange);
-			if (captionTrack) {
-				captionTrack.removeEventListener("cuechange", handleCueChange);
-			}
+			cleanupCaptionTracks();
 		};
 	}, [
 		hasPlayedOnce,
@@ -524,15 +495,16 @@ export function CapVideoPlayer({
 		}
 	}, [canRetryUploadProcessing, isRetryingProcessing, queryClient, videoId]);
 
-	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
+	const prevUploadProgress =
+		useRef<typeof uploadProgressRaw>(uploadProgressRaw);
 	useEffect(() => {
 		if (
 			shouldReloadPlaybackAfterUploadCompletes(
 				prevUploadProgress.current,
-				uploadProgress,
-				videoLoaded,
+				uploadProgressRaw,
 			)
 		) {
+			setVideoLoaded(false);
 			setHasError(false);
 			void queryClient.invalidateQueries({
 				queryKey: [
@@ -543,16 +515,35 @@ export function CapVideoPlayer({
 					preferredSource,
 				],
 			});
+			onUploadComplete?.();
 		}
-		prevUploadProgress.current = uploadProgress;
+		prevUploadProgress.current = uploadProgressRaw;
 	}, [
 		enableCrossOrigin,
+		onUploadComplete,
 		preferredSource,
 		queryClient,
 		rawFallbackSrc,
-		uploadProgress,
-		videoLoaded,
+		uploadProgressRaw,
 		videoSrc,
+	]);
+
+	const editRecoveryRefreshTriggeredRef = useRef(false);
+	useEffect(() => {
+		if (
+			!blockPlaybackDuringProcessing ||
+			uploadProgressRaw?.status !== "error" ||
+			editRecoveryRefreshTriggeredRef.current
+		) {
+			return;
+		}
+
+		editRecoveryRefreshTriggeredRef.current = true;
+		onUploadComplete?.();
+	}, [
+		blockPlaybackDuringProcessing,
+		onUploadComplete,
+		uploadProgressRaw?.status,
 	]);
 
 	const showPreparingOverlay =
@@ -573,7 +564,8 @@ export function CapVideoPlayer({
 			? "The processed version is unavailable right now, so this page is playing the original uploaded file instead."
 			: "This page is temporarily playing the original uploaded file while Cap finishes processing the optimized version for smoother playback and broader compatibility.";
 	const blockPlaybackControls =
-		(!videoLoaded && hasActiveProgress) || showUploadFailureOverlay;
+		((blockPlaybackDuringProcessing || !videoLoaded) && hasActiveProgress) ||
+		showUploadFailureOverlay;
 
 	return (
 		<MediaPlayer
@@ -649,6 +641,7 @@ export function CapVideoPlayer({
 			<VideoPreviewGif
 				videoId={videoId}
 				visible={
+					!disablePreviewGif &&
 					videoLoaded &&
 					!hasPlayedOnce &&
 					!showUploadFailureOverlay &&
@@ -676,6 +669,7 @@ export function CapVideoPlayer({
 					{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
 					{captionsSrc && (
 						<track
+							key={captionsSrc}
 							label="English"
 							kind="captions"
 							srcLang="en"
@@ -685,63 +679,68 @@ export function CapVideoPlayer({
 				</MediaPlayerVideo>
 			)}
 			<AnimatePresence>
-				{!videoLoaded && hasActiveProgress && !showUploadFailureOverlay && (
-					<>
-						<motion.div
-							initial={{ opacity: 0 }}
-							animate={{ opacity: 1 }}
-							exit={{ opacity: 0 }}
-							transition={{ duration: 0.2 }}
-							className="absolute inset-0 z-10 transition-all duration-300 bg-black/60 rounded-xl"
-						/>
-						<motion.div
-							initial={{ opacity: 0, y: 10 }}
-							animate={{ opacity: 1, y: 0 }}
-							exit={{ opacity: 0, y: 10 }}
-							transition={{ duration: 0.2 }}
-							className="flex absolute bottom-3 left-3 gap-2 items-center z-20"
-						>
-							<span className="text-sm font-semibold text-white">
-								{getProgressStatusText(
-									isProcessing
-										? "processing"
-										: isGeneratingThumbnail
-											? "generating_thumbnail"
-											: "uploading",
-								)}
-								{uploadProgress?.progress != null &&
-									uploadProgress.progress > 0 &&
-									` ${Math.round(uploadProgress.progress)}%`}
-							</span>
-							<svg className="w-4 h-4 transform -rotate-90" viewBox="0 0 20 20">
-								<title>Progress</title>
-								<circle
-									cx="10"
-									cy="10"
-									r="8"
-									stroke="currentColor"
-									strokeWidth="3"
-									fill="none"
-									className="text-white/30"
-								/>
-								<circle
-									cx="10"
-									cy="10"
-									r="8"
-									stroke="currentColor"
-									strokeWidth="3"
-									fill="none"
-									strokeLinecap="round"
-									className="text-white transition-all duration-200 ease-out"
-									style={{
-										strokeDasharray: `${circumference} ${circumference}`,
-										strokeDashoffset: `${calculateStrokeDashoffset(uploadProgress?.progress ?? 0, circumference)}`,
-									}}
-								/>
-							</svg>
-						</motion.div>
-					</>
-				)}
+				{(blockPlaybackDuringProcessing || !videoLoaded) &&
+					hasActiveProgress &&
+					!showUploadFailureOverlay && (
+						<>
+							<motion.div
+								initial={{ opacity: 0 }}
+								animate={{ opacity: 1 }}
+								exit={{ opacity: 0 }}
+								transition={{ duration: 0.2 }}
+								className="absolute inset-0 z-10 transition-all duration-300 bg-black/60 rounded-xl"
+							/>
+							<motion.div
+								initial={{ opacity: 0, y: 10 }}
+								animate={{ opacity: 1, y: 0 }}
+								exit={{ opacity: 0, y: 10 }}
+								transition={{ duration: 0.2 }}
+								className="flex absolute bottom-3 left-3 gap-2 items-center z-20"
+							>
+								<span className="text-sm font-semibold text-white">
+									{getProgressStatusText(
+										isProcessing
+											? "processing"
+											: isGeneratingThumbnail
+												? "generating_thumbnail"
+												: "uploading",
+									)}
+									{uploadProgress?.progress != null &&
+										uploadProgress.progress > 0 &&
+										` ${Math.round(uploadProgress.progress)}%`}
+								</span>
+								<svg
+									className="w-4 h-4 transform -rotate-90"
+									viewBox="0 0 20 20"
+								>
+									<title>Progress</title>
+									<circle
+										cx="10"
+										cy="10"
+										r="8"
+										stroke="currentColor"
+										strokeWidth="3"
+										fill="none"
+										className="text-white/30"
+									/>
+									<circle
+										cx="10"
+										cy="10"
+										r="8"
+										stroke="currentColor"
+										strokeWidth="3"
+										fill="none"
+										strokeLinecap="round"
+										className="text-white transition-all duration-200 ease-out"
+										style={{
+											strokeDasharray: `${circumference} ${circumference}`,
+											strokeDashoffset: `${calculateStrokeDashoffset(uploadProgress?.progress ?? 0, circumference)}`,
+										}}
+									/>
+								</svg>
+							</motion.div>
+						</>
+					)}
 				{showPlayButton &&
 					videoLoaded &&
 					!hasPlayedOnce &&
@@ -764,6 +763,17 @@ export function CapVideoPlayer({
 						</motion.div>
 					)}
 			</AnimatePresence>
+			{resolvedSrc.data &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<MediaPlayerPlaybackSpeedDial
+						defaultSpeed={defaultPlaybackSpeed}
+						fallbackDuration={playerDuration}
+						show={showPlayButton && !hasPlayedOnce}
+					/>
+				)}
 			{currentCue && toggleCaptions && (
 				<div
 					className={clsx(
@@ -782,6 +792,14 @@ export function CapVideoPlayer({
 				!showUploadFailureOverlay &&
 				!showPlaybackResolutionError && <MediaPlayerError />}
 			<MediaPlayerVolumeIndicator />
+			{showFloatingVolumeControl &&
+				videoLoaded &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<div className="absolute bottom-3 left-3 z-50 rounded-full bg-black/45 p-1 text-white shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-md">
+						<MediaPlayerVolume expandable />
+					</div>
+				)}
 
 			{mainControlsVisible &&
 				markersReady &&
@@ -816,7 +834,10 @@ export function CapVideoPlayer({
 				})()}
 
 			<MediaPlayerControls
-				className="flex-col items-start gap-2.5"
+				className={clsx(
+					"flex-col items-start gap-2.5",
+					showPlayButton && !hasPlayedOnce && "max-sm:hidden",
+				)}
 				mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
 				isUploadingOrFailed={blockPlaybackControls}
 			>
@@ -832,8 +853,8 @@ export function CapVideoPlayer({
 				<div className="flex gap-2 items-center w-full">
 					<div className="flex flex-1 gap-2 items-center">
 						<MediaPlayerPlay />
-						<MediaPlayerSeekBackward />
-						<MediaPlayerSeekForward />
+						<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
+						<MediaPlayerSeekForward className="hidden sm:inline-flex" />
 						<MediaPlayerVolume
 							expandable
 							// enhancedAudioEnabled={enhancedAudioEnabled}

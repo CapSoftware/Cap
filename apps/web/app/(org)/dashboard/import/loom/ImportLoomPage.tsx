@@ -42,6 +42,7 @@ import {
 	importFromLoom,
 	importFromLoomCsv,
 	type LoomCsvImportResult,
+	type LoomCsvImportRowResult,
 } from "@/actions/loom";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { UpgradeModal } from "@/components/UpgradeModal";
@@ -72,6 +73,41 @@ const LOOM_CSV_TEMPLATE =
 
 const OPTIONAL_COLUMN_VALUE = "__cap_skip_column__";
 const MAX_SPACE_NAME_LENGTH = 255;
+const MAX_LOOM_CSV_IMPORT_ROWS = 500;
+const LOOM_CSV_BATCH_SIZE = 10;
+const LOOM_CSV_BATCH_DELAY_MS = 1500;
+const LOOM_CSV_LIMIT_MESSAGE =
+	"CSV imports are limited to 500 videos at a time. Contact support to raise this limit.";
+
+function delay(ms: number) {
+	return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function chunkRows<T>(rows: T[], size: number) {
+	const chunks: T[][] = [];
+	for (let index = 0; index < rows.length; index += size) {
+		chunks.push(rows.slice(index, index + size));
+	}
+	return chunks;
+}
+
+function buildCsvImportResult(
+	results: LoomCsvImportRowResult[],
+	error?: string,
+): LoomCsvImportResult {
+	const importedCount = results.filter((row) => row.success).length;
+	const failedCount = results.length - importedCount;
+
+	return {
+		success: importedCount > 0,
+		importedCount,
+		failedCount,
+		results,
+		error:
+			error ??
+			(importedCount > 0 ? undefined : "No Loom videos were imported."),
+	};
+}
 
 function parseCsvRecords(text: string) {
 	const records: string[][] = [];
@@ -209,6 +245,7 @@ export const ImportLoomPage = () => {
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [isCsvImporting, setIsCsvImporting] = useState(false);
+	const [csvImportProgress, setCsvImportProgress] = useState(0);
 	const [result, setResult] = useState<LoomCsvImportResult | null>(null);
 
 	const selectedColumnValues = [
@@ -257,10 +294,12 @@ export const ImportLoomPage = () => {
 
 	const invalidRows = mappedRows.length - readyRows.length;
 	const previewRows = mappedRows.slice(0, 5);
+	const csvLimitExceeded = readyRows.length > MAX_LOOM_CSV_IMPORT_ROWS;
 	const canImport =
 		!!activeOrganization &&
 		!selectedColumnsConflict &&
 		readyRows.length > 0 &&
+		!csvLimitExceeded &&
 		!isCsvImporting;
 
 	const columnOptions =
@@ -340,6 +379,10 @@ export const ImportLoomPage = () => {
 
 		try {
 			const parsed = parseCsv(await file.text(), file.name);
+			if (parsed.rows.length > MAX_LOOM_CSV_IMPORT_ROWS) {
+				toast.error(LOOM_CSV_LIMIT_MESSAGE);
+			}
+
 			const loomUrlGuess = guessColumn(parsed.headers, [
 				"loomvideourl",
 				"loomurl",
@@ -367,6 +410,7 @@ export const ImportLoomPage = () => {
 				spaceName: spaceNameGuess,
 			});
 			setResult(null);
+			setCsvImportProgress(0);
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Could not parse CSV.",
@@ -390,29 +434,56 @@ export const ImportLoomPage = () => {
 	};
 
 	const handleCsvImport = async () => {
+		if (csvLimitExceeded) {
+			toast.error(LOOM_CSV_LIMIT_MESSAGE);
+			return;
+		}
+
 		if (!activeOrganization || !canImport) return;
 
 		setIsCsvImporting(true);
+		setResult(null);
+		setCsvImportProgress(0);
 
 		try {
-			const importResult = await importFromLoomCsv({
-				orgId: activeOrganization.organization.id,
-				rows: readyRows,
-			});
+			const batches = chunkRows(readyRows, LOOM_CSV_BATCH_SIZE);
+			let combinedResults: LoomCsvImportRowResult[] = [];
+			let blockedError: string | undefined;
 
-			setResult(importResult);
+			for (const [batchIndex, batch] of batches.entries()) {
+				const importResult = await importFromLoomCsv({
+					orgId: activeOrganization.organization.id,
+					rows: batch,
+				});
 
-			if (importResult.importedCount > 0) {
+				if (importResult.results.length === 0 && importResult.error) {
+					blockedError = importResult.error;
+					break;
+				}
+
+				combinedResults = [...combinedResults, ...importResult.results];
+				setCsvImportProgress(combinedResults.length);
+				setResult(buildCsvImportResult(combinedResults));
+
+				if (batchIndex < batches.length - 1) {
+					await delay(LOOM_CSV_BATCH_DELAY_MS);
+				}
+			}
+
+			const finalResult = buildCsvImportResult(combinedResults, blockedError);
+			setResult(finalResult);
+
+			if (finalResult.importedCount > 0) {
 				toast.success(
-					`${importResult.importedCount} ${pluralize(
-						importResult.importedCount,
+					`${finalResult.importedCount} ${pluralize(
+						finalResult.importedCount,
 						"Loom import",
 						"Loom imports",
 					)} started.`,
 				);
 				router.refresh();
 			} else {
-				toast.error(importResult.error || "No Loom videos were imported.");
+				toast.error(finalResult.error || "No Loom videos were imported.");
 			}
 
 			setConfirmOpen(false);
@@ -632,6 +703,7 @@ export const ImportLoomPage = () => {
 											setCsvData(null);
 											setMapping({});
 											setResult(null);
+											setCsvImportProgress(0);
 										}}
 									>
 										Replace CSV
@@ -704,6 +776,28 @@ export const ImportLoomPage = () => {
 										/>
 									</div>
 
+									{csvLimitExceeded && (
+										<div className="flex gap-3 items-start p-4 rounded-lg border bg-red-2 border-red-4 text-red-11">
+											<FontAwesomeIcon
+												className="mt-0.5 size-4"
+												icon={faTriangleExclamation}
+											/>
+											<div className="text-sm">
+												<p className="font-medium">
+													CSV imports are limited to {MAX_LOOM_CSV_IMPORT_ROWS}{" "}
+													videos at a time.
+												</p>
+												<p className="mt-1 text-red-10">
+													Split this file into smaller batches or{" "}
+													<a className="underline" href="mailto:hello@cap.so">
+														contact support
+													</a>{" "}
+													to raise the limit.
+												</p>
+											</div>
+										</div>
+									)}
+
 									{previewRows.length > 0 && (
 										<div className="overflow-hidden rounded-lg border border-gray-3">
 											<Table>
@@ -758,6 +852,7 @@ export const ImportLoomPage = () => {
 												setCsvData(null);
 												setMapping({});
 												setResult(null);
+												setCsvImportProgress(0);
 											}}
 										>
 											Clear
@@ -850,7 +945,8 @@ export const ImportLoomPage = () => {
 					</DialogHeader>
 					<div className="p-5 text-sm text-gray-11">
 						{readyRows.length} {pluralize(readyRows.length, "video", "videos")}{" "}
-						will be imported for organization members.
+						will be imported for organization members in batches of{" "}
+						{LOOM_CSV_BATCH_SIZE}.
 						{readyRows.some((row) => row.spaceName) && (
 							<span className="block mt-2">
 								Rows with a space name will be added to that space. Missing
@@ -881,7 +977,9 @@ export const ImportLoomPage = () => {
 							variant="dark"
 							disabled={!canImport}
 						>
-							{isCsvImporting ? "Importing..." : "Start Import"}
+							{isCsvImporting
+								? `Importing ${csvImportProgress}/${readyRows.length}`
+								: "Start Import"}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

@@ -1,10 +1,10 @@
-import { useCallback, useRef } from "react";
 import {
 	appendLocalRecordingChunk,
 	finalizeLocalRecording,
 	type LocalRecordingStrategy,
-} from "./local-recording-backup";
-import type { RecorderErrorEvent } from "./web-recorder-types";
+} from "@cap/recorder-core/local-recording-backup";
+import type { RecorderErrorEvent } from "@cap/recorder-core/recorder-types";
+import { useCallback, useRef } from "react";
 
 export const useMediaRecorderSetup = () => {
 	const mediaRecorderRef = useRef<MediaRecorder | null>(null);

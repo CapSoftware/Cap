@@ -24,7 +24,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			title: "Enhanced Privacy & Security",
 			description:
-				"Cap prioritizes your privacy with GDPR compliance and the option to use your own S3 storage, ensuring your data remains under your control. Connect your own custom domain for a branded experience while maintaining 100% ownership of your data.",
+				"Cap prioritizes your privacy with GDPR compliance and the option to use your own Google Drive or S3 storage, ensuring your data remains under your control. Connect your own custom domain for a branded experience while maintaining 100% ownership of your data.",
 		},
 		{
 			title: "Half the Price of Loom",
@@ -92,7 +92,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			title: "Complete Data Ownership",
 			description:
-				"Cap lets you connect your own S3 storage and custom domain, giving you 100% ownership and control over your content. No more being locked into proprietary platforms.",
+				"Cap lets you connect your own Google Drive or S3 storage and custom domain, giving you 100% ownership and control over your content. No more being locked into proprietary platforms.",
 		},
 		{
 			title: "Community-Driven Development",
@@ -131,7 +131,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			question: "Can I keep full ownership of my recordings with Cap?",
 			answer:
-				"Absolutely! Cap allows you to connect your own S3 storage and custom domain, giving you 100% ownership and control of your content. Your data remains yours, and you're never locked into our platform.",
+				"Absolutely! Cap allows you to connect your own Google Drive or S3 storage and custom domain, giving you 100% ownership and control of your content. Your data remains yours, and you're never locked into our platform.",
 		},
 		{
 			question: "Does Cap support collaboration features?",
@@ -181,7 +181,7 @@ export const loomAlternativeContent: SeoPageContent = {
 			],
 			[
 				"Own Storage Integration",
-				{ text: "Connect your own S3", status: "positive" },
+				{ text: "Connect your own S3 or Google Drive", status: "positive" },
 				{ text: "Not available", status: "negative" },
 			],
 			[
@@ -209,7 +209,7 @@ export const loomAlternativeContent: SeoPageContent = {
 			"Import your existing Loom videos using Cap's built-in Loom video importer",
 			"Start recording using either Instant Mode or Studio Mode",
 			"Share your recordings easily with Cap's built-in sharing features",
-			"Optional: Connect your own S3 storage and custom domain for complete data ownership",
+			"Optional: Connect your own Google Drive or S3 storage and custom domain for complete data ownership",
 		],
 	},
 

@@ -49,7 +49,9 @@ import { TrackIcon, TrackManager } from "./TrackManager";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
 const TIMELINE_PADDING = 16;
-const TRACK_GUTTER = 64;
+const TRACK_GUTTER_GAP = 8;
+const TRACK_GUTTER = 112;
+const TRACK_ICON_WIDTH = TRACK_GUTTER - TRACK_GUTTER_GAP;
 const TIMELINE_HEADER_HEIGHT = 32;
 const PLAYHEAD_TOP_OFFSET = 24;
 
@@ -806,7 +808,7 @@ export function Timeline(props: {
 		>
 			<div
 				ref={setTimelineContainerRef}
-				class="pt-[2rem] relative overflow-hidden flex flex-col gap-2 h-full"
+				class="pt-8 relative overflow-hidden flex flex-col gap-2 h-full"
 				style={{
 					"padding-left": `${TIMELINE_PADDING}px`,
 					"padding-right": `${TIMELINE_PADDING}px`,
@@ -899,7 +901,7 @@ export function Timeline(props: {
 					{(time) => (
 						<div
 							class={cx(
-								"flex absolute bottom-0 z-20 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%]",
+								"flex absolute bottom-0 z-20 justify-center items-center w-px pointer-events-none bg-linear-to-b to-120%",
 								split() ? "from-red-300" : "from-gray-400",
 							)}
 							style={{
@@ -921,7 +923,7 @@ export function Timeline(props: {
 				</Show>
 				<div
 					class={cx(
-						"absolute bottom-0 rounded-full z-20 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]",
+						"absolute bottom-0 rounded-full z-20 w-px pointer-events-none bg-linear-to-b to-120% from-[rgb(226,64,64)]",
 						split() && "opacity-50",
 					)}
 					style={{
@@ -953,7 +955,7 @@ export function Timeline(props: {
 						}}
 					>
 						<div class="flex flex-col gap-2 min-h-full">
-							<TrackRow icon={trackIcons.clip}>
+							<TrackRow icon={trackIcons.clip} label="Video">
 								<ClipTrack
 									ref={setTimelineRef}
 									handleUpdatePlayhead={handleUpdatePlayhead}
@@ -962,6 +964,7 @@ export function Timeline(props: {
 							<Show when={captionTrackVisible()}>
 								<TrackRow
 									icon={trackIcons.caption}
+									label="Captions"
 									onDelete={() => handleDeleteSingleTrack("caption")}
 								>
 									<CaptionsTrack
@@ -977,6 +980,7 @@ export function Timeline(props: {
 							<Show when={keyboardTrackVisible()}>
 								<TrackRow
 									icon={trackIcons.keyboard}
+									label="Keyboard"
 									onDelete={() => handleDeleteSingleTrack("keyboard")}
 								>
 									<KeyboardTrack
@@ -991,6 +995,7 @@ export function Timeline(props: {
 								{(laneIndex) => (
 									<TrackRow
 										icon={trackIcons.text}
+										label="Text"
 										onDelete={() => handleDeleteTrackLane("text", laneIndex)}
 										onContextMenu={(e) =>
 											handleOpenTrackMenu(e, "text", laneIndex)
@@ -1010,6 +1015,7 @@ export function Timeline(props: {
 								{(laneIndex) => (
 									<TrackRow
 										icon={trackIcons.mask}
+										label="Mask"
 										onDelete={() => handleDeleteTrackLane("mask", laneIndex)}
 										onContextMenu={(e) =>
 											handleOpenTrackMenu(e, "mask", laneIndex)
@@ -1025,7 +1031,7 @@ export function Timeline(props: {
 									</TrackRow>
 								)}
 							</For>
-							<TrackRow icon={trackIcons.zoom}>
+							<TrackRow icon={trackIcons.zoom} label="Zoom">
 								<ZoomTrack
 									onDragStateChanged={(v) => {
 										zoomSegmentDragState = v;
@@ -1034,7 +1040,7 @@ export function Timeline(props: {
 								/>
 							</TrackRow>
 							<Show when={sceneTrackVisible()}>
-								<TrackRow icon={trackIcons.scene}>
+								<TrackRow icon={trackIcons.scene} label="Scene">
 									<SceneTrack
 										onDragStateChanged={(v) => {
 											sceneSegmentDragState = v;
@@ -1053,6 +1059,7 @@ export function Timeline(props: {
 
 function TrackRow(props: {
 	icon: () => JSX.Element;
+	label?: string;
 	children: JSX.Element;
 	onDelete?: () => void;
 	onContextMenu?: (e: MouseEvent) => void;
@@ -1060,22 +1067,23 @@ function TrackRow(props: {
 	importing?: boolean;
 }) {
 	return (
-		<div
-			class="group/track flex items-stretch gap-2"
-			onContextMenu={props.onContextMenu}
-		>
-			<div class="relative">
+		<div class="flex items-stretch gap-2" onContextMenu={props.onContextMenu}>
+			<div
+				class="group/icon relative shrink-0"
+				style={{ width: `${TRACK_ICON_WIDTH}px` }}
+			>
 				<TrackIcon
 					icon={props.icon()}
+					label={props.label}
 					class={
 						props.onDelete
-							? "transition-opacity group-hover/track:pointer-events-none group-hover/track:opacity-0"
+							? "transition-opacity group-hover/icon:pointer-events-none group-hover/icon:opacity-0"
 							: undefined
 					}
 				/>
 				<Show when={props.onDelete}>
 					<button
-						class="absolute inset-0 z-20 pointer-events-none flex items-center justify-center rounded-xl border border-red-400/70 bg-red-500/90 text-white opacity-0 transition-opacity group-hover/track:pointer-events-auto group-hover/track:opacity-100"
+						class="absolute inset-0 z-20 pointer-events-none flex items-center justify-center rounded-xl border border-red-400/70 bg-red-500/90 text-white opacity-0 transition-opacity group-hover/icon:pointer-events-auto group-hover/icon:opacity-100"
 						onClick={(e) => {
 							e.stopPropagation();
 							props.onDelete?.();
@@ -1148,7 +1156,7 @@ function TimelineMarkings() {
 							}}
 						>
 							<Show when={showLabel()}>
-								<div class="absolute -top-[1.125rem] -translate-x-1/2">
+								<div class="absolute -top-4.5 -translate-x-1/2">
 									{formatTime(second())}
 								</div>
 							</Show>

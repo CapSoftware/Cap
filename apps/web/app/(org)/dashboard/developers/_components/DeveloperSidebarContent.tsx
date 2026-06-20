@@ -52,12 +52,13 @@ export function DeveloperSidebarContent() {
 		pathname === href || pathname.startsWith(`${href}/`);
 
 	return (
-		<nav className="flex flex-col justify-between w-full h-full">
+		<nav className="flex flex-col w-full h-full min-h-0">
 			<div
 				className={clsx(
-					"mt-1",
-					sidebarCollapsed ? "flex flex-col justify-center items-center" : "",
+					"flex-1 pt-1 min-h-0 overflow-y-auto",
+					sidebarCollapsed ? "flex flex-col items-center" : "",
 				)}
+				style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
 			>
 				{mainNav.map((item) => {
 					const active = isActive(item.href);

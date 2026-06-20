@@ -9,7 +9,10 @@ use crate::output_pipeline::{MacOSFragmentedM4SMuxer, MacOSFragmentedM4SMuxerCon
 #[cfg(windows)]
 use crate::output_pipeline::{WindowsFragmentedM4SMuxer, WindowsFragmentedM4SMuxerConfig};
 use anyhow::anyhow;
+#[cfg(any(target_os = "macos", windows))]
 use cap_enc_ffmpeg::h264::H264EncoderBuilder;
+#[cfg(target_os = "linux")]
+use cap_enc_ffmpeg::h264::H264Preset;
 #[cfg(windows)]
 use cap_enc_ffmpeg::h264::H264Preset;
 use cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent;
@@ -353,11 +356,68 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     }
 }
 
+#[cfg(target_os = "linux")]
+impl MakeCapturePipeline for screen_capture::X11Capture {
+    async fn make_studio_mode_pipeline(
+        screen_capture: screen_capture::VideoSourceConfig,
+        output_path: PathBuf,
+        start_time: Timestamps,
+        _fragmented: bool,
+        _use_oop_muxer: bool,
+        shared_pause_state: Option<SharedPauseState>,
+        output_size: Option<(u32, u32)>,
+        quality: StudioQuality,
+    ) -> anyhow::Result<OutputPipeline> {
+        let fragments_dir = output_path
+            .parent()
+            .map(|p| p.join("display"))
+            .unwrap_or_else(|| output_path.with_file_name("display"));
+
+        let ultra = quality == StudioQuality::Ultra;
+        OutputPipeline::builder(fragments_dir)
+            .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_timestamps(start_time)
+            .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
+                segment_duration: std::time::Duration::from_secs(2),
+                preset: if ultra {
+                    H264Preset::Medium
+                } else {
+                    H264Preset::Ultrafast
+                },
+                output_size,
+                shared_pause_state,
+            })
+            .await
+    }
+
+    async fn make_instant_segmented_video_pipeline(
+        screen_capture: screen_capture::VideoSourceConfig,
+        segments_dir: PathBuf,
+        output_size: (u32, u32),
+        start_time: Timestamps,
+        _segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
+    ) -> anyhow::Result<OutputPipeline> {
+        OutputPipeline::builder(segments_dir)
+            .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_timestamps(start_time)
+            .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
+                segment_duration: std::time::Duration::from_secs(2),
+                preset: H264Preset::Ultrafast,
+                output_size: Some(output_size),
+                shared_pause_state: None,
+            })
+            .await
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub type ScreenCaptureMethod = screen_capture::CMSampleBufferCapture;
 
 #[cfg(windows)]
 pub type ScreenCaptureMethod = screen_capture::Direct3DCapture;
+
+#[cfg(target_os = "linux")]
+pub type ScreenCaptureMethod = screen_capture::X11Capture;
 
 pub fn target_to_display_and_crop(
     target: &ScreenCaptureTarget,
@@ -412,6 +472,26 @@ pub fn target_to_display_and_crop(
                     raw_window_bounds.size(),
                 ))
             }
+
+            #[cfg(target_os = "linux")]
+            {
+                let raw_display_position = display
+                    .raw_handle()
+                    .physical_position()
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
+                let raw_window_bounds = window
+                    .raw_handle()
+                    .physical_bounds()
+                    .ok_or_else(|| anyhow!("No window bounds"))?;
+
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        raw_window_bounds.position().x() - raw_display_position.x(),
+                        raw_window_bounds.position().y() - raw_display_position.y(),
+                    ),
+                    raw_window_bounds.size(),
+                ))
+            }
         }
         ScreenCaptureTarget::Area {
             bounds: relative_bounds,
@@ -423,6 +503,30 @@ pub fn target_to_display_and_crop(
             }
 
             #[cfg(windows)]
+            {
+                let raw_display_size = display
+                    .physical_size()
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
+                let logical_display_size = display
+                    .logical_size()
+                    .ok_or_else(|| anyhow!("No display logical size"))?;
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        (relative_bounds.position().x() / logical_display_size.width())
+                            * raw_display_size.width(),
+                        (relative_bounds.position().y() / logical_display_size.height())
+                            * raw_display_size.height(),
+                    ),
+                    PhysicalSize::new(
+                        (relative_bounds.size().width() / logical_display_size.width())
+                            * raw_display_size.width(),
+                        (relative_bounds.size().height() / logical_display_size.height())
+                            * raw_display_size.height(),
+                    ),
+                ))
+            }
+
+            #[cfg(target_os = "linux")]
             {
                 let raw_display_size = display
                     .physical_size()
@@ -458,7 +562,7 @@ pub fn target_to_display_and_crop(
 pub fn create_d3d_device()
 -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Device> {
     use windows::Win32::Graphics::{
-        Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE},
+        Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN},
         Direct3D11::{D3D11_CREATE_DEVICE_FLAG, ID3D11Device},
     };
 
@@ -474,6 +578,19 @@ pub fn create_d3d_device()
         }
         flags
     };
+
+    if let Ok(selected) = cap_d3d_adapter::select_capture_adapter(None) {
+        if let Err(error) = create_d3d_device_on_adapter(&selected.adapter, flags, &mut device) {
+            tracing::warn!(
+                adapter = %selected.description,
+                error = ?error,
+                "capture_pipeline: pinned-adapter D3D11CreateDevice failed, falling back"
+            );
+        } else {
+            return Ok(device.unwrap());
+        }
+    }
+
     let mut result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, flags, &mut device);
     if let Err(error) = &result {
         use windows::Win32::Graphics::Dxgi::DXGI_ERROR_UNSUPPORTED;
@@ -485,6 +602,31 @@ pub fn create_d3d_device()
         }
     }
     result?;
+
+    fn create_d3d_device_on_adapter(
+        adapter: &windows::Win32::Graphics::Dxgi::IDXGIAdapter,
+        flags: D3D11_CREATE_DEVICE_FLAG,
+        device: *mut Option<ID3D11Device>,
+    ) -> windows::core::Result<()> {
+        unsafe {
+            use windows::Win32::{
+                Foundation::HMODULE,
+                Graphics::Direct3D11::{D3D11_SDK_VERSION, D3D11CreateDevice},
+            };
+
+            D3D11CreateDevice(
+                Some(adapter),
+                D3D_DRIVER_TYPE_UNKNOWN,
+                HMODULE(std::ptr::null_mut()),
+                flags,
+                None,
+                D3D11_SDK_VERSION,
+                Some(device),
+                None,
+                None,
+            )
+        }
+    }
 
     fn create_d3d_device_with_type(
         driver_type: D3D_DRIVER_TYPE,

@@ -8,6 +8,7 @@ import { spaceMembers, spaces } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import {
 	type ImageUpload,
+	Organisation,
 	Space,
 	SpaceMemberId,
 	type SpaceMemberRole,
@@ -15,6 +16,7 @@ import {
 } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { isOrganizationOwnerPro } from "@/lib/org-pro";
 import {
 	getSpaceSettingsFromFormData,
 	hasProSpaceSettingsEnabled,
@@ -45,6 +47,7 @@ export async function createSpace(
 		const name = formData.get("name") as string;
 		const passwordEnabled = formData.get("passwordEnabled") === "true";
 		const password = formData.get("password") as string | null;
+		const publicEnabled = formData.get("public") === "true";
 		const settings = getSpaceSettingsFromFormData(formData);
 		const canUseProFeatures = userIsPro(user);
 
@@ -76,7 +79,18 @@ export async function createSpace(
 			};
 		}
 
-		// Check for duplicate space name in the same organization
+		if (
+			publicEnabled &&
+			!(await isOrganizationOwnerPro(
+				Organisation.OrganisationId.make(user.activeOrganizationId),
+			))
+		) {
+			return {
+				success: false,
+				error: "Upgrade to Cap Pro to create a public collection link",
+			};
+		}
+
 		const existingSpace = await db()
 			.select({ id: spaces.id })
 			.from(spaces)
@@ -95,7 +109,6 @@ export async function createSpace(
 			};
 		}
 
-		// Generate the space ID early so we can use it in the file path
 		const spaceId = Space.SpaceId.make(nanoId());
 		let iconUrl: ImageUpload.ImageUrlOrKey | null = null;
 		const hashedPassword =
@@ -104,7 +117,6 @@ export async function createSpace(
 				: null;
 
 		await db().transaction(async (tx) => {
-			// Create the space first
 			await tx.insert(spaces).values({
 				id: spaceId,
 				name,
@@ -113,10 +125,9 @@ export async function createSpace(
 				iconUrl: null,
 				settings,
 				password: hashedPassword,
+				public: publicEnabled,
 			});
 
-			// --- Member Management Logic ---
-			// Collect member user IDs from formData
 			const memberUserIds: string[] = [];
 			for (const entry of formData.getAll("members[]")) {
 				if (typeof entry === "string" && entry.length > 0) {
@@ -124,16 +135,13 @@ export async function createSpace(
 				}
 			}
 
-			// Always add the creator as Admin (if not already in the list)
 			if (!memberUserIds.includes(user.id)) {
 				memberUserIds.push(user.id);
 			}
 
-			// Create space members
 			if (memberUserIds.length > 0) {
 				const spaceMembersToInsert = memberUserIds.map((userId) => {
-					// Creator is always Admin, others are member
-					const role: SpaceMemberRole = userId === user.id ? "Admin" : "member";
+					const role: SpaceMemberRole = userId === user.id ? "admin" : "member";
 					return {
 						id: SpaceMemberId.make(nanoId()),
 						spaceId,

@@ -14,6 +14,7 @@ import {
 	createSignal,
 	For,
 	on,
+	onCleanup,
 	onMount,
 	type ParentProps,
 	Show,
@@ -436,6 +437,9 @@ export function Cropper(
 			target.width === start.width &&
 			target.height === start.height
 		) {
+			animationFrameId = null;
+			setIsAnimating(false);
+			setDisplayRawBounds(target);
 			return;
 		}
 
@@ -470,6 +474,7 @@ export function Cropper(
 		durationMs = 240,
 	) {
 		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+		animationFrameId = null;
 		setIsAnimating(true);
 		setRawBoundsConstraining(bounds, origin);
 		animateToRawBounds(rawBounds(), durationMs);
@@ -638,6 +643,8 @@ export function Cropper(
 	function onRegionPointerDown(e: PointerEvent) {
 		if (!containerRef || e.button !== 0) return;
 
+		const target = e.currentTarget as HTMLElement;
+		disposeActivePointerSession();
 		stopAnimation();
 		e.stopPropagation();
 		setMouseState({ drag: "region" });
@@ -648,25 +655,108 @@ export function Cropper(
 			y: e.clientY - containerRect.top - currentBounds.y,
 		};
 
-		createRoot((dispose) =>
+		trackPointerSession(
+			target,
+			e.pointerId,
+			(e) => {
+				let newX = e.clientX - containerRect.left - startOffset.x;
+				let newY = e.clientY - containerRect.top - startOffset.y;
+
+				newX = clamp(newX, 0, containerRect.width - currentBounds.width);
+				newY = clamp(newY, 0, containerRect.height - currentBounds.height);
+
+				currentBounds = moveBounds(currentBounds, newX, newY);
+				setRawBounds(currentBounds);
+
+				if (!isAnimating()) setDisplayRawBounds(currentBounds);
+			},
+			() => {
+				setMouseState({ drag: null });
+			},
+		);
+	}
+
+	let activePointerSessionDispose: (() => void) | undefined;
+
+	function disposeActivePointerSession() {
+		activePointerSessionDispose?.();
+		activePointerSessionDispose = undefined;
+	}
+
+	function trackPointerSession(
+		target: HTMLElement,
+		pointerId: number,
+		onMove: (event: PointerEvent) => void,
+		onEnd: () => void,
+	) {
+		target.setPointerCapture?.(pointerId);
+
+		createRoot((dispose) => {
+			let ended = false;
+			const finish = () => {
+				if (ended) return;
+				ended = true;
+				if (target.hasPointerCapture?.(pointerId)) {
+					target.releasePointerCapture(pointerId);
+				}
+				onEnd();
+				activePointerSessionDispose = undefined;
+				dispose();
+			};
+			const finishForPointer = (event: PointerEvent) => {
+				if (event.pointerId === pointerId) finish();
+			};
+
 			createEventListenerMap(window, {
-				pointerup: () => {
-					setMouseState({ drag: null });
-					dispose();
+				pointermove: (event) => {
+					if (event.pointerId === pointerId) onMove(event);
 				},
-				pointermove: (e) => {
-					let newX = e.clientX - containerRect.left - startOffset.x;
-					let newY = e.clientY - containerRect.top - startOffset.y;
-
-					newX = clamp(newX, 0, containerRect.width - currentBounds.width);
-					newY = clamp(newY, 0, containerRect.height - currentBounds.height);
-
-					currentBounds = moveBounds(currentBounds, newX, newY);
-					setRawBounds(currentBounds);
-
-					if (!isAnimating()) setDisplayRawBounds(currentBounds);
+				pointerup: finishForPointer,
+				pointercancel: finishForPointer,
+				// While pointer capture is held the drag is still ours even if the window
+				// loses focus (e.g. another overlay or the camera window grabs it on
+				// Windows). Real pointer loss arrives via pointercancel/lostpointercapture.
+				blur: () => {
+					if (!target.hasPointerCapture?.(pointerId)) finish();
 				},
-			}),
+			});
+			createEventListenerMap(target, {
+				lostpointercapture: finishForPointer,
+			});
+
+			activePointerSessionDispose = finish;
+		});
+	}
+
+	onCleanup(() => {
+		disposeActivePointerSession();
+		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+	});
+
+	function onHandlePointerDown(handle: HandleSide, e: PointerEvent) {
+		if (!containerRef || e.button !== 0) return;
+		const target = e.currentTarget as HTMLElement;
+		disposeActivePointerSession();
+		e.stopPropagation();
+
+		stopAnimation();
+		setMouseState({ drag: "handle", cursor: handle.cursor });
+
+		const context: ResizeSessionState = {
+			containerRect: containerRef.getBoundingClientRect(),
+			startBounds: rawBounds(),
+			isAltMode: e.altKey,
+			activeHandle: { ...handle },
+			originalHandle: handle,
+		};
+
+		trackPointerSession(
+			target,
+			e.pointerId,
+			(e) => handleResizePointerMove(e, context),
+			() => {
+				setMouseState({ drag: null });
+			},
 		);
 	}
 
@@ -773,34 +863,6 @@ export function Cropper(
 		if (!isAnimating()) setDisplayRawBounds(finalBounds);
 	}
 
-	function onHandlePointerDown(handle: HandleSide, e: PointerEvent) {
-		if (!containerRef || e.button !== 0) return;
-		e.stopPropagation();
-
-		stopAnimation();
-		setMouseState({ drag: "handle", cursor: handle.cursor });
-
-		const context: ResizeSessionState = {
-			containerRect: containerRef.getBoundingClientRect(),
-			startBounds: rawBounds(),
-			isAltMode: e.altKey,
-			activeHandle: { ...handle },
-			originalHandle: handle,
-		};
-
-		createRoot((dispose) =>
-			createEventListenerMap(window, {
-				pointerup: () => {
-					setMouseState({ drag: null });
-					// Note: may need to be added back
-					// setAspectState("snapped", null);
-					dispose();
-				},
-				pointermove: (e) => handleResizePointerMove(e, context),
-			}),
-		);
-	}
-
 	function onHandleDoubleClick(handle: HandleSide, e: MouseEvent) {
 		e.stopPropagation();
 		const currentBounds = rawBounds();
@@ -828,8 +890,11 @@ export function Cropper(
 
 	function onOverlayPointerDown(e: PointerEvent) {
 		if (!containerRef || e.button !== 0) return;
+		const target = e.currentTarget as HTMLElement;
+		disposeActivePointerSession();
 		e.preventDefault();
 		e.stopPropagation();
+		stopAnimation();
 
 		const initialBounds = { ...rawBounds() };
 		const SE_HANDLE_INDEX = 3; // use bottom-right as the temporary handle
@@ -858,20 +923,19 @@ export function Cropper(
 			originalHandle: handle,
 		};
 
-		createRoot((dispose) => {
-			createEventListenerMap(window, {
-				pointerup: () => {
-					setMouseState({ drag: null });
-					const bounds = rawBounds();
-					if (bounds.width < 5 || bounds.height < 5) {
-						setRawBounds(initialBounds);
-						if (!isAnimating()) setDisplayRawBounds(initialBounds);
-					}
-					dispose();
-				},
-				pointermove: (e) => handleResizePointerMove(e, context),
-			});
-		});
+		trackPointerSession(
+			target,
+			e.pointerId,
+			(e) => handleResizePointerMove(e, context),
+			() => {
+				setMouseState({ drag: null });
+				const bounds = rawBounds();
+				if (bounds.width < 5 || bounds.height < 5) {
+					setRawBounds(initialBounds);
+					if (!isAnimating()) setDisplayRawBounds(initialBounds);
+				}
+			},
+		);
 	}
 
 	const KEY_MAPPINGS = new Map([
@@ -1018,7 +1082,7 @@ export function Cropper(
 	return (
 		<div
 			ref={containerRef}
-			class="relative w-full h-full select-none overscroll-contain focus:outline-none touch-none"
+			class="relative w-full h-full select-none overscroll-contain focus:outline-hidden touch-none"
 			style={{
 				cursor: cursorStyle() ?? (props.aspectRatio ? "default" : "crosshair"),
 			}}
@@ -1031,11 +1095,11 @@ export function Cropper(
 			<Transition
 				appear
 				enterActiveClass="transition-opacity duration-300 ease-in-out"
-				enterClass="opacity-0 blur-sm"
+				enterClass="opacity-0 blur-xs"
 				enterToClass="opacity-100 blur-none"
 				exitActiveClass="transition-opacity duration-300 ease-in-out"
 				exitClass="opacity-100 blur-none"
-				exitToClass="opacity-0 blur-sm"
+				exitToClass="opacity-0 blur-xs"
 			>
 				<Show when={props.showBounds && labelTransform()}>
 					{(transform) => (
@@ -1110,7 +1174,7 @@ export function Cropper(
 							handle.isCorner ? (
 								<button
 									type="button"
-									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-none"
+									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-hidden"
 									tabIndex={-1}
 									classList={{ "opacity-0": mouseState.drag === "overlay" }}
 									style={{
@@ -1136,7 +1200,7 @@ export function Cropper(
 								>
 									<svg
 										aria-hidden="true"
-										class="absolute pointer-events-none drop-shadow-sm shadow-black"
+										class="absolute pointer-events-none drop-shadow-xs shadow-black"
 										classList={{
 											"size-1": boundsTooSmall(),
 											"size-6": !boundsTooSmall(),
@@ -1172,7 +1236,7 @@ export function Cropper(
 							) : (
 								<button
 									type="button"
-									class="absolute focus:outline-none focus:ring-0 outline-none"
+									class="absolute focus:outline-hidden focus:ring-0 outline-hidden"
 									tabIndex={-1}
 									style={{
 										visibility:
@@ -1239,9 +1303,9 @@ export function Cropper(
 								aria-live="polite"
 							>
 								<div
-									class="h-[18px] w-11 rounded-full text-center text-xs text-gray-12 border border-white/70 dark:border-white/20 drop-shadow-md outline-1 outline outline-black/80"
+									class="h-[18px] w-11 rounded-full text-center text-xs text-gray-12 border border-white/70 dark:border-white/20 drop-shadow-md outline-1 outline-solid outline-black/80"
 									classList={{
-										"backdrop-blur-sm bg-white/50 dark:bg-black/50 dark:backdrop-brightness-90 backdrop-brightness-200":
+										"backdrop-blur-xs bg-white/50 dark:bg-black/50 dark:backdrop-brightness-90 backdrop-brightness-200":
 											props.useBackdropFilter,
 										"bg-gray-3 opacity-80": !props.useBackdropFilter,
 									}}

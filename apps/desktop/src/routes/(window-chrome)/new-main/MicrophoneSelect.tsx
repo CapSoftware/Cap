@@ -70,7 +70,7 @@ export default function MicrophoneSelect(props: {
 	const isDisabled = () => !!currentRecording.data || props.disabled;
 
 	return (
-		<div class="flex flex-col items-stretch text-[--text-primary]">
+		<div class="flex flex-col items-stretch text-(--text-primary)">
 			<button
 				type="button"
 				disabled={isDisabled()}
@@ -181,7 +181,7 @@ export function MicrophoneSelectBase(props: {
 		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
 
 	return (
-		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+		<div class="flex flex-col gap-1 items-stretch text-(--text-primary)">
 			<button
 				type="button"
 				disabled={!!currentRecording.data || props.disabled}

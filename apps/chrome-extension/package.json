@@ -1,0 +1,41 @@
+{
+	"name": "@cap/chrome-extension",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "rm -rf dist && vite build && vite build --config vite.content.config.ts && vite build --config vite.content-overlay.config.ts",
+		"dev": "rm -rf dist && (trap 'kill 0' INT TERM; vite build --watch --config vite.content.config.ts --mode development & vite build --watch --config vite.content-overlay.config.ts --mode development & vite build --watch --mode development & wait)",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run src",
+		"test:e2e:install": "playwright install chromium",
+		"test:e2e": "pnpm build && playwright test",
+		"test:e2e:headed": "pnpm build && playwright test --headed"
+	},
+	"dependencies": {
+		"@cap/recorder-core": "workspace:*",
+		"@cap/web-domain": "workspace:*",
+		"@radix-ui/colors": "^3.0.0",
+		"@radix-ui/react-select": "^2.2.5",
+		"@radix-ui/react-switch": "^1.1.0",
+		"class-variance-authority": "^0.7.0",
+		"clsx": "^2.1.1",
+		"lucide-react": "^0.525.0",
+		"react": "19.2.4",
+		"react-dom": "19.2.4",
+		"tailwind-merge": "^2.6.0"
+	},
+	"devDependencies": {
+		"@playwright/test": "^1.51.1",
+		"@types/chrome": "^0.0.323",
+		"@types/react": "19.2.14",
+		"@types/react-dom": "19.2.3",
+		"@vitejs/plugin-react": "4.4.1",
+		"autoprefixer": "^10.4.16",
+		"postcss": "^8.4.31",
+		"tailwindcss": "^3.4.0",
+		"typescript": "^5.8.3",
+		"vite": "6.3.5",
+		"vitest": "^3.2.0"
+	}
+}

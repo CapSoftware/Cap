@@ -29,6 +29,7 @@ const MASK_GROWTH_ALPHA: f32 = 0.25;
 const MASK_SHRINK_ALPHA: f32 = 0.12;
 const MASK_STABILITY_EPSILON: f32 = 0.025;
 const MASK_EDGE_CONTRAST: f32 = 4.0;
+const INITIAL_MASK_VALUE: f32 = 1.0;
 
 pub struct BlurProcessor {
     model: SegmentationModel,
@@ -47,6 +48,7 @@ pub struct BlurProcessor {
     readback_bytes_per_row: u32,
     readback_state: ReadbackState,
     inference_interval: Duration,
+    mask_initialized: bool,
     mask_dirty: bool,
     output_generation: u64,
 }
@@ -185,10 +187,10 @@ impl BlurProcessor {
             composite_pipeline,
             downsample_pipeline,
             textures: None,
-            mask_data: vec![0.0; pixel_count],
-            smoothed_mask: vec![0.0; pixel_count],
-            mask_scratch: vec![0.0; pixel_count],
-            mask_upload: vec![0.0; pixel_count],
+            mask_data: vec![INITIAL_MASK_VALUE; pixel_count],
+            smoothed_mask: vec![INITIAL_MASK_VALUE; pixel_count],
+            mask_scratch: vec![INITIAL_MASK_VALUE; pixel_count],
+            mask_upload: vec![INITIAL_MASK_VALUE; pixel_count],
             last_inference: Instant::now()
                 .checked_sub(std::time::Duration::from_secs(1))
                 .unwrap_or_else(Instant::now),
@@ -198,6 +200,7 @@ impl BlurProcessor {
             readback_bytes_per_row,
             readback_state: ReadbackState::Idle,
             inference_interval: DEFAULT_INFERENCE_INTERVAL,
+            mask_initialized: false,
             mask_dirty: true,
             output_generation: 0,
         })
@@ -376,10 +379,11 @@ impl BlurProcessor {
         queue: &wgpu::Queue,
         input_texture: &wgpu::Texture,
     ) -> bool {
-        let rgba_256 = match self.readback_downsampled(device, queue, input_texture) {
-            Some(data) => data,
-            None => return false,
-        };
+        let rgba_256 =
+            match self.readback_downsampled(device, queue, input_texture, !self.mask_initialized) {
+                Some(data) => data,
+                None => return false,
+            };
 
         match self.model.run_inference(&rgba_256) {
             Ok(new_mask) => {
@@ -387,10 +391,15 @@ impl BlurProcessor {
                 if new_mask.len() >= pixel_count {
                     for (i, &raw) in new_mask.iter().take(pixel_count).enumerate() {
                         let v = refine_mask_value(raw);
-                        self.smoothed_mask[i] = smooth_mask_value(self.smoothed_mask[i], v);
+                        self.smoothed_mask[i] = if self.mask_initialized {
+                            smooth_mask_value(self.smoothed_mask[i], v)
+                        } else {
+                            v
+                        };
                     }
                     self.mask_data
                         .copy_from_slice(&self.smoothed_mask[..pixel_count]);
+                    self.mask_initialized = true;
                     return true;
                 }
                 false
@@ -407,33 +416,9 @@ impl BlurProcessor {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         input_texture: &wgpu::Texture,
+        wait_for_result: bool,
     ) -> Option<Vec<u8>> {
-        let mut completed: Option<Vec<u8>> = None;
-
-        if let ReadbackState::InFlight(status) = &self.readback_state {
-            let _ = device.poll(wgpu::PollType::Poll);
-            match status.load(Ordering::Acquire) {
-                READBACK_READY_OK => {
-                    let slice = self.readback_buffer.slice(..);
-                    let data = slice.get_mapped_range();
-                    let expected_row = (SEGMENTATION_SIZE * 4) as usize;
-                    let bytes_per_row = self.readback_bytes_per_row as usize;
-                    let mut out = Vec::with_capacity(expected_row * SEGMENTATION_SIZE as usize);
-                    for row in 0..SEGMENTATION_SIZE as usize {
-                        let start = row * bytes_per_row;
-                        out.extend_from_slice(&data[start..start + expected_row]);
-                    }
-                    drop(data);
-                    self.readback_buffer.unmap();
-                    self.readback_state = ReadbackState::Idle;
-                    completed = Some(out);
-                }
-                READBACK_READY_ERR => {
-                    self.readback_state = ReadbackState::Idle;
-                }
-                _ => {}
-            }
-        }
+        let mut completed = self.take_completed_readback(device, wgpu::PollType::Poll);
 
         if matches!(self.readback_state, ReadbackState::Idle) {
             let input_view = input_texture.create_view(&Default::default());
@@ -516,9 +501,49 @@ impl BlurProcessor {
                 });
 
             self.readback_state = ReadbackState::InFlight(status);
+
+            if wait_for_result {
+                completed = self
+                    .take_completed_readback(device, wgpu::PollType::Wait)
+                    .or(completed);
+            }
         }
 
         completed
+    }
+
+    fn take_completed_readback(
+        &mut self,
+        device: &wgpu::Device,
+        poll_type: wgpu::PollType,
+    ) -> Option<Vec<u8>> {
+        if let ReadbackState::InFlight(status) = &self.readback_state {
+            let _ = device.poll(poll_type);
+            match status.load(Ordering::Acquire) {
+                READBACK_READY_OK => {
+                    let slice = self.readback_buffer.slice(..);
+                    let data = slice.get_mapped_range();
+                    let expected_row = (SEGMENTATION_SIZE * 4) as usize;
+                    let bytes_per_row = self.readback_bytes_per_row as usize;
+                    let mut out = Vec::with_capacity(expected_row * SEGMENTATION_SIZE as usize);
+                    for row in 0..SEGMENTATION_SIZE as usize {
+                        let start = row * bytes_per_row;
+                        out.extend_from_slice(&data[start..start + expected_row]);
+                    }
+                    drop(data);
+                    self.readback_buffer.unmap();
+                    self.readback_state = ReadbackState::Idle;
+                    Some(out)
+                }
+                READBACK_READY_ERR => {
+                    self.readback_state = ReadbackState::Idle;
+                    None
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
     }
 
     fn upload_mask(&mut self, queue: &wgpu::Queue) {

@@ -180,13 +180,27 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
             for window_id in &self.excluded_windows {
                 let Some(window) = Window::from_id(window_id) else {
+                    warn!(%window_id, "Excluded window id no longer resolves");
                     continue;
                 };
 
                 if let Some(sc_window) = window.raw_handle().as_sc(self.shareable_content.clone()) {
                     collected.push(sc_window);
+                } else {
+                    warn!(
+                        %window_id,
+                        window_title = ?window.name(),
+                        owner_name = ?window.owner_name(),
+                        "Excluded window missing from ScreenCaptureKit shareable content"
+                    );
                 }
             }
+
+            info!(
+                configured_excluded_windows = self.excluded_windows.len(),
+                mapped_excluded_windows = collected.len(),
+                "Mapped ScreenCaptureKit excluded windows"
+            );
 
             collected
         };
@@ -923,12 +937,25 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
         let mut collected = Vec::new();
         for window_id in &params.excluded_windows {
             let Some(window) = Window::from_id(window_id) else {
+                warn!(%window_id, "Excluded screenshot window id no longer resolves");
                 continue;
             };
             if let Some(sc_window) = window.raw_handle().as_sc(shareable_content.clone()) {
                 collected.push(sc_window);
+            } else {
+                warn!(
+                    %window_id,
+                    window_title = ?window.name(),
+                    owner_name = ?window.owner_name(),
+                    "Excluded screenshot window missing from ScreenCaptureKit shareable content"
+                );
             }
         }
+        info!(
+            configured_excluded_windows = params.excluded_windows.len(),
+            mapped_excluded_windows = collected.len(),
+            "Mapped screenshot ScreenCaptureKit excluded windows"
+        );
         collected
     };
 

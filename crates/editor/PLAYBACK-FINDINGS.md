@@ -35,7 +35,7 @@
 
 ## Current Status
 
-**Last Updated**: 2026-05-07
+**Last Updated**: 2026-05-20
 
 ### Performance Summary
 
@@ -79,6 +79,14 @@
 - [x] **Profile decoder init time** - Hardware acceleration confirmed (AVAssetReader) (2026-01-28)
 - [x] **Identify latency hotspots** - No issues found, p95=3.1ms (2026-01-28)
 - [x] **Optimize random-access scrubbing** - Reduced AVAssetReader scrub decode p95 on cap-performance-fixtures from 231.5ms to 47.6ms (2026-05-07)
+- [x] **Add live editor playback harness** - Added `cap-editor --example editor-playback-benchmark` telemetry for warmup, frame source, skips, renderer queue wait, render time, callback packing, and output format (2026-05-20)
+- [x] **Optimize live editor playback render output** - Switched live editor renderer output from NV12 to RGBA after telemetry showed NV12 renderer p95 over frame budget at 1080p (2026-05-20)
+- [x] **Reduce live editor first-render drops** - Moved renderer setup earlier and prerendered the first playback frame before starting the playback clock, reducing 1080p renderer drops from 8 to 0 on the reference live run (2026-05-20)
+- [x] **Measure desktop RGBA display bandwidth** - Time-normalized desktop frame transport stats and measured RGBA payload at 406.6 MB/s full preview, 172.8 MB/s default half preview, with callback/display packing below budget (2026-05-20)
+- [x] **Instrument desktop transport/display leg** - Added Rust WebSocket pack/send stats plus browser receive-to-display and WebGPU upload timing in `__capFpsStats()` (2026-05-20)
+- [x] **Run sustained live editor playback** - 900-frame full and default-half preview runs stayed near 60fps with no playback skips; both exposed a deterministic renderer spike around frame 696/keyframe area causing 3 renderer drops (2026-05-20)
+- [x] **Preload editor cursor assets off the playback path** - Moved SVG/PNG cursor texture loading into renderer-layer initialization after stage telemetry proved the frame 696 sustained-run drop was first-use cursor asset loading (2026-05-20)
+- [x] **Capture live desktop transport/display stats** - Added a no-dev-server desktop display benchmark that drives the real Rust renderer/WebSocket path into Chrome and captured WebGPU upload/display stats for 300-frame and 900-frame full/default-half runs (2026-05-20)
 
 ---
 
@@ -462,6 +470,156 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `cargo clippy -p cap-rendering --all-targets -- -D warnings`
 
 **Stopping point**: Scrubbing is substantially faster and playback validation still passes. Remaining architectural opportunities are renderer readback/transport overhead and longer-duration testing on lower-powered MacBook Air hardware.
+
+---
+
+### Session 2026-05-20 (Live Editor Playback Harness + RGBA Output)
+
+**Goal**: Build an editor playback performance harness, identify the top measured bottleneck in the actual live playback path, and fix it without changing playback timing, decode behavior, or audio sync.
+
+**What was done**:
+1. Added `crates/editor/examples/editor-playback-benchmark.rs`, which drives the real `Playback` loop and `Renderer` with telemetry instead of only benchmarking direct decode/render calls.
+2. Added playback telemetry for warmup, frame source, skips, schedule overshoot, frame acquisition, uniform construction, renderer queue wait, render time, callback packing, dropped frames, and output format.
+3. Ran baseline live playback on `/tmp/cap-performance-fixtures/reference-recording.cap` at 60fps for 300 frames.
+4. Identified `render_immediate_nv12` as the top measured bottleneck.
+5. Switched live editor playback renderer output to RGBA, using the existing desktop RGBA frame transport path.
+
+**Changes Made**:
+- `crates/editor/src/telemetry.rs`: New telemetry event channel and stage enums.
+- `crates/editor/src/playback.rs`: Emits live playback telemetry without changing playback scheduling.
+- `crates/editor/src/editor.rs`: Emits renderer telemetry and uses RGBA output for live editor frames.
+- `crates/editor/examples/editor-playback-benchmark.rs`: New live playback benchmark harness.
+- `crates/editor/Cargo.toml`: Registers the new benchmark example.
+
+**Baseline Results**:
+- Live 1080p playback: submitted 300, rendered 253, renderer dropped 47, skipped 28.
+- Renderer output: NV12.
+- Renderer render p95: 19.00ms, over the 16.67ms frame budget.
+- Callback packing p95: 0.02ms.
+
+**Final Results**:
+- Live 1080p playback: submitted 300, rendered 290, renderer dropped 10, skipped 0.
+- Renderer output: RGBA.
+- Renderer render p95: 9.21ms.
+- Default half preview: renderer render p95 7.37ms, skipped 0.
+- Existing playback validation still passes: decode p95 5.0ms/3.0ms, mic diff 35.3ms/13.8ms, system audio diff 92.7ms/92.8ms, camera drift 0.0ms.
+
+**Impact**:
+- Live 1080p renderer p95 improved 19.00ms → 9.21ms (-51.5%).
+- Playback skips improved 28 → 0 on the measured 300-frame run.
+- The fix avoids NV12 color conversion for editor preview frames and uses the already-supported RGBA display path.
+
+**Validation**:
+- `cargo fmt --all`
+- `cargo check -p cap-editor --examples`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution full`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution half`
+- `cargo run -p cap-recording --example playback-test-runner -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 full`
+
+**Stopping point**: The top measured live playback bottleneck is fixed. Remaining opportunity is first-render setup latency, visible as a max render spike and a small number of initial renderer drops even though steady-state p95 is under budget.
+
+---
+
+### Session 2026-05-20 (First-Render Setup + RGBA Transport)
+
+**Goal**: Continue after the RGBA output change by reducing first-render/setup latency and remaining live renderer drops, then check whether the larger RGBA desktop payload is becoming the next limiter.
+
+**What was done**:
+1. Measured the post-RGBA live playback path on `/tmp/cap-performance-fixtures/reference-recording.cap` at 60fps for 300 frames.
+2. Confirmed the remaining drops were concentrated around renderer setup and the first rendered frame, not steady-state rendering.
+3. Moved renderer layer creation earlier so it overlaps segment/decoder creation.
+4. Added renderer output-size preparation before playback frames are queued.
+5. Prerendered the exact starting playhead frame before starting the playback clock/audio stream, then began the timed loop at the next frame.
+6. Tightened desktop display stats so `__capFpsStats()` reports true MB/s, render FPS, render duration, and active transport mode for the RGBA display path.
+
+**Before This Session**:
+- Full 1080p RGBA live playback: submitted 300, rendered 292, renderer dropped 8, skipped 0.
+- Warmup: 28.2ms.
+- Renderer render p95: 8.20ms, max 62.90ms.
+- Callback payload: 398.6 MB/s.
+
+**Final Results**:
+- Full 1080p RGBA live playback: submitted 300, rendered 300, renderer dropped 0, skipped 0.
+- Full 1080p setup/warmup including initial prerender: 65.4ms.
+- Full 1080p renderer render p95: 7.10ms; first-frame prerender max: 63.16ms before playback clock start.
+- Full 1080p callback payload: 406.6 MB/s.
+- Default half preview: submitted 300, rendered 300, renderer dropped 0, skipped 0.
+- Default half preview renderer render p95: 7.05ms.
+- Default half preview callback payload: 172.8 MB/s.
+- Existing playback validation still passes: decode p95 4.8ms/2.9ms, mic diff 35.3ms/13.8ms, system audio diff 92.7ms/92.8ms, camera drift 0.0ms.
+
+**Impact**:
+- Remaining 1080p renderer drops improved 8 → 0.
+- First-frame GPU spike still exists, but it is paid before the playback clock and audio stream start, so it no longer causes renderer queue drops or visual startup skips.
+- RGBA bandwidth is not the measured limiter on the reference runs: callback packing p95 stayed at 0.01ms and renderer queue wait p95 stayed at 0.05ms while carrying the larger RGBA payload.
+
+**Validation**:
+- `cargo fmt --all`
+- `cargo check -p cap-rendering`
+- `cargo check -p cap-editor --examples`
+- `pnpm exec biome check --write apps/desktop/src/utils/socket.ts`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution full`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution half`
+- `cargo run -p cap-recording --example playback-test-runner -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 full`
+
+**Stopping point**: The measured live editor path now renders every submitted frame on the reference fixture with no renderer drops or playback skips. The remaining first-frame cost is GPU startup work, but it is isolated to setup before timed playback begins.
+
+---
+
+### Session 2026-05-20 (Desktop Path Instrumentation + Cursor Asset Preload)
+
+**Goal**: Measure and safely reduce the next bottleneck across the desktop editor playback path after first-render/drop fixes, including Rust WebSocket pack/send, browser receive/display, WebGPU upload timing, full/default-half preview comparison, sustained playback, and first-frame setup latency.
+
+**What was done**:
+1. Added Rust WebSocket timing fields to the existing `WS frame stats` log: pack avg/max, send avg/max, and renderer-output-created-to-sent avg/max.
+2. Extended desktop `__capFpsStats()` with WebGPU upload avg/max, receive-to-display avg/max, and SharedArrayBuffer write/fallback counts.
+3. Updated the live editor benchmark to report effective FPS without teardown sleep, separate steady renderer timing from the prewarmed first frame, and split renderer preparation into display, cursor, camera, layer render, finish, and readback stages.
+4. Measured the 900-frame sustained drop: both full and default-half preview hit a deterministic frame 696 outlier, with cursor preparation at about 64-66ms while display, camera, callback packing, queue wait, and readback stayed below budget.
+5. Moved cursor SVG/PNG texture loading into the existing renderer-layer initialization path, keeping the same SVG-first and PNG-fallback asset selection and the lazy fallback for non-editor paths.
+6. Added a no-dev-server desktop display transport benchmark that runs the real `cap-desktop` Rust WebSocket sender, bundles the real desktop `socket.ts` display path with Vite, opens Chrome through CDP, and captures WebGPU display notifications and stats.
+7. Ran final 300-frame and 900-frame full/default-half preview benchmarks on `/tmp/cap-performance-fixtures/reference-recording.cap` at 60fps.
+8. Re-ran playback sync validation on the same fixture.
+
+**Changes Made**:
+- `apps/desktop/src-tauri/src/frame_ws.rs`: Added pack/send/created-to-sent counters to desktop WebSocket frame stats.
+- `apps/desktop/src-tauri/src/lib.rs`, `apps/desktop/src-tauri/examples/desktop-display-transport-benchmark.rs`: Exposed the existing frame WebSocket module to examples and added a benchmark that pushes real editor renderer output through the desktop WebSocket sender.
+- `apps/desktop/scripts/desktop-display-transport-benchmark.js`, `apps/desktop/package.json`: Added the browser-side benchmark harness that captures display notifications, sampled WebGPU upload timing, receive-to-display timing, transport mode, and fallback counters without starting a dev server.
+- `apps/desktop/src/utils/webgpu-renderer.ts`: Returns render timing with resize, texture setup, upload, draw, and total durations.
+- `apps/desktop/src/utils/socket.ts`: Records receive-to-display, WebGPU upload, render, SharedArrayBuffer write, fallback stats, and stable stats-window counters for benchmark aggregation.
+- `crates/editor/examples/editor-playback-benchmark.rs`: Reports steady render timing separately from first-frame prewarm and prints renderer stage breakdowns.
+- `crates/editor/src/editor.rs`, `crates/editor/src/telemetry.rs`, `crates/rendering/src/frame_pipeline.rs`, `crates/rendering/src/lib.rs`: Added live renderer-stage telemetry for prepare, display/cursor/camera preparation, render command encoding, finish/readback submit, and immediate flush.
+- `crates/rendering/src/layers/cursor.rs`: Preloads recording cursor assets through the same SVG-first/PNG-fallback path before playback frames need a newly-seen cursor texture.
+
+**Results**:
+- Before cursor preload, 900-frame full/default-half preview rendered 897/900 frames with 3 renderer drops and no playback skips; the repeated outlier was frame 696, with cursor preparation at 64.44ms full and 66.29ms default-half.
+- Final 300-frame full preview: submitted/rendered/callback 300/300/300, skipped 0, renderer dropped 0, effective rendered FPS 59.9, steady render p95 8.47ms, first render 18.72ms, cursor prepare max 0.20ms, payload 430.8 MB/s.
+- Final 300-frame default-half preview: submitted/rendered/callback 300/300/300, skipped 0, renderer dropped 0, effective rendered FPS 59.9, steady render p95 7.71ms, first render 16.73ms, cursor prepare max 0.16ms, payload 183.1 MB/s.
+- Final 900-frame full preview: submitted/rendered/callback 900/900/900, skipped 0, renderer dropped 0, effective rendered FPS 59.9, steady render p95 7.67ms, max 9.50ms, first render 16.98ms, cursor prepare max 0.24ms, payload 430.9 MB/s.
+- Final 900-frame default-half preview: submitted/rendered/callback 900/900/900, skipped 0, renderer dropped 0, effective rendered FPS 60.0, steady render p95 7.47ms, max 8.37ms, first render 17.94ms, cursor prepare max 0.23ms, payload 183.2 MB/s.
+- The first-frame cursor asset cost was removed from the measured prewarmed frame by running cursor preload in the existing renderer-layer initialization thread; final warmup was 28.4ms full and 20.1ms default-half on the sustained runs.
+- Playback validation still passes: AVAssetReader hardware decode, playback p95 5.0ms/3.2ms, mic diff 35.3ms/13.8ms, system audio diff 92.7ms/92.8ms, camera drift 0.0ms.
+- Desktop transport/display 300-frame full preview: Rust submitted/rendered/callback 300/300/300, browser displayed 300/300, WebGPU transport, browser aggregate render FPS 60.59, upload avg/max 2.05/2.40ms, receive-to-display avg/max 3.24/11.40ms, Rust WebSocket steady pack avg/max 0.111/0.219ms, send avg/max 1.195/1.916ms, created-to-sent avg/max 1.340/2.053ms, payload 430.6 MB/s.
+- Desktop transport/display 300-frame default-half preview: Rust submitted/rendered/callback 300/300/300, browser displayed 300/300, WebGPU transport, browser aggregate render FPS 59.60, upload avg/max 0.057/0.300ms, receive-to-display avg/max 1.47/8.70ms, Rust WebSocket steady pack avg/max 0.050/0.128ms, send avg/max 0.479/0.964ms, created-to-sent avg/max 0.560/1.105ms, payload 183.1 MB/s.
+- Desktop transport/display 900-frame full preview: Rust submitted/rendered/callback 900/900/900, browser displayed 900/900, WebGPU transport, browser aggregate render FPS 60.00, upload avg/max 2.08/2.50ms, receive-to-display avg/max 4.22/11.10ms, Rust WebSocket steady pack avg/max 0.109/0.635ms, send avg/max 1.260/9.272ms, created-to-sent avg/max 1.401/9.427ms, payload 431.0 MB/s.
+- Desktop transport/display 900-frame default-half preview: Rust submitted/rendered/callback 900/900/900, browser displayed 900/900, WebGPU transport, browser aggregate render FPS 59.95, upload avg/max 0.062/0.300ms, receive-to-display avg/max 1.65/8.70ms, Rust WebSocket steady pack avg/max 0.048/0.177ms, send avg/max 0.462/3.040ms, created-to-sent avg/max 0.542/3.182ms, payload 183.2 MB/s.
+- Shared-buffer write/fallback counters were zero on these editor-preview runs because the direct-canvas WebGPU path handled the displayed frames; no fallback transport was observed.
+
+**Validation**:
+- `cargo fmt --all`
+- `cargo check -p cap-editor --examples`
+- `cargo check -p cap-desktop --examples`
+- `pnpm exec biome check --write apps/desktop/scripts/desktop-display-transport-benchmark.js apps/desktop/package.json apps/desktop/src/utils/socket.ts apps/desktop/src/utils/webgpu-renderer.ts crates/editor/PLAYBACK-FINDINGS.md`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution full`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution half`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 900 --resolution full`
+- `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 900 --resolution half`
+- `pnpm --dir apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution full --startup-delay-ms 5000`
+- `pnpm --dir apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution half --startup-delay-ms 5000`
+- `pnpm --dir apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 900 --resolution full --startup-delay-ms 5000`
+- `pnpm --dir apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 900 --resolution half --startup-delay-ms 5000`
+- `cargo run -p cap-recording --example playback-test-runner -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 full`
+
+**Stopping point**: The measured sustained-run bottleneck was first-use cursor asset loading during playback. Moving that work to renderer-layer initialization removes the repeated frame 696 drop without changing playback timing, frame choice, preview resolution semantics, visual asset selection, audio/video sync, decoder selection, GPU adapter selection, or fallback behavior. The full desktop path now sustains 60fps on the reference fixture with no renderer drops, skips, WebSocket send failures, or browser display notification loss in the 900-frame full/default-half runs. The next visible full-preview cost is WebGPU texture upload/display work around 2.1ms average plus Rust WebSocket send around 1.3ms average, both still under frame budget.
 
 ---
 

@@ -138,6 +138,98 @@ pub fn probe_stream_stats(path: &Path) -> Result<StreamStats> {
     Ok(stats)
 }
 
+#[derive(Debug, Clone)]
+pub struct FrameGapReading {
+    pub frame_count: usize,
+    pub median_interval_secs: f64,
+    pub max_gap_secs: f64,
+    pub max_gap_at_secs: f64,
+    /// Largest gap whose start falls in the warmup-boundary window (~2.0s).
+    /// The wall-clock-rebase bug deterministically injects its step here, so this
+    /// is the most reliable fingerprint even when its magnitude is small.
+    pub boundary_gap_secs: f64,
+    pub boundary_gap_at_secs: f64,
+}
+
+/// Content-time window around the encoder's 2.0s warmup boundary.
+pub const WARMUP_BOUNDARY_SECS: f64 = 2.0;
+pub const WARMUP_BOUNDARY_WINDOW_SECS: f64 = 0.1;
+
+/// Reads every video frame's presentation timestamp and reports the largest
+/// interval between consecutive frames (the "gap"), along with the median
+/// interval for reference. A healthy continuous-capture stream (e.g. a camera)
+/// has all intervals ≈ the median; a timestamp-injection bug shows up as a
+/// single mid-stream gap many times the median (the warmup-boundary hole).
+pub fn probe_frame_gaps(path: &Path) -> Result<FrameGapReading> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "frame=pts_time",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .context("Failed to run ffprobe for frame gaps")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("ffprobe frame gaps failed: {stderr}");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut pts: Vec<f64> = stdout
+        .lines()
+        .filter_map(|l| l.trim().trim_end_matches(',').parse::<f64>().ok())
+        .collect();
+    pts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    if pts.len() < 3 {
+        anyhow::bail!(
+            "not enough video frames to measure gaps ({} found)",
+            pts.len()
+        );
+    }
+
+    let mut intervals: Vec<f64> = Vec::with_capacity(pts.len() - 1);
+    let mut max_gap_secs = 0.0_f64;
+    let mut max_gap_at_secs = 0.0_f64;
+    let mut boundary_gap_secs = 0.0_f64;
+    let mut boundary_gap_at_secs = 0.0_f64;
+    for window in pts.windows(2) {
+        let gap = window[1] - window[0];
+        let at = window[0];
+        intervals.push(gap);
+        if gap > max_gap_secs {
+            max_gap_secs = gap;
+            max_gap_at_secs = at;
+        }
+        if (at - WARMUP_BOUNDARY_SECS).abs() <= WARMUP_BOUNDARY_WINDOW_SECS
+            && gap > boundary_gap_secs
+        {
+            boundary_gap_secs = gap;
+            boundary_gap_at_secs = at;
+        }
+    }
+
+    let mut sorted = intervals.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_interval_secs = sorted[sorted.len() / 2];
+
+    Ok(FrameGapReading {
+        frame_count: pts.len(),
+        median_interval_secs,
+        max_gap_secs,
+        max_gap_at_secs,
+        boundary_gap_secs,
+        boundary_gap_at_secs,
+    })
+}
+
 pub fn verify_playable(path: &Path) -> Result<()> {
     let output = Command::new("ffprobe")
         .args(["-v", "error", "-show_streams", "-show_format"])

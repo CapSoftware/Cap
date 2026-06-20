@@ -1,5 +1,6 @@
 "use client";
 
+import type { videos as videosSchema } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import {
@@ -21,6 +22,7 @@ import {
 	faGear,
 	faLink,
 	faLock,
+	faScissors,
 	faShare,
 	faTrash,
 	faUnlock,
@@ -37,6 +39,7 @@ import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import {
 	type ImageLoadingStatus,
 	VideoThumbnail,
@@ -92,6 +95,8 @@ export interface CapCardProps extends PropsWithChildren {
 		}[];
 		ownerName: string | null;
 		metadata?: VideoMetadata;
+		source?: typeof videosSchema.$inferSelect.source;
+		isScreenshot?: boolean;
 		hasPassword?: boolean;
 		hasInheritedPassword?: boolean;
 		inheritedPasswordSources?: SpaceRuleSource[];
@@ -155,6 +160,7 @@ export const CapCard = ({
 	const [isDragging, setIsDragging] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
 	const { user, setUpgradeModalOpen } = useDashboardContext();
+	const [editUpgradeModalOpen, setEditUpgradeModalOpen] = useState(false);
 
 	const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -348,9 +354,28 @@ export const CapCard = ({
 						: `${webUrl}/s/${cap.id}`,
 		);
 	};
+	const canEditVideo =
+		isOwner &&
+		!sharedCapCard &&
+		cap.isScreenshot !== true &&
+		!cap.hasActiveUpload &&
+		(cap.source?.type === "desktopMP4" || cap.source?.type === "webMP4") &&
+		Boolean(cap.duration && cap.duration > 0);
+	const handleEditVideo = () => {
+		if (!canEditVideo) return;
+		if (!user.isPro) {
+			setEditUpgradeModalOpen(true);
+			return;
+		}
+		router.push(`/s/${cap.id}/edit`);
+	};
 
 	return (
 		<>
+			<UpgradeModal
+				open={editUpgradeModalOpen}
+				onOpenChange={setEditUpgradeModalOpen}
+			/>
 			<SharingDialog
 				isOpen={isSharingDialogOpen}
 				onClose={() => setIsSharingDialogOpen(false)}
@@ -536,6 +561,18 @@ export const CapCard = ({
 										<FontAwesomeIcon className="size-3" icon={faCopy} />
 										<p className="text-sm text-gray-12">Duplicate</p>
 									</DropdownMenuItem>
+									{canEditVideo && (
+										<DropdownMenuItem
+											onClick={(e) => {
+												e.stopPropagation();
+												handleEditVideo();
+											}}
+											className="flex gap-2 items-center rounded-lg"
+										>
+											<FontAwesomeIcon className="size-3" icon={faScissors} />
+											<p className="text-sm text-gray-12">Edit video</p>
+										</DropdownMenuItem>
+									)}
 									<DropdownMenuItem
 										onClick={() => {
 											if (!user.isPro) setUpgradeModalOpen(true);

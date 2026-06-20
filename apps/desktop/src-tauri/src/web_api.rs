@@ -133,7 +133,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
 
         let path = path.into();
         let server_url = current_server_url(self).await?;
-        let url = format!("{}{}", server_url, path);
+        let url = format!("{server_url}{path}");
         let response =
             do_authed_request(&self.state::<http_client::HttpClient>(), &auth, build, url).await?;
 
@@ -160,7 +160,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String {
         let pathname = pathname.as_ref();
         match current_server_url(self).await {
-            Ok(server_url) => format!("{}{}", server_url, pathname),
+            Ok(server_url) => format!("{server_url}{pathname}"),
             Err(err) => {
                 warn!("App state unavailable while building app URL: {err}");
                 format!("{}{}", default_server_url(), pathname)

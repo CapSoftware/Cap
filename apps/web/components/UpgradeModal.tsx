@@ -3,7 +3,6 @@
 import { buildEnv } from "@cap/env";
 import { Button, Dialog, DialogContent, Switch } from "@cap/ui";
 import NumberFlow from "@number-flow/react";
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import { useMutation } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -24,12 +23,14 @@ import { useRouter } from "next/navigation";
 import { memo, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
+import { Fit, Layout, useRive } from "@/lib/rive";
 
 interface UpgradeModalProps {
 	open: boolean;
 	onboarding?: boolean;
 	onOpenChange: (open: boolean) => void;
 	onCheckout?: () => Promise<void>;
+	dismissible?: boolean;
 }
 
 const modalVariants = {
@@ -64,6 +65,7 @@ const UpgradeModalImpl = ({
 	onOpenChange,
 	onCheckout,
 	onboarding,
+	dismissible = true,
 }: UpgradeModalProps) => {
 	const stripeCtx = useStripeContext();
 	const [isAnnual, setIsAnnual] = useState(true);
@@ -109,7 +111,7 @@ const UpgradeModalImpl = ({
 		{
 			icon: <Database className={iconStyling} />,
 			title: "Custom storage",
-			description: "Connect your own S3 bucket",
+			description: "Connect your own Google Drive or S3 bucket",
 		},
 		{
 			icon: <Shield className={iconStyling} />,
@@ -180,11 +182,25 @@ const UpgradeModalImpl = ({
 		},
 	});
 
+	const handleOpenChange = (nextOpen: boolean) => {
+		if (nextOpen || dismissible) {
+			onOpenChange(nextOpen);
+		}
+	};
+
 	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
+		<Dialog open={open} onOpenChange={handleOpenChange}>
 			<DialogContent
-				className="sm:max-w-[1100px] w-[calc(100%-20px)] custom-scroll bg-gray-2 border
-      border-gray-4 overflow-y-auto md:overflow-hidden max-h-[90vh] p-0"
+				onEscapeKeyDown={(event) => {
+					if (!dismissible) event.preventDefault();
+				}}
+				onInteractOutside={(event) => {
+					if (!dismissible) event.preventDefault();
+				}}
+				className={[
+					"sm:max-w-[1100px] w-[calc(100%-20px)] custom-scroll bg-gray-2 border border-gray-4 overflow-y-auto md:overflow-hidden max-h-[90vh] p-0",
+					dismissible ? "" : "[&>button:last-child]:hidden",
+				].join(" ")}
 			>
 				<AnimatePresence mode="wait">
 					{open && (
@@ -287,13 +303,15 @@ const UpgradeModalImpl = ({
 											? "Loading..."
 											: "Upgrade to Cap Pro"}
 									</Button>
-									<button
-										type="button"
-										className="mt-2 w-full max-w-sm h-14 text-base rounded-xl hover:underline text-gray-11 hover:text-gray-12"
-										onClick={() => onOpenChange(false)}
-									>
-										Skip
-									</button>
+									{dismissible && (
+										<button
+											type="button"
+											className="mt-2 w-full max-w-sm h-14 text-base rounded-xl hover:underline text-gray-11 hover:text-gray-12"
+											onClick={() => onOpenChange(false)}
+										>
+											Skip
+										</button>
+									)}
 								</div>
 							</div>
 

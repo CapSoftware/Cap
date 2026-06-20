@@ -6,13 +6,18 @@ import {
 	commands,
 } from "~/utils/tauri";
 
+export type CaptionManualPosition = { x: number; y: number };
+export type EditorCaptionSettings = CaptionSettings & {
+	manualPosition?: CaptionManualPosition | null;
+};
+
 export type CaptionsState = {
 	segments: CaptionSegment[];
-	settings: CaptionSettings;
+	settings: EditorCaptionSettings;
 	currentCaption: string | null;
 };
 
-export const defaultCaptionSettings: CaptionSettings = {
+export const defaultCaptionSettings: EditorCaptionSettings = {
 	enabled: false,
 	font: "System Sans-Serif",
 	size: 50,
@@ -30,6 +35,7 @@ export const defaultCaptionSettings: CaptionSettings = {
 	lingerDuration: 0.4,
 	wordTransitionDuration: 0.25,
 	activeWordHighlight: false,
+	manualPosition: null,
 };
 
 function createCaptionsStore() {
@@ -44,7 +50,7 @@ function createCaptionsStore() {
 		setState,
 
 		// Actions
-		updateSettings(settings: Partial<CaptionSettings>) {
+		updateSettings(settings: Partial<EditorCaptionSettings>) {
 			setState("settings", (prev) => ({ ...prev, ...settings }));
 		},
 
@@ -147,6 +153,7 @@ function createCaptionsStore() {
 						lingerDuration: state.settings.lingerDuration,
 						wordTransitionDuration: state.settings.wordTransitionDuration,
 						activeWordHighlight: state.settings.activeWordHighlight,
+						manualPosition: state.settings.manualPosition,
 					},
 				};
 

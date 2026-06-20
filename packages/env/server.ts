@@ -76,6 +76,10 @@ function createServerEnv() {
 			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true).describe(
 				"Should videos be public or private by default",
 			),
+			CAP_CHROME_EXTENSION_ID: z
+				.string()
+				.optional()
+				.describe("Chrome Web Store extension id allowed to receive auth keys"),
 			CAP_ALLOWED_SIGNUP_DOMAINS: z
 				.string()
 				.optional()

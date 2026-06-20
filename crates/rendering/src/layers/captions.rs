@@ -65,6 +65,7 @@ pub enum CaptionPosition {
     BottomLeft,
     BottomCenter,
     BottomRight,
+    Manual,
 }
 
 impl CaptionPosition {
@@ -75,6 +76,7 @@ impl CaptionPosition {
             "top-right" => Self::TopRight,
             "bottom-left" => Self::BottomLeft,
             "bottom-right" => Self::BottomRight,
+            "manual" => Self::Manual,
             _ => Self::BottomCenter,
         }
     }
@@ -83,6 +85,7 @@ impl CaptionPosition {
         match self {
             Self::TopLeft | Self::TopCenter | Self::TopRight => 0.08,
             Self::BottomLeft | Self::BottomCenter | Self::BottomRight => 0.85,
+            Self::Manual => 0.85,
         }
     }
 
@@ -91,6 +94,7 @@ impl CaptionPosition {
             Self::TopLeft | Self::BottomLeft => 0.05,
             Self::TopCenter | Self::BottomCenter => 0.5,
             Self::TopRight | Self::BottomRight => 0.95,
+            Self::Manual => 0.5,
         }
     }
 }
@@ -102,28 +106,7 @@ pub struct CaptionOverlayLayout {
 }
 
 const BASE_TEXT_OPACITY: f32 = 0.8;
-const MAX_WORDS_PER_LINE: usize = 6;
 const BOUNCE_OFFSET_PIXELS: f32 = 8.0;
-
-fn wrap_text_by_words(text: &str, max_words: usize) -> String {
-    let words: Vec<&str> = text.split_whitespace().collect();
-    if words.is_empty() {
-        return String::new();
-    }
-
-    let mut result = String::new();
-    for (i, word) in words.iter().enumerate() {
-        if i > 0 {
-            if i % max_words == 0 {
-                result.push('\n');
-            } else {
-                result.push(' ');
-            }
-        }
-        result.push_str(word);
-    }
-    result
-}
 
 fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -214,7 +197,7 @@ impl CaptionsLayer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let font_system = FontSystem::new();
+        let font_system = super::new_font_system();
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
@@ -397,7 +380,10 @@ impl CaptionsLayer {
         );
 
         let raw_caption_text = self.current_text.clone().unwrap_or_default();
-        let caption_text = wrap_text_by_words(&raw_caption_text, MAX_WORDS_PER_LINE);
+        let caption_text = raw_caption_text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         let caption_words: Vec<CaptionWord> = active
             .segment
             .words
@@ -431,7 +417,12 @@ impl CaptionsLayer {
         let device = &constants.device;
         let queue = &constants.queue;
 
-        let position = CaptionPosition::from_str(&caption_data.settings.position);
+        let position = active
+            .segment
+            .position_override
+            .as_deref()
+            .map(CaptionPosition::from_str)
+            .unwrap_or_else(|| CaptionPosition::from_str(&caption_data.settings.position));
         let margin = width as f32 * 0.05;
 
         let base_color = [
@@ -468,7 +459,7 @@ impl CaptionsLayer {
         let mut updated_buffer = Buffer::new(&mut self.font_system, metrics);
         let wrap_width = (width as f32 - margin * 2.0).max(font_size);
         updated_buffer.set_size(&mut self.font_system, Some(wrap_width), None);
-        updated_buffer.set_wrap(&mut self.font_system, glyphon::Wrap::Word);
+        updated_buffer.set_wrap(&mut self.font_system, glyphon::Wrap::None);
 
         let font_family = match caption_data.settings.font.as_str() {
             "System Serif" => Family::Serif,
@@ -599,22 +590,51 @@ impl CaptionsLayer {
         }
 
         let available_width = (width as f32 - margin * 2.0).max(1.0);
-        let padding = font_size * 0.5;
-        let corner_radius = font_size * 0.55;
-        let text_width = layout_width.min(available_width);
-        let text_height = layout_height;
+        let initial_padding = font_size * 0.5;
+        let fit_scale = if layout_width + initial_padding * 2.0 > available_width {
+            (available_width / (layout_width + initial_padding * 2.0)).clamp(0.35, 1.0)
+        } else {
+            1.0
+        };
+        let effective_font_size = font_size * fit_scale;
+        let padding = effective_font_size * 0.5;
+        let corner_radius = effective_font_size * 0.55;
+        let text_width = (layout_width * fit_scale).min(available_width);
+        let text_height = layout_height * fit_scale;
         let box_width = (text_width + padding * 2.0).min(available_width).max(1.0);
         let box_height = (text_height + padding * 2.0).min(height as f32).max(1.0);
 
-        let background_left = match position {
-            CaptionPosition::TopLeft | CaptionPosition::BottomLeft => margin,
-            CaptionPosition::TopRight | CaptionPosition::BottomRight => {
-                (width as f32 - margin - box_width).max(0.0)
+        let background_left = if position == CaptionPosition::Manual {
+            caption_data
+                .settings
+                .manual_position
+                .map(|manual_position| {
+                    (manual_position.x.clamp(0.0, 1.0) * width as f32 - box_width / 2.0)
+                        .clamp(0.0, (width as f32 - box_width).max(0.0))
+                })
+                .unwrap_or_else(|| ((width as f32 - box_width) / 2.0).max(0.0))
+        } else {
+            match position {
+                CaptionPosition::TopLeft | CaptionPosition::BottomLeft => margin,
+                CaptionPosition::TopRight | CaptionPosition::BottomRight => {
+                    (width as f32 - margin - box_width).max(0.0)
+                }
+                CaptionPosition::TopCenter | CaptionPosition::BottomCenter => {
+                    ((width as f32 - box_width) / 2.0).max(0.0)
+                }
+                CaptionPosition::Manual => ((width as f32 - box_width) / 2.0).max(0.0),
             }
-            _ => ((width as f32 - box_width) / 2.0).max(0.0),
         };
 
-        let center_y = height as f32 * position.y_factor();
+        let center_y = if position == CaptionPosition::Manual {
+            caption_data
+                .settings
+                .manual_position
+                .map(|manual_position| manual_position.y.clamp(0.0, 1.0) * height as f32)
+                .unwrap_or_else(|| height as f32 * CaptionPosition::BottomCenter.y_factor())
+        } else {
+            height as f32 * position.y_factor()
+        };
         let base_background_top =
             (center_y - box_height / 2.0).clamp(0.0, (height as f32 - box_height).max(0.0));
         let background_top = (base_background_top + bounce_offset as f32)
@@ -643,7 +663,7 @@ impl CaptionsLayer {
         );
 
         if caption_data.settings.outline {
-            let outline_thickness = 1.2;
+            let outline_thickness = 1.2 * fit_scale;
             let outline_offsets = [
                 (-outline_thickness, -outline_thickness),
                 (0.0, -outline_thickness),
@@ -664,7 +684,7 @@ impl CaptionsLayer {
                     buffer: &self.text_buffer,
                     left: text_left + offset_x,
                     top: text_top + offset_y,
-                    scale: 1.0,
+                    scale: fit_scale,
                     bounds,
                     default_color: outline_color,
                     custom_glyphs: &[],
@@ -683,7 +703,7 @@ impl CaptionsLayer {
             buffer: &self.text_buffer,
             left: text_left,
             top: text_top,
-            scale: 1.0,
+            scale: fit_scale,
             bounds,
             default_color,
             custom_glyphs: &[],

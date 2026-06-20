@@ -1,0 +1,1096 @@
+:host {
+	all: initial;
+	position: fixed;
+	inset: 0;
+	z-index: 2147483647;
+	display: block;
+	overflow: visible;
+	pointer-events: none;
+	color-scheme: light;
+	isolation: isolate;
+	contain: layout style paint;
+}
+
+:host,
+:host * {
+	box-sizing: border-box;
+	font-synthesis: none;
+	text-shadow: none;
+	text-transform: none;
+}
+
+.cap-extension-camera-window {
+	position: fixed;
+	left: 0;
+	top: 0;
+	z-index: 2147483647;
+	cursor: move;
+	pointer-events: auto;
+	touch-action: none;
+	user-select: none;
+	will-change: transform;
+	color: #202020;
+	font-family:
+		Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+	font-size: 14px;
+	font-weight: 400;
+	letter-spacing: 0;
+	line-height: 1.2;
+}
+
+.cap-extension-camera-window.is-dragging {
+	cursor: grabbing;
+}
+
+.cap-extension-drag-surface {
+	all: unset;
+	position: fixed;
+	inset: 0;
+	display: block;
+	z-index: 2147483647;
+	cursor: grabbing;
+	pointer-events: auto;
+	touch-action: none;
+	user-select: none;
+}
+
+.cap-extension-camera-shell {
+	position: relative;
+	display: flex;
+	width: 100%;
+	height: 100%;
+	flex-direction: column;
+	cursor: move;
+}
+
+.cap-extension-camera-bar {
+	display: flex;
+	height: 52px;
+	align-items: flex-start;
+	justify-content: center;
+	pointer-events: none;
+}
+
+.cap-extension-camera-controls {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	border-radius: 12px;
+	background: #fcfcfc;
+	box-shadow: 0 16px 48px rgba(0, 0, 0, 0.16);
+	color: #838383;
+	opacity: 0;
+	pointer-events: auto;
+	transform: translateY(8px);
+	transition:
+		opacity 160ms ease,
+		transform 160ms ease;
+}
+
+.cap-extension-camera-window:hover .cap-extension-camera-controls,
+.cap-extension-camera-controls:focus-within {
+	opacity: 1;
+	transform: translateY(0);
+}
+
+.cap-extension-camera-control {
+	all: unset;
+	display: flex;
+	width: 38px;
+	height: 38px;
+	align-items: center;
+	justify-content: center;
+	border-radius: 8px;
+	color: #838383;
+	cursor: pointer;
+	transition:
+		background 160ms ease,
+		color 160ms ease,
+		opacity 160ms ease;
+}
+
+.cap-extension-camera-control:hover,
+.cap-extension-camera-control:focus-visible,
+.cap-extension-camera-control.is-active {
+	background: #f0f0f0;
+	color: #202020;
+}
+
+.cap-extension-camera-control:focus-visible {
+	outline: 1px solid #5eb1ef;
+	outline-offset: 1px;
+}
+
+.cap-extension-camera-control svg {
+	display: block;
+	width: 22px;
+	height: 22px;
+	flex: 0 0 auto;
+}
+
+.cap-extension-camera-control:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.cap-extension-parent-pip-video {
+	position: fixed;
+	right: 0;
+	bottom: 0;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.cap-extension-camera-frame {
+	position: relative;
+	overflow: hidden;
+	border: 0;
+	background: #000;
+	box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+	color: #fff;
+}
+
+.cap-extension-camera-iframe {
+	position: absolute;
+	inset: 0;
+	display: block;
+	width: 100%;
+	height: 100%;
+	border: 0;
+	background: #000;
+	pointer-events: auto;
+}
+
+.cap-extension-camera-last-frame {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	opacity: 1;
+	pointer-events: none;
+	transition: opacity 140ms ease;
+}
+
+.cap-extension-camera-last-frame.is-hidden {
+	opacity: 0;
+}
+
+.cap-extension-camera-last-frame.is-mirrored {
+	transform: scaleX(-1);
+}
+
+.cap-extension-camera-frame.is-pip .cap-extension-camera-iframe,
+.cap-extension-camera-frame.is-pip .cap-extension-camera-last-frame {
+	visibility: hidden;
+}
+
+.cap-extension-camera-loading,
+.cap-extension-camera-error,
+.cap-extension-camera-pip-active {
+	position: absolute;
+	inset: 0;
+	z-index: 2;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.cap-extension-camera-loading {
+	background: rgba(0, 0, 0, 0.26);
+}
+
+.cap-extension-camera-loading span {
+	display: block;
+	width: 28px;
+	height: 28px;
+	border: 2px solid rgba(255, 255, 255, 0.3);
+	border-top-color: rgba(255, 255, 255, 0.9);
+	border-radius: 999px;
+	animation: cap-extension-spin 760ms linear infinite;
+}
+
+.cap-extension-camera-error {
+	padding: 18px;
+	background: rgba(0, 0, 0, 0.82);
+	color: rgba(255, 255, 255, 0.9);
+	font-size: 12px;
+	font-weight: 500;
+	line-height: 1.35;
+	text-align: center;
+}
+
+@keyframes cap-extension-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+.cap-extension-camera-pip-active {
+	background: linear-gradient(180deg, #1b1c21 0%, #101114 100%);
+}
+
+.cap-extension-camera-pip-active > div {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: calc(100% - 24px);
+	padding: 8px 12px;
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	border-radius: 999px;
+	background: rgba(0, 0, 0, 0.6);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+	backdrop-filter: blur(12px);
+	color: rgba(255, 255, 255, 0.9);
+	font-size: 12px;
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+.cap-extension-camera-pip-active button {
+	all: unset;
+	display: flex;
+	width: 16px;
+	height: 16px;
+	align-items: center;
+	justify-content: center;
+	border-radius: 999px;
+	cursor: pointer;
+	transition: background 160ms ease;
+}
+
+.cap-extension-camera-pip-active button:hover,
+.cap-extension-camera-pip-active button:focus-visible {
+	background: rgba(255, 255, 255, 0.2);
+}
+
+.cap-extension-camera-pip-active button:focus-visible {
+	outline: 1px solid rgba(255, 255, 255, 0.65);
+	outline-offset: 1px;
+}
+
+.cap-extension-panel-backdrop {
+	all: unset;
+	position: fixed;
+	inset: 0;
+	/* Sits below the drawing canvas so that, while drawing, strokes land on the
+	   canvas instead of this backdrop closing the panel out from under them. It
+	   still covers the page (which lives far below) to catch outside clicks when
+	   no canvas is mounted. */
+	z-index: 2147483640;
+	display: block;
+	background: transparent;
+	pointer-events: auto;
+	cursor: default;
+}
+
+.cap-extension-panel-backdrop:focus-visible {
+	outline: none;
+}
+
+.cap-extension-panel {
+	position: fixed;
+	top: 16px;
+	right: 16px;
+	z-index: 2147483647;
+	overflow: hidden;
+	border: 1px solid rgba(18, 18, 23, 0.1);
+	border-radius: 20px;
+	background: #f9f9f9;
+	box-shadow:
+		0 24px 64px rgba(0, 0, 0, 0.28),
+		0 4px 16px rgba(0, 0, 0, 0.12);
+	pointer-events: auto;
+	transition: height 180ms ease;
+	animation: cap-extension-panel-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+	will-change: transform, height;
+}
+
+.cap-extension-panel-iframe {
+	display: block;
+	width: 100%;
+	height: 100%;
+	border: 0;
+	background: transparent;
+}
+
+@keyframes cap-extension-panel-in {
+	from {
+		opacity: 0;
+		transform: translateY(-10px) scale(0.98);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}
+
+.cap-extension-control-bar {
+	position: fixed;
+	z-index: 2147483647;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 12px;
+	border: 1px solid rgba(18, 18, 23, 0.08);
+	border-radius: 18px;
+	background: rgba(252, 252, 252, 0.97);
+	box-shadow:
+		0 24px 64px rgba(0, 0, 0, 0.28),
+		0 4px 16px rgba(0, 0, 0, 0.12);
+	color: #202020;
+	cursor: grab;
+	pointer-events: auto;
+	user-select: none;
+	backdrop-filter: blur(20px);
+	font-family:
+		Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+	font-size: 13px;
+	letter-spacing: 0;
+	line-height: 1;
+	animation: cap-extension-bar-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cap-extension-control-bar.is-dragging {
+	cursor: grabbing;
+}
+
+.cap-extension-control-bar-info {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding-left: 2px;
+}
+
+.cap-extension-control-bar-logo {
+	display: block;
+	width: 30px;
+	height: 30px;
+	flex: 0 0 auto;
+	border-radius: 8px;
+	pointer-events: none;
+}
+
+.cap-extension-control-bar-text {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.cap-extension-control-bar-title {
+	font-size: 14px;
+	font-weight: 600;
+	line-height: 1;
+	color: #18181b;
+	white-space: nowrap;
+}
+
+.cap-extension-control-bar-title.is-timer {
+	min-width: 44px;
+	font-size: 15px;
+	font-variant-numeric: tabular-nums;
+}
+
+.cap-extension-control-bar-title.is-warning {
+	color: #e5484d;
+}
+
+.cap-extension-control-bar-subtitle {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 11.5px;
+	font-weight: 500;
+	line-height: 1;
+	color: #83838b;
+	white-space: nowrap;
+}
+
+.cap-extension-control-bar-dot {
+	width: 8px;
+	height: 8px;
+	flex: 0 0 auto;
+	border-radius: 999px;
+}
+
+.cap-extension-control-bar-dot.is-recording {
+	background: #e5484d;
+	box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.18);
+	animation: cap-extension-pulse 1.6s ease-in-out infinite;
+}
+
+.cap-extension-control-bar-dot.is-creating {
+	background: #f59f00;
+	box-shadow: 0 0 0 3px rgba(245, 159, 0, 0.18);
+	animation: cap-extension-pulse 1.6s ease-in-out infinite;
+}
+
+.cap-extension-control-bar-dot.is-paused {
+	background: #b4b4b4;
+}
+
+.cap-extension-control-bar-dot.is-ready {
+	background: #3b82f6;
+	box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+}
+
+.cap-extension-control-bar-divider {
+	width: 1px;
+	align-self: stretch;
+	margin: 2px 0;
+	background: rgba(18, 18, 23, 0.08);
+}
+
+.cap-extension-control-bar-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.cap-extension-control-bar-icon-button {
+	all: unset;
+	box-sizing: border-box;
+	display: flex;
+	width: 40px;
+	height: 40px;
+	align-items: center;
+	justify-content: center;
+	border-radius: 12px;
+	color: #5f5f66;
+	cursor: pointer;
+	transition:
+		background 160ms ease,
+		color 160ms ease;
+}
+
+.cap-extension-control-bar-icon-button svg {
+	display: block;
+	flex: 0 0 auto;
+}
+
+.cap-extension-control-bar-icon-button:hover,
+.cap-extension-control-bar-icon-button:focus-visible {
+	background: rgba(18, 18, 23, 0.06);
+	color: #18181b;
+}
+
+.cap-extension-control-bar-icon-button:focus-visible {
+	outline: 2px solid #5eb1ef;
+	outline-offset: 1px;
+}
+
+.cap-extension-control-bar-icon-button:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+.cap-extension-control-bar-icon-button.is-quiet {
+	color: #9b9ba3;
+}
+
+.cap-extension-control-bar-icon-button.is-active {
+	background: rgba(37, 99, 235, 0.12);
+	color: #2563eb;
+}
+
+.cap-extension-control-bar-icon-button.is-active:hover,
+.cap-extension-control-bar-icon-button.is-active:focus-visible {
+	background: rgba(37, 99, 235, 0.18);
+	color: #1d4ed8;
+}
+
+.cap-extension-control-bar-pill {
+	all: unset;
+	box-sizing: border-box;
+	display: flex;
+	height: 40px;
+	align-items: center;
+	gap: 8px;
+	padding: 0 18px;
+	border-radius: 12px;
+	border: 1px solid transparent;
+	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.2) inset;
+	color: #fff;
+	font-size: 13.5px;
+	font-weight: 600;
+	line-height: 1;
+	white-space: nowrap;
+	cursor: pointer;
+	transition:
+		background 160ms ease,
+		border-color 160ms ease;
+}
+
+.cap-extension-control-bar-pill svg {
+	display: block;
+	flex: 0 0 auto;
+}
+
+.cap-extension-control-bar-pill:focus-visible {
+	outline: 2px solid #5eb1ef;
+	outline-offset: 1px;
+}
+
+.cap-extension-control-bar-pill:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+
+.cap-extension-control-bar-pill.is-stop {
+	gap: 7px;
+	padding: 0 16px;
+	background: #e5484d;
+	border-color: #d93036;
+}
+
+.cap-extension-control-bar-pill.is-stop:hover:not(:disabled),
+.cap-extension-control-bar-pill.is-stop:focus-visible {
+	background: #d93036;
+}
+
+.cap-extension-control-bar-pill.is-start {
+	background: #2563eb;
+	border-color: #1d4ed8;
+}
+
+.cap-extension-control-bar-pill.is-start:hover:not(:disabled),
+.cap-extension-control-bar-pill.is-start:focus-visible {
+	background: #1d4ed8;
+}
+
+.cap-extension-recording-rail {
+	position: fixed;
+	left: 16px;
+	top: 50%;
+	z-index: 2147483647;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 8px 8px;
+	border: 1px solid rgba(18, 18, 23, 0.08);
+	border-radius: 18px;
+	background: rgba(252, 252, 252, 0.97);
+	box-shadow:
+		0 24px 64px rgba(0, 0, 0, 0.28),
+		0 4px 16px rgba(0, 0, 0, 0.12);
+	color: #202020;
+	pointer-events: auto;
+	user-select: none;
+	backdrop-filter: blur(20px);
+	font-family:
+		Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+	font-size: 13px;
+	letter-spacing: 0;
+	line-height: 1;
+	transform: translateY(-50%);
+	animation: cap-extension-rail-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cap-extension-recording-rail-timer {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 7px;
+	padding: 4px 6px 2px;
+}
+
+.cap-extension-recording-rail-time {
+	min-width: 40px;
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 1;
+	color: #18181b;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.cap-extension-recording-rail-timer.is-warning
+	.cap-extension-recording-rail-time {
+	color: #e5484d;
+}
+
+@keyframes cap-extension-rail-in {
+	from {
+		opacity: 0;
+		transform: translateY(-50%) translateX(-14px) scale(0.97);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(-50%) translateX(0) scale(1);
+	}
+}
+
+@keyframes cap-extension-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.35;
+	}
+}
+
+@keyframes cap-extension-bar-in {
+	from {
+		opacity: 0;
+		transform: translateY(14px) scale(0.97);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}
+
+/* The drawing surface sits above the recorder panel's backdrop (so drawing
+   works even while the panel that hosts the "Ready to record" bar is open) but
+   below the floating bars and the draw toolbar (which stay at the maximum
+   z-index) so those controls remain clickable while the canvas captures
+   pointer events everywhere else on the page. */
+.cap-extension-draw-canvas {
+	position: fixed;
+	inset: 0;
+	z-index: 2147483645;
+	display: block;
+	cursor: crosshair;
+	pointer-events: auto;
+	touch-action: none;
+}
+
+.cap-extension-draw-toolbar {
+	position: fixed;
+	top: 16px;
+	left: 50%;
+	z-index: 2147483647;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 10px;
+	border: 1px solid rgba(18, 18, 23, 0.08);
+	border-radius: 16px;
+	background: rgba(252, 252, 252, 0.97);
+	box-shadow:
+		0 24px 64px rgba(0, 0, 0, 0.28),
+		0 4px 16px rgba(0, 0, 0, 0.12);
+	color: #202020;
+	pointer-events: auto;
+	user-select: none;
+	backdrop-filter: blur(20px);
+	font-family:
+		Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+	font-size: 13px;
+	letter-spacing: 0;
+	line-height: 1;
+	transform: translateX(-50%);
+	animation: cap-extension-draw-toolbar-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cap-extension-draw-group {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.cap-extension-draw-divider {
+	width: 1px;
+	align-self: stretch;
+	margin: 3px 0;
+	background: rgba(18, 18, 23, 0.08);
+}
+
+.cap-extension-draw-swatch {
+	all: unset;
+	box-sizing: border-box;
+	width: 22px;
+	height: 22px;
+	flex: 0 0 auto;
+	border-radius: 999px;
+	box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+	cursor: pointer;
+	transition:
+		transform 140ms ease,
+		box-shadow 140ms ease;
+}
+
+.cap-extension-draw-swatch:hover {
+	transform: scale(1.12);
+}
+
+.cap-extension-draw-swatch.is-active {
+	box-shadow:
+		inset 0 0 0 1px rgba(0, 0, 0, 0.12),
+		0 0 0 2px #fcfcfc,
+		0 0 0 4px currentColor;
+}
+
+.cap-extension-draw-swatch:focus-visible {
+	outline: 2px solid #5eb1ef;
+	outline-offset: 2px;
+}
+
+.cap-extension-draw-size,
+.cap-extension-draw-icon-button {
+	all: unset;
+	box-sizing: border-box;
+	display: flex;
+	width: 32px;
+	height: 32px;
+	align-items: center;
+	justify-content: center;
+	border-radius: 9px;
+	color: #5f5f66;
+	cursor: pointer;
+	transition:
+		background 140ms ease,
+		color 140ms ease;
+}
+
+.cap-extension-draw-size:hover,
+.cap-extension-draw-icon-button:hover,
+.cap-extension-draw-size:focus-visible,
+.cap-extension-draw-icon-button:focus-visible {
+	background: rgba(18, 18, 23, 0.06);
+	color: #18181b;
+}
+
+.cap-extension-draw-size:focus-visible,
+.cap-extension-draw-icon-button:focus-visible {
+	outline: 2px solid #5eb1ef;
+	outline-offset: 1px;
+}
+
+.cap-extension-draw-size.is-active,
+.cap-extension-draw-icon-button.is-active {
+	background: rgba(18, 18, 23, 0.09);
+	color: #18181b;
+}
+
+.cap-extension-draw-icon-button svg {
+	display: block;
+	flex: 0 0 auto;
+}
+
+.cap-extension-draw-size-dot {
+	display: block;
+	flex: 0 0 auto;
+	border-radius: 999px;
+	background: currentColor;
+}
+
+@keyframes cap-extension-draw-toolbar-in {
+	from {
+		opacity: 0;
+		transform: translateX(-50%) translateY(-10px) scale(0.98);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(-50%) translateY(0) scale(1);
+	}
+}
+
+/* Pre-roll countdown: a full-screen takeover that counts 3, 2, 1 before the
+   recording begins. */
+.cap-extension-countdown {
+	position: fixed;
+	inset: 0;
+	z-index: 2147483647;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 28px;
+	pointer-events: auto;
+	background: radial-gradient(
+		120% 120% at 50% 45%,
+		rgba(12, 14, 20, 0.62) 0%,
+		rgba(8, 9, 13, 0.82) 100%
+	);
+	backdrop-filter: blur(10px) saturate(120%);
+	-webkit-backdrop-filter: blur(10px) saturate(120%);
+	color: #fff;
+	font-family:
+		Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+	animation: cap-countdown-backdrop-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	will-change: opacity;
+}
+
+.cap-extension-countdown.is-leaving {
+	animation: cap-countdown-backdrop-out 220ms ease-in both;
+	pointer-events: none;
+}
+
+.cap-extension-countdown-sr {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	border: 0;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+.cap-extension-countdown-stage {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: min(52vmin, 460px);
+	height: min(52vmin, 460px);
+}
+
+.cap-extension-countdown-ring {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	transform: rotate(-90deg);
+	overflow: visible;
+}
+
+.cap-extension-countdown-ring-track {
+	fill: none;
+	stroke: rgba(255, 255, 255, 0.14);
+	stroke-width: 4;
+}
+
+.cap-extension-countdown-ring-progress {
+	fill: none;
+	stroke: #fff;
+	stroke-width: 4;
+	stroke-linecap: round;
+	/* 2 * pi * r (r = 54) */
+	stroke-dasharray: 339.292;
+	filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.45));
+	animation: cap-countdown-ring-drain var(--cap-countdown-step, 1000ms) linear
+		both;
+}
+
+.cap-extension-countdown-number {
+	position: relative;
+	font-size: clamp(140px, 30vmin, 360px);
+	font-weight: 700;
+	line-height: 1;
+	letter-spacing: -0.02em;
+	font-variant-numeric: tabular-nums;
+	text-shadow: 0 8px 40px rgba(0, 0, 0, 0.45);
+	animation: cap-countdown-pop var(--cap-countdown-step, 1000ms)
+		cubic-bezier(0.22, 1, 0.36, 1) both;
+	will-change: transform, opacity;
+}
+
+.cap-extension-countdown-hint {
+	font-size: 14px;
+	font-weight: 500;
+	letter-spacing: 0.01em;
+	color: rgba(255, 255, 255, 0.62);
+	animation: cap-countdown-backdrop-in 360ms ease-out both;
+}
+
+@keyframes cap-countdown-backdrop-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes cap-countdown-backdrop-out {
+	from {
+		opacity: 1;
+	}
+	to {
+		opacity: 0;
+	}
+}
+
+@keyframes cap-countdown-pop {
+	0% {
+		transform: scale(0.55);
+		opacity: 0;
+	}
+	18% {
+		transform: scale(1.04);
+		opacity: 1;
+	}
+	30% {
+		transform: scale(1);
+		opacity: 1;
+	}
+	72% {
+		transform: scale(1);
+		opacity: 1;
+	}
+	100% {
+		transform: scale(1.32);
+		opacity: 0;
+	}
+}
+
+@keyframes cap-countdown-ring-drain {
+	from {
+		stroke-dashoffset: 0;
+	}
+	to {
+		stroke-dashoffset: 339.292;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.cap-extension-countdown-number {
+		animation: cap-countdown-backdrop-in 200ms ease-out both;
+	}
+	.cap-extension-countdown-ring-progress {
+		animation-timing-function: linear;
+	}
+}
+
+/* Shared confirm prompt (no mic / no sound) — a floating card centered over
+   the page that the user must answer before recording starts. */
+.cap-extension-confirm {
+	position: fixed;
+	inset: 0;
+	z-index: 2147483647;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	pointer-events: auto;
+	font-family:
+		Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+	animation: cap-countdown-backdrop-in 160ms ease-out both;
+}
+
+.cap-extension-confirm-backdrop {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	cursor: default;
+	background: rgba(8, 9, 13, 0.5);
+	backdrop-filter: blur(4px);
+	-webkit-backdrop-filter: blur(4px);
+}
+
+.cap-extension-confirm-card {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	width: min(340px, 100%);
+	padding: 24px;
+	border-radius: 18px;
+	background: #fff;
+	color: #18181b;
+	text-align: center;
+	box-shadow:
+		0 1px 2px rgba(0, 0, 0, 0.08),
+		0 12px 40px rgba(0, 0, 0, 0.28);
+	animation: cap-confirm-card-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.cap-extension-confirm-icon {
+	width: 26px;
+	height: 26px;
+	padding: 9px;
+	box-sizing: content-box;
+	border-radius: 9999px;
+	background: #fde8e8;
+	color: #dc2626;
+}
+
+.cap-extension-confirm-title {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 1.25;
+	color: #18181b;
+}
+
+.cap-extension-confirm-message {
+	margin: 0;
+	font-size: 13.5px;
+	font-weight: 400;
+	line-height: 1.45;
+	color: #52525b;
+}
+
+.cap-extension-confirm-actions {
+	display: flex;
+	gap: 10px;
+	width: 100%;
+	margin-top: 6px;
+}
+
+.cap-extension-confirm-button {
+	flex: 1 1 0;
+	min-width: 0;
+	height: 40px;
+	padding: 0 16px;
+	border-radius: 9999px;
+	border: 1px solid transparent;
+	font-family: inherit;
+	font-size: 14px;
+	font-weight: 500;
+	line-height: 1;
+	white-space: nowrap;
+	cursor: pointer;
+	transition:
+		background-color 150ms ease,
+		border-color 150ms ease;
+}
+
+.cap-extension-confirm-button:focus-visible {
+	outline: 2px solid #2563eb;
+	outline-offset: 2px;
+}
+
+.cap-extension-confirm-button.is-secondary {
+	background: #f4f4f5;
+	border-color: #e4e4e7;
+	color: #27272a;
+}
+
+.cap-extension-confirm-button.is-secondary:hover {
+	background: #e4e4e7;
+}
+
+.cap-extension-confirm-button.is-primary {
+	background: #18181b;
+	color: #fafafa;
+}
+
+.cap-extension-confirm-button.is-primary:hover {
+	background: #27272a;
+}
+
+@keyframes cap-confirm-card-in {
+	from {
+		opacity: 0;
+		transform: translateY(8px) scale(0.96);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}

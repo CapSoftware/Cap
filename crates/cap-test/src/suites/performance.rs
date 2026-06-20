@@ -223,8 +223,7 @@ async fn run_open_test(recording_path: &Path) -> TestResult {
                 ));
             } else if setup_secs > MAX_OPEN_TIME_SECS {
                 result.set_failed(&format!(
-                    "Fixture open exceeded {:.1}s ({setup_secs:.2}s)",
-                    MAX_OPEN_TIME_SECS
+                    "Fixture open exceeded {MAX_OPEN_TIME_SECS:.1}s ({setup_secs:.2}s)"
                 ));
             }
 
@@ -374,8 +373,7 @@ async fn run_export_test(recording_path: &Path) -> TestResult {
                 result.set_failed("Export never reported frame progress");
             } else if metrics.first_progress_secs.unwrap_or_default() > MAX_EXPORT_START_SECS {
                 result.set_failed(&format!(
-                    "Export did not start within {:.1}s",
-                    MAX_EXPORT_START_SECS
+                    "Export did not start within {MAX_EXPORT_START_SECS:.1}s"
                 ));
             } else if metrics.effective_fps < min_export_fps {
                 result.set_failed(&format!(

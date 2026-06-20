@@ -250,7 +250,7 @@ async fn instant_record_with_real_mic_and_screen() {
         .filter_map(|p| std::fs::metadata(p).ok())
         .map(|m| m.len())
         .sum();
-    eprintln!("  Total video segment size: {} bytes", total_segment_size);
+    eprintln!("  Total video segment size: {total_segment_size} bytes");
     assert!(
         total_segment_size > 1000,
         "segments should have substantial data, got {total_segment_size} bytes"
@@ -285,7 +285,7 @@ async fn instant_record_with_real_mic_and_screen() {
         .expect("Video segment concatenation should succeed");
     assert!(assembled_video.exists(), "Assembled video MP4 should exist");
     let video_size = std::fs::metadata(&assembled_video).unwrap().len();
-    eprintln!("  Assembled video size: {} bytes", video_size);
+    eprintln!("  Assembled video size: {video_size} bytes");
     assert!(
         video_size > 1000,
         "Assembled video should have substantial data"
@@ -428,6 +428,6 @@ async fn instant_record_with_real_mic_and_screen() {
     );
     eprintln!("  Video duration: {video_dur_secs:.2}s");
     eprintln!("  Video segments: {}", segment_files.len());
-    eprintln!("  Total segment size: {} bytes", total_segment_size);
+    eprintln!("  Total segment size: {total_segment_size} bytes");
     eprintln!("  Health: {:?}", completed.health);
 }

@@ -56,11 +56,33 @@ fn fs(@location(0) texCoord: vec2f) -> @location(0) vec4f {
 }
 `;
 
+const NV12_FULL_FRAGMENT_SHADER = `
+@group(0) @binding(0) var frameSampler: sampler;
+@group(0) @binding(1) var yTexture: texture_2d<f32>;
+@group(0) @binding(2) var uvTexture: texture_2d<f32>;
+
+@fragment
+fn fs(@location(0) texCoord: vec2f) -> @location(0) vec4f {
+	let y = textureSample(yTexture, frameSampler, texCoord).r;
+	let uv = textureSample(uvTexture, frameSampler, texCoord).rg;
+
+	let u = uv.r - 0.5;
+	let v = uv.g - 0.5;
+
+	let r = clamp(y + 1.402 * v, 0.0, 1.0);
+	let g = clamp(y - 0.344136 * u - 0.714136 * v, 0.0, 1.0);
+	let b = clamp(y + 1.772 * u, 0.0, 1.0);
+
+	return vec4f(r, g, b, 1.0);
+}
+`;
+
 export interface WebGPURenderer {
 	device: GPUDevice;
 	context: GPUCanvasContext;
 	pipeline: GPURenderPipeline;
 	nv12Pipeline: GPURenderPipeline;
+	nv12FullPipeline: GPURenderPipeline;
 	sampler: GPUSampler;
 	frameTexture: GPUTexture | null;
 	bindGroup: GPUBindGroup | null;
@@ -76,14 +98,44 @@ export interface WebGPURenderer {
 	canvas: OffscreenCanvas;
 }
 
-export async function isWebGPUSupported(): Promise<boolean> {
+export interface WebGPURenderTiming {
+	resizeMs: number;
+	textureSetupMs: number;
+	uploadMs: number;
+	drawMs: number;
+	totalMs: number;
+}
+
+function createEmptyTiming(start: number): WebGPURenderTiming {
+	return {
+		resizeMs: 0,
+		textureSetupMs: 0,
+		uploadMs: 0,
+		drawMs: 0,
+		totalMs: performance.now() - start,
+	};
+}
+
+async function requestWebGPUAdapter(
+	powerPreference: GPUPowerPreference = "high-performance",
+): Promise<GPUAdapter | null> {
+	let preferredAdapter: GPUAdapter | null = null;
+	try {
+		preferredAdapter = await navigator.gpu.requestAdapter({
+			powerPreference,
+		});
+	} catch {}
+	return preferredAdapter ?? navigator.gpu.requestAdapter();
+}
+
+export async function isWebGPUSupported(
+	powerPreference: GPUPowerPreference = "high-performance",
+): Promise<boolean> {
 	if (typeof navigator === "undefined" || !navigator.gpu) {
 		return false;
 	}
 	try {
-		const adapter = await navigator.gpu.requestAdapter({
-			powerPreference: "high-performance",
-		});
+		const adapter = await requestWebGPUAdapter(powerPreference);
 		return adapter !== null;
 	} catch {
 		return false;
@@ -92,10 +144,9 @@ export async function isWebGPUSupported(): Promise<boolean> {
 
 export async function initWebGPU(
 	canvas: OffscreenCanvas,
+	powerPreference: GPUPowerPreference = "high-performance",
 ): Promise<WebGPURenderer> {
-	const adapter = await navigator.gpu.requestAdapter({
-		powerPreference: "high-performance",
-	});
+	const adapter = await requestWebGPUAdapter(powerPreference);
 	if (!adapter) {
 		throw new Error("No WebGPU adapter available");
 	}
@@ -171,6 +222,9 @@ export async function initWebGPU(
 	const nv12FragmentModule = device.createShaderModule({
 		code: NV12_FRAGMENT_SHADER,
 	});
+	const nv12FullFragmentModule = device.createShaderModule({
+		code: NV12_FULL_FRAGMENT_SHADER,
+	});
 
 	const pipeline = device.createRenderPipeline({
 		layout: pipelineLayout,
@@ -204,6 +258,22 @@ export async function initWebGPU(
 		},
 	});
 
+	const nv12FullPipeline = device.createRenderPipeline({
+		layout: nv12PipelineLayout,
+		vertex: {
+			module: vertexModule,
+			entryPoint: "vs",
+		},
+		fragment: {
+			module: nv12FullFragmentModule,
+			entryPoint: "fs",
+			targets: [{ format }],
+		},
+		primitive: {
+			topology: "triangle-list",
+		},
+	});
+
 	const sampler = device.createSampler({
 		magFilter: "linear",
 		minFilter: "linear",
@@ -216,6 +286,7 @@ export async function initWebGPU(
 		context,
 		pipeline,
 		nv12Pipeline,
+		nv12FullPipeline,
 		sampler,
 		frameTexture: null,
 		bindGroup: null,
@@ -238,11 +309,17 @@ export function renderFrameWebGPU(
 	width: number,
 	height: number,
 	bytesPerRow: number = width * 4,
-): void {
+): WebGPURenderTiming {
+	const totalStart = performance.now();
+	let resizeMs = 0;
+	let textureSetupMs = 0;
+	let uploadMs = 0;
+	let drawMs = 0;
 	const { device, context, pipeline, sampler, bindGroupLayout, canvas } =
 		renderer;
 
 	if (canvas.width !== width || canvas.height !== height) {
+		const start = performance.now();
 		canvas.width = width;
 		canvas.height = height;
 		const format = navigator.gpu.getPreferredCanvasFormat();
@@ -251,9 +328,11 @@ export function renderFrameWebGPU(
 			format,
 			alphaMode: "opaque",
 		});
+		resizeMs = performance.now() - start;
 	}
 
 	if (renderer.cachedWidth !== width || renderer.cachedHeight !== height) {
+		const start = performance.now();
 		renderer.frameTexture?.destroy();
 		renderer.frameTexture = device.createTexture({
 			size: { width, height },
@@ -269,10 +348,11 @@ export function renderFrameWebGPU(
 		});
 		renderer.cachedWidth = width;
 		renderer.cachedHeight = height;
+		textureSetupMs = performance.now() - start;
 	}
 
 	if (!renderer.frameTexture || !renderer.bindGroup) {
-		return;
+		return createEmptyTiming(totalStart);
 	}
 
 	const requiredBytes = bytesPerRow * height;
@@ -280,26 +360,30 @@ export function renderFrameWebGPU(
 		console.error(
 			`WebGPU renderFrame: buffer too small. Expected at least ${requiredBytes} bytes, got ${data.byteLength}`,
 		);
-		return;
+		return createEmptyTiming(totalStart);
 	}
 
 	const textureData =
 		data.byteLength > requiredBytes ? data.subarray(0, requiredBytes) : data;
 
+	const uploadStart = performance.now();
 	device.queue.writeTexture(
 		{ texture: renderer.frameTexture },
 		textureData.buffer as unknown as GPUAllowSharedBufferSource,
 		{ offset: textureData.byteOffset, bytesPerRow, rowsPerImage: height },
 		{ width, height },
 	);
+	uploadMs = performance.now() - uploadStart;
 
+	const drawStart = performance.now();
 	const encoder = device.createCommandEncoder();
 	const currentTexture = context.getCurrentTexture();
 	const pass = encoder.beginRenderPass({
 		colorAttachments: [
 			{
 				view: currentTexture.createView(),
-				loadOp: "load",
+				clearValue: { r: 0, g: 0, b: 0, a: 1 },
+				loadOp: "clear",
 				storeOp: "store",
 			},
 		],
@@ -311,6 +395,15 @@ export function renderFrameWebGPU(
 	pass.end();
 
 	device.queue.submit([encoder.finish()]);
+	drawMs = performance.now() - drawStart;
+
+	return {
+		resizeMs,
+		textureSetupMs,
+		uploadMs,
+		drawMs,
+		totalMs: performance.now() - totalStart,
+	};
 }
 
 export function renderNv12FrameWebGPU(
@@ -319,17 +412,25 @@ export function renderNv12FrameWebGPU(
 	width: number,
 	height: number,
 	yStride: number,
-): void {
+	fullRange = false,
+): WebGPURenderTiming {
+	const totalStart = performance.now();
+	let resizeMs = 0;
+	let textureSetupMs = 0;
+	let uploadMs = 0;
+	let drawMs = 0;
 	const {
 		device,
 		context,
 		nv12Pipeline,
+		nv12FullPipeline,
 		sampler,
 		nv12BindGroupLayout,
 		canvas,
 	} = renderer;
 
 	if (canvas.width !== width || canvas.height !== height) {
+		const start = performance.now();
 		canvas.width = width;
 		canvas.height = height;
 		const format = navigator.gpu.getPreferredCanvasFormat();
@@ -338,12 +439,14 @@ export function renderNv12FrameWebGPU(
 			format,
 			alphaMode: "opaque",
 		});
+		resizeMs = performance.now() - start;
 	}
 
 	if (
 		renderer.cachedNv12Width !== width ||
 		renderer.cachedNv12Height !== height
 	) {
+		const start = performance.now();
 		renderer.yTexture?.destroy();
 		renderer.uvTexture?.destroy();
 
@@ -370,10 +473,11 @@ export function renderNv12FrameWebGPU(
 
 		renderer.cachedNv12Width = width;
 		renderer.cachedNv12Height = height;
+		textureSetupMs = performance.now() - start;
 	}
 
 	if (!renderer.yTexture || !renderer.uvTexture || !renderer.nv12BindGroup) {
-		return;
+		return createEmptyTiming(totalStart);
 	}
 
 	const ySize = yStride * height;
@@ -383,12 +487,13 @@ export function renderNv12FrameWebGPU(
 	const uvSize = uvStride * uvHeight;
 
 	if (data.byteLength < ySize + uvSize) {
-		return;
+		return createEmptyTiming(totalStart);
 	}
 
 	const yData = data.subarray(0, ySize);
 	const uvData = data.subarray(ySize, ySize + uvSize);
 
+	const uploadStart = performance.now();
 	device.queue.writeTexture(
 		{ texture: renderer.yTexture },
 		yData.buffer as unknown as GPUAllowSharedBufferSource,
@@ -406,24 +511,36 @@ export function renderNv12FrameWebGPU(
 		},
 		{ width: uvWidth, height: uvHeight },
 	);
+	uploadMs = performance.now() - uploadStart;
 
+	const drawStart = performance.now();
 	const encoder = device.createCommandEncoder();
 	const pass = encoder.beginRenderPass({
 		colorAttachments: [
 			{
 				view: context.getCurrentTexture().createView(),
-				loadOp: "load",
+				clearValue: { r: 0, g: 0, b: 0, a: 1 },
+				loadOp: "clear",
 				storeOp: "store",
 			},
 		],
 	});
 
-	pass.setPipeline(nv12Pipeline);
+	pass.setPipeline(fullRange ? nv12FullPipeline : nv12Pipeline);
 	pass.setBindGroup(0, renderer.nv12BindGroup);
 	pass.draw(3);
 	pass.end();
 
 	device.queue.submit([encoder.finish()]);
+	drawMs = performance.now() - drawStart;
+
+	return {
+		resizeMs,
+		textureSetupMs,
+		uploadMs,
+		drawMs,
+		totalMs: performance.now() - totalStart,
+	};
 }
 
 export function disposeWebGPU(renderer: WebGPURenderer): void {

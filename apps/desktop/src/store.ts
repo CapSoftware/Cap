@@ -1,6 +1,7 @@
 import { createQuery } from "@tanstack/solid-query";
 import { Store } from "@tauri-apps/plugin-store";
 import { onCleanup } from "solid-js";
+import type { AutomationsStore } from "~/utils/automations";
 import type { GeneralSettingsStore } from "~/utils/general-settings";
 import type {
 	AuthStore,
@@ -8,6 +9,16 @@ import type {
 	PresetsStore,
 	RecordingSettingsStore,
 } from "~/utils/tauri";
+
+export type UserProfileStore = {
+	userId: string | null;
+	profile: {
+		name: string | null;
+		email: string | null;
+		imageUrl: string | null;
+	};
+	updatedAt: number;
+};
 
 let _store: Promise<Store> | undefined;
 const store = () => {
@@ -18,10 +29,17 @@ const store = () => {
 	return _store;
 };
 
-function declareStore<T extends object>(name: string) {
-	const get = () => store().then((s) => s.get<T>(name));
+function declareStore<T extends object>(name: string, defaults?: T) {
+	const withDefaults = (value?: T) =>
+		defaults ? { ...defaults, ...(value ?? {}) } : value;
+	const get = async () => {
+		const s = await store();
+		return withDefaults(await s.get<T>(name));
+	};
 	const listen = (fn: (data?: T | undefined) => void) =>
-		store().then((s) => s.onKeyChange<T>(name, fn));
+		store().then((s) =>
+			s.onKeyChange<T>(name, (data) => fn(withDefaults(data))),
+		);
 
 	return {
 		get,
@@ -56,8 +74,21 @@ function declareStore<T extends object>(name: string) {
 
 export const presetsStore = declareStore<PresetsStore>("presets");
 export const authStore = declareStore<AuthStore>("auth");
+export const automationsStore = declareStore<AutomationsStore>("automations");
+export const userProfileStore = declareStore<UserProfileStore>("user_profile");
 export const hotkeysStore = declareStore<HotkeysStore>("hotkeys");
 export const generalSettingsStore =
 	declareStore<GeneralSettingsStore>("general_settings");
-export const recordingSettingsStore =
-	declareStore<RecordingSettingsStore>("recording_settings");
+export const recordingSettingsStore = declareStore<RecordingSettingsStore>(
+	"recording_settings",
+	{
+		target: null,
+		micName: null,
+		cameraId: null,
+		mode: "instant",
+		systemAudio: false,
+		organizationId: null,
+		cameraDeviceSettings: {},
+		microphoneDeviceSettings: {},
+	},
+);

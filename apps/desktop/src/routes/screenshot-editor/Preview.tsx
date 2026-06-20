@@ -420,6 +420,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		if (frame?.bitmap && canvasRef) {
 			const ctx = canvasRef.getContext("2d");
 			if (ctx) {
+				ctx.clearRect(0, 0, canvasRef.width, canvasRef.height);
 				ctx.drawImage(frame.bitmap, 0, 0);
 			}
 		}
@@ -430,11 +431,11 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 			{/* Preview Area */}
 			<div
 				ref={setCanvasContainerRef}
-				class="flex-1 relative flex items-center justify-center overflow-hidden outline-none"
+				class="flex-1 relative flex items-center justify-center overflow-hidden outline-hidden"
 				style={gridStyle}
 				onMouseDown={handleMiddleMouseDown}
 			>
-				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-sm p-1 border border-gray-4">
+				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-xs p-1 border border-gray-4">
 					<EditorButton
 						tooltipText="Zoom Out"
 						kbd={["meta", "-"]}

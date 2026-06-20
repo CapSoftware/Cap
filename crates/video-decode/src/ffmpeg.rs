@@ -36,7 +36,7 @@ fn query_d3d11_video_decoder_capabilities() -> HwDecoderCapabilities {
         Win32::{
             Foundation::HMODULE,
             Graphics::{
-                Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+                Direct3D::D3D_DRIVER_TYPE_UNKNOWN,
                 Direct3D11::{
                     D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_DECODER_PROFILE_H264_VLD_NOFGT,
                     D3D11_DECODER_PROFILE_HEVC_VLD_MAIN, D3D11_SDK_VERSION,
@@ -49,11 +49,13 @@ fn query_d3d11_video_decoder_capabilities() -> HwDecoderCapabilities {
     };
 
     let result: Result<HwDecoderCapabilities, String> = (|| {
+        let selected = cap_d3d_adapter::select_capture_adapter(None)?;
+
         let mut device = None;
         unsafe {
             D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
+                Some(&selected.adapter),
+                D3D_DRIVER_TYPE_UNKNOWN,
                 HMODULE::default(),
                 D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
                 None,
@@ -62,7 +64,12 @@ fn query_d3d11_video_decoder_capabilities() -> HwDecoderCapabilities {
                 None,
                 None,
             )
-            .map_err(|e| format!("D3D11CreateDevice failed: {e:?}"))?;
+            .map_err(|e| {
+                format!(
+                    "D3D11CreateDevice failed on '{}': {e:?}",
+                    selected.description
+                )
+            })?;
         }
 
         let device = device.ok_or("D3D11CreateDevice returned null")?;

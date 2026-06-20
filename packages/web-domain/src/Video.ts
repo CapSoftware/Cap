@@ -13,6 +13,8 @@ import { UserId } from "./User.ts";
 export const VideoId = Schema.String.pipe(Schema.brand("VideoId"));
 export type VideoId = typeof VideoId.Type;
 
+export const FREE_PLAN_MAX_RECORDING_SECONDS = 5 * 60;
+
 // Purposefully doesn't include password as this is a public class
 export class Video extends Schema.Class<Video>("Video")({
 	id: VideoId,
@@ -200,13 +202,15 @@ export function normalizeSegmentEntry(
 }
 
 /*
- * Used to specify a video password provided by a user,
+ * Used to specify video passwords provided by a user,
  * whether via cookies in the case of the website,
- * or via query params for the API.
+ * or via query params for the API. Holds every hash the user has verified
+ * (the cookie remembers one per unlocked resource), so unlocking one share
+ * never invalidates another.
  */
 export class VideoPasswordAttachment extends Context.Tag(
 	"VideoPasswordAttachment",
-)<VideoPasswordAttachment, { password: Option.Option<string> }>() {}
+)<VideoPasswordAttachment, { passwords: ReadonlyArray<string> }>() {}
 
 export class VerifyVideoPasswordError extends Schema.TaggedError<VerifyVideoPasswordError>()(
 	"VerifyVideoPasswordError",
@@ -236,16 +240,17 @@ export const verifyPasswordCandidates = (
 
 		if (passwords.length === 0) return;
 
-		if (
-			Option.isNone(passwordAttachment) ||
-			Option.isNone(passwordAttachment.value.password)
-		)
+		const verified = Option.isSome(passwordAttachment)
+			? passwordAttachment.value.passwords
+			: [];
+
+		if (verified.length === 0)
 			return yield* new VerifyVideoPasswordError({
 				id: video.id,
 				cause: "not-provided",
 			});
 
-		if (!passwords.includes(passwordAttachment.value.password.value))
+		if (!verified.some((hash) => passwords.includes(hash)))
 			return yield* new VerifyVideoPasswordError({
 				id: video.id,
 				cause: "wrong-password",

@@ -82,6 +82,11 @@ impl Timestamp {
         {
             Self::MachAbsoluteTime(MachAbsoluteTimestamp::from_cpal(instant))
         }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = instant;
+            Self::Instant(Instant::now())
+        }
     }
 }
 
@@ -120,7 +125,7 @@ impl std::ops::Sub<Duration> for Timestamp {
 
     fn sub(self, rhs: Duration) -> Self::Output {
         match self {
-            Timestamp::Instant(i) => Timestamp::Instant(i.checked_sub(rhs).unwrap()),
+            Timestamp::Instant(i) => Timestamp::Instant(i.checked_sub(rhs).unwrap_or(i)),
             Timestamp::SystemTime(t) => Timestamp::SystemTime(t - rhs),
             #[cfg(windows)]
             Timestamp::PerformanceCounter(c) => Timestamp::PerformanceCounter(c - rhs),

@@ -157,6 +157,8 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			name: videos.name,
 			createdAt: videos.createdAt,
 			metadata: videos.metadata,
+			source: videos.source,
+			isScreenshot: videos.isScreenshot,
 			duration: videos.duration,
 			public: videos.public,
 			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
@@ -206,6 +208,8 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			videos.name,
 			videos.createdAt,
 			videos.metadata,
+			videos.source,
+			videos.isScreenshot,
 			videos.duration,
 			videos.public,
 			videos.password,
@@ -222,6 +226,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			id: folders.id,
 			name: folders.name,
 			color: folders.color,
+			public: folders.public,
 			parentId: folders.parentId,
 			videoCount: sql<number>`(
         SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id

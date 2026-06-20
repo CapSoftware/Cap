@@ -3,10 +3,11 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import { Storage } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
+import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
+import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Effect, Exit, Option } from "effect";
+import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
@@ -22,10 +23,19 @@ export async function getTranscript(
 		};
 	}
 
-	const query = await db()
-		.select({ video: videos })
-		.from(videos)
-		.where(eq(videos.id, videoId));
+	const exit = await Effect.gen(function* () {
+		const videosPolicy = yield* VideosPolicy;
+
+		return yield* Effect.promise(() =>
+			db().select({ video: videos }).from(videos).where(eq(videos.id, videoId)),
+		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
+	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
+
+	if (Exit.isFailure(exit)) {
+		return { success: false, message: "Video not found" };
+	}
+
+	const query = exit.value;
 
 	if (query.length === 0) {
 		return { success: false, message: "Video not found" };

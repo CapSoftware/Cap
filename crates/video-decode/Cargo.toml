@@ -19,6 +19,7 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 cidre = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+cap-d3d-adapter = { path = "../d3d-adapter" }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",

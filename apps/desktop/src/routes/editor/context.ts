@@ -21,6 +21,7 @@ import {
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 
 import { generalSettingsStore } from "~/store";
+import type { EditorCaptionSettings } from "~/store/captions";
 import { defaultKeyboardSettings } from "~/store/keyboard";
 
 import { createPresets } from "~/utils/createPresets";
@@ -43,8 +44,10 @@ import {
 	type SerializedEditorInstance,
 	type SingleSegment,
 	type TimelineConfiguration,
+	type TimelineSegment,
 	type XY,
 } from "~/utils/tauri";
+import { deriveCaptionTrackSegments, mapEditedTimeToSource } from "./captions";
 import type { MaskSegment } from "./masks";
 import type { TextSegment } from "./text";
 import {
@@ -62,10 +65,12 @@ export type ModalDialog =
 			type: "crop";
 			position: XY<number>;
 			size: XY<number>;
-			previewUrl?: string | null;
 	  };
 
-export type LayoutMode = { type: "export" } | { type: "transcript" };
+export type LayoutMode =
+	| { type: "export" }
+	| { type: "transcript" }
+	| { type: "clips" };
 
 export type CurrentDialog = ModalDialog | LayoutMode;
 
@@ -76,6 +81,12 @@ export type OpenModalDialog = { open: true } & ModalDialog;
 const LAYOUT_MODE_TYPES: Set<CurrentDialog["type"]> = new Set([
 	"export",
 	"transcript",
+	"clips",
+]);
+
+const PERSISTED_LAYOUT_MODE_TYPES: Set<CurrentDialog["type"]> = new Set([
+	"export",
+	"clips",
 ]);
 
 export function isLayoutMode(d: DialogState): d is OpenLayoutMode {
@@ -136,22 +147,32 @@ export type CornerRoundingType = "rounded" | "squircle";
 
 type WithCornerStyle<T> = T & { roundingType: CornerRoundingType };
 
+export type EditorTimelineSegment = TimelineSegment & {
+	name?: string | null;
+};
+
 type EditorTimelineConfiguration = Omit<
 	TimelineConfiguration,
-	"sceneSegments" | "maskSegments"
+	"sceneSegments" | "maskSegments" | "segments"
 > & {
+	segments: EditorTimelineSegment[];
 	sceneSegments?: SceneSegment[];
 	maskSegments: MaskSegment[];
 	textSegments: TextSegment[];
 };
 
+type EditorCaptionsData = NonNullable<ProjectConfiguration["captions"]> & {
+	settings: EditorCaptionSettings;
+};
+
 export type EditorProjectConfiguration = Omit<
 	ProjectConfiguration,
-	"background" | "camera" | "timeline"
+	"background" | "camera" | "timeline" | "captions"
 > & {
 	background: WithCornerStyle<ProjectConfiguration["background"]>;
 	camera: WithCornerStyle<ProjectConfiguration["camera"]>;
 	timeline?: EditorTimelineConfiguration | null;
+	captions: EditorCaptionsData | null;
 	hiddenTextSegments?: number[];
 };
 
@@ -295,14 +316,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			deleteClipSegment: (segmentIndex: number) => {
 				if (!project.timeline) return;
 				const segment = project.timeline.segments[segmentIndex];
-				if (
-					!segment ||
-					!segment.recordingSegment === undefined ||
-					project.timeline.segments.filter(
-						(s) => s.recordingSegment === segment.recordingSegment,
-					).length < 2
-				)
-					return;
+				if (!segment || project.timeline.segments.length < 2) return;
 
 				batch(() => {
 					setProject(
@@ -700,8 +714,43 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 
 		const previewResolutionBase = () => getPreviewResolution(previewQuality());
 
-		const [dialog, setDialog] = createSignal<DialogState>({
-			open: false,
+		const layoutModeStorageKey = `cap:editor:layoutMode:${props.editorInstance.path}`;
+
+		const readPersistedLayoutMode = (): DialogState => {
+			try {
+				const raw = localStorage.getItem(layoutModeStorageKey);
+				if (!raw) return { open: false };
+				const parsed = JSON.parse(raw) as { type?: CurrentDialog["type"] };
+				if (parsed?.type && PERSISTED_LAYOUT_MODE_TYPES.has(parsed.type)) {
+					return { open: true, type: parsed.type } as OpenLayoutMode;
+				}
+			} catch (error) {
+				console.error("Failed to read persisted editor layout mode", error);
+			}
+			return { open: false };
+		};
+
+		const [dialog, setDialog] = createSignal<DialogState>(
+			readPersistedLayoutMode(),
+		);
+
+		createEffect(() => {
+			const current = dialog();
+			try {
+				if (
+					isLayoutMode(current) &&
+					PERSISTED_LAYOUT_MODE_TYPES.has(current.type)
+				) {
+					localStorage.setItem(
+						layoutModeStorageKey,
+						JSON.stringify({ type: current.type }),
+					);
+				} else {
+					localStorage.removeItem(layoutModeStorageKey);
+				}
+			} catch (error) {
+				console.error("Failed to persist editor layout mode", error);
+			}
 		});
 
 		const [exportState, setExportState] = createStore<
@@ -912,34 +961,109 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			})();
 		});
 
+		const captionRecordingSegments = props.editorInstance.recordings.segments;
+
+		// One-time migration: legacy projects stored caption segments in
+		// already-edited output time. Invert them back to source/recording time
+		// so the render track can be derived from them. For unedited timelines
+		// this is a no-op; for edited ones it makes the current positions a fixed
+		// point and lets future edits stay aligned.
+		if (project.captions && !project.captions.sourceTimed) {
+			const timeline = project.timeline;
+			const segments = project.captions.segments ?? [];
+			if (timeline && segments.length > 0) {
+				const toSource = (time: number) =>
+					mapEditedTimeToSource(
+						time,
+						timeline.segments,
+						captionRecordingSegments,
+					);
+				const inverted = segments.flatMap((segment) => {
+					const start = toSource(segment.start);
+					const end = toSource(segment.end);
+					if (start === null || end === null) return [];
+					const words = (segment.words ?? []).flatMap((word) => {
+						const wordStart = toSource(word.start);
+						const wordEnd = toSource(word.end);
+						return wordStart !== null && wordEnd !== null
+							? [{ ...word, start: wordStart, end: wordEnd }]
+							: [];
+					});
+					return [{ ...segment, start, end, words }];
+				});
+				inverted.sort((a, b) => a.start - b.start);
+				setProject("captions", "segments", inverted);
+			}
+			if (project.captions) setProject("captions", "sourceTimed", true);
+		}
+
+		// Keep the rendered caption track (output time) projected from the
+		// source-time caption master through the current edit list, so captions
+		// follow clip trims/deletes/reorders/inserts 1:1 with no re-transcription.
 		createEffect(
 			on(
 				() => {
-					const segs = project.timeline?.segments;
-					if (!segs || segs.length === 0) return "";
-					return segs
+					const segments = project.captions?.segments;
+					const timeline = project.timeline;
+					if (!segments || segments.length === 0 || !timeline) return null;
+					const captionsSig = segments
+						.map(
+							(s) =>
+								`${s.id}|${s.start}|${s.end}|${s.text}|${(s.words ?? [])
+									.map((w) => `${w.start}:${w.end}:${w.text}`)
+									.join("~")}`,
+						)
+						.join(",");
+					const timelineSig = timeline.segments
 						.map(
 							(s) =>
 								`${s.start}|${s.end}|${s.timescale}|${s.recordingSegment ?? 0}`,
 						)
 						.join(",");
+					return `${captionsSig}@@${timelineSig}`;
 				},
-				(current, prev) => {
-					if (prev === undefined || prev === "") return;
-					if (current === prev) return;
+				() => {
+					const timeline = project.timeline;
+					const segments = project.captions?.segments;
+					if (!timeline || !segments) return;
+					const derived = deriveCaptionTrackSegments(
+						segments,
+						timeline.segments,
+						captionRecordingSegments,
+						timeline.captionSegments ?? [],
+					);
+					setProject(
+						"timeline",
+						"captionSegments",
+						reconcile(derived, { key: "id" }),
+					);
 
-					const hasCaptions =
-						(project.timeline?.captionSegments?.length ?? 0) > 0 ||
-						(project.captions?.segments?.length ?? 0) > 0;
-
-					if (hasCaptions) {
-						batch(() => {
-							setEditorState("captions", "isStale", true);
-							setEditorState("captions", "staleDismissed", false);
-						});
+					// Push the refreshed caption track to the renderer immediately.
+					// The store (and timeline strip) update reactively, but the
+					// renderer only reflects config that is explicitly pushed, and
+					// the editor's config-push effect doesn't run on initial load,
+					// so without this the rendered frame keeps stale caption
+					// positions until the next unrelated edit.
+					if (!editorState.playing) {
+						const frameNumber = Math.max(
+							Math.floor(editorState.playbackTime * FPS),
+							0,
+						);
+						commands
+							.updateProjectConfigInMemory(
+								serializeProjectConfiguration(project),
+								frameNumber,
+								FPS,
+								previewResolutionBase(),
+							)
+							.catch((error) => {
+								console.error(
+									"Failed to refresh caption preview config",
+									error,
+								);
+							});
 					}
 				},
-				{ defer: true },
 			),
 		);
 

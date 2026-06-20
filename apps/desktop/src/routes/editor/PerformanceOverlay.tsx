@@ -218,7 +218,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 				}}
 			>
 				<div
-					class="rounded-md px-2 py-1.5 shadow-lg backdrop-blur-sm pointer-events-auto cursor-pointer hover:brightness-110 transition-[filter]"
+					class="rounded-md px-2 py-1.5 shadow-lg backdrop-blur-xs pointer-events-auto cursor-pointer hover:brightness-110 transition-[filter]"
 					style={{
 						"background-color": "rgba(0, 0, 0, 0.8)",
 						border: "1px solid rgba(255, 255, 255, 0.15)",

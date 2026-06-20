@@ -1,4 +1,4 @@
-import { type Folder, Policy } from "@cap/web-domain";
+import { type Folder, Policy, type Space } from "@cap/web-domain";
 import { Effect } from "effect";
 
 import { Database } from "../Database.ts";
@@ -15,6 +15,22 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 			const spacesPolicy = yield* SpacesPolicy;
 			const orgsPolicy = yield* OrganisationsPolicy;
 			const spaces = yield* Spaces;
+			const canManageSpaceOrOrg = (spaceId: Space.SpaceIdOrOrganisationId) =>
+				Effect.gen(function* () {
+					const spaceOrOrg = yield* spaces.getSpaceOrOrg(spaceId);
+					if (!spaceOrOrg) return false;
+
+					if (spaceOrOrg.variant === "space") {
+						yield* Policy.any(
+							spacesPolicy.isAdmin(spaceOrOrg.space.id),
+							orgsPolicy.isAdminOrOwner(spaceOrOrg.space.organizationId),
+						);
+					} else {
+						yield* orgsPolicy.isAdminOrOwner(spaceOrOrg.organization.id);
+					}
+
+					return true;
+				});
 
 			const canEdit = (id: Folder.FolderId) =>
 				Policy.policy((user) =>
@@ -31,15 +47,16 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 						const spaceOrOrg = yield* spaces.getSpaceOrOrg(folder.spaceId);
 						if (!spaceOrOrg) return false;
 
-						if (spaceOrOrg.variant === "space")
-							yield* spacesPolicy.isMember(spaceOrOrg.space.id);
-						else yield* orgsPolicy.isOwner(spaceOrOrg.organization.id);
+						yield* canManageSpaceOrOrg(folder.spaceId);
 
 						return true;
 					}),
 				);
 
-			return { canEdit };
+			const canCreateIn = (spaceId: Space.SpaceIdOrOrganisationId) =>
+				Policy.policy(() => canManageSpaceOrOrg(spaceId));
+
+			return { canEdit, canCreateIn };
 		}),
 		dependencies: [
 			FoldersRepo.Default,

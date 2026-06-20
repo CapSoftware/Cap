@@ -1,5 +1,51 @@
 import { buildEnv } from "@cap/env";
 
+const activeSubscriptionStatuses = new Set([
+	"active",
+	"trialing",
+	"complete",
+	"paid",
+]);
+
+export type ProSeatProvider = {
+	id: string;
+	inviteQuota?: number | null;
+	stripeSubscriptionId?: string | null;
+	stripeSubscriptionStatus?: string | null;
+};
+
+export function hasActiveDirectSubscription(
+	provider: ProSeatProvider | null | undefined,
+) {
+	return (
+		!!provider?.stripeSubscriptionId &&
+		!!provider.stripeSubscriptionStatus &&
+		activeSubscriptionStatuses.has(provider.stripeSubscriptionStatus)
+	);
+}
+
+export function selectProSeatProvider<T extends ProSeatProvider>({
+	actor,
+	owner,
+	actorCanManageProSeats,
+}: {
+	actor?: T | null;
+	owner?: T | null;
+	actorCanManageProSeats: boolean;
+}) {
+	const candidates = [
+		actorCanManageProSeats && hasActiveDirectSubscription(actor) ? actor : null,
+		hasActiveDirectSubscription(owner) ? owner : null,
+	].filter((provider): provider is T => !!provider);
+
+	return (
+		candidates.sort((a, b) => (b.inviteQuota ?? 1) - (a.inviteQuota ?? 1))[0] ??
+		owner ??
+		(actorCanManageProSeats ? actor : null) ??
+		null
+	);
+}
+
 export function calculateProSeats(organization: {
 	inviteQuota?: number;
 	members?: { id: string; hasProSeat?: boolean }[];

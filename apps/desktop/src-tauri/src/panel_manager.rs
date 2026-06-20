@@ -219,7 +219,7 @@ pub fn try_to_panel(window: &tauri::WebviewWindow) -> Result<NSPanel, PanelConve
 
     window
         .to_panel()
-        .map_err(|e| PanelConversionError::ConversionFailed(format!("{:?}", e)))
+        .map_err(|e| PanelConversionError::ConversionFailed(format!("{e:?}")))
 }
 
 #[cfg(target_os = "macos")]
@@ -234,7 +234,7 @@ impl std::fmt::Display for PanelConversionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidHandle => write!(f, "Window handle is invalid or unavailable"),
-            Self::ConversionFailed(msg) => write!(f, "Panel conversion failed: {}", msg),
+            Self::ConversionFailed(msg) => write!(f, "Panel conversion failed: {msg}"),
         }
     }
 }

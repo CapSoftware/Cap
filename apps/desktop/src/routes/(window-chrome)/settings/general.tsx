@@ -16,18 +16,18 @@ import {
 	createResource,
 	createSignal,
 	For,
-	type JSX,
 	onCleanup,
 	onMount,
-	type ParentProps,
 	Show,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
+import toast from "solid-toast";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
+import { clientEnv } from "~/utils/env";
 import {
 	deriveGeneralSettings,
 	type GeneralSettingsStore,
@@ -43,9 +43,17 @@ import {
 	type StudioRecordingQuality,
 	type WindowExclusion,
 } from "~/utils/tauri";
+import IconLucideAlertTriangle from "~icons/lucide/alert-triangle";
 import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideX from "~icons/lucide/x";
-import { SettingItem, ToggleSettingItem } from "./Setting";
+import {
+	Section,
+	SectionCard,
+	SectionRows,
+	SettingItem,
+	SettingsPageContent,
+	ToggleSettingItem,
+} from "./Setting";
 
 const getExclusionPrimaryLabel = (entry: WindowExclusion) =>
 	entry.ownerName ?? entry.windowTitle ?? entry.bundleIdentifier ?? "Unknown";
@@ -70,6 +78,34 @@ const getWindowOptionLabel = (window: CaptureWindow) => {
 	return parts.join(" • ");
 };
 
+const isSameExclusion = (a: WindowExclusion, b: WindowExclusion) =>
+	(a.bundleIdentifier ?? null) === (b.bundleIdentifier ?? null) &&
+	(a.ownerName ?? null) === (b.ownerName ?? null) &&
+	(a.windowTitle ?? null) === (b.windowTitle ?? null);
+
+const coversDefaultExclusion = (
+	entry: WindowExclusion,
+	defaultEntry: WindowExclusion,
+) => {
+	if (isSameExclusion(entry, defaultEntry)) return true;
+	if (
+		defaultEntry.windowTitle &&
+		entry.windowTitle === defaultEntry.windowTitle
+	) {
+		return true;
+	}
+	if (
+		defaultEntry.bundleIdentifier &&
+		entry.bundleIdentifier === defaultEntry.bundleIdentifier
+	) {
+		return true;
+	}
+	if (defaultEntry.ownerName && entry.ownerName === defaultEntry.ownerName) {
+		return !entry.windowTitle || entry.windowTitle === defaultEntry.windowTitle;
+	}
+	return false;
+};
+
 type ExtendedGeneralSettingsStore = GeneralSettingsStore;
 
 const MAX_FPS_OPTIONS = [
@@ -83,6 +119,8 @@ const MAX_FPS_OPTIONS = [
 
 const DEFAULT_PROJECT_NAME_TEMPLATE =
 	"{target_name} ({target_kind}) {date} {time}";
+const FREE_INSTANT_MODE_MAX_RESOLUTION = 1280;
+const PRO_INSTANT_MODE_MAX_RESOLUTION = 1920;
 
 export default function GeneralSettings() {
 	const [store] = createResource(() => generalSettingsStore.get());
@@ -129,11 +167,11 @@ function AppearanceSection(props: {
 									aria-checked={isSelected()}
 									aria-label={`Select theme: ${theme.name}`}
 									onClick={() => props.onThemeChange(theme.id)}
-									class="flex flex-col gap-2 items-center group focus:outline-none"
+									class="flex flex-col gap-2 items-center group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1 rounded-xl"
 								>
 									<div
 										class={cx(
-											"w-full aspect-[5/3] rounded-lg overflow-hidden border-2 transition-all duration-150",
+											"w-full aspect-[5/3] rounded-lg overflow-hidden border-2 transition-[border-color,box-shadow] duration-150",
 											isSelected()
 												? "border-blue-9"
 												: "border-gray-4 group-hover:border-gray-6",
@@ -172,6 +210,16 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
 		deriveGeneralSettings(props.initialStore),
 	);
+	const auth = authStore.createQuery();
+	const hasCapPro = createMemo(() => {
+		const plan = auth.data?.plan;
+		return !!plan && (plan.upgraded || plan.manual);
+	});
+	const instantModeMaxResolution = createMemo(() =>
+		hasCapPro()
+			? (settings.instantModeMaxResolution ?? PRO_INSTANT_MODE_MAX_RESOLUTION)
+			: FREE_INSTANT_MODE_MAX_RESOLUTION,
+	);
 
 	createEffect(() => {
 		setSettings(reconcile(deriveGeneralSettings(props.initialStore)));
@@ -206,6 +254,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	};
 
 	onMount(() => {
+		commands
+			.updateAuthPlan()
+			.then(() => auth.refetch())
+			.catch(console.error);
+
 		let pending: string | null = null;
 		try {
 			pending = localStorage.getItem("cap.settings.scrollToSection");
@@ -232,6 +285,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			initialValue: [] as CaptureWindow[],
 		},
 	);
+	const [defaultExcludedWindows] = createResource(
+		() => commands.getDefaultExcludedWindows(),
+		{
+			initialValue: [] as WindowExclusion[],
+		},
+	);
 
 	const handleChange = async <K extends keyof typeof settings>(
 		key: K,
@@ -240,12 +299,26 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	) => {
 		console.log(`Handling settings change for ${key}: ${value}`);
 
+		const previousValue = settings[key];
 		setSettings(key as keyof GeneralSettingsStore, value);
-		generalSettingsStore.set({ [key]: value, ...(extra ?? {}) });
+		try {
+			await generalSettingsStore.set({ [key]: value, ...(extra ?? {}) });
+		} catch (error) {
+			setSettings(key as keyof GeneralSettingsStore, previousValue);
+			console.error(`Failed to update ${key}`, error);
+		}
 	};
 
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
+	const missingDefaultExclusions = createMemo(() =>
+		defaultExcludedWindows().filter(
+			(defaultEntry) =>
+				!excludedWindows().some((entry) =>
+					coversDefaultExclusion(entry, defaultEntry),
+				),
+		),
+	);
 
 	const matchesExclusion = (
 		exclusion: WindowExclusion,
@@ -396,8 +469,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	};
 
 	return (
-		<div ref={scrollContainerRef} class="flex flex-col h-full custom-scroll">
-			<div class="px-6 py-6 space-y-7 max-w-[42rem]">
+		<div
+			ref={scrollContainerRef}
+			class="cap-settings-page flex flex-col h-full custom-scroll"
+		>
+			<SettingsPageContent>
 				<AppearanceSection
 					currentTheme={settings.theme ?? "system"}
 					onThemeChange={(newTheme) => {
@@ -437,14 +513,22 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					</Section>
 				)}
 
+				<CapProSection
+					hasCapPro={hasCapPro()}
+					instantResolution={instantModeMaxResolution()}
+					onInstantResolutionChange={(value) =>
+						handleChange("instantModeMaxResolution", value)
+					}
+					autoOpenShareableLinks={!settings.disableAutoOpenLinks}
+					onAutoOpenShareableLinksChange={(v) =>
+						handleChange("disableAutoOpenLinks", !v)
+					}
+				/>
+
 				<QualitySection
 					studioQuality={settings.studioRecordingQuality ?? "balanced"}
 					onStudioQualityChange={(value) =>
 						handleChange("studioRecordingQuality", value)
-					}
-					instantResolution={settings.instantModeMaxResolution ?? 1920}
-					onInstantResolutionChange={(value) =>
-						handleChange("instantModeMaxResolution", value)
 					}
 				/>
 
@@ -555,21 +639,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					</SectionRows>
 				</Section>
 
-				<Section
-					title="Cap Pro"
-					description="Settings available with a Cap Pro license."
-					pro
-				>
-					<SectionRows>
-						<ToggleSettingItem
-							label="Auto-open shareable links"
-							description="Open the share link in your browser as soon as the upload finishes."
-							value={!settings.disableAutoOpenLinks}
-							onChange={(v) => handleChange("disableAutoOpenLinks", !v)}
-						/>
-					</SectionRows>
-				</Section>
-
 				<DefaultProjectNameCard
 					onChange={(value) =>
 						handleChange("defaultProjectNameTemplate", value)
@@ -579,6 +648,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 				<ExcludedWindowsCard
 					excludedWindows={excludedWindows()}
+					missingDefaultExclusions={missingDefaultExclusions()}
 					availableWindows={availableWindows()}
 					onRequestAvailableWindows={refreshAvailableWindows}
 					onRemove={handleRemoveExclusion}
@@ -589,7 +659,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				/>
 
 				<ServerURLSetting
-					value={settings.serverUrl ?? "https://cap.so"}
+					value={settings.serverUrl ?? clientEnv.VITE_SERVER_URL}
+					defaultValue={clientEnv.VITE_SERVER_URL}
 					onChange={async (v) => {
 						const url = new URL(v);
 						const origin = url.origin;
@@ -611,7 +682,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					value={settings.enableTelemetry !== false}
 					onChange={(v) => handleChange("enableTelemetry", v)}
 				/>
-			</div>
+			</SettingsPageContent>
 		</div>
 	);
 }
@@ -694,7 +765,7 @@ function SegmentedControl<T extends string | number>(props: {
 							type="button"
 							onClick={() => props.onChange(option.value)}
 							class={cx(
-								"px-3 py-1 text-xs font-medium rounded-md transition-all",
+								"px-3 py-1 text-xs font-medium rounded-md transition-[background-color,color,box-shadow]",
 								isSelected()
 									? "bg-gray-1 text-gray-12 shadow-sm"
 									: "text-gray-10 hover:text-gray-12",
@@ -726,7 +797,7 @@ function StudioQualitySubsection(props: {
 		>
 			<div class="flex justify-between items-start gap-4">
 				<div class="flex flex-col gap-0.5 min-w-0">
-					<p class="text-[13px] font-medium text-gray-12">Studio mode</p>
+					<p class="text-[13px] text-gray-12">Studio mode</p>
 					<p class="text-xs leading-snug text-gray-10">
 						Encoder profile for local Studio recordings.
 					</p>
@@ -750,131 +821,152 @@ function StudioQualitySubsection(props: {
 	);
 }
 
-function InstantQualitySubsection(props: {
+function InstantQualitySetting(props: {
+	hasCapPro: boolean;
 	value: number;
 	onChange: (value: number) => void;
 }) {
+	const effectiveValue = createMemo(() =>
+		props.hasCapPro ? props.value : FREE_INSTANT_MODE_MAX_RESOLUTION,
+	);
 	const currentTier = createMemo(
 		() =>
-			INSTANT_RESOLUTION_TIERS.find((t) => t.value === props.value) ??
-			INSTANT_RESOLUTION_TIERS[1],
+			INSTANT_RESOLUTION_TIERS.find((t) => t.value === effectiveValue()) ??
+			INSTANT_RESOLUTION_TIERS[0],
 	);
+	const handleResolutionClick = async (value: number) => {
+		if (props.hasCapPro || value === FREE_INSTANT_MODE_MAX_RESOLUTION) {
+			props.onChange(value);
+			return;
+		}
+
+		toast.custom(
+			(t) => (
+				<div class="flex gap-3 items-center px-4 py-3 rounded-xl border shadow-lg bg-gray-1 border-gray-4 text-gray-12">
+					<p class="text-sm">
+						Upgrade to Cap Pro to record Instant Mode videos above 720p.
+					</p>
+					<button
+						type="button"
+						class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors bg-blue-9 text-white hover:bg-blue-10"
+						onClick={() => {
+							toast.dismiss(t.id);
+							void commands.showWindow("Upgrade");
+						}}
+					>
+						Upgrade
+					</button>
+				</div>
+			),
+			{ duration: 6000 },
+		);
+	};
 
 	return (
-		<div
+		<SettingItem
 			id="settings-section-instant-quality"
-			class="flex flex-col gap-3 px-4 py-4"
+			label="Instant Mode quality"
+			description={
+				props.hasCapPro
+					? "Choose the maximum upload resolution for Instant recordings."
+					: "Instant recordings are locked to 720p. Cap Pro unlocks higher resolutions."
+			}
 		>
-			<div class="flex justify-between items-start gap-4">
-				<div class="flex flex-col gap-0.5 min-w-0">
-					<p class="text-[13px] font-medium text-gray-12">Instant mode</p>
-					<p class="text-xs leading-snug text-gray-10">
-						Maximum upload resolution for Instant recordings.
-					</p>
+			<div class="flex flex-col items-end gap-1.5">
+				<div class="inline-flex p-0.5 rounded-lg border border-gray-3 bg-gray-3">
+					<For each={INSTANT_RESOLUTION_TIERS}>
+						{(tier) => {
+							const isSelected = () => effectiveValue() === tier.value;
+							return (
+								<button
+									type="button"
+									onClick={() => void handleResolutionClick(tier.value)}
+									class={cx(
+										"px-3 py-1 text-xs font-medium rounded-md transition-[background-color,color,box-shadow]",
+										isSelected()
+											? "bg-gray-1 text-gray-12 shadow-sm"
+											: "text-gray-10 hover:text-gray-12",
+									)}
+								>
+									{tier.label}
+								</button>
+							);
+						}}
+					</For>
 				</div>
-				<SegmentedControl
-					value={props.value}
-					onChange={props.onChange}
-					options={INSTANT_RESOLUTION_TIERS.map((tier) => ({
-						value: tier.value,
-						label: tier.label,
-					}))}
+				<p class="text-[11px] leading-snug text-right text-gray-10">
+					{currentTier().summary}
+				</p>
+			</div>
+		</SettingItem>
+	);
+}
+
+function CapProSection(props: {
+	hasCapPro: boolean;
+	instantResolution: number;
+	onInstantResolutionChange: (value: number) => void;
+	autoOpenShareableLinks: boolean;
+	onAutoOpenShareableLinksChange: (value: boolean) => void;
+}) {
+	return (
+		<Section
+			title="Cap Pro"
+			description="Settings available with a Cap Pro license."
+			pro
+		>
+			<SectionRows>
+				<InstantQualitySetting
+					hasCapPro={props.hasCapPro}
+					value={props.instantResolution}
+					onChange={props.onInstantResolutionChange}
 				/>
-			</div>
-			<div class="flex flex-col gap-1.5 px-3 py-2.5 rounded-lg bg-gray-3">
-				<p class="text-xs text-gray-12">{currentTier().summary}</p>
-			</div>
-		</div>
+				<ToggleSettingItem
+					label="Auto-open shareable links"
+					description="Open the share link in your browser as soon as the upload finishes."
+					value={props.autoOpenShareableLinks}
+					onChange={props.onAutoOpenShareableLinksChange}
+				/>
+			</SectionRows>
+		</Section>
 	);
 }
 
 function QualitySection(props: {
 	studioQuality: StudioRecordingQuality;
 	onStudioQualityChange: (value: StudioRecordingQuality) => void;
-	instantResolution: number;
-	onInstantResolutionChange: (value: number) => void;
 }) {
 	return (
 		<Section
 			title="Quality"
-			description="Pick the right profile for each recording mode."
+			description="Pick the right profile for local Studio recordings."
 		>
-			<SectionCard class="divide-y divide-gray-3">
+			<SectionCard>
 				<StudioQualitySubsection
 					value={props.studioQuality}
 					onChange={props.onStudioQualityChange}
-				/>
-				<InstantQualitySubsection
-					value={props.instantResolution}
-					onChange={props.onInstantResolutionChange}
 				/>
 			</SectionCard>
 		</Section>
 	);
 }
 
-function Section(
-	props: ParentProps<{
-		title: string;
-		description?: string;
-		right?: JSX.Element;
-		pro?: boolean;
-	}>,
-) {
-	return (
-		<section class="space-y-2.5">
-			<header class="flex justify-between items-end gap-3 px-1">
-				<div class="flex flex-col gap-0.5 min-w-0">
-					<div class="flex gap-2 items-center">
-						<h3 class="text-sm font-semibold tracking-tight text-gray-12">
-							{props.title}
-						</h3>
-						<Show when={props.pro}>
-							<span class="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-blue-9 text-white">
-								Pro
-							</span>
-						</Show>
-					</div>
-					<Show when={props.description}>
-						<p class="text-xs leading-relaxed text-gray-10">
-							{props.description}
-						</p>
-					</Show>
-				</div>
-				<Show when={props.right}>
-					<div class="flex shrink-0 gap-2 items-center">{props.right}</div>
-				</Show>
-			</header>
-			{props.children}
-		</section>
-	);
-}
-
-function SectionCard(props: ParentProps<{ class?: string; padded?: boolean }>) {
-	return (
-		<div
-			class={cx(
-				"overflow-hidden rounded-xl border border-gray-3 bg-gray-2",
-				props.padded && "px-4 py-4",
-				props.class,
-			)}
-		>
-			{props.children}
-		</div>
-	);
-}
-
-function SectionRows(props: ParentProps) {
-	return (
-		<SectionCard class="divide-y divide-gray-3">{props.children}</SectionCard>
-	);
-}
-
 function ServerURLSetting(props: {
 	value: string;
+	defaultValue: string;
 	onChange: (v: string) => void;
 }) {
 	const [value, setValue] = createWritableMemo(() => props.value);
+	const isDefaultValue = () =>
+		props.value === props.defaultValue && value() === props.defaultValue;
+	const resetToDefault = () => {
+		if (props.value === props.defaultValue) {
+			setValue(props.defaultValue);
+			return;
+		}
+
+		props.onChange(props.defaultValue);
+	};
 
 	return (
 		<Section
@@ -891,7 +983,15 @@ function ServerURLSetting(props: {
 							onInput={(e) => setValue(e.currentTarget.value)}
 						/>
 					</label>
-					<div class="flex justify-end">
+					<div class="flex justify-end gap-2">
+						<Button
+							size="sm"
+							variant="gray"
+							disabled={isDefaultValue()}
+							onClick={resetToDefault}
+						>
+							Reset to Default
+						</Button>
 						<Button
 							size="sm"
 							variant="dark"
@@ -975,7 +1075,7 @@ function DefaultProjectNameCard(props: {
 			<button
 				type="button"
 				title="Click to copy"
-				class="px-1.5 py-0.5 mx-0.5 font-mono text-[11px] rounded-md transition-all duration-150 ease-out cursor-pointer bg-gray-3 hover:bg-gray-4 active:scale-95 text-gray-12"
+				class="px-1.5 py-0.5 mx-0.5 font-mono text-[11px] rounded-md transition-[background-color,color,transform] duration-150 ease-out cursor-pointer bg-gray-3 hover:bg-gray-4 active:scale-95 text-gray-12"
 				onClick={() => commands.writeClipboardString(props.children)}
 			>
 				{props.children}
@@ -1041,11 +1141,11 @@ function DefaultProjectNameCard(props: {
 
 					<Collapsible class="w-full rounded-lg">
 						<Collapsible.Trigger class="inline-flex gap-1 items-center text-xs transition-colors text-gray-10 hover:text-gray-12 group">
-							<IconCapChevronDown class="size-3.5 ui-group-expanded:rotate-180 transition-transform duration-200" />
+							<IconCapChevronDown class="size-3.5 data-group-expanded:rotate-180 transition-transform duration-200" />
 							<span>Available placeholders</span>
 						</Collapsible.Trigger>
 
-						<Collapsible.Content class="space-y-3 pt-3 text-xs text-gray-12 opacity-0 transition animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
+						<Collapsible.Content class="space-y-3 pt-3 text-xs text-gray-12 opacity-0 transition animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
 							<p class="text-gray-10">
 								Click any placeholder to copy it. Time supports custom formats
 								via <code class="text-gray-12">{"{moment:HH:mm}"}</code>.
@@ -1099,6 +1199,7 @@ function DefaultProjectNameCard(props: {
 
 function ExcludedWindowsCard(props: {
 	excludedWindows: WindowExclusion[];
+	missingDefaultExclusions: WindowExclusion[];
 	availableWindows: CaptureWindow[];
 	onRequestAvailableWindows: () => Promise<CaptureWindow[]>;
 	onRemove: (index: number) => Promise<void>;
@@ -1108,7 +1209,15 @@ function ExcludedWindowsCard(props: {
 	isWindows: boolean;
 }) {
 	const hasExclusions = () => props.excludedWindows.length > 0;
+	const hasMissingDefaultExclusions = () =>
+		props.missingDefaultExclusions.length > 0;
+	const missingDefaultLabels = () =>
+		props.missingDefaultExclusions.map(getExclusionPrimaryLabel).join(", ");
 	const canAdd = () => !props.isLoading;
+	const handleResetClick = () => {
+		if (props.isLoading) return;
+		void props.onReset();
+	};
 
 	const handleAddClick = async (event: MouseEvent) => {
 		event.preventDefault();
@@ -1177,10 +1286,7 @@ function ExcludedWindowsCard(props: {
 						variant="gray"
 						size="sm"
 						disabled={props.isLoading}
-						onClick={() => {
-							if (props.isLoading) return;
-							void props.onReset();
-						}}
+						onClick={handleResetClick}
 					>
 						Reset
 					</Button>
@@ -1198,6 +1304,31 @@ function ExcludedWindowsCard(props: {
 			}
 		>
 			<SectionCard padded>
+				<Show when={hasMissingDefaultExclusions()}>
+					<div class="mb-3 rounded-lg border border-amber-6 bg-amber-3/30 px-3 py-2.5">
+						<div class="flex items-start gap-2">
+							<IconLucideAlertTriangle class="mt-0.5 size-4 shrink-0 text-amber-11" />
+							<div class="min-w-0 flex-1 space-y-1">
+								<p class="text-xs font-medium text-amber-11">
+									Recommended Cap windows are not excluded
+								</p>
+								<p class="text-[10px] leading-snug text-amber-11">
+									Camera, settings, or recording windows can appear as black
+									boxes in screen recordings. Missing: {missingDefaultLabels()}.
+								</p>
+							</div>
+							<Button
+								variant="gray"
+								size="sm"
+								disabled={props.isLoading}
+								onClick={handleResetClick}
+								class="shrink-0"
+							>
+								Restore
+							</Button>
+						</div>
+					</div>
+				</Show>
 				<Show when={!props.isLoading} fallback={<ExcludedWindowsSkeleton />}>
 					<Show
 						when={hasExclusions()}
@@ -1249,8 +1380,8 @@ function ExcludedWindowsSkeleton() {
 				{(width) => (
 					<div class="flex gap-2 items-center pr-1 pl-3 py-1.5 rounded-full border bg-gray-3 border-gray-4 animate-pulse">
 						<div class="flex flex-col gap-1 leading-tight">
-							<div class={cx("h-2.5 rounded bg-gray-4", width)} />
-							<div class="w-14 h-2 rounded bg-gray-4" />
+							<div class={cx("h-2.5 rounded-sm bg-gray-4", width)} />
+							<div class="w-14 h-2 rounded-sm bg-gray-4" />
 						</div>
 						<div class="rounded-full size-5 bg-gray-4" />
 					</div>

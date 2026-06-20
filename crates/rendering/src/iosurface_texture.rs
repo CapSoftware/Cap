@@ -84,6 +84,26 @@ impl IOSurfaceTextureCache {
             .ok_or(IOSurfaceTextureError::TextureCreationFailed)
     }
 
+    pub fn create_bgra_texture(
+        &self,
+        io_surface: &io::Surf,
+        width: u32,
+        height: u32,
+    ) -> Result<R<mtl::Texture>, IOSurfaceTextureError> {
+        let mut desc = mtl::TextureDesc::new_2d(
+            mtl::PixelFormat::Bgra8UNorm,
+            width as usize,
+            height as usize,
+            false,
+        );
+        desc.set_storage_mode(mtl::StorageMode::Shared);
+        desc.set_usage(mtl::TextureUsage::SHADER_READ);
+
+        self.metal_device
+            .new_texture_with_surf(&desc, io_surface, 0)
+            .ok_or(IOSurfaceTextureError::TextureCreationFailed)
+    }
+
     pub fn create_rgba_texture(
         &self,
         io_surface: &io::Surf,

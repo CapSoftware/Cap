@@ -20,12 +20,14 @@ export function NewComment({
 	videoName = "",
 	commenterName = "",
 	commentContent = "",
+	manageNotificationsUrl,
 }: {
 	email: string;
 	url: string;
 	videoName: string;
 	commenterName: string;
 	commentContent: string;
+	manageNotificationsUrl?: string;
 }) {
 	return (
 		<Html>
@@ -71,7 +73,10 @@ export function NewComment({
 						<Text className="max-w-sm flex-wrap break-words font-medium text-purple-600 no-underline">
 							{url.replace(/^https?:\/\//, "")}
 						</Text>
-						<Footer email={email} />
+						<Footer
+							email={email}
+							manageNotificationsUrl={manageNotificationsUrl}
+						/>
 					</Container>
 				</Body>
 			</Tailwind>

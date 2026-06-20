@@ -14,7 +14,9 @@ use crate::{
     cursor::{CursorActor, Cursors, IncrementalCaptureOutputs, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer},
-    output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
+    output_pipeline::{
+        AudioGapSummary, DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError,
+    },
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
 };
@@ -44,10 +46,25 @@ use std::{
 use tokio::{sync::watch, task::JoinHandle};
 use tracing::{Instrument, debug, error_span, info, trace, warn};
 
-const CAMERA_ACTIVE_MAX_SCREEN_WIDTH: u32 = 1920;
-const CAMERA_ACTIVE_MAX_SCREEN_HEIGHT: u32 = 1200;
 const COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH: u32 = 1600;
 const COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT: u32 = 1000;
+
+fn camera_active_max_capture_size(
+    quality: crate::StudioQuality,
+    camera_active: bool,
+) -> Option<(u32, u32)> {
+    if !camera_active {
+        return None;
+    }
+
+    match quality {
+        crate::StudioQuality::Compatibility => Some((
+            COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH,
+            COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT,
+        )),
+        crate::StudioQuality::Balanced | crate::StudioQuality::Ultra => None,
+    }
+}
 
 #[allow(clippy::large_enum_variant)]
 enum ActorState {
@@ -403,6 +420,18 @@ struct SegmentFailureDiagnostics {
 struct SegmentOutput {
     meta: MultipleSegment,
     diagnostics: Option<SegmentFailureDiagnostics>,
+    duration: f64,
+}
+
+fn to_project_gap_summary(
+    summary: Option<AudioGapSummary>,
+) -> Option<cap_project::AudioGapSummary> {
+    summary.map(|s| cap_project::AudioGapSummary {
+        total_overlap_trimmed_ms: s.total_overlap_trimmed_ms,
+        startup_overlap_trimmed_ms: s.startup_overlap_trimmed_ms,
+        overlap_dropped_frames: s.overlap_dropped_frames,
+        startup_overlap_drops: s.startup_overlap_drops,
+    })
 }
 
 fn record_track_failure(
@@ -969,22 +998,34 @@ async fn stop_recording(
                     track_failures: s.pipeline.track_failures.clone(),
                 });
 
+            let display_fps = s
+                .pipeline
+                .screen
+                .video_info
+                .map(|v| v.fps())
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        "Screen video_info missing, using default fps: {}",
+                        DEFAULT_FPS
+                    );
+                    DEFAULT_FPS
+                });
+            // Use the encoded display-media duration (frame_count / fps), not the wall-clock
+            // recording span which includes pipeline-drain latency. This is the timeline the
+            // recorder persists to project-config.json, so it is what un-edited recordings use; the
+            // editor/export fallbacks only synthesize a timeline when none is present and read the
+            // muxed container duration, which this closely (not bit-exactly) matches.
+            let display_media_duration = if display_fps > 0 {
+                s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
+            } else {
+                0.0
+            };
+
             SegmentOutput {
                 meta: MultipleSegment {
                     display: VideoMeta {
                         path: make_relative(&s.pipeline.screen.path),
-                        fps: s
-                            .pipeline
-                            .screen
-                            .video_info
-                            .map(|v| v.fps())
-                            .unwrap_or_else(|| {
-                                tracing::warn!(
-                                    "Screen video_info missing, using default fps: {}",
-                                    DEFAULT_FPS
-                                );
-                                DEFAULT_FPS
-                            }),
+                        fps: display_fps,
                         start_time: Some(display_start_time),
                         device_id: None,
                     },
@@ -1004,6 +1045,7 @@ async fn stop_recording(
                         path: make_relative(&mic.path),
                         start_time: mic_start_time,
                         device_id: s.mic_device_id.clone(),
+                        gap_summary: to_project_gap_summary(mic.audio_gap_summary),
                     }),
                     system_audio: s.pipeline.system_audio.map(|audio| {
                         let raw_sys_start = to_start_time(audio.first_timestamp);
@@ -1026,6 +1068,7 @@ async fn stop_recording(
                             path: make_relative(&audio.path),
                             start_time: Some(sys_start_time),
                             device_id: None,
+                            gap_summary: to_project_gap_summary(audio.audio_gap_summary),
                         }
                     }),
                     cursor: s
@@ -1042,7 +1085,21 @@ async fn stop_recording(
                     }),
                 },
                 diagnostics,
+                duration: display_media_duration,
             }
+        })
+        .collect();
+    let timeline_segments: Vec<_> = segment_outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, segment)| {
+            (segment.duration > 0.0).then_some(TimelineSegment {
+                recording_clip: i as u32,
+                start: 0.0,
+                end: segment.duration,
+                timescale: 1.0,
+                name: None,
+            })
         })
         .collect();
     let segment_failure_diagnostics: Vec<_> = segment_outputs
@@ -1053,6 +1110,19 @@ async fn stop_recording(
         .into_iter()
         .map(|segment| segment.meta)
         .collect();
+    let clip_configs = segment_metas
+        .iter()
+        .all(|segment| segment.camera.is_none())
+        .then(|| {
+            segment_metas
+                .iter()
+                .enumerate()
+                .map(|(i, segment)| ClipConfiguration {
+                    index: i as u32,
+                    offsets: segment.calculate_audio_offsets(),
+                })
+                .collect::<Vec<_>>()
+        });
 
     let needs_remux = if fragmented {
         segment_metas.iter().any(|seg| {
@@ -1094,7 +1164,21 @@ async fn stop_recording(
 
     persist_final_recording_meta(&recording_dir, &meta);
 
-    let project_config = cap_project::ProjectConfiguration::default();
+    let mut project_config = cap_project::ProjectConfiguration::default();
+    if !timeline_segments.is_empty() {
+        project_config.timeline = Some(TimelineConfiguration {
+            segments: timeline_segments,
+            zoom_segments: Vec::new(),
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+        });
+    }
+    if let Some(clips) = clip_configs {
+        project_config.clips = clips;
+    }
     project_config
         .write(&recording_dir)
         .map_err(RecordingError::from)?;
@@ -1290,16 +1374,6 @@ async fn create_segment_pipeline(
     #[cfg(not(target_os = "macos"))]
     let segment_fragmented = fragmented;
 
-    #[cfg(target_os = "macos")]
-    let shared_pause_state = if segment_fragmented {
-        Some(SharedPauseState::new(Arc::new(
-            std::sync::atomic::AtomicBool::new(false),
-        )))
-    } else {
-        None
-    };
-
-    #[cfg(windows)]
     let shared_pause_state = if segment_fragmented {
         Some(SharedPauseState::new(Arc::new(
             std::sync::atomic::AtomicBool::new(false),
@@ -1314,37 +1388,81 @@ async fn create_segment_pipeline(
     );
 
     let (screen, system_audio, cursor_display) = if camera_only {
-        let camera_feed = base_inputs.camera_feed.clone().ok_or_else(|| {
-            anyhow!(
-                "Camera-only recording requires a camera, but no camera is currently available. \
-                Please select a camera in the recording settings before starting. \
-                If you have already selected a camera, it may have been disconnected or \
-                failed to initialize. Try reconnecting your camera or selecting a different one."
-            )
-        })?;
+        #[cfg(target_os = "linux")]
+        {
+            let camera_feed = base_inputs.camera_feed.clone().ok_or_else(|| {
+                anyhow!(
+                    "Camera-only recording requires a camera, but no camera is currently available. \
+                    Please select a camera in the recording settings before starting. \
+                    If you have already selected a camera, it may have been disconnected or \
+                    failed to initialize. Try reconnecting your camera or selecting a different one."
+                )
+            })?;
 
-        #[cfg(target_os = "macos")]
-        let screen = OutputPipeline::builder(screen_output_path.clone())
-            .with_video::<sources::NativeCamera>(camera_feed.clone())
-            .with_timestamps(start_time)
-            .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
-            .instrument(error_span!("screen-out"))
-            .await
+            let builder = if segment_fragmented {
+                OutputPipeline::builder(dir.join("display"))
+            } else {
+                OutputPipeline::builder(screen_output_path.clone())
+            }
+            .with_video::<sources::Camera>(camera_feed)
+            .with_timestamps(start_time);
+
+            let screen = if segment_fragmented {
+                builder
+                    .build::<crate::ffmpeg::SegmentedVideoMuxer>(
+                        crate::ffmpeg::SegmentedVideoMuxerConfig {
+                            segment_duration: Duration::from_secs(2),
+                            shared_pause_state: shared_pause_state.clone(),
+                            ..Default::default()
+                        },
+                    )
+                    .instrument(error_span!("screen-out"))
+                    .await
+            } else {
+                builder
+                    .build::<crate::ffmpeg::Mp4Muxer>(())
+                    .instrument(error_span!("screen-out"))
+                    .await
+            }
             .context("camera-only screen pipeline setup")?;
 
-        #[cfg(windows)]
-        let screen = OutputPipeline::builder(screen_output_path.clone())
-            .with_video::<sources::NativeCamera>(camera_feed.clone())
-            .with_timestamps(start_time)
-            .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
-                encoder_preferences: encoder_preferences.clone(),
-                ..Default::default()
-            })
-            .instrument(error_span!("screen-out"))
-            .await
-            .context("camera-only screen pipeline setup")?;
+            (screen, None, None)
+        }
 
-        (screen, None, None)
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            let camera_feed = base_inputs.camera_feed.clone().ok_or_else(|| {
+                anyhow!(
+                    "Camera-only recording requires a camera, but no camera is currently available. \
+                    Please select a camera in the recording settings before starting. \
+                    If you have already selected a camera, it may have been disconnected or \
+                    failed to initialize. Try reconnecting your camera or selecting a different one."
+                )
+            })?;
+
+            #[cfg(target_os = "macos")]
+            let screen = OutputPipeline::builder(screen_output_path.clone())
+                .with_video::<sources::NativeCamera>(camera_feed.clone())
+                .with_timestamps(start_time)
+                .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
+                .instrument(error_span!("screen-out"))
+                .await
+                .context("camera-only screen pipeline setup")?;
+
+            #[cfg(windows)]
+            let screen = OutputPipeline::builder(screen_output_path.clone())
+                .with_video::<sources::NativeCamera>(camera_feed.clone())
+                .with_timestamps(start_time)
+                .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
+                    encoder_preferences: encoder_preferences.clone(),
+                    ..Default::default()
+                })
+                .instrument(error_span!("screen-out"))
+                .await
+                .context("camera-only screen pipeline setup")?;
+
+            (screen, None, None)
+        }
     } else {
         let capture_target = base_inputs.capture_target.clone();
 
@@ -1354,21 +1472,7 @@ async fn create_segment_pipeline(
         let (display, crop) =
             target_to_display_and_crop(&capture_target).context("target_display_crop")?;
         let compatibility_quality = matches!(quality, crate::StudioQuality::Compatibility);
-        let max_capture_size = if camera_active {
-            if compatibility_quality {
-                Some((
-                    COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH,
-                    COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT,
-                ))
-            } else {
-                Some((
-                    CAMERA_ACTIVE_MAX_SCREEN_WIDTH,
-                    CAMERA_ACTIVE_MAX_SCREEN_HEIGHT,
-                ))
-            }
-        } else {
-            None
-        };
+        let max_capture_size = camera_active_max_capture_size(quality, camera_active);
         let effective_max_fps = if compatibility_quality && camera_active {
             max_fps.min(24)
         } else {
@@ -1383,6 +1487,8 @@ async fn create_segment_pipeline(
             max_capture_size,
             start_time.system_time(),
             base_inputs.capture_system_audio,
+            #[cfg(target_os = "linux")]
+            sources::screen_capture::LinuxCaptureSource::from_target(&capture_target),
             #[cfg(windows)]
             d3d_device,
             #[cfg(target_os = "macos")]
@@ -1478,6 +1584,36 @@ async fn create_segment_pipeline(
                     encoder_preferences: encoder_preferences.clone(),
                     ..Default::default()
                 })
+                .instrument(error_span!("camera-out"))
+                .await
+        };
+        Some(pipeline.context("camera pipeline setup")?)
+    } else {
+        None
+    };
+
+    #[cfg(target_os = "linux")]
+    let camera = if camera_only {
+        None
+    } else if let Some(camera_feed) = base_inputs.camera_feed {
+        let pipeline = if segment_fragmented {
+            OutputPipeline::builder(dir.join("camera"))
+                .with_video::<sources::Camera>(camera_feed)
+                .with_timestamps(start_time)
+                .build::<crate::ffmpeg::SegmentedVideoMuxer>(
+                    crate::ffmpeg::SegmentedVideoMuxerConfig {
+                        segment_duration: Duration::from_secs(2),
+                        shared_pause_state: shared_pause_state.clone(),
+                        ..Default::default()
+                    },
+                )
+                .instrument(error_span!("camera-out"))
+                .await
+        } else {
+            OutputPipeline::builder(dir.join("camera.mp4"))
+                .with_video::<sources::Camera>(camera_feed)
+                .with_timestamps(start_time)
+                .build::<crate::ffmpeg::Mp4Muxer>(())
                 .instrument(error_span!("camera-out"))
                 .await
         };
@@ -1682,6 +1818,7 @@ mod tests {
             first_timestamp,
             video_info,
             video_frame_count,
+            audio_gap_summary: None,
         }
     }
 
@@ -1801,6 +1938,35 @@ mod tests {
             48_000,
             2,
         )
+    }
+
+    #[test]
+    fn camera_active_capture_size_leaves_non_compatibility_native() {
+        for quality in [crate::StudioQuality::Balanced, crate::StudioQuality::Ultra] {
+            assert!(camera_active_max_capture_size(quality, true).is_none());
+        }
+    }
+
+    #[test]
+    fn camera_active_capture_size_keeps_guardrail_for_compatibility() {
+        assert_eq!(
+            camera_active_max_capture_size(crate::StudioQuality::Compatibility, true),
+            Some((
+                COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH,
+                COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT,
+            ))
+        );
+    }
+
+    #[test]
+    fn inactive_camera_capture_size_is_unbounded() {
+        for quality in [
+            crate::StudioQuality::Compatibility,
+            crate::StudioQuality::Balanced,
+            crate::StudioQuality::Ultra,
+        ] {
+            assert!(camera_active_max_capture_size(quality, false).is_none());
+        }
     }
 
     #[test]

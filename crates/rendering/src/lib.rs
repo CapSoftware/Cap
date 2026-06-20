@@ -1,7 +1,8 @@
 use anyhow::Result;
 use cap_project::{
     AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, CornerStyle, Crop,
-    CursorEvents, MaskKind, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
+    CursorEvents, CursorType, MaskKind, ProjectConfiguration, RecordingMeta, SceneMode,
+    StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -10,7 +11,7 @@ use cursor_interpolation::{
 };
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use frame_pipeline::{
-    NV12BufferPool, RenderSession, finish_encoder, finish_encoder_nv12_pooled,
+    NV12BufferPool, RenderSession, finish_encoder_nv12_pooled, finish_encoder_timed,
     flush_pending_readback,
 };
 use futures::future::OptionFuture;
@@ -20,10 +21,7 @@ use layers::{
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
@@ -50,7 +48,17 @@ pub mod zoom_focus_interpolation;
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
 pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, SharedNv12Buffer};
+pub use layers::{BackgroundTextureCache, clean_background_path};
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
+
+/// Warms the process-wide system-font scan used by the text/captions/keyboard
+/// layers. The first scan is the slow part (hundreds of ms to over a second on
+/// macOS); calling this off the hot path at startup keeps the first editor or
+/// screenshot-editor open fast. Subsequent `FontSystem` creations clone the cached
+/// font database cheaply.
+pub fn prewarm_fonts() {
+    drop(layers::new_font_system());
+}
 
 pub use cursor_interpolation::PrecomputedCursorTimeline;
 use mask::interpolate_masks;
@@ -100,12 +108,27 @@ impl Nv12RenderStartupBreakdownMs {
     }
 }
 
+const NON_HARDWARE_WGPU_ADAPTER_MARKERS: &[&str] = &[
+    "parsec",
+    "displaylink",
+    "splashtop",
+    "synergy",
+    "virtual display",
+    "microsoft basic render",
+    "microsoft basic",
+    "warp",
+];
+
 pub fn is_software_wgpu_adapter(info: &wgpu::AdapterInfo) -> bool {
-    matches!(info.device_type, wgpu::DeviceType::Cpu)
-        || info
-            .name
-            .to_lowercase()
-            .contains("microsoft basic render driver")
+    matches!(
+        info.device_type,
+        wgpu::DeviceType::Cpu | wgpu::DeviceType::VirtualGpu
+    ) || {
+        let name = info.name.to_ascii_lowercase();
+        NON_HARDWARE_WGPU_ADAPTER_MARKERS
+            .iter()
+            .any(|marker| name.contains(marker))
+    }
 }
 
 fn force_software_wgpu_adapter() -> bool {
@@ -171,7 +194,7 @@ pub async fn probe_software_adapter() -> Option<(bool, String)> {
     Some((is_software_wgpu_adapter(&info), info.name))
 }
 
-const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
+pub const STANDARD_CURSOR_HEIGHT: f32 = 60.0;
 
 fn rounding_type_value(style: CornerStyle) -> f32 {
     match style {
@@ -184,6 +207,7 @@ fn rounding_type_value(style: CornerStyle) -> f32 {
 pub struct RenderOptions {
     pub camera_size: Option<XY<u32>>,
     pub screen_size: XY<u32>,
+    pub preserve_screen_alpha: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -370,6 +394,7 @@ impl RecordingSegmentDecoders {
                 camera_frame,
                 segment_time,
                 recording_time: segment_time + self.segment_offset as f32,
+                segment_has_camera: self.camera.is_some(),
             })
         } else {
             let camera_frame = OptionFuture::from(
@@ -394,6 +419,7 @@ impl RecordingSegmentDecoders {
                 camera_frame,
                 segment_time,
                 recording_time: segment_time + self.segment_offset as f32,
+                segment_has_camera: self.camera.is_some(),
             })
         }
     }
@@ -427,6 +453,7 @@ impl RecordingSegmentDecoders {
                 camera_frame,
                 segment_time,
                 recording_time: segment_time + self.segment_offset as f32,
+                segment_has_camera: self.camera.is_some(),
             })
         } else {
             let camera_frame = OptionFuture::from(
@@ -451,6 +478,7 @@ impl RecordingSegmentDecoders {
                 camera_frame,
                 segment_time,
                 recording_time: segment_time + self.segment_offset as f32,
+                segment_has_camera: self.camera.is_some(),
             })
         }
     }
@@ -1462,15 +1490,18 @@ pub fn get_duration(
         && let Ok(camera_duration) =
             recordings.get_source_duration(&recording_meta.path(&camera_path))
     {
-        println!("Camera recording duration: {camera_duration}");
         max_duration = max_duration.max(camera_duration);
-        println!("New max duration after camera check: {max_duration}");
+        tracing::debug!(
+            camera_duration,
+            max_duration,
+            "Adjusted project duration using camera recording"
+        );
     }
 
     if let Some(timeline) = &project.timeline {
         timeline.duration()
     } else {
-        println!("No timeline found, using max_duration: {max_duration}");
+        tracing::debug!(max_duration, "Using recording duration without timeline");
         max_duration
     }
 }
@@ -1483,7 +1514,7 @@ pub struct RenderVideoConstants {
     pub options: RenderOptions,
     pub meta: StudioRecordingMeta,
     pub recording_meta: RecordingMeta,
-    pub background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
+    pub background_textures: std::sync::Arc<BackgroundTextureCache>,
     pub is_software_adapter: bool,
     adapter_name: String,
 }
@@ -1511,9 +1542,10 @@ impl RenderVideoConstants {
                 .camera
                 .as_ref()
                 .map(|c| XY::new(c.width, c.height)),
+            preserve_screen_alpha: false,
         };
 
-        let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let background_textures = Arc::new(BackgroundTextureCache::default());
 
         let adapter_name = shared.adapter.get_info().name;
 
@@ -1540,6 +1572,7 @@ impl RenderVideoConstants {
         options: RenderOptions,
         meta: StudioRecordingMeta,
         recording_meta: RecordingMeta,
+        background_textures: Arc<BackgroundTextureCache>,
     ) -> Self {
         let adapter_name = shared.adapter.get_info().name;
         Self {
@@ -1548,7 +1581,7 @@ impl RenderVideoConstants {
             device: shared.device,
             queue: shared.queue,
             options,
-            background_textures: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            background_textures,
             meta,
             recording_meta,
             is_software_adapter: shared.is_software_adapter,
@@ -1569,6 +1602,7 @@ impl RenderVideoConstants {
                 .camera
                 .as_ref()
                 .map(|c| XY::new(c.width, c.height)),
+            preserve_screen_alpha: false,
         };
 
         let instance = create_wgpu_instance().await;
@@ -1646,7 +1680,7 @@ impl RenderVideoConstants {
 
         let (device, queue) = adapter.request_device(&device_descriptor).await?;
 
-        let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let background_textures = Arc::new(BackgroundTextureCache::default());
 
         Ok(Self {
             _instance: instance,
@@ -1661,6 +1695,130 @@ impl RenderVideoConstants {
             adapter_name,
         })
     }
+}
+
+/// One pane of the split-screen layout. `target` is the fully-split destination
+/// rect in output px `[x0,y0,x1,y1]`. The crop is NOT stored as a fixed rect —
+/// during the morph it is re-derived each frame from the *current* (lerped)
+/// target's aspect so crop aspect always equals target aspect (no distortion);
+/// `focal`/`zoom` (within `src_origin`+`src_size`, the source sub-region in frame
+/// px) are blended from identity toward these as the morph completes. `crop` is
+/// the fully-split crop, kept only for the cursor remap.
+#[derive(Clone, Copy, Debug)]
+pub struct SplitPaneLayout {
+    pub target: [f32; 4],
+    pub crop: [f32; 4],
+    pub focal: [f32; 2],
+    pub zoom: f32,
+    pub src_origin: [f32; 2],
+    pub src_size: [f32; 2],
+}
+
+impl SplitPaneLayout {
+    /// Crop matching `target_t`'s aspect, with focal/zoom blended from identity
+    /// (centre, 1.0) toward this pane's values by `t`. At `t == 0` this
+    /// reproduces the layer's pre-split crop (full source at the pre-split
+    /// aspect); at `t == 1` it is the fully-split crop.
+    fn crop_for(&self, target_t: [f32; 4], t: f32) -> [f32; 4] {
+        let aspect = (target_t[2] - target_t[0]) / (target_t[3] - target_t[1]).max(f32::EPSILON);
+        let focal = [
+            lerp_f32(0.5, self.focal[0], t),
+            lerp_f32(0.5, self.focal[1], t),
+        ];
+        let zoom = lerp_f32(1.0, self.zoom, t);
+        fit_crop_to_target(self.src_origin, self.src_size, aspect, focal, zoom)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SplitLayoutComputed {
+    pub screen: SplitPaneLayout,
+    pub camera: SplitPaneLayout,
+    /// 0..1 morph amount; the layers lerp from their normal layout toward these
+    /// panes by this factor, giving the fade in/out at segment boundaries.
+    pub factor: f64,
+}
+
+fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+fn lerp_bounds(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        lerp_f32(a[0], b[0], t),
+        lerp_f32(a[1], b[1], t),
+        lerp_f32(a[2], b[2], t),
+        lerp_f32(a[3], b[3], t),
+    ]
+}
+
+fn snap_bounds_to_output_pixels(bounds: [f32; 4], output_size: [f32; 2]) -> [f32; 4] {
+    let max_x = output_size[0].max(1.0);
+    let max_y = output_size[1].max(1.0);
+    let mut x0 = bounds[0].round().clamp(0.0, max_x);
+    let mut y0 = bounds[1].round().clamp(0.0, max_y);
+    let mut x1 = bounds[2].round().clamp(0.0, max_x);
+    let mut y1 = bounds[3].round().clamp(0.0, max_y);
+
+    if x1 <= x0 {
+        if x0 < max_x {
+            x1 = (x0 + 1.0).min(max_x);
+        } else {
+            x0 = (x1 - 1.0).max(0.0);
+        }
+    }
+
+    if y1 <= y0 {
+        if y0 < max_y {
+            y1 = (y0 + 1.0).min(max_y);
+        } else {
+            y0 = (y1 - 1.0).max(0.0);
+        }
+    }
+
+    [x0, y0, x1, y1]
+}
+
+fn inset_crop_bounds(bounds: [f32; 4], frame_size: [f32; 2], inset: f32) -> [f32; 4] {
+    let max_x = frame_size[0].max(1.0);
+    let max_y = frame_size[1].max(1.0);
+    let x0 = bounds[0].min(bounds[2]).clamp(0.0, max_x);
+    let y0 = bounds[1].min(bounds[3]).clamp(0.0, max_y);
+    let x1 = bounds[0].max(bounds[2]).clamp(0.0, max_x);
+    let y1 = bounds[1].max(bounds[3]).clamp(0.0, max_y);
+    let inset_x = inset.min(((x1 - x0) - 1.0).max(0.0) * 0.5);
+    let inset_y = inset.min(((y1 - y0) - 1.0).max(0.0) * 0.5);
+
+    [x0 + inset_x, y0 + inset_y, x1 - inset_x, y1 - inset_y]
+}
+
+/// Largest centred crop of `src` (origin+size, frame px) matching `target_aspect`
+/// (aspect-fill, no letterboxing), then tightened by `zoom` (>=1 zooms in) and
+/// recentred on the normalized `focal` point, clamped to stay inside `src`.
+/// Mirrors the camera-only fill-crop derivation, generalized with pan + zoom.
+fn fit_crop_to_target(
+    src_origin: [f32; 2],
+    src_size: [f32; 2],
+    target_aspect: f32,
+    focal: [f32; 2],
+    zoom: f32,
+) -> [f32; 4] {
+    let src_aspect = src_size[0] / src_size[1].max(f32::EPSILON);
+    let (base_w, base_h) = if src_aspect > target_aspect {
+        (src_size[1] * target_aspect, src_size[1])
+    } else {
+        (src_size[0], src_size[0] / target_aspect.max(f32::EPSILON))
+    };
+    let zoom = zoom.max(0.01);
+    let w = (base_w / zoom).min(src_size[0]);
+    let h = (base_h / zoom).min(src_size[1]);
+    let focal_px = [
+        src_origin[0] + focal[0].clamp(0.0, 1.0) * src_size[0],
+        src_origin[1] + focal[1].clamp(0.0, 1.0) * src_size[1],
+    ];
+    let x0 = (focal_px[0] - w * 0.5).clamp(src_origin[0], src_origin[0] + src_size[0] - w);
+    let y0 = (focal_px[1] - h * 0.5).clamp(src_origin[1], src_origin[1] + src_size[1] - h);
+    [x0, y0, x0 + w, y0 + h]
 }
 
 #[derive(Clone, Debug)]
@@ -1679,6 +1837,7 @@ pub struct ProjectUniforms {
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
     pub scene: InterpolatedScene,
+    pub split: Option<SplitLayoutComputed>,
     pub resolution_base: XY<u32>,
     pub display_parent_motion_px: XY<f32>,
     pub motion_blur_amount: f32,
@@ -1761,6 +1920,7 @@ struct MotionAnalysis {
     movement_magnitude: f32,
     zoom_center_uv: XY<f32>,
     zoom_magnitude: f32,
+    zooming_out: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1815,8 +1975,29 @@ fn analyze_motion(current: &MotionBounds, previous: &MotionBounds) -> MotionAnal
     analysis.movement_uv = movement_uv;
     analysis.movement_magnitude = movement_magnitude;
     analysis.zoom_magnitude = zoom_magnitude;
-    analysis.zoom_center_uv = current.point_to_uv(zoom_center_point);
+    analysis.zooming_out = curr_diag < prev_diag;
+    let clamp_uv = |v: f32| {
+        if v.is_finite() {
+            v.clamp(0.0, 1.0)
+        } else {
+            0.5
+        }
+    };
+    let zoom_center_uv = current.point_to_uv(zoom_center_point);
+    analysis.zoom_center_uv = XY::new(clamp_uv(zoom_center_uv.x), clamp_uv(zoom_center_uv.y));
     analysis
+}
+
+fn smooth_motion_response(amount: f32, start: f32, full: f32) -> f32 {
+    if amount <= start {
+        return 0.0;
+    }
+    if amount >= full {
+        return 1.0;
+    }
+
+    let t = ((amount - start) / (full - start)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 fn zoom_vanishing_point(current: &MotionBounds, previous: &MotionBounds) -> Option<XY<f64>> {
@@ -1870,18 +2051,46 @@ fn resolve_motion_descriptor(
 
     let zoom_metric = analysis.zoom_magnitude;
     let move_metric = analysis.movement_magnitude;
+    let zoom_response = smooth_motion_response(
+        zoom_metric,
+        ZOOM_MOTION_START_THRESHOLD,
+        ZOOM_MOTION_FULL_THRESHOLD,
+    );
+    let move_response = smooth_motion_response(
+        move_metric,
+        MOVE_MOTION_START_THRESHOLD,
+        MOVE_MOTION_FULL_THRESHOLD,
+    );
     let zoom_strength = base_amount * zoom_multiplier;
     let move_strength = base_amount * move_multiplier;
 
-    if zoom_metric > move_metric && zoom_metric > MOTION_MIN_THRESHOLD && zoom_strength > 0.0 {
-        let zoom_amount = (zoom_metric * zoom_strength).min(MAX_ZOOM_AMOUNT);
-        MotionBlurDescriptor::zoom(analysis.zoom_center_uv, zoom_amount, zoom_strength)
-    } else if move_metric > MOTION_MIN_THRESHOLD && move_strength > 0.0 {
+    if zoom_response > 0.0 && zoom_strength > 0.0 {
+        let zoom_multiplier = if analysis.zooming_out {
+            ZOOM_OUT_BLUR_MULTIPLIER
+        } else {
+            ZOOM_IN_BLUR_MULTIPLIER
+        };
+        let max_zoom_amount = if analysis.zooming_out {
+            MAX_ZOOM_OUT_AMOUNT
+        } else {
+            MAX_ZOOM_IN_AMOUNT
+        };
+        let zoom_amount =
+            (zoom_metric * zoom_strength * zoom_response * zoom_multiplier).min(max_zoom_amount);
+        MotionBlurDescriptor::zoom(
+            analysis.zoom_center_uv,
+            zoom_amount,
+            (zoom_strength * zoom_response).min(1.0),
+        )
+    } else if move_response > 0.0 && move_strength > 0.0 {
         let vector = XY::new(
-            analysis.movement_uv.x * move_strength,
-            analysis.movement_uv.y * move_strength,
+            analysis.movement_uv.x * move_strength * move_response,
+            analysis.movement_uv.y * move_strength * move_response,
         );
-        MotionBlurDescriptor::movement(clamp_vector(vector, MOTION_VECTOR_CAP), move_strength)
+        MotionBlurDescriptor::movement(
+            clamp_vector(vector, MOTION_VECTOR_CAP),
+            (move_strength * move_response).min(1.0),
+        )
     } else {
         MotionBlurDescriptor::none()
     }
@@ -1896,13 +2105,26 @@ fn normalized_motion_amount(user_motion_blur: f32, fps: f32) -> f32 {
 }
 
 const CAMERA_PADDING: f32 = 50.0;
+const CAMERA_EDGE_CROP_INSET_PX: f32 = 2.0;
+
+/// Output aspect ratio at/above which split-screen lays the screen and camera
+/// side-by-side (left/right). Below it (portrait/narrow output) the panes stack
+/// top/bottom instead.
+const SPLIT_STACK_ASPECT_THRESHOLD: f32 = 1.0;
 
 const SCREEN_MAX_PADDING: f64 = 0.4;
 
 const MOTION_BLUR_BASELINE_FPS: f32 = 60.0;
-const MOTION_MIN_THRESHOLD: f32 = 0.003;
-const MOTION_VECTOR_CAP: f32 = 2.0;
-const MAX_ZOOM_AMOUNT: f32 = 2.0;
+const DISPLAY_MOTION_SAMPLE_FRAMES: u32 = 3;
+const MOVE_MOTION_START_THRESHOLD: f32 = 0.001;
+const MOVE_MOTION_FULL_THRESHOLD: f32 = 0.028;
+const ZOOM_MOTION_START_THRESHOLD: f32 = 0.0005;
+const ZOOM_MOTION_FULL_THRESHOLD: f32 = 0.045;
+const MOTION_VECTOR_CAP: f32 = 0.045;
+const MAX_ZOOM_IN_AMOUNT: f32 = 0.08;
+const MAX_ZOOM_OUT_AMOUNT: f32 = 0.014;
+const ZOOM_IN_BLUR_MULTIPLIER: f32 = 0.65;
+const ZOOM_OUT_BLUR_MULTIPLIER: f32 = 0.06;
 const DISPLAY_MOVE_MULTIPLIER: f32 = 1.0;
 const DISPLAY_ZOOM_MULTIPLIER: f32 = 1.0;
 const CAMERA_MULTIPLIER: f32 = 1.0;
@@ -2175,12 +2397,18 @@ impl ProjectUniforms {
         has_previous: bool,
         base_amount: f32,
         extra_zoom: f32,
+        frame_span: f32,
     ) -> MotionBlurComputation {
         if !has_previous || base_amount <= f32::EPSILON {
             return MotionBlurComputation::none();
         }
 
         let mut analysis = analyze_motion(&current, &previous);
+        let frame_span = frame_span.max(1.0);
+        analysis.movement_px = analysis.movement_px / frame_span;
+        analysis.movement_uv = analysis.movement_uv / frame_span;
+        analysis.movement_magnitude /= frame_span;
+        analysis.zoom_magnitude /= frame_span;
         if extra_zoom > 0.0 {
             analysis.zoom_magnitude = (analysis.zoom_magnitude + extra_zoom).min(3.0);
         }
@@ -2191,7 +2419,7 @@ impl ProjectUniforms {
             DISPLAY_MOVE_MULTIPLIER,
             DISPLAY_ZOOM_MULTIPLIER,
         );
-        let parent_vector = if analysis.movement_magnitude > MOTION_MIN_THRESHOLD {
+        let parent_vector = if analysis.movement_magnitude > MOVE_MOTION_START_THRESHOLD {
             analysis.movement_px
         } else {
             XY::new(0.0, 0.0)
@@ -2498,15 +2726,24 @@ impl ProjectUniforms {
         let prev_zoom_focus =
             zoom_focus_interpolator.interpolate(prev_recording_time_for_zoom_focus_interpolate);
 
+        let display_cursor_coord = |coord: XY<f64>| {
+            if coord.x.is_finite() && coord.y.is_finite() {
+                Some(Coord::<RawDisplayUVSpace>::new(XY::new(
+                    coord.x.clamp(0.0, 1.0),
+                    coord.y.clamp(0.0, 1.0),
+                )))
+            } else {
+                None
+            }
+        };
+
         let actual_cursor_coord = interpolated_cursor
             .as_ref()
-            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord))
-            .filter(|c| (0.0..=1.0).contains(&c.x) && (0.0..=1.0).contains(&c.y));
+            .and_then(|c| display_cursor_coord(c.position.coord));
 
         let prev_actual_cursor_coord = prev_interpolated_cursor
             .as_ref()
-            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord))
-            .filter(|c| (0.0..=1.0).contains(&c.x) && (0.0..=1.0).contains(&c.y));
+            .and_then(|c| display_cursor_coord(c.position.coord));
 
         let segment_end_focus = segments_cursor
             .prev_segment
@@ -2526,8 +2763,7 @@ impl ProjectUniforms {
                     .clamp(0.0, prev.end) as f32;
                 cursor_interp_fn(boundary_recording_time)
             })
-            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord))
-            .filter(|c| (0.0..=1.0).contains(&c.x) && (0.0..=1.0).contains(&c.y));
+            .and_then(|c| display_cursor_coord(c.position.coord));
 
         let zoom = InterpolatedZoom::new_with_cursor_and_end_focus(
             segments_cursor,
@@ -2555,8 +2791,7 @@ impl ProjectUniforms {
                     .clamp(0.0, prev.end) as f32;
                 cursor_interp_fn(boundary_recording_time)
             })
-            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord))
-            .filter(|c| (0.0..=1.0).contains(&c.x) && (0.0..=1.0).contains(&c.y));
+            .and_then(|c| display_cursor_coord(c.position.coord));
 
         let prev_zoom = InterpolatedZoom::new_with_cursor_and_end_focus(
             prev_segments_cursor,
@@ -2566,12 +2801,147 @@ impl ProjectUniforms {
             prev_segment_end_cursor,
         );
 
+        let motion_sample_frames = frame_number.min(DISPLAY_MOTION_SAMPLE_FRAMES);
+        let motion_frame_delta = motion_sample_frames as f32 / fps_f32;
+        let motion_prev_frame_time = (frame_time - motion_frame_delta).max(0.0);
+        let motion_prev_recording_time = (current_recording_time - motion_frame_delta).max(0.0);
+        let motion_frame_span = if has_previous {
+            ((frame_time - motion_prev_frame_time) * fps_f32).max(1.0)
+        } else {
+            1.0
+        };
+        let motion_prev_segments_cursor =
+            SegmentsCursor::new(motion_prev_frame_time as f64, zoom_segments);
+        let motion_prev_recording_time_for_zoom_focus_interpolate = motion_prev_segments_cursor
+            .segment
+            .filter(|s| matches!(s.mode, cap_project::ZoomMode::Auto))
+            .map(|s| motion_prev_recording_time.min(s.end as f32))
+            .unwrap_or(motion_prev_recording_time);
+        let motion_prev_zoom_focus = zoom_focus_interpolator
+            .interpolate(motion_prev_recording_time_for_zoom_focus_interpolate);
+        let motion_prev_actual_cursor_coord = cursor_interp_fn(motion_prev_recording_time)
+            .and_then(|c| display_cursor_coord(c.position.coord));
+        let motion_prev_segment_end_focus = motion_prev_segments_cursor
+            .prev_segment
+            .filter(|_| motion_prev_segments_cursor.segment.is_none())
+            .map(|prev| {
+                let boundary_recording_time = (motion_prev_recording_time as f64
+                    - (motion_prev_frame_time as f64 - prev.end))
+                    .clamp(0.0, prev.end) as f32;
+                zoom_focus_interpolator.interpolate(boundary_recording_time)
+            });
+        let motion_prev_segment_end_cursor = motion_prev_segments_cursor
+            .prev_segment
+            .filter(|_| motion_prev_segments_cursor.segment.is_none())
+            .and_then(|prev| {
+                let boundary_recording_time = (motion_prev_recording_time as f64
+                    - (motion_prev_frame_time as f64 - prev.end))
+                    .clamp(0.0, prev.end) as f32;
+                cursor_interp_fn(boundary_recording_time)
+            })
+            .and_then(|c| display_cursor_coord(c.position.coord));
+        let motion_prev_zoom = InterpolatedZoom::new_with_cursor_and_end_focus(
+            motion_prev_segments_cursor,
+            motion_prev_zoom_focus,
+            motion_prev_actual_cursor_coord,
+            motion_prev_segment_end_focus,
+            motion_prev_segment_end_cursor,
+        );
+
         let scene =
             InterpolatedScene::new(SceneSegmentsCursor::new(frame_time as f64, scene_segments));
         let prev_scene = InterpolatedScene::new(SceneSegmentsCursor::new(
             prev_frame_time as f64,
             scene_segments,
         ));
+
+        // Resolve the side-by-side layout once and share it with the display,
+        // camera and cursor layers. Only engages when a camera actually exists;
+        // otherwise the layers render normally (graceful full-screen fallback).
+        let split_layout: Option<SplitLayoutComputed> = if scene.is_split() {
+            options
+                .camera_size
+                .filter(|_| !project.camera.hide)
+                .map(|camera_size| {
+                    let out_w = output_size.0 as f32;
+                    let out_h = output_size.1 as f32;
+                    let horizontal =
+                        (out_w / out_h.max(f32::EPSILON)) >= SPLIT_STACK_ASPECT_THRESHOLD;
+
+                    let (screen_target, camera_target) = if horizontal {
+                        let mid = out_w * 0.5;
+                        ([0.0, 0.0, mid, out_h], [mid, 0.0, out_w, out_h])
+                    } else {
+                        let mid = out_h * 0.5;
+                        ([0.0, 0.0, out_w, mid], [0.0, mid, out_w, out_h])
+                    };
+
+                    let params = scene_segments
+                        .iter()
+                        .find(|s| {
+                            matches!(s.mode, SceneMode::SplitScreen)
+                                && (frame_time as f64) >= s.start - s.transition_in.max(0.0)
+                                && (frame_time as f64) < s.end + s.transition_out.max(0.0)
+                        })
+                        .and_then(|s| s.split_layout)
+                        .unwrap_or_default();
+
+                    let screen_src_origin = [crop.position.x as f32, crop.position.y as f32];
+                    let screen_src_size = [crop.size.x as f32, crop.size.y as f32];
+                    let camera_src_size = [camera_size.x as f32, camera_size.y as f32];
+
+                    let screen = SplitPaneLayout {
+                        target: screen_target,
+                        crop: fit_crop_to_target(
+                            screen_src_origin,
+                            screen_src_size,
+                            (screen_target[2] - screen_target[0])
+                                / (screen_target[3] - screen_target[1]).max(f32::EPSILON),
+                            [
+                                params.screen_position.x as f32,
+                                params.screen_position.y as f32,
+                            ],
+                            params.screen_zoom as f32,
+                        ),
+                        focal: [
+                            params.screen_position.x as f32,
+                            params.screen_position.y as f32,
+                        ],
+                        zoom: params.screen_zoom as f32,
+                        src_origin: screen_src_origin,
+                        src_size: screen_src_size,
+                    };
+                    let camera = SplitPaneLayout {
+                        target: camera_target,
+                        crop: fit_crop_to_target(
+                            [0.0, 0.0],
+                            camera_src_size,
+                            (camera_target[2] - camera_target[0])
+                                / (camera_target[3] - camera_target[1]).max(f32::EPSILON),
+                            [
+                                params.camera_position.x as f32,
+                                params.camera_position.y as f32,
+                            ],
+                            params.camera_zoom as f32,
+                        ),
+                        focal: [
+                            params.camera_position.x as f32,
+                            params.camera_position.y as f32,
+                        ],
+                        zoom: params.camera_zoom as f32,
+                        src_origin: [0.0, 0.0],
+                        src_size: camera_src_size,
+                    };
+
+                    SplitLayoutComputed {
+                        screen,
+                        camera,
+                        factor: scene.split_factor,
+                    }
+                })
+        } else {
+            None
+        };
 
         let (display, display_motion_parent) = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
@@ -2592,10 +2962,8 @@ impl ProjectUniforms {
             let (start, end) =
                 Self::display_bounds(&zoom, display_offset, display_size, output_size);
             let (prev_start, prev_end) =
-                Self::display_bounds(&prev_zoom, display_offset, display_size, output_size);
+                Self::display_bounds(&motion_prev_zoom, display_offset, display_size, output_size);
 
-            let target_size = (end - start).coord;
-            let min_target_axis = target_size.x.min(target_size.y);
             let scene_blur_strength = (scene.screen_blur as f32 * 0.8).min(1.2);
 
             let display_motion = Self::compute_display_motion_blur(
@@ -2604,24 +2972,48 @@ impl ProjectUniforms {
                 has_previous,
                 normalized_screen_motion,
                 scene_blur_strength,
+                motion_frame_span,
             );
             let descriptor = display_motion.descriptor;
             let display_parent_motion_px = display_motion.parent_movement_px;
+
+            // Morph the screen toward its split-screen half (and its
+            // aspect-matched crop) by the scene's split factor; the normal
+            // full-frame rect is untouched when not splitting (split_t == 0).
+            let base_target_bounds = [start.x as f32, start.y as f32, end.x as f32, end.y as f32];
+            let base_crop_bounds = [
+                crop_start.x as f32,
+                crop_start.y as f32,
+                crop_end.x as f32,
+                crop_end.y as f32,
+            ];
+            let split_t = split_layout.as_ref().map_or(0.0, |s| s.factor as f32);
+            let split_fade = 1.0 - split_t;
+            let final_target_bounds = split_layout.as_ref().map_or(base_target_bounds, |s| {
+                lerp_bounds(base_target_bounds, s.screen.target, split_t)
+            });
+            // Derive the crop from the CURRENT (lerped) target aspect so crop
+            // aspect always equals target aspect during the morph — a linear
+            // crop lerp would distort the image mid-transition.
+            let final_crop_bounds = split_layout.as_ref().map_or(base_crop_bounds, |s| {
+                s.screen.crop_for(final_target_bounds, split_t)
+            });
+            let final_target_size = [
+                final_target_bounds[2] - final_target_bounds[0],
+                final_target_bounds[3] - final_target_bounds[1],
+            ];
+            let final_min_axis = final_target_size[0].min(final_target_size[1]) as f64;
 
             (
                 CompositeVideoFrameUniforms {
                     output_size: [output_size.x as f32, output_size.y as f32],
                     frame_size: size,
-                    crop_bounds: [
-                        crop_start.x as f32,
-                        crop_start.y as f32,
-                        crop_end.x as f32,
-                        crop_end.y as f32,
-                    ],
-                    target_bounds: [start.x as f32, start.y as f32, end.x as f32, end.y as f32],
-                    target_size: [target_size.x as f32, target_size.y as f32],
-                    rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis)
-                        as f32,
+                    crop_bounds: final_crop_bounds,
+                    target_bounds: final_target_bounds,
+                    target_size: final_target_size,
+                    rounding_px: (project.background.rounding / 100.0 * 0.5 * final_min_axis)
+                        as f32
+                        * split_fade,
                     rounding_type: rounding_type_value(project.background.rounding_type),
                     mirror_x: 0.0,
                     motion_blur_vector: descriptor.movement_vector_uv,
@@ -2632,7 +3024,7 @@ impl ProjectUniforms {
                         descriptor.zoom_amount,
                         0.0,
                     ],
-                    shadow: project.background.shadow,
+                    shadow: project.background.shadow * split_fade,
                     shadow_size: project
                         .background
                         .advanced_shadow
@@ -2642,7 +3034,8 @@ impl ProjectUniforms {
                         .background
                         .advanced_shadow
                         .as_ref()
-                        .map_or(18.0, |s| s.opacity),
+                        .map_or(18.0, |s| s.opacity)
+                        * split_fade,
                     shadow_blur: project
                         .background
                         .advanced_shadow
@@ -2660,7 +3053,12 @@ impl ProjectUniforms {
                         0.0
                     },
                     border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
-                    _padding1: [0.0; 4],
+                    preserve_source_alpha: if options.preserve_screen_alpha {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    _padding1: [0.0; 3],
                     border_color: if let Some(b) = project.background.border.as_ref() {
                         [
                             b.color[0] as f32 / 255.0,
@@ -2739,18 +3137,24 @@ impl ProjectUniforms {
                 let position = position_for(size);
                 let prev_position = position_for(prev_size);
 
-                let target_bounds = [
-                    position[0],
-                    position[1],
-                    position[0] + size[0],
-                    position[1] + size[1],
-                ];
-                let prev_target_bounds = [
-                    prev_position[0],
-                    prev_position[1],
-                    prev_position[0] + prev_size[0],
-                    prev_position[1] + prev_size[1],
-                ];
+                let target_bounds = snap_bounds_to_output_pixels(
+                    [
+                        position[0],
+                        position[1],
+                        position[0] + size[0],
+                        position[1] + size[1],
+                    ],
+                    output_size,
+                );
+                let prev_target_bounds = snap_bounds_to_output_pixels(
+                    [
+                        prev_position[0],
+                        prev_position[1],
+                        prev_position[0] + prev_size[0],
+                        prev_position[1] + prev_size[1],
+                    ],
+                    output_size,
+                );
 
                 let current_bounds = MotionBounds::new(
                     Coord::new(XY::new(target_bounds[0] as f64, target_bounds[1] as f64)),
@@ -2787,16 +3191,41 @@ impl ProjectUniforms {
                     }
                 };
 
+                // Morph the camera from its PiP overlay toward its split-screen
+                // half by the split factor. The crop is re-derived from the
+                // current (lerped) target's aspect so it never distorts: at
+                // t == 0 it reproduces the shape crop (square center-crop /
+                // source), at t == 1 it is the aspect-fill split crop.
+                let split_t = split_layout.as_ref().map_or(0.0, |s| s.factor as f32);
+                let split_fade = 1.0 - split_t;
+                let final_target_bounds = snap_bounds_to_output_pixels(
+                    split_layout.as_ref().map_or(target_bounds, |s| {
+                        lerp_bounds(target_bounds, s.camera.target, split_t)
+                    }),
+                    output_size,
+                );
+                let final_crop_bounds = inset_crop_bounds(
+                    split_layout.as_ref().map_or(crop_bounds, |s| {
+                        s.camera.crop_for(final_target_bounds, split_t)
+                    }),
+                    frame_size,
+                    CAMERA_EDGE_CROP_INSET_PX,
+                );
+                let final_target_size = [
+                    final_target_bounds[2] - final_target_bounds[0],
+                    final_target_bounds[3] - final_target_bounds[1],
+                ];
+
                 CompositeVideoFrameUniforms {
                     output_size,
                     frame_size,
-                    crop_bounds,
-                    target_bounds,
-                    target_size: [
-                        target_bounds[2] - target_bounds[0],
-                        target_bounds[3] - target_bounds[1],
-                    ],
-                    rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]),
+                    crop_bounds: final_crop_bounds,
+                    target_bounds: final_target_bounds,
+                    target_size: final_target_size,
+                    rounding_px: project.camera.rounding / 100.0
+                        * 0.5
+                        * final_target_size[0].min(final_target_size[1])
+                        * split_fade,
                     rounding_type: rounding_type_value(project.camera.rounding_type),
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     motion_blur_vector: camera_descriptor.movement_vector_uv,
@@ -2807,7 +3236,7 @@ impl ProjectUniforms {
                         camera_descriptor.zoom_amount,
                         0.0,
                     ],
-                    shadow: project.camera.shadow,
+                    shadow: project.camera.shadow * split_fade,
                     shadow_size: project
                         .camera
                         .advanced_shadow
@@ -2817,7 +3246,8 @@ impl ProjectUniforms {
                         .camera
                         .advanced_shadow
                         .as_ref()
-                        .map_or(18.0, |s| s.opacity),
+                        .map_or(18.0, |s| s.opacity)
+                        * split_fade,
                     shadow_blur: project
                         .camera
                         .advanced_shadow
@@ -2826,7 +3256,8 @@ impl ProjectUniforms {
                     opacity: scene.regular_camera_transition_opacity() as f32,
                     border_enabled: 0.0,
                     border_width: 0.0,
-                    _padding1: [0.0; 4],
+                    preserve_source_alpha: 0.0,
+                    _padding1: [0.0; 3],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                 }
             });
@@ -2849,12 +3280,15 @@ impl ProjectUniforms {
                     (output_size[1] - size[1]) / 2.0,
                 ];
 
-                let target_bounds = [
-                    position[0],
-                    position[1],
-                    position[0] + size[0],
-                    position[1] + size[1],
-                ];
+                let target_bounds = snap_bounds_to_output_pixels(
+                    [
+                        position[0],
+                        position[1],
+                        position[0] + size[0],
+                        position[1] + size[1],
+                    ],
+                    output_size,
+                );
 
                 // In camera-only mode, we ignore the camera shape setting (Square/Source)
                 // and just apply the minimum crop needed to fill the output aspect ratio.
@@ -2870,15 +3304,19 @@ impl ProjectUniforms {
                     let crop_y = (frame_size[1] - visible_height) / 2.0;
                     [0.0, crop_y, frame_size[0], frame_size[1] - crop_y]
                 };
+                let crop_bounds =
+                    inset_crop_bounds(crop_bounds, frame_size, CAMERA_EDGE_CROP_INSET_PX);
 
-                let camera_only_blur =
-                    (scene.camera_only_blur as f32 * CAMERA_ONLY_MULTIPLIER).clamp(0.0, 1.0);
+                let camera_only_blur = (scene.camera_only_blur as f32
+                    * CAMERA_ONLY_MULTIPLIER
+                    * normalized_screen_motion)
+                    .clamp(0.0, 1.0);
                 let camera_only_descriptor = if camera_only_blur <= f32::EPSILON {
                     MotionBlurDescriptor::none()
                 } else {
                     MotionBlurDescriptor::zoom(
                         XY::new(0.5, 0.5),
-                        (camera_only_blur * 0.75).min(MAX_ZOOM_AMOUNT),
+                        (camera_only_blur * 0.75).min(MAX_ZOOM_IN_AMOUNT),
                         camera_only_blur,
                     )
                 };
@@ -2910,7 +3348,8 @@ impl ProjectUniforms {
                     opacity: scene.camera_only_transition_opacity() as f32,
                     border_enabled: 0.0,
                     border_width: 0.0,
-                    _padding1: [0.0; 4],
+                    preserve_source_alpha: 0.0,
+                    _padding1: [0.0; 3],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                 }
             });
@@ -2951,6 +3390,7 @@ impl ProjectUniforms {
             project: project.clone(),
             zoom,
             scene,
+            split: split_layout,
             interpolated_cursor,
             frame_rate: fps,
             frame_number,
@@ -2972,7 +3412,44 @@ mod tests {
         RenderOptions {
             screen_size: XY::new(screen_width, screen_height),
             camera_size: None,
+            preserve_screen_alpha: false,
         }
+    }
+
+    fn motion_bounds(start: XY<f64>, end: XY<f64>) -> MotionBounds {
+        MotionBounds::new(
+            Coord::<FrameSpace>::new(start),
+            Coord::<FrameSpace>::new(end),
+        )
+    }
+
+    #[test]
+    fn snap_bounds_to_output_pixels_stabilizes_fractional_camera_bounds() {
+        let bounds = snap_bounds_to_output_pixels([10.4, 20.6, 110.49, 220.51], [1920.0, 1080.0]);
+
+        assert_eq!(bounds, [10.0, 21.0, 110.0, 221.0]);
+    }
+
+    #[test]
+    fn snap_bounds_to_output_pixels_preserves_minimum_size_at_edges() {
+        let bounds =
+            snap_bounds_to_output_pixels([1919.7, 1079.8, 1920.2, 1080.4], [1920.0, 1080.0]);
+
+        assert_eq!(bounds, [1919.0, 1079.0, 1920.0, 1080.0]);
+    }
+
+    #[test]
+    fn inset_crop_bounds_keeps_camera_sampling_away_from_source_edges() {
+        let bounds = inset_crop_bounds([0.0, 0.0, 640.0, 480.0], [640.0, 480.0], 2.0);
+
+        assert_eq!(bounds, [2.0, 2.0, 638.0, 478.0]);
+    }
+
+    #[test]
+    fn inset_crop_bounds_preserves_tiny_crops() {
+        let bounds = inset_crop_bounds([0.0, 0.0, 1.0, 1.0], [1.0, 1.0], 2.0);
+
+        assert_eq!(bounds, [0.0, 0.0, 1.0, 1.0]);
     }
 
     #[test]
@@ -3041,6 +3518,102 @@ mod tests {
         assert!((size.x - 1920.0).abs() <= 1.0);
         assert!((size.y - 1080.0).abs() <= 1.0);
     }
+
+    #[test]
+    fn display_zoom_out_motion_blur_is_subtle() {
+        let previous = motion_bounds(XY::new(-960.0, -540.0), XY::new(2880.0, 1620.0));
+        let current = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+
+        let blur =
+            ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.0, 1.0);
+
+        assert_eq!(blur.descriptor.mode, MotionBlurMode::Zoom);
+        assert!(blur.descriptor.zoom_amount <= 0.014);
+    }
+
+    #[test]
+    fn display_zoom_in_motion_blur_is_subtle() {
+        let previous = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+        let current = motion_bounds(XY::new(-960.0, -540.0), XY::new(2880.0, 1620.0));
+
+        let blur =
+            ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.0, 1.0);
+
+        assert_eq!(blur.descriptor.mode, MotionBlurMode::Zoom);
+        assert!(blur.descriptor.zoom_amount <= 0.08);
+    }
+
+    #[test]
+    fn display_movement_motion_blur_ramps_with_velocity() {
+        let base = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+        let slow = motion_bounds(XY::new(0.5, 0.0), XY::new(1920.5, 1080.0));
+        let medium = motion_bounds(XY::new(12.0, 0.0), XY::new(1932.0, 1080.0));
+        let fast = motion_bounds(XY::new(48.0, 0.0), XY::new(1968.0, 1080.0));
+
+        let slow_blur =
+            ProjectUniforms::compute_display_motion_blur(slow, base, true, 1.0, 0.0, 1.0);
+        let medium_blur =
+            ProjectUniforms::compute_display_motion_blur(medium, base, true, 1.0, 0.0, 1.0);
+        let fast_blur =
+            ProjectUniforms::compute_display_motion_blur(fast, base, true, 1.0, 0.0, 1.0);
+
+        assert_eq!(slow_blur.descriptor.mode, MotionBlurMode::None);
+        assert_eq!(medium_blur.descriptor.mode, MotionBlurMode::Movement);
+        assert!(medium_blur.descriptor.strength > 0.0);
+        assert!(medium_blur.descriptor.strength < fast_blur.descriptor.strength);
+        assert_eq!(fast_blur.descriptor.strength, 1.0);
+    }
+
+    #[test]
+    fn display_movement_motion_blur_caps_extreme_velocity() {
+        let base = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+        let extreme = motion_bounds(XY::new(5000.0, 0.0), XY::new(6920.0, 1080.0));
+
+        let blur = ProjectUniforms::compute_display_motion_blur(extreme, base, true, 1.0, 0.0, 1.0);
+        let len = (blur.descriptor.movement_vector_uv[0].powi(2)
+            + blur.descriptor.movement_vector_uv[1].powi(2))
+        .sqrt();
+
+        assert_eq!(blur.descriptor.mode, MotionBlurMode::Movement);
+        assert!(len <= MOTION_VECTOR_CAP + f32::EPSILON);
+    }
+
+    #[test]
+    fn display_scale_change_prefers_stable_zoom_blur_over_pan_blur() {
+        let previous = motion_bounds(XY::new(-800.0, -700.0), XY::new(3040.0, 1460.0));
+        let current = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+
+        let blur =
+            ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.0, 1.0);
+
+        assert_eq!(blur.descriptor.mode, MotionBlurMode::Zoom);
+    }
+
+    #[test]
+    fn display_zoom_out_remains_visible_with_stabilized_sampling() {
+        let previous = motion_bounds(XY::new(-960.0, -540.0), XY::new(2880.0, 1620.0));
+        let current = motion_bounds(XY::new(-480.0, -270.0), XY::new(2400.0, 1350.0));
+
+        let blur =
+            ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.0, 3.0);
+
+        assert_eq!(blur.descriptor.mode, MotionBlurMode::Zoom);
+        assert!(blur.descriptor.zoom_amount > 0.003);
+        assert!(blur.descriptor.zoom_amount <= MAX_ZOOM_OUT_AMOUNT);
+    }
+
+    #[test]
+    fn display_motion_sample_span_normalizes_blur_velocity() {
+        let base = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+        let moved = motion_bounds(XY::new(48.0, 0.0), XY::new(1968.0, 1080.0));
+
+        let one_frame =
+            ProjectUniforms::compute_display_motion_blur(moved, base, true, 1.0, 0.0, 1.0);
+        let three_frame =
+            ProjectUniforms::compute_display_motion_blur(moved, base, true, 1.0, 0.0, 3.0);
+
+        assert!(three_frame.descriptor.strength < one_frame.descriptor.strength);
+    }
 }
 
 #[derive(Clone)]
@@ -3049,6 +3622,28 @@ pub struct DecodedSegmentFrames {
     pub camera_frame: Option<DecodedFrame>,
     pub segment_time: f32,
     pub recording_time: f32,
+    pub segment_has_camera: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameRenderStageTimings {
+    pub prepare_duration: std::time::Duration,
+    pub background_prepare_duration: std::time::Duration,
+    pub background_blur_prepare_duration: std::time::Duration,
+    pub display_prepare_duration: std::time::Duration,
+    pub cursor_prepare_duration: std::time::Duration,
+    pub camera_prepare_duration: std::time::Duration,
+    pub camera_only_prepare_duration: std::time::Duration,
+    pub camera_blur_prepare_duration: std::time::Duration,
+    pub text_prepare_duration: std::time::Duration,
+    pub captions_prepare_duration: std::time::Duration,
+    pub keyboard_prepare_duration: std::time::Duration,
+    pub layer_render_duration: std::time::Duration,
+    pub finish_duration: std::time::Duration,
+    pub finish_wait_previous_duration: std::time::Duration,
+    pub finish_resize_duration: std::time::Duration,
+    pub finish_submit_readback_duration: std::time::Duration,
+    pub immediate_flush_duration: std::time::Duration,
 }
 
 pub struct FrameRenderer<'a> {
@@ -3074,6 +3669,13 @@ impl<'a> FrameRenderer<'a> {
         self.session = None;
     }
 
+    pub fn prepare_output_size(&mut self, width: u32, height: u32) {
+        let session = self
+            .session
+            .get_or_insert_with(|| RenderSession::new(&self.constants.device, width, height));
+        session.update_texture_size(&self.constants.device, width, height);
+    }
+
     pub async fn render(
         &mut self,
         segment_frames: DecodedSegmentFrames,
@@ -3082,6 +3684,19 @@ impl<'a> FrameRenderer<'a> {
         render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<Option<RenderedFrame>, RenderingError> {
+        self.render_with_timings(segment_frames, uniforms, cursor, render_display, layers)
+            .await
+            .map(|(frame, _)| frame)
+    }
+
+    pub async fn render_with_timings(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        render_display: bool,
+        layers: &mut RendererLayers,
+    ) -> Result<(Option<RenderedFrame>, FrameRenderStageTimings), RenderingError> {
         let mut last_error = None;
 
         for attempt in 0..Self::MAX_RENDER_RETRIES {
@@ -3110,7 +3725,7 @@ impl<'a> FrameRenderer<'a> {
                 uniforms.output_size.1,
             );
 
-            match produce_frame(
+            match produce_frame_with_timings(
                 self.constants,
                 segment_frames.clone(),
                 uniforms.clone(),
@@ -3121,7 +3736,7 @@ impl<'a> FrameRenderer<'a> {
             )
             .await
             {
-                Ok(opt_frame) => return Ok(opt_frame),
+                Ok(result) => return Ok(result),
                 Err(RenderingError::BufferMapWaitingFailed) => {
                     tracing::warn!(
                         frame_number = uniforms.frame_number,
@@ -3154,15 +3769,34 @@ impl<'a> FrameRenderer<'a> {
         render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<RenderedFrame, RenderingError> {
-        if let Some(frame) = self
-            .render(segment_frames, uniforms, cursor, render_display, layers)
-            .await?
-        {
-            return Ok(frame);
-        }
-        self.flush_pipeline()
+        self.render_immediate_with_timings(segment_frames, uniforms, cursor, render_display, layers)
             .await
-            .unwrap_or(Err(RenderingError::BufferMapWaitingFailed))
+            .map(|(frame, _)| frame)
+    }
+
+    pub async fn render_immediate_with_timings(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        render_display: bool,
+        layers: &mut RendererLayers,
+    ) -> Result<(RenderedFrame, FrameRenderStageTimings), RenderingError> {
+        let (frame, mut timings) = self
+            .render_with_timings(segment_frames, uniforms, cursor, render_display, layers)
+            .await?;
+
+        if let Some(frame) = frame {
+            return Ok((frame, timings));
+        }
+
+        let flush_start = Instant::now();
+        let frame = self
+            .flush_pipeline()
+            .await
+            .unwrap_or(Err(RenderingError::BufferMapWaitingFailed))?;
+        timings.immediate_flush_duration = flush_start.elapsed();
+        Ok((frame, timings))
     }
 
     pub async fn flush_pipeline(&mut self) -> Option<Result<RenderedFrame, RenderingError>> {
@@ -3576,6 +4210,15 @@ impl RendererLayers {
         }
     }
 
+    pub fn preload_cursor_assets(
+        &mut self,
+        constants: &RenderVideoConstants,
+        use_svg: bool,
+        cursor_type: &CursorType,
+    ) {
+        self.cursor.preload_assets(constants, use_svg, cursor_type);
+    }
+
     pub async fn prepare(
         &mut self,
         constants: &RenderVideoConstants,
@@ -3588,7 +4231,10 @@ impl RendererLayers {
             .prepare(
                 constants,
                 uniforms,
-                Background::from(uniforms.project.background.source.clone()),
+                Background::from_source(
+                    uniforms.project.background.source.clone(),
+                    constants.options.preserve_screen_alpha,
+                ),
             )
             .await?;
 
@@ -3615,28 +4261,45 @@ impl RendererLayers {
             constants,
         );
 
+        let camera_frame_data = if segment_frames.segment_has_camera {
+            constants.options.camera_size.and_then(|_| {
+                segment_frames.camera_frame.as_ref().map(|frame| {
+                    // Use the decoded frame's own dimensions rather than the project's
+                    // configured `camera_size` (which is taken from the first recording).
+                    // An imported clip can carry a camera recorded at a different
+                    // resolution; uploading it with the first clip's size makes the YUV
+                    // upload fail and leaves the previous clip's camera on screen.
+                    (
+                        XY::new(frame.width(), frame.height()),
+                        frame,
+                        segment_frames.recording_time,
+                    )
+                })
+            })
+        } else {
+            None
+        };
+
         self.camera.prepare(
             &constants.device,
             &constants.queue,
-            uniforms.camera,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
+            if segment_frames.segment_has_camera {
+                uniforms.camera
+            } else {
+                None
+            },
+            camera_frame_data,
         );
 
         self.camera_only.prepare(
             &constants.device,
             &constants.queue,
-            uniforms.camera_only,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
+            if segment_frames.segment_has_camera {
+                uniforms.camera_only
+            } else {
+                None
+            },
+            camera_frame_data,
         );
 
         if let Some(mode) = blur_mode_from_config(&uniforms.project.camera.background_blur) {
@@ -3677,18 +4340,49 @@ impl RendererLayers {
         encoder: &mut wgpu::CommandEncoder,
         render_display: bool,
     ) -> Result<(), RenderingError> {
+        self.prepare_with_encoder_timed(
+            constants,
+            uniforms,
+            segment_frames,
+            cursor,
+            encoder,
+            render_display,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn prepare_with_encoder_timed(
+        &mut self,
+        constants: &RenderVideoConstants,
+        uniforms: &ProjectUniforms,
+        segment_frames: &DecodedSegmentFrames,
+        cursor: &CursorEvents,
+        encoder: &mut wgpu::CommandEncoder,
+        render_display: bool,
+    ) -> Result<FrameRenderStageTimings, RenderingError> {
+        let mut timings = FrameRenderStageTimings::default();
+
+        let start = Instant::now();
         self.background
             .prepare(
                 constants,
                 uniforms,
-                Background::from(uniforms.project.background.source.clone()),
+                Background::from_source(
+                    uniforms.project.background.source.clone(),
+                    constants.options.preserve_screen_alpha,
+                ),
             )
             .await?;
+        timings.background_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         if uniforms.project.background.blur > 0.0 {
             self.background_blur.prepare(&constants.queue, uniforms);
         }
+        timings.background_blur_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         if render_display {
             self.display.prepare_with_encoder(
                 &constants.device,
@@ -3699,7 +4393,9 @@ impl RendererLayers {
                 encoder,
             );
         }
+        timings.display_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         self.cursor.prepare(
             segment_frames,
             uniforms.resolution_base,
@@ -3708,33 +4404,56 @@ impl RendererLayers {
             uniforms,
             constants,
         );
+        timings.cursor_prepare_duration = start.elapsed();
 
+        let camera_frame_data = if segment_frames.segment_has_camera {
+            constants.options.camera_size.and_then(|_| {
+                segment_frames.camera_frame.as_ref().map(|frame| {
+                    // Use the decoded frame's own dimensions rather than the project's
+                    // configured `camera_size` (which is taken from the first recording).
+                    // An imported clip can carry a camera recorded at a different
+                    // resolution; uploading it with the first clip's size makes the YUV
+                    // upload fail and leaves the previous clip's camera on screen.
+                    (
+                        XY::new(frame.width(), frame.height()),
+                        frame,
+                        segment_frames.recording_time,
+                    )
+                })
+            })
+        } else {
+            None
+        };
+
+        let start = Instant::now();
         self.camera.prepare_with_encoder(
             &constants.device,
             &constants.queue,
-            uniforms.camera,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
+            if segment_frames.segment_has_camera {
+                uniforms.camera
+            } else {
+                None
+            },
+            camera_frame_data,
             encoder,
         );
+        timings.camera_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         self.camera_only.prepare_with_encoder(
             &constants.device,
             &constants.queue,
-            uniforms.camera_only,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
+            if segment_frames.segment_has_camera {
+                uniforms.camera_only
+            } else {
+                None
+            },
+            camera_frame_data,
             encoder,
         );
+        timings.camera_only_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         if let Some(mode) = blur_mode_from_config(&uniforms.project.camera.background_blur) {
             self.run_shared_camera_blur_with_encoder(
                 &constants.device,
@@ -3743,21 +4462,27 @@ impl RendererLayers {
                 mode,
             );
         }
+        timings.camera_blur_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         self.text.prepare(
             &constants.device,
             &constants.queue,
             uniforms.output_size,
             &uniforms.texts,
         );
+        timings.text_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         self.captions.prepare(
             uniforms,
             segment_frames,
             XY::new(uniforms.output_size.0, uniforms.output_size.1),
             constants,
         );
+        timings.captions_prepare_duration = start.elapsed();
 
+        let start = Instant::now();
         self.keyboard.prepare(
             uniforms,
             segment_frames,
@@ -3765,8 +4490,9 @@ impl RendererLayers {
             constants,
             self.captions.active_layout(),
         );
+        timings.keyboard_prepare_duration = start.elapsed();
 
-        Ok(())
+        Ok(timings)
     }
 
     pub fn render(
@@ -3873,7 +4599,7 @@ impl RendererLayers {
     }
 }
 
-async fn produce_frame(
+async fn produce_frame_with_timings(
     constants: &RenderVideoConstants,
     segment_frames: DecodedSegmentFrames,
     uniforms: ProjectUniforms,
@@ -3881,15 +4607,16 @@ async fn produce_frame(
     render_display: bool,
     layers: &mut RendererLayers,
     session: &mut RenderSession,
-) -> Result<Option<RenderedFrame>, RenderingError> {
+) -> Result<(Option<RenderedFrame>, FrameRenderStageTimings), RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         }),
     );
 
-    layers
-        .prepare_with_encoder(
+    let prepare_start = Instant::now();
+    let mut timings = layers
+        .prepare_with_encoder_timed(
             constants,
             &uniforms,
             &segment_frames,
@@ -3898,7 +4625,9 @@ async fn produce_frame(
             render_display,
         )
         .await?;
+    timings.prepare_duration = prepare_start.elapsed();
 
+    let layer_render_start = Instant::now();
     layers.render(
         &constants.device,
         &constants.queue,
@@ -3907,15 +4636,23 @@ async fn produce_frame(
         &uniforms,
         render_display,
     );
+    timings.layer_render_duration = layer_render_start.elapsed();
 
-    finish_encoder(
+    let finish_start = Instant::now();
+    let (frame, finish_timings) = finish_encoder_timed(
         session,
         &constants.device,
         &constants.queue,
         &uniforms,
         encoder,
     )
-    .await
+    .await?;
+    timings.finish_duration = finish_start.elapsed();
+    timings.finish_wait_previous_duration = finish_timings.wait_previous_duration;
+    timings.finish_resize_duration = finish_timings.resize_duration;
+    timings.finish_submit_readback_duration = finish_timings.submit_readback_duration;
+
+    Ok((frame, timings))
 }
 
 fn blur_mode_from_config(

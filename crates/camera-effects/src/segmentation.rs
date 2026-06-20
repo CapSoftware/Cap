@@ -1,8 +1,13 @@
 use anyhow::Context;
 use ort::session::Session;
 use ort::value::Value;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::path::PathBuf;
+
+#[cfg(target_os = "macos")]
+const ORT_LIBRARY_NAME: &str = "libonnxruntime.dylib";
+#[cfg(target_os = "linux")]
+const ORT_LIBRARY_NAME: &str = "libonnxruntime.so";
 
 const MODEL_BYTES: &[u8] = include_bytes!("../assets/selfie_segmentation.onnx");
 const MODEL_INPUT_SIZE: usize = 256;
@@ -85,7 +90,7 @@ fn create_session() -> anyhow::Result<Session> {
     Ok(session)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn init_runtime() -> anyhow::Result<()> {
     let path = std::env::var_os("ORT_DYLIB_PATH")
         .map(PathBuf::from)
@@ -94,7 +99,7 @@ fn init_runtime() -> anyhow::Result<()> {
                 .into_iter()
                 .find(|path| path.exists())
         })
-        .context("Failed to find macOS ONNX Runtime dylib")?;
+        .context("Failed to find ONNX Runtime library")?;
 
     let _ = ort::init_from(&path)
         .with_context(|| format!("Failed to load ONNX Runtime from {}", path.display()))?
@@ -103,19 +108,19 @@ fn init_runtime() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn init_runtime() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn onnx_runtime_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
     if let Ok(exe) = std::env::current_exe()
         && let Some(exe_dir) = exe.parent()
     {
-        candidates.push(exe_dir.join("libonnxruntime.dylib"));
+        candidates.push(exe_dir.join(ORT_LIBRARY_NAME));
 
         if let Some(contents_dir) = exe_dir.parent() {
             candidates.push(
@@ -123,14 +128,15 @@ fn onnx_runtime_candidates() -> Vec<PathBuf> {
                     .join("Resources")
                     .join("onnxruntime")
                     .join("lib")
-                    .join("libonnxruntime.dylib"),
+                    .join(ORT_LIBRARY_NAME),
             );
         }
     }
 
     candidates.push(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/native-deps/onnxruntime/lib/libonnxruntime.dylib"),
+            .join("../../target/native-deps/onnxruntime/lib")
+            .join(ORT_LIBRARY_NAME),
     );
 
     candidates

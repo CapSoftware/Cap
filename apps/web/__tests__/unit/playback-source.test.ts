@@ -235,7 +235,34 @@ describe("resolvePlaybackSource", () => {
 		expect(result).toBeNull();
 	});
 
-	it("falls back after MP4 network errors and returns null when no source works", async () => {
+	it("uses a same-origin MP4 source when the probe is blocked after redirect", async () => {
+		const fetchImpl = vi
+			.fn<typeof fetch>()
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+		const result = await resolvePlaybackSource({
+			videoSrc: "/api/playlist?videoType=mp4",
+			rawFallbackSrc: "/api/playlist?videoType=raw-preview",
+			enableCrossOrigin: true,
+			fetchImpl,
+			now: () => 350,
+		});
+
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+		expect(fetchImpl).toHaveBeenCalledWith(
+			"/api/playlist?videoType=mp4&_t=350",
+			{
+				headers: { range: "bytes=0-0" },
+			},
+		);
+		expect(result).toEqual({
+			url: "/api/playlist?videoType=mp4&_t=350",
+			type: "mp4",
+			supportsCrossOrigin: false,
+		});
+	});
+
+	it("falls back after absolute MP4 network errors and returns null when no source works", async () => {
 		const fetchImpl = vi
 			.fn<typeof fetch>()
 			.mockRejectedValueOnce(new Error("network"))
@@ -246,7 +273,7 @@ describe("resolvePlaybackSource", () => {
 			);
 
 		const result = await resolvePlaybackSource({
-			videoSrc: "/api/playlist?videoType=mp4",
+			videoSrc: "https://cap.so/api/playlist?videoType=mp4",
 			rawFallbackSrc: "/api/playlist?videoType=raw-preview",
 			fetchImpl,
 			now: () => 400,

@@ -37,6 +37,10 @@ interface ResetFrameStateMessage {
 	type: "reset-frame-state";
 }
 
+interface WakeMessage {
+	type: "wake";
+}
+
 interface ReadyMessage {
 	type: "ready";
 }
@@ -90,7 +94,8 @@ type IncomingMessage =
 	| ResizeMessage
 	| InitSharedBufferMessage
 	| CleanupMessage
-	| ResetFrameStateMessage;
+	| ResetFrameStateMessage
+	| WakeMessage;
 
 interface FrameTiming {
 	frameNumber: number;
@@ -123,6 +128,7 @@ interface PendingFrameWebGPUNv12 {
 	width: number;
 	height: number;
 	yStride: number;
+	fullRange: boolean;
 	timing: FrameTiming;
 	releaseCallback?: () => void;
 }
@@ -200,6 +206,7 @@ interface FrameMetadataNv12 {
 	width: number;
 	height: number;
 	yStride: number;
+	fullRange: boolean;
 	frameNumber: number;
 	targetTimeNs: bigint;
 	ySize: number;
@@ -209,7 +216,8 @@ interface FrameMetadataNv12 {
 
 type FrameMetadata = FrameMetadataRgba | FrameMetadataNv12;
 
-const NV12_MAGIC = 0x4e563132;
+const NV12_VIDEO_MAGIC = 0x4e563132;
+const NV12_FULL_MAGIC = 0x4e563146;
 
 function parseFrameMetadata(bytes: Uint8Array): FrameMetadata | null {
 	if (bytes.byteLength < 24) return null;
@@ -219,7 +227,7 @@ function parseFrameMetadata(bytes: Uint8Array): FrameMetadata | null {
 		const formatView = new DataView(bytes.buffer, formatOffset, 4);
 		const formatFlag = formatView.getUint32(0, true);
 
-		if (formatFlag === NV12_MAGIC) {
+		if (formatFlag === NV12_VIDEO_MAGIC || formatFlag === NV12_FULL_MAGIC) {
 			const metadataOffset = bytes.byteOffset + bytes.byteLength - 28;
 			const meta = new DataView(bytes.buffer, metadataOffset, 28);
 			const yStride = meta.getUint32(0, true);
@@ -228,10 +236,10 @@ function parseFrameMetadata(bytes: Uint8Array): FrameMetadata | null {
 			const frameNumber = meta.getUint32(12, true);
 			const targetTimeNs = meta.getBigUint64(16, true);
 
-			if (!width || !height) return null;
+			if (!width || !height || !yStride) return null;
 
 			const ySize = yStride * height;
-			const uvSize = yStride * (height / 2);
+			const uvSize = yStride * Math.floor(height / 2);
 			const totalSize = ySize + uvSize;
 
 			if (bytes.byteLength - 28 < totalSize) {
@@ -243,6 +251,7 @@ function parseFrameMetadata(bytes: Uint8Array): FrameMetadata | null {
 				width,
 				height,
 				yStride,
+				fullRange: formatFlag === NV12_FULL_MAGIC,
 				frameNumber,
 				targetTimeNs,
 				ySize,
@@ -292,6 +301,7 @@ function convertNv12ToRgba(
 	width: number,
 	height: number,
 	yStride: number,
+	fullRange = false,
 ): Uint8ClampedArray {
 	const rgbaSize = width * height * 4;
 	if (!nv12ConversionBuffer || nv12ConversionBufferSize < rgbaSize) {
@@ -307,23 +317,30 @@ function convertNv12ToRgba(
 
 	for (let row = 0; row < height; row++) {
 		const yRowOffset = row * yStride;
-		const uvRowOffset = Math.floor(row / 2) * uvStride;
+		const uvRowOffset = (row >> 1) * uvStride;
 		const rgbaRowOffset = row * width * 4;
 
-		for (let col = 0; col < width; col++) {
-			const y = yPlane[yRowOffset + col] - 16;
-
-			const uvCol = Math.floor(col / 2) * 2;
+		for (let col = 0; col < width; col += 2) {
+			const uvCol = (col >> 1) * 2;
 			const u = uvPlane[uvRowOffset + uvCol] - 128;
 			const v = uvPlane[uvRowOffset + uvCol + 1] - 128;
-
-			const c = 298 * y;
 			const d = u;
 			const e = v;
 
-			let r = (c + 409 * e + 128) >> 8;
-			let g = (c - 100 * d - 208 * e + 128) >> 8;
-			let b = (c + 516 * d + 128) >> 8;
+			const y0 = yPlane[yRowOffset + col];
+			let r: number;
+			let g: number;
+			let b: number;
+			if (fullRange) {
+				r = y0 + ((359 * e + 128) >> 8);
+				g = y0 - ((88 * d + 183 * e + 128) >> 8);
+				b = y0 + ((454 * d + 128) >> 8);
+			} else {
+				const c0 = 298 * (y0 - 16);
+				r = (c0 + 409 * e + 128) >> 8;
+				g = (c0 - 100 * d - 208 * e + 128) >> 8;
+				b = (c0 + 516 * d + 128) >> 8;
+			}
 
 			r = r < 0 ? 0 : r > 255 ? 255 : r;
 			g = g < 0 ? 0 : g > 255 ? 255 : g;
@@ -334,6 +351,34 @@ function convertNv12ToRgba(
 			rgba[rgbaOffset + 1] = g;
 			rgba[rgbaOffset + 2] = b;
 			rgba[rgbaOffset + 3] = 255;
+
+			const nextCol = col + 1;
+			if (nextCol < width) {
+				const y1 = yPlane[yRowOffset + nextCol];
+				let nextR: number;
+				let nextG: number;
+				let nextB: number;
+				if (fullRange) {
+					nextR = y1 + ((359 * e + 128) >> 8);
+					nextG = y1 - ((88 * d + 183 * e + 128) >> 8);
+					nextB = y1 + ((454 * d + 128) >> 8);
+				} else {
+					const c1 = 298 * (y1 - 16);
+					nextR = (c1 + 409 * e + 128) >> 8;
+					nextG = (c1 - 100 * d - 208 * e + 128) >> 8;
+					nextB = (c1 + 516 * d + 128) >> 8;
+				}
+
+				nextR = nextR < 0 ? 0 : nextR > 255 ? 255 : nextR;
+				nextG = nextG < 0 ? 0 : nextG > 255 ? 255 : nextG;
+				nextB = nextB < 0 ? 0 : nextB > 255 ? 255 : nextB;
+
+				const nextRgbaOffset = rgbaOffset + 4;
+				rgba[nextRgbaOffset] = nextR;
+				rgba[nextRgbaOffset + 1] = nextG;
+				rgba[nextRgbaOffset + 2] = nextB;
+				rgba[nextRgbaOffset + 3] = 255;
+			}
 		}
 	}
 
@@ -385,6 +430,7 @@ function renderBorrowedWebGPU(bytes: Uint8Array, release: () => void): boolean {
 			width,
 			height,
 			meta.yStride,
+			meta.fullRange,
 		);
 		release();
 	} else {
@@ -467,6 +513,7 @@ function queueFrameFromBytes(
 				width,
 				height,
 				yStride: meta.yStride,
+				fullRange: meta.fullRange,
 				timing,
 				releaseCallback,
 			});
@@ -642,6 +689,7 @@ function renderLoop() {
 						frame.width,
 						frame.height,
 						frame.yStride,
+						frame.fullRange,
 					);
 				} else {
 					const expectedRowBytes = frame.width * 4;
@@ -713,6 +761,7 @@ function renderLoop() {
 					frame.width,
 					frame.height,
 					frame.yStride,
+					frame.fullRange,
 				);
 			} else {
 				renderFrameWebGPU(
@@ -974,6 +1023,7 @@ function processFrameBytesSync(
 				width,
 				height,
 				yStride: meta.yStride,
+				fullRange: meta.fullRange,
 				timing,
 				releaseCallback,
 			});
@@ -1013,6 +1063,7 @@ function processFrameBytesSync(
 			width,
 			height,
 			meta.yStride,
+			meta.fullRange,
 		);
 	} else {
 		const frameData = new Uint8ClampedArray(
@@ -1092,6 +1143,11 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 			}
 		}
 		frameQueue = [];
+		return;
+	}
+
+	if (e.data.type === "wake") {
+		startRenderLoop();
 		return;
 	}
 

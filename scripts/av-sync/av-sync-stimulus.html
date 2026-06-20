@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Cap A/V Sync Stimulus</title>
+		<style>
+			:root {
+				color-scheme: dark;
+			}
+			html,
+			body {
+				margin: 0;
+				height: 100%;
+				background: #000;
+				overflow: hidden;
+				font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+			}
+			#flash {
+				position: fixed;
+				inset: 0;
+				background: #fff;
+				opacity: 0;
+			}
+			#flash.on {
+				opacity: 1;
+			}
+			#hud {
+				position: fixed;
+				left: 50%;
+				top: 50%;
+				transform: translate(-50%, -50%);
+				color: #2b8a3e;
+				text-align: center;
+				user-select: none;
+			}
+			#count {
+				font-size: 14vw;
+				font-weight: 700;
+				line-height: 1;
+			}
+			#clock {
+				font-size: 4vw;
+				opacity: 0.7;
+			}
+			#start {
+				position: fixed;
+				inset: 0;
+				display: flex;
+				flex-direction: column;
+				gap: 1rem;
+				align-items: center;
+				justify-content: center;
+				background: #000;
+				color: #fff;
+				text-align: center;
+				cursor: pointer;
+				padding: 2rem;
+			}
+			#start h1 {
+				font-size: 2rem;
+				margin: 0;
+			}
+			#start p {
+				max-width: 40rem;
+				opacity: 0.7;
+				line-height: 1.5;
+			}
+			button {
+				font: inherit;
+				font-size: 1.25rem;
+				padding: 0.75rem 2rem;
+				border-radius: 0.5rem;
+				border: 1px solid #444;
+				background: #2b8a3e;
+				color: #fff;
+				cursor: pointer;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="flash"></div>
+		<div id="hud" hidden>
+			<div id="count">0</div>
+			<div id="clock">0.0s</div>
+		</div>
+		<div id="start">
+			<h1>Cap A/V Sync Stimulus</h1>
+			<p>
+				Every <span id="interval-label">2.0</span>s the screen flashes white and a
+				click plays at the same instant. Record this page full-screen (with system
+				audio and/or your microphone), then run <code>av-sync-check</code> on the
+				recording. Append <code>?interval=1.5</code> to the URL to change the spacing.
+			</p>
+			<button id="go">Start &amp; go full-screen</button>
+			<p>
+				For a camera+mic test: point the webcam at this screen and let the mic hear
+				the speaker. For a screen+system-audio test: record this tab/display with
+				system audio enabled.
+			</p>
+		</div>
+
+		<script>
+			const params = new URLSearchParams(location.search);
+			const INTERVAL = Math.max(0.5, Number(params.get("interval")) || 2.0);
+			const FLASH_MS = 160;
+			const CLICK_MS = 50;
+			const CLICK_HZ = 1000;
+
+			document.getElementById("interval-label").textContent = INTERVAL.toFixed(1);
+
+			const flashEl = document.getElementById("flash");
+			const hudEl = document.getElementById("hud");
+			const countEl = document.getElementById("count");
+			const clockEl = document.getElementById("clock");
+			const startEl = document.getElementById("start");
+
+			let audioCtx = null;
+			let startTime = 0;
+			let nextIndex = 0;
+			let flashOffAt = 0;
+
+			function playClick() {
+				if (!audioCtx) return;
+				const t = audioCtx.currentTime;
+				const osc = audioCtx.createOscillator();
+				const gain = audioCtx.createGain();
+				osc.type = "sine";
+				osc.frequency.value = CLICK_HZ;
+				// Sharp attack + decay so the onset is a clean, detectable transient.
+				gain.gain.setValueAtTime(0, t);
+				gain.gain.linearRampToValueAtTime(1, t + 0.001);
+				gain.gain.setValueAtTime(1, t + CLICK_MS / 1000 - 0.005);
+				gain.gain.linearRampToValueAtTime(0, t + CLICK_MS / 1000);
+				osc.connect(gain).connect(audioCtx.destination);
+				osc.start(t);
+				osc.stop(t + CLICK_MS / 1000 + 0.01);
+			}
+
+			function fire(now) {
+				flashEl.classList.add("on");
+				flashOffAt = now + FLASH_MS;
+				playClick();
+				nextIndex += 1;
+				countEl.textContent = String(nextIndex);
+			}
+
+			function loop(now) {
+				const elapsed = (now - startTime) / 1000;
+				clockEl.textContent = `${elapsed.toFixed(1)}s`;
+
+				if (elapsed >= nextIndex * INTERVAL) {
+					fire(now);
+				}
+				if (flashEl.classList.contains("on") && now >= flashOffAt) {
+					flashEl.classList.remove("on");
+				}
+				requestAnimationFrame(loop);
+			}
+
+			document.getElementById("go").addEventListener("click", async () => {
+				audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+				await audioCtx.resume();
+				try {
+					await document.documentElement.requestFullscreen();
+				} catch {
+					// Full-screen is best-effort; recording the window still works.
+				}
+				startEl.hidden = true;
+				hudEl.hidden = false;
+				startTime = performance.now();
+				nextIndex = 0;
+				requestAnimationFrame(loop);
+			});
+		</script>
+	</body>
+</html>

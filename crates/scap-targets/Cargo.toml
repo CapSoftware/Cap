@@ -36,3 +36,6 @@ windows = { workspace = true, features = [
 	"Win32_Graphics_Gdi",
 	"Win32_Storage_FileSystem",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13.2", features = ["randr"] }

@@ -16,6 +16,7 @@ export type CurrentUser = {
 const AuthContext = createContext<
 	{ user: Promise<CurrentUser | null> } | undefined
 >(undefined);
+const anonymousUser = Promise.resolve(null);
 
 export function AuthContextProvider({
 	children,
@@ -38,5 +39,6 @@ export function useAuthContext() {
 }
 
 export function useCurrentUser() {
-	return use(useAuthContext().user);
+	const context = use(AuthContext);
+	return use(context?.user ?? anonymousUser);
 }

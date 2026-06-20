@@ -6,6 +6,8 @@ use std::sync::Arc;
 use cap_desktop_lib::DynLoggingLayer;
 use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
+const TOKIO_WORKER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
+
 fn main() {
     #[cfg(debug_assertions)]
     unsafe {
@@ -14,7 +16,11 @@ fn main() {
 
     // We have to hold onto the ClientInitGuard until the very end
     let _sentry_guard = std::option_env!("CAP_DESKTOP_SENTRY_URL").map(|url| {
-        let sentry_client = sentry::init((
+        // Crashpad minidump initialization is intentionally disabled. Its process-wide SEH
+        // handler terminates through TerminateProcess, bypassing panic hooks, Tauri exit
+        // events, and Windows Error Reporting. Re-enable it by binding this guard and
+        // passing it to tauri_plugin_sentry::minidump::init once the WER trace is captured.
+        sentry::init((
             url,
             sentry::ClientOptions {
                 release: sentry::release_name!(),
@@ -40,12 +46,7 @@ fn main() {
                 })),
                 ..Default::default()
             },
-        ));
-
-        // Caution! Everything before here runs in both app and crash reporter processes
-        let _guard = tauri_plugin_sentry::minidump::init(&sentry_client);
-
-        (sentry_client, _guard)
+        ))
     });
 
     let (reload_layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
@@ -151,6 +152,7 @@ fn main() {
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .thread_stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
         .build()
         .expect("Failed to build multi threaded tokio runtime")
         .block_on(cap_desktop_lib::run(handle, logs_dir));

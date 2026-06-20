@@ -94,7 +94,7 @@ export function AspectRatioSelect() {
 				>
 					<MenuItemList<typeof KSelect.Listbox>
 						as={KSelect.Listbox}
-						class="w-[12.5rem]"
+						class="w-50"
 					/>
 				</PopperContent>
 			</KSelect.Portal>

@@ -8,14 +8,40 @@ runs:
       shell: bash
       run: |
         sudo apt update
-        sudo apt install libwebkit2gtk-4.1-dev \
+        sudo apt install -y --no-install-recommends \
+          libwebkit2gtk-4.1-dev \
           build-essential \
+          pkg-config \
           curl \
           wget \
           file \
+          clang \
+          libclang-dev \
           libxdo-dev \
           libssl-dev \
           libayatana-appindicator3-dev \
           librsvg2-dev \
           libpipewire-0.3-dev \
-          ffmpeg clang libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev pkg-config libasound2-dev
+          libspa-0.2-dev \
+          libasound2-dev \
+          libdbus-1-dev \
+          libudev-dev \
+          libx11-dev \
+          libxrandr-dev \
+          libxcb1-dev \
+          libxcb-randr0-dev \
+          libxcb-shm0-dev \
+          libxcb-xfixes0-dev \
+          libxfixes-dev \
+          libwayland-dev \
+          libxkbcommon-dev \
+          ffmpeg \
+          libavcodec-dev \
+          libavformat-dev \
+          libavutil-dev \
+          libavfilter-dev \
+          libavdevice-dev \
+          libswscale-dev \
+          libswresample-dev \
+          patchelf \
+          rpm

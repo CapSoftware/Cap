@@ -2,10 +2,13 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import type { Video } from "@cap/web-domain";
+import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
+import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Exit } from "effect";
 import type { NextRequest } from "next/server";
 import { startAiGeneration } from "@/lib/generate-ai";
+import * as EffectRuntime from "@/lib/server";
 import { isAiGenerationEnabled } from "@/utils/flags";
 
 export const dynamic = "force-dynamic";
@@ -27,10 +30,22 @@ export async function GET(request: NextRequest) {
 			);
 		}
 
-		const result = await db()
-			.select()
-			.from(videos)
-			.where(eq(videos.id, videoId));
+		const exit = await Effect.gen(function* () {
+			const videosPolicy = yield* VideosPolicy;
+
+			return yield* Effect.promise(() =>
+				db().select().from(videos).where(eq(videos.id, videoId)),
+			).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
+		}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
+
+		if (Exit.isFailure(exit)) {
+			return Response.json(
+				{ error: true, message: "Video not found" },
+				{ status: 404 },
+			);
+		}
+
+		const result = exit.value;
 		if (result.length === 0 || !result[0]) {
 			return Response.json(
 				{ error: true, message: "Video not found" },

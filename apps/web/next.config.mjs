@@ -30,6 +30,7 @@ const nextConfig = {
 		"@cap/web-domain",
 		"@cap/env",
 		"@cap/database",
+		"@cap/recorder-core",
 		"next-mdx-remote",
 	],
 	typescript: {
@@ -91,6 +92,16 @@ const nextConfig = {
 			{
 				source: "/s/:videoId",
 				destination: "/s/:videoId",
+				has: [
+					{
+						type: "host",
+						value: "(?!cap.so|cap.link).*",
+					},
+				],
+			},
+			{
+				source: "/c/:collectionId",
+				destination: "/c/:collectionId",
 				has: [
 					{
 						type: "host",

@@ -1,30 +1,53 @@
 "use client";
 
+import {
+	InstantRecordingUploader,
+	initiateMultipartUpload,
+	MultipartCompletionUncertainError,
+} from "@cap/recorder-core/instant-mp4-uploader";
+import type {
+	ChunkUploadState,
+	RecorderPhase,
+	RecordingFailureDownload,
+	RecoveredRecordingDownload,
+	UploadTarget,
+	VideoId,
+} from "@cap/recorder-core/recorder-types";
+import {
+	detectCapabilities,
+	isUserCancellationError,
+	openShareUrlInNewTab,
+	type RecorderCapabilities,
+	type RecordingPipeline,
+	selectRecordingPipeline,
+	shouldRetryDisplayMediaWithoutPreferences,
+} from "@cap/recorder-core/recorder-utils";
+import {
+	canUseRecordingSpool,
+	deleteRecoveredRecordingSpool,
+	RECORDING_SPOOL_HEARTBEAT_INTERVAL_MS,
+	RecordingSpool,
+} from "@cap/recorder-core/recording-spool";
+import { moveRecordingSpoolToInMemoryBackup } from "@cap/recorder-core/recording-spool-fallback";
 import { Organisation } from "@cap/web-domain";
 import { useQueryClient } from "@tanstack/react-query";
 import { Cause, Exit, Option } from "effect";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { triggerInstantRecordingProcessing } from "@/actions/video/trigger-instant-recording-processing";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { uploadWithTarget } from "@/utils/upload-target";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
-import {
-	InstantRecordingUploader,
-	initiateMultipartUpload,
-	MultipartCompletionUncertainError,
-} from "./instant-mp4-uploader";
 import type { RecordingMode } from "./RecordingModeSelector";
-import { captureThumbnail, convertToMp4 } from "./recording-conversion";
 import {
-	canUseRecordingSpool,
-	deleteRecoveredRecordingSpool,
-	RecordingSpool,
-} from "./recording-spool";
-import { moveRecordingSpoolToInMemoryBackup } from "./recording-spool-fallback";
+	canConvertToMp4InBrowser,
+	captureThumbnail,
+	convertToMp4,
+} from "./recording-conversion";
 import { uploadRecording } from "./recording-upload";
 import {
 	loadRecoveredRecordingSpools,
@@ -43,23 +66,6 @@ import {
 	FREE_PLAN_MAX_RECORDING_MS,
 	RECORDING_MODE_TO_DISPLAY_SURFACE,
 } from "./web-recorder-constants";
-import type {
-	ChunkUploadState,
-	RecorderPhase,
-	RecordingFailureDownload,
-	RecoveredRecordingDownload,
-	UploadTarget,
-	VideoId,
-} from "./web-recorder-types";
-import {
-	detectCapabilities,
-	isUserCancellationError,
-	openShareUrlInNewTab,
-	type RecorderCapabilities,
-	type RecordingPipeline,
-	selectRecordingPipeline,
-	shouldRetryDisplayMediaWithoutPreferences,
-} from "./web-recorder-utils";
 
 interface UseWebRecorderOptions {
 	organisationId: string | undefined;
@@ -251,6 +257,7 @@ export const useWebRecorder = ({
 	const recordingSpoolRef = useRef<RecordingSpool | null>(null);
 	const recordingSpoolDegradingRef = useRef(false);
 	const recordingSpoolWarningShownRef = useRef(false);
+	const recordingSpoolHeartbeatRef = useRef<number | null>(null);
 	const recoveredDownloadUrlsRef = useRef(new Map<string, string>());
 
 	const isStreamingPipelineActive = useCallback(
@@ -387,11 +394,39 @@ export const useWebRecorder = ({
 		};
 	}, [dismissRecoveredDownload]);
 
+	const stopRecordingSpoolHeartbeat = useCallback(() => {
+		if (recordingSpoolHeartbeatRef.current === null) return;
+		window.clearInterval(recordingSpoolHeartbeatRef.current);
+		recordingSpoolHeartbeatRef.current = null;
+	}, []);
+
+	// Chunk writes alone are not a liveness signal — a paused MediaRecorder
+	// produces no chunks, so without the heartbeat another dashboard tab's
+	// recovery sweep would offer a >RECORDING_SPOOL_LIVE_MIN_IDLE_MS pause as
+	// "recovered" and let the user delete the live session's backup (for the
+	// buffered pipeline, its upload source).
+	const startRecordingSpoolHeartbeat = useCallback(
+		(spool: RecordingSpool) => {
+			stopRecordingSpoolHeartbeat();
+			recordingSpoolHeartbeatRef.current = window.setInterval(() => {
+				if (recordingSpoolRef.current !== spool) {
+					stopRecordingSpoolHeartbeat();
+					return;
+				}
+				void spool.touch();
+			}, RECORDING_SPOOL_HEARTBEAT_INTERVAL_MS);
+		},
+		[stopRecordingSpoolHeartbeat],
+	);
+
+	useEffect(() => stopRecordingSpoolHeartbeat, [stopRecordingSpoolHeartbeat]);
+
 	const disposeRecordingSpool = useCallback(async () => {
 		const spool = recordingSpoolRef.current;
 		recordingSpoolRef.current = null;
 		recordingSpoolDegradingRef.current = false;
 		recordingSpoolWarningShownRef.current = false;
+		stopRecordingSpoolHeartbeat();
 		if (!spool) return;
 
 		try {
@@ -399,24 +434,28 @@ export const useWebRecorder = ({
 		} catch (error) {
 			console.error("Failed to dispose recording spool", error);
 		}
-	}, []);
+	}, [stopRecordingSpoolHeartbeat]);
 
-	const createRecordingSpool = useCallback(async (mimeType: string) => {
-		if (!canUseRecordingSpool()) {
-			return null;
-		}
+	const createRecordingSpool = useCallback(
+		async (mimeType: string) => {
+			if (!canUseRecordingSpool()) {
+				return null;
+			}
 
-		try {
-			const spool = await RecordingSpool.create({ mimeType });
-			recordingSpoolDegradingRef.current = false;
-			recordingSpoolWarningShownRef.current = false;
-			recordingSpoolRef.current = spool;
-			return spool;
-		} catch (error) {
-			console.error("Failed to initialize recording spool", error);
-			return null;
-		}
-	}, []);
+			try {
+				const spool = await RecordingSpool.create({ mimeType });
+				recordingSpoolDegradingRef.current = false;
+				recordingSpoolWarningShownRef.current = false;
+				recordingSpoolRef.current = spool;
+				startRecordingSpoolHeartbeat(spool);
+				return spool;
+			} catch (error) {
+				console.error("Failed to initialize recording spool", error);
+				return null;
+			}
+		},
+		[startRecordingSpoolHeartbeat],
+	);
 
 	const persistChunkToRecordingSpool = useCallback(
 		(chunk: Blob) => {
@@ -433,6 +472,7 @@ export const useWebRecorder = ({
 
 				recordingSpoolDegradingRef.current = true;
 				recordingSpoolRef.current = null;
+				stopRecordingSpoolHeartbeat();
 				await moveRecordingSpoolToInMemoryBackup({
 					spool,
 					setLocalRecordingStrategy,
@@ -460,7 +500,12 @@ export const useWebRecorder = ({
 				);
 			});
 		},
-		[recordedChunksRef, replaceLocalRecording, setLocalRecordingStrategy],
+		[
+			recordedChunksRef,
+			replaceLocalRecording,
+			setLocalRecordingStrategy,
+			stopRecordingSpoolHeartbeat,
+		],
 	);
 
 	const resolveFailureBlob = useCallback(async (blob: Blob | null) => {
@@ -1259,86 +1304,161 @@ export const useWebRecorder = ({
 					);
 				}
 			} else {
-				const processedRecordingBlob =
-					pipeline.fileExtension === "mp4"
-						? rawRecordingBlob
-						: await convertToMp4(
-								rawRecordingBlob as Blob,
-								hasAudioTrack,
-								creationResult.id,
-								setUploadStatus,
-								() => updatePhase("converting"),
-							);
+				let processedRecordingBlob: Blob | null = null;
+				let conversionFailed = false;
 
-				if (!processedRecordingBlob) {
-					throw new Error("Failed to prepare recording for upload");
+				if (pipeline.fileExtension === "mp4") {
+					processedRecordingBlob = rawRecordingBlob;
+				} else if (await canConvertToMp4InBrowser(hasAudioTrack)) {
+					try {
+						processedRecordingBlob = await convertToMp4(
+							rawRecordingBlob as Blob,
+							hasAudioTrack,
+							creationResult.id,
+							setUploadStatus,
+							() => updatePhase("converting"),
+						);
+					} catch (conversionError) {
+						// The browser claimed it could encode MP4 but the conversion
+						// still failed (e.g. a stalled decoder). Rather than discarding
+						// the recording, upload the raw WebM and let the media server
+						// transcode it, mirroring the streaming-webm server path.
+						console.warn(
+							"In-browser conversion failed; falling back to server-side processing",
+							conversionError,
+						);
+						conversionFailed = true;
+					}
+				} else {
+					// This browser's WebCodecs can't encode the MP4 (e.g. Firefox has
+					// no AAC/H.264 encoder), so skip the conversion that would always
+					// fail and let the media server transcode the raw recording.
+					conversionFailed = true;
 				}
 
-				const thumbnailBlob = await captureThumbnail(processedRecordingBlob, {
-					width,
-					height,
-				});
-				const thumbnailPreviewUrl = thumbnailBlob
-					? URL.createObjectURL(thumbnailBlob)
-					: undefined;
+				if (conversionFailed) {
+					updatePhase("uploading");
+					const rawSubpath = `raw-upload.${pipeline.fileExtension}`;
+					const uploadSession = await initiateMultipartUpload({
+						videoId: creationResult.id,
+						contentType: pipeline.mimeType,
+						subpath: rawSubpath,
+					});
+					const fallbackUploader = new InstantRecordingUploader({
+						videoId: creationResult.id,
+						uploadId: uploadSession.uploadId,
+						provider: uploadSession.provider,
+						mimeType: pipeline.mimeType,
+						subpath: rawSubpath,
+						setUploadStatus,
+						sendProgressUpdate: (uploaded, total) =>
+							sendProgressUpdate(creationResult.id, uploaded, total),
+						onChunkStateChange: setChunkUploads,
+						onFatalError: () => {
+							void stopRecordingRef.current?.();
+						},
+					});
+					instantUploaderRef.current = fallbackUploader;
 
-				try {
-					setUploadStatus({
-						status: "uploadingVideo",
-						capId: creationResult.id,
-						progress: 0,
-						thumbnailUrl: thumbnailPreviewUrl,
+					await fallbackUploader.finalize({
+						finalBlob: rawRecordingBlob,
+						durationSeconds,
+						width,
+						height,
+						fps,
+						subpath: rawSubpath,
 					});
 
-					await uploadRecording(
-						processedRecordingBlob,
-						creationResult.upload,
-						creationResult.id,
-						thumbnailPreviewUrl,
-						setUploadStatus,
-					);
+					if (!fallbackUploader.getProcessingStarted()) {
+						toast.warning(
+							"Recording uploaded. Processing did not start yet, but the original recording is available.",
+						);
+					}
+				} else {
+					if (!processedRecordingBlob) {
+						throw new Error("Failed to prepare recording for upload");
+					}
 
-					if (thumbnailBlob) {
+					const thumbnailBlob = await captureThumbnail(processedRecordingBlob, {
+						width,
+						height,
+					});
+					const thumbnailPreviewUrl = thumbnailBlob
+						? URL.createObjectURL(thumbnailBlob)
+						: undefined;
+
+					try {
+						setUploadStatus({
+							status: "uploadingVideo",
+							capId: creationResult.id,
+							progress: 0,
+							thumbnailUrl: thumbnailPreviewUrl,
+						});
+
+						await uploadRecording(
+							processedRecordingBlob,
+							creationResult.upload,
+							creationResult.id,
+							thumbnailPreviewUrl,
+							setUploadStatus,
+						);
+
 						try {
-							const screenshotData = await createVideoAndGetUploadUrl({
+							await triggerInstantRecordingProcessing({
 								videoId: creationResult.id,
-								isScreenshot: true,
-								orgId: Organisation.OrganisationId.make(orgId),
 							});
-
-							setUploadStatus({
-								status: "uploadingThumbnail",
-								capId: creationResult.id,
-								progress: 90,
-							});
-
-							await uploadWithTarget({
-								target: screenshotData.uploadTarget,
-								body: thumbnailBlob,
-								fileName: "screen-capture.jpg",
-								onProgress: ({ loaded, total }) => {
-									const percent = 90 + (loaded / total) * 10;
-									setUploadStatus({
-										status: "uploadingThumbnail",
-										capId: creationResult.id,
-										progress: percent,
-									});
-								},
-							});
-
-							queryClient.refetchQueries({
-								queryKey: ThumbnailRequest.queryKey(creationResult.id),
-							});
-						} catch (thumbnailError) {
-							console.error("Failed to upload thumbnail", thumbnailError);
+						} catch (processingError) {
+							console.error(
+								"Failed to start video processing",
+								processingError,
+							);
 							toast.warning(
-								"Recording uploaded, but thumbnail failed to upload.",
+								"Recording uploaded. Processing did not start yet, but the original recording is available.",
 							);
 						}
-					}
-				} finally {
-					if (thumbnailPreviewUrl) {
-						URL.revokeObjectURL(thumbnailPreviewUrl);
+
+						if (thumbnailBlob) {
+							try {
+								const screenshotData = await createVideoAndGetUploadUrl({
+									videoId: creationResult.id,
+									isScreenshot: true,
+									orgId: Organisation.OrganisationId.make(orgId),
+								});
+
+								setUploadStatus({
+									status: "uploadingThumbnail",
+									capId: creationResult.id,
+									progress: 90,
+								});
+
+								await uploadWithTarget({
+									target: screenshotData.uploadTarget,
+									body: thumbnailBlob,
+									fileName: "screen-capture.jpg",
+									onProgress: ({ loaded, total }) => {
+										const percent = 90 + (loaded / total) * 10;
+										setUploadStatus({
+											status: "uploadingThumbnail",
+											capId: creationResult.id,
+											progress: percent,
+										});
+									},
+								});
+
+								queryClient.refetchQueries({
+									queryKey: ThumbnailRequest.queryKey(creationResult.id),
+								});
+							} catch (thumbnailError) {
+								console.error("Failed to upload thumbnail", thumbnailError);
+								toast.warning(
+									"Recording uploaded, but thumbnail failed to upload.",
+								);
+							}
+						}
+					} finally {
+						if (thumbnailPreviewUrl) {
+							URL.revokeObjectURL(thumbnailPreviewUrl);
+						}
 					}
 				}
 			}

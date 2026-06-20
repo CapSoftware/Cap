@@ -138,7 +138,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         mask = 1.0 - smoothstep(-aa_width, aa_width, edge_distance);
     } else if (shape == 2.0) {
         // Full shape with aspect ratio-corrected rounded corners
-        let window_aspect = window_uniforms.window_width / window_uniforms.window_height;
+        let window_aspect = crop_aspect;
         // Interpolate corner radius based on normalized size (0-1)
         let corner_radius = mix(0.08, 0.12, size);
 

@@ -1,6 +1,3 @@
-"use client";
-
-import Script from "next/script";
 import { testimonials } from "@/data/testimonials";
 import {
 	createBreadcrumbSchema,
@@ -30,7 +27,7 @@ const homePageFAQs = [
 	{
 		question: "Can I use my own storage with Cap?",
 		answer:
-			"Yes, Cap allows you to connect your own S3 storage and custom domain, giving you 100% ownership and control over your content.",
+			"Yes, Cap allows you to connect your own Google Drive or S3 storage and a custom domain, giving you 100% ownership and control over your content.",
 	},
 	{
 		question: "What makes Cap different from other screen recorders?",
@@ -58,11 +55,5 @@ const createHomePageSchema = () => {
 };
 
 export const HomePageSchema = () => {
-	return (
-		<Script
-			id="homepage-structured-data"
-			type="application/ld+json"
-			dangerouslySetInnerHTML={{ __html: createHomePageSchema() }}
-		/>
-	);
+	return <script type="application/ld+json">{createHomePageSchema()}</script>;
 };

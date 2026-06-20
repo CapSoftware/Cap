@@ -53,7 +53,7 @@ impl DiscoveredHardware {
         println!("  CPU: {}", self.system_info.cpu);
         println!("  Memory: {} GB", self.system_info.memory_gb);
         if let Some(gpu) = &self.system_info.gpu {
-            println!("  GPU: {}", gpu);
+            println!("  GPU: {gpu}");
         }
 
         println!("\n{} ({})", "Displays:".bold(), self.displays.len());

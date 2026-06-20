@@ -273,7 +273,7 @@ impl ValidationResult {
         } else {
             "INVALID".red().bold()
         };
-        println!("Status: {}", status);
+        println!("Status: {status}");
 
         if let Some(video) = &self.video_info {
             println!("\n{}", "Video:".bold());
@@ -302,20 +302,20 @@ impl ValidationResult {
             } else {
                 "OUT OF SYNC".red()
             };
-            println!("  Status: {}", sync_status);
+            println!("  Status: {sync_status}");
         }
 
         if !self.errors.is_empty() {
             println!("\n{}", "Errors:".red().bold());
             for error in &self.errors {
-                println!("  - {}", error);
+                println!("  - {error}");
             }
         }
 
         if !self.warnings.is_empty() {
             println!("\n{}", "Warnings:".yellow().bold());
             for warning in &self.warnings {
-                println!("  - {}", warning);
+                println!("  - {warning}");
             }
         }
 
@@ -367,11 +367,11 @@ impl ComparisonResult {
 
         let pass_rate_diff = self.current_summary.pass_rate - self.baseline_summary.pass_rate;
         let diff_str = if pass_rate_diff >= 0.0 {
-            format!("+{:.1}%", pass_rate_diff).green()
+            format!("+{pass_rate_diff:.1}%").green()
         } else {
-            format!("{:.1}%", pass_rate_diff).red()
+            format!("{pass_rate_diff:.1}%").red()
         };
-        println!("  Change: {}", diff_str);
+        println!("  Change: {diff_str}");
 
         if !self.regressions.is_empty() {
             println!(
@@ -577,7 +577,7 @@ impl CompatibilityReport {
         println!("  CPU: {}", self.meta.system.cpu);
         println!("  Memory: {} GB", self.meta.system.memory_gb);
         if let Some(gpu) = &self.meta.system.gpu {
-            println!("  GPU: {}", gpu);
+            println!("  GPU: {gpu}");
         }
         println!("  Timestamp: {}", self.meta.timestamp);
 
@@ -612,7 +612,7 @@ impl CompatibilityReport {
         } else {
             "N/A (single monitor)".yellow()
         };
-        println!("  Multi-Monitor: {}", multi_status);
+        println!("  Multi-Monitor: {multi_status}");
 
         self.matrix_results.print_summary();
 
@@ -643,7 +643,7 @@ impl CompatibilityReport {
                     } else {
                         classification.display_name().yellow().bold()
                     };
-                    println!("    Classification: {}", class_str);
+                    println!("    Classification: {class_str}");
                 }
             }
             println!();
@@ -665,7 +665,7 @@ impl CompatibilityReport {
                 if !failure.reproduction_steps.is_empty() {
                     println!("    Reproduction:");
                     for step in &failure.reproduction_steps {
-                        println!("      - {}", step);
+                        println!("      - {step}");
                     }
                 }
             }
@@ -677,7 +677,7 @@ impl CompatibilityReport {
         } else {
             "RELEASE GATE: FAILED".red().bold()
         };
-        println!("{}\n", gate_str);
+        println!("{gate_str}\n");
     }
 }
 

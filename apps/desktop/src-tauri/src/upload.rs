@@ -105,6 +105,24 @@ fn is_upload_response_accepted(
             && offset.saturating_add(size) < total_size)
 }
 
+fn content_type_for_upload_subpath(subpath: &str) -> &'static str {
+    if subpath.ends_with(".json") {
+        "application/json"
+    } else if subpath.ends_with(".mp4") || subpath.ends_with(".m4s") {
+        "video/mp4"
+    } else if subpath.ends_with(".jpg") || subpath.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if subpath.ends_with(".aac") {
+        "audio/aac"
+    } else if subpath.ends_with(".webm") {
+        "audio/webm"
+    } else if subpath.ends_with(".m3u8") {
+        "application/x-mpegURL"
+    } else {
+        "application/octet-stream"
+    }
+}
+
 #[instrument(skip(app, channel, file_path, screenshot_path))]
 pub async fn upload_video(
     app: &AppHandle,
@@ -922,13 +940,21 @@ impl SegmentUploader {
                 .map_err(|err| format!("segment_upload/client: {err:?}"))?
                 .clone();
 
-            let send_result = client
+            let request = client
                 .put(&presigned_url)
                 .header("Content-Length", file_size)
+                .header("Content-Type", content_type_for_upload_subpath(subpath))
                 .timeout(Duration::from_secs(5 * 60))
-                .body(file_bytes.clone())
-                .send()
-                .await;
+                .body(file_bytes.clone());
+            let send_result = with_drive_content_range(
+                request,
+                &presigned_url,
+                0,
+                file_size as u64,
+                file_size as u64,
+            )
+            .send()
+            .await;
 
             match send_result {
                 Ok(resp) if resp.status().is_success() => {
@@ -1001,15 +1027,18 @@ impl SegmentUploader {
             .map_err(|err| format!("segment_upload/manifest/client: {err:?}"))?
             .clone();
 
-        let resp = client
+        let content_length = json.len() as u64;
+        let request = client
             .put(&presigned_url)
-            .header("Content-Length", json.len())
+            .header("Content-Length", content_length)
             .header("Content-Type", "application/json")
             .timeout(Duration::from_secs(60))
-            .body(json)
-            .send()
-            .await
-            .map_err(|err| format!("segment_upload/manifest/error: {err}"))?;
+            .body(json);
+        let resp =
+            with_drive_content_range(request, &presigned_url, 0, content_length, content_length)
+                .send()
+                .await
+                .map_err(|err| format!("segment_upload/manifest/error: {err}"))?;
 
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();

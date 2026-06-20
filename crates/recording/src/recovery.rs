@@ -6,8 +6,8 @@ use std::{
 use cap_enc_ffmpeg::fragmented_mp4::tail_is_complete;
 use cap_enc_ffmpeg::remux::{
     concatenate_audio_to_ogg, concatenate_m4s_segments_with_init, concatenate_video_fragments,
-    get_media_duration, get_video_fps, probe_media_valid, probe_video_can_decode,
-    probe_video_seek_points, remux_file,
+    get_media_duration, get_video_fps, merge_video_audio, probe_media_valid,
+    probe_video_can_decode, probe_video_seek_points, remux_file,
 };
 use cap_project::{
     AudioMeta, Cursors, MultipleSegment, MultipleSegments, ProjectConfiguration, RecordingMeta,
@@ -59,6 +59,8 @@ pub enum RecoveryError {
     VideoConcat(cap_enc_ffmpeg::remux::RemuxError),
     #[error("Failed to concatenate audio fragments: {0}")]
     AudioConcat(cap_enc_ffmpeg::remux::RemuxError),
+    #[error("Failed to merge media streams: {0}")]
+    MediaMerge(cap_enc_ffmpeg::remux::RemuxError),
     #[error("Failed to serialize meta: {0}")]
     Serialize(#[from] serde_json::Error),
     #[error("No recoverable segments found")]
@@ -106,6 +108,23 @@ impl RecoveryManager {
         } else {
             None
         }
+    }
+
+    /// Remux a recording in place if its tracks are still fragment directories (status `NeedsRemux`,
+    /// e.g. straight after a fragmented studio stop), running the same `recover` the desktop uses
+    /// after stop. A no-op for recordings already stored as progressive mp4, so callers can run it
+    /// unconditionally before consuming a `.cap`.
+    pub fn remux_if_needed(project_path: &Path) -> Result<bool, RecoveryError> {
+        let Some(incomplete) = Self::find_incomplete_single(project_path) else {
+            return Ok(false);
+        };
+
+        if incomplete.recoverable_segments.is_empty() {
+            return Ok(false);
+        }
+
+        Self::recover(&incomplete)?;
+        Ok(true)
     }
 
     pub fn find_incomplete(recordings_dir: &Path) -> Vec<IncompleteRecording> {
@@ -970,6 +989,55 @@ impl RecoveryManager {
         Self::finalize_to_progressive_mp4_with_health(fragmented_dir, output, None)
     }
 
+    pub fn finalize_instant_output(
+        display_dir: &Path,
+        audio_dir: &Path,
+        output: &Path,
+    ) -> Result<PathBuf, RecoveryError> {
+        if !audio_dir.exists() {
+            return Self::finalize_to_progressive_mp4(display_dir, output);
+        }
+
+        Self::rescue_pending_tmp_fragments(audio_dir, None);
+        let audio_info = Self::find_complete_fragments_with_init(audio_dir);
+        if audio_info.fragments.is_empty() {
+            return Self::finalize_to_progressive_mp4(display_dir, output);
+        }
+
+        let parent = output.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent)?;
+        let stem = output
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("instant");
+        let video_output = parent.join(format!("{stem}.video.mp4"));
+        let audio_output = parent.join(format!("{stem}.audio.mp4"));
+        let merged_output = parent.join(format!("{stem}.merged.mp4"));
+
+        let result = (|| {
+            Self::finalize_to_progressive_mp4(display_dir, &video_output)?;
+            Self::finalize_audio_fragments_to_progressive_mp4(
+                &audio_info.fragments,
+                audio_info.init_segment.as_deref(),
+                &audio_output,
+                "audio",
+            )?;
+            merge_video_audio(&video_output, &audio_output, &merged_output)
+                .map_err(RecoveryError::MediaMerge)?;
+            Self::validate_required_video(&merged_output, "display")?;
+            replace_file(&merged_output, output)?;
+            Ok(output.to_path_buf())
+        })();
+
+        for path in [&video_output, &audio_output, &merged_output] {
+            if path.exists() && path != output {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+
+        result
+    }
+
     pub fn finalize_to_progressive_mp4_with_health(
         fragmented_dir: &Path,
         output: &Path,
@@ -1080,6 +1148,36 @@ impl RecoveryManager {
         }
 
         Self::validate_required_video(output, label)?;
+        Ok(())
+    }
+
+    fn finalize_audio_fragments_to_progressive_mp4(
+        fragments: &[PathBuf],
+        init_segment: Option<&Path>,
+        output: &Path,
+        label: &str,
+    ) -> Result<(), RecoveryError> {
+        if fragments.is_empty() {
+            return Err(RecoveryError::NoRecoverableSegments);
+        }
+
+        if let Some(init_path) = init_segment {
+            info!(
+                "Concatenating {} M4S {label} segments with init to {:?}",
+                fragments.len(),
+                output
+            );
+            concatenate_m4s_segments_with_init(init_path, fragments, output)
+                .map_err(RecoveryError::AudioConcat)?;
+        } else {
+            info!(
+                "Concatenating {} {label} fragments to {:?}",
+                fragments.len(),
+                output
+            );
+            concatenate_video_fragments(fragments, output).map_err(RecoveryError::AudioConcat)?;
+        }
+
         Ok(())
     }
 
@@ -1217,6 +1315,7 @@ impl RecoveryManager {
                                 device_id: original_segment
                                     .and_then(|s| s.mic.as_ref())
                                     .and_then(|m| m.device_id.clone()),
+                                gap_summary: None,
                             })
                         } else {
                             None
@@ -1240,6 +1339,7 @@ impl RecoveryManager {
                                 device_id: original_segment
                                     .and_then(|s| s.system_audio.as_ref())
                                     .and_then(|a| a.device_id.clone()),
+                                gap_summary: None,
                             })
                         } else {
                             None
@@ -1311,6 +1411,7 @@ impl RecoveryManager {
                     start: 0.0,
                     end: duration,
                     timescale: 1.0,
+                    name: None,
                 })
             })
             .collect();

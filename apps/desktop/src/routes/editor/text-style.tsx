@@ -15,6 +15,7 @@ export const FONT_OPTIONS = [
 ];
 
 export const CAPTION_POSITION_OPTIONS = [
+	{ value: "manual", label: "Manual" },
 	{ value: "top-left", label: "Top Left" },
 	{ value: "top-center", label: "Top Center" },
 	{ value: "top-right", label: "Top Right" },

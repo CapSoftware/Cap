@@ -5,7 +5,10 @@ import IconCapLogo from "~icons/cap/logo";
 function SkeletonPulse(props: { class?: string }) {
 	return (
 		<div
-			class={cx("animate-pulse rounded bg-gray-3 dark:bg-gray-4", props.class)}
+			class={cx(
+				"animate-pulse rounded-sm bg-gray-3 dark:bg-gray-4",
+				props.class,
+			)}
 		/>
 	);
 }
@@ -64,7 +67,7 @@ function PreviewSkeleton() {
 	return (
 		<div class="flex flex-col flex-1 overflow-hidden bg-gray-1 dark:bg-gray-2">
 			<div class="flex-1 relative flex items-center justify-center overflow-hidden bg-gray-2 dark:bg-gray-3">
-				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-sm p-1 border border-gray-4">
+				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-xs p-1 border border-gray-4">
 					<SkeletonButton />
 					<SkeletonPulse class="w-20 h-2 rounded-full" />
 					<SkeletonButton />

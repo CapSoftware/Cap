@@ -8,6 +8,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 	Input,
+	Select,
 } from "@cap/ui";
 import { faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -23,10 +24,21 @@ interface InviteDialogProps {
 	setIsOpen: (open: boolean) => void;
 }
 
+type InviteRole = "admin" | "member";
+type InviteEmail = {
+	email: string;
+	role: InviteRole;
+};
+
+const roleOptions = [
+	{ value: "member", label: "Member" },
+	{ value: "admin", label: "Admin" },
+];
+
 export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 	const router = useRouter();
 	const { activeOrganization } = useDashboardContext();
-	const [inviteEmails, setInviteEmails] = useState<string[]>([]);
+	const [inviteEmails, setInviteEmails] = useState<InviteEmail[]>([]);
 	const [emailInput, setEmailInput] = useState("");
 	const emailInputId = useId();
 	const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -38,7 +50,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 		}
 	}, [isOpen]);
 
-	const handleAddEmails = () => {
+	const buildInviteEmailsWithPendingInput = () => {
 		const newEmails = emailInput
 			.split(",")
 			.map((email) => email.trim().toLowerCase())
@@ -49,24 +61,50 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 			toast.error(
 				`Invalid email${invalidEmails.length > 1 ? "s" : ""}: ${invalidEmails.join(", ")}`,
 			);
+			return null;
 		}
 
 		const validEmails = newEmails.filter((email) => emailRegex.test(email));
-		setInviteEmails([...new Set([...inviteEmails, ...validEmails])]);
+		const inviteMap = new Map(
+			inviteEmails.map((invite) => [invite.email, invite]),
+		);
+
+		for (const email of validEmails) {
+			if (!inviteMap.has(email)) {
+				inviteMap.set(email, { email, role: "member" });
+			}
+		}
+
+		return Array.from(inviteMap.values());
+	};
+
+	const handleAddEmails = () => {
+		const nextInviteEmails = buildInviteEmailsWithPendingInput();
+		if (!nextInviteEmails) return;
+
+		setInviteEmails(nextInviteEmails);
 		setEmailInput("");
 	};
 
 	const handleRemoveEmail = (email: string) => {
-		setInviteEmails(inviteEmails.filter((e) => e !== email));
+		setInviteEmails(inviteEmails.filter((invite) => invite.email !== email));
+	};
+
+	const handleUpdateEmailRole = (email: string, role: InviteRole) => {
+		setInviteEmails(
+			inviteEmails.map((invite) =>
+				invite.email === email ? { ...invite, role } : invite,
+			),
+		);
 	};
 
 	const sendInvites = useMutation({
-		mutationFn: async () => {
+		mutationFn: async (emails: InviteEmail[]) => {
 			if (!activeOrganization?.organization.id) {
 				throw new Error("No active organization");
 			}
 			return await sendOrganizationInvites(
-				inviteEmails,
+				emails,
 				activeOrganization.organization.id,
 			);
 		},
@@ -91,6 +129,17 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 		},
 	});
 
+	const handleSendInvites = () => {
+		const nextInviteEmails = buildInviteEmailsWithPendingInput();
+		if (!nextInviteEmails || nextInviteEmails.length === 0) return;
+
+		setInviteEmails(nextInviteEmails);
+		setEmailInput("");
+		sendInvites.mutate(nextInviteEmails);
+	};
+
+	const hasPendingEmailInput = emailInput.trim() !== "";
+
 	return (
 		<Dialog open={isOpen} onOpenChange={setIsOpen}>
 			<DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
@@ -111,7 +160,16 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 						value={emailInput}
 						onChange={(e) => setEmailInput(e.target.value)}
 						placeholder="name@company.com"
-						onBlur={handleAddEmails}
+						onBlur={(e) => {
+							const relatedTarget = e.relatedTarget;
+							if (
+								relatedTarget instanceof HTMLElement &&
+								relatedTarget.dataset.inviteSubmit === "true"
+							) {
+								return;
+							}
+							handleAddEmails();
+						}}
 						onKeyDown={(e) => {
 							if (e.key === "Enter" || e.key === ",") {
 								e.preventDefault();
@@ -120,12 +178,27 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 						}}
 					/>
 					<div className="flex overflow-y-auto flex-col gap-2.5 mt-4 max-h-60">
-						{inviteEmails.map((email) => (
+						{inviteEmails.map((invite) => (
 							<div
-								key={email}
-								className="flex justify-between items-center p-3 rounded-xl border transition-colors duration-200 cursor-pointer border-gray-4 hover:bg-gray-3"
+								key={invite.email}
+								className="flex gap-3 justify-between items-center p-3 rounded-xl border transition-colors duration-200 border-gray-4 hover:bg-gray-3"
 							>
-								<span className="text-sm text-gray-12">{email}</span>
+								<span className="min-w-0 text-sm truncate text-gray-12">
+									{invite.email}
+								</span>
+								<Select
+									value={invite.role}
+									placeholder="Role"
+									options={roleOptions}
+									size="sm"
+									variant="gray"
+									onValueChange={(value) =>
+										handleUpdateEmailRole(
+											invite.email,
+											value === "admin" ? "admin" : "member",
+										)
+									}
+								/>
 								<Button
 									style={
 										{
@@ -135,7 +208,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 									type="button"
 									variant="destructive"
 									size="xs"
-									onClick={() => handleRemoveEmail(email)}
+									onClick={() => handleRemoveEmail(invite.email)}
 								>
 									Remove
 								</Button>
@@ -157,8 +230,12 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 						size="sm"
 						variant="dark"
 						spinner={sendInvites.isPending}
-						disabled={sendInvites.isPending || inviteEmails.length === 0}
-						onClick={() => sendInvites.mutate()}
+						disabled={
+							sendInvites.isPending ||
+							(inviteEmails.length === 0 && !hasPendingEmailInput)
+						}
+						data-invite-submit="true"
+						onClick={handleSendInvites}
 					>
 						Send Invites
 					</Button>

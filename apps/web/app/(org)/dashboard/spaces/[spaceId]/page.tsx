@@ -58,6 +58,7 @@ async function fetchFolders(
 			id: folders.id,
 			name: folders.name,
 			color: folders.color,
+			public: folders.public,
 			parentId: folders.parentId,
 			spaceId: folders.spaceId,
 			videoCount: sql<number>`(
@@ -80,7 +81,7 @@ const fetchSpaceMembers = Effect.fn(function* (
 				.select({
 					id: spaceMembers.id,
 					userId: spaceMembers.userId,
-					role: sql<string>`'member'`,
+					role: spaceMembers.role,
 					name: users.name,
 					email: users.email,
 					image: users.image,

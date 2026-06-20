@@ -492,7 +492,7 @@ export const CameraPreviewWindow = ({
 									e.stopPropagation();
 									handleClose();
 								}}
-								className="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12"
+								className="p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12"
 							>
 								<X className="size-5.5" />
 							</button>
@@ -503,7 +503,7 @@ export const CameraPreviewWindow = ({
 									setSize((s) => (s === "sm" ? "lg" : "sm"));
 								}}
 								className={clsx(
-									"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
+									"p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 									size === "lg" && "bg-gray-3 text-gray-12",
 								)}
 							>
@@ -522,7 +522,7 @@ export const CameraPreviewWindow = ({
 									);
 								}}
 								className={clsx(
-									"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
+									"p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 									shape !== "round" && "bg-gray-3 text-gray-12",
 								)}
 							>
@@ -539,7 +539,7 @@ export const CameraPreviewWindow = ({
 									setMirrored((m) => !m);
 								}}
 								className={clsx(
-									"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
+									"p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 									mirrored && "bg-gray-3 text-gray-12",
 								)}
 							>
@@ -553,7 +553,7 @@ export const CameraPreviewWindow = ({
 										handleTogglePictureInPicture();
 									}}
 									className={clsx(
-										"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
+										"p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 										isInPictureInPicture && "bg-gray-3 text-gray-12",
 									)}
 								>

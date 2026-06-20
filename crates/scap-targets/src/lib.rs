@@ -195,6 +195,20 @@ impl Window {
                 ),
             ))
         }
+
+        #[cfg(target_os = "linux")]
+        {
+            let display_bounds = display.raw_handle().logical_bounds()?;
+            let window_bounds = self.raw_handle().logical_bounds()?;
+
+            Some(LogicalBounds::new(
+                LogicalPosition::new(
+                    window_bounds.position().x() - display_bounds.position().x(),
+                    window_bounds.position().y() - display_bounds.position().y(),
+                ),
+                window_bounds.size(),
+            ))
+        }
     }
 }
 

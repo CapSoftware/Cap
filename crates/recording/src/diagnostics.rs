@@ -536,8 +536,91 @@ mod macos_impl {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod linux_impl {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize, Type)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SystemDiagnostics {
+        pub kernel_version: Option<String>,
+        pub available_encoders: Vec<String>,
+        pub screen_capture_supported: bool,
+        pub gpu_name: Option<String>,
+    }
+
+    pub fn collect_diagnostics() -> SystemDiagnostics {
+        let kernel_version = get_kernel_version();
+        let available_encoders = get_available_encoders();
+        let gpu_name = get_gpu_name();
+
+        tracing::info!("System Diagnostics:");
+        if let Some(ref version) = kernel_version {
+            tracing::info!("  Kernel: {}", version);
+        }
+        if let Some(ref gpu) = gpu_name {
+            tracing::info!("  GPU: {}", gpu);
+        }
+        tracing::info!("  Encoders: {:?}", available_encoders);
+
+        SystemDiagnostics {
+            kernel_version,
+            available_encoders,
+            screen_capture_supported: true,
+            gpu_name,
+        }
+    }
+
+    fn get_kernel_version() -> Option<String> {
+        std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn get_gpu_name() -> Option<String> {
+        let output = std::process::Command::new("glxinfo")
+            .arg("-B")
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("OpenGL renderer string:")
+                    .map(|name| name.trim().to_string())
+            })
+            .filter(|name| !name.is_empty())
+    }
+
+    fn get_available_encoders() -> Vec<String> {
+        let candidates = [
+            "h264_nvenc",
+            "h264_vaapi",
+            "h264_qsv",
+            "libx264",
+            "hevc_nvenc",
+            "hevc_vaapi",
+            "libx265",
+        ];
+
+        candidates
+            .iter()
+            .filter(|name| ffmpeg::encoder::find_by_name(name).is_some())
+            .map(|s| s.to_string())
+            .collect()
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub use windows_impl::*;
 
 #[cfg(target_os = "macos")]
 pub use macos_impl::*;
+
+#[cfg(target_os = "linux")]
+pub use linux_impl::*;

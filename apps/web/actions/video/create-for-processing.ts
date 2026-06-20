@@ -45,7 +45,18 @@ export async function createVideoForServerProcessing({
 
 	if (!user) throw new Error("Unauthorized");
 
-	if (!userIsPro(user) && duration && duration > 300) {
+	// Free-tier length cap. `duration` here is client-supplied metadata sent at
+	// upload-start, so it is only authoritative when a positive value is given
+	// (instant recordings legitimately start with 0/unknown duration). A
+	// positive declared duration over the cap is rejected up-front; the real
+	// duration is only known at finalize, which is where the cap must ultimately
+	// be enforced.
+	if (
+		!userIsPro(user) &&
+		typeof duration === "number" &&
+		Number.isFinite(duration) &&
+		duration > 300
+	) {
 		throw new Error("upgrade_required");
 	}
 
@@ -65,6 +76,7 @@ export async function createVideoForServerProcessing({
 		rawFileKey,
 		{
 			contentType: "video/mp4",
+			method: "put",
 			fields: {
 				"x-amz-meta-userid": user.id,
 				"x-amz-meta-duration": duration?.toString() ?? "",
@@ -90,8 +102,10 @@ export async function createVideoForServerProcessing({
 
 	await db().insert(videoUploads).values({
 		videoId,
+		mode: "singlepart",
 		phase: "uploading",
 		processingProgress: 0,
+		rawFileKey,
 	});
 
 	if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
