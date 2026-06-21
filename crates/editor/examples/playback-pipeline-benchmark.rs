@@ -658,13 +658,16 @@ async fn run_scrubbing_benchmark(
     }
 
     let display_paths: Vec<PathBuf> = match meta {
-        StudioRecordingMeta::SingleSegment { segment } => {
-            vec![recording_meta.path(&segment.display.path)]
-        }
+        StudioRecordingMeta::SingleSegment { segment } => segment
+            .display
+            .as_ref()
+            .map(|d| vec![recording_meta.path(&d.path)])
+            .unwrap_or_default(),
         StudioRecordingMeta::MultipleSegments { inner } => inner
             .segments
             .iter()
-            .map(|segment| recording_meta.path(&segment.display.path))
+            .filter_map(|segment| segment.display.as_ref())
+            .map(|display| recording_meta.path(&display.path))
             .collect(),
     };
     let keyframe_stats: Vec<Option<VideoKeyframeStats>> = display_paths

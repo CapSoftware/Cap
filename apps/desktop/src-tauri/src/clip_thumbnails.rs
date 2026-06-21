@@ -27,13 +27,21 @@ pub async fn get_clip_thumbnail(
     };
 
     let display_path = match studio.as_ref() {
-        StudioRecordingMeta::SingleSegment { segment } => meta.path(&segment.display.path),
+        StudioRecordingMeta::SingleSegment { segment } => segment
+            .display
+            .as_ref()
+            .map(|d| meta.path(&d.path))
+            .ok_or_else(|| "Recording has no display track".to_string())?,
         StudioRecordingMeta::MultipleSegments { inner } => {
             let segment = inner
                 .segments
                 .get(recording_segment as usize)
                 .ok_or_else(|| format!("Recording segment {recording_segment} not found"))?;
-            meta.path(&segment.display.path)
+            segment
+                .display
+                .as_ref()
+                .map(|d| meta.path(&d.path))
+                .ok_or_else(|| "Recording segment has no display track".to_string())?
         }
     };
 

@@ -793,7 +793,7 @@ pub async fn prewarm_screenshot_renderer() {
     };
     let studio_meta = StudioRecordingMeta::SingleSegment {
         segment: SingleSegment {
-            display: video_meta,
+            display: Some(video_meta),
             camera: None,
             audio: None,
             cursor: None,
@@ -806,6 +806,7 @@ pub async fn prewarm_screenshot_renderer() {
         sharing: None,
         inner: RecordingMetaInner::Studio(Box::new(studio_meta.clone())),
         upload: None,
+        audio_only: false,
     };
 
     let options = cap_rendering::RenderOptions {

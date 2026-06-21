@@ -139,21 +139,23 @@ impl EditorInstance {
             warn!("Project config has no timeline, creating one from recording segments");
             let timeline_segments = match meta.as_ref() {
                 StudioRecordingMeta::SingleSegment { segment } => {
-                    let display_path = recording_meta.path(&segment.display.path);
-                    match display_video_duration(&display_path) {
-                        Some(duration) if duration > 0.0 => vec![TimelineSegment {
-                            recording_clip: 0,
-                            start: 0.0,
-                            end: duration,
-                            timescale: 1.0,
-                            name: None,
-                        }],
-                        _ => {
-                            warn!(
-                                "Failed to determine display duration for {}, leaving timeline unset",
-                                display_path.display()
-                            );
-                            Vec::new()
+                    if let Some(display) = segment.display.as_ref() {
+                        let display_path = recording_meta.path(&display.path);
+                        match display_video_duration(&display_path) {
+                            Some(duration) if duration > 0.0 => vec![TimelineSegment {
+                                recording_clip: 0,
+                                start: 0.0,
+                                end: duration,
+                                timescale: 1.0,
+                                name: None,
+                            }],
+                            _ => {
+                                warn!(
+                                    "Failed to determine display duration for {}, leaving timeline unset",
+                                    display_path.display()
+                                );
+                                Vec::new()
+                            }
                         }
                     } else {
                         Vec::new()
