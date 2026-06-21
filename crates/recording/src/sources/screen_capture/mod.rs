@@ -85,7 +85,9 @@ impl LinuxCaptureSource {
         match target {
             ScreenCaptureTarget::Window { .. } => Self::Window,
             ScreenCaptureTarget::Area { .. } => Self::Area,
-            ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::CameraOnly => Self::Display,
+            ScreenCaptureTarget::Display { .. }
+            | ScreenCaptureTarget::CameraOnly
+            | ScreenCaptureTarget::AudioOnly => Self::Display,
         }
     }
 }

@@ -816,7 +816,7 @@ pub async fn create_segments(
                         .display
                         .as_ref()
                         .map(|d| recording_meta.path(&d.path))
-                        .unwrap_or_default(),
+                        .ok_or("SingleSegment / missing display metadata")?,
                     camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                 },
                 0,
@@ -868,7 +868,9 @@ pub async fn create_segments(
                             .display
                             .as_ref()
                             .map(|d| recording_meta.path(&d.path))
-                            .unwrap_or_default(),
+                            .ok_or_else(|| {
+                                format!("MultipleSegments {i} / missing display metadata")
+                            })?,
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
                     i,

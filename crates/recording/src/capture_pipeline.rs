@@ -424,6 +424,13 @@ pub fn target_to_display_and_crop(
 ) -> anyhow::Result<(scap_targets::Display, Option<CropBounds>)> {
     use scap_targets::{bounds::*, *};
 
+    if matches!(
+        target,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+    ) {
+        return Err(anyhow!("Camera-only/Audio-only target has no display"));
+    }
+
     let display = target
         .display()
         .ok_or_else(|| anyhow!("Display not found"))?;
