@@ -158,6 +158,12 @@ impl EditorInstance {
                             }
                         }
                     } else {
+                        if recording_meta.audio_only {
+                            return Err(
+                                "Audio-only recordings aren't supported in the editor yet"
+                                    .to_string(),
+                            );
+                        }
                         Vec::new()
                     }
                 }
@@ -818,7 +824,14 @@ pub async fn create_segments(
                         .display
                         .as_ref()
                         .map(|d| recording_meta.path(&d.path))
-                        .ok_or("SingleSegment / missing display metadata")?,
+                        .ok_or_else(|| {
+                            if recording_meta.audio_only {
+                                "Audio-only recordings aren't supported in the editor yet"
+                                    .to_string()
+                            } else {
+                                "SingleSegment / missing display metadata".to_string()
+                            }
+                        })?,
                     camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                 },
                 0,
@@ -871,7 +884,12 @@ pub async fn create_segments(
                             .as_ref()
                             .map(|d| recording_meta.path(&d.path))
                             .ok_or_else(|| {
-                                format!("MultipleSegments {i} / missing display metadata")
+                                if recording_meta.audio_only {
+                                    "Audio-only recordings aren't supported in the editor yet"
+                                        .to_string()
+                                } else {
+                                    format!("MultipleSegments {i} / missing display metadata")
+                                }
                             })?,
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
