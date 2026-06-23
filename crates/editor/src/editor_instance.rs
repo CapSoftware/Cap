@@ -122,6 +122,10 @@ impl EditorInstance {
             return Err("Cannot edit non-studio recordings".to_string());
         };
 
+        if recording_meta.audio_only {
+            return Err("Audio-only recordings aren't supported in the editor yet".to_string());
+        }
+
         let segment_count = match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { .. } => 1,
             StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
@@ -158,12 +162,6 @@ impl EditorInstance {
                             }
                         }
                     } else {
-                        if recording_meta.audio_only {
-                            return Err(
-                                "Audio-only recordings aren't supported in the editor yet"
-                                    .to_string(),
-                            );
-                        }
                         Vec::new()
                     }
                 }
