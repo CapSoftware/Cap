@@ -232,6 +232,7 @@ export function normalizeProject(
 		timeline,
 		background: withCornerDefaults(config.background),
 		camera: withCornerDefaults(config.camera),
+		captions: config.captions as unknown as EditorCaptionsData | null,
 	};
 }
 

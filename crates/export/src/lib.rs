@@ -94,8 +94,12 @@ impl ExporterBuilder {
             .ok_or(Error::NotStudioRecording)?;
 
         let recordings = Arc::new(
-            ProjectRecordingsMeta::new(&recording_meta.project_path, studio_meta)
-                .map_err(Error::RecordingsMeta)?,
+            ProjectRecordingsMeta::new_with_external(
+                &recording_meta.project_path,
+                studio_meta,
+                &project_config.external_recordings,
+            )
+            .map_err(Error::RecordingsMeta)?,
         );
 
         // A freshly recorded .cap has no timeline — only the editor creates one. Without it the
@@ -143,10 +147,14 @@ impl ExporterBuilder {
             .map_err(Error::RendererSetup)?,
         );
 
-        let segments =
-            cap_editor::create_segments(&recording_meta, studio_meta, self.force_ffmpeg_decoder)
-                .await
-                .map_err(Error::MediaLoad)?;
+        let segments = cap_editor::create_all_segments(
+            &recording_meta,
+            studio_meta,
+            &project_config.external_recordings,
+            self.force_ffmpeg_decoder,
+        )
+        .await
+        .map_err(Error::MediaLoad)?;
 
         let output_path = self
             .output_path

@@ -2,6 +2,7 @@ import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { platform } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
@@ -25,7 +26,7 @@ import "./styles.css";
 import Tooltip from "~/components/Tooltip";
 import { defaultCaptionSettings } from "~/store/captions";
 import { defaultKeyboardSettings } from "~/store/keyboard";
-import { commands } from "~/utils/tauri";
+import { commands, events } from "~/utils/tauri";
 import {
 	applyCaptionResultToProject,
 	getCaptionGenerationErrorMessage,
@@ -724,6 +725,35 @@ export function Timeline(props: {
 		}
 	};
 
+	const [isImporting, setIsImporting] = createSignal(false);
+
+	const handleImportCapRecording = async () => {
+		const selected = await openDialog({
+			directory: true,
+			title: "Select a Cap Recording to Import",
+		});
+		if (!selected || typeof selected !== "string") return;
+		if (!selected.endsWith(".cap")) {
+			toast.error("Please select a .cap recording folder");
+			return;
+		}
+		setIsImporting(true);
+		try {
+			await commands.importCapRecording(selected);
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			setIsImporting(false);
+		}
+	};
+
+	const importedListenerPromise = events.capRecordingImported.listen(() => {
+		window.location.reload();
+	});
+	onCleanup(() => {
+		importedListenerPromise.then((unlisten) => unlisten());
+	});
+
 	const split = () => editorState.timeline.interactMode === "split";
 
 	const maskImage = () => {
@@ -842,13 +872,28 @@ export function Timeline(props: {
 					<div class="absolute inset-0 flex items-end">
 						<TimelineMarkings />
 					</div>
-					<div class="absolute bottom-0 z-30">
+					<div class="absolute bottom-0 z-30 flex items-center gap-2">
 						<Tooltip content="Add track">
 							<TrackManager
 								options={trackOptions()}
 								onToggle={handleToggleTrack}
 								onAdd={handleAddTrack}
 							/>
+						</Tooltip>
+						<Tooltip content="Import Cap recording">
+							<button
+								class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-500 text-white text-xs font-medium disabled:opacity-50"
+								onClick={handleImportCapRecording}
+								disabled={isImporting()}
+							>
+								<Show
+									when={isImporting()}
+									fallback={<IconLucidePlus class="size-3" />}
+								>
+									<IconLucideLoader2 class="size-3 animate-spin" />
+								</Show>
+								Import recording
+							</button>
 						</Tooltip>
 					</div>
 				</div>
@@ -910,7 +955,12 @@ export function Timeline(props: {
 						}}
 					>
 						<div class="flex flex-col gap-2 min-h-full">
-							<TrackRow icon={trackIcons.clip} label="Video">
+							<TrackRow
+								icon={trackIcons.clip}
+								label="Video"
+								onImport={handleImportCapRecording}
+								importing={isImporting()}
+							>
 								<ClipTrack
 									ref={setTimelineRef}
 									handleUpdatePlayhead={handleUpdatePlayhead}
@@ -1018,6 +1068,8 @@ function TrackRow(props: {
 	children: JSX.Element;
 	onDelete?: () => void;
 	onContextMenu?: (e: MouseEvent) => void;
+	onImport?: () => void;
+	importing?: boolean;
 }) {
 	return (
 		<div class="flex items-stretch gap-2" onContextMenu={props.onContextMenu}>
@@ -1045,6 +1097,25 @@ function TrackRow(props: {
 						title="Delete track"
 					>
 						<IconCapTrash class="size-4" />
+					</button>
+				</Show>
+				<Show when={props.onImport}>
+					<button
+						class="absolute inset-0 z-20 pointer-events-none flex items-center justify-center rounded-xl border border-blue-400/70 bg-blue-500/90 text-white opacity-0 transition-opacity group-hover/icon:pointer-events-auto group-hover/icon:opacity-100 disabled:opacity-50"
+						onClick={(e) => {
+							e.stopPropagation();
+							props.onImport?.();
+						}}
+						onMouseDown={(e) => e.stopPropagation()}
+						disabled={props.importing}
+						title="Import Cap recording"
+					>
+						<Show
+							when={props.importing}
+							fallback={<IconLucidePlus class="size-4" />}
+						>
+							<IconLucideLoader2 class="size-4 animate-spin" />
+						</Show>
 					</button>
 				</Show>
 			</div>

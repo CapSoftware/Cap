@@ -76,11 +76,11 @@ function createCueList(text: string): TextTrackCueList {
 function createVideo(
 	textTracks: FakeTextTrackList,
 	trackElements: FakeTrackElement[],
-): HTMLVideoElement {
+): FakeVideo & HTMLVideoElement {
 	return new FakeVideo(
 		textTracks,
 		trackElements,
-	) as unknown as HTMLVideoElement;
+	) as unknown as FakeVideo & HTMLVideoElement;
 }
 
 describe("bindCaptionTrackCueText", () => {

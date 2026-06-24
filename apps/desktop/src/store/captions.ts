@@ -236,9 +236,11 @@ function createCaptionsStore() {
 			try {
 				const captionsData = await commands.loadCaptions(videoPath);
 				if (captionsData) {
-					const loadedSettings = captionsData.settings
-						? { ...defaultCaptionSettings, ...captionsData.settings }
-						: { ...defaultCaptionSettings, enabled: true };
+					const loadedSettings = (
+						captionsData.settings
+							? { ...defaultCaptionSettings, ...captionsData.settings }
+							: { ...defaultCaptionSettings, enabled: true }
+					) as EditorCaptionSettings;
 					setState((prev) => ({
 						...prev,
 						segments: captionsData.segments,

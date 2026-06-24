@@ -865,7 +865,7 @@ pub struct SceneSegment {
     pub transition_out: f64,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
@@ -1265,6 +1265,14 @@ impl Annotation {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalRecordingReference {
+    pub path: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectConfiguration {
@@ -1285,6 +1293,8 @@ pub struct ProjectConfiguration {
     pub screen_motion_blur: f32,
     #[serde(default)]
     pub screen_movement_spring: ScreenMovementSpring,
+    #[serde(default)]
+    pub external_recordings: Vec<ExternalRecordingReference>,
 }
 
 fn camera_config_needs_migration(value: &Value) -> bool {
@@ -1315,6 +1325,7 @@ impl Default for ProjectConfiguration {
             hidden_text_segments: Default::default(),
             screen_motion_blur: Self::default_screen_motion_blur(),
             screen_movement_spring: Default::default(),
+            external_recordings: Default::default(),
         }
     }
 }
