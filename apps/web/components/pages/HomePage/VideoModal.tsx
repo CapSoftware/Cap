@@ -4,12 +4,7 @@
 
 import { useClickAway } from "@uidotdev/usehooks";
 import { motion } from "framer-motion";
-import dynamic from "next/dynamic";
 import type React from "react";
-
-const MuxPlayer = dynamic(() => import("@mux/mux-player-react"), {
-	ssr: false,
-});
 
 interface Props {
 	setVideoToggled: React.Dispatch<React.SetStateAction<boolean>>;
@@ -35,16 +30,29 @@ const VideoModal = ({ setVideoToggled }: Props) => {
 					damping: 20,
 				}}
 				ref={ref}
-				className="w-[calc(100%-20px)] max-w-[1000px] bg-gray-1 rounded-[16px] md:h-[700px] h-[300px]"
+				className="w-[calc(100%-20px)] max-w-[960px] overflow-hidden bg-gray-1 rounded-[16px]"
 			>
-				<MuxPlayer
-					playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"
-					metadataVideoTitle="Placeholder (optional)"
-					metadata-viewer-user-id="Placeholder (optional)"
-					accentColor="#5C9FFF"
-					className="h-full rounded-[16px] overflow-hidden select-none"
-					autoPlay
-				/>
+				<div
+					style={{
+						position: "relative",
+						width: "100%",
+						paddingTop: "56.25%",
+					}}
+				>
+					<iframe
+						src="https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?autoplay=1&muted=0&accent=3e63dd"
+						style={{
+							position: "absolute",
+							inset: 0,
+							width: "100%",
+							height: "100%",
+							border: 0,
+						}}
+						allow="autoplay; fullscreen; picture-in-picture"
+						allowFullScreen
+						title="Cap demo video"
+					/>
+				</div>
 			</motion.div>
 		</motion.div>
 	);

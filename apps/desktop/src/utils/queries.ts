@@ -149,6 +149,7 @@ export const isSystemAudioSupported = queryOptions({
 
 type CameraCaptureTarget = ScreenCaptureTarget | { variant: "cameraOnly" };
 type ExtendedRecordingTargetMode = RecordingTargetMode | "camera" | null;
+type RecordingTargetModeSource = "main" | "editor" | "editorRecording" | null;
 
 export function createOptionsQuery() {
 	const PERSIST_KEY = "recording-options-query-2";
@@ -158,6 +159,7 @@ export function createOptionsQuery() {
 		mode: RecordingMode;
 		captureSystemAudio?: boolean;
 		targetMode?: ExtendedRecordingTargetMode;
+		targetModeSource?: RecordingTargetModeSource;
 		cameraID?: DeviceOrModelID | null;
 		organizationId?: string | null;
 		/** @deprecated */

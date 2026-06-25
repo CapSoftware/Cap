@@ -101,6 +101,10 @@ const footerLinks = {
 		{ label: "Screen Recorder for Windows", href: "/screen-recorder-windows" },
 		{ label: "Screen Recording Software", href: "/screen-recording-software" },
 		{
+			label: "Chrome Screen Recorder",
+			href: "/google-chrome-screen-recorder",
+		},
+		{
 			label: "Google Drive Screen Recorder",
 			href: "/google-drive-screen-recorder",
 		},

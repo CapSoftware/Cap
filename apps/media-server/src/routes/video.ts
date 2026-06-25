@@ -93,6 +93,7 @@ const editSchema = z.object({
 	userId: z.string(),
 	sourceUrl: z.string().url(),
 	outputPresignedUrl: z.string().url(),
+	outputVerificationUrl: z.string().url().optional(),
 	thumbnailPresignedUrl: z.string().url().optional(),
 	previewGifPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
@@ -861,6 +862,58 @@ async function generateAndUploadPreviewGif(
 	}
 }
 
+const UPLOAD_VERIFICATION_ATTEMPTS = 4;
+const UPLOAD_VERIFICATION_RETRY_MS = 1000;
+
+function getDurationTolerance(duration: number) {
+	if (!Number.isFinite(duration) || duration <= 0) return 0.5;
+	return Math.max(0.5, Math.min(5, duration * 0.01));
+}
+
+function isDurationClose(actual: number, expected: number) {
+	return (
+		Number.isFinite(actual) &&
+		Number.isFinite(expected) &&
+		Math.abs(actual - expected) <= getDurationTolerance(expected)
+	);
+}
+
+async function waitForVerificationRetry(attempt: number) {
+	await new Promise((resolve) =>
+		setTimeout(resolve, UPLOAD_VERIFICATION_RETRY_MS * (attempt + 1)),
+	);
+}
+
+async function verifyUploadedVideo(
+	outputVerificationUrl: string | undefined,
+	expectedMetadata: VideoMetadata,
+) {
+	if (!outputVerificationUrl) return;
+
+	let lastError: Error | undefined;
+
+	for (let attempt = 0; attempt < UPLOAD_VERIFICATION_ATTEMPTS; attempt++) {
+		try {
+			const actualMetadata = await probeVideo(outputVerificationUrl);
+			if (isDurationClose(actualMetadata.duration, expectedMetadata.duration)) {
+				return;
+			}
+
+			lastError = new Error(
+				`Uploaded video duration mismatch: expected ${expectedMetadata.duration.toFixed(3)}s, got ${actualMetadata.duration.toFixed(3)}s`,
+			);
+		} catch (error) {
+			lastError = error instanceof Error ? error : new Error(String(error));
+		}
+
+		if (attempt < UPLOAD_VERIFICATION_ATTEMPTS - 1) {
+			await waitForVerificationRetry(attempt);
+		}
+	}
+
+	throw lastError ?? new Error("Uploaded video verification failed");
+}
+
 async function editVideoAsync(
 	jobId: string,
 	sourceUrl: string,
@@ -955,6 +1008,7 @@ async function editVideoAsync(
 		}
 
 		await uploadFileToS3(outputTempFile.path, outputPresignedUrl, "video/mp4");
+		await verifyUploadedVideo(options.outputVerificationUrl, outputMetadata);
 
 		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
 			updateJob(jobId, {

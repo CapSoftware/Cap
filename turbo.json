@@ -8,6 +8,10 @@
 			"dependsOn": ["^build"],
 			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},
+		"@cap/desktop#build": {
+			"dependsOn": ["^build"],
+			"outputs": [".output/**"]
+		},
 		"@cap/chrome-extension#build": {
 			"inputs": [
 				"**/*.ts",

@@ -414,9 +414,9 @@ export function SceneTrack(props: {
 
 					return (
 						<SegmentRoot
+							segColor="var(--track-scene)"
 							class={cx(
-								"border transition-colors duration-200 hover:border-gray-12 group",
-								`bg-linear-to-r from-[#5C1BC4] via-[#975CFA] to-[#5C1BC4] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]`,
+								"border transition-colors duration-200 group",
 								isSelected() ? "border-gray-12" : "border-transparent",
 							)}
 							innerClass="ring-blue-5"
@@ -627,12 +627,13 @@ export function SceneTrack(props: {
 					<SegmentRoot
 						class="pointer-events-none"
 						innerClass="ring-blue-300"
+						segColor="var(--track-scene)"
 						segment={{
 							start: time(),
 							end: time() + maxAvailableDuration(),
 						}}
 					>
-						<SegmentContent class="bg-linear-to-r hover:border duration-200 hover:border-gray-500 from-[#5C1BC4] via-[#975CFA] to-[#5C1BC4] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
+						<SegmentContent class="group">
 							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
 								+
 							</p>

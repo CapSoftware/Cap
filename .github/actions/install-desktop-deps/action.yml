@@ -6,6 +6,16 @@ runs:
     - name: install dependencies (ubuntu only)
       if: ${{ runner.os == 'Linux' }}
       shell: bash
+      # NOTE: Do NOT add `ffmpeg` or any `libav*-dev` / `libsw*-dev` packages here.
+      # The Rust build links FFmpeg from the spacedrive native-deps bundle via
+      # `FFMPEG_DIR=target/native-deps` (see scripts/setup.js). Ubuntu's system
+      # FFmpeg dev packages are FFmpeg 6 (libavcodec.so.60, libavutil.so.58, ...),
+      # while native-deps ships FFmpeg 7 (.so.61/.59/.10). If the system dev
+      # packages are present, ffmpeg-sys-next's linker can resolve the system
+      # FFmpeg 6 `.so` instead of the native-deps FFmpeg 7, so the binary records
+      # FFmpeg 6 NEEDED sonames while the .deb bundles the FFmpeg 7 libs that
+      # setup.js stages -> soname mismatch and the loader fails at launch. Keeping
+      # them absent forces the binary to link the same FFmpeg 7 that gets bundled.
       run: |
         sudo apt update
         sudo apt install -y --no-install-recommends \
@@ -35,12 +45,5 @@ runs:
           libxfixes-dev \
           libwayland-dev \
           libxkbcommon-dev \
-          ffmpeg \
-          libavcodec-dev \
-          libavformat-dev \
-          libavutil-dev \
-          libavfilter-dev \
-          libavdevice-dev \
-          libswscale-dev \
-          libswresample-dev \
+          libva-dev \
           patchelf

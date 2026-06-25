@@ -160,9 +160,9 @@ export function KeyboardTrack(props: {
 						<SegmentRoot
 							data-keyboard-segment
 							data-index={i()}
+							segColor="var(--track-keyboard)"
 							class={cx(
-								"border duration-200 hover:border-sky-6 transition-colors group",
-								"bg-linear-to-r from-[#0d1830] via-[#142445] to-[#0d1830] shadow-[inset_0_8px_12px_3px_rgba(120,180,255,0.16)]",
+								"border duration-200 transition-colors group",
 								isSelected() ? "border-sky-7" : "border-transparent",
 							)}
 							innerClass="ring-sky-6"

@@ -179,6 +179,15 @@ async getMicWaveforms() : Promise<number[][]> {
 async getSystemAudioWaveforms() : Promise<number[][]> {
     return await TAURI_INVOKE("get_system_audio_waveforms");
 },
+async listAudioLibrary() : Promise<AudioLibraryTrack[]> {
+    return await TAURI_INVOKE("list_audio_library");
+},
+async addAudioLibraryTrack(id: string) : Promise<ImportedAudioTrack> {
+    return await TAURI_INVOKE("add_audio_library_track", { id });
+},
+async importAudioTrackFile(sourcePath: string) : Promise<ImportedAudioTrack> {
+    return await TAURI_INVOKE("import_audio_track_file", { sourcePath });
+},
 async startPlayback(fps: number, resolutionBase: XY<number>) : Promise<null> {
     return await TAURI_INVOKE("start_playback", { fps, resolutionBase });
 },
@@ -534,7 +543,26 @@ overlap_dropped_frames: number;
  */
 startup_overlap_drops: number }
 export type AudioInputLevelChange = number
+export type AudioLibraryTrack = { id: string; name: string; category: string }
 export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null; gap_summary?: AudioGapSummary | null }
+/**
+ * A timeline-positioned audio clip (background music or imported audio).
+ * 
+ * Unlike the recording's mic/system audio (which is keyed to recording clips),
+ * these segments live in output/timeline time exactly like zoom/text/mask
+ * segments. `path` is resolved relative to the project directory so projects
+ * stay portable when moved.
+ */
+export type AudioTrackSegment = { start: number; end: number; track?: number; path: string; name?: string | null; enabled?: boolean; 
+/**
+ * Offset into the source audio file (seconds) at which playback begins.
+ */
+trimStart?: number; volumeDb?: number; fadeIn?: number; fadeOut?: number; 
+/**
+ * Source duration in seconds, persisted so the UI can clamp resizing
+ * without re-decoding the file.
+ */
+duration?: number | null }
 export type AuthSecret = { api_key: string } | { token: string; expires: number }
 export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; organizations?: Organization[]; organizations_updated_at?: number | null }
 export type AutomationActionCheck = { actionType: string; capability: string; supported: boolean }
@@ -639,6 +667,11 @@ export type HotkeyAction = "startStudioRecording" | "startInstantRecording" | "s
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type ImportStage = "Probing" | "Converting" | "Finalizing" | "Complete" | "Failed"
+export type ImportedAudioTrack = { 
+/**
+ * Path relative to the project directory, e.g. `assets/audio/<file>`.
+ */
+path: string; name: string; duration: number }
 export type IncompleteRecordingInfo = { projectPath: string; prettyName: string; segmentCount: number; estimatedDurationSecs: number }
 export type InstantRecordingMeta = { recording: boolean } | { error: string } | { fps: number; sample_rate: number | null }
 export type JsonValue<T> = [T]
@@ -729,7 +762,7 @@ export type StudioRecordingStatus = { status: "InProgress" } | { status: "NeedsR
 export type SystemDiagnostics = { macosVersion: MacOSVersionInfo | null; availableEncoders: string[]; screenCaptureSupported: boolean; metalSupported: boolean; gpuName: string | null }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; fadeDuration?: number }
-export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[] }
+export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
 export type Trigger = "screenshotTaken" | "studioRecordingFinished" | "instantRecordingFinished" | "recordingStarted" | "uploadCompleted" | "videoImported" | "recordingDeleted"

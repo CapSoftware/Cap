@@ -274,6 +274,16 @@ export type MediaDeviceList = {
 	microphones: MicrophoneDevice[];
 };
 
+// "unknown" covers browsers without the Permissions API; every other value is
+// the live PermissionState reported by the offscreen document, the top-level
+// extension page that actually holds the camera/mic grant.
+export type MediaPermissionState = PermissionState | "unknown";
+
+export type MediaPermissionSnapshot = {
+	camera: MediaPermissionState;
+	microphone: MediaPermissionState;
+};
+
 export type OffscreenRequest =
 	| StartRecordingRequest
 	| StopRecordingRequest
@@ -294,6 +304,7 @@ export type OffscreenResponse =
 			status?: RecordingStatus;
 			answer?: RTCSessionDescriptionInit;
 			devices?: MediaDeviceList;
+			permissions?: MediaPermissionSnapshot;
 			micProbe?: MicrophoneProbeResult;
 	  }
 	| {
@@ -465,6 +476,7 @@ export type ServiceWorkerResponse =
 			bootstrap?: BootstrapData;
 			cameraDevices?: CameraDevice[];
 			microphoneDevices?: MicrophoneDevice[];
+			mediaPermissions?: MediaPermissionSnapshot;
 			status?: RecordingStatus;
 			settings?: ExtensionSettings;
 			plan?: RecordingPlan;

@@ -443,12 +443,39 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						},
 					});
 
-					const shareUrl = `${serverEnv().WEB_URL}/s/${videoId}`;
+					const canonicalShareUrl = `${serverEnv().WEB_URL}/s/${videoId}`;
+
+					const verifiedCustomDomain = yield* db
+						.use((db) =>
+							db
+								.select({
+									customDomain: Db.organizations.customDomain,
+									domainVerified: Db.organizations.domainVerified,
+								})
+								.from(Db.organizations)
+								.where(Dz.eq(Db.organizations.id, input.orgId))
+								.limit(1),
+						)
+						.pipe(
+							Effect.map(([org]) =>
+								org?.customDomain && org.domainVerified
+									? org.customDomain.startsWith("http://") ||
+										org.customDomain.startsWith("https://")
+										? org.customDomain
+										: `https://${org.customDomain}`
+									: null,
+							),
+							Effect.catchAll(() => Effect.succeed(null)),
+						);
+
+					const shareUrl = verifiedCustomDomain
+						? `${verifiedCustomDomain}/s/${videoId}`
+						: canonicalShareUrl;
 
 					if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
 						yield* Effect.tryPromise(() =>
 							dub().links.create({
-								url: shareUrl,
+								url: canonicalShareUrl,
 								domain: "cap.link",
 								key: videoId,
 							}),

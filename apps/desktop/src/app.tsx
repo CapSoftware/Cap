@@ -154,16 +154,27 @@ function Inner() {
 						const matches = useCurrentMatches();
 
 						onMount(() => {
+							let autoShow = true;
 							for (const match of matches()) {
-								if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
+								if (match.route.info?.AUTO_SHOW_WINDOW === false)
+									autoShow = false;
 							}
 
 							if (
-								location.pathname !== "/" &&
-								location.pathname !== "/camera"
+								location.pathname === "/" ||
+								location.pathname === "/camera"
 							) {
+								return;
+							}
+
+							if (autoShow) {
 								void currentWindow.show();
 								void currentWindow.setFocus();
+							} else {
+								// The route reveals itself after its first themed paint to
+								// avoid a load flash. Safety net so the window is never left
+								// hidden if that self-reveal never runs (e.g. chunk load error).
+								setTimeout(() => void currentWindow.show(), 2000);
 							}
 						});
 
@@ -211,7 +222,11 @@ function Inner() {
 					<Route path="/camera" component={CameraPage} />
 					<Route path="/capture-area" component={CaptureAreaPage} />
 					<Route path="/debug" component={DebugPage} />
-					<Route path="/editor" component={EditorPage} />
+					<Route
+						path="/editor"
+						info={{ AUTO_SHOW_WINDOW: false }}
+						component={EditorPage}
+					/>
 					<Route
 						path="/in-progress-recording"
 						component={InProgressRecordingPage}

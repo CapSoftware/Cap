@@ -55,6 +55,7 @@ async function getOwnerSubscription(
 	const allMembers = await db()
 		.select({
 			id: organizationMembers.id,
+			userId: organizationMembers.userId,
 			hasProSeat: organizationMembers.hasProSeat,
 		})
 		.from(organizationMembers)
@@ -62,6 +63,8 @@ async function getOwnerSubscription(
 
 	const { proSeatsUsed } = calculateProSeats({
 		inviteQuota: owner.inviteQuota ?? 1,
+		ownerId: user.id,
+		ownerIsPro: true,
 		members: allMembers,
 	});
 

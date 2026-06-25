@@ -8,3 +8,19 @@
 .timeline-scissors-cursor * {
 	cursor: inherit;
 }
+
+.timeline-fade-cursor {
+	cursor:
+		url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='20' viewBox='0 0 26 20' shape-rendering='geometricPrecision'%3E%3Crect x='1' y='1' width='24' height='18' rx='1.5' fill='%23ffffff' stroke='%23222222' stroke-width='1'/%3E%3Cpath d='M4.5 14.5C4.5 10 5.2 7 8.2 5.2' fill='none' stroke='%23111111' stroke-width='1.35' stroke-linecap='round'/%3E%3Cpath d='M14.5 10h7.5M14.5 10H7' stroke='%23111111' stroke-width='1.55' stroke-linecap='round'/%3E%3Cpath d='M20.5 7.4l2.4 2.6-2.4 2.6M7.5 7.4L5.1 10l2.4 2.6' fill='none' stroke='%23111111' stroke-width='1.25' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+		13 10,
+		ew-resize;
+}
+
+.timeline-fade-cursor * {
+	cursor: inherit;
+}
+
+.cap-track-fill {
+	background: var(--seg-color);
+	border: 1px solid color-mix(in srgb, var(--seg-color) 58%, black);
+}

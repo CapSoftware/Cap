@@ -8,15 +8,18 @@ const revalidatePathMock = vi.fn();
 const storageGetWritableAccessForUserMock = vi.hoisted(() => vi.fn());
 const checkRateLimitMock = vi.hoisted(() => vi.fn());
 const headersMock = vi.hoisted(() => vi.fn());
+const getOrganizationAccessMock = vi.hoisted(() => vi.fn());
 
 const mockDb = {
 	select: vi.fn(() => mockDb),
 	insert: vi.fn(() => mockDb),
+	update: vi.fn(() => mockDb),
 	delete: vi.fn(() => mockDb),
 	from: vi.fn(() => mockDb),
 	innerJoin: vi.fn(() => mockDb),
 	leftJoin: vi.fn(() => mockDb),
 	where: whereMock,
+	set: vi.fn(() => mockDb),
 	values: valuesMock,
 	transaction: vi.fn((callback) => callback(mockDb)),
 };
@@ -24,6 +27,8 @@ const mockDb = {
 vi.mock("@cap/database", () => ({
 	db: vi.fn(() => mockDb),
 }));
+
+vi.mock("server-only", () => ({}));
 
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: vi.fn(),
@@ -41,8 +46,18 @@ vi.mock("@cap/database/schema", () => ({
 		sourceId: "sourceId",
 	},
 	organizationMembers: {
+		id: "memberId",
 		userId: "memberUserId",
 		organizationId: "memberOrganizationId",
+		role: "memberRole",
+		hasProSeat: "memberHasProSeat",
+	},
+	organizationInvites: {
+		id: "inviteId",
+		organizationId: "inviteOrganizationId",
+		invitedEmail: "invitedEmail",
+		invitedByUserId: "invitedByUserId",
+		role: "inviteRole",
 	},
 	organizations: {
 		id: "organizationId",
@@ -73,6 +88,11 @@ vi.mock("@cap/database/schema", () => ({
 	users: {
 		id: "userId",
 		email: "email",
+		activeOrganizationId: "activeOrganizationId",
+		defaultOrgId: "defaultOrgId",
+		inviteQuota: "inviteQuota",
+		stripeSubscriptionId: "stripeSubscriptionId",
+		thirdPartyStripeSubscriptionId: "thirdPartyStripeSubscriptionId",
 	},
 	videos: {
 		id: "id",
@@ -116,6 +136,11 @@ vi.mock("@cap/web-domain", () => ({
 	SpaceMemberId: {
 		make: vi.fn((value: string) => value),
 	},
+	User: {
+		UserId: {
+			make: vi.fn((value: string) => value),
+		},
+	},
 	Video: {
 		VideoId: {
 			make: vi.fn((value: string) => value),
@@ -147,6 +172,7 @@ vi.mock("@/lib/server", async () => {
 });
 
 vi.mock("@/actions/organization/authorization", () => ({
+	getOrganizationAccess: getOrganizationAccessMock,
 	requireOrganizationAccess: vi.fn(),
 }));
 
@@ -175,15 +201,23 @@ describe("importFromLoom", () => {
 		valuesMock.mockReset();
 		mockDb.select.mockReturnValue(mockDb);
 		mockDb.insert.mockReturnValue(mockDb);
+		mockDb.update.mockReturnValue(mockDb);
 		mockDb.delete.mockReturnValue(mockDb);
 		mockDb.from.mockReturnValue(mockDb);
 		mockDb.innerJoin.mockReturnValue(mockDb);
 		mockDb.leftJoin.mockReturnValue(mockDb);
 		mockDb.transaction.mockImplementation((callback) => callback(mockDb));
+		mockDb.set.mockReturnValue(mockDb);
 		valuesMock.mockResolvedValue(undefined);
 		whereMock.mockResolvedValue([]);
 		startMock.mockResolvedValue(undefined);
 		checkRateLimitMock.mockResolvedValue({ rateLimited: false });
+		getOrganizationAccessMock.mockResolvedValue({
+			id: "org-1",
+			ownerId: "user-123",
+			memberId: null,
+			role: "owner",
+		});
 		headersMock.mockResolvedValue(
 			new Headers({
 				host: "cap.test",
@@ -312,8 +346,13 @@ describe("importFromLoom", () => {
 		expect(revalidatePathMock).toHaveBeenCalledWith("/dashboard/caps");
 	});
 
-	it("rejects a CSV import when the current user is not the organization owner", async () => {
-		whereMock.mockReturnValueOnce(withLimit([{ ownerId: "owner-456" }]));
+	it("rejects a CSV import when the current user is not an organization admin or owner", async () => {
+		getOrganizationAccessMock.mockResolvedValueOnce({
+			id: "org-1",
+			ownerId: "owner-456",
+			memberId: "member-row",
+			role: "member",
+		});
 
 		const fetchMock = vi.mocked(fetch);
 		const { importFromLoomCsv } = await import("@/actions/loom");
@@ -335,18 +374,56 @@ describe("importFromLoom", () => {
 			failedCount: 0,
 			results: [],
 			error:
-				"Only the organization owner can import Loom videos from a CSV. Ask the owner to do it.",
+				"Only organization admins and owners can import Loom videos from a CSV.",
 		});
+		expect(getOrganizationAccessMock).toHaveBeenCalledWith("user-123", "org-1");
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(valuesMock).not.toHaveBeenCalled();
 	});
 
-	it("rejects CSV rows for emails outside the organization", async () => {
+	it("provisions missing CSV users and starts imports for them", async () => {
 		whereMock
-			.mockReturnValueOnce(withLimit([{ ownerId: "user-123" }]))
-			.mockReturnValueOnce(withLimit([]));
+			.mockReturnValueOnce(withLimit([]))
+			.mockReturnValueOnce(withLimit([]))
+			.mockReturnValueOnce(withLimit([]))
+			.mockReturnValueOnce(withLimit([]))
+			.mockReturnValueOnce(withLimit([{ ownerId: "owner-456" }]))
+			.mockReturnValueOnce(
+				withLimit([{ inviteQuota: 1, stripeSubscriptionId: null }]),
+			)
+			.mockResolvedValueOnce([]);
 
 		const fetchMock = vi.mocked(fetch);
+		fetchMock.mockImplementation(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+
+			if (url.includes("/transcoded-url")) {
+				return {
+					ok: true,
+					status: 200,
+					text: async () =>
+						JSON.stringify({ url: "https://cdn.loom.com/video.mp4" }),
+				} as Response;
+			}
+
+			if (url === "https://www.loom.com/graphql") {
+				return {
+					ok: true,
+					json: async () => ({
+						data: { getVideo: { name: "Imported video" } },
+					}),
+				} as Response;
+			}
+
+			if (url.includes("/v1/oembed")) {
+				return {
+					ok: true,
+					json: async () => ({ duration: 42, width: 1920, height: 1080 }),
+				} as Response;
+			}
+
+			throw new Error(`Unexpected fetch: ${url}`);
+		});
 		const { importFromLoomCsv } = await import("@/actions/loom");
 
 		const result = await importFromLoomCsv({
@@ -361,30 +438,54 @@ describe("importFromLoom", () => {
 		});
 
 		expect(result).toEqual({
-			success: false,
-			importedCount: 0,
-			failedCount: 1,
+			success: true,
+			importedCount: 1,
+			failedCount: 0,
 			results: [
 				{
 					rowNumber: 2,
 					userEmail: "not-member@example.com",
 					spaceName: undefined,
-					success: false,
-					error: "This email is not a member of the organization.",
+					success: true,
+					videoId: "video-123",
+					error: undefined,
 				},
 			],
-			error: "No Loom videos were imported.",
+			error: undefined,
 		});
-		expect(fetchMock).not.toHaveBeenCalled();
-		expect(valuesMock).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalled();
+		expect(valuesMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				email: "not-member@example.com",
+				activeOrganizationId: "org-1",
+				defaultOrgId: "org-1",
+			}),
+		);
+		expect(valuesMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				organizationId: "org-1",
+				invitedEmail: "not-member@example.com",
+				invitedByUserId: "user-123",
+				role: "member",
+			}),
+		);
+		expect(valuesMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				organizationId: "org-1",
+				userId: "video-123",
+				role: "member",
+			}),
+		);
+		expect(storageGetWritableAccessForUserMock).toHaveBeenCalledWith(
+			"video-123",
+			"org-1",
+		);
 	});
 
 	it("rejects CSV imports when the current user is rate limited", async () => {
-		whereMock
-			.mockReturnValueOnce(withLimit([{ ownerId: "user-123" }]))
-			.mockReturnValueOnce(
-				withLimit([{ userId: "member-123", email: "member@example.com" }]),
-			);
+		whereMock.mockReturnValueOnce(
+			withLimit([{ userId: "member-123", email: "member@example.com" }]),
+		);
 		checkRateLimitMock.mockResolvedValueOnce({ rateLimited: true });
 
 		const fetchMock = vi.mocked(fetch);
@@ -428,8 +529,6 @@ describe("importFromLoom", () => {
 	});
 
 	it("limits CSV imports to 500 rows", async () => {
-		whereMock.mockReturnValueOnce(withLimit([{ ownerId: "user-123" }]));
-
 		const fetchMock = vi.mocked(fetch);
 		const { importFromLoomCsv } = await import("@/actions/loom");
 
@@ -455,9 +554,14 @@ describe("importFromLoom", () => {
 		expect(valuesMock).not.toHaveBeenCalled();
 	});
 
-	it("starts CSV Loom imports for matched organization members", async () => {
+	it("starts CSV Loom imports for matched organization members when the current user is an organization admin", async () => {
+		getOrganizationAccessMock.mockResolvedValueOnce({
+			id: "org-1",
+			ownerId: "owner-456",
+			memberId: "member-row",
+			role: "admin",
+		});
 		whereMock
-			.mockReturnValueOnce(withLimit([{ ownerId: "user-123" }]))
 			.mockReturnValueOnce(
 				withLimit([{ userId: "member-123", email: "member@example.com" }]),
 			)
@@ -547,11 +651,11 @@ describe("importFromLoom", () => {
 
 	it("creates missing spaces and adds CSV Loom imports to them", async () => {
 		whereMock
-			.mockReturnValueOnce(withLimit([{ ownerId: "user-123" }]))
 			.mockReturnValueOnce(
 				withLimit([{ userId: "member-123", email: "member@example.com" }]),
 			)
 			.mockResolvedValueOnce([])
+			.mockReturnValueOnce(withLimit([]))
 			.mockReturnValueOnce(withLimit([]))
 			.mockReturnValueOnce(withLimit([]));
 

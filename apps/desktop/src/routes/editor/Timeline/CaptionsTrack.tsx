@@ -168,9 +168,9 @@ export function CaptionsTrack(props: {
 						<SegmentRoot
 							data-caption-segment
 							data-index={i()}
+							segColor="var(--track-caption)"
 							class={cx(
-								"border duration-200 hover:border-green-6 transition-colors group",
-								"bg-linear-to-r from-[#0d1f12] via-[#162618] to-[#0d1f12]",
+								"border duration-200 transition-colors group",
 								isSelected() ? "border-green-7" : "border-transparent",
 							)}
 							innerClass="ring-green-6"

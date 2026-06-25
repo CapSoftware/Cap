@@ -5,6 +5,11 @@ import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Link from "next/link";
 import { useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
+import { ChromeExtensionButton } from "@/components/ChromeExtensionButton";
+import {
+	CAP_CHROME_EXTENSION_URL,
+	CHROME_EXTENSION_BUTTON_CLASS,
+} from "@/lib/chrome-extension";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
@@ -23,10 +28,15 @@ export const DownloadPage = () => {
 			? "irm https://cap.so/install-cli.ps1 | iex"
 			: "curl -fsSL https://cap.so/install-cli.sh | sh";
 
-	const trackDownloadClick = (ctaLocation: string, targetUrl: string) => {
+	const trackDownloadClick = (
+		ctaLocation: string,
+		targetUrl: string,
+		target?: string,
+	) => {
 		trackEvent("download_cta_clicked", {
 			source_page: "download_page",
 			cta_location: ctaLocation,
+			...(target ? { target } : {}),
 			target_url: targetUrl,
 			detected_platform: platform ?? "unknown",
 			is_intel: Boolean(isIntel),
@@ -55,16 +65,33 @@ export const DownloadPage = () => {
 				</p>
 				<div className="flex flex-col justify-center items-center space-y-4 fade-in-up animate-delay-2">
 					<div className="flex flex-col items-center space-y-4">
-						<Button
-							variant="blue"
-							size="lg"
-							href={primaryDownloadUrl}
-							onClick={() => trackDownloadClick("primary", primaryDownloadUrl)}
-							className="flex justify-center items-center py-6 font-medium text-white"
-						>
-							{!loading && getPlatformIcon(platform)}
-							{getDownloadButtonText(platform, loading, isIntel)}
-						</Button>
+						<div className="flex flex-col gap-3 justify-center items-center w-full sm:flex-row sm:gap-4">
+							<Button
+								variant="blue"
+								size="lg"
+								href={primaryDownloadUrl}
+								onClick={() =>
+									trackDownloadClick("primary", primaryDownloadUrl)
+								}
+								className="flex justify-center items-center w-full font-medium text-white sm:w-auto"
+							>
+								{!loading && getPlatformIcon(platform)}
+								{getDownloadButtonText(platform, loading, isIntel)}
+							</Button>
+							<span className="text-sm font-medium text-gray-500">or</span>
+							<ChromeExtensionButton
+								variant="white"
+								size="lg"
+								onClick={() =>
+									trackDownloadClick(
+										"chrome_extension_primary",
+										CAP_CHROME_EXTENSION_URL,
+										"chrome_extension",
+									)
+								}
+								className={`${CHROME_EXTENSION_BUTTON_CLASS} w-full font-medium sm:w-auto`}
+							/>
+						</div>
 
 						<div className="text-sm text-gray-10">
 							{getVersionText(platform)}

@@ -46,6 +46,10 @@ import {
 } from "@/actions/loom";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import {
+	canManageOrganizationSettings,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
 
 type Mode = "single" | "csv";
 
@@ -78,6 +82,8 @@ const LOOM_CSV_BATCH_SIZE = 10;
 const LOOM_CSV_BATCH_DELAY_MS = 1500;
 const LOOM_CSV_LIMIT_MESSAGE =
 	"CSV imports are limited to 500 videos at a time. Contact support to raise this limit.";
+const LOOM_CSV_PERMISSION_MESSAGE =
+	"Only organization admins and owners can import Loom videos from a CSV.";
 
 function delay(ms: number) {
 	return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -230,10 +236,18 @@ export const ImportLoomPage = () => {
 	const { user, activeOrganization } = useDashboardContext();
 	const router = useRouter();
 
-	const isOrganizationOwner =
-		!!user && user.id === activeOrganization?.organization.ownerId;
+	const currentMember = activeOrganization?.members.find(
+		(member) => member.userId === user?.id,
+	);
+	const currentRole = getEffectiveOrganizationRole({
+		userId: user?.id,
+		ownerId: activeOrganization?.organization.ownerId,
+		memberRole: currentMember?.role,
+	});
+	const canUseCsvImport = canManageOrganizationSettings(currentRole);
 
 	const [mode, setMode] = useState<Mode>("single");
+	const activeMode = canUseCsvImport ? mode : "single";
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(!user?.isPro);
 
 	const [loomUrl, setLoomUrl] = useState("");
@@ -296,6 +310,7 @@ export const ImportLoomPage = () => {
 	const previewRows = mappedRows.slice(0, 5);
 	const csvLimitExceeded = readyRows.length > MAX_LOOM_CSV_IMPORT_ROWS;
 	const canImport =
+		canUseCsvImport &&
 		!!activeOrganization &&
 		!selectedColumnsConflict &&
 		readyRows.length > 0 &&
@@ -366,6 +381,11 @@ export const ImportLoomPage = () => {
 
 	const loadCsvFile = async (file: File) => {
 		if (!user) return;
+
+		if (!canUseCsvImport) {
+			toast.error(LOOM_CSV_PERMISSION_MESSAGE);
+			return;
+		}
 
 		if (!user.isPro) {
 			setUpgradeModalOpen(true);
@@ -513,8 +533,8 @@ export const ImportLoomPage = () => {
 							Import from Loom
 						</h1>
 						<p className="mt-1 max-w-xl text-sm text-gray-10">
-							{isOrganizationOwner
-								? "Bring a single Loom video into Cap, or bulk import recordings for organization members from a CSV."
+							{canUseCsvImport
+								? "Bring a single Loom video into Cap, or bulk import recordings for organization members and new users from a CSV."
 								: "Paste a Loom share link to bring it into Cap."}
 						</p>
 					</div>
@@ -522,20 +542,20 @@ export const ImportLoomPage = () => {
 			</div>
 
 			<div className="flex flex-col gap-6 w-full max-w-4xl">
-				{isOrganizationOwner && (
+				{canUseCsvImport && (
 					<div
 						role="tablist"
 						aria-label="Loom import mode"
 						className="flex gap-1 p-1 rounded-full border w-fit border-gray-3 bg-gray-2"
 					>
 						<ModeTab
-							active={mode === "single"}
+							active={activeMode === "single"}
 							icon={faLink}
 							label="Single Video"
 							onClick={() => setMode("single")}
 						/>
 						<ModeTab
-							active={mode === "csv"}
+							active={activeMode === "csv"}
 							icon={faFileCsv}
 							label="Bulk Import"
 							onClick={() => setMode("csv")}
@@ -543,7 +563,7 @@ export const ImportLoomPage = () => {
 					</div>
 				)}
 
-				{mode === "single" ? (
+				{activeMode === "single" ? (
 					<div className="flex overflow-hidden flex-col rounded-xl border bg-gray-1 border-gray-3">
 						<div className="flex flex-col gap-1 px-6 py-5 border-b border-gray-3">
 							<p className="text-sm font-medium text-gray-12">Loom video URL</p>
@@ -613,7 +633,8 @@ export const ImportLoomPage = () => {
 												<code className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-12 text-[11px] font-mono">
 													space_name
 												</code>{" "}
-												to place videos in spaces.
+												to place videos in spaces. Emails that are not members
+												yet will be added without an email invite.
 											</p>
 										</div>
 									</div>
@@ -945,8 +966,8 @@ export const ImportLoomPage = () => {
 					</DialogHeader>
 					<div className="p-5 text-sm text-gray-11">
 						{readyRows.length} {pluralize(readyRows.length, "video", "videos")}{" "}
-						will be imported for organization members in batches of{" "}
-						{LOOM_CSV_BATCH_SIZE}.
+						will be imported for existing members or newly added users in
+						batches of {LOOM_CSV_BATCH_SIZE}.
 						{readyRows.some((row) => row.spaceName) && (
 							<span className="block mt-2">
 								Rows with a space name will be added to that space. Missing

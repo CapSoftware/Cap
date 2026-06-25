@@ -332,12 +332,12 @@ export function MaskTrack(props: {
 						<SegmentRoot
 							data-mask-segment
 							data-index={index}
+							segColor="var(--track-mask)"
 							class={cx(
 								"duration-200 transition-colors group",
-								"bg-linear-to-r from-[#1f2022] via-[#2c2d30] to-[#1f2022]",
 								isSelected()
 									? "border border-gray-12"
-									: "border-0! hover:border! hover:border-gray-12",
+									: "border border-transparent",
 							)}
 							innerClass="ring-red-5"
 							segment={segment}
@@ -503,9 +503,10 @@ export function MaskTrack(props: {
 					<SegmentRoot
 						class="pointer-events-none z-10 border border-transparent"
 						innerClass="ring-red-300"
+						segColor="var(--track-mask)"
 						segment={details()}
 					>
-						<SegmentContent class="bg-linear-to-r from-[#1f2022] via-[#2c2d30] to-[#1f2022] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.16)]">
+						<SegmentContent>
 							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md">
 								+
 							</p>

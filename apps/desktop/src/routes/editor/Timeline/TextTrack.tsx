@@ -302,9 +302,9 @@ export function TextTrack(props: {
 						<SegmentRoot
 							data-text-segment
 							data-index={index}
+							segColor="var(--track-text)"
 							class={cx(
-								"border duration-200 hover:border-blue-6 transition-colors group",
-								"bg-linear-to-r from-[#111826] via-[#1c2232] to-[#111826]",
+								"border duration-200 transition-colors group",
 								isSelected() ? "border-blue-7" : "border-transparent",
 								!segment.enabled && "opacity-60",
 							)}
@@ -446,9 +446,10 @@ export function TextTrack(props: {
 					<SegmentRoot
 						class="pointer-events-none z-10 border border-transparent"
 						innerClass="ring-blue-300"
+						segColor="var(--track-text)"
 						segment={details()}
 					>
-						<SegmentContent class="bg-linear-to-r from-[#111826] via-[#1c2232] to-[#111826] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.16)]">
+						<SegmentContent>
 							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md">
 								+
 							</p>

@@ -625,7 +625,14 @@ function Inner() {
 												}}
 												onRecordingStart={() => {
 													setOriginalCameraBounds(null);
-													setOptions("targetMode", null);
+													if (options.targetModeSource === "editor") {
+														setOptions({
+															targetMode: null,
+															targetModeSource: "editorRecording",
+														});
+													} else {
+														setOptions("targetMode", null);
+													}
 													commands.closeTargetSelectOverlays();
 												}}
 												onClose={() => {

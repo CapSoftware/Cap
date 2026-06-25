@@ -3585,16 +3585,16 @@ fn project_config_from_recording(
             Vec::new()
         };
 
-        config.timeline = Some(TimelineConfiguration {
-            segments: timeline_segments,
-            zoom_segments,
-            scene_segments: Vec::new(),
-            mask_segments: Vec::new(),
-            text_segments: Vec::new(),
-            caption_segments: Vec::new(),
-            keyboard_segments: Vec::new(),
-        });
-    }
+    config.timeline = Some(TimelineConfiguration {
+        segments: timeline_segments,
+        zoom_segments,
+        scene_segments: Vec::new(),
+        mask_segments: Vec::new(),
+        text_segments: Vec::new(),
+        caption_segments: Vec::new(),
+        keyboard_segments: Vec::new(),
+        audio_segments: Vec::new(),
+    });
 
     config
 }

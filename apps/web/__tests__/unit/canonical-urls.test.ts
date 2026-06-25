@@ -109,6 +109,10 @@ const expectedCanonicals: Array<{ file: string; canonical: string }> = [
 		file: "(site)/(seo)/hipaa-compliant-screen-recording/page.tsx",
 		canonical: "https://cap.so/hipaa-compliant-screen-recording",
 	},
+	{
+		file: "(site)/(seo)/google-chrome-screen-recorder/page.tsx",
+		canonical: "https://cap.so/google-chrome-screen-recorder",
+	},
 ];
 
 describe("Canonical URLs", () => {

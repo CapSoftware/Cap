@@ -35,7 +35,7 @@ impl ScreenCaptureFormat for X11Capture {
     type VideoFormat = ffmpeg::frame::Video;
 
     fn pixel_format() -> ffmpeg::format::Pixel {
-        ffmpeg::format::Pixel::BGRA
+        ffmpeg::format::Pixel::BGRZ
     }
 
     fn audio_info() -> AudioInfo {
@@ -127,33 +127,36 @@ impl ScreenCaptureConfig<X11Capture> {
             .physical_size()
             .ok_or_else(|| anyhow!("Display size unavailable"))?;
 
-        let (x, y, width, height) = if let Some(crop) = self.config.crop_bounds {
-            let position = crop.position();
-            let size = crop.size();
+        let crop = self.config.crop_bounds.map(|crop| {
             (
-                display_position.x() as i32 + position.x().max(0.0) as i32,
-                display_position.y() as i32 + position.y().max(0.0) as i32,
-                size.width().max(2.0) as u32,
-                size.height().max(2.0) as u32,
+                crop.position().x(),
+                crop.position().y(),
+                crop.size().width(),
+                crop.size().height(),
             )
-        } else {
-            (
-                display_position.x() as i32,
-                display_position.y() as i32,
-                display_size.width().max(2.0) as u32,
-                display_size.height().max(2.0) as u32,
-            )
+        });
+        let (x, y, width, height) = x11_capture_rect(
+            display_position.x(),
+            display_position.y(),
+            display_size.width(),
+            display_size.height(),
+            crop,
+        )?;
+        let video_info = VideoInfo {
+            width,
+            height,
+            ..self.video_info
         };
 
         Ok((
             VideoSourceConfig {
-                video_info: self.video_info,
+                video_info,
                 input: LinuxInputConfig::X11(X11InputConfig {
                     display_name: std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string()),
                     x,
                     y,
-                    width: ensure_even(width),
-                    height: ensure_even(height),
+                    width,
+                    height,
                     fps: self.config.fps,
                     show_cursor: self.config.show_cursor,
                 }),
@@ -161,6 +164,64 @@ impl ScreenCaptureConfig<X11Capture> {
             system_audio,
         ))
     }
+}
+
+pub(crate) fn x11_capture_rect(
+    display_x: f64,
+    display_y: f64,
+    display_width: f64,
+    display_height: f64,
+    crop: Option<(f64, f64, f64, f64)>,
+) -> anyhow::Result<(i32, i32, u32, u32)> {
+    let display_left = floor_i32(display_x, "display x")?;
+    let display_top = floor_i32(display_y, "display y")?;
+    let display_right = ceil_i32(display_x + display_width.max(2.0), "display right")?;
+    let display_bottom = ceil_i32(display_y + display_height.max(2.0), "display bottom")?;
+
+    if display_right - display_left < 2 || display_bottom - display_top < 2 {
+        bail!("X11 display bounds are too small for capture");
+    }
+
+    let (raw_left, raw_top, raw_right, raw_bottom) = match crop {
+        Some((x, y, width, height)) => (
+            floor_i32(display_x + x, "capture x")?,
+            floor_i32(display_y + y, "capture y")?,
+            ceil_i32(display_x + x + width.max(2.0), "capture right")?,
+            ceil_i32(display_y + y + height.max(2.0), "capture bottom")?,
+        ),
+        None => (display_left, display_top, display_right, display_bottom),
+    };
+
+    let left = raw_left.clamp(display_left, display_right - 2);
+    let top = raw_top.clamp(display_top, display_bottom - 2);
+    let right = raw_right.clamp(left + 2, display_right);
+    let bottom = raw_bottom.clamp(top + 2, display_bottom);
+
+    Ok((
+        left,
+        top,
+        ensure_even((right - left) as u32),
+        ensure_even((bottom - top) as u32),
+    ))
+}
+
+fn floor_i32(value: f64, label: &str) -> anyhow::Result<i32> {
+    finite_i32(value, label)
+        .map(f64::floor)
+        .map(|value| value as i32)
+}
+
+fn ceil_i32(value: f64, label: &str) -> anyhow::Result<i32> {
+    finite_i32(value, label)
+        .map(f64::ceil)
+        .map(|value| value as i32)
+}
+
+fn finite_i32(value: f64, label: &str) -> anyhow::Result<f64> {
+    if !value.is_finite() || value < i32::MIN as f64 || value > i32::MAX as f64 {
+        bail!("Invalid X11 {label}: {value}");
+    }
+    Ok(value)
 }
 
 impl OutputVideoSource for VideoSource {

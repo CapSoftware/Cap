@@ -46,6 +46,8 @@ import {
 import type {
 	ConnectCameraPreviewRequest,
 	ExtensionSettings,
+	MediaPermissionSnapshot,
+	MediaPermissionState,
 	MicrophoneProbeResult,
 	MicrophoneSettings,
 	OffscreenRequest,
@@ -1601,6 +1603,31 @@ const enumerateMediaDevices = async () => {
 	};
 };
 
+// The recorder panel is a cross-origin iframe whose own permission query is
+// delegated from the host page, so it cannot tell when Chrome has reset the
+// extension's camera/mic grant (which happens automatically after the
+// extension goes unused for a while). This top-level page shares the grant
+// with the recording pipeline, so its query is the authoritative source.
+const queryMediaPermission = async (
+	name: PermissionName,
+): Promise<MediaPermissionState> => {
+	if (!navigator.permissions?.query) return "unknown";
+	try {
+		const status = await navigator.permissions.query({ name });
+		return status.state;
+	} catch {
+		return "unknown";
+	}
+};
+
+const queryMediaPermissions = async (): Promise<MediaPermissionSnapshot> => {
+	const [camera, microphone] = await Promise.all([
+		queryMediaPermission("camera" as PermissionName),
+		queryMediaPermission("microphone" as PermissionName),
+	]);
+	return { camera, microphone };
+};
+
 const connectCameraPreview = async (request: ConnectCameraPreviewRequest) => {
 	disconnectCameraPreview(request.sessionId);
 	const stream = await getCameraPreviewStream(request.settings);
@@ -1679,7 +1706,11 @@ const handleRequest = async (
 	}
 
 	if (message.type === "enumerate-devices") {
-		return { ok: true, devices: await enumerateMediaDevices() };
+		const [devices, permissions] = await Promise.all([
+			enumerateMediaDevices(),
+			queryMediaPermissions(),
+		]);
+		return { ok: true, devices, permissions };
 	}
 
 	if (message.type === "probe-microphone") {

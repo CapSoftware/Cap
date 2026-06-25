@@ -26,6 +26,7 @@ import {
 	removeTimelineDisplaySplitPoint,
 	selectTimelineSegment,
 	splitTimelineAt,
+	trimTimelineClipEdge,
 	undoTimelineHistory,
 } from "@/lib/video-edits";
 
@@ -273,6 +274,115 @@ describe("timeline editing", () => {
 		expect(getTimelineKeepRanges(afterSecondSplitRemoved)).toEqual([
 			{ start: 0, end: 10 },
 		]);
+	});
+
+	it("trims an inner clip from either edge without touching its neighbours", () => {
+		const splitState = splitTimelineAt(createTimelineState(10), 4);
+		const [firstClip, secondClip] = getTimelineDisplaySegments(splitState);
+		if (!firstClip || !secondClip) throw new Error("Expected two clips");
+
+		const secondTrimmedLeft = trimTimelineClipEdge(
+			splitState,
+			secondClip.id,
+			"start",
+			6,
+		);
+		expect(getTimelineKeepRanges(secondTrimmedLeft)).toEqual([
+			{ start: 0, end: 4 },
+			{ start: 6, end: 10 },
+		]);
+
+		const firstTrimmedRight = trimTimelineClipEdge(
+			splitState,
+			firstClip.id,
+			"end",
+			3,
+		);
+		expect(getTimelineKeepRanges(firstTrimmedRight)).toEqual([
+			{ start: 0, end: 3 },
+			{ start: 4, end: 10 },
+		]);
+	});
+
+	it("never lets a clip edge carve into the adjacent clip", () => {
+		const splitState = splitTimelineAt(createTimelineState(10), 4);
+		const [firstClip, secondClip] = getTimelineDisplaySegments(splitState);
+		if (!firstClip || !secondClip) throw new Error("Expected two clips");
+
+		// First clip's right edge dragged past its own end stops at the boundary.
+		expect(
+			getTimelineKeepRanges(
+				trimTimelineClipEdge(splitState, firstClip.id, "end", 8),
+			),
+		).toEqual([{ start: 0, end: 10 }]);
+
+		// Second clip's left edge dragged before its own start stops at the boundary.
+		expect(
+			getTimelineKeepRanges(
+				trimTimelineClipEdge(splitState, secondClip.id, "start", 1),
+			),
+		).toEqual([{ start: 0, end: 10 }]);
+	});
+
+	it("carves (does not un-collapse) when the outer clip already has trimmed-off footage", () => {
+		// Front: delete [0,2] so the first visible clip is source 2-10.
+		const frontDeleted = deleteSelectedTimelineSegment(
+			selectTimelineSegment(
+				splitTimelineAt(createTimelineState(10), 2),
+				getTimelineSegments(splitTimelineAt(createTimelineState(10), 2))[0]
+					?.id ?? "",
+			),
+		);
+		const frontClip = getTimelineDisplaySegments(frontDeleted)[0];
+		if (!frontClip) throw new Error("Expected a leading clip");
+		const frontTrimmed = trimTimelineClipEdge(
+			frontDeleted,
+			frontClip.id,
+			"start",
+			4,
+		);
+		expect(getTimelineKeepRanges(frontTrimmed)).toEqual([
+			{ start: 4, end: 10 },
+		]);
+		// Display stays collapsed (6s), not ballooned back to 10s.
+		expect(getTimelineDisplayDuration(frontTrimmed)).toBe(6);
+
+		// Back: delete [8,10] so the last visible clip is source 0-8.
+		const backDeleted = deleteSelectedTimelineSegment(
+			selectTimelineSegment(
+				splitTimelineAt(createTimelineState(10), 8),
+				getTimelineSegments(splitTimelineAt(createTimelineState(10), 8))[1]
+					?.id ?? "",
+			),
+		);
+		const backSegments = getTimelineDisplaySegments(backDeleted);
+		const backClip = backSegments[backSegments.length - 1];
+		if (!backClip) throw new Error("Expected a trailing clip");
+		const backTrimmed = trimTimelineClipEdge(
+			backDeleted,
+			backClip.id,
+			"end",
+			6,
+		);
+		expect(getTimelineKeepRanges(backTrimmed)).toEqual([{ start: 0, end: 6 }]);
+		expect(getTimelineDisplayDuration(backTrimmed)).toBe(6);
+	});
+
+	it("moves the global in/out point from the outermost clip edges", () => {
+		const splitState = splitTimelineAt(createTimelineState(10), 4);
+		const [firstClip, secondClip] = getTimelineDisplaySegments(splitState);
+		if (!firstClip || !secondClip) throw new Error("Expected two clips");
+
+		expect(
+			getTimelineKeepRanges(
+				trimTimelineClipEdge(splitState, firstClip.id, "start", 2),
+			),
+		).toEqual([{ start: 2, end: 10 }]);
+		expect(
+			getTimelineKeepRanges(
+				trimTimelineClipEdge(splitState, secondClip.id, "end", 8),
+			),
+		).toEqual([{ start: 0, end: 8 }]);
 	});
 
 	it("tracks undo and redo state", () => {

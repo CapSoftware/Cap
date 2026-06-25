@@ -81,13 +81,22 @@ import IconLucideImageOff from "~icons/lucide/image-off";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideMoon from "~icons/lucide/moon";
+import IconLucideMusic from "~icons/lucide/music";
 import IconLucidePalette from "~icons/lucide/palette";
 import IconLucideRabbit from "~icons/lucide/rabbit";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
 import IconLucideVideo from "~icons/lucide/video";
+import IconLucideVolume2 from "~icons/lucide/volume-2";
 import IconLucideWind from "~icons/lucide/wind";
+import { AudioLibraryPanel } from "./AudioLibrary";
+import {
+	AUDIO_TRACK_BG_CLASS,
+	type AudioTrackSegment,
+	MAX_VOLUME_DB,
+	MIN_VOLUME_DB,
+} from "./audio";
 import { BrandColorsDropdown } from "./BrandColorsDropdown";
 import { CaptionsTab } from "./CaptionsTab";
 import { syncCaptionWordsWithText } from "./captions";
@@ -474,7 +483,12 @@ export function ConfigSidebar() {
 
 	return (
 		<KTabs
-			value={editorState.timeline.selection ? undefined : state.selectedTab}
+			value={
+				editorState.timeline.selection ||
+				editorState.timeline.audioPicker !== null
+					? undefined
+					: state.selectedTab
+			}
 			class="flex flex-col min-h-0 shrink-0 flex-1 max-w-104 overflow-hidden rounded-xl z-10 bg-gray-1 dark:bg-gray-2 border border-gray-3"
 		>
 			<KTabs.List class="flex overflow-hidden sticky top-0 z-60 flex-row items-center h-16 text-lg border-b border-gray-3 shrink-0 bg-gray-1 dark:bg-gray-2">
@@ -519,6 +533,12 @@ export function ConfigSidebar() {
 								if (editorState.timeline.selection) {
 									setEditorState("timeline", "selection", null);
 								}
+								if (editorState.timeline.audioPicker !== null) {
+									setEditorState("timeline", "audioPicker", null);
+								}
+								if (editorState.timeline.audioReplace !== null) {
+									setEditorState("timeline", "audioReplace", null);
+								}
 								setState("selectedTab", item.id);
 								scrollRef.scrollTo({
 									top: 0,
@@ -540,7 +560,12 @@ export function ConfigSidebar() {
 				</For>
 
 				{/** Center the indicator with the icon */}
-				<Show when={!editorState.timeline.selection}>
+				<Show
+					when={
+						!editorState.timeline.selection &&
+						editorState.timeline.audioPicker === null
+					}
+				>
 					<KTabs.Indicator class="absolute top-0 left-0 w-full h-full transition-transform duration-200 ease-in-out pointer-events-none will-change-transform">
 						<div class="absolute top-1/2 left-1/2 rounded-lg transform -translate-x-1/2 -translate-y-1/2 bg-gray-3 will-change-transform size-9" />
 					</KTabs.Indicator>
@@ -553,7 +578,10 @@ export function ConfigSidebar() {
 				}}
 				class="custom-scroll overflow-x-hidden overflow-y-scroll text-[0.875rem] flex-1 min-h-0"
 				classList={{
-					hidden: !!editorState.timeline.selection,
+					hidden:
+						!!editorState.timeline.selection ||
+						editorState.timeline.audioPicker !== null ||
+						editorState.timeline.audioReplace !== null,
 				}}
 			>
 				<BackgroundConfig
@@ -943,12 +971,57 @@ export function ConfigSidebar() {
 				}}
 				class="custom-scroll p-4 top-16 left-0 right-0 bottom-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50"
 				classList={{
-					hidden: !editorState.timeline.selection,
+					hidden:
+						!editorState.timeline.selection &&
+						editorState.timeline.audioPicker === null &&
+						editorState.timeline.audioReplace === null,
 					"animate-in slide-in-from-bottom-2 fade-in":
-						!!editorState.timeline.selection,
+						!!editorState.timeline.selection ||
+						editorState.timeline.audioPicker !== null ||
+						editorState.timeline.audioReplace !== null,
 				}}
 			>
-				<Show when={editorState.timeline.selection}>
+				<Show
+					when={
+						editorState.timeline.audioPicker !== null &&
+						!editorState.timeline.selection &&
+						editorState.timeline.audioReplace === null
+					}
+				>
+					<AudioLibraryPanel
+						mode={{
+							type: "add",
+							lane: editorState.timeline.audioPicker ?? 0,
+						}}
+						onClose={() => setEditorState("timeline", "audioPicker", null)}
+					/>
+				</Show>
+				<Show
+					when={(() => {
+						const index = editorState.timeline.audioReplace;
+						if (index === null) return null;
+						const segment = project.timeline?.audioSegments?.[index];
+						if (!segment) {
+							setEditorState("timeline", "audioReplace", null);
+							return null;
+						}
+						return { index };
+					})()}
+				>
+					{(value) => (
+						<AudioLibraryPanel
+							mode={{ type: "replace", index: value().index }}
+							onClose={() => setEditorState("timeline", "audioReplace", null)}
+						/>
+					)}
+				</Show>
+				<Show
+					when={
+						editorState.timeline.audioReplace === null
+							? editorState.timeline.selection
+							: null
+					}
+				>
 					{(selection) => (
 						<Suspense>
 							<Show
@@ -1157,6 +1230,77 @@ export function ConfigSidebar() {
 														segment={item.segment}
 														segmentIndex={item.index}
 														brandColorSwatches={brandColorSwatches()}
+													/>
+												</div>
+											)}
+										</For>
+									</div>
+								)}
+							</Show>
+							<Show
+								when={(() => {
+									const audioSelection = selection();
+									if (audioSelection.type !== "audio") return;
+
+									const segments = audioSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.audioSegments?.[index],
+										}))
+										.filter(
+											(
+												item,
+											): item is {
+												index: number;
+												segment: AudioTrackSegment;
+											} => item.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+									return { selection: audioSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} audio{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() =>
+													projectActions.deleteAudioSegments(
+														value().segments.map((s) => s.index),
+													)
+												}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<div class="p-4 rounded-lg border border-gray-200">
+													<AudioSegmentConfig
+														segment={item.segment}
+														segmentIndex={item.index}
 													/>
 												</div>
 											)}
@@ -3228,6 +3372,138 @@ function TextSegmentConfig(props: {
 					minValue={0}
 					maxValue={1}
 					step={0.01}
+					formatTooltip="s"
+				/>
+			</Field>
+		</div>
+	);
+}
+
+function AudioSegmentConfig(props: {
+	segmentIndex: number;
+	segment: AudioTrackSegment;
+}) {
+	const { setProject, setEditorState } = useEditorContext();
+	const clampNumber = (value: number, min: number, max: number) =>
+		Math.min(Math.max(Number.isFinite(value) ? value : min, min), max);
+
+	const updateSegment = (fn: (segment: AudioTrackSegment) => void) => {
+		setProject(
+			"timeline",
+			"audioSegments",
+			produce((segments) => {
+				const target = segments?.[props.segmentIndex];
+				if (!target) return;
+				fn(target);
+			}),
+		);
+	};
+
+	const segmentDuration = () =>
+		Math.max(props.segment.end - props.segment.start, 0);
+	const fadeMax = () => Math.max(0.1, segmentDuration());
+
+	return (
+		<div class="space-y-4">
+			<Field
+				name={`Audio ${props.segmentIndex + 1}`}
+				icon={<IconLucideMusic class="size-4" />}
+			>
+				<div class="flex flex-col gap-3">
+					<button
+						type="button"
+						onClick={() =>
+							setEditorState("timeline", "audioReplace", props.segmentIndex)
+						}
+						class="flex gap-3 items-center p-2 w-full text-left rounded-xl border transition-colors group border-gray-3 bg-gray-2 hover:border-gray-5 hover:bg-gray-3"
+					>
+						<span
+							class={cx(
+								"rounded-lg ring-1 shrink-0 size-10 ring-black/10",
+								AUDIO_TRACK_BG_CLASS,
+							)}
+						/>
+						<div class="flex flex-col flex-1 min-w-0">
+							<span class="text-sm font-medium truncate text-gray-12">
+								{props.segment.name || "Audio"}
+							</span>
+							<span class="text-xs text-gray-10">Tap to change track</span>
+						</div>
+						<span class="flex gap-1 items-center px-2 h-7 text-xs font-medium rounded-lg border transition-colors shrink-0 border-gray-3 bg-gray-1 text-gray-11 group-hover:text-gray-12">
+							<IconLucideRefreshCw class="size-3.5" />
+							Change
+						</span>
+					</button>
+					<div class="flex gap-3 items-center">
+						<input
+							class="flex-1 px-3 py-2 rounded-lg border border-gray-3 bg-gray-2 text-gray-12"
+							value={props.segment.name ?? ""}
+							placeholder="Audio"
+							onInput={(e) =>
+								updateSegment((segment) => {
+									segment.name = e.currentTarget.value;
+								})
+							}
+						/>
+						<div class="flex flex-col gap-2 items-center">
+							<span class="text-xs text-gray-11">Enabled</span>
+							<Toggle
+								checked={props.segment.enabled}
+								onChange={(value) =>
+									updateSegment((segment) => {
+										segment.enabled = value;
+									})
+								}
+							/>
+						</div>
+					</div>
+				</div>
+			</Field>
+			<Field name="Volume" icon={<IconLucideVolume2 class="size-4" />}>
+				<Slider
+					value={[
+						clampNumber(props.segment.volumeDb, MIN_VOLUME_DB, MAX_VOLUME_DB),
+					]}
+					onChange={([value]) =>
+						updateSegment((segment) => {
+							segment.volumeDb = clampNumber(
+								value,
+								MIN_VOLUME_DB,
+								MAX_VOLUME_DB,
+							);
+						})
+					}
+					minValue={MIN_VOLUME_DB}
+					maxValue={MAX_VOLUME_DB}
+					step={1}
+					formatTooltip="dB"
+				/>
+			</Field>
+			<Field name="Fade In" icon={<IconLucideTimer class="size-4" />}>
+				<Slider
+					value={[clampNumber(props.segment.fadeIn, 0, fadeMax())]}
+					onChange={([value]) =>
+						updateSegment((segment) => {
+							segment.fadeIn = clampNumber(value, 0, segmentDuration());
+						})
+					}
+					minValue={0}
+					maxValue={fadeMax()}
+					step={0.05}
+					formatTooltip="s"
+				/>
+			</Field>
+			<Field name="Fade Out" icon={<IconLucideTimer class="size-4" />}>
+				<Slider
+					value={[clampNumber(props.segment.fadeOut, 0, fadeMax())]}
+					onChange={([value]) =>
+						updateSegment((segment) => {
+							segment.fadeOut = clampNumber(value, 0, segmentDuration());
+						})
+					}
+					minValue={0}
+					maxValue={fadeMax()}
+					step={0.05}
 					formatTooltip="s"
 				/>
 			</Field>

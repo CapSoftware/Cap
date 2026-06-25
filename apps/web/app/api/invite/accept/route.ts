@@ -94,6 +94,7 @@ export async function POST(request: NextRequest) {
 					const allMembers = await tx
 						.select({
 							id: organizationMembers.id,
+							userId: organizationMembers.userId,
 							hasProSeat: organizationMembers.hasProSeat,
 						})
 						.from(organizationMembers)
@@ -104,6 +105,8 @@ export async function POST(request: NextRequest) {
 
 					const { proSeatsRemaining } = calculateProSeats({
 						inviteQuota: owner.inviteQuota ?? 1,
+						ownerId: org.ownerId,
+						ownerIsPro: true,
 						members: allMembers,
 					});
 

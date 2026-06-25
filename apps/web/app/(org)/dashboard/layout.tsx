@@ -1,4 +1,7 @@
+import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { organizationInvites } from "@cap/database/schema";
+import { and, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
@@ -20,6 +23,21 @@ import {
 
 export const dynamic = "force-dynamic";
 
+async function getPendingInviteIdForUser(email: string) {
+	const [invite] = await db()
+		.select({ id: organizationInvites.id })
+		.from(organizationInvites)
+		.where(
+			and(
+				eq(organizationInvites.invitedEmail, email.toLowerCase()),
+				eq(organizationInvites.status, "pending"),
+			),
+		)
+		.limit(1);
+
+	return invite?.id ?? null;
+}
+
 export default async function DashboardLayout({
 	children,
 }: {
@@ -27,6 +45,9 @@ export default async function DashboardLayout({
 }) {
 	const user = await getCurrentUser();
 	if (!user) redirect("/login");
+
+	const pendingInviteId = await getPendingInviteIdForUser(user.email);
+	if (pendingInviteId) redirect(`/invite/${pendingInviteId}`);
 
 	if (!user.name || user.name.length === 0) {
 		redirect("/onboarding/welcome");

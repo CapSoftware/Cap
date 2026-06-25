@@ -151,6 +151,13 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		null,
 	);
 
+	// Tracks whether the preview canvas has painted its first frame. The image
+	// wrapper has rounded corners + a drop shadow; rendering it before the canvas
+	// is painted briefly exposes the empty (transparent) canvas/shadow, which on a
+	// window screenshot reads as a "transparent border" flash around the corners.
+	// Gate the wrapper's visibility on the first paint to remove the transient.
+	const [canvasHasContent, setCanvasHasContent] = createSignal(false);
+
 	createEffect(() => {
 		const frame = latestFrame();
 		const currentBitmap = frame?.bitmap ?? null;
@@ -256,6 +263,31 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		props.setZoom(newZoom);
 	};
 
+	// Coalesce rapid zoom input (trackpad pinch fires 60-120x/sec) into one
+	// update per animation frame. Without this, every wheel/gesture tick triggers
+	// a full reactive + layout pass on the scaled canvas, which is the source of
+	// the zoom lag. Coordinate semantics are unchanged — we just apply at most
+	// once per frame.
+	let zoomRaf: number | null = null;
+	let pendingZoom: { x: number; y: number; zoom: number } | null = null;
+	const flushZoom = () => {
+		zoomRaf = null;
+		const p = pendingZoom;
+		pendingZoom = null;
+		if (p) zoomAtPoint(p.x, p.y, p.zoom);
+	};
+	const scheduleZoomAtPoint = (
+		clientX: number,
+		clientY: number,
+		newZoom: number,
+	) => {
+		pendingZoom = { x: clientX, y: clientY, zoom: newZoom };
+		if (zoomRaf == null) zoomRaf = requestAnimationFrame(flushZoom);
+	};
+	onCleanup(() => {
+		if (zoomRaf != null) cancelAnimationFrame(zoomRaf);
+	});
+
 	const normalizeWheelDeltaY = (e: WheelEvent) => {
 		if (e.deltaMode === 1) return e.deltaY * 16;
 		if (e.deltaMode === 2) return e.deltaY * window.innerHeight;
@@ -263,21 +295,23 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 	};
 
 	let lastGestureScale = 1;
-	let lastGestureAt = 0;
+	let pinchZoom = 1;
 
 	const handleWheel = (e: WheelEvent) => {
 		e.preventDefault();
 		if (e.ctrlKey) {
-			if (performance.now() - lastGestureAt < 80) return;
 			const normalizedDelta = normalizeWheelDeltaY(e);
 			if (normalizedDelta === 0) return;
 			const delta =
 				-Math.sign(normalizedDelta) * Math.max(Math.abs(normalizedDelta), 8);
 			const zoomStep = 0.005;
-			zoomAtPoint(
+			// Accumulate against any zoom already queued this frame so coalesced
+			// ticks compose instead of overwriting each other.
+			const base = pendingZoom ? pendingZoom.zoom : props.zoom;
+			scheduleZoomAtPoint(
 				e.clientX,
 				e.clientY,
-				clampZoom(props.zoom + delta * zoomStep),
+				clampZoom(base + delta * zoomStep),
 			);
 		} else {
 			setPan((p) => ({
@@ -299,7 +333,9 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		const e = event as WebKitGestureEvent;
 		e.preventDefault();
 		lastGestureScale = e.scale ?? 1;
-		lastGestureAt = performance.now();
+		// Seed the running pinch target from the currently-applied zoom so the
+		// rAF-coalesced deltas compose correctly across skipped frames.
+		pinchZoom = props.zoom;
 	};
 
 	const handleGestureChange = (event: Event) => {
@@ -308,19 +344,20 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		const scale = e.scale ?? 1;
 		const scaleDelta = scale / Math.max(lastGestureScale, 0.001);
 		lastGestureScale = scale;
-		lastGestureAt = performance.now();
+		pinchZoom = clampZoom(pinchZoom * scaleDelta);
 		const point = getGesturePoint(e);
-		zoomAtPoint(
-			point.clientX,
-			point.clientY,
-			clampZoom(props.zoom * scaleDelta),
-		);
+		scheduleZoomAtPoint(point.clientX, point.clientY, pinchZoom);
 	};
 
 	const handleGestureEnd = (event: Event) => {
 		event.preventDefault();
 		lastGestureScale = 1;
-		lastGestureAt = performance.now();
+		// Apply any zoom queued by the final gesturechange immediately so the last
+		// pinch frame isn't dropped when the gesture ends mid-frame.
+		if (zoomRaf != null) {
+			cancelAnimationFrame(zoomRaf);
+			flushZoom();
+		}
 	};
 
 	createEffect(() => {
@@ -422,6 +459,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 			if (ctx) {
 				ctx.clearRect(0, 0, canvasRef.width, canvasRef.height);
 				ctx.drawImage(frame.bitmap, 0, 0);
+				setCanvasHasContent(true);
 			}
 		}
 	});
@@ -683,6 +721,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 											overflow: "hidden",
 											"border-radius": "4px",
 											"box-shadow": imageShadow(),
+											visibility: canvasHasContent() ? "visible" : "hidden",
 										}}
 									>
 										<canvas

@@ -10,7 +10,11 @@ import {
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { calculateProSeats, selectProSeatProvider } from "@/utils/organization";
+import {
+	calculateProSeats,
+	hasActiveDirectSubscription,
+	selectProSeatProvider,
+} from "@/utils/organization";
 import { requireOrganizationProSeatManager } from "./authorization";
 
 export async function toggleProSeat(
@@ -54,6 +58,7 @@ export async function toggleProSeat(
 			const allMembers = await tx
 				.select({
 					id: organizationMembers.id,
+					userId: organizationMembers.userId,
 					hasProSeat: organizationMembers.hasProSeat,
 				})
 				.from(organizationMembers)
@@ -80,6 +85,8 @@ export async function toggleProSeat(
 
 			const { proSeatsRemaining } = calculateProSeats({
 				inviteQuota: seatProvider?.inviteQuota ?? 1,
+				ownerId: actor.ownerId,
+				ownerIsPro: hasActiveDirectSubscription(owner),
 				members: allMembers,
 			});
 

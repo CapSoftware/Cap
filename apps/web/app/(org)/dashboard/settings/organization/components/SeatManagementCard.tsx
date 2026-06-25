@@ -23,9 +23,11 @@ export function SeatManagementCard() {
 	const queryClient = useQueryClient();
 	const organizationId = activeOrganization?.organization.id;
 
-	const { proSeatsUsed, proSeatsTotal } = calculateSeats(
-		activeOrganization || {},
-	);
+	const { proSeatsUsed, proSeatsTotal } = calculateSeats({
+		...(activeOrganization || {}),
+		ownerId: activeOrganization?.organization.ownerId,
+		ownerIsPro: Boolean(activeOrganization?.ownerIsPro),
+	});
 
 	const [desiredQuantity, setDesiredQuantity] = useState(proSeatsTotal);
 	const [debouncedQuantity, setDebouncedQuantity] = useState(proSeatsTotal);
@@ -112,12 +114,18 @@ export function SeatManagementCard() {
 				</CardDescription>
 			</CardHeader>
 			<div className="flex flex-col gap-5 mt-4">
-				<div className="flex items-center gap-3 text-sm text-gray-11">
+				<div className="flex flex-col gap-1 text-sm text-gray-11">
 					<span>
 						<span className="font-medium text-gray-12">{proSeatsUsed}</span> of{" "}
 						<span className="font-medium text-gray-12">{proSeatsTotal}</span>{" "}
-						Pro seats assigned
+						Pro seats assigned to members
 					</span>
+					{activeOrganization?.ownerIsPro && (
+						<span className="text-xs text-gray-10">
+							The organization owner is always on Cap Pro and doesn't use a
+							seat.
+						</span>
+					)}
 				</div>
 
 				<div className="flex flex-wrap items-center gap-4">

@@ -2,6 +2,7 @@
 
 mod api;
 mod audio;
+mod audio_library;
 mod audio_meter;
 mod auth;
 mod automation;
@@ -4284,6 +4285,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         })
         .ok();
 
+    // Detect the camera-preview quality profile once from total RAM. On low-RAM
+    // machines (<= 8GB) this opts the preview into a cheaper profile (smaller
+    // textures, 30fps, no background blur); higher-spec machines keep the exact
+    // current behaviour. Only the preview is affected — recording is untouched.
+    {
+        let mut system = sysinfo::System::new();
+        system.refresh_memory();
+        camera::init_preview_profile(system.total_memory());
+    }
+
     posthog::init();
 
     let tauri_context = tauri::generate_context!();
@@ -4348,6 +4359,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             get_editor_project_path,
             get_mic_waveforms,
             get_system_audio_waveforms,
+            audio_library::list_audio_library,
+            audio_library::add_audio_library_track,
+            audio_library::import_audio_track_file,
             start_playback,
             stop_playback,
             set_playhead_position,

@@ -280,10 +280,25 @@ jobs:
 
       - name: Build app
         working-directory: apps/desktop
-        run: pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Linux' && '--bundles deb,appimage' || '' }}
+        run: pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Windows' && '--bundles nsis' || runner.os == 'Linux' && '--bundles deb,appimage --verbose' || '' }}
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
+          # linuxdeploy resolves each binary's dependencies with ldd. Our main
+          # binary and the cap-muxer/cap-exporter/cap-cli sidecars link the
+          # bundled FFmpeg libs via rpath $ORIGIN, which no longer resolves once
+          # linuxdeploy copies them into AppDir/usr/bin. Point ldd at the staged
+          # FFmpeg libs so it can find and bundle them instead of aborting.
+          LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && format('{0}/target/{1}/release:{0}/target/native-deps/lib', github.workspace, matrix.settings.target) || '' }}
+          # linuxdeploy chokes on `strip` for libraries using modern ELF
+          # relocation (`.relr.dyn`) such as our bundled FFmpeg .so files,
+          # failing with "failed to run linuxdeploy". NO_STRIP skips that step.
+          NO_STRIP: ${{ runner.os == 'Linux' && 'true' || '' }}
+          # appimagetool (invoked by linuxdeploy) is itself an AppImage and the
+          # ubuntu-24.04 runners have no FUSE, so force extract-and-run.
+          APPIMAGE_EXTRACT_AND_RUN: ${{ runner.os == 'Linux' && '1' || '' }}
+          # appimagetool aborts if it can't infer the AppDir architecture; pin it.
+          ARCH: ${{ runner.os == 'Linux' && 'x86_64' || '' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # codesigning
           APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
@@ -297,6 +312,64 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+      # Guards against the two Linux packaging regressions:
+      #   1. Frontend missing: vinxi must produce apps/desktop/.output/public,
+      #      which Tauri EMBEDS into the binary (it is NOT shipped as a loose
+      #      /usr/lib/Cap/index.html file). A blank webview ships if turbo's cache
+      #      restores an empty .output/public (see @cap/desktop#build outputs in
+      #      turbo.json), so we assert the build output exists and is non-empty.
+      #   2. FFmpeg soname mismatch: every libav*/libsw* the main binary lists as
+      #      NEEDED must be bundled under /usr/lib/cap/ with the exact same soname.
+      #      The bundled libs come from native-deps (FFmpeg 7); if the binary
+      #      linked system FFmpeg 6 the loader fails at launch.
+      - name: Verify Linux deb contents
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # (1) frontend was actually built. Tauri embeds .output/public into the
+          # binary at build time, so an empty/missing dir => blank webview.
+          FE="apps/desktop/.output/public/index.html"
+          if [[ ! -s "$FE" ]]; then
+            echo "::error::Frontend build output missing/empty ($FE) - webview would be blank."
+            ls -la apps/desktop/.output/public 2>/dev/null || echo "(no .output/public dir)"
+            exit 1
+          fi
+          echo "Frontend build output OK ($FE, $(wc -c < "$FE") bytes)"
+
+          DEB="$(find target/${{ matrix.settings.target }}/release/bundle/deb -name '*.deb' | head -n1)"
+          if [[ -z "$DEB" ]]; then echo "::error::No .deb produced"; exit 1; fi
+          echo "Inspecting $DEB"
+          WORK="$(mktemp -d)"
+          dpkg-deb -x "$DEB" "$WORK"
+
+          # Best-effort confirmation that the SPA actually got embedded into the
+          # binary (Tauri stores asset path keys as plaintext). Informational only.
+          if strings "$WORK/usr/bin/Cap" 2>/dev/null | grep -q "index.html"; then
+            echo "Binary appears to embed the frontend (index.html key present)"
+          else
+            echo "::warning::Could not confirm embedded frontend key in binary (asset format may differ)"
+          fi
+
+          # (2) every FFmpeg soname the binary NEEDs is bundled
+          BIN="$WORK/usr/bin/Cap"
+          NEEDED="$(objdump -p "$BIN" | awk '/NEEDED/{print $2}' | grep -E '^lib(av|sw|postproc)' || true)"
+          echo "Binary NEEDs FFmpeg sonames:"; echo "${NEEDED:-(none)}"
+          echo "Bundled FFmpeg libs:"; ls -1 "$WORK/usr/lib/cap" 2>/dev/null || true
+          MISSING=0
+          for so in $NEEDED; do
+            if [[ ! -f "$WORK/usr/lib/cap/$so" ]]; then
+              echo "::error::Binary NEEDs $so but it is not bundled under /usr/lib/cap/"
+              MISSING=1
+            fi
+          done
+          if [[ "$MISSING" -ne 0 ]]; then
+            echo "::error::FFmpeg soname mismatch between binary and bundled libs."
+            exit 1
+          fi
+          echo "FFmpeg soname bundle OK"
 
       - name: Upload unsigned Windows installer
         if: ${{ runner.os == 'Windows' }}

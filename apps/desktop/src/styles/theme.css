@@ -11,11 +11,26 @@
 @import "@radix-ui/colors/indigo-dark.css";
 @import "@radix-ui/colors/yellow.css";
 @import "@radix-ui/colors/yellow-dark.css";
+@import "@radix-ui/colors/jade.css";
+@import "@radix-ui/colors/jade-dark.css";
 
 @plugin "@tailwindcss/typography";
 @plugin "tailwind-scrollbar";
 
 @tailwind utilities;
+
+/* Single source of truth for timeline track colours. Both the timeline
+ * segments and the "Add track" picker read these, so they always match. */
+:root {
+	--track-clip: #3f8ae0; /* blue */
+	--track-zoom: #4a4f5c; /* slate */
+	--track-caption: #c44fa6; /* magenta */
+	--track-keyboard: #d4742c; /* orange */
+	--track-text: #2898ac; /* teal */
+	--track-mask: #d2444b; /* red */
+	--track-scene: #975cfa; /* purple */
+	--track-audio: var(--jade-9); /* green */
+}
 
 :root {
 	/* Light theme variables */
@@ -1203,6 +1218,16 @@
 		black calc(100% - 24px),
 		transparent
 	);
+}
+
+@keyframes cap-audio-eq {
+	0%,
+	100% {
+		transform: scaleY(0.3);
+	}
+	50% {
+		transform: scaleY(1);
+	}
 }
 
 @layer utilities {

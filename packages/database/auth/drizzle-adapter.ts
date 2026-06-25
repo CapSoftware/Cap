@@ -15,12 +15,95 @@ import {
 	verificationTokens,
 } from "../schema.ts";
 
+type CreateUserData = Parameters<NonNullable<Adapter["createUser"]>>[0];
+type LinkAccountData = Parameters<NonNullable<Adapter["linkAccount"]>>[0];
+type UnlinkAccountData = Parameters<NonNullable<Adapter["unlinkAccount"]>>[0];
+type UpdateSessionData = Parameters<NonNullable<Adapter["updateSession"]>>[0];
+
+function getProvisionedUserName(email: string) {
+	return (
+		email
+			.split("@")[0]
+			?.replace(/[._-]+/g, " ")
+			.trim() || email
+	);
+}
+
+async function hasPendingProvisionedInvite(
+	db: MySql2Database,
+	userId: User.UserId,
+	email: string,
+) {
+	const [pendingInviteMember] = await db
+		.select({ inviteId: organizationInvites.id })
+		.from(organizationInvites)
+		.innerJoin(
+			organizationMembers,
+			and(
+				eq(
+					organizationMembers.organizationId,
+					organizationInvites.organizationId,
+				),
+				eq(organizationMembers.userId, userId),
+			),
+		)
+		.where(
+			and(
+				eq(organizationInvites.invitedEmail, email),
+				eq(organizationInvites.status, "pending"),
+			),
+		)
+		.limit(1);
+
+	return !!pendingInviteMember;
+}
+
+async function hasLinkedAccount(db: MySql2Database, userId: User.UserId) {
+	const [linkedAccount] = await db
+		.select({ id: accounts.id })
+		.from(accounts)
+		.where(eq(accounts.userId, userId))
+		.limit(1);
+
+	return !!linkedAccount;
+}
+
 export function DrizzleAdapter(db: MySql2Database): Adapter {
 	return {
-		async createUser(userData: any) {
-			const normalizedEmail = (userData.email as string)?.toLowerCase() ?? "";
-			const userId = User.UserId.make(nanoId());
+		async createUser(userData: CreateUserData) {
+			const normalizedEmail = userData.email.toLowerCase();
+			let userId = User.UserId.make(nanoId());
 			await db.transaction(async (tx) => {
+				const [existingUser] = await tx
+					.select()
+					.from(users)
+					.where(eq(users.email, normalizedEmail))
+					.limit(1);
+
+				if (existingUser) {
+					userId = existingUser.id;
+					const userUpdate: Partial<typeof users.$inferInsert> = {};
+
+					if (!existingUser.name && userData.name) {
+						userUpdate.name = userData.name;
+					}
+					if (!existingUser.name && !userData.name) {
+						userUpdate.name = getProvisionedUserName(normalizedEmail);
+					}
+					if (!existingUser.emailVerified && userData.emailVerified) {
+						userUpdate.emailVerified = userData.emailVerified;
+					}
+					if (!existingUser.image && userData.image) {
+						userUpdate.image = userData.image as ImageUpload.ImageUrlOrKey;
+					}
+
+					if (Object.keys(userUpdate).length > 0) {
+						await tx.update(users).set(userUpdate).where(eq(users.id, userId));
+					}
+
+					return;
+				}
+
 				const [pendingInvite] = await tx
 					.select({ id: organizationInvites.id })
 					.from(organizationInvites)
@@ -37,7 +120,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 					email: normalizedEmail,
 					emailVerified: userData.emailVerified,
 					name: userData.name,
-					image: userData.image,
+					image: userData.image as ImageUpload.ImageUrlOrKey | null,
 					activeOrganizationId: Organisation.OrganisationId.make(""),
 				});
 
@@ -164,7 +247,16 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 					throw e;
 				});
 			const row = rows[0];
-			return row ?? null;
+			if (!row) return null;
+
+			if (
+				!(await hasLinkedAccount(db, row.id)) &&
+				(await hasPendingProvisionedInvite(db, row.id, normalizedEmail))
+			) {
+				return null;
+			}
+
+			return row;
 		},
 		async getUserByAccount({ providerAccountId, provider }) {
 			const rows = await db
@@ -202,7 +294,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 		async deleteUser(userId) {
 			await db.delete(users).where(eq(users.id, User.UserId.make(userId)));
 		},
-		async linkAccount(account: any) {
+		async linkAccount(account: LinkAccountData) {
 			await db.insert(accounts).values({
 				id: User.UserId.make(nanoId()),
 				userId: account.userId,
@@ -218,7 +310,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 				token_type: account.token_type,
 			});
 		},
-		async unlinkAccount({ providerAccountId, provider }: any) {
+		async unlinkAccount({ providerAccountId, provider }: UnlinkAccountData) {
 			await db
 				.delete(accounts)
 				.where(
@@ -272,11 +364,18 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 				},
 			};
 		},
-		async updateSession(session: any) {
-			await db
-				.update(sessions)
-				.set(session as any)
-				.where(eq(sessions.sessionToken, session.sessionToken));
+		async updateSession(session: UpdateSessionData) {
+			const sessionUpdate: Partial<typeof sessions.$inferInsert> = {};
+			if (session.expires) sessionUpdate.expires = session.expires;
+			if (session.userId)
+				sessionUpdate.userId = User.UserId.make(session.userId);
+
+			if (Object.keys(sessionUpdate).length > 0) {
+				await db
+					.update(sessions)
+					.set(sessionUpdate)
+					.where(eq(sessions.sessionToken, session.sessionToken));
+			}
 			const rows = await db
 				.select()
 				.from(sessions)

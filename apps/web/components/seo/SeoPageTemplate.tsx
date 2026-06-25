@@ -10,25 +10,18 @@ import {
 	faTimes,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import MuxPlayer from "@mux/mux-player-react";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "motion/react";
 import Image from "next/image";
 import { useState } from "react";
+import { renderRichText } from "@/components/RichText";
 import { ComparisonSlider } from "@/components/seo/ComparisonSlider";
 import type { ComparisonCell, SeoPageContent } from "@/components/seo/types";
 
 const MotionButton = motion.create(Button);
 const MotionImage = motion.create(Image);
 
-const renderHTML = (content: string) => {
-	const styledContent = content.replace(
-		/<a\s/g,
-		'<a class="font-semibold text-blue-500 transition-colors hover:text-blue-600" ',
-	);
-
-	return <span dangerouslySetInnerHTML={{ __html: styledContent }} />;
-};
+const renderHTML = (content: string) => renderRichText(content);
 
 const renderComparisonCell = (cell: string | ComparisonCell) => {
 	if (typeof cell === "string") {
@@ -185,7 +178,9 @@ export const SeoPageTemplate = ({
 						>
 							<MotionButton
 								variant="blue"
-								href="/download"
+								href={content.cta.buttonHref ?? "/download"}
+								target={content.cta.buttonTarget}
+								icon={content.cta.buttonIcon}
 								size="lg"
 								className="relative z-[20] w-full font-medium text-md sm:w-auto"
 							>
@@ -194,7 +189,8 @@ export const SeoPageTemplate = ({
 							{content.cta.secondaryButtonText && (
 								<MotionButton
 									variant="white"
-									href="/pricing"
+									href={content.cta.secondaryButtonHref ?? "/pricing"}
+									target={content.cta.secondaryButtonTarget}
 									size="lg"
 									className="relative z-[20] w-full font-medium text-md sm:w-auto"
 								>
@@ -285,20 +281,17 @@ export const SeoPageTemplate = ({
 										}}
 									/>
 								</div>
-							) : (
+							) : content.video.url ? (
 								<div className="overflow-hidden rounded-xl shadow-md">
-									<MuxPlayer
-										playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"
-										playerInitTime={0}
-										metadataVideoTitle="Cap Demo"
-										accentColor="#5C9FFF"
-										style={{
-											aspectRatio: "16/9",
-											width: "100%",
-										}}
+									<iframe
+										src={content.video.url}
+										title={content.video.alt ?? "Cap demo video"}
+										allow="fullscreen; picture-in-picture"
+										allowFullScreen
+										className="w-full border-0 aspect-video"
 									/>
 								</div>
-							)}
+							) : null}
 						</div>
 					</div>
 				)}
@@ -554,13 +547,16 @@ export const SeoPageTemplate = ({
 								{content.cta.title}
 							</h2>
 							<p className="mb-6 text-xl text-gray-10">
-								Ready to get started? Download now and see the difference.
+								{content.cta.subtitle ??
+									"Ready to get started? Download now and see the difference."}
 							</p>
 						</div>
 						<div className="flex flex-col justify-center items-center space-y-3 sm:flex-row sm:space-y-0 sm:space-x-4">
 							<Button
 								variant="blue"
-								href="/download"
+								href={content.cta.buttonHref ?? "/download"}
+								target={content.cta.buttonTarget}
+								icon={content.cta.buttonIcon}
 								size="lg"
 								className="px-8 py-3 w-full font-medium transition-all duration-300 sm:w-auto sm:max-w-fit"
 							>
@@ -569,7 +565,8 @@ export const SeoPageTemplate = ({
 							{content.cta.secondaryButtonText && (
 								<Button
 									variant="white"
-									href="/pricing"
+									href={content.cta.secondaryButtonHref ?? "/pricing"}
+									target={content.cta.secondaryButtonTarget}
 									size="lg"
 									className="px-8 py-3 w-full font-medium transition-all duration-300 sm:w-auto sm:max-w-fit"
 								>

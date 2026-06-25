@@ -519,9 +519,9 @@ export function ZoomTrack(props: {
 
 						return (
 							<SegmentRoot
+								segColor="var(--track-zoom)"
 								class={cx(
-									"border duration-200 hover:border-gray-12 transition-colors group",
-									"bg-linear-to-r from-[#292929] via-[#434343] to-[#292929] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
+									"border duration-200 transition-colors group",
 									isSelected() ? "border-gray-12" : "border-transparent",
 								)}
 								innerClass="ring-red-5"
@@ -732,9 +732,10 @@ export function ZoomTrack(props: {
 					<SegmentRoot
 						class="pointer-events-none z-0"
 						innerClass="ring-red-300"
+						segColor="var(--track-zoom)"
 						segment={details()}
 					>
-						<SegmentContent class="bg-linear-to-r hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
+						<SegmentContent class="group">
 							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
 								+
 							</p>

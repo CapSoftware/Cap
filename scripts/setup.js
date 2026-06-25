@@ -54,7 +54,10 @@ async function main() {
 		};
 
 		const nativeDepsTar = NATIVE_DEPS_ASSETS[arch];
-		const nativeDepsTarPath = path.join(targetDir, nativeDepsTar);
+		const nativeDepsTarPath = path.join(
+			targetDir,
+			`${NATIVE_DEPS_VERSION}-${nativeDepsTar}`,
+		);
 		let downloadedNativeDeps = false;
 
 		if (!(await fileExists(nativeDepsTarPath))) {
@@ -207,7 +210,7 @@ async function main() {
 		if (triple) {
 			cargoConfigContents += FFMPEG_CARGO_ENV;
 
-			const NATIVE_DEPS_VERSION = "v0.25";
+			const NATIVE_DEPS_VERSION = "v0.26";
 			const NATIVE_DEPS_URL = `https://github.com/spacedriveapp/native-deps/releases/download/${NATIVE_DEPS_VERSION}`;
 			const NATIVE_DEPS_ASSETS = {
 				x86_64: "native-deps-x86_64-linux-gnu.tar.xz",
@@ -218,7 +221,10 @@ async function main() {
 			if (!nativeDepsTar)
 				throw new Error(`Unsupported Linux arch for native deps: ${arch}`);
 
-			const nativeDepsTarPath = path.join(targetDir, nativeDepsTar);
+			const nativeDepsTarPath = path.join(
+				targetDir,
+				`${NATIVE_DEPS_VERSION}-${nativeDepsTar}`,
+			);
 			let downloadedNativeDeps = false;
 			if (!(await fileExists(nativeDepsTarPath))) {
 				console.log(`Downloading ${nativeDepsTar}`);
@@ -264,6 +270,7 @@ async function main() {
 			console.log(
 				`Staged ${sonameLibs.length} FFmpeg shared libraries for Linux bundling`,
 			);
+			await writeLinuxTauriConfig(sonameLibs);
 
 			cargoConfigContents += `\n[target.${triple}]\nrustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN", "-C", "link-arg=-Wl,-rpath,$ORIGIN/../lib/cap"]\n`;
 		}
@@ -419,6 +426,30 @@ async function fileExists(path) {
 		.access(path)
 		.then(() => true)
 		.catch(() => false);
+}
+
+async function writeLinuxTauriConfig(sonameLibs) {
+	const configPath = path.join(
+		__root,
+		"apps",
+		"desktop",
+		"src-tauri",
+		"tauri.linux.conf.json",
+	);
+	const files = {};
+
+	for (const name of sonameLibs.toSorted()) {
+		files[`/usr/lib/cap/${name}`] =
+			`../../../target/native-deps/cap-deb-libs/${name}`;
+	}
+
+	await writeFileIfChanged(
+		configPath,
+		`${JSON.stringify({ bundle: { linux: { deb: { files } } } }, null, "\t")}\n`,
+	);
+	console.log(
+		`Generated Linux Tauri deb config with ${sonameLibs.length} shared libraries`,
+	);
 }
 
 async function missingFiles(dir, names) {

@@ -23,7 +23,10 @@ import { Effect } from "effect";
 import { FatalError } from "workflow";
 import { runPromise } from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
-import { remapCurrentOutputTimeThroughEdit } from "@/lib/video-edits";
+import {
+	getEditSpecOutputDuration,
+	remapCurrentOutputTimeThroughEdit,
+} from "@/lib/video-edits";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 interface EditVideoWorkflowPayload {
@@ -51,6 +54,8 @@ const MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS = 720;
 const MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS = 5000;
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
 const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_OUTPUT_VERIFICATION_MAX_ATTEMPTS = 4;
+const MEDIA_SERVER_OUTPUT_VERIFICATION_RETRY_MS = 1000;
 
 function isPositiveNumber(value: number | null): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -62,6 +67,19 @@ function getValidDuration(duration: number) {
 
 async function waitForRetry(delayMs: number): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function getDurationTolerance(duration: number) {
+	if (!Number.isFinite(duration) || duration <= 0) return 0.5;
+	return Math.max(0.5, Math.min(5, duration * 0.01));
+}
+
+function isDurationClose(actual: number, expected: number) {
+	return (
+		Number.isFinite(actual) &&
+		Number.isFinite(expected) &&
+		Math.abs(actual - expected) <= getDurationTolerance(expected)
+	);
 }
 
 export async function editVideoWorkflow(
@@ -81,6 +99,7 @@ export async function editVideoWorkflow(
 	try {
 		await validateEditRequest(videoId, sourceKey);
 		const result = await renderVideoEditOnMediaServer(payload);
+		await verifyRenderedEditOutput(videoId, userId, editSpec, result.metadata);
 		await invalidateEditedVideoCache(videoId, editSpec);
 		await saveEditResultAndComplete(
 			videoId,
@@ -93,7 +112,7 @@ export async function editVideoWorkflow(
 		return result;
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
-		await clearEditProcessingState(videoId, sourceKey);
+		await clearEditProcessingState(videoId, sourceKey, previousSpec);
 		throw new FatalError(errorMessage);
 	}
 }
@@ -142,6 +161,7 @@ async function startMediaServerEditJob(
 		userId: string;
 		sourceUrl: string;
 		outputPresignedUrl: string;
+		outputVerificationUrl?: string;
 		thumbnailPresignedUrl: string;
 		previewGifPresignedUrl: string;
 		webhookUrl: string;
@@ -261,6 +281,12 @@ async function renderVideoEditOnMediaServer(
 		)
 		.pipe(runPromise);
 
+	const outputVerificationUrl = await bucket
+		.getInternalSignedObjectUrl(outputKey, {
+			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+		})
+		.pipe(runPromise);
+
 	const thumbnailPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
 			thumbnailKey,
@@ -301,6 +327,7 @@ async function renderVideoEditOnMediaServer(
 		userId,
 		sourceUrl,
 		outputPresignedUrl,
+		outputVerificationUrl,
 		thumbnailPresignedUrl,
 		previewGifPresignedUrl,
 		webhookUrl,
@@ -352,6 +379,111 @@ async function getCompletedMetadata(
 		.where(eq(videos.id, videoId as Video.VideoId));
 
 	return getMetadataFromVideoRow(video);
+}
+
+async function probeVideoOnMediaServer(
+	mediaServerUrl: string,
+	videoUrl: string,
+	webhookSecret: string | undefined,
+): Promise<VideoEditRenderResult["metadata"]> {
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+	};
+	if (webhookSecret) {
+		headers["x-media-server-secret"] = webhookSecret;
+	}
+
+	const response = await fetch(`${mediaServerUrl}/video/probe`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({ videoUrl }),
+	});
+
+	if (!response.ok) {
+		const errorData = (await response.json().catch(() => ({}))) as {
+			error?: string;
+			details?: string;
+		};
+		throw new Error(
+			errorData.error || errorData.details || "Rendered video probe failed",
+		);
+	}
+
+	const { metadata } = (await response.json()) as VideoEditRenderResult;
+	return metadata;
+}
+
+async function verifyRenderedEditOutput(
+	videoId: string,
+	userId: string,
+	editSpec: VideoEditSpec,
+	reportedMetadata: VideoEditRenderResult["metadata"],
+): Promise<void> {
+	"use step";
+
+	const expectedDuration = getEditSpecOutputDuration(editSpec);
+	if (!isDurationClose(reportedMetadata.duration, expectedDuration)) {
+		throw new Error(
+			`Media server reported edited duration ${reportedMetadata.duration.toFixed(3)}s, expected ${expectedDuration.toFixed(3)}s`,
+		);
+	}
+
+	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
+	if (!mediaServerUrl) {
+		throw new FatalError("MEDIA_SERVER_URL is not configured");
+	}
+
+	const [video] = await db()
+		.select()
+		.from(videos)
+		.where(eq(videos.id, Video.VideoId.make(videoId)));
+
+	if (!video) {
+		throw new FatalError("Video does not exist");
+	}
+
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+	).pipe(runPromise);
+	const outputKey = `${userId}/${videoId}/result.mp4`;
+	const outputUrl = await bucket
+		.getInternalSignedObjectUrl(outputKey, {
+			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+		})
+		.pipe(runPromise);
+
+	let lastError: Error | undefined;
+
+	for (
+		let attempt = 0;
+		attempt < MEDIA_SERVER_OUTPUT_VERIFICATION_MAX_ATTEMPTS;
+		attempt++
+	) {
+		try {
+			const actualMetadata = await probeVideoOnMediaServer(
+				mediaServerUrl,
+				outputUrl,
+				serverEnv().MEDIA_SERVER_WEBHOOK_SECRET || undefined,
+			);
+			if (isDurationClose(actualMetadata.duration, expectedDuration)) {
+				return;
+			}
+
+			lastError = new Error(
+				`Rendered video duration mismatch: expected ${expectedDuration.toFixed(3)}s, got ${actualMetadata.duration.toFixed(3)}s`,
+			);
+		} catch (error) {
+			lastError = error instanceof Error ? error : new Error(String(error));
+		}
+
+		if (attempt < MEDIA_SERVER_OUTPUT_VERIFICATION_MAX_ATTEMPTS - 1) {
+			await waitForRetry(
+				MEDIA_SERVER_OUTPUT_VERIFICATION_RETRY_MS * (attempt + 1),
+			);
+		}
+	}
+
+	throw lastError ?? new Error("Rendered video verification failed");
 }
 
 function clearAiMetadata(metadata: VideoMetadata | null): VideoMetadata {
@@ -626,15 +758,29 @@ async function saveEditResultAndComplete(
 async function clearEditProcessingState(
 	videoId: string,
 	sourceKey: string,
+	previousSpec: VideoEditSpec,
 ): Promise<void> {
 	"use step";
 
-	await db()
-		.delete(videoUploads)
-		.where(
-			and(
-				eq(videoUploads.videoId, videoId as Video.VideoId),
-				eq(videoUploads.rawFileKey, sourceKey),
-			),
-		);
+	const previousDuration = getValidDuration(
+		getEditSpecOutputDuration(previousSpec),
+	);
+
+	await db().transaction(async (tx) => {
+		if (previousDuration !== undefined) {
+			await tx
+				.update(videos)
+				.set({ duration: previousDuration })
+				.where(eq(videos.id, videoId as Video.VideoId));
+		}
+
+		await tx
+			.delete(videoUploads)
+			.where(
+				and(
+					eq(videoUploads.videoId, videoId as Video.VideoId),
+					eq(videoUploads.rawFileKey, sourceKey),
+				),
+			);
+	});
 }

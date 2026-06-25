@@ -112,6 +112,7 @@ pub struct Playback {
     pub start_frame_number: u32,
     pub project: watch::Receiver<ProjectConfiguration>,
     pub segment_medias: Arc<Vec<SegmentMedia>>,
+    pub music: crate::audio::MusicTracks,
     pub telemetry: Option<PlaybackTelemetry>,
 }
 
@@ -483,6 +484,7 @@ impl Playback {
 
             let audio_playback = AudioPlayback {
                 segments: get_audio_segments(&self.segment_medias),
+                music: self.music.clone(),
                 stop_rx: stop_rx.clone(),
                 start_frame_number: self.start_frame_number,
                 project: self.project.clone(),
@@ -1197,6 +1199,7 @@ const AUDIO_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 struct AudioPlayback {
     segments: Vec<AudioSegment>,
+    music: crate::audio::MusicTracks,
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
     project: watch::Receiver<ProjectConfiguration>,
@@ -1372,6 +1375,7 @@ impl AudioPlayback {
             start_frame_number,
             project,
             segments,
+            music,
             fps,
             playhead_rx,
             ..
@@ -1475,7 +1479,8 @@ impl AudioPlayback {
                 .saturating_mul(headroom_multiplier)
                 .max(channels * AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT as usize);
 
-            let mut audio_renderer = AudioPlaybackBuffer::new(segments.clone(), base_output_info);
+            let mut audio_renderer =
+                AudioPlaybackBuffer::new(segments.clone(), music.clone(), base_output_info);
 
             match strategy {
                 BufferSizeStrategy::Fixed(desired) => {
@@ -1673,6 +1678,7 @@ impl AudioPlayback {
             start_frame_number,
             project,
             segments,
+            music,
             fps,
             playhead_rx,
             ..
@@ -1708,6 +1714,7 @@ impl AudioPlayback {
         let project_snapshot = project.borrow().clone();
         let mut audio_buffer = PrerenderedAudioBuffer::<T>::new(
             segments,
+            music,
             &project_snapshot,
             output_info,
             duration_secs,

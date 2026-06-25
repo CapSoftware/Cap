@@ -1,5 +1,5 @@
 use crate::ExporterBase;
-use cap_editor::{AudioRenderer, get_audio_segments};
+use cap_editor::{AudioRenderer, get_audio_segments, load_music_tracks_uncached};
 use cap_enc_ffmpeg::{AudioEncoder, aac::AACEncoder, h264::H264Encoder, mp4::*};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;
@@ -179,11 +179,13 @@ impl Mp4ExportSettings {
         video_info.time_base = ffmpeg::Rational::new(1, fps as i32);
 
         let audio_segments = get_audio_segments(&base.segments);
+        let music = load_music_tracks_uncached(&base.project_config, &base.project_path);
 
-        let has_audio = audio_segments
+        let has_recording_audio = audio_segments
             .first()
             .filter(|_| !base.project_config.audio.mute)
             .is_some();
+        let has_audio = has_recording_audio || !music.is_empty();
 
         let record_first_queued_ms = mode.record_first_queued_ms_since_pipeline;
         let nv12_render_startup_breakdown_ms = mode.nv12_render_startup_breakdown_ms;
@@ -223,7 +225,7 @@ impl Mp4ExportSettings {
             info!("Created MP4File encoder (NV12, external conversion, export settings)");
 
             let mut audio_renderer = if has_audio {
-                Some(AudioRenderer::new(audio_segments))
+                Some(AudioRenderer::new(audio_segments).with_music(music))
             } else {
                 None
             };

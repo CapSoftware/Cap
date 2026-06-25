@@ -247,6 +247,44 @@ fn project_validate_detects_missing_media() {
 }
 
 #[test]
+fn project_validate_rejects_in_progress_zero_segment_studio_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("recording.cap");
+    std::fs::create_dir_all(&project).unwrap();
+    let meta = serde_json::json!({
+        "platform": "Linux",
+        "pretty_name": "Broken Linux Recording",
+        "sharing": null,
+        "segments": [],
+        "status": { "status": "InProgress" }
+    });
+    std::fs::write(
+        project.join("recording-meta.json"),
+        serde_json::to_vec_pretty(&meta).unwrap(),
+    )
+    .unwrap();
+
+    let output = run(&[
+        "project",
+        "validate",
+        project.to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    assert!(!output.status.success());
+    let json = parse_json(&output);
+    assert_eq!(json["valid"], false);
+    assert!(json["error"].is_string());
+    let problems = json["problems"].as_array().unwrap();
+    assert!(
+        problems.iter().any(|problem| problem
+            .as_str()
+            .is_some_and(|value| value.contains("no segments"))),
+        "expected no-segments validation problem: {json}"
+    );
+}
+
+#[test]
 fn project_inspect_complete_project_succeeds() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("recording.cap");

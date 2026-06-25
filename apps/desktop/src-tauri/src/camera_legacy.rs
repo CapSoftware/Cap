@@ -9,7 +9,7 @@ use flume::Sender;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::camera::{CameraPreviewState, MAX_CAMERA_SIZE, MIN_CAMERA_SIZE};
+use crate::camera::{CameraPreviewState, MAX_CAMERA_SIZE, MIN_CAMERA_SIZE, is_low_spec_preview};
 use crate::frame_ws::{WSFrame, create_watch_frame_ws};
 
 const WS_READBACK_PENDING: u8 = 0;
@@ -39,14 +39,37 @@ const WS_PREVIEW_TARGET_FRAME_INTERVAL: Duration = Duration::from_micros(16_666)
 const WS_PREVIEW_FRAME_INTERVAL_SLACK: Duration = Duration::from_millis(1);
 const WS_BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(150);
 
+// Low-spec preview profile (mirrors the native path in camera.rs). Only used
+// when `is_low_spec_preview()` is true (machines <= 8GB RAM detected at
+// startup); high-spec machines use the constants above bit-for-bit.
+const WS_PREVIEW_LOW_SPEC_MAX_WIDTH: u32 = 640;
+const WS_PREVIEW_LOW_SPEC_MAX_HEIGHT: u32 = 360;
+const WS_PREVIEW_LOW_SPEC_TARGET_FRAME_INTERVAL: Duration = Duration::from_micros(33_333);
+const FRAME_POOL_LOW_SPEC_MAX: usize = 2;
+
 fn preview_frame_due(last_preview_at: Option<Instant>, now: Instant) -> bool {
+    // High-spec keeps the original 60fps target; low-spec paces at 30fps.
+    let target_interval = if is_low_spec_preview() {
+        WS_PREVIEW_LOW_SPEC_TARGET_FRAME_INTERVAL
+    } else {
+        WS_PREVIEW_TARGET_FRAME_INTERVAL
+    };
     last_preview_at.is_none_or(|last| {
-        now.saturating_duration_since(last) + WS_PREVIEW_FRAME_INTERVAL_SLACK
-            >= WS_PREVIEW_TARGET_FRAME_INTERVAL
+        now.saturating_duration_since(last) + WS_PREVIEW_FRAME_INTERVAL_SLACK >= target_interval
     })
 }
 
 const FRAME_POOL_MAX: usize = 4;
+
+/// Frame-pool cap, lowered on low-spec to hold fewer ~2MB buffers in memory.
+#[inline]
+fn frame_pool_max() -> usize {
+    if is_low_spec_preview() {
+        FRAME_POOL_LOW_SPEC_MAX
+    } else {
+        FRAME_POOL_MAX
+    }
+}
 
 // Reuses a previously-sent frame buffer once every WSFrame referencing it has
 // been dropped (watch cell replaced + socket sends finished), eliminating the
@@ -68,7 +91,7 @@ fn with_pooled_buffer(
     let mut vec = Vec::new();
     fill(&mut vec);
     let buf = Arc::new(vec);
-    if pool.len() < FRAME_POOL_MAX {
+    if pool.len() < frame_pool_max() {
         pool.push(buf.clone());
     }
     buf
@@ -93,7 +116,14 @@ fn pack_rows(dst: &mut Vec<u8>, src: &[u8], width: u32, height: u32, stride: u32
 
 fn scaled_preview_dimensions(width: u32, height: u32, state: &CameraPreviewState) -> (u32, u32) {
     let blur_enabled = state.background_blur != cap_project::BackgroundBlurMode::Off;
-    let (max_width, max_height) = if blur_enabled {
+    let (max_width, max_height) = if is_low_spec_preview() {
+        // Low-spec caps preview to 640x360 (blur is skipped on low-spec, so the
+        // blur-vs-no-blur branch below does not apply).
+        (
+            WS_PREVIEW_LOW_SPEC_MAX_WIDTH,
+            WS_PREVIEW_LOW_SPEC_MAX_HEIGHT,
+        )
+    } else if blur_enabled {
         (WS_PREVIEW_BLUR_MAX_WIDTH, WS_PREVIEW_BLUR_MAX_HEIGHT)
     } else {
         (WS_PREVIEW_MAX_WIDTH, WS_PREVIEW_MAX_HEIGHT)
@@ -358,6 +388,14 @@ impl WsBlurState {
         mode: cap_camera_effects::BlurMode,
         pool: &mut Vec<Arc<Vec<u8>>>,
     ) -> Option<Arc<Vec<u8>>> {
+        // Low-spec: never spin up the headless ONNX/wgpu blur processor (the
+        // heaviest preview cost). Returning `None` makes the caller fall back to
+        // packing the raw camera rows, so the preview is unblurred but cheap.
+        // The UI blur toggle is unaffected; it just has no visual effect here.
+        if is_low_spec_preview() {
+            return None;
+        }
+
         if !self.init_attempted {
             self.init_attempted = true;
             self.processor = init_headless_blur();

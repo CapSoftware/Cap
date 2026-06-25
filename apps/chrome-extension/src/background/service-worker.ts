@@ -43,6 +43,7 @@ import type {
 	CameraPreviewEventRelay,
 	ExtensionAuth,
 	ExtensionSettings,
+	MediaPermissionSnapshot,
 	MicrophoneDevice,
 	MicrophoneWarningVariant,
 	OffscreenRequest,
@@ -56,7 +57,12 @@ import type {
 	ServiceWorkerResponse,
 } from "../shared/types";
 
-const POPUP_URL = "popup.html";
+// popup.html is web-accessible with use_dynamic_url so sites cannot fingerprint
+// the extension via the overlay iframe's static URL; that same flag makes its
+// static chrome-extension:// URL fail with ERR_BLOCKED_BY_CLIENT when opened as
+// a window. The standalone fallback therefore loads a privileged twin that is
+// not in web_accessible_resources.
+const POPUP_URL = "popup-window.html";
 const OFFSCREEN_URL = "offscreen.html";
 const AUTH_TIMEOUT_MS = 10 * 60 * 1000;
 const OFFSCREEN_MESSAGE_ATTEMPTS = 3;
@@ -69,6 +75,10 @@ let bootstrapCache: BootstrapData | null = null;
 let recordingStatus: RecordingStatus = { phase: "idle" };
 let cameraDevicesCache: CameraDevice[] = [];
 let microphoneDevicesCache: MicrophoneDevice[] = [];
+let mediaPermissionsCache: MediaPermissionSnapshot = {
+	camera: "unknown",
+	microphone: "unknown",
+};
 let uploadProgressTabId: number | null = null;
 let activePreviewTabId: number | null = null;
 let pendingPreviewTabId: number | null = null;
@@ -939,17 +949,45 @@ const broadcastCameraDevices = (devices: CameraDevice[]) => {
 };
 
 // The recorder panel is a cross-origin iframe, so its own enumerateDevices()
-// returns no labelled devices even when the grant exists. Enumerate in the
-// offscreen document instead (a top-level extension page that keeps the grant)
-// and cache the result. Empty results never overwrite a populated cache: a
-// transient enumeration that loses labels must not wipe known devices.
+// returns no labelled devices even when the grant exists, and its permission
+// query is delegated from the host page. Enumerate and query permissions in
+// the offscreen document instead (a top-level extension page that keeps the
+// grant) and cache the result. Empty results never overwrite a populated
+// cache: a transient enumeration that loses labels must not wipe known
+// devices.
 const refreshMediaDevicesFromOffscreen = async () => {
 	try {
 		const response = await sendOffscreen({
 			target: "offscreen",
 			type: "enumerate-devices",
 		});
-		if (response.ok && response.devices) {
+		if (!response.ok) return;
+		if (response.permissions) {
+			mediaPermissionsCache = response.permissions;
+			// A grant Chrome has reset (its automatic clean-up of unused
+			// permissions, or a manual revoke) must drop the cached device list,
+			// otherwise the stale entries hide that recording can no longer reach
+			// any camera/mic. Empty enumeration results alone never clear the
+			// cache — a cross-origin context that transiently loses labels would
+			// then wipe known devices — so only a definitively non-granted state
+			// triggers the clear.
+			if (
+				response.permissions.camera === "prompt" ||
+				response.permissions.camera === "denied"
+			) {
+				if (cameraDevicesCache.length > 0) {
+					cameraDevicesCache = [];
+					broadcastCameraDevices(cameraDevicesCache);
+				}
+			}
+			if (
+				response.permissions.microphone === "prompt" ||
+				response.permissions.microphone === "denied"
+			) {
+				microphoneDevicesCache = [];
+			}
+		}
+		if (response.devices) {
 			if (response.devices.cameras.length > 0) {
 				cameraDevicesCache = response.devices.cameras;
 				broadcastCameraDevices(cameraDevicesCache);
@@ -1567,6 +1605,7 @@ const handleRequest = async (
 			ok: true,
 			cameraDevices: cameraDevicesCache,
 			microphoneDevices: microphoneDevicesCache,
+			mediaPermissions: mediaPermissionsCache,
 		};
 	}
 

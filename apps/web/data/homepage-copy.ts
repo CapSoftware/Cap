@@ -217,7 +217,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				title: "Cross-Platform For Your Entire Team",
 				description:
-					"Native apps for macOS and Windows that feel at home on each platform. No janky Electron apps or browser extensions — just fast, reliable recording that works with your existing tools and workflow.",
+					"Native apps for macOS and Windows that feel at home on each platform, plus a Chrome extension when browser recording is the right fit. Fast, reliable recording that works with your existing tools and workflow.",
 			},
 			{
 				title: "Quality That Makes You Look Professional",

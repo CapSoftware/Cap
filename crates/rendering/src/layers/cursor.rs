@@ -205,11 +205,12 @@ impl CursorLayer {
         let mut rgba = vec![0u8; (size * size * 4) as usize];
         let center = size as f32 / 2.0;
         let outer_radius = center - size as f32 * 0.08;
-        let border_width = size as f32 * 0.025;
-        let edge_softness = size as f32 * 0.015;
+        let dark_ring_width = size as f32 * 0.014;
+        let light_ring_width = size as f32 * 0.016;
+        let shadow_spread = size as f32 * 0.035;
+        let edge_softness = size as f32 * 0.018;
 
-        let fill_alpha = 0.2_f32;
-        let border_alpha = 0.55_f32;
+        let inner_edge = outer_radius - dark_ring_width - light_ring_width;
 
         for y in 0..size {
             for x in 0..size {
@@ -218,24 +219,42 @@ impl CursorLayer {
                 let dist = (dx * dx + dy * dy).sqrt();
                 let idx = ((y * size + x) * 4) as usize;
 
+                if dist > outer_radius + shadow_spread {
+                    continue;
+                }
+
+                let mut color = [0.0_f32; 4];
+
+                if dist > outer_radius {
+                    let shadow_t = ((dist - outer_radius) / shadow_spread).clamp(0.0, 1.0);
+                    let shadow_alpha = 0.16 * (1.0 - shadow_t * shadow_t);
+                    composite_cursor_layer(&mut color, [0.0, 0.0, 0.0, shadow_alpha]);
+                }
+
                 if dist <= outer_radius + edge_softness {
-                    let outer_fade = 1.0 - ((dist - outer_radius) / edge_softness).clamp(0.0, 1.0);
+                    let outer_fade = 1.0
+                        - ((dist - outer_radius) / edge_softness)
+                            .clamp(0.0, 1.0)
+                            .powf(1.2);
 
-                    let border_start = outer_radius - border_width;
-                    let border_factor = if dist >= border_start {
-                        ((dist - border_start) / border_width).clamp(0.0, 1.0)
+                    if dist > outer_radius - dark_ring_width {
+                        let ring_alpha = 0.38 * outer_fade;
+                        composite_cursor_layer(&mut color, [0.0, 0.0, 0.0, ring_alpha]);
+                    } else if dist > inner_edge {
+                        let ring_alpha = 0.42 * outer_fade;
+                        composite_cursor_layer(&mut color, [1.0, 1.0, 1.0, ring_alpha]);
                     } else {
-                        0.0
-                    };
+                        let fill_alpha = 0.14 * outer_fade;
+                        composite_cursor_layer(&mut color, [1.0, 1.0, 1.0, fill_alpha]);
+                    }
+                }
 
-                    let base_alpha = fill_alpha + border_factor * (border_alpha - fill_alpha);
-                    let alpha = base_alpha * outer_fade;
-
-                    let premul = (255.0 * alpha) as u8;
-                    rgba[idx] = premul;
-                    rgba[idx + 1] = premul;
-                    rgba[idx + 2] = premul;
-                    rgba[idx + 3] = premul;
+                if color[3] > 0.0 {
+                    let a = color[3];
+                    rgba[idx] = (color[0] * a * 255.0).round() as u8;
+                    rgba[idx + 1] = (color[1] * a * 255.0).round() as u8;
+                    rgba[idx + 2] = (color[2] * a * 255.0).round() as u8;
+                    rgba[idx + 3] = (a * 255.0).round() as u8;
                 }
             }
         }
@@ -610,6 +629,24 @@ impl CursorLayer {
             pass.draw(0..4, 0..1);
         }
     }
+}
+
+fn composite_cursor_layer(dst: &mut [f32; 4], src: [f32; 4]) {
+    let src_a = src[3];
+    if src_a <= 0.0 {
+        return;
+    }
+
+    let dst_a = dst[3];
+    let out_a = src_a + dst_a * (1.0 - src_a);
+    if out_a <= 0.0 {
+        return;
+    }
+
+    for i in 0..3 {
+        dst[i] = (src[i] * src_a + dst[i] * dst_a * (1.0 - src_a)) / out_a;
+    }
+    dst[3] = out_a;
 }
 
 fn cursor_height_px(

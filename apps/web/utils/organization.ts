@@ -48,11 +48,17 @@ export function selectProSeatProvider<T extends ProSeatProvider>({
 
 export function calculateProSeats(organization: {
 	inviteQuota?: number;
-	members?: { id: string; hasProSeat?: boolean }[];
+	ownerId?: string | null;
+	ownerIsPro?: boolean;
+	members?: { id: string; userId?: string | null; hasProSeat?: boolean }[];
 }) {
 	const proSeatsTotal = organization?.inviteQuota ?? 1;
+	const ownerId = organization?.ownerId;
+	const ownerIsPro = organization?.ownerIsPro ?? false;
 	const proSeatsUsed =
-		organization?.members?.filter((m) => m.hasProSeat).length ?? 0;
+		organization?.members?.filter(
+			(m) => m.hasProSeat || (ownerIsPro && !!ownerId && m.userId === ownerId),
+		).length ?? 0;
 	const proSeatsRemaining = buildEnv.NEXT_PUBLIC_IS_CAP
 		? Math.max(0, proSeatsTotal - proSeatsUsed)
 		: Number.MAX_SAFE_INTEGER;
@@ -66,7 +72,9 @@ export function calculateProSeats(organization: {
 
 export function calculateSeats(organization: {
 	inviteQuota?: number;
-	members?: { id: string; hasProSeat?: boolean }[];
+	ownerId?: string | null;
+	ownerIsPro?: boolean;
+	members?: { id: string; userId?: string | null; hasProSeat?: boolean }[];
 	invites?: { id: string }[];
 }) {
 	const { proSeatsTotal, proSeatsUsed, proSeatsRemaining } =

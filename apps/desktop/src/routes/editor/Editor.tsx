@@ -643,7 +643,7 @@ function Inner() {
 			<div class="flex flex-col flex-1 min-h-0 animate-in fade-in duration-300">
 				<Header />
 				<div
-					class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5"
+					class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5"
 					data-tauri-drag-region
 				>
 					<div
@@ -744,7 +744,7 @@ function Inner() {
 							</Show>
 						</div>
 						<div
-							class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden relative"
+							class="flex-none min-h-0 px-2 overflow-hidden relative"
 							style={{ height: `${timelineHeight()}px` }}
 						>
 							<div class="h-full">

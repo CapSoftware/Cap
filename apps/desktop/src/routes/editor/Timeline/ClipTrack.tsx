@@ -547,9 +547,9 @@ export function ClipTrack(
 								)}
 							</Show>
 							<SegmentRoot
+								segColor="var(--track-clip)"
 								class={cx(
-									"border transition-colors duration-200 group hover:border-gray-12",
-									"bg-linear-to-r from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]",
+									"border transition-colors duration-200 group",
 									isSelected() ? "border-gray-12" : "border-transparent",
 								)}
 								innerClass="ring-blue-9"

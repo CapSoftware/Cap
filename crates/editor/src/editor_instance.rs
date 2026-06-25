@@ -98,6 +98,7 @@ pub struct EditorInstance {
         watch::Receiver<ProjectConfiguration>,
     ),
     pub segment_medias: Arc<Vec<SegmentMedia>>,
+    music_cache: Arc<std::sync::Mutex<crate::MusicTracks>>,
     meta: RecordingMeta,
     pub export_preview_active: AtomicBool,
     pub export_active: AtomicBool,
@@ -202,6 +203,7 @@ impl EditorInstance {
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),
                     keyboard_segments: Vec::new(),
+                    audio_segments: Vec::new(),
                 });
 
                 if let Err(e) = project.write(&recording_meta.project_path) {
@@ -299,6 +301,7 @@ impl EditorInstance {
             preview_tx,
             project_config: watch::channel(project),
             segment_medias: Arc::new(segments),
+            music_cache: Arc::new(std::sync::Mutex::new(crate::MusicTracks::new())),
             meta: recording_meta,
             playback_active: playback_active_tx,
             playback_active_rx,
@@ -344,7 +347,26 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
+    /// Decodes (and caches) the music tracks referenced by the current project
+    /// config off the async runtime so playback start isn't blocked by ffmpeg.
+    async fn load_music_tracks(&self) -> crate::MusicTracks {
+        let project = self.project_config.1.borrow().clone();
+        let project_path = self.project_path.clone();
+        let cache = self.music_cache.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let mut cache = cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            crate::load_music_tracks(&project, &project_path, &mut cache)
+        })
+        .await
+        .unwrap_or_default()
+    }
+
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
+        let music = self.load_music_tracks().await;
+
         let (mut handle, prev) = {
             let mut state = self.state.lock().await;
 
@@ -352,6 +374,7 @@ impl EditorInstance {
 
             let playback_handle = match (playback::Playback {
                 segment_medias: self.segment_medias.clone(),
+                music: music.clone(),
                 renderer: self.renderer.clone(),
                 render_constants: self.render_constants.clone(),
                 start_frame_number,

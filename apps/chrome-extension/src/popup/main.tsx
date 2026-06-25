@@ -27,6 +27,8 @@ import type {
 	CameraDevice,
 	ExtensionAuth,
 	ExtensionSettings,
+	MediaPermissionSnapshot,
+	MediaPermissionState,
 	MicrophoneDevice,
 	RecordingMode,
 	RecordingStatus,
@@ -70,6 +72,17 @@ const postPanelMessage = (
 		},
 		"*",
 	);
+};
+
+// Maps the offscreen document's authoritative permission query to a stored
+// access flag. "unknown" (no Permissions API) leaves the flag untouched so a
+// browser that cannot report state never wipes a working grant.
+const accessFromPermission = (
+	state: MediaPermissionState,
+): boolean | undefined => {
+	if (state === "granted") return true;
+	if (state === "prompt" || state === "denied") return false;
+	return undefined;
 };
 
 const isRecordingStatus = (
@@ -136,6 +149,7 @@ function App() {
 	const loadDevices = useCallback(async () => {
 		let cameras: CameraDevice[] = [];
 		let microphones: MicrophoneDevice[] = [];
+		let permissions: MediaPermissionSnapshot | null = null;
 
 		if (navigator.mediaDevices?.enumerateDevices) {
 			try {
@@ -151,7 +165,9 @@ function App() {
 		// where Chrome withholds device labels from enumerateDevices() even though
 		// the extension origin holds the camera/mic grant. Ask the offscreen
 		// document (a top-level extension page that keeps the grant) for whichever
-		// list came up empty.
+		// list came up empty, and for the authoritative permission state — the
+		// iframe's own query is delegated from the host page, so it cannot tell
+		// when Chrome has reset the extension's grant.
 		if (cameras.length === 0 || microphones.length === 0) {
 			const response = await sendServiceWorkerMessage({
 				target: "service-worker",
@@ -164,16 +180,32 @@ function App() {
 				if (microphones.length === 0 && response.microphoneDevices) {
 					microphones = response.microphoneDevices;
 				}
+				if (response.mediaPermissions) {
+					permissions = response.mediaPermissions;
+				}
 			}
 		}
 
 		setCameraDevices(cameras);
 		setMicDevices(microphones);
-		if (cameras.length > 0 || microphones.length > 0) {
-			const nextAccess = await updateMediaAccessState({
-				...(cameras.length > 0 ? { camera: true } : {}),
-				...(microphones.length > 0 ? { microphone: true } : {}),
-			});
+
+		// Keep the persisted access flags honest in both directions: seeing a
+		// device (or a "granted" query) proves the grant exists, while a
+		// definitively non-granted query proves it is gone. Without the clearing
+		// half, a grant Chrome resets while the extension sits unused would leave
+		// the flags stuck on, so the panel would silently show empty pickers
+		// instead of a "Request permission" prompt.
+		const access: Partial<Pick<MediaAccessState, "camera" | "microphone">> = {};
+		if (cameras.length > 0) access.camera = true;
+		if (microphones.length > 0) access.microphone = true;
+		if (permissions) {
+			const cameraAccess = accessFromPermission(permissions.camera);
+			if (cameraAccess !== undefined) access.camera = cameraAccess;
+			const microphoneAccess = accessFromPermission(permissions.microphone);
+			if (microphoneAccess !== undefined) access.microphone = microphoneAccess;
+		}
+		if (access.camera !== undefined || access.microphone !== undefined) {
+			const nextAccess = await updateMediaAccessState(access);
 			setMediaAccess(nextAccess);
 		}
 		const reconciled = reconcileRememberedDevices(
@@ -600,9 +632,7 @@ function App() {
 							<CameraSelector
 								selectedCameraId={selectedCameraId}
 								availableCameras={cameraDevices}
-								permissionGranted={
-									mediaAccess.camera || Boolean(settings.webcam.deviceId)
-								}
+								permissionGranted={mediaAccess.camera}
 								disabled={recordingActive || busy}
 								open={cameraSelectOpen}
 								onOpenChange={(isOpen) => {
@@ -620,9 +650,7 @@ function App() {
 							<MicrophoneSelector
 								selectedMicId={selectedMicId}
 								availableMics={micDevices}
-								permissionGranted={
-									mediaAccess.microphone || Boolean(selectedMicId)
-								}
+								permissionGranted={mediaAccess.microphone}
 								disabled={recordingActive || busy}
 								open={micSelectOpen}
 								onOpenChange={(isOpen) => {

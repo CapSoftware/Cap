@@ -865,6 +865,45 @@ pub struct SceneSegment {
     pub transition_out: f64,
 }
 
+/// A timeline-positioned audio clip (background music or imported audio).
+///
+/// Unlike the recording's mic/system audio (which is keyed to recording clips),
+/// these segments live in output/timeline time exactly like zoom/text/mask
+/// segments. `path` is resolved relative to the project directory so projects
+/// stay portable when moved.
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioTrackSegment {
+    pub start: f64,
+    pub end: f64,
+    #[serde(default)]
+    pub track: u32,
+    pub path: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default = "AudioTrackSegment::default_enabled")]
+    pub enabled: bool,
+    /// Offset into the source audio file (seconds) at which playback begins.
+    #[serde(default)]
+    pub trim_start: f64,
+    #[serde(default)]
+    pub volume_db: f32,
+    #[serde(default)]
+    pub fade_in: f64,
+    #[serde(default)]
+    pub fade_out: f64,
+    /// Source duration in seconds, persisted so the UI can clamp resizing
+    /// without re-decoding the file.
+    #[serde(default)]
+    pub duration: Option<f64>,
+}
+
+impl AudioTrackSegment {
+    fn default_enabled() -> bool {
+        true
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
@@ -880,6 +919,8 @@ pub struct TimelineConfiguration {
     pub caption_segments: Vec<CaptionTrackSegment>,
     #[serde(default)]
     pub keyboard_segments: Vec<crate::KeyboardTrackSegment>,
+    #[serde(default)]
+    pub audio_segments: Vec<AudioTrackSegment>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]

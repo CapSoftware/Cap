@@ -395,6 +395,11 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 	createEffect(() => {
 		if (rawOptions.targetMode == null && hiddenForPicker) {
 			hiddenForPicker = false;
+			if (rawOptions.targetModeSource === "editorRecording") {
+				closeRecord();
+				setTargetSearch("");
+				return;
+			}
 			void commands.setEditorRecordingTarget(null).catch(() => {});
 			restoreMode();
 			closeRecord();
@@ -435,7 +440,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 		}
 
 		await commands.openTargetSelectOverlays(null, null, mode);
-		setOptions("targetMode", mode);
+		setOptions({ targetMode: mode, targetModeSource: "editor" });
 		hideEditorForPicker();
 	};
 
@@ -451,7 +456,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 			null,
 			"display",
 		);
-		setOptions("targetMode", "display");
+		setOptions({ targetMode: "display", targetModeSource: "editor" });
 		hideEditorForPicker();
 	};
 
@@ -467,7 +472,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 			null,
 			"window",
 		);
-		setOptions("targetMode", "window");
+		setOptions({ targetMode: "window", targetModeSource: "editor" });
 		hideEditorForPicker();
 
 		try {
@@ -537,19 +542,54 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 	const segments = createMemo<EditorTimelineSegment[]>(
 		() => project.timeline?.segments ?? [],
 	);
-	const hasMultipleRecordings = () =>
-		editorInstance.recordings.segments.length > 1;
+	const recordedClipCount = () => editorInstance.recordings.segments.length;
 
-	const clipLabel = (index: number) =>
-		index === 0 ? "Original" : `Clip ${index + 1}`;
+	const clipLabel = (index: number) => `Clip ${index + 1}`;
+
+	const segmentClipIndex = (segment: EditorTimelineSegment, index: number) =>
+		segment.recordingSegment ??
+		Math.min(index, Math.max(recordedClipCount() - 1, 0));
+
+	const segmentSplitNumber = (
+		segment: EditorTimelineSegment,
+		index: number,
+	) => {
+		const clipIndex = segmentClipIndex(segment, index);
+		let count = 0;
+		for (let i = 0; i <= index; i++) {
+			const current = segments()[i];
+			if (current && segmentClipIndex(current, i) === clipIndex) count++;
+		}
+		return count;
+	};
+
+	const segmentLabel = (segment: EditorTimelineSegment, index: number) => {
+		const splitNumber = segmentSplitNumber(segment, index);
+		return splitNumber === 1
+			? clipLabel(segmentClipIndex(segment, index))
+			: `Split ${splitNumber - 1}`;
+	};
 
 	const displayName = (segment: EditorTimelineSegment, index: number) => {
 		const name = segment.name?.trim();
-		return name ? name : clipLabel(index);
+		return name ? name : segmentLabel(segment, index);
 	};
 	const displayNameAt = (index: number) => {
 		const segment = segments()[index];
 		return segment ? displayName(segment, index) : clipLabel(index);
+	};
+
+	const segmentDescription = (
+		segment: EditorTimelineSegment,
+		index: number,
+		duration: number,
+	) => {
+		const formattedDuration = formatClipDuration(duration);
+		const splitNumber = segmentSplitNumber(segment, index);
+		if (splitNumber > 1) {
+			return `${clipLabel(segmentClipIndex(segment, index))} · ${formattedDuration}`;
+		}
+		return formattedDuration;
 	};
 
 	const [editingIndex, setEditingIndex] = createSignal<number | null>(null);
@@ -740,9 +780,9 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 
 				<div class="flex flex-none gap-2 items-center">
 					<span class="text-sm font-medium text-gray-12">Clips</span>
-					<Show when={segments().length > 0}>
+					<Show when={recordedClipCount() > 0}>
 						<span class="rounded-md bg-gray-3 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-gray-11">
-							{segments().length}
+							{recordedClipCount()}
 						</span>
 					</Show>
 				</div>
@@ -822,7 +862,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 																});
 															}}
 															value={draftName()}
-															placeholder={clipLabel(index())}
+															placeholder={segmentLabel(segment, index())}
 															onInput={(e) =>
 																setDraftName(e.currentTarget.value)
 															}
@@ -842,9 +882,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 														/>
 													</Show>
 													<span class="text-xs tabular-nums text-gray-10">
-														{hasMultipleRecordings()
-															? `Recording ${(segment.recordingSegment ?? 0) + 1} · ${formatClipDuration(duration())}`
-															: formatClipDuration(duration())}
+														{segmentDescription(segment, index(), duration())}
 													</span>
 												</div>
 												<div class="flex flex-none gap-0.5 items-center">

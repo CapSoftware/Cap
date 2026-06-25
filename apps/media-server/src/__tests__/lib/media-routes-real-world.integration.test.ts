@@ -113,6 +113,12 @@ function uploadedBytes(pathname: string) {
 	return bytes;
 }
 
+async function uploadResponseBytes(pathname: string) {
+	const bytes = uploadedArtifacts.get(pathname);
+	if (!bytes) return null;
+	return bytes;
+}
+
 beforeAll(async () => {
 	mock.restore();
 	process.env.MEDIA_SERVER_WEBHOOK_SECRET = MEDIA_SERVER_SECRET;
@@ -151,11 +157,33 @@ beforeAll(async () => {
 				}
 			}
 
+			if (
+				(request.method === "GET" || request.method === "HEAD") &&
+				url.pathname.startsWith("/uploads/")
+			) {
+				const bytes = await uploadResponseBytes(url.pathname);
+				if (!bytes) return new Response("Not found", { status: 404 });
+				const headers = {
+					"Content-Type": "video/mp4",
+					"Content-Length": bytes.byteLength.toString(),
+				};
+				return request.method === "HEAD"
+					? new Response(null, { headers })
+					: new Response(bytes, { headers });
+			}
+
 			if (request.method === "PUT" && url.pathname.startsWith("/uploads/")) {
-				uploadedArtifacts.set(
-					url.pathname,
-					new Uint8Array(await request.arrayBuffer()),
-				);
+				if (url.pathname === "/uploads/stale-edit-output.mp4") {
+					uploadedArtifacts.set(
+						url.pathname,
+						new Uint8Array(await Bun.file(TEST_VIDEO_WITH_AUDIO).arrayBuffer()),
+					);
+				} else {
+					uploadedArtifacts.set(
+						url.pathname,
+						new Uint8Array(await request.arrayBuffer()),
+					);
+				}
 				return new Response(null, { status: 200, statusText: "OK" });
 			}
 
@@ -299,6 +327,7 @@ describe("media routes real-world integration tests", () => {
 				userId: "real-edit-user",
 				sourceUrl: fixtureUrl(),
 				outputPresignedUrl: uploadUrl("edit-output.mp4"),
+				outputVerificationUrl: uploadUrl("edit-output.mp4"),
 				keepRanges: [
 					{ start: 0, end: 0.4 },
 					{ start: 0.55, end: 0.95 },
@@ -320,6 +349,29 @@ describe("media routes real-world integration tests", () => {
 			expect(metadata.audioCodec).toBe("aac");
 			expect(metadata.duration).toBeGreaterThan(0.3);
 			expect(metadata.duration).toBeLessThan(1.2);
+		} finally {
+			deleteJob(data.jobId);
+		}
+	}, 90000);
+
+	test("fails an edit job when uploaded video verification sees stale bytes", async () => {
+		const response = await app.fetch(
+			mediaPostRequest("/video/edit", {
+				videoId: "stale-edit-video",
+				userId: "stale-edit-user",
+				sourceUrl: fixtureUrl(),
+				outputPresignedUrl: uploadUrl("stale-edit-output.mp4"),
+				outputVerificationUrl: uploadUrl("stale-edit-output.mp4"),
+				keepRanges: [{ start: 0, end: 0.1 }],
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const data = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(data.jobId);
+		try {
+			expect(job.phase).toBe("error");
+			expect(job.error).toContain("Uploaded video duration mismatch");
 		} finally {
 			deleteJob(data.jobId);
 		}

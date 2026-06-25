@@ -48,7 +48,11 @@ interface MembersCardProps {
 export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 	const router = useRouter();
 	const { activeOrganization, user } = useDashboardContext();
-	const { proSeatsRemaining } = calculateSeats(activeOrganization || {});
+	const { proSeatsRemaining } = calculateSeats({
+		...(activeOrganization || {}),
+		ownerId: activeOrganization?.organization.ownerId,
+		ownerIsPro: Boolean(activeOrganization?.ownerIsPro),
+	});
 	const currentMember = activeOrganization?.members.find(
 		(member) => member.userId === user.id,
 	);
@@ -57,6 +61,16 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 		ownerId: activeOrganization?.organization.ownerId,
 		memberRole: currentMember?.role,
 	});
+	const pendingInviteEmails = new Set(
+		activeOrganization?.invites?.map((invite) =>
+			invite.invitedEmail.toLowerCase(),
+		) ?? [],
+	);
+	const memberEmails = new Set(
+		activeOrganization?.members?.map((member) =>
+			member.user.email.toLowerCase(),
+		) ?? [],
+	);
 	const canManageMembers = canManageOrganizationMembers(currentRole);
 	const canManageProSeats = canManageOrganizationProSeats(currentRole);
 
@@ -335,7 +349,11 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 									<TableCell>
 										{format(member.createdAt, "MMM d, yyyy")}
 									</TableCell>
-									<TableCell>Active</TableCell>
+									<TableCell>
+										{pendingInviteEmails.has(member.user.email.toLowerCase())
+											? "Pending"
+											: "Active"}
+									</TableCell>
 									<TableCell>
 										{!memberIsOwner ? (
 											<Button
@@ -367,42 +385,47 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 								</TableRow>
 							);
 						})}
-						{activeOrganization?.invites?.map((invite) => (
-							<TableRow key={invite.id}>
-								<TableCell className="text-gray-10">Pending</TableCell>
-								<TableCell>{invite.invitedEmail}</TableCell>
-								<TableCell>
-									{organizationRoleLabel(
-										normalizeAssignableOrganizationRole(invite.role) ??
-											"member",
-									)}
-								</TableCell>
-								{buildEnv.NEXT_PUBLIC_IS_CAP && <TableCell>-</TableCell>}
-								<TableCell>-</TableCell>
-								<TableCell>Invited</TableCell>
-								<TableCell>
-									<Button
-										type="button"
-										size="xs"
-										variant="destructive"
-										onClick={() => {
-											if (canManageMembers) {
-												deleteInviteMutation.mutate(invite.id);
-											} else {
-												showMemberManagerToast();
+						{activeOrganization?.invites
+							?.filter(
+								(invite) =>
+									!memberEmails.has(invite.invitedEmail.toLowerCase()),
+							)
+							.map((invite) => (
+								<TableRow key={invite.id}>
+									<TableCell className="text-gray-10">Pending</TableCell>
+									<TableCell>{invite.invitedEmail}</TableCell>
+									<TableCell>
+										{organizationRoleLabel(
+											normalizeAssignableOrganizationRole(invite.role) ??
+												"member",
+										)}
+									</TableCell>
+									{buildEnv.NEXT_PUBLIC_IS_CAP && <TableCell>-</TableCell>}
+									<TableCell>-</TableCell>
+									<TableCell>Invited</TableCell>
+									<TableCell>
+										<Button
+											type="button"
+											size="xs"
+											variant="destructive"
+											onClick={() => {
+												if (canManageMembers) {
+													deleteInviteMutation.mutate(invite.id);
+												} else {
+													showMemberManagerToast();
+												}
+											}}
+											disabled={
+												!canManageMembers || deletingInviteId === invite.id
 											}
-										}}
-										disabled={
-											!canManageMembers || deletingInviteId === invite.id
-										}
-									>
-										{deletingInviteId === invite.id
-											? "Deleting..."
-											: "Delete Invite"}
-									</Button>
-								</TableCell>
-							</TableRow>
-						))}
+										>
+											{deletingInviteId === invite.id
+												? "Deleting..."
+												: "Delete Invite"}
+										</Button>
+									</TableCell>
+								</TableRow>
+							))}
 					</TableBody>
 				</Table>
 			</Card>

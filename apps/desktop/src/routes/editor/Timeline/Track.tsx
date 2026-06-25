@@ -1,6 +1,12 @@
 import { mergeRefs } from "@solid-primitives/refs";
 import { cx } from "cva";
-import { type ComponentProps, createMemo, createSignal, Show } from "solid-js";
+import {
+	type ComponentProps,
+	createMemo,
+	createSignal,
+	Show,
+	splitProps,
+} from "solid-js";
 import { useEditorContext } from "../context";
 import {
 	SegmentContextProvider,
@@ -9,6 +15,8 @@ import {
 	useTimelineContext,
 	useTrackContext,
 } from "./context";
+
+export const CAP_TRACK_FILL_CLASS = "cap-track-fill";
 
 export function TrackRoot(props: ComponentProps<"div">) {
 	const [ref, setRef] = createSignal<HTMLDivElement>();
@@ -56,48 +64,68 @@ export function useSegmentWidth(segment: () => { start: number; end: number }) {
 export function SegmentRoot(
 	props: ComponentProps<"div"> & {
 		innerClass: string;
+		segColor?: string;
 		segment: { start: number; end: number };
+		forceVisible?: boolean;
 		onMouseDown?: (
 			e: MouseEvent & { currentTarget: HTMLDivElement; target: Element },
 		) => void;
 	},
 ) {
+	const [local, rest] = splitProps(props, [
+		"innerClass",
+		"segColor",
+		"segment",
+		"forceVisible",
+		"onMouseDown",
+		"class",
+		"style",
+		"ref",
+		"children",
+	]);
 	const { editorState } = useEditorContext();
 	const { isSegmentVisible } = useTimelineContext();
-	const translateX = useSegmentTranslateX(() => props.segment);
-	const width = useSegmentWidth(() => props.segment);
-	// Virtualize off-screen segments: Solid memos are lazy, so gating the
-	// rendered element behind visibility means translateX/width never recompute
-	// for segments outside the timeline viewport during scroll/zoom.
-	const visible = createMemo(() =>
-		isSegmentVisible(props.segment.start, props.segment.end),
+	const translateX = useSegmentTranslateX(() => local.segment);
+	const width = useSegmentWidth(() => local.segment);
+	const visible = createMemo(
+		() =>
+			local.forceVisible ||
+			isSegmentVisible(local.segment.start, local.segment.end),
 	);
 
 	return (
 		<Show when={visible()}>
 			<SegmentContextProvider width={width}>
 				<div
-					{...props}
+					{...rest}
 					class={cx(
 						"absolute overflow-visible border rounded-xl inset-y-0",
 						editorState.timeline.interactMode === "split" &&
 							"timeline-scissors-cursor",
-						props.class,
+						local.class,
 					)}
 					style={{
 						"--segment-x": `${translateX()}px`,
 						transform: "translateX(var(--segment-x))",
 						width: `${width()}px`,
+						...(typeof local.style === "object" ? local.style : {}),
 					}}
-					ref={props.ref}
+					onMouseDown={local.onMouseDown}
+					ref={local.ref}
 				>
 					<div
 						class={cx(
+							CAP_TRACK_FILL_CLASS,
 							"relative h-full flex flex-row rounded-xl overflow-hidden group",
-							props.innerClass,
+							local.innerClass,
 						)}
+						style={
+							local.segColor
+								? ({ "--seg-color": local.segColor } as Record<string, string>)
+								: undefined
+						}
 					>
-						{props.children}
+						{local.children}
 					</div>
 				</div>
 			</SegmentContextProvider>
