@@ -1474,6 +1474,10 @@ async fn generate_export_preview_inner(
         return Err("Cannot preview non-studio recordings".to_string());
     };
 
+    if recording_meta.audio_only {
+        return Err("Audio-only recordings don't have a visual preview".to_string());
+    }
+
     let project_config =
         export_project_config(recording_meta.project_config(), settings.cursor_only);
 

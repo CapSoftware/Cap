@@ -44,6 +44,8 @@ pub enum ExporterBuildError {
     MetaLoad(#[source] Box<dyn std::error::Error>),
     #[error("Recording is not a studio recording")]
     NotStudioRecording,
+    #[error("Audio-only recordings aren't supported in the export pipeline yet")]
+    AudioOnly,
     #[error("Failed to load recordings meta: {0}")]
     RecordingsMeta(String),
     #[error("Failed to setup renderer: {0}")]
@@ -92,6 +94,10 @@ impl ExporterBuilder {
         let studio_meta = recording_meta
             .studio_meta()
             .ok_or(Error::NotStudioRecording)?;
+
+        if recording_meta.audio_only {
+            return Err(Error::AudioOnly);
+        }
 
         let recordings = Arc::new(
             ProjectRecordingsMeta::new(&recording_meta.project_path, studio_meta)
