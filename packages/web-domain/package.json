@@ -9,7 +9,8 @@
 	},
 	"scripts": {
 		"build": "tsdown",
-		"generate-openapi": "node scripts/generate-openapi.ts"
+		"generate-openapi": "node scripts/generate-openapi.ts",
+		"test": "pnpm exec vitest run"
 	},
 	"dependencies": {
 		"@effect/platform": "^0.92.1",
@@ -18,6 +19,7 @@
 		"effect": "^3.18.4"
 	},
 	"devDependencies": {
-		"@effect/platform-node": "^0.98.3"
+		"@effect/platform-node": "^0.98.3",
+		"vitest": "~2.1.9"
 	}
 }

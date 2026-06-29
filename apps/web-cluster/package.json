@@ -4,7 +4,8 @@
 	"scripts": {
 		"dev_": "pnpm dotenv -e ../../.env -- concurrently \"deno run --allow-all --watch ./src/runner/index.ts\" \"deno run --allow-all --watch ./src/shard-manager.ts\"",
 		"build": "pnpm run --filter @cap/web-cluster^... build",
-		"build:docker": "cd ../.. && docker build -f apps/web-cluster/Dockerfile -t ghcr.io/brendonovich/cap-web-cluster:latest ."
+		"build:docker": "cd ../.. && docker build -f apps/web-cluster/Dockerfile -t ghcr.io/brendonovich/cap-web-cluster:latest .",
+		"test": "pnpm exec vitest run"
 	},
 	"dependencies": {
 		"@cap/web-backend": "workspace:*",
@@ -26,6 +27,7 @@
 	},
 	"devDependencies": {
 		"concurrently": "^9.2.1",
-		"dotenv-cli": "^10.0.0"
+		"dotenv-cli": "^10.0.0",
+		"vitest": "~2.1.9"
 	}
 }
