@@ -6,7 +6,7 @@ use specta::Type;
 use std::collections::BTreeMap;
 #[cfg(target_os = "macos")]
 use tauri::Listener;
-use tauri::{AppHandle, Wry};
+use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_store::StoreExt;
 use tracing::{error, instrument};
 use uuid::Uuid;
@@ -91,12 +91,13 @@ impl MainWindowRecordingStartBehaviour {
     }
 }
 
+// NOTE: Do not add "Cap Target Select" here — on Windows, WDA_EXCLUDEFROMCAPTURE applied to that
+// hidden window causes it to reappear as a ghost overlay after recording ends.
 const DEFAULT_EXCLUDED_WINDOW_TITLES: &[&str] = &[
     "Cap",
     "Cap Settings",
     "Cap Recording Controls",
     "Cap Camera",
-    "Cap Target Select",
     "Cap Window Capture Occluder",
     "Cap Capture Area",
     "Cap Mode Selection",
@@ -214,6 +215,8 @@ pub struct GeneralSettingsStore {
     pub enable_telemetry: bool,
     #[serde(default)]
     pub out_of_process_muxer: bool,
+    #[serde(default)]
+    pub recordings_path: Option<String>,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -308,6 +311,7 @@ impl Default for GeneralSettingsStore {
             has_completed_onboarding: false,
             enable_telemetry: true,
             out_of_process_muxer: cap_recording::DEFAULT_OUT_OF_PROCESS_MUXER,
+            recordings_path: None,
         }
     }
 }
@@ -332,6 +336,26 @@ impl From<Appearance> for Option<tauri::Theme> {
 }
 
 impl GeneralSettingsStore {
+    pub fn recordings_dir(app: &AppHandle<Wry>) -> std::path::PathBuf {
+        let custom = Self::get(app)
+            .map_err(|e| tracing::warn!("Failed to read general settings for recordings_dir: {e}"))
+            .ok()
+            .flatten()
+            .and_then(|s| s.recordings_path)
+            .and_then(|p| {
+                let path = std::path::PathBuf::from(&p);
+                if path.is_absolute() { Some(path) } else { None }
+            });
+
+        let path = custom.unwrap_or_else(|| {
+            app.path().app_data_dir().unwrap().join("recordings")
+        });
+        if let Err(e) = std::fs::create_dir_all(&path) {
+            tracing::warn!(?path, %e, "Failed to create recordings directory");
+        }
+        path
+    }
+
     // The effective value: the native preview is macOS-only; it is not
     // reliable on Windows, so the stored setting is ignored there and the
     // websocket preview is always used.
@@ -421,6 +445,17 @@ pub fn init(app: &AppHandle) {
     };
 
     append_missing_default_excluded_windows(&mut store.excluded_windows);
+
+    const REMOVE_TARGET_SELECT_MIGRATION_KEY: &str = "remove_cap_target_select_exclusion_v1";
+    if let Ok(raw_store) = app.store("store")
+        && raw_store.get(REMOVE_TARGET_SELECT_MIGRATION_KEY).is_none()
+    {
+        store.excluded_windows.retain(|w| {
+            w.window_title.as_deref() != Some("Cap Target Select")
+        });
+        raw_store.set(REMOVE_TARGET_SELECT_MIGRATION_KEY, json!(true));
+    }
+
     crate::posthog::set_telemetry_enabled(store.enable_telemetry);
     register_bundled_muxer_binary(app);
 

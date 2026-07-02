@@ -15,6 +15,18 @@ import {
 	uploadScreenshotShareBlob,
 } from "./screenshotExport";
 
+function withWhiteBackground(source: HTMLCanvasElement): HTMLCanvasElement {
+	const canvas = document.createElement("canvas");
+	canvas.width = source.width;
+	canvas.height = source.height;
+	const ctx = canvas.getContext("2d");
+	if (!ctx) return source;
+	ctx.fillStyle = "white";
+	ctx.fillRect(0, 0, canvas.width, canvas.height);
+	ctx.drawImage(source, 0, 0);
+	return canvas;
+}
+
 export function useScreenshotExport() {
 	const editorCtx = useScreenshotEditorContext();
 	const {
@@ -168,16 +180,22 @@ export function useScreenshotExport() {
 				toast.loading("Preparing upload", { id: toastId });
 			}
 
+			const needsAlpha =
+				destination === "share" || destination === "clipboard"
+					? canvasNeedsTransparency(outputCanvas, project)
+					: false;
+			const blobCanvas =
+				destination === "clipboard" && !needsAlpha
+					? withWhiteBackground(outputCanvas)
+					: outputCanvas;
 			const blob =
 				destination === "share"
 					? await canvasToBlob(
-							outputCanvas,
-							canvasNeedsTransparency(outputCanvas, project)
-								? "image/png"
-								: "image/jpeg",
+							blobCanvas,
+							needsAlpha ? "image/png" : "image/jpeg",
 							0.9,
 						)
-					: await canvasToBlob(outputCanvas, "image/png");
+					: await canvasToBlob(blobCanvas, "image/png");
 
 			if (destination === "file") {
 				const buffer = await blob.arrayBuffer();

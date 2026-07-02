@@ -639,6 +639,28 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					</SectionRows>
 				</Section>
 
+				<StorageSection
+					recordingsPath={settings.recordingsPath ?? null}
+					onPick={async () => {
+						try {
+							const path = await commands.pickRecordingsFolder();
+							if (path !== null) {
+								setSettings("recordingsPath", path);
+							}
+						} catch (e) {
+							toast.error(`Failed to choose recordings folder: ${e instanceof Error ? e.message : String(e)}`);
+						}
+					}}
+					onReset={async () => {
+						try {
+							await commands.resetRecordingsFolder();
+							setSettings("recordingsPath", null);
+						} catch (e) {
+							toast.error(`Failed to reset recordings folder: ${e instanceof Error ? e.message : String(e)}`);
+						}
+					}}
+				/>
+
 				<DefaultProjectNameCard
 					onChange={(value) =>
 						handleChange("defaultProjectNameTemplate", value)
@@ -684,6 +706,43 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				/>
 			</SettingsPageContent>
 		</div>
+	);
+}
+
+function StorageSection(props: {
+	recordingsPath: string | null;
+	onPick: () => Promise<void>;
+	onReset: () => Promise<void>;
+}) {
+	const defaultLabel = "Default (Application Support)";
+	const displayPath = () => props.recordingsPath ?? defaultLabel;
+	const isCustom = () => props.recordingsPath !== null;
+
+	return (
+		<Section
+			title="Storage"
+			description="Where Cap saves your recordings."
+		>
+			<SectionCard padded>
+				<div class="flex flex-col gap-3">
+					<div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-3 border border-gray-4 min-w-0">
+						<span class="flex-1 text-xs text-gray-12 truncate font-mono">
+							{displayPath()}
+						</span>
+					</div>
+					<div class="flex justify-end gap-2">
+						<Show when={isCustom()}>
+							<Button size="sm" variant="gray" onClick={props.onReset}>
+								Reset to Default
+							</Button>
+						</Show>
+						<Button size="sm" variant="dark" onClick={props.onPick}>
+							Choose Folder
+						</Button>
+					</div>
+				</div>
+			</SectionCard>
+		</Section>
 	);
 }
 

@@ -4,10 +4,10 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tracing::info;
 
-use crate::create_screenshot;
+use crate::{create_screenshot, general_settings::GeneralSettingsStore};
 
 const RECOVERY_CUTOFF_DATE: (i32, u32, u32) = (2025, 12, 31);
 
@@ -44,11 +44,7 @@ pub struct IncompleteRecordingInfo {
 pub async fn find_incomplete_recordings(
     app: AppHandle,
 ) -> Result<Vec<IncompleteRecordingInfo>, String> {
-    let recordings_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("recordings");
+    let recordings_dir = GeneralSettingsStore::recordings_dir(&app);
 
     if !recordings_dir.exists() {
         return Ok(Vec::new());

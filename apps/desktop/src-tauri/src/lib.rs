@@ -4107,6 +4107,44 @@ async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Resul
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
+async fn pick_recordings_folder(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    app.dialog()
+        .file()
+        .set_title("Choose Recordings Folder")
+        .pick_folder(move |path| {
+            let _ = tx.send(
+                path.as_ref()
+                    .and_then(|p| p.as_path())
+                    .and_then(|p| p.to_str())
+                    .map(|s| s.to_string()),
+            );
+        });
+
+    let result = rx.await.map_err(|e| e.to_string())?;
+    if let Some(ref path) = result {
+        general_settings::GeneralSettingsStore::update(&app, |s| {
+            s.recordings_path = Some(path.clone());
+        })?;
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app))]
+async fn reset_recordings_folder(app: AppHandle) -> Result<(), String> {
+    general_settings::GeneralSettingsStore::update(&app, |s| {
+        s.recordings_path = None;
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app))]
 async fn set_camera_preview_state(
     app: MutableState<'_, App>,
     state: CameraPreviewState,
@@ -4437,6 +4475,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             delete_recording_directory,
             set_pretty_name,
             set_server_url,
+            pick_recordings_folder,
+            reset_recordings_folder,
             set_camera_preview_state,
             set_camera_window_position,
             ignore_camera_window_position,
@@ -5995,9 +6035,7 @@ pub(crate) async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Re
 }
 
 fn recordings_path(app: &AppHandle) -> PathBuf {
-    let path = app.path().app_data_dir().unwrap().join("recordings");
-    std::fs::create_dir_all(&path).unwrap_or_default();
-    path
+    general_settings::GeneralSettingsStore::recordings_dir(app)
 }
 
 // fn recording_path(app: &AppHandle, recording_id: &str) -> PathBuf {
