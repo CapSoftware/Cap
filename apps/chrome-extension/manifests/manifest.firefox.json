@@ -1,0 +1,59 @@
+{
+	"manifest_version": 3,
+	"name": "Cap - Screen Recorder & Screen Capture",
+	"short_name": "Cap",
+	"description": "Free, open source screen recorder. Capture your screen, camera & mic in Firefox and share a video link the moment you stop.",
+	"version": "1.0.3",
+	"homepage_url": "https://cap.so",
+	"browser_specific_settings": {
+		"gecko": {
+			"id": "extension@cap.so",
+			"strict_min_version": "128.0",
+			"data_collection_permissions": {
+				"required": ["authenticationInfo", "websiteContent"]
+			}
+		}
+	},
+	"icons": {
+		"16": "icons/icon-16.png",
+		"32": "icons/icon-32.png",
+		"48": "icons/icon-48.png",
+		"128": "icons/icon-128.png"
+	},
+	"action": {
+		"default_title": "Record your screen with Cap",
+		"default_icon": {
+			"16": "icons/icon-16.png",
+			"32": "icons/icon-32.png",
+			"48": "icons/icon-48.png",
+			"128": "icons/icon-128.png"
+		}
+	},
+	"background": {
+		"scripts": ["assets/service-worker.js"],
+		"type": "module"
+	},
+	"options_ui": {
+		"page": "options.html",
+		"open_in_tab": true
+	},
+	"permissions": ["activeTab", "identity", "scripting", "storage"],
+	"host_permissions": ["http://*/*", "https://*/*", "file:///*"],
+	"content_scripts": [
+		{
+			"matches": ["http://*/*", "https://*/*", "file:///*"],
+			"js": ["assets/content-bootstrap.js"],
+			"run_at": "document_idle"
+		}
+	],
+	"web_accessible_resources": [
+		{
+			"resources": ["icons/*", "content/overlay.js", "welcome.html"],
+			"matches": ["http://*/*", "https://*/*", "file:///*"]
+		},
+		{
+			"resources": ["camera-preview.html", "popup.html"],
+			"matches": ["http://*/*", "https://*/*", "file:///*"]
+		}
+	]
+}
