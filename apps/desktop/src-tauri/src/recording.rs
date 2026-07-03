@@ -72,7 +72,7 @@ use crate::{
     upload::{InstantMultipartUpload, SegmentUploader, compress_image},
     web_api::ManagerExt,
     windows::{
-        CapWindowId, EditorRecordingTarget, CapWindow, editor_window_for_path, hide_overlay,
+        CapWindow, CapWindowId, EditorRecordingTarget, editor_window_for_path, hide_overlay,
     },
 };
 
