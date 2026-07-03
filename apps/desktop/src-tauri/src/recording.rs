@@ -72,7 +72,7 @@ use crate::{
     upload::{InstantMultipartUpload, SegmentUploader, compress_image},
     web_api::ManagerExt,
     windows::{
-        CapWindow, CapWindowId, EditorRecordingTarget, editor_window_for_path, hide_overlay,
+        CapWindowId, EditorRecordingTarget, CapWindow, editor_window_for_path, hide_overlay,
     },
 };
 
@@ -1703,15 +1703,7 @@ pub async fn start_recording(
     }
 
     let countdown = general_settings.and_then(|v| v.recording_countdown);
-    for (id, win) in app
-        .webview_windows()
-        .iter()
-        .filter_map(|(label, win)| CapWindowId::from_str(label).ok().map(|id| (id, win)))
-    {
-        if matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
-            hide_overlay(win);
-        }
-    }
+    crate::target_select_overlay::close_target_select_overlay_windows(&app);
     let _ = CapWindow::InProgressRecording {
         countdown,
         capture_target: Some(inputs.capture_target.clone()),
@@ -3426,34 +3418,27 @@ async fn handle_recording_finish(
             .map_err(|e| format!("Failed to save recording meta: {e}"))?;
     }
 
-    if let RecordingMetaInner::Studio(_) = meta_inner {
-        match GeneralSettingsStore::get(app)
-            .ok()
-            .flatten()
-            .map(|v| v.post_studio_recording_behaviour)
-            .unwrap_or(PostStudioRecordingBehaviour::OpenEditor)
-        {
-            PostStudioRecordingBehaviour::OpenEditor => {
-                let _ = CapWindow::Editor {
-                    project_path: recording_dir,
-                }
-                .show(app)
-                .await;
-            }
-            PostStudioRecordingBehaviour::ShowOverlay => {
-                let _ = CapWindow::RecordingsOverlay.show(app).await;
-
-                let app = AppHandle::clone(app);
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(1000)).await;
-
-                    let _ = NewStudioRecordingAdded {
-                        path: recording_dir.clone(),
-                    }
-                    .emit(&app);
-                });
-            }
+    if let RecordingMetaInner::Instant(_) = &meta_inner {
+        let (link, id) = match instant_share {
+            Some((link, id)) => (Some(link), Some(id)),
+            None => (None, None),
         };
+        crate::automation::run_instant_recording_automations(
+            app.clone(),
+            recording_dir.clone(),
+            link,
+            id,
+        );
+    }
+
+    if let RecordingMetaInner::Studio(_) = meta_inner {
+        let duration = compute_studio_duration_secs(&recording_dir);
+        crate::automation::run_studio_recording_automations(
+            app.clone(),
+            recording_dir.clone(),
+            duration,
+        );
+        apply_post_studio_editor_behaviour(app, recording_dir, duration).await;
     }
 
     // Play sound to indicate recording has stopped
