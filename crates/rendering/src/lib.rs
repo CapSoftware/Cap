@@ -516,6 +516,11 @@ pub enum RenderingError {
     ImageLoadError(String),
     #[error("Error polling wgpu: {0}")]
     PollError(#[from] wgpu::PollError),
+    #[error("Failed to upload display frame {frame_number} at recording time {recording_time}")]
+    DisplayFrameUploadFailed {
+        frame_number: u32,
+        recording_time: f32,
+    },
     #[error(
         "Failed to decode video frames. The recording may be corrupted or incomplete. Try re-recording or contact support if the issue persists."
     )]
@@ -4388,7 +4393,7 @@ impl RendererLayers {
 
         let start = Instant::now();
         if render_display {
-            self.display.prepare_with_encoder(
+            let display_ready = self.display.prepare_with_encoder(
                 &constants.device,
                 &constants.queue,
                 segment_frames,
@@ -4396,6 +4401,12 @@ impl RendererLayers {
                 uniforms.display,
                 encoder,
             );
+            if !display_ready {
+                return Err(RenderingError::DisplayFrameUploadFailed {
+                    frame_number: uniforms.frame_number,
+                    recording_time: segment_frames.recording_time,
+                });
+            }
         }
         timings.display_prepare_duration = start.elapsed();
 
@@ -4549,7 +4560,9 @@ impl RendererLayers {
             session.swap_textures();
         }
 
-        let should_render_screen = render_display && uniforms.scene.should_render_screen();
+        let should_render_screen = render_display
+            && uniforms.scene.should_render_screen()
+            && self.display.has_valid_frame();
         let should_render_cursor = if render_display {
             uniforms.scene.should_render_screen()
         } else {
