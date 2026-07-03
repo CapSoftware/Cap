@@ -58,6 +58,9 @@ impl Summary {
             PlaybackTelemetryEvent::RendererSendFailed { .. } => {
                 self.send_failures += 1;
             }
+            PlaybackTelemetryEvent::AudioSegmentsResolved { .. }
+            | PlaybackTelemetryEvent::AudioPipelineReady { .. }
+            | PlaybackTelemetryEvent::ClockStarted { .. } => {}
         }
     }
 
@@ -307,6 +310,7 @@ async fn main() {
     };
 
     let (_project_tx, project_rx) = watch::channel(project);
+    let audio_output = Arc::new(cap_editor::AudioOutput::new());
     let playback = Playback {
         renderer: renderer.clone(),
         render_constants,
@@ -314,6 +318,7 @@ async fn main() {
         project: project_rx,
         segment_medias,
         music: cap_editor::MusicTracks::new(),
+        audio_output,
         telemetry: Some(telemetry),
     };
 

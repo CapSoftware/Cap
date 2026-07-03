@@ -496,7 +496,7 @@ function TextSegmentOverlay(props: {
 					class="absolute inset-0 rounded-md border-2 transition-colors"
 					classList={{
 						"border-blue-9 bg-blue-9/10 cursor-move": props.isSelected,
-						"border-transparent hover:border-blue-6 hover:bg-blue-9/5 cursor-pointer":
+						"border-transparent hover:border-blue-6 hover:bg-blue-9/5":
 							!props.isSelected,
 					}}
 				/>

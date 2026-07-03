@@ -74,12 +74,32 @@ pub fn load_music_tracks_uncached(
     load_music_tracks(project, project_path, &mut cache)
 }
 
-pub fn get_audio_segments(segments: &[SegmentMedia]) -> Vec<AudioSegment> {
-    segments
-        .iter()
-        .map(|s| AudioSegment {
+/// Waits for a segment track's background decode, degrading a failed track to
+/// "no audio" (with a warning) so playback never hard-fails on a corrupt file.
+/// Export validates loaders strictly before reaching this point.
+async fn loaded_track(
+    loader: &crate::AudioLoader,
+    label: &str,
+) -> Option<Arc<cap_audio::AudioData>> {
+    match loader.get().await {
+        Ok(audio) => audio,
+        Err(error) => {
+            warn!(%error, "Failed to load {label} track; continuing without it");
+            None
+        }
+    }
+}
+
+pub async fn get_audio_segments(segments: &[SegmentMedia]) -> Vec<AudioSegment> {
+    let mut out = Vec::with_capacity(segments.len());
+
+    for s in segments {
+        let audio = loaded_track(&s.audio, "mic audio").await;
+        let system_audio = loaded_track(&s.system_audio, "system audio").await;
+
+        out.push(AudioSegment {
             tracks: [
-                s.audio.clone().map(|a| {
+                audio.map(|a| {
                     AudioSegmentTrack::new(
                         a,
                         |c| c.mic_volume_db,
@@ -92,7 +112,7 @@ pub fn get_audio_segments(segments: &[SegmentMedia]) -> Vec<AudioSegment> {
                     )
                     .with_timing_offset_secs(s.audio_timing_repair.mic_offset_secs)
                 }),
-                s.system_audio.clone().map(|a| -> AudioSegmentTrack {
+                system_audio.map(|a| -> AudioSegmentTrack {
                     AudioSegmentTrack::new(
                         a,
                         |c| c.system_volume_db,
@@ -105,6 +125,8 @@ pub fn get_audio_segments(segments: &[SegmentMedia]) -> Vec<AudioSegment> {
             .into_iter()
             .flatten()
             .collect::<Vec<_>>(),
-        })
-        .collect::<Vec<_>>()
+        });
+    }
+
+    out
 }

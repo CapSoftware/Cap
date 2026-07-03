@@ -118,6 +118,7 @@ function Inner() {
 
 	onMount(() => {
 		initAnonymousUser();
+		prewarmFontCaches();
 	});
 
 	return (
@@ -228,4 +229,27 @@ function Inner() {
 			</CapErrorBoundary>
 		</>
 	);
+}
+
+// WebKit resolves the emoji fallback chain lazily on first glyph paint, which
+// can jank the first list/text render containing emoji (e.g. recording
+// titles). Drawing once to an offscreen canvas at idle warms the per-process
+// font caches instead.
+function prewarmFontCaches() {
+	const warm = () => {
+		try {
+			const canvas = document.createElement("canvas");
+			canvas.width = 32;
+			canvas.height = 32;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) return;
+			ctx.font = "16px 'Geist Sans'";
+			ctx.fillText("Ag", 0, 24);
+			ctx.font = "16px system-ui";
+			ctx.fillText("😀", 0, 24);
+		} catch { }
+	};
+
+	if ("requestIdleCallback" in window) requestIdleCallback(warm);
+	else setTimeout(warm, 250);
 }

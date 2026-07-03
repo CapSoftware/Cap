@@ -198,27 +198,23 @@ impl H264PacketEncoder {
     }
 
     fn update_pts(&mut self, frame: &mut frame::Video, timestamp: Duration) {
+        // Use encoder_time_base (the value sent to the muxer subprocess via InitVideo),
+        // NOT self.encoder.time_base() which may be overridden by the codec after open.
+        // Mismatching these causes the muxer to rescale PTS using the wrong time base,
+        // producing wrong playback speed (observed as 4-8x too fast with h264_videotoolbox).
+        let tb = self.encoder_time_base;
         if timestamp != Duration::MAX {
-            let tb = self.encoder.time_base();
             let rate = tb.denominator() as f64 / tb.numerator() as f64;
             let pts = (timestamp.as_secs_f64() * rate).round() as i64;
             let first_pts = *self.first_pts.get_or_insert(pts);
-            let pts = normalize_input_pts(
-                pts - first_pts,
-                self.last_frame_pts,
-                tb,
-                self.encoder.frame_rate(),
-            );
+            let pts =
+                normalize_input_pts(pts - first_pts, self.last_frame_pts, tb, self.frame_rate);
             self.last_frame_pts = Some(pts);
             frame.set_pts(Some(pts));
         } else if let Some(pts) = frame.pts() {
             let first_pts = *self.first_pts.get_or_insert(pts);
-            let pts = normalize_input_pts(
-                pts - first_pts,
-                self.last_frame_pts,
-                self.encoder.time_base(),
-                self.encoder.frame_rate(),
-            );
+            let pts =
+                normalize_input_pts(pts - first_pts, self.last_frame_pts, tb, self.frame_rate);
             self.last_frame_pts = Some(pts);
             frame.set_pts(Some(pts));
         } else {

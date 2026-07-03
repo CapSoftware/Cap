@@ -1061,21 +1061,14 @@ impl SegmentUploader {
         app: &AppHandle,
         video_id: &str,
         manifest: &SegmentUploadManifest,
+        url_cache: &PresignedUrlCache,
     ) -> Result<(), AuthedApiError> {
         let json = serde_json::to_string_pretty(manifest)
             .map_err(|e| format!("segment_upload/manifest/serialize: {e}"))?;
 
-        let presigned_url = api::upload_signed(
-            app,
-            api::PresignedS3PutRequest {
-                video_id: video_id.to_string(),
-                subpath: "segments/manifest.json".to_string(),
-                method: api::PresignedS3PutRequestMethod::Put,
-                meta: None,
-            },
-        )
-        .await?
-        .url;
+        let presigned_url = url_cache
+            .get_or_fetch(app, video_id, "segments/manifest.json")
+            .await?;
 
         let client = app
             .state::<RetryableHttpClient>()
@@ -1159,6 +1152,7 @@ impl SegmentUploader {
             let dirty = manifest_dirty.clone();
             let shutdown = manifest_shutdown.clone();
             let notify = manifest_notify.clone();
+            let url_cache = url_cache.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(1));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1172,7 +1166,9 @@ impl SegmentUploader {
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
                             .to_manifest();
-                        if let Err(e) = Self::upload_manifest(&app, &video_id, &manifest).await {
+                        if let Err(e) =
+                            Self::upload_manifest(&app, &video_id, &manifest, &url_cache).await
+                        {
                             warn!("Periodic manifest upload failed: {e}");
                         }
                     }
@@ -1182,7 +1178,9 @@ impl SegmentUploader {
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner())
                                 .to_manifest();
-                            Self::upload_manifest(&app, &video_id, &manifest).await.ok();
+                            Self::upload_manifest(&app, &video_id, &manifest, &url_cache)
+                                .await
+                                .ok();
                         }
                         break;
                     }
@@ -1553,7 +1551,37 @@ impl SegmentUploader {
 
             return Err(error.into());
         }
-        Self::upload_manifest(&app, &video_id, &final_manifest).await?;
+        {
+            let mut manifest_err: Option<AuthedApiError> = None;
+            for attempt in 0..3u32 {
+                match Self::upload_manifest(&app, &video_id, &final_manifest, &url_cache).await {
+                    Ok(()) => {
+                        manifest_err = None;
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            attempt = attempt + 1,
+                            "Failed to upload final manifest: {e}"
+                        );
+                        manifest_err = Some(e);
+                        if attempt < 2 {
+                            tokio::time::sleep(Duration::from_millis(1000 * (1 << attempt) as u64))
+                                .await;
+                        }
+                    }
+                }
+            }
+            if let Some(e) = manifest_err {
+                error!("All attempts to upload final manifest failed for {video_id}");
+
+                // Leave the UploadMeta::SegmentUpload written at upload start in
+                // place so resume_uploads retries this recording on next launch.
+                emit_upload_complete(&app, &video_id);
+
+                return Err(format!("segment_upload/final_manifest: {e}").into());
+            }
+        }
 
         {
             let mut signal_ok = false;

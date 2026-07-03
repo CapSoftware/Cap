@@ -345,6 +345,10 @@ export function createCustomDomainQuery() {
 				return { custom_domain: null, domain_verified: null };
 			}
 		},
+		// This is read during the editor's initial render, under its top-level
+		// Suspense boundary. Without placeholder data, a slow/offline network
+		// keeps the query pending and the whole editor stuck on the skeleton.
+		placeholderData: { custom_domain: null, domain_verified: null },
 		refetchOnMount: true,
 		refetchOnWindowFocus: true,
 	}));

@@ -66,6 +66,12 @@ import {
 import { getDeepgramTranscriptionOptions } from "@/workflows/transcribe";
 
 describe("AI generation language support", () => {
+	it("exposes Romanian for AI generation", () => {
+		expect(AI_GENERATION_LANGUAGES.ro).toBe("Romanian");
+		expect(isAiGenerationLanguage("ro")).toBe(true);
+		expect(parseAiGenerationLanguage("ro")).toBe("ro");
+	});
+
 	it("does not expose unsupported transcription languages", () => {
 		expect(AI_GENERATION_LANGUAGES).not.toHaveProperty("pa");
 		expect(isAiGenerationLanguage("pa")).toBe(false);
@@ -75,11 +81,15 @@ describe("AI generation language support", () => {
 	it("constrains Deepgram auto-detection to detectable languages", () => {
 		expect(getDeepgramTranscriptionOptions("auto")).toMatchObject({
 			model: "nova-3",
-			detect_language: expect.arrayContaining(["en", "es", "zh"]),
+			detect_language: expect.arrayContaining(["en", "es", "ro", "zh"]),
 		});
 	});
 
 	it("passes explicit languages to Deepgram", () => {
+		expect(getDeepgramTranscriptionOptions("ro")).toMatchObject({
+			model: "nova-3",
+			language: "ro",
+		});
 		expect(getDeepgramTranscriptionOptions("zh")).toMatchObject({
 			model: "nova-3",
 			language: "zh",

@@ -325,6 +325,11 @@ pub fn close_target_select_overlay_windows(app: &AppHandle) {
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&id) {
             saw_overlay = true;
+            // On Windows, hide() leaves the DirectComposition transparency surface composited on
+            // screen (ghost overlay). Closing the window fully releases the surface.
+            #[cfg(windows)]
+            let _ = window.close();
+            #[cfg(not(windows))]
             hide_overlay(&window);
             if let Some(state) = state.as_ref() {
                 state.destroy(&display_id, app.global_shortcut());

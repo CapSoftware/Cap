@@ -358,14 +358,9 @@ impl RecordingSegmentDecoders {
             Ok(Some(camera))
         };
 
-        #[cfg(target_os = "windows")]
+        // Decoders spawn their own threads and just signal readiness, so screen
+        // and camera can always initialize concurrently.
         let (screen, camera) = tokio::try_join!(screen_future, camera_future)?;
-
-        #[cfg(not(target_os = "windows"))]
-        let screen = screen_future.await?;
-
-        #[cfg(not(target_os = "windows"))]
-        let camera = camera_future.await?;
 
         Ok(Self {
             screen,

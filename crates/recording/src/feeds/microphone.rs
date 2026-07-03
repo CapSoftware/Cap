@@ -806,7 +806,12 @@ fn get_usable_device(
 ) -> Option<(String, Device, SupportedStreamConfig)> {
     let device_name_for_logging = device.name().ok();
 
-    let preferred_rate = cpal::SampleRate(48_000);
+    let native_rate = device
+        .default_input_config()
+        .ok()
+        .map(|c| c.sample_rate().0)
+        .unwrap_or(48_000);
+    let preferred_rate = cpal::SampleRate(native_rate);
 
     let result = device
         .supported_input_configs()

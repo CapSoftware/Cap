@@ -201,10 +201,12 @@ pub(crate) async fn apply_video_start_gate(
                 // the actual capture time after the trim, not the pre-trim buffer start.
                 // Without this, the editor's mic_offset = display_start - mic_start equals
                 // trim_duration and causes it to skip that same duration a second time.
-                let trim_duration = Duration::from_nanos(
-                    trim_samples as u64 * 1_000_000_000 / sample_rate as u64,
-                );
-                VideoStartGateAction::UseFrame(AudioFrame::new(trimmed, frame.timestamp + trim_duration))
+                let trim_duration =
+                    Duration::from_nanos(trim_samples as u64 * 1_000_000_000 / sample_rate as u64);
+                VideoStartGateAction::UseFrame(AudioFrame::new(
+                    trimmed,
+                    frame.timestamp + trim_duration,
+                ))
             }
             None => {
                 warn!(
@@ -4724,8 +4726,7 @@ mod tests {
                         new_frame
                             .timestamp
                             .signed_duration_since_secs(master_clock.timestamps()),
-                        expected_ts
-                            .signed_duration_since_secs(master_clock.timestamps()),
+                        expected_ts.signed_duration_since_secs(master_clock.timestamps()),
                         "gate UseFrame timestamp must be advanced past the trimmed samples"
                     );
                 }

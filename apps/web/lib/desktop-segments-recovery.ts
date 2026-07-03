@@ -2,7 +2,17 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import { type User, Video } from "@cap/web-domain";
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	eq,
+	inArray,
+	isNull,
+	lte,
+	notLike,
+	or,
+	sql,
+} from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 import {
 	type DesktopSegmentsFinalizationStatus,
@@ -23,6 +33,13 @@ export const DESKTOP_SEGMENTS_RECOVERY_STABILITY_MS = 15 * MINUTE;
 export const DESKTOP_SEGMENTS_RECOVERY_BATCH_SIZE = 20;
 
 const RECOVERABLE_UPLOAD_PHASES = ["uploading", "error"] as const;
+
+// After this many consecutive scans where a candidate is unrecoverable
+// (missing manifest, no segments, ...), it is retired from the scan queue so
+// dead rows can't permanently clog the head of the updatedAt-ordered scan.
+export const DESKTOP_SEGMENTS_RECOVERY_MAX_DEAD_ATTEMPTS = 3;
+const DEAD_MARKER_SIGNATURE = "dead";
+const RECOVERY_ABANDONED_PREFIX = "recovery-abandoned:";
 
 type DesktopSegmentsRecoveryResult =
 	| {
@@ -229,6 +246,71 @@ async function markCandidateObserved({
 		);
 }
 
+async function retireCandidate({
+	videoId,
+	status,
+	now,
+}: {
+	videoId: Video.VideoId;
+	status: StaleDesktopSegmentsRecoveryStatus;
+	now: Date;
+}) {
+	await db()
+		.update(videoUploads)
+		.set({
+			updatedAt: now,
+			// Terminal phase so viewers stop seeing an eternal "uploading" state;
+			// the desktop can still revive it by re-uploading and re-queueing.
+			phase: "error",
+			processingError: `${RECOVERY_ABANDONED_PREFIX} ${status} — the upload was interrupted and could not be recovered automatically. Reopen Cap on the recording device to retry, or record again.`,
+		})
+		.where(
+			and(
+				eq(videoUploads.videoId, videoId),
+				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
+			),
+		);
+}
+
+async function recordDeadCandidateObservation({
+	videoId,
+	status,
+	marker,
+	now,
+}: {
+	videoId: Video.VideoId;
+	status: StaleDesktopSegmentsRecoveryStatus;
+	marker: ReturnType<typeof parseDesktopSegmentsRecoveryMarker>;
+	now: Date;
+}) {
+	const attempts =
+		(marker?.signature === DEAD_MARKER_SIGNATURE ? marker.attempts : 0) + 1;
+
+	if (attempts >= DESKTOP_SEGMENTS_RECOVERY_MAX_DEAD_ATTEMPTS) {
+		await retireCandidate({ videoId, status, now });
+		return;
+	}
+
+	// Bump updatedAt so the candidate rotates to the back of the
+	// updatedAt-ordered scan instead of blocking the queue head.
+	await db()
+		.update(videoUploads)
+		.set({
+			updatedAt: now,
+			processingMessage: buildDesktopSegmentsRecoveryMarker(
+				DEAD_MARKER_SIGNATURE,
+				now.getTime(),
+				attempts,
+			),
+		})
+		.where(
+			and(
+				eq(videoUploads.videoId, videoId),
+				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
+			),
+		);
+}
+
 async function recoverStaleDesktopSegmentsCandidate({
 	videoId,
 	processingMessage,
@@ -238,14 +320,36 @@ async function recoverStaleDesktopSegmentsCandidate({
 	processingMessage: string | null;
 	now: Date;
 }): Promise<StaleDesktopSegmentsRecoveryStatus> {
+	const marker = parseDesktopSegmentsRecoveryMarker(processingMessage);
 	const loaded = await loadDesktopSegmentsManifest({ videoId });
 
-	if (loaded.status !== "loaded") return loaded.status;
+	if (loaded.status === "already-finalized") {
+		// The upload row outlived finalization; retire it immediately so it
+		// stops occupying the scan queue.
+		await retireCandidate({ videoId, status: loaded.status, now });
+		return loaded.status;
+	}
+
+	if (loaded.status !== "loaded") {
+		await recordDeadCandidateObservation({
+			videoId,
+			status: loaded.status,
+			marker,
+			now,
+		});
+		return loaded.status;
+	}
 
 	if (
 		!loaded.manifest.video_init_uploaded ||
 		loaded.manifest.video_segments.length === 0
 	) {
+		await recordDeadCandidateObservation({
+			videoId,
+			status: "no-video-segments",
+			marker,
+			now,
+		});
 		return "no-video-segments";
 	}
 
@@ -261,7 +365,6 @@ async function recoverStaleDesktopSegmentsCandidate({
 	}
 
 	const signature = getDesktopSegmentsManifestSignature(loaded.manifest);
-	const marker = parseDesktopSegmentsRecoveryMarker(processingMessage);
 
 	if (marker?.signature !== signature) {
 		await markCandidateObserved({ videoId, signature, now });
@@ -306,6 +409,13 @@ export async function recoverStaleDesktopSegments({
 				lte(videos.createdAt, staleBefore),
 				lte(videoUploads.updatedAt, staleBefore),
 				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
+				or(
+					isNull(videoUploads.processingError),
+					notLike(
+						videoUploads.processingError,
+						`${RECOVERY_ABANDONED_PREFIX}%`,
+					),
+				),
 			),
 		)
 		.orderBy(asc(videoUploads.updatedAt))
@@ -331,6 +441,23 @@ export async function recoverStaleDesktopSegments({
 				`[desktop-segments-recovery] Failed to recover ${candidate.videoId}:`,
 				error,
 			);
+			// A candidate that keeps throwing must still rotate/retire, or it
+			// blocks the queue head forever.
+			try {
+				await recordDeadCandidateObservation({
+					videoId: Video.VideoId.make(candidate.videoId),
+					status: "failed",
+					marker: parseDesktopSegmentsRecoveryMarker(
+						candidate.processingMessage,
+					),
+					now,
+				});
+			} catch (markError) {
+				console.error(
+					`[desktop-segments-recovery] Failed to mark ${candidate.videoId}:`,
+					markError,
+				);
+			}
 		}
 
 		summary.statuses[status] = (summary.statuses[status] ?? 0) + 1;

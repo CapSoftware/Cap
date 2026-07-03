@@ -2378,18 +2378,25 @@ async fn handle_spawn_failure(
     }
     .emit(app);
 
-    let mut dialog = MessageDialogBuilder::new(
-        app.dialog().clone(),
-        "An error occurred".to_string(),
-        message.clone(),
-    )
-    .kind(tauri_plugin_dialog::MessageDialogKind::Error);
+    // DeviceNotFound errors are surfaced to the user via the frontend toast; skip the
+    // blocking native dialog so the overlay stays responsive and the error isn't repeated.
+    let is_device_not_found =
+        message.contains("no longer available") || message.contains("DeviceNotFound");
 
-    if let Some(window) = CapWindowId::RecordingControls.get(app) {
-        dialog = dialog.parent(&window);
+    if !is_device_not_found {
+        let mut dialog = MessageDialogBuilder::new(
+            app.dialog().clone(),
+            "An error occurred".to_string(),
+            message.clone(),
+        )
+        .kind(tauri_plugin_dialog::MessageDialogKind::Error);
+
+        if let Some(window) = CapWindowId::RecordingControls.get(app) {
+            dialog = dialog.parent(&window);
+        }
+
+        dialog.blocking_show();
     }
-
-    dialog.blocking_show();
 
     let mut state = state_mtx.write().await;
     let _ = handle_recording_end(
@@ -3019,11 +3026,15 @@ async fn handle_recording_end(
         let _ = window.hide();
     }
 
-    // Destroy any target-select overlays that were hidden when recording started
-    // so they don't reappear when the main window comes back.
+    // Destroy any target-select overlays so they don't reappear when the main window comes back.
+    // On Windows, hide() leaves the DirectComposition transparency surface composited on screen
+    // (ghost overlay); closing the window releases the surface entirely.
     let focus_manager = handle.try_state::<crate::target_select_overlay::WindowFocusManager>();
     for (label, window) in handle.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&label) {
+            #[cfg(windows)]
+            let _ = window.close();
+            #[cfg(not(windows))]
             hide_overlay(&window);
             if let Some(ref fm) = focus_manager {
                 fm.destroy(&display_id, handle.global_shortcut());

@@ -96,7 +96,7 @@ export function Slider(
 			}}
 		>
 			<KSlider.Track
-				class="h-[0.3rem] cursor-pointer transition-[height] relative mx-1 bg-gray-4 rounded-full w-full before:content-[''] before:absolute before:inset-0 before:-top-3 before:-bottom-3"
+				class="h-[0.3rem] transition-[height] relative mx-1 bg-gray-4 rounded-full w-full before:content-[''] before:absolute before:inset-0 before:-top-3 before:-bottom-3"
 				onPointerDown={() => {
 					setDragging(true);
 					createRoot((dispose) => {
@@ -137,7 +137,7 @@ export function Slider(
 							setDragging(false);
 						}}
 						class={cx(
-							"bg-gray-1 dark:bg-gray-12 border border-gray-6 shadow-md rounded-full outline-hidden size-4 -top-[6.3px] data-disabled:bg-gray-9 after:content-[''] after:absolute after:inset-0 after:-m-3 after:cursor-pointer",
+							"bg-gray-1 dark:bg-gray-12 border border-gray-6 shadow-md rounded-full outline-hidden size-4 -top-[6.3px] data-disabled:bg-gray-9 after:content-[''] after:absolute after:inset-0 after:-m-3",
 						)}
 					/>
 				</Tooltip>

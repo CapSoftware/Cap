@@ -912,7 +912,6 @@ function Handle(props: {
 			fill={props.isText ? "#3b82f6" : "white"}
 			stroke={props.isText ? "white" : "#3b82f6"}
 			stroke-width={props.isText ? 1.5 : 1}
-			class="cursor-pointer"
 			style={{
 				"pointer-events": "all",
 				cursor: props.cursor,

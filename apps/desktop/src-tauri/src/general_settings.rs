@@ -85,7 +85,14 @@ pub fn default_studio_recording_quality() -> StudioRecordingQuality {
 impl MainWindowRecordingStartBehaviour {
     pub fn perform(&self, window: &tauri::WebviewWindow) -> tauri::Result<()> {
         match self {
-            Self::Close => window.hide(),
+            Self::Close => {
+                // On Windows, hide() leaves the DirectComposition surface composited on screen as
+                // a white ghost box. minimize() releases the surface without leaving an artifact.
+                #[cfg(windows)]
+                return window.minimize();
+                #[cfg(not(windows))]
+                window.hide()
+            }
             Self::Minimise => window.minimize(),
         }
     }
@@ -347,9 +354,7 @@ impl GeneralSettingsStore {
                 if path.is_absolute() { Some(path) } else { None }
             });
 
-        let path = custom.unwrap_or_else(|| {
-            app.path().app_data_dir().unwrap().join("recordings")
-        });
+        let path = custom.unwrap_or_else(|| app.path().app_data_dir().unwrap().join("recordings"));
         if let Err(e) = std::fs::create_dir_all(&path) {
             tracing::warn!(?path, %e, "Failed to create recordings directory");
         }
@@ -450,9 +455,9 @@ pub fn init(app: &AppHandle) {
     if let Ok(raw_store) = app.store("store")
         && raw_store.get(REMOVE_TARGET_SELECT_MIGRATION_KEY).is_none()
     {
-        store.excluded_windows.retain(|w| {
-            w.window_title.as_deref() != Some("Cap Target Select")
-        });
+        store
+            .excluded_windows
+            .retain(|w| w.window_title.as_deref() != Some("Cap Target Select"));
         raw_store.set(REMOVE_TARGET_SELECT_MIGRATION_KEY, json!(true));
     }
 

@@ -364,6 +364,7 @@ const DEEPGRAM_DETECTABLE_LANGUAGES = [
 	"it",
 	"nl",
 	"pl",
+	"ro",
 	"sk",
 	"ru",
 	"tr",

@@ -103,6 +103,7 @@ pub struct EditorInstance {
     pub export_preview_active: AtomicBool,
     pub export_active: AtomicBool,
     runtime_handle: tokio::runtime::Handle,
+    audio_output: Arc<crate::AudioOutput>,
 }
 
 impl EditorInstance {
@@ -239,6 +240,35 @@ impl EditorInstance {
             }
         }
 
+        // Segment setup (decoder init + kicking off audio decodes) is
+        // independent of the GPU/render setup below, so run it concurrently on
+        // its own task.
+        let segments_task = tokio::spawn({
+            let recording_meta = recording_meta.clone();
+            let studio_meta = (**meta).clone();
+            async move { create_segments(&recording_meta, &studio_meta, false).await }
+        });
+
+        // Open the session's audio output stream now (in the background) so
+        // the first play press doesn't wait on the device — Bluetooth outputs
+        // in particular can take seconds to wake.
+        let audio_output = Arc::new(crate::AudioOutput::new());
+        let has_declared_audio = match meta.as_ref() {
+            StudioRecordingMeta::SingleSegment { segment } => segment.audio.is_some(),
+            StudioRecordingMeta::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .any(|s| s.mic.is_some() || s.system_audio.is_some()),
+        };
+        let has_music = project
+            .timeline
+            .as_ref()
+            .map(|t| !t.audio_segments.is_empty())
+            .unwrap_or(false);
+        if has_declared_audio || has_music {
+            audio_output.prewarm();
+        }
+
         let recordings = Arc::new(ProjectRecordingsMeta::new(
             &recording_meta.project_path,
             meta.as_ref(),
@@ -266,7 +296,9 @@ impl EditorInstance {
 
         let layers_rx = editor::start_renderer_layers_creation(&render_constants, &project);
 
-        let segments = create_segments(&recording_meta, meta.as_ref(), false).await?;
+        let segments = segments_task
+            .await
+            .map_err(|e| format!("Segment setup task failed: {e}"))??;
         let layers_rx = editor::finish_renderer_layers_creation(layers_rx).await;
 
         let renderer = Arc::new(editor::Renderer::spawn(
@@ -299,6 +331,7 @@ impl EditorInstance {
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
             runtime_handle: tokio::runtime::Handle::current(),
+            audio_output,
         });
 
         this.state.lock().await.preview_task =
@@ -330,6 +363,8 @@ impl EditorInstance {
         }
 
         self.renderer.stop().await;
+
+        self.audio_output.shutdown();
 
         tokio::task::yield_now().await;
 
@@ -374,6 +409,7 @@ impl EditorInstance {
                 render_constants: self.render_constants.clone(),
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
+                audio_output: self.audio_output.clone(),
                 telemetry: None,
             })
             .start(fps, resolution_base)
@@ -637,12 +673,64 @@ pub struct EditorState {
 }
 
 pub struct SegmentMedia {
-    pub audio: Option<Arc<AudioData>>,
-    pub system_audio: Option<Arc<AudioData>>,
+    pub audio: AudioLoader,
+    pub system_audio: AudioLoader,
     pub audio_timing_repair: SegmentAudioTimingRepair,
     pub cursor: Arc<CursorEvents>,
     pub keyboard: Arc<cap_project::KeyboardEvents>,
     pub decoders: RecordingSegmentDecoders,
+}
+
+/// Shared handle to an audio track that decodes in the background.
+///
+/// Editor startup doesn't block on decoding entire audio files into memory;
+/// consumers that actually need samples (playback, export, waveforms) await
+/// [`AudioLoader::get`], which resolves as soon as the background decode
+/// completes.
+#[derive(Clone)]
+pub struct AudioLoader {
+    rx: watch::Receiver<Option<Result<Option<Arc<AudioData>>, String>>>,
+}
+
+impl AudioLoader {
+    /// A loader for a segment with no audio track.
+    pub fn none() -> Self {
+        Self::ready(None)
+    }
+
+    /// A loader wrapping already-decoded audio.
+    pub fn ready(audio: Option<Arc<AudioData>>) -> Self {
+        // The sender is dropped immediately; `get` still resolves because the
+        // value is already present when it first borrows the channel.
+        let (_tx, rx) = watch::channel(Some(Ok(audio)));
+        Self { rx }
+    }
+
+    /// Starts decoding `path` on the blocking pool.
+    pub fn spawn(path: PathBuf, label: String) -> Self {
+        let (tx, rx) = watch::channel(None);
+        tokio::task::spawn_blocking(move || {
+            let result = AudioData::from_file(&path)
+                .map(|data| Some(Arc::new(data)))
+                .map_err(|e| format!("{label} / {e}"));
+            let _ = tx.send(Some(result));
+        });
+        Self { rx }
+    }
+
+    /// Waits for the background decode to finish. Returns `Ok(None)` when the
+    /// segment has no audio track.
+    pub async fn get(&self) -> Result<Option<Arc<AudioData>>, String> {
+        let mut rx = self.rx.clone();
+        loop {
+            if let Some(result) = rx.borrow_and_update().clone() {
+                return result;
+            }
+            if rx.changed().await.is_err() {
+                return Err("Audio load task was dropped".to_string());
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -802,15 +890,20 @@ pub async fn create_segments(
     force_ffmpeg: bool,
 ) -> Result<Vec<SegmentMedia>, String> {
     let legacy_timing_repair = LegacyAudioTimingRepair::load(&recording_meta.project_path);
+    let legacy_timing_repair = &legacy_timing_repair;
 
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
-            let audio_task = s.audio.as_ref().map(|audio_meta| {
-                spawn_audio_load(
-                    recording_meta.path(&audio_meta.path),
-                    "SingleSegment Audio".to_string(),
-                )
-            });
+            let audio = s
+                .audio
+                .as_ref()
+                .map(|audio_meta| {
+                    AudioLoader::spawn(
+                        recording_meta.path(&audio_meta.path),
+                        "SingleSegment Audio".to_string(),
+                    )
+                })
+                .unwrap_or_else(AudioLoader::none);
 
             let cursor = Arc::new(
                 s.cursor
@@ -843,13 +936,11 @@ pub async fn create_segments(
                 force_ffmpeg,
             )
             .await
-            .map_err(|e| format!("SingleSegment / {e}"));
-            let audio = collect_audio_task(audio_task, "SingleSegment Audio").await?;
-            let decoders = decoders?;
+            .map_err(|e| format!("SingleSegment / {e}"))?;
 
             Ok(vec![SegmentMedia {
                 audio,
-                system_audio: None,
+                system_audio: AudioLoader::none(),
                 audio_timing_repair: SegmentAudioTimingRepair {
                     mic_offset_secs: legacy_timing_repair.offset(
                         0,
@@ -864,19 +955,31 @@ pub async fn create_segments(
             }])
         }
         cap_project::StudioRecordingMeta::MultipleSegments { inner, .. } => {
-            let mut segments = vec![];
-
-            for (i, s) in inner.segments.iter().enumerate() {
-                let audio_label = format!("MultipleSegments {i} Audio");
-                let audio_task = s
+            // Segments initialize concurrently: decoder setup dominates and is
+            // independent per segment, while audio decodes lazily in the
+            // background via AudioLoader.
+            let segment_futures = inner.segments.iter().enumerate().map(|(i, s)| async move {
+                let audio = s
                     .mic
                     .as_ref()
-                    .map(|audio| spawn_audio_load(recording_meta.path(&audio.path), audio_label));
+                    .map(|audio| {
+                        AudioLoader::spawn(
+                            recording_meta.path(&audio.path),
+                            format!("MultipleSegments {i} Audio"),
+                        )
+                    })
+                    .unwrap_or_else(AudioLoader::none);
 
-                let system_audio_label = format!("MultipleSegments {i} System Audio");
-                let system_audio_task = s.system_audio.as_ref().map(|audio| {
-                    spawn_audio_load(recording_meta.path(&audio.path), system_audio_label)
-                });
+                let system_audio = s
+                    .system_audio
+                    .as_ref()
+                    .map(|audio| {
+                        AudioLoader::spawn(
+                            recording_meta.path(&audio.path),
+                            format!("MultipleSegments {i} System Audio"),
+                        )
+                    })
+                    .unwrap_or_else(AudioLoader::none);
 
                 let cursor = Arc::new(s.cursor_events(recording_meta));
 
@@ -891,19 +994,11 @@ pub async fn create_segments(
                     force_ffmpeg,
                 )
                 .await
-                .map_err(|e| format!("MultipleSegments {i} / {e}"));
+                .map_err(|e| format!("MultipleSegments {i} / {e}"))?;
 
                 let keyboard = Arc::new(s.keyboard_events(recording_meta));
-                let audio =
-                    collect_audio_task(audio_task, &format!("MultipleSegments {i} Audio")).await?;
-                let system_audio = collect_audio_task(
-                    system_audio_task,
-                    &format!("MultipleSegments {i} System Audio"),
-                )
-                .await?;
-                let decoders = decoders?;
 
-                segments.push(SegmentMedia {
+                Ok::<SegmentMedia, String>(SegmentMedia {
                     audio,
                     system_audio,
                     audio_timing_repair: SegmentAudioTimingRepair {
@@ -921,35 +1016,11 @@ pub async fn create_segments(
                     cursor,
                     keyboard,
                     decoders,
-                });
-            }
+                })
+            });
 
-            Ok(segments)
+            futures::future::try_join_all(segment_futures).await
         }
-    }
-}
-
-fn spawn_audio_load(
-    path: PathBuf,
-    label: String,
-) -> tokio::task::JoinHandle<Result<AudioData, String>> {
-    tokio::task::spawn_blocking(move || {
-        AudioData::from_file(path).map_err(|e| format!("{label} / {e}"))
-    })
-}
-
-async fn collect_audio_task(
-    task: Option<tokio::task::JoinHandle<Result<AudioData, String>>>,
-    label: &str,
-) -> Result<Option<Arc<AudioData>>, String> {
-    match task {
-        Some(task) => {
-            let audio = task
-                .await
-                .map_err(|e| format!("{label} task failed: {e}"))??;
-            Ok(Some(Arc::new(audio)))
-        }
-        None => Ok(None),
     }
 }
 

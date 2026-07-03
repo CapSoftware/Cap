@@ -35,7 +35,7 @@
 
 ## Current Status
 
-**Last Updated**: 2026-05-20
+**Last Updated**: 2026-07-03
 
 ### Performance Summary
 
@@ -620,6 +620,78 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `cargo run -p cap-recording --example playback-test-runner -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 full`
 
 **Stopping point**: The measured sustained-run bottleneck was first-use cursor asset loading during playback. Moving that work to renderer-layer initialization removes the repeated frame 696 drop without changing playback timing, frame choice, preview resolution semantics, visual asset selection, audio/video sync, decoder selection, GPU adapter selection, or fallback behavior. The full desktop path now sustains 60fps on the reference fixture with no renderer drops, skips, WebSocket send failures, or browser display notification loss in the 900-frame full/default-half runs. The next visible full-preview cost is WebGPU texture upload/display work around 2.1ms average plus Rust WebSocket send around 1.3ms average, both still under frame budget.
+
+---
+
+### Session 2026-07-03 (Play-Start Latency: Progressive Audio Pre-Render)
+
+**Goal**: Pressing play (including after scrubbing) sometimes took multiple seconds before video started. Benchmark press-play → clock-start latency, find the cause, fix it without any A/V sync or steady-state regressions.
+
+**What was done**:
+1. Added permanent play-start telemetry to `Playback`: `AudioSegmentsResolved` (background audio-decode wait inside `Playback::start`), `AudioPipelineReady` (audio setup block duration), `ClockStarted` (total press-to-clock latency). Zero overhead in production (`telemetry: None`).
+2. Extended `editor-playback-benchmark` with `--press-starts "0,45,0"` — sequential play presses (play → scrub ahead → play → scrub back → play) against one shared renderer/decoders, mirroring the real app, printing a per-press latency breakdown.
+3. Benchmarked a real 226s 7-segment recording (mic + system audio + 60fps import) on M4 Max, release AND debug profiles (dev app runs debug with no opt-level override → Rust audio loops are ~15x slower).
+4. Root cause: `PrerenderedAudioBuffer::new` rendered + resampled the ENTIRE timeline mix synchronously on EVERY play press before the clock could start — O(duration) CPU + 82MB alloc for 226s. Debug: ~930ms per press; scales with duration everywhere (1hr recording ≈ 1s+ even on fast hardware in release).
+5. Rewrote it as a progressive pre-render: a `cap-audio-prerender` producer thread renders the same chunk-for-chunk pipeline (AudioRenderer → AudioResampler) into a shared zero-initialised `Box<[AtomicU32]>` (f32 bits), publishing progress via Release/Acquire watermarks. Pass 1 renders playhead−1s→end (stream ready after a 250ms window, typically <5ms), pass 2 wraps 0→playhead for backwards seeks. The cpal callback reads only below the watermarks and outputs silence for not-yet-rendered regions (never garbage); it converts f32→device format per sample. Producer renders 240x+ realtime even in debug, and aborts via a stop flag when the stream drops.
+
+**Changes Made**:
+- `crates/editor/src/audio.rs`: `PrerenderedAudioBuffer` is now progressive (`ProgressiveTimeline` shared state, `spawn_progressive_render`, watermark-gated `fill`). Same public API + `start_playhead_secs` param + `wait_until_ready`.
+- `crates/editor/src/playback.rs`: `create_stream_prerendered` computes the latency hint first, passes the start playhead to the buffer, and waits (bounded 2s) for the initial window before returning the stream. Play-start telemetry emission.
+- `crates/editor/src/telemetry.rs`: new `AudioSegmentsResolved` / `AudioPipelineReady` / `ClockStarted` events.
+- `crates/editor/examples/editor-playback-benchmark.rs`: `--press-starts` multi-press mode + play-start latency report.
+
+**Results** (226s recording, 30fps, half preview, M4 Max):
+- Release press-to-clock: press1 183→129ms, press2 (scrub) 147→82ms, press3 146→62ms. Audio pipeline block 113-135ms → 40-80ms.
+- Debug (dev app): press2 (scrub) 997→50ms, press3 →55ms (≈20x). Press1 975ms remains video warmup (fresh-process decoder/GPU warmup; the real app prewarms this at editor open).
+- Full playback validation still passes: all 6 segments decode OK, mic sync 28-86ms, system audio 19-27ms, camera drift 0.0ms.
+- Sustained 300-frame run: 300/300 rendered, 0 skips, 0 renderer drops, 29.8/30fps.
+- All 17 cap-editor tests pass (debug + release), including `prerendered_playback_and_export_apply_negative_timing_offset_consistently` which asserts playback `fill()` output (through the new atomic read path) matches export rendering sample-for-sample.
+
+**Intentional behavior notes**:
+- Seeking into a not-yet-rendered region (only possible within ~100ms of press in release, ~1s in debug) plays brief silence instead of blocking; video is unaffected and audio realigns via the existing playhead sync.
+- The full mix still completes in the background (~60ms release / ~950ms debug for 226s), so seeks after that are identical to the old fully-prerendered behavior.
+- On non-f32 output devices the sample conversion moved from swr to cpal (`f32 → T` per sample); values are equivalent (neither dithers), and macOS/Windows default outputs are f32 anyway.
+
+**Stopping point**: Press-to-clock is now duration-independent. Remaining (not blocking): first-callback wait (~40ms, device period) could overlap video warmup for another ~40ms win; Bluetooth outputs still gate clock start on the device's first callback (pre-existing); benchmark press-1 warmup in a fresh process reflects setup the real app prewarms at editor open.
+
+---
+
+### Session 2026-07-03 (No-Silence Guarantee: Persistent Audio Output Stream)
+
+**Goal**: Continue the play-start work with a hard requirement: video must never play while audio that should be audible is silent, and repeated play/scrub cycles must be instant even on Bluetooth outputs.
+
+**What was done**:
+1. Fixed a ready-gate anchoring bug in the progressive pre-render: the "initial window rendered" signal was anchored at the pre-roll start (playhead−1s), not the playhead itself, so the guarantee "samples at the playhead exist before the stream starts" had a hole. The signal is now anchored at the actual start playhead + 250ms window.
+2. Replaced the per-press audio stream with a persistent per-editor-session output stream (`crates/editor/src/audio_output.rs`): one `cap-audio-output` thread owns a cpal stream that plays silence while paused. A play press builds the progressive buffer, waits for the playhead window (ms), and installs the source into the live callback via a command channel; the callback acknowledges on first consumption, and only then does the playback clock start. Pressing play costs one callback period (~5-15ms) instead of a device open + first-callback wait (~40ms internal, seconds on Bluetooth).
+3. The stream is prewarmed at `EditorInstance::new` (when the recording declares audio or the project has music), so even the FIRST press skips the device wake. It is rebuilt only when the default output device changes or the stream errors (checked per play), and shuts down on editor dispose/drop.
+4. Sources carry a generation token: a stale playback shutting down cannot detach its successor's audio (start_playback installs the new source before stopping the old one).
+5. Deleted the now-dead legacy audio paths: `AudioPlayback`, per-press `create_stream`/`create_stream_prerendered` (playback.rs) and `AudioPlaybackBuffer` + resampler `reset` (audio.rs).
+
+**Why silence is now structurally prevented**:
+- Clock start is gated on BOTH the playhead window being rendered AND the live callback consuming the source.
+- User seeks always create a new playback (there is no live-seek path into a running `Playback`), which re-anchors pass 1 at the new position and re-gates.
+- Mid-playback the video clock advances at 1x while the producer renders 240x+ realtime even in debug — consumption can never catch the watermark. Drift corrections are bounded ≪ the 1s pre-roll.
+- If the audio device is genuinely dead (ack timeout 5s), playback degrades to video-only exactly as before, and the stream is rebuilt on the next press.
+
+**Results** (226s 7-segment recording, 30fps, half preview, M4 Max):
+- Release press-to-clock: 57 / 40 / 41ms (press 1 / scrub+play / play again) — audio pipeline 5-12ms per press (was 113-135ms at baseline, 40-80ms after the progressive fix alone).
+- Debug (dev app): 923 / 59 / 48ms — press-1 remainder is fresh-process video warmup that the real app prewarms at editor open.
+- Sustained 300-frame run: 300/300 rendered, 0 renderer drops, 29.9/30fps, render p95 9.4ms.
+- Sync validation unchanged: mic 28-86ms, system 19-27ms, camera drift 0.0ms.
+- All 17 cap-editor tests pass (debug + release); clippy clean; cap-desktop/cap-export/cap CLI compile.
+
+**Behavior notes**:
+- While the editor is open (and the recording has audio), the app holds an open output stream playing silence — this is how DAWs/editors keep latency down; it keeps Bluetooth links awake between presses.
+- Pause responsiveness: audio now stops when the playback loop exits (≤1 frame + 1 callback period ≈ ~45ms) instead of the audio thread being woken directly; imperceptible in practice.
+- Output device switching mid-playback keeps playing to the old device until the next press (same as the old per-press binding), then rebuilds.
+
+**Multi-recording regression matrix (10 latest real recordings, release, M4 Max)**:
+- Coverage: 7-segment mixed mic+system+camera project, 4-segment system-audio project, 3840×1920 window recordings, single-segment mic+camera recordings, mic+system single-segment — 30 play presses total (play at 0 → scrub to mid → play again).
+- Press-to-clock: 16-125ms across all 30 presses (fresh-process press 1 on 4K-window content up to ~490ms — decoder warmup the real app pays at editor open, not at press). Audio pipeline attach: 1-28ms every press. Frames: 60/60 rendered on every press, 0 renderer drops, 0 skips, 0 send failures.
+- Sync validation: 9/10 pass (mic 8-86ms, system 19-32ms, camera drift 0.0ms everywhere). The one FAIL ("Built-in Retina 01.03 PM", mic diff 265ms) is baked into that recording's files — the validator's code paths (crates/recording, crates/audio) are untouched by this change and measure the same on any build; it's the known recording-side start_time class, not a playback regression.
+- One matrix-script artifact: pressing play past the end of an edited timeline (script used raw-footage midpoint, 82s > 64.8s timeline) hits the pre-existing 5s no-frames warmup timeout and aborts cleanly; next press recovers. Unreachable in the app (playhead is clamped) and unchanged behavior.
+
+**Stopping point**: No-silence + instant-press guarantees in place, validated across 10 real recordings. Follow-up candidates: overlap the (now ~10ms) audio attach with video warmup; a few-ms fade-in on source install to eliminate any theoretical click at play start.
 
 ---
 

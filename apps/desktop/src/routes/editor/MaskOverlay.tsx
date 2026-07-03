@@ -171,7 +171,7 @@ export function MaskOverlay(props: MaskOverlayProps) {
 							fallback={
 								<div
 									class={cx(
-										"absolute pointer-events-auto cursor-pointer rounded-md border-2 transition-colors",
+										"absolute pointer-events-auto rounded-md border-2 transition-colors",
 										overlayClass(),
 									)}
 									style={{

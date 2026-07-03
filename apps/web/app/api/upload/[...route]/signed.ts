@@ -1,3 +1,5 @@
+import { inspect } from "node:util";
+
 import { db, updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
@@ -90,7 +92,10 @@ app.post(
 
 			return c.json(batch);
 		} catch (error) {
-			console.error("Batch signed URL generation failed:", error);
+			console.error(
+				"Batch signed URL generation failed:",
+				inspect(error, { depth: null }),
+			);
 			return c.json({ error: "Internal server error" }, 500);
 		}
 	},
@@ -140,17 +145,19 @@ app.post(
 				? "audio/aac"
 				: fileKey.endsWith(".webm")
 					? "audio/webm"
-					: fileKey.endsWith(".mp4")
+					: fileKey.endsWith(".mp4") || fileKey.endsWith(".m4s")
 						? "video/mp4"
 						: fileKey.endsWith(".mp3")
 							? "audio/mpeg"
 							: fileKey.endsWith(".m3u8")
 								? "application/x-mpegURL"
-								: fileKey.endsWith(".jpg") || fileKey.endsWith(".jpeg")
-									? "image/jpeg"
-									: fileKey.endsWith(".png")
-										? "image/png"
-										: "video/mp2t";
+								: fileKey.endsWith(".json")
+									? "application/json"
+									: fileKey.endsWith(".jpg") || fileKey.endsWith(".jpeg")
+										? "image/jpeg"
+										: fileKey.endsWith(".png")
+											? "image/png"
+											: "video/mp2t";
 
 			const data = await Effect.gen(function* () {
 				const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
@@ -210,12 +217,11 @@ app.post(
 				},
 			});
 		} catch (s3Error) {
-			console.error("S3 operation failed:", s3Error);
-			throw new Error(
-				`S3 operation failed: ${
-					s3Error instanceof Error ? s3Error.message : "Unknown error"
-				}`,
+			console.error(
+				"Signed upload URL generation failed:",
+				inspect(s3Error, { depth: null }),
 			);
+			return c.json({ error: "Internal server error" }, 500);
 		}
 	},
 );
