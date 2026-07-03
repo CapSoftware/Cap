@@ -1703,15 +1703,7 @@ pub async fn start_recording(
     }
 
     let countdown = general_settings.and_then(|v| v.recording_countdown);
-    for (id, win) in app
-        .webview_windows()
-        .iter()
-        .filter_map(|(label, win)| CapWindowId::from_str(label).ok().map(|id| (id, win)))
-    {
-        if matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
-            hide_overlay(win);
-        }
-    }
+    crate::target_select_overlay::close_target_select_overlay_windows(&app);
     let _ = CapWindow::InProgressRecording {
         countdown,
         capture_target: Some(inputs.capture_target.clone()),
