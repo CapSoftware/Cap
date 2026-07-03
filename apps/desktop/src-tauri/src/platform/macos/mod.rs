@@ -460,8 +460,15 @@ impl WebviewWindowExt for WebviewWindow {
         self.run_on_main_thread({
             let webview = self.clone();
             move || {
-                let nswindow = unsafe { &*webview.ns_window().expect("NSWindow not ready").cast() };
-                let mtm = MainThreadMarker::new().expect("Running on main");
+                let Ok(ns_window) = webview.ns_window() else {
+                    tracing::warn!("NSWindow not ready");
+                    return;
+                };
+                let Some(mtm) = MainThreadMarker::new() else {
+                    tracing::warn!("Not running on main thread");
+                    return;
+                };
+                let nswindow = unsafe { &*ns_window.cast::<NSWindow>() };
                 f(mtm, nswindow);
             }
         })

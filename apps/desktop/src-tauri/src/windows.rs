@@ -2507,7 +2507,11 @@ impl CapWindow {
             CapWindow::Editor { project_path } => {
                 let state = manager.state::<EditorWindowIds>();
                 let s = state.ids.lock().unwrap();
-                let id = s.iter().find(|(path, _)| path == project_path).unwrap().1;
+                let id = s
+                    .iter()
+                    .find(|(path, _)| path == project_path)
+                    .map(|(_, id)| *id)
+                    .expect("editor window id should be registered before calling CapWindow::id");
                 CapWindowId::Editor { id }
             }
             CapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
