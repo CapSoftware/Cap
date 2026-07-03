@@ -19,7 +19,18 @@ import { handleDomainError } from "../Http/Errors.ts";
 import { Videos } from "../Videos/index.ts";
 import { Extensions } from "./Extensions.ts";
 
-const CHROMIUM_IDENTITY_HOST_SUFFIX = ".chromiumapp.org";
+// Each browser's identity.launchWebAuthFlow intercepts redirects to its own
+// synthetic host; the leading label identifies the extension installation.
+const IDENTITY_REDIRECT_HOSTS = [
+	{
+		suffix: ".chromiumapp.org",
+		getConfiguredExtensionId: () => serverEnv().CAP_CHROME_EXTENSION_ID,
+	},
+	{
+		suffix: ".extensions.allizom.org",
+		getConfiguredExtensionId: () => serverEnv().CAP_FIREFOX_EXTENSION_ID,
+	},
+] as const;
 
 const validateExtensionRedirectUri = (redirectUri: string) =>
 	Effect.gen(function* () {
@@ -28,18 +39,15 @@ const validateExtensionRedirectUri = (redirectUri: string) =>
 			catch: () => new HttpApiError.BadRequest(),
 		});
 
-		if (
-			url.protocol !== "https:" ||
-			!url.hostname.endsWith(CHROMIUM_IDENTITY_HOST_SUFFIX)
-		) {
+		const identityHost = IDENTITY_REDIRECT_HOSTS.find(({ suffix }) =>
+			url.hostname.endsWith(suffix),
+		);
+		if (url.protocol !== "https:" || !identityHost) {
 			return yield* new HttpApiError.BadRequest();
 		}
 
-		const extensionId = url.hostname.slice(
-			0,
-			-CHROMIUM_IDENTITY_HOST_SUFFIX.length,
-		);
-		const configuredExtensionId = serverEnv().CAP_CHROME_EXTENSION_ID;
+		const extensionId = url.hostname.slice(0, -identityHost.suffix.length);
+		const configuredExtensionId = identityHost.getConfiguredExtensionId();
 
 		if (configuredExtensionId) {
 			if (extensionId !== configuredExtensionId) {
@@ -52,7 +60,8 @@ const validateExtensionRedirectUri = (redirectUri: string) =>
 		// signed-in user's auth key through this flow. The only deployment
 		// where accepting an arbitrary id is safe is localhost development;
 		// every reachable deployment (staging, previews, self-hosted) must set
-		// CAP_CHROME_EXTENSION_ID regardless of NODE_ENV.
+		// CAP_CHROME_EXTENSION_ID / CAP_FIREFOX_EXTENSION_ID regardless of
+		// NODE_ENV.
 		const webHostname = new URL(serverEnv().WEB_URL).hostname;
 		const isLocalDevelopment =
 			serverEnv().NODE_ENV !== "production" &&
@@ -150,7 +159,7 @@ const renderConsentPage = ({
 	</head>
 	<body>
 		<main class="card">
-			<h1>Connect the Cap Chrome extension</h1>
+			<h1>Connect the Cap browser extension</h1>
 			<p>The Cap extension is asking for access to your Cap account <span class="email">${escapeHtml(email)}</span> to create and upload recordings on your behalf.</p>
 			<p>Only continue if you opened this page from the Cap extension.</p>
 			<form method="post" action="approve" class="actions">
