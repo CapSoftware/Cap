@@ -50,7 +50,7 @@ use crate::{
 use cap_recording::{feeds, sources::screen_capture::ScreenCaptureTarget};
 
 #[cfg(target_os = "macos")]
-const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
+const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 20.0);
 
 const DEFAULT_FALLBACK_DISPLAY_WIDTH: f64 = 1920.0;
 const DEFAULT_FALLBACK_DISPLAY_HEIGHT: f64 = 1080.0;
@@ -805,7 +805,7 @@ impl CapWindowId {
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
             Self::Editor { .. } | Self::ScreenshotEditor { .. } => {
-                Some(Some(LogicalPosition::new(20.0, 24.0)))
+                Some(Some(LogicalPosition::new(20.0, 28.0)))
             }
             Self::Camera
             | Self::WindowCaptureOccluder { .. }
@@ -813,7 +813,7 @@ impl CapWindowId {
             | Self::RecordingsOverlay
             | Self::RecordingControls
             | Self::TargetSelectOverlay { .. } => None,
-            Self::Settings => Some(Some(LogicalPosition::new(22.0, 22.0))),
+            Self::Settings => Some(Some(LogicalPosition::new(20.0, 28.0))),
             _ => Some(None),
         }
     }
