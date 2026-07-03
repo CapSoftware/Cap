@@ -1,3 +1,4 @@
+import { capabilities } from "../platform/capabilities";
 import { EXTENSION_PROTOCOL } from "../platform/extension-protocol";
 import {
 	ApiRequestError,
@@ -57,7 +58,11 @@ import type {
 	ServiceWorkerRequest,
 	ServiceWorkerResponse,
 } from "../shared/types";
-import { ensureRecorderHost, hasRecorderHost } from "./recorder-host";
+import {
+	ensureRecorderHost,
+	focusRecorderHost,
+	hasRecorderHost,
+} from "./recorder-host";
 
 // popup.html is web-accessible with use_dynamic_url so sites cannot fingerprint
 // the extension via the overlay iframe's static URL; that same flag makes its
@@ -1107,6 +1112,11 @@ const resolveMicWarning = async (
 };
 
 const performRecordingStart = async (mode: RecordingMode) => {
+	// Defense against stale overlay/content-script messages: the mode selector
+	// already hides tab capture where it is unsupported.
+	if (mode === "tab" && !capabilities.supportsTabCapture) {
+		throw new Error("Tab recording is not available in this browser.");
+	}
 	const { settings, auth, bootstrap } = await requireSignedInState();
 	externalCaptureAutoPipPending = false;
 	const recordingSettings =
@@ -1154,6 +1164,12 @@ const performRecordingStart = async (mode: RecordingMode) => {
 	// no blanket re-injection is needed here; sendOverlay still injects
 	// per-tab on demand and the bootstrap lazy-loads the overlay UI.
 	try {
+		// On Firefox the recorder document must collect a click (transient
+		// activation for getDisplayMedia), so make sure its window exists and
+		// is in front before asking it to start. Both calls are cheap no-ops
+		// beyond document creation on Chrome.
+		await ensureRecorderHost({ interactive: true });
+		await focusRecorderHost();
 		return await sendOffscreen({
 			target: "offscreen",
 			type: "start-recording",
@@ -1794,6 +1810,23 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 	if (changeInfo.status === "complete" && tab.active) {
 		void syncActivePreview(tabId).catch(() => undefined);
+	}
+});
+
+// The Firefox recorder host is a window the user can close mid-recording;
+// syncRecordingStatus already degrades to idle when the host is gone, it
+// just needs to be triggered promptly. Chrome's offscreen document is not
+// user-closable, so this never fires anything meaningful there.
+chrome.windows.onRemoved.addListener(() => {
+	if (capabilities.supportsOffscreen) return;
+	void syncRecordingStatus().catch(() => undefined);
+});
+
+// Firefox grants host permissions after install (welcome page); inject the
+// bootstrap into tabs that were already open once that happens.
+chrome.permissions.onAdded.addListener((permissions) => {
+	if (permissions.origins?.length) {
+		void injectOverlayIntoOpenTabs();
 	}
 });
 

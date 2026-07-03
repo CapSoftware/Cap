@@ -65,6 +65,7 @@ import {
 	toSessionDescriptionInit,
 	waitForIceGatheringComplete,
 } from "../shared/webrtc";
+import { awaitCaptureGesture, minimizeRecorderWindow } from "./arm-gesture";
 import { captureDisplayStream } from "./display-capture";
 
 const RECORDING_TIMESLICE_MS = 1000;
@@ -790,6 +791,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 	try {
 		status = { phase: "creating" };
 
+		await awaitCaptureGesture(throwIfStartCanceled);
 		const mainStream = await getMainStream(request);
 		ownedStreams.push(mainStream);
 		throwIfStartCanceled();
@@ -806,6 +808,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 			ownedStreams.push(microphoneStream);
 		}
 		throwIfStartCanceled();
+		void minimizeRecorderWindow();
 		const { width, height, fps } = getStreamSize(mainStream);
 		const videoTracks = mainStream.getVideoTracks();
 		if (videoTracks.length === 0) {

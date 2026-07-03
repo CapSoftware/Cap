@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { capabilities } from "../platform/capabilities";
 import { toCameraDevices, toMicrophoneDevices } from "../shared/devices";
 import {
 	reconcileRememberedDevices,
@@ -92,6 +93,13 @@ const isRecordingStatus = (
 	status.phase === "paused" ||
 	status.phase === "uploading";
 
+// A remembered "tab" mode can arrive from settings synced on a browser that
+// supports tab capture; fall back rather than render an unselectable mode.
+const resolveAvailableMode = (mode: RecordingMode): RecordingMode =>
+	mode === "tab" && !capabilities.supportsTabCapture ? "fullscreen" : mode;
+
+const HOST_PERMISSION_ORIGINS = ["http://*/*", "https://*/*"];
+
 function App() {
 	// This page is web accessible, so any site can put it in an iframe and
 	// overlay it for clickjacking. When embedded, render nothing until the
@@ -114,6 +122,9 @@ function App() {
 	const [cameraSelectOpen, setCameraSelectOpen] = useState(false);
 	const [micSelectOpen, setMicSelectOpen] = useState(false);
 	const [failedRecordingsCount, setFailedRecordingsCount] = useState(0);
+	const [hostAccessGranted, setHostAccessGranted] = useState(
+		capabilities.hostPermissionsGrantedAtInstall,
+	);
 	const settingsRef = useRef(defaultSettings);
 
 	const recordingActive = isRecordingStatus(status);
@@ -131,7 +142,7 @@ function App() {
 	const updateSettings = useCallback(async (next: ExtensionSettings) => {
 		settingsRef.current = next;
 		setSettings(next);
-		setMode(next.capture.recordingMode);
+		setMode(resolveAvailableMode(next.capture.recordingMode));
 		await saveSettings(next);
 		await sendServiceWorkerMessage({
 			target: "service-worker",
@@ -143,7 +154,7 @@ function App() {
 	const applySettings = useCallback((next: ExtensionSettings) => {
 		settingsRef.current = next;
 		setSettings(next);
-		setMode(next.capture.recordingMode);
+		setMode(resolveAvailableMode(next.capture.recordingMode));
 	}, []);
 
 	const loadDevices = useCallback(async () => {
@@ -224,6 +235,21 @@ function App() {
 			active: true,
 		});
 	};
+
+	const openWelcomePage = () => {
+		chrome.tabs.create({
+			url: chrome.runtime.getURL("welcome.html"),
+			active: true,
+		});
+	};
+
+	useEffect(() => {
+		if (capabilities.hostPermissionsGrantedAtInstall) return;
+		chrome.permissions.contains(
+			{ origins: HOST_PERMISSION_ORIGINS },
+			(granted) => setHostAccessGranted(Boolean(granted)),
+		);
+	}, []);
 
 	useEffect(() => {
 		if (!IS_EMBEDDED) return;
@@ -664,7 +690,7 @@ function App() {
 								onPermissionBlocked={openPermissionPage}
 							/>
 						</div>
-						{mode !== "camera" && (
+						{mode !== "camera" && capabilities.supportsSystemAudioCapture && (
 							<div className="cap-fade-up cap-fade-up-4">
 								<SystemAudioToggle
 									enabled={settings.systemAudio.enabled}
@@ -687,6 +713,16 @@ function App() {
 								onStop={() => void stop()}
 							/>
 						</div>
+						{!hostAccessGranted && (
+							<button
+								type="button"
+								className="cap-fade-up text-left text-[0.75rem] leading-[1.4] text-gray-11 underline underline-offset-2 hover:text-[--text-primary]"
+								onClick={openWelcomePage}
+							>
+								Enable Cap on all sites to see the on-page countdown and
+								recording toolbar.
+							</button>
+						)}
 						{recordingBarStatus && (
 							<div className="cap-fade-up">
 								<RecordingBar

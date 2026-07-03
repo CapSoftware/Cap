@@ -4,8 +4,57 @@
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>Cap Recorder</title>
+		<style>
+			body {
+				margin: 0;
+				font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+				background: #101012;
+				color: #f4f4f5;
+			}
+			#arm-capture {
+				box-sizing: border-box;
+				min-height: 100vh;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 16px;
+				padding: 24px;
+				text-align: center;
+			}
+			#arm-capture p {
+				margin: 0;
+				max-width: 280px;
+				font-size: 13px;
+				line-height: 1.5;
+				color: #a1a1aa;
+			}
+			#arm-capture-button {
+				height: 40px;
+				padding: 0 24px;
+				border: none;
+				border-radius: 10px;
+				background: #4785ff;
+				color: #fff;
+				font-size: 14px;
+				font-weight: 500;
+				cursor: pointer;
+			}
+			#arm-capture-button:hover {
+				background: #3b74e6;
+			}
+		</style>
 	</head>
 	<body>
+		<!-- Shown only on Firefox: the click provides the user activation
+		     getDisplayMedia requires in this window. -->
+		<main id="arm-capture" hidden>
+			<button id="arm-capture-button" type="button">Start recording</button>
+			<p>
+				Firefox needs one click here before Cap can ask which screen or
+				window to share.
+			</p>
+		</main>
 		<script type="module" src="/src/recorder/recorder.ts"></script>
 	</body>
 </html>

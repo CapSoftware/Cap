@@ -5,6 +5,7 @@ import {
 	MonitorIcon,
 	RectangleHorizontal,
 } from "lucide-react";
+import { capabilities } from "../../platform/capabilities";
 import type { RecordingMode } from "../../shared/types";
 import {
 	SelectContent,
@@ -55,6 +56,10 @@ export const RecordingModeSelector = ({
 		},
 	};
 
+	const availableModeEntries = Object.entries(recordingModeOptions).filter(
+		([value]) => value !== "tab" || capabilities.supportsTabCapture,
+	);
+
 	const selectedOption = mode ? recordingModeOptions[mode] : null;
 	const SelectedIcon = selectedOption?.icon;
 
@@ -81,7 +86,7 @@ export const RecordingModeSelector = ({
 					</SelectValue>
 				</SelectTrigger>
 				<SelectContent className="z-[502] max-w-[280px]">
-					{Object.entries(recordingModeOptions).map(([value, option]) => {
+					{availableModeEntries.map(([value, option]) => {
 						const OptionIcon = option.icon;
 
 						return (

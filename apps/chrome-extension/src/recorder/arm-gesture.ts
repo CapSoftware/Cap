@@ -1,0 +1,63 @@
+import { TARGET } from "../platform/target";
+
+const ARM_CANCEL_POLL_INTERVAL_MS = 150;
+
+// Firefox requires transient user activation for getDisplayMedia, and this
+// document is opened by the service worker without one; a click on the arm
+// button inside this window is what carries the activation into capture.
+// Chrome's offscreen document is exempt, so this resolves immediately there.
+// The click is required for every mode (getUserMedia does not need it, but
+// one uniform path keeps the permission prompts anchored to a focused,
+// visible window).
+export const awaitCaptureGesture = async (throwIfCanceled: () => void) => {
+	if (TARGET !== "firefox") return;
+	const container = document.getElementById("arm-capture");
+	const button = document.getElementById("arm-capture-button");
+	if (
+		!(container instanceof HTMLElement) ||
+		!(button instanceof HTMLButtonElement)
+	) {
+		return;
+	}
+
+	container.hidden = false;
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const onClick = () => {
+				window.clearInterval(intervalId);
+				resolve();
+			};
+			const intervalId = window.setInterval(() => {
+				try {
+					throwIfCanceled();
+				} catch (error) {
+					window.clearInterval(intervalId);
+					button.removeEventListener("click", onClick);
+					reject(error instanceof Error ? error : new Error(String(error)));
+				}
+			}, ARM_CANCEL_POLL_INTERVAL_MS);
+			button.addEventListener("click", onClick, { once: true });
+		});
+	} finally {
+		container.hidden = true;
+	}
+};
+
+// Once every capture prompt has been answered this window has no further
+// business on screen; get it out of the shot (and out of the picker's way)
+// before the countdown runs. Cosmetic, so callers fire-and-forget it.
+export const minimizeRecorderWindow = async () => {
+	if (TARGET !== "firefox") return;
+	await new Promise<void>((resolve) => {
+		chrome.windows.getCurrent((currentWindow) => {
+			if (chrome.runtime.lastError || currentWindow?.id === undefined) {
+				resolve();
+				return;
+			}
+			chrome.windows.update(currentWindow.id, { state: "minimized" }, () => {
+				void chrome.runtime.lastError;
+				resolve();
+			});
+		});
+	});
+};

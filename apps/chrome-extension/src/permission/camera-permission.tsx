@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { TARGET } from "../platform/target";
 import { CapBrand, DoodleBoilFilter } from "../shared/cap-brand";
 import { toCameraDevices } from "../shared/devices";
 import { mountPageNav } from "../shared/page-nav";
@@ -18,14 +19,24 @@ mountPageNav("camera");
 
 type Status = "idle" | "requesting" | "ready" | "error";
 
+const BROWSER_NAME = TARGET === "firefox" ? "Firefox" : "Chrome";
+
+// Firefox forgets getUserMedia grants when the prompt is dismissed without
+// the checkbox, which would resurface the prompt inside a minimized recorder
+// window on every recording.
+const REMEMBER_HINT =
+	TARGET === "firefox"
+		? ' Tick "Remember this decision" so Firefox keeps the grant for future recordings.'
+		: "";
+
 const headlines: Record<Status, { title: string; lede: string }> = {
 	idle: {
 		title: "Camera & microphone access",
 		lede: "Allow access once so Cap can show your camera preview and record your voice.",
 	},
 	requesting: {
-		title: "Waiting for Chrome",
-		lede: "Click Allow in the browser prompt up by the address bar.",
+		title: `Waiting for ${BROWSER_NAME}`,
+		lede: `Click Allow in the browser prompt up by the address bar.${REMEMBER_HINT}`,
 	},
 	ready: {
 		title: "You're all set",
@@ -49,7 +60,7 @@ const getCameraErrorMessage = (error: unknown) => {
 		error.name === "NotAllowedError" ||
 		error.message.toLowerCase().includes("permission")
 	) {
-		return "Chrome did not grant camera access. Click Allow in the browser prompt.";
+		return `${BROWSER_NAME} did not grant camera access. Click Allow in the browser prompt.${REMEMBER_HINT}`;
 	}
 	if (error.name === "NotFoundError") return "No camera was found.";
 	if (error.name === "NotReadableError") return "Camera is already in use.";

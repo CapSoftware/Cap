@@ -168,6 +168,25 @@
 					<p>Click the Cap icon whenever you're ready to record.</p>
 				</li>
 			</ol>
+			<div class="cta-row" id="host-permission-row" hidden>
+				<button id="grant-hosts" class="cta" type="button">
+					Enable Cap on all sites
+				</button>
+				<p id="hosts-granted" class="paper-pill success" hidden>
+					<svg class="check-mini" viewBox="0 0 24 24" aria-hidden="true">
+						<path
+							class="check-mini-path"
+							pathLength="1"
+							d="M 4 13 L 9.5 18 L 20 6"
+						></path>
+					</svg>
+					Cap can show its recording toolbar on every site.
+				</p>
+			</div>
+			<p id="host-permission-note" class="cta-note" hidden>
+				Firefox asks before extensions can run on websites. Granting access
+				lets Cap show its countdown and recording toolbar on the page.
+			</p>
 			<div class="cta-row">
 				<button id="sign-in" class="cta" type="button">Sign in to Cap</button>
 				<p id="signed-in" class="paper-pill success" hidden>
