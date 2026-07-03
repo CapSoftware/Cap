@@ -84,7 +84,6 @@ pub struct SegmentedVideoEncoder {
     segment_start_time: Option<Duration>,
     last_frame_timestamp: Option<Duration>,
     frames_in_segment: u32,
-    encoded_frame_count: u64,
 
     completed_segments: Vec<VideoSegmentInfo>,
 
@@ -281,7 +280,6 @@ impl SegmentedVideoEncoder {
             segment_start_time: None,
             last_frame_timestamp: None,
             frames_in_segment: 0,
-            encoded_frame_count: 0,
             completed_segments: Vec::new(),
             pending_segment_indices: Vec::new(),
             frames_since_pending_flush: 0,
@@ -341,10 +339,14 @@ impl SegmentedVideoEncoder {
 
         self.last_frame_timestamp = Some(timestamp);
 
-        let encoder_timestamp = self.next_encoder_timestamp();
+        // Encode with the real capture timestamp: the editor timeline, cursor
+        // events and the mic track are all addressed in wall-clock time, so
+        // frames must keep it too (WGC-style captures only deliver frames when
+        // the screen changes — a synthetic frame-index clock compresses those
+        // gaps and desyncs everything downstream). Non-monotonic capture
+        // timestamps are handled by normalize_input_pts inside the encoder.
         self.encoder
-            .queue_frame(frame, encoder_timestamp, &mut self.output)?;
-        self.encoded_frame_count += 1;
+            .queue_frame(frame, timestamp, &mut self.output)?;
         self.frames_in_segment += 1;
 
         if is_first_frame {
@@ -365,12 +367,6 @@ impl SegmentedVideoEncoder {
         }
 
         Ok(())
-    }
-
-    fn next_encoder_timestamp(&self) -> Duration {
-        let frame_rate_num = self.codec_info.frame_rate_num.max(1) as f64;
-        let frame_rate_den = self.codec_info.frame_rate_den.max(1) as f64;
-        Duration::from_secs_f64(self.encoded_frame_count as f64 * frame_rate_den / frame_rate_num)
     }
 
     fn notify_segment(&self, event: SegmentCompletedEvent) {

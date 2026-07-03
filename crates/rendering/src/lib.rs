@@ -258,7 +258,6 @@ pub struct RecordingSegmentDecoders {
     pub segment_offset: f64,
 }
 
-const SCREEN_MAX_FALLBACK_DISTANCE: u32 = 4;
 const CAMERA_MAX_FALLBACK_DISTANCE: u32 = 2;
 
 pub struct SegmentVideoPaths {
@@ -328,6 +327,11 @@ impl RecordingSegmentDecoders {
         };
 
         let screen_future = async {
+            // Screen capture is change-driven (WGC delivers nothing while the
+            // screen is static), so the nearest decoded frame is routinely many
+            // frame-times away from the requested time and is still the right
+            // content. Keep the default (wide) fallback distance; a tight cap
+            // here blanks the preview during static stretches.
             spawn_decoder(
                 "screen",
                 display_path,
@@ -336,7 +340,6 @@ impl RecordingSegmentDecoders {
                 force_ffmpeg,
             )
             .await
-            .map(|decoder| decoder.with_max_fallback_distance(SCREEN_MAX_FALLBACK_DISTANCE))
             .map_err(|e| format!("Screen:{e}"))
         };
 
