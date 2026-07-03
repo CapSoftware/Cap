@@ -478,7 +478,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					currentTheme={settings.appearance ?? "system"}
 					onThemeChange={(newAppearance) => {
 						setSettings("appearance", newAppearance);
-						commands.setAppearance(newAppearance);
+							void commands.setAppearance(newAppearance).catch(console.error);
 					}}
 				/>
 

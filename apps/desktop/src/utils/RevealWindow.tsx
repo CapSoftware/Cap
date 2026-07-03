@@ -60,10 +60,9 @@ export function RevealWindowWithSuspense(
 	props: ParentProps<{ fallback?: JSX.Element }>,
 ) {
 	const resolved = children(() => props.children);
-	const isRouting = useIsRouting();
 
 	createEffect(() => {
-		if (resolved() || !isRouting()) maybeShowWindow();
+		if (resolved()) maybeShowWindow();
 	});
 
 	return <Suspense fallback={props.fallback}>{resolved()}</Suspense>;
