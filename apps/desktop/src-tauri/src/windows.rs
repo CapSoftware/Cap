@@ -2511,7 +2511,7 @@ impl CapWindow {
                     .iter()
                     .find(|(path, _)| path == project_path)
                     .map(|(_, id)| *id)
-                    .expect("editor window id should be registered before calling CapWindow::id");
+                    .expect(format!("editor window id should be registered before calling CapWindow::id ({project_path:?})"));
                 CapWindowId::Editor { id }
             }
             CapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,

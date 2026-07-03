@@ -78,7 +78,7 @@ unsafe fn setup_terminate_handler(nsapp: &NSApplication) {
     ) -> isize {
         match MACOS_NATIVE_TERMINATE_APP.get() {
             Some(app) => {
-                spawn_on_runtime({
+                tauri::async_runtime::spawn({
                     let app = app.clone();
                     async move {
                         crate::request_app_exit(app).await;
