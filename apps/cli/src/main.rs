@@ -7,6 +7,7 @@ mod project;
 mod record;
 mod recordings;
 mod screenshot;
+mod selftest;
 mod session;
 mod targets;
 mod update;
@@ -196,6 +197,8 @@ enum Commands {
     Targets(TargetsArgs),
     /// Report CLI environment and capture-readiness diagnostics
     Doctor(FormatArgs),
+    /// Run end-to-end diagnostics that verify Cap works on this machine
+    Selftest(selftest::SelftestArgs),
     /// Print CLI version and execution context
     Version(FormatArgs),
     /// Inspect or manage the desktop-installed `cap` shim
@@ -210,7 +213,12 @@ enum Commands {
 
 impl Commands {
     fn exit_after_success(&self) -> bool {
-        matches!(self, Self::Export(_) | Self::ExportPreview(_))
+        // Selftest runs an export, so it shares export's teardown-crash
+        // avoidance on Windows.
+        matches!(
+            self,
+            Self::Export(_) | Self::ExportPreview(_) | Self::Selftest(_)
+        )
     }
 }
 
@@ -425,6 +433,12 @@ fn main() {
 
     let exit_after_success = cli.exit_after_success();
 
+    // The self-test opens a window, which AppKit requires to live on the real
+    // process main thread — so the main thread stays here to serve pattern
+    // requests while the command itself runs on the runtime thread.
+    let pattern_rx = matches!(cli.command, Some(Commands::Selftest(_)))
+        .then(selftest::pattern::install_main_thread_runner);
+
     // Windows export exercises deep WGPU/MediaFoundation/FFmpeg stacks. Running the CLI runtime
     // on an explicitly large stack is what stopped the export worker from overflowing before
     // the first frame; keep the sidecar and desktop runtimes in sync.
@@ -432,6 +446,17 @@ fn main() {
         .name("cap-cli-runtime".to_string())
         .stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
         .spawn(move || -> Result<(), String> {
+            // serve_main_thread blocks the main thread until this shutdown
+            // runs; a drop guard keeps that true on every exit path, including
+            // the runtime failing to build and panics unwinding out of run().
+            struct PatternShutdown;
+            impl Drop for PatternShutdown {
+                fn drop(&mut self) {
+                    selftest::pattern::shutdown_main_thread_runner();
+                }
+            }
+            let _pattern_shutdown = PatternShutdown;
+
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .thread_stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
@@ -451,16 +476,24 @@ fn main() {
             result
         });
 
-    // Surface failures as a clean, unquoted `error: ...` line on stderr (the default
-    // `Result`-returning main prints `Error: "debug-quoted"`, which is noisy for humans and brittle
-    // for agents scraping stderr). clap already exits 2 for usage/parse errors before we get here.
-    let outcome = match runtime_thread {
-        Ok(handle) => handle.join(),
+    // A failed spawn means nothing will ever call shutdown_main_thread_runner, so the
+    // pattern server below would block forever — bail out before serving.
+    let runtime_thread = match runtime_thread {
+        Ok(handle) => handle,
         Err(e) => {
             eprintln!("error: Failed to spawn CLI runtime thread: {e}");
             std::process::exit(1);
         }
     };
+
+    if let Some(rx) = pattern_rx {
+        selftest::pattern::serve_main_thread(rx);
+    }
+
+    // Surface failures as a clean, unquoted `error: ...` line on stderr (the default
+    // `Result`-returning main prints `Error: "debug-quoted"`, which is noisy for humans and brittle
+    // for agents scraping stderr). clap already exits 2 for usage/parse errors before we get here.
+    let outcome = runtime_thread.join();
 
     match outcome {
         Ok(Ok(())) => {}
@@ -484,6 +517,7 @@ async fn run(cli: Cli) -> Result<(), String> {
     match command {
         Commands::Export(e) => e.run(json).await,
         Commands::ExportPreview(e) => e.run().await,
+        Commands::Selftest(args) => args.run(json).await,
         Commands::Project(args) => args.run(json),
         Commands::Record(RecordArgs { command, args }) => match command {
             Some(RecordCommands::Start(args)) => args.run(json).await,

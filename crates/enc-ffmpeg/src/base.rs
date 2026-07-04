@@ -13,6 +13,14 @@ pub struct EncoderBase {
     first_pts: Option<i64>,
     last_frame_pts: Option<i64>,
     last_written_dts: Option<i64>,
+    /// One-packet reorder buffer: a packet is written once its successor is
+    /// known so a synthesized duration can be replaced with the real dts
+    /// delta. Fragmenting muxers place each fragment at the accumulated
+    /// duration of the previous one, and the last sample of a fragment uses
+    /// the packet duration verbatim — a nominal duration there collapses any
+    /// capture gap that lands on a fragment cut, playing post-gap content
+    /// during the gap. The bool records whether the duration was synthesized.
+    held_packet: Option<(Packet, bool)>,
 }
 
 impl EncoderBase {
@@ -23,6 +31,7 @@ impl EncoderBase {
             last_frame_pts: None,
             stream_index,
             last_written_dts: None,
+            held_packet: None,
         }
     }
 
@@ -66,6 +75,44 @@ impl EncoderBase {
         }
     }
 
+    /// Stamps the frame's pts from its capture timestamp using an explicit
+    /// tick rate. Audio input frames must be stamped in *input sample rate*
+    /// units — the resampler rescales them to the encoder's output rate —
+    /// whereas [`Self::update_pts`] uses the encoder's own (output) time
+    /// base. Mixing the two conventions plays non-48kHz microphones at the
+    /// wrong speed.
+    pub fn update_pts_with_rate(
+        &mut self,
+        frame: &mut frame::Frame,
+        timestamp: Duration,
+        rate: f64,
+    ) {
+        if timestamp != Duration::MAX {
+            let pts = (timestamp.as_secs_f64() * rate).round() as i64;
+            let first_pts = *self.first_pts.get_or_insert(pts);
+            let mut pts = pts - first_pts;
+            if let Some(last) = self.last_frame_pts
+                && pts <= last
+            {
+                pts = last + 1;
+            }
+            self.last_frame_pts = Some(pts);
+            frame.set_pts(Some(pts));
+        } else if let Some(pts) = frame.pts() {
+            let first_pts = *self.first_pts.get_or_insert(pts);
+            let mut pts = pts - first_pts;
+            if let Some(last) = self.last_frame_pts
+                && pts <= last
+            {
+                pts = last + 1;
+            }
+            self.last_frame_pts = Some(pts);
+            frame.set_pts(Some(pts));
+        } else {
+            tracing::error!("Frame has no pts");
+        }
+    }
+
     pub fn send_frame(
         &mut self,
         frame: &frame::Frame,
@@ -95,7 +142,8 @@ impl EncoderBase {
                 _ => {}
             }
 
-            if self.packet.duration() <= 0
+            let duration_synthesized = self.packet.duration() <= 0;
+            if duration_synthesized
                 && let Some(duration) = nominal_packet_duration(
                     output.stream(self.stream_index).unwrap().time_base(),
                     encoder.frame_rate(),
@@ -123,7 +171,18 @@ impl EncoderBase {
             }
 
             self.last_written_dts = self.packet.dts();
-            self.packet.write_interleaved(output)?;
+
+            let current = std::mem::replace(&mut self.packet, Packet::empty());
+            if let Some((mut previous, previous_synthesized)) = self.held_packet.take() {
+                if previous_synthesized
+                    && let (Some(prev_dts), Some(cur_dts)) = (previous.dts(), current.dts())
+                    && cur_dts > prev_dts
+                {
+                    previous.set_duration(cur_dts - prev_dts);
+                }
+                previous.write_interleaved(output)?;
+            }
+            self.held_packet = Some((current, duration_synthesized));
         }
 
         Ok(())
@@ -136,7 +195,13 @@ impl EncoderBase {
     ) -> Result<(), ffmpeg::Error> {
         encoder.send_eof()?;
 
-        self.process_packets(output, encoder)
+        self.process_packets(output, encoder)?;
+
+        if let Some((previous, _)) = self.held_packet.take() {
+            previous.write_interleaved(output)?;
+        }
+
+        Ok(())
     }
 }
 

@@ -391,7 +391,7 @@ function SelectInput<T extends string>(props: {
 			type="button"
 			onClick={() => void openMenu()}
 			class={cx(
-				"flex gap-2 justify-between items-center w-full px-2.5 h-8 text-[13px] rounded-lg border transition-colors cursor-pointer bg-gray-1 border-gray-3 text-gray-12 outline-none hover:bg-gray-2 hover:border-gray-5 focus-visible:border-gray-6",
+				"flex gap-2 justify-between items-center w-full px-2.5 h-8 text-[13px] rounded-lg border transition-colors bg-gray-1 border-gray-3 text-gray-12 outline-none hover:bg-gray-2 hover:border-gray-5 focus-visible:border-gray-6",
 				props.class,
 			)}
 		>

@@ -225,7 +225,7 @@ export function GradientEditor(props: {
 					<div class="flex flex-wrap gap-2">
 						<button
 							type="button"
-							class="flex items-center justify-center rounded-lg transition-all duration-200 cursor-pointer size-8 hover:opacity-80 hover:scale-105 border border-dashed border-gray-8 bg-gray-2 text-gray-10"
+							class="flex items-center justify-center rounded-lg transition-all duration-200 size-8 hover:opacity-80 hover:scale-105 border border-dashed border-gray-8 bg-gray-2 text-gray-10"
 							onClick={() => {
 								updateGradient({
 									from: randomColor(),
@@ -256,7 +256,7 @@ export function GradientEditor(props: {
 							{(gradient) => (
 								<button
 									type="button"
-									class="rounded-lg transition-all duration-200 cursor-pointer size-8 hover:opacity-80 hover:scale-105 ring-offset-2 ring-offset-gray-200"
+									class="rounded-lg transition-all duration-200 size-8 hover:opacity-80 hover:scale-105 ring-offset-2 ring-offset-gray-200"
 									classList={{
 										"ring-2 ring-gray-500":
 											src().from[0] === gradient.from[0] &&

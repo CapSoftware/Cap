@@ -10,6 +10,9 @@ import { authStore, generalSettingsStore } from "~/store";
 import { clientEnv } from "./env";
 import { resolveServerRequestPath } from "./server-url-routing";
 
+const isJsonContentType = (contentType: string | null) =>
+	contentType?.toLowerCase().split(";")[0]?.trim() === "application/json";
+
 export async function getConfiguredServerUrl() {
 	return (
 		(await generalSettingsStore.get())?.serverUrl ?? clientEnv.VITE_SERVER_URL
@@ -31,7 +34,7 @@ const api: ApiFetcher = async (args) => {
 	let body: unknown;
 
 	const contentType = resp.headers.get("content-type");
-	if (contentType === "application/json") {
+	if (isJsonContentType(contentType)) {
 		body = await resp.json();
 	} else {
 		body = await resp.text();

@@ -17,6 +17,7 @@ import {
 	createSignal,
 	on,
 	onCleanup,
+	onMount,
 } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 
@@ -1079,10 +1080,27 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			},
 		});
 
-		const [micWaveforms] = createResource(() => commands.getMicWaveforms());
-		const [systemAudioWaveforms] = createResource(() =>
-			commands.getSystemAudioWaveforms(),
-		);
+		// Plain signals, not resources: audio decodes in the background after
+		// the editor opens, so these can resolve late — they must never suspend
+		// the editor UI back to the skeleton. Waveforms simply appear once
+		// decoded.
+		const [micWaveforms, setMicWaveforms] = createSignal<number[][]>();
+		const [systemAudioWaveforms, setSystemAudioWaveforms] =
+			createSignal<number[][]>();
+		onMount(() => {
+			commands
+				.getMicWaveforms()
+				.then(setMicWaveforms)
+				.catch((error) =>
+					console.error("Failed to load mic waveforms:", error),
+				);
+			commands
+				.getSystemAudioWaveforms()
+				.then(setSystemAudioWaveforms)
+				.catch((error) =>
+					console.error("Failed to load system audio waveforms:", error),
+				);
+		});
 		const customDomain = createCustomDomainQuery();
 		const hasRecordedKeyboardEvents = createMemo(() => {
 			const meta = props.meta();

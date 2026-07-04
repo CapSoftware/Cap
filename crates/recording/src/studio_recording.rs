@@ -901,6 +901,19 @@ pub struct CompletedRecording {
     pub cursor_data: cap_project::CursorImages,
 }
 
+fn snap_nearby_start_time(
+    raw_start: f64,
+    reference_start: Option<f64>,
+    threshold_secs: f64,
+) -> f64 {
+    match reference_start {
+        Some(reference_start) if (raw_start - reference_start).abs() <= threshold_secs => {
+            reference_start
+        }
+        _ => raw_start,
+    }
+}
+
 async fn stop_recording(
     recording_dir: PathBuf,
     segments: Vec<RecordingSegment>,
@@ -959,35 +972,14 @@ async fn stop_recording(
 
             let camera_start_time = s.pipeline.camera.as_ref().map(|camera| {
                 let raw_camera_start = to_start_time(camera.first_timestamp);
-                if let Some(mic_start) = mic_start_time {
-                    let sync_offset = raw_camera_start - mic_start;
-                    if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
-                        mic_start
-                    } else {
-                        raw_camera_start
-                    }
-                } else {
-                    raw_camera_start
-                }
+                snap_nearby_start_time(raw_camera_start, mic_start_time, CROSS_TRACK_SNAP_SECS)
             });
 
             let raw_display_start = to_start_time(s.pipeline.screen.first_timestamp);
-            let display_start_time = if let Some(cam_start) = camera_start_time {
-                let sync_offset = raw_display_start - cam_start;
-                if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
-                    cam_start
-                } else {
-                    raw_display_start
-                }
-            } else if let Some(mic_start) = mic_start_time {
-                let sync_offset = raw_display_start - mic_start;
-                if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
-                    mic_start
-                } else {
-                    raw_display_start
-                }
+            let display_start_time = if camera_start_time.is_some() {
+                snap_nearby_start_time(raw_display_start, camera_start_time, CROSS_TRACK_SNAP_SECS)
             } else {
-                raw_display_start
+                snap_nearby_start_time(raw_display_start, mic_start_time, CROSS_TRACK_SNAP_SECS)
             };
 
             let diagnostics =
@@ -1010,16 +1002,38 @@ async fn stop_recording(
                     );
                     DEFAULT_FPS
                 });
-            // Use the encoded display-media duration (frame_count / fps), not the wall-clock
-            // recording span which includes pipeline-drain latency. This is the timeline the
-            // recorder persists to project-config.json, so it is what un-edited recordings use; the
-            // editor/export fallbacks only synthesize a timeline when none is present and read the
-            // muxed container duration, which this closely (not bit-exactly) matches.
-            let display_media_duration = if display_fps > 0 {
-                s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
-            } else {
-                0.0
+            // Use the encoded display-media span (first to last muxed timestamp plus one
+            // nominal frame), not the wall-clock recording span which includes
+            // pipeline-drain latency, and not frame_count / fps, which under-reports VFR
+            // content by the length of every capture gap (static screens, dropped frames).
+            // This is the timeline the recorder persists to project-config.json, so it is
+            // what un-edited recordings use.
+            let display_media_duration = match s.pipeline.screen.video_timestamp_span {
+                Some((first, last)) if display_fps > 0 => {
+                    (last - first).as_secs_f64() + 1.0 / f64::from(display_fps)
+                }
+                _ if display_fps > 0 => {
+                    s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
+                }
+                _ => 0.0,
             };
+
+            // Non-fragmented recordings have their final display file already;
+            // verify the muxed container matches the timestamps we sent it.
+            // Fragmented recordings get the same check after remux in recovery.
+            if s.pipeline
+                .screen
+                .path
+                .extension()
+                .is_some_and(|e| e == "mp4")
+                && s.pipeline.screen.path.is_file()
+                && display_media_duration > 0.0
+            {
+                crate::output_validation::check_display_sync_span(
+                    &s.pipeline.screen.path,
+                    Duration::from_secs_f64(display_media_duration),
+                );
+            }
 
             SegmentOutput {
                 meta: MultipleSegment {
@@ -1050,19 +1064,17 @@ async fn stop_recording(
                     system_audio: s.pipeline.system_audio.map(|audio| {
                         let raw_sys_start = to_start_time(audio.first_timestamp);
                         let sys_start_time = if let Some(mic_start) = mic_start_time {
-                            let sync_offset = raw_sys_start - mic_start;
-                            if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
-                                mic_start
-                            } else {
-                                raw_sys_start
-                            }
+                            snap_nearby_start_time(
+                                raw_sys_start,
+                                Some(mic_start),
+                                CROSS_TRACK_SNAP_SECS,
+                            )
                         } else {
-                            let sync_offset = raw_sys_start - display_start_time;
-                            if sync_offset.abs() > CROSS_TRACK_SNAP_SECS {
-                                display_start_time
-                            } else {
-                                raw_sys_start
-                            }
+                            snap_nearby_start_time(
+                                raw_sys_start,
+                                Some(display_start_time),
+                                CROSS_TRACK_SNAP_SECS,
+                            )
                         };
                         AudioMeta {
                             path: make_relative(&audio.path),
@@ -1819,6 +1831,7 @@ mod tests {
             first_timestamp,
             video_info,
             video_frame_count,
+            video_timestamp_span: None,
             audio_gap_summary: None,
         }
     }
@@ -1939,6 +1952,71 @@ mod tests {
             48_000,
             2,
         )
+    }
+
+    #[test]
+    fn snap_nearby_start_time_keeps_far_track_start() {
+        assert_eq!(snap_nearby_start_time(0.2, Some(0.0), 0.04), 0.2);
+    }
+
+    #[test]
+    fn snap_nearby_start_time_aligns_near_track_start() {
+        assert_eq!(snap_nearby_start_time(0.02, Some(0.0), 0.04), 0.0);
+    }
+
+    #[tokio::test]
+    async fn stop_recording_preserves_far_display_start_time() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let recording_dir = temp_dir.path().join("recording");
+        let start_time = Timestamps::now();
+        std::fs::create_dir_all(recording_dir.join("content"))
+            .expect("recording content dir should be created");
+
+        let segment = RecordingSegment {
+            start: 0.0,
+            end: 1.0,
+            pipeline: FinishedPipeline {
+                start_time,
+                screen: test_finished_output_pipeline_at(
+                    recording_dir.join("content/display.mp4"),
+                    Timestamp::Instant(start_time.instant() + Duration::from_millis(200)),
+                    Some(test_video_info()),
+                    60,
+                ),
+                microphone: Some(test_finished_output_pipeline_at(
+                    recording_dir.join("content/mic.ogg"),
+                    Timestamp::Instant(start_time.instant()),
+                    None,
+                    0,
+                )),
+                camera: None,
+                system_audio: None,
+                cursor: None,
+                track_failures: Vec::new(),
+            },
+            camera_device_id: None,
+            mic_device_id: Some("mic".to_string()),
+        };
+
+        let completed = stop_recording(
+            recording_dir.clone(),
+            vec![segment],
+            Default::default(),
+            false,
+        )
+        .await
+        .expect("recording should stop");
+
+        let StudioRecordingMeta::MultipleSegments { inner } = completed.meta else {
+            panic!("expected multiple segments meta");
+        };
+        let segment = inner.segments.first().expect("segment should be present");
+
+        assert_eq!(segment.display.start_time, Some(0.2));
+        assert_eq!(
+            segment.mic.as_ref().and_then(|mic| mic.start_time),
+            Some(0.0)
+        );
     }
 
     #[test]

@@ -284,7 +284,7 @@ function ScreenshotItem(props: {
 	return (
 		<li
 			onClick={props.onClick}
-			class="flex flex-row justify-between p-3 not-last:border-b not-last:border-gray-3 items-center w-full cursor-pointer hover:bg-gray-3 transition-colors duration-200"
+			class="flex flex-row justify-between p-3 not-last:border-b not-last:border-gray-3 items-center w-full hover:bg-gray-3 transition-colors duration-200"
 		>
 			<div class="flex gap-5 items-center">
 				<Show

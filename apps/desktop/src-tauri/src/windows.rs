@@ -1785,13 +1785,25 @@ impl ShowCapWindow {
             Self::Editor { .. } => {
                 hide_recording_windows(app, false);
 
-                let window = self
+                let window = match self
                     .window_builder(app, "/editor")
                     .maximizable(true)
                     .inner_size(1275.0, 800.0)
                     .min_inner_size(1275.0, 800.0)
                     .focused(true)
-                    .build()?;
+                    .build()
+                {
+                    Ok(window) => window,
+                    Err(error) => {
+                        // Don't leave the prewarmed instance (decoders, frame
+                        // websocket) orphaned if the window failed to appear.
+                        let window_label = self.id(app).label();
+                        PendingEditorInstances::get(app)
+                            .cancel_prewarm(&window_label)
+                            .await;
+                        return Err(error);
+                    }
+                };
                 lock_window_text_scale(&window);
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(1275.0, 800.0);
@@ -1806,6 +1818,22 @@ impl ShowCapWindow {
                     if let Err(e) = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y)) {
                         warn!("Failed to position Editor window on Windows: {}", e);
                     }
+                }
+
+                // Show immediately: the native background color is already
+                // themed, so the window can appear before the webview loads and
+                // the editor skeleton takes over. When window transparency is
+                // enabled we keep the old behaviour (the frontend reveals the
+                // window after applying the HudWindow effects) to avoid an
+                // opaque-to-transparent pop.
+                let transparency_enabled = GeneralSettingsStore::get(app)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.window_transparency)
+                    .unwrap_or(false);
+                if !transparency_enabled {
+                    window.show().ok();
+                    window.set_focus().ok();
                 }
 
                 window
@@ -2672,9 +2700,12 @@ impl ShowCapWindow {
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
         let id = self.id(app);
 
-        let theme = GeneralSettingsStore::get(app)
-            .ok()
-            .flatten()
+        let settings = GeneralSettingsStore::get(app).ok().flatten();
+        let window_transparency_enabled = settings
+            .as_ref()
+            .map(|s| s.window_transparency)
+            .unwrap_or(false);
+        let theme = settings
             .map(|s| match s.theme {
                 AppTheme::System => None,
                 AppTheme::Light => Some(tauri::Theme::Light),
@@ -2702,6 +2733,20 @@ impl ShowCapWindow {
                 r#"(function(){{var s=document.createElement('style');s.textContent='html,body{{background-color:{bg_color}}}';document.documentElement.appendChild(s);}})();"#
             );
             builder = builder.initialization_script(&init_script);
+
+            // Native backing color so the window is themed before the webview's
+            // first paint, allowing windows to be shown immediately without a
+            // white/black flash. Skipped when the user has window transparency
+            // enabled: an opaque native background would sit behind the
+            // translucent webview content and defeat the effect.
+            if !window_transparency_enabled {
+                let native_bg = if is_dark {
+                    tauri::window::Color(0x14, 0x14, 0x14, 0xff)
+                } else {
+                    tauri::window::Color(0xff, 0xff, 0xff, 0xff)
+                };
+                builder = builder.background_color(native_bg);
+            }
         }
 
         if let Some(min) = id.min_size() {

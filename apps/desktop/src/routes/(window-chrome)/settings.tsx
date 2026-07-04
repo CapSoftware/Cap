@@ -549,7 +549,7 @@ export default function Settings(props: RouteSectionProps) {
 					</Show>
 				</div>
 			</div>
-			<div class="cap-settings-content overflow-y-hidden flex-1 animate-in min-w-0">
+			<div class="cap-settings-content overflow-y-hidden flex-1 min-w-0">
 				<CapErrorBoundary>
 					<Suspense fallback={<SettingsContentSkeleton />}>
 						{props.children}

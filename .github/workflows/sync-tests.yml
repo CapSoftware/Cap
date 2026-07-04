@@ -1,0 +1,161 @@
+name: A/V Sync Tests
+
+# Verifies audio/video sync correctness on every platform:
+#   1. Unit + property tests for the timestamp pipeline (encoders, drift
+#      trackers, muxers).
+#   2. The synthetic device matrix: fake cameras/screens/microphones across
+#      frame rates, sample rates, channel counts and delivery pathologies
+#      (jitter, drops, static-screen gaps), driven through the real recording
+#      pipeline and verified at the container level. No capture hardware or
+#      GPU required, so results are deterministic on hosted runners.
+#
+# Findings are published as a job-summary table and a JSON artifact per OS.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * *"
+  pull_request:
+    paths:
+      - "crates/recording/**"
+      - "crates/enc-ffmpeg/**"
+      - "crates/enc-avfoundation/**"
+      - "crates/enc-mediafoundation/**"
+      - "crates/timestamp/**"
+      - "crates/rendering/**"
+      - "crates/media-info/**"
+      - ".github/workflows/sync-tests.yml"
+
+concurrency:
+  group: sync-tests-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-latest
+          - windows-2022
+          - ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || runner.os == 'macOS' && 'aarch64-apple-darwin' || 'x86_64-unknown-linux-gnu' }}
+
+      - name: Install desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
+        run: node scripts/setup.js
+
+      - name: Add FFmpeg DLLs to PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      - name: Install software Vulkan driver (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+
+      - name: Timestamp pipeline unit + property tests
+        shell: bash
+        run: |
+          cargo test --locked -p cap-timestamp -p cap-enc-ffmpeg
+          cargo test --locked -p cap-recording --lib
+          cargo test --locked -p cap-rendering
+
+      - name: Synthetic device matrix
+        id: matrix
+        continue-on-error: true
+        shell: bash
+        env:
+          CAP_SYNC_MATRIX_REPORT: ${{ github.workspace }}/sync-matrix-${{ matrix.runner }}.json
+          CAP_SYNC_MATRIX_RANDOM_CASES: ${{ github.event_name == 'schedule' && '40' || '6' }}
+        run: |
+          cargo test --locked -p cap-recording --test sync_matrix -- --nocapture
+
+      # Verifies the editor's playback machinery (decoders, frame scheduling,
+      # audio pipeline) preserves sync. The fixture recording is generated
+      # through the real recording pipeline, so no capture hardware is needed;
+      # rendering uses the platform's software adapter where no GPU exists.
+      # 30s of pattern stabilizes the drift slope against frame-quantization
+      # noise. Playback runs at the default 30 fps: lower rates trip the audio
+      # sync policy's drift-correction threshold every few frames and accrue
+      # real (policy-induced) drift that fails the gate.
+      #
+      # Linux-only: the Windows WARP adapter composites blank frames and the
+      # macOS runners' paravirtualized Metal collapses to ~2 fps presentation
+      # regardless of decoder, so neither can sustain a wall-clock playback
+      # measurement. The decoder logic under test (FFmpeg gap holds) is fully
+      # exercised here; the macOS AVAssetReader path is covered by running
+      # `cap selftest playback` locally on real hardware.
+      - name: Editor playback sync harness
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo run --locked -p cap -- --log-level info selftest playback --duration 30 --json
+
+      - name: Report findings
+        if: always()
+        shell: bash
+        run: |
+          REPORT="${{ github.workspace }}/sync-matrix-${{ matrix.runner }}.json"
+          {
+            echo "## A/V sync matrix — ${{ matrix.runner }}"
+            echo ""
+            if [ -f "$REPORT" ]; then
+              PYTHONIOENCODING=utf-8 python3 - "$REPORT" << 'PYEOF'
+          import json, sys
+          report = json.load(open(sys.argv[1]))
+          print(f"Randomized seed: `{report.get('seed')}` (rerun with CAP_SYNC_MATRIX_SEED)")
+          print()
+          print("| Case | Result | Detail |")
+          print("| --- | --- | --- |")
+          for case in report.get("cases", []):
+              verdict = "PASS" if case["pass"] else "FAIL"
+              detail = case["detail"].replace("|", "\\|")
+              print(f"| {case['name']} | {verdict} | {detail} |")
+          PYEOF
+            else
+              echo "No report produced — the matrix crashed before writing results."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-matrix-${{ matrix.runner }}
+          path: ${{ github.workspace }}/sync-matrix-${{ matrix.runner }}.json
+          if-no-files-found: ignore
+
+      - name: Fail on matrix failures
+        if: steps.matrix.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "Synthetic sync matrix reported failures; see the job summary." >&2
+          exit 1

@@ -256,7 +256,7 @@ export function LayersPanel() {
 										onMouseDown={(e) => handleMouseDown(ann, e)}
 										onClick={(e) => handleLayerClick(ann, e)}
 										class={cx(
-											"flex items-center gap-2 px-2 py-1.5 mx-1 rounded-md cursor-pointer transition-all group",
+											"flex items-center gap-2 px-2 py-1.5 mx-1 rounded-md transition-all group",
 											isSelected()
 												? "bg-blue-3 dark:bg-blue-4"
 												: "hover:bg-gray-3",

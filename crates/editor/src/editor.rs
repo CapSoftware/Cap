@@ -19,7 +19,7 @@ pub enum RendererMessage {
     RenderFrame {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
-        finished: oneshot::Sender<()>,
+        finished: oneshot::Sender<bool>,
         cursor: Arc<CursorEvents>,
         queued_at: Instant,
     },
@@ -144,7 +144,7 @@ impl Renderer {
         struct PendingFrame {
             segment_frames: DecodedSegmentFrames,
             uniforms: ProjectUniforms,
-            finished: oneshot::Sender<()>,
+            finished: oneshot::Sender<bool>,
             cursor: Arc<CursorEvents>,
             queued_at: Instant,
         }
@@ -201,7 +201,7 @@ impl Renderer {
                     } => {
                         let dropped_frame_number = current.uniforms.frame_number;
                         let replacement_frame_number = uniforms.frame_number;
-                        let _ = current.finished.send(());
+                        let _ = current.finished.send(false);
                         if let Some(telemetry) = &telemetry {
                             telemetry.emit(PlaybackTelemetryEvent::RendererDropped {
                                 frame_number: dropped_frame_number,
@@ -218,7 +218,7 @@ impl Renderer {
                         drained_count += 1;
                     }
                     RendererMessage::Stop { finished } => {
-                        let _ = current.finished.send(());
+                        let _ = current.finished.send(false);
                         let _ = finished.send(());
                         return;
                     }
@@ -273,13 +273,13 @@ impl Renderer {
                             output_format,
                         });
                     }
+                    let _ = current.finished.send(true);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to render frame in editor");
+                    let _ = current.finished.send(false);
                 }
             }
-
-            let _ = current.finished.send(());
         }
     }
 
@@ -354,6 +354,31 @@ impl RendererHandle {
         }
     }
 
+    pub async fn render_frame_confirmed(
+        &self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: Arc<CursorEvents>,
+    ) -> bool {
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let frame_number = uniforms.frame_number;
+        let msg = RendererMessage::RenderFrame {
+            segment_frames,
+            uniforms,
+            finished: finished_tx,
+            cursor,
+            queued_at: Instant::now(),
+        };
+        if self.tx.send(msg).await.is_err() {
+            if let Some(telemetry) = &self.telemetry {
+                telemetry.emit(PlaybackTelemetryEvent::RendererSendFailed { frame_number });
+            }
+            return false;
+        }
+
+        finished_rx.await.unwrap_or(false)
+    }
+
     pub fn render_frame_wait(
         &self,
         segment_frames: DecodedSegmentFrames,
@@ -376,7 +401,7 @@ impl RendererHandle {
             return false;
         }
 
-        finished_rx.blocking_recv().is_ok()
+        finished_rx.blocking_recv().unwrap_or(false)
     }
 
     pub async fn stop(&self) {

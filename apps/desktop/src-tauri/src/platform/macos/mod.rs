@@ -213,13 +213,10 @@ pub fn apply_liquid_glass_background(
         // single inheritance path.
         //
         // macOS 26.3 shipped an NSGlassEffectView that responds to neither selector,
-        // so the pin silently fails. We MUST NOT proceed to disable occlusion
-        // detection in that state: an occlusion-suppressed window whose private glass
-        // view is not pinned active leaves WindowServer unable to ever quiesce the
-        // surface, which wedges the compositor when the window is hidden/closed and
-        // takes down the whole login session. When we can't pin the material, abandon
-        // the private SPI entirely and let the caller fall back to NSVisualEffectView
-        // vibrancy (Ok(false)).
+        // so the pin silently fails. In that state the material can't be relied on
+        // (it dims whenever another window becomes key), so abandon the private SPI
+        // entirely and let the caller fall back to NSVisualEffectView vibrancy
+        // (Ok(false)).
         if !force_glass_view_always_active(glass_view) {
             // Never entered the view hierarchy; balance the alloc and bail. The
             // content-layer squircle clip applied above is kept (plain Core Animation,
@@ -236,19 +233,19 @@ pub fn apply_liquid_glass_background(
         let _: () = msg_send![ns_window, setOpaque: false];
         let _: () = msg_send![ns_window, setBackgroundColor: clear_color];
 
-        // Stop AppKit from marking the window "occluded" when another app becomes
-        // frontmost. The OS treats a window-without-key as occluded for power-saving
-        // purposes and freezes the contentView's rendering loop — which means the
-        // NSGlassEffectView's backdrop sampling pauses on the last frame, so the
-        // glass shows whatever happened to be behind us at the moment we lost focus
-        // (Safari, etc.) instead of reflecting the live backdrop change. There's no
-        // public API for this; probe the private setters used across NSWindow and
-        // NSPanel SPI variants, plus the same SPI on the embedded WKWebView since
-        // its pause is what actually freezes the contentView's render loop. Only
-        // reached once the glass view pinned active (see above); reversed by
-        // teardown_liquid_glass_ns before the window is hidden or the process exits.
-        disable_window_occlusion_detection(ns_window);
-        disable_webview_occlusion_detection(content_view);
+        // Deliberately DO NOT disable window/WKWebView occlusion detection here.
+        // Earlier builds called the private `_setWindowOcclusionDetectionEnabled:` /
+        // `_setWebViewWindowOcclusionDetectionEnabled:` SPI so the glass backdrop kept
+        // sampling while Cap was unfocused, but an occlusion-suppressed surface is one
+        // WindowServer can never quiesce — on macOS 26 that wedged the compositor when
+        // the window was later hidden or the app quit (often after sleep/lid-close),
+        // watchdog-stalling WindowServer and soft-restarting the whole login session.
+        // Gating it on the always-active pin was not enough: the main window's
+        // close-to-tray path hides the window without any teardown, so any future
+        // macOS build where the pin succeeds would silently re-arm the wedge. The
+        // only field-verified-safe configuration is to leave occlusion detection
+        // alone entirely; the trade-off is merely cosmetic (backdrop sampling may
+        // pause on the last frame while the app is deactivated).
 
         let _: () = msg_send![glass_view, setAutoresizingMask: 18usize];
         let _: () = msg_send![
@@ -265,144 +262,6 @@ pub fn apply_liquid_glass_background(
 
         crate::crash_sentinel::set_liquid_glass_outcome("applied");
         Ok(true)
-    }
-}
-
-unsafe fn disable_window_occlusion_detection(ns_window: cocoa::base::id) {
-    use objc::{msg_send, sel, sel_impl};
-
-    // Apple uses different naming for this private SPI between NSWindow and
-    // various AppKit subclasses (and the name has shifted across OS versions).
-    // Try each variant directly; respondsToSelector keeps the call safe.
-    unsafe {
-        let responds: bool = msg_send![
-            ns_window,
-            respondsToSelector: sel!(_setWindowOcclusionDetectionEnabled:)
-        ];
-        if responds {
-            let _: () = msg_send![ns_window, _setWindowOcclusionDetectionEnabled: false];
-            tracing::info!(
-                target: "cap_desktop_lib::liquid_glass",
-                "Disabled window occlusion detection via _setWindowOcclusionDetectionEnabled:"
-            );
-            return;
-        }
-
-        let responds: bool = msg_send![
-            ns_window,
-            respondsToSelector: sel!(setWindowOcclusionDetectionEnabled:)
-        ];
-        if responds {
-            let _: () = msg_send![ns_window, setWindowOcclusionDetectionEnabled: false];
-            tracing::info!(
-                target: "cap_desktop_lib::liquid_glass",
-                "Disabled window occlusion detection via setWindowOcclusionDetectionEnabled:"
-            );
-            return;
-        }
-
-        let responds: bool = msg_send![
-            ns_window,
-            respondsToSelector: sel!(_setOcclusionDetectionEnabled:)
-        ];
-        if responds {
-            let _: () = msg_send![ns_window, _setOcclusionDetectionEnabled: false];
-            tracing::info!(
-                target: "cap_desktop_lib::liquid_glass",
-                "Disabled window occlusion detection via _setOcclusionDetectionEnabled:"
-            );
-            return;
-        }
-
-        let responds: bool = msg_send![
-            ns_window,
-            respondsToSelector: sel!(setOcclusionDetectionEnabled:)
-        ];
-        if responds {
-            let _: () = msg_send![ns_window, setOcclusionDetectionEnabled: false];
-            tracing::info!(
-                target: "cap_desktop_lib::liquid_glass",
-                "Disabled window occlusion detection via setOcclusionDetectionEnabled:"
-            );
-            return;
-        }
-
-        tracing::warn!(
-            target: "cap_desktop_lib::liquid_glass",
-            "NSWindow does not respond to any known occlusion-detection selector; \
-             glass backdrop will freeze when app deactivates"
-        );
-    }
-}
-
-unsafe fn disable_webview_occlusion_detection(content_view: cocoa::base::id) {
-    use cocoa::base::id;
-    use objc::{msg_send, runtime::Class, sel, sel_impl};
-
-    unsafe {
-        let Some(wkwebview_class) = Class::get("WKWebView") else {
-            tracing::warn!(
-                target: "cap_desktop_lib::liquid_glass",
-                "WKWebView class not found; skipping WebView occlusion fix"
-            );
-            return;
-        };
-        let wkwebview_class = wkwebview_class as *const Class;
-
-        let subviews: id = msg_send![content_view, subviews];
-        if subviews == cocoa::base::nil {
-            return;
-        }
-
-        let count: usize = msg_send![subviews, count];
-        for index in 0..count {
-            let subview: id = msg_send![subviews, objectAtIndex: index];
-            if subview == cocoa::base::nil {
-                continue;
-            }
-
-            let is_webview: bool = msg_send![subview, isKindOfClass: wkwebview_class];
-            if !is_webview {
-                continue;
-            }
-
-            let responds: bool = msg_send![
-                subview,
-                respondsToSelector: sel!(_setWebViewWindowOcclusionDetectionEnabled:)
-            ];
-            if responds {
-                let _: () = msg_send![subview, _setWebViewWindowOcclusionDetectionEnabled: false];
-                tracing::info!(
-                    target: "cap_desktop_lib::liquid_glass",
-                    "Disabled WKWebView occlusion via _setWebViewWindowOcclusionDetectionEnabled:"
-                );
-                return;
-            }
-
-            let responds: bool = msg_send![
-                subview,
-                respondsToSelector: sel!(_setWindowOcclusionDetectionEnabled:)
-            ];
-            if responds {
-                let _: () = msg_send![subview, _setWindowOcclusionDetectionEnabled: false];
-                tracing::info!(
-                    target: "cap_desktop_lib::liquid_glass",
-                    "Disabled WKWebView occlusion via _setWindowOcclusionDetectionEnabled:"
-                );
-                return;
-            }
-
-            tracing::warn!(
-                target: "cap_desktop_lib::liquid_glass",
-                "WKWebView does not respond to any known occlusion-detection selector"
-            );
-            return;
-        }
-
-        tracing::warn!(
-            target: "cap_desktop_lib::liquid_glass",
-            "No WKWebView found in content view subviews"
-        );
     }
 }
 
@@ -467,8 +326,9 @@ unsafe fn force_glass_view_always_active(glass_view: cocoa::base::id) -> bool {
 unsafe fn enable_window_occlusion_detection(ns_window: cocoa::base::id) {
     use objc::{msg_send, sel, sel_impl};
 
-    // Mirror disable_window_occlusion_detection: re-enable via whichever private SPI
-    // variant this AppKit build responds to, so the OS can quiesce the surface again.
+    // Defense-in-depth heal: current builds never disable occlusion detection, but
+    // re-assert the OS default via whichever private SPI variant this AppKit build
+    // responds to, so the OS can always quiesce the surface.
     unsafe {
         let responds: bool = msg_send![
             ns_window,

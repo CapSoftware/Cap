@@ -738,7 +738,7 @@ export function ConfigSidebar() {
 										class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
 									>
 										<RadioGroup.ItemInput class="sr-only" />
-										<RadioGroup.ItemLabel class="flex cursor-pointer items-start gap-3 p-3">
+										<RadioGroup.ItemLabel class="flex items-start gap-3 p-3">
 											<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
 											<div class="flex flex-col text-left">
 												<span class="text-sm font-medium text-gray-12">
@@ -822,7 +822,7 @@ export function ConfigSidebar() {
 										class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
 									>
 										<RadioGroup.ItemInput class="sr-only" />
-										<RadioGroup.ItemLabel class="flex cursor-pointer items-start gap-3 p-3">
+										<RadioGroup.ItemLabel class="flex items-start gap-3 p-3">
 											<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
 											<div class="flex flex-col text-left">
 												<span class="text-sm font-medium text-gray-12">
@@ -2157,7 +2157,7 @@ function BackgroundConfig(props: {
 											ensureBackgroundPresentation();
 										}}
 										class={cx(
-											"overflow-hidden relative w-full h-48 rounded-lg border transition cursor-pointer group",
+											"overflow-hidden relative w-full h-48 rounded-lg border transition group",
 											project.background.source.type === "wallpaper" &&
 												project.background.source.path === photo().rawPath
 												? "border-blue-9 ring-2 ring-blue-9"
@@ -2271,7 +2271,7 @@ function BackgroundConfig(props: {
 											class="relative aspect-square group"
 										>
 											<KRadioGroup.ItemInput class="peer" />
-											<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition cursor-pointer not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
+											<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
 												<img
 													src={photo.url}
 													loading="eager"
@@ -2292,7 +2292,7 @@ function BackgroundConfig(props: {
 														class="relative aspect-square group"
 													>
 														<KRadioGroup.ItemInput class="peer" />
-														<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border cursor-pointer border-gray-5 data-checked:border-blue-9 data-checked:ring-2 data-checked:ring-blue-9 peer-focus-visible:border-2 peer-focus-visible:border-blue-9">
+														<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border border-gray-5 data-checked:border-blue-9 data-checked:ring-2 data-checked:ring-blue-9 peer-focus-visible:border-2 peer-focus-visible:border-blue-9">
 															<img
 																src={photo.url}
 																alt="Wallpaper option"
@@ -2445,7 +2445,7 @@ function BackgroundConfig(props: {
 													}}
 												/>
 												<div
-													class="rounded-lg transition-all duration-200 cursor-pointer size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
+													class="rounded-lg transition-all duration-200 size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
 													style={{
 														background:
 															color === "#00000000"
@@ -2775,7 +2775,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 											<RadioGroup.ItemInput class="peer" />
 											<RadioGroup.ItemControl
 												class={cx(
-													"cursor-pointer size-6 shrink-0 rounded-md absolute flex justify-center items-center focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-blue-9 focus-visible:outline-offset-2 peer-focus-visible:outline-solid peer-focus-visible:outline-2 peer-focus-visible:outline-blue-9 peer-focus-visible:outline-offset-2 transition-colors duration-100",
+													"size-6 shrink-0 rounded-md absolute flex justify-center items-center focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-blue-9 focus-visible:outline-offset-2 peer-focus-visible:outline-solid peer-focus-visible:outline-2 peer-focus-visible:outline-blue-9 peer-focus-visible:outline-offset-2 transition-colors duration-100",
 													selected() ? "bg-blue-9" : "bg-gray-5",
 													item.x === "left"
 														? "left-2"
@@ -3143,7 +3143,7 @@ function HexColorInput(props: {
 				<div class="relative">
 					<button
 						type="button"
-						class="size-[2rem] rounded-[0.5rem] cursor-pointer transition-[box-shadow]"
+						class="size-[2rem] rounded-[0.5rem] transition-[box-shadow]"
 						style={{
 							"background-color": text(),
 							"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(
@@ -3157,7 +3157,7 @@ function HexColorInput(props: {
 							colorInput = el;
 						}}
 						type="color"
-						class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+						class="absolute inset-0 w-full h-full opacity-0"
 						value={text()}
 						onInput={(e) => {
 							const next = e.currentTarget.value;
@@ -3813,7 +3813,7 @@ function MaskSegmentConfig(props: {
 								class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
 							>
 								<RadioGroup.ItemInput class="sr-only" />
-								<RadioGroup.ItemLabel class="flex cursor-pointer items-center gap-2 p-2 text-sm text-gray-12">
+								<RadioGroup.ItemLabel class="flex items-center gap-2 p-2 text-sm text-gray-12">
 									<RadioGroup.ItemControl class="size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
 									{option.label}
 								</RadioGroup.ItemLabel>

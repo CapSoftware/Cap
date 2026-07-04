@@ -889,7 +889,7 @@ function ToggleStep(props: { active: boolean }) {
 							{(mode, index) => (
 								<div
 									class={cx(
-										"rounded-full flex items-center justify-center transition-colors duration-300 cursor-pointer hover:brightness-95 border",
+										"rounded-full flex items-center justify-center transition-colors duration-300 hover:brightness-95 border",
 										activeMode() === index()
 											? "bg-gray-7 border-transparent dark:border-gray-6"
 											: "bg-white dark:bg-gray-4 border-gray-5 dark:border-gray-6",
@@ -926,7 +926,7 @@ function ToggleStep(props: { active: boolean }) {
 						{(mode, index) => (
 							<span
 								class={cx(
-									"text-sm font-medium text-center transition-all duration-300 cursor-pointer",
+									"text-sm font-medium text-center transition-all duration-300",
 									activeMode() === index()
 										? "text-gray-12"
 										: "text-gray-9 opacity-50",
@@ -1912,7 +1912,7 @@ function StartupOverlay(props: {
 				style={{ transition: "all 600ms cubic-bezier(0.4, 0, 0.2, 1)" }}
 			>
 				<div class="text-center">
-					<div onClick={handleLogoClick} class="cursor-pointer inline-block">
+					<div onClick={handleLogoClick} class="inline-block">
 						<IconCapLogo
 							class={cx(
 								"w-20 h-24 mx-auto drop-shadow-[0_0_100px_rgba(0,0,0,0.2)]",

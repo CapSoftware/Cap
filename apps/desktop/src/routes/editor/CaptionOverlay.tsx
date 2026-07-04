@@ -298,7 +298,7 @@ export function CaptionOverlay(props: CaptionOverlayProps) {
 						classList={{
 							"border-blue-9 bg-blue-9/10 cursor-move":
 								selectedCaptionIndex() === caption().index,
-							"border-transparent hover:border-blue-6 hover:bg-blue-9/5 cursor-pointer":
+							"border-transparent hover:border-blue-6 hover:bg-blue-9/5":
 								selectedCaptionIndex() !== caption().index,
 						}}
 						style={{

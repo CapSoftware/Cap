@@ -589,7 +589,7 @@ function TranscriptWord(props: {
 				<span
 					ref={props.ref}
 					class={cx(
-						"cursor-pointer transition-colors duration-100 rounded-xs relative",
+						"transition-colors duration-100 rounded-xs relative",
 						props.isSelected && "bg-blue-4/50",
 						props.isActive
 							? "text-blue-11"

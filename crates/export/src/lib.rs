@@ -149,6 +149,13 @@ impl ExporterBuilder {
                 .await
                 .map_err(Error::MediaLoad)?;
 
+        // Audio decodes in the background after create_segments; exports must
+        // not silently drop a track, so fail loudly if any decode failed.
+        for segment in &segments {
+            segment.audio.get().await.map_err(Error::MediaLoad)?;
+            segment.system_audio.get().await.map_err(Error::MediaLoad)?;
+        }
+
         let output_path = self
             .output_path
             .unwrap_or_else(|| recording_meta.output_path());

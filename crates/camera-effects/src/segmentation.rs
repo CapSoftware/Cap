@@ -1,13 +1,15 @@
 use anyhow::Context;
 use ort::session::Session;
 use ort::value::Value;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 const ORT_LIBRARY_NAME: &str = "libonnxruntime.dylib";
 #[cfg(target_os = "linux")]
 const ORT_LIBRARY_NAME: &str = "libonnxruntime.so";
+#[cfg(target_os = "windows")]
+const ORT_LIBRARY_NAME: &str = "onnxruntime.dll";
 
 const MODEL_BYTES: &[u8] = include_bytes!("../assets/selfie_segmentation.onnx");
 const MODEL_INPUT_SIZE: usize = 256;
@@ -90,7 +92,7 @@ fn create_session() -> anyhow::Result<Session> {
     Ok(session)
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn init_runtime() -> anyhow::Result<()> {
     let path = std::env::var_os("ORT_DYLIB_PATH")
         .map(PathBuf::from)
@@ -108,12 +110,12 @@ fn init_runtime() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn init_runtime() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn onnx_runtime_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 

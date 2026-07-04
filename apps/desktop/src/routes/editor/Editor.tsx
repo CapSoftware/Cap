@@ -640,7 +640,7 @@ function Inner() {
 
 	return (
 		<Show when={!fullscreenMode()} fallback={<ExportPage />}>
-			<div class="flex flex-col flex-1 min-h-0 animate-in fade-in duration-300">
+			<div class="flex flex-col flex-1 min-h-0">
 				<Header />
 				<div
 					class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5"

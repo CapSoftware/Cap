@@ -115,9 +115,11 @@ use tracing::*;
 use upload::{create_or_get_video, upload_screenshot_bytes, upload_screenshot_file, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
+#[cfg(target_os = "macos")]
+use windows::hide_overlay;
 use windows::{
     CapWindowId, EditorRecordingTarget, EditorWindowIds, ScreenshotEditorWindowIds, ShowCapWindow,
-    hide_overlay, set_window_transparent, show_overlay,
+    set_window_transparent, show_overlay,
 };
 
 use crate::{recording::start_recording, upload::build_video_meta};
@@ -138,6 +140,65 @@ use tauri::menu::{
 
 type FinalizingRecordingsMap =
     std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>;
+
+const EDITOR_PREVIEW_FPS: u32 = 60;
+const EDITOR_OUTPUT_SIZE: XY<u32> = XY::new(1920, 1080);
+const DEFAULT_EDITOR_PREVIEW_SCALE_NUMERATOR: u32 = 65;
+const DEFAULT_EDITOR_PREVIEW_SCALE_DENOMINATOR: u32 = 100;
+
+fn default_editor_preview_resolution() -> XY<u32> {
+    scaled_editor_preview_resolution(
+        EDITOR_OUTPUT_SIZE,
+        DEFAULT_EDITOR_PREVIEW_SCALE_NUMERATOR,
+        DEFAULT_EDITOR_PREVIEW_SCALE_DENOMINATOR,
+    )
+}
+
+fn scaled_editor_preview_resolution(
+    output_size: XY<u32>,
+    numerator: u32,
+    denominator: u32,
+) -> XY<u32> {
+    XY::new(
+        scaled_editor_preview_dimension(output_size.x, numerator, denominator, 4, 4),
+        scaled_editor_preview_dimension(output_size.y, numerator, denominator, 2, 2),
+    )
+}
+
+fn scaled_editor_preview_dimension(
+    value: u32,
+    numerator: u32,
+    denominator: u32,
+    minimum: u32,
+    alignment: u32,
+) -> u32 {
+    let denominator = denominator.max(1);
+    let alignment = alignment.max(1);
+    let scaled = ((u64::from(value) * u64::from(numerator)) + (u64::from(denominator) / 2))
+        / u64::from(denominator);
+    let rounded = u32::try_from(scaled).unwrap_or(u32::MAX).max(minimum);
+    let aligned = u64::from(rounded).div_ceil(u64::from(alignment)) * u64::from(alignment);
+
+    u32::try_from(aligned).unwrap_or(u32::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_editor_preview_resolution_matches_frontend_defaults() {
+        assert_eq!(default_editor_preview_resolution(), XY::new(1248, 702));
+    }
+
+    #[test]
+    fn scaled_editor_preview_resolution_rounds_like_frontend() {
+        assert_eq!(
+            scaled_editor_preview_resolution(XY::new(1919, 1079), 65, 100),
+            XY::new(1248, 702)
+        );
+    }
+}
 
 #[derive(Default)]
 pub struct FinalizingRecordings {
@@ -2850,10 +2911,6 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
 
     let editor_instance = EditorInstances::get_or_create(&window, path).await?;
 
-    let meta = editor_instance.meta();
-
-    println!("Pretty name: {}", meta.pretty_name);
-
     Ok(SerializedEditorInstance {
         frames_socket_url: format!("ws://localhost:{}", editor_instance.ws_port),
         recording_duration: editor_instance.recordings.duration(),
@@ -4104,10 +4161,15 @@ async fn get_mic_waveforms(editor_instance: WindowEditorInstance) -> Result<Vec<
     let mut out = Vec::new();
 
     for segment in editor_instance.segment_medias.iter() {
-        if let Some(audio) = &segment.audio {
-            out.push(audio::get_waveform(audio));
-        } else {
-            out.push(Vec::new());
+        // Waits for the background decode; a failed track just renders as an
+        // empty waveform (playback/export surface the actual error).
+        match segment.audio.get().await {
+            Ok(Some(audio)) => out.push(audio::get_waveform(&audio)),
+            Ok(None) => out.push(Vec::new()),
+            Err(error) => {
+                warn!(%error, "Mic audio failed to load; returning empty waveform");
+                out.push(Vec::new());
+            }
         }
     }
 
@@ -4123,10 +4185,13 @@ async fn get_system_audio_waveforms(
     let mut out = Vec::new();
 
     for segment in editor_instance.segment_medias.iter() {
-        if let Some(audio) = &segment.system_audio {
-            out.push(audio::get_waveform(audio));
-        } else {
-            out.push(Vec::new());
+        match segment.system_audio.get().await {
+            Ok(Some(audio)) => out.push(audio::get_waveform(&audio)),
+            Ok(None) => out.push(Vec::new()),
+            Err(error) => {
+                warn!(%error, "System audio failed to load; returning empty waveform");
+                out.push(Vec::new());
+            }
         }
     }
 
@@ -6134,6 +6199,10 @@ async fn create_editor_instance_impl(
             });
         }
     });
+
+    instance
+        .preview_tx
+        .send_modify(|v| *v = Some((0, EDITOR_PREVIEW_FPS, default_editor_preview_resolution())));
 
     Ok((instance, event_id))
 }

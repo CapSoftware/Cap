@@ -211,7 +211,7 @@ pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {e}"))?;
-    let recordings_dir = GeneralSettingsStore::recordings_dir(&app);
+    let recordings_dir = GeneralSettingsStore::recordings_dir(app);
 
     let is_recording = {
         let app_lock = app.state::<ArcLock<crate::App>>();

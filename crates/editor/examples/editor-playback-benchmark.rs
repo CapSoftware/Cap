@@ -80,6 +80,12 @@ struct BenchmarkSummary {
     warmup_ms: f64,
     warmup_buffered_frames: usize,
     warmup_target_frames: usize,
+    audio_resolved_ms: Option<f64>,
+    audio_pipeline_ms: Option<f64>,
+    audio_pipeline_has_audio: bool,
+    clock_started_ms: Option<f64>,
+    first_submit_ms: Option<f64>,
+    first_renderer_frame_ms: Option<f64>,
     submitted_frames: u64,
     rendered_frames: u64,
     callback_frames: u64,
@@ -130,7 +136,21 @@ struct RenderSample {
 
 impl BenchmarkSummary {
     fn record_event(&mut self, event: PlaybackTelemetryEvent) {
+        self.record_event_at(event, None);
+    }
+
+    fn record_event_at(&mut self, event: PlaybackTelemetryEvent, press_elapsed_ms: Option<f64>) {
         match event {
+            PlaybackTelemetryEvent::AudioSegmentsResolved { elapsed } => {
+                self.audio_resolved_ms = Some(elapsed.as_secs_f64() * 1000.0);
+            }
+            PlaybackTelemetryEvent::AudioPipelineReady { elapsed, has_audio } => {
+                self.audio_pipeline_ms = Some(elapsed.as_secs_f64() * 1000.0);
+                self.audio_pipeline_has_audio = has_audio;
+            }
+            PlaybackTelemetryEvent::ClockStarted { elapsed } => {
+                self.clock_started_ms = Some(elapsed.as_secs_f64() * 1000.0);
+            }
             PlaybackTelemetryEvent::WarmupComplete {
                 elapsed,
                 buffered_frames,
@@ -152,6 +172,9 @@ impl BenchmarkSummary {
                 total_frames_skipped: _,
             } => {
                 self.submitted_frames += 1;
+                if self.first_submit_ms.is_none() {
+                    self.first_submit_ms = press_elapsed_ms;
+                }
                 *self.sources.entry(source).or_insert(0) += 1;
                 self.schedule_overshoot.push(schedule_overshoot);
                 self.frame_acquire.push(frame_acquire_duration);
@@ -181,6 +204,9 @@ impl BenchmarkSummary {
             } => {
                 let render_stage_timings = *render_stage_timings;
                 self.rendered_frames += 1;
+                if self.first_renderer_frame_ms.is_none() {
+                    self.first_renderer_frame_ms = press_elapsed_ms;
+                }
                 *self.output_formats.entry(output_format).or_insert(0) += 1;
                 self.queue_wait.push(queue_wait);
                 self.drain.push(drain_duration);
@@ -514,66 +540,138 @@ async fn main() {
         }
     };
 
+    // Sequential play presses: `--press-starts "0,45,0"` presses play at each
+    // listed time (seconds), running a short burst of frames per press. This
+    // mirrors play → scrub ahead → play. Without the flag there is a single
+    // press at --start-frame/--start-time.
+    let press_start_frames: Vec<u32> = arg_value(&args, "--press-starts")
+        .map(|s| {
+            s.split(',')
+                .filter_map(|v| v.trim().parse::<f64>().ok())
+                .map(|secs| (secs * fps as f64).round() as u32)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let presses: Vec<(u32, u64)> = if press_start_frames.is_empty() {
+        vec![(start_frame_number, target_frames)]
+    } else {
+        press_start_frames
+            .iter()
+            .map(|frame| (*frame, target_frames.min(90)))
+            .collect()
+    };
+
     let (_project_tx, project_rx) = watch::channel(project);
-    let playback = Playback {
-        renderer: renderer.clone(),
-        render_constants,
-        start_frame_number,
-        project: project_rx,
-        segment_medias,
-        music: cap_editor::MusicTracks::new(),
-        telemetry: Some(telemetry),
-    };
 
-    let playback_handle = match playback.start(fps, resolution_base).await {
-        Ok(handle) => handle,
-        Err(e) => {
-            eprintln!("Failed to start playback: {e:?}");
-            std::process::exit(1);
-        }
-    };
-
-    let start = Instant::now();
-    let timeout = Duration::from_secs_f64(target_frames as f64 / fps as f64 + 15.0);
-    let deadline = tokio::time::sleep(timeout);
-    tokio::pin!(deadline);
+    // One persistent output stream shared across presses, like the real app.
+    let audio_output = Arc::new(cap_editor::AudioOutput::new());
+    audio_output.prewarm();
 
     let mut summary = BenchmarkSummary::default();
+    let mut measured_elapsed = 0.0f64;
 
-    loop {
-        if summary.submitted_frames >= target_frames {
-            break;
-        }
+    for (press_idx, (press_start_frame, press_frames)) in presses.iter().copied().enumerate() {
+        let playback = Playback {
+            renderer: renderer.clone(),
+            render_constants: render_constants.clone(),
+            start_frame_number: press_start_frame,
+            project: project_rx.clone(),
+            segment_medias: segment_medias.clone(),
+            music: cap_editor::MusicTracks::new(),
+            audio_output: audio_output.clone(),
+            telemetry: Some(telemetry.clone()),
+        };
 
-        tokio::select! {
-            event = telemetry_rx.recv() => {
-                if let Some(event) = event {
-                    summary.record_event(event);
-                } else {
+        let press_instant = Instant::now();
+        let playback_handle = match playback.start(fps, resolution_base).await {
+            Ok(handle) => handle,
+            Err(e) => {
+                eprintln!("Failed to start playback: {e:?}");
+                std::process::exit(1);
+            }
+        };
+        let start_await_ms = press_instant.elapsed().as_secs_f64() * 1000.0;
+
+        let start = Instant::now();
+        let timeout = Duration::from_secs_f64(press_frames as f64 / fps as f64 + 15.0);
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+
+        let mut press_summary = BenchmarkSummary::default();
+
+        loop {
+            if press_summary.submitted_frames >= press_frames {
+                break;
+            }
+
+            tokio::select! {
+                event = telemetry_rx.recv() => {
+                    if let Some(event) = event {
+                        let press_elapsed_ms = press_instant.elapsed().as_secs_f64() * 1000.0;
+                        press_summary.record_event_at(event, Some(press_elapsed_ms));
+                    } else {
+                        break;
+                    }
+                }
+                bytes = frame_rx.recv() => {
+                    if let Some(bytes) = bytes {
+                        press_summary.record_callback_frame(bytes);
+                    }
+                }
+                _ = &mut deadline => {
                     break;
                 }
             }
-            bytes = frame_rx.recv() => {
-                if let Some(bytes) = bytes {
-                    summary.record_callback_frame(bytes);
-                }
-            }
-            _ = &mut deadline => {
-                break;
-            }
         }
-    }
 
-    let measured_elapsed = start.elapsed().as_secs_f64();
+        let press_elapsed = start.elapsed().as_secs_f64();
 
-    playback_handle.stop();
-    tokio::time::sleep(Duration::from_millis(250)).await;
+        playback_handle.stop();
+        tokio::time::sleep(Duration::from_millis(250)).await;
 
-    while let Ok(event) = telemetry_rx.try_recv() {
-        summary.record_event(event);
-    }
-    while let Ok(bytes) = frame_rx.try_recv() {
-        summary.record_callback_frame(bytes);
+        while let Ok(event) = telemetry_rx.try_recv() {
+            press_summary.record_event(event);
+        }
+        while let Ok(bytes) = frame_rx.try_recv() {
+            press_summary.record_callback_frame(bytes);
+        }
+
+        let press_time_secs = press_start_frame as f64 / fps as f64;
+        println!(
+            "\nPlay-start latency (press {} at t={:.1}s, frame {}):",
+            press_idx + 1,
+            press_time_secs,
+            press_start_frame
+        );
+        println!("  start() await:          {start_await_ms:>8.1}ms");
+        if let Some(ms) = press_summary.audio_resolved_ms {
+            println!("    audio decode wait:    {ms:>8.1}ms");
+        }
+        println!(
+            "  warmup (frame prefetch):{:>8.1}ms",
+            press_summary.warmup_ms
+        );
+        if let Some(ms) = press_summary.first_submit_ms {
+            println!("  first frame submitted:  {ms:>8.1}ms");
+        }
+        if let Some(ms) = press_summary.first_renderer_frame_ms {
+            println!("  first frame rendered:   {ms:>8.1}ms");
+        }
+        if let Some(ms) = press_summary.audio_pipeline_ms {
+            println!(
+                "  audio pipeline ready:   {ms:>8.1}ms (has_audio={})",
+                press_summary.audio_pipeline_has_audio
+            );
+        }
+        if let Some(ms) = press_summary.clock_started_ms {
+            println!("  TOTAL press-to-clock:   {ms:>8.1}ms");
+        } else {
+            println!("  TOTAL press-to-clock:   (clock start not observed)");
+        }
+
+        summary = press_summary;
+        measured_elapsed = press_elapsed;
     }
 
     renderer.stop().await;

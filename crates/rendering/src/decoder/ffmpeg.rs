@@ -19,7 +19,7 @@ use cap_video_decode::FrameTextures;
 
 use super::{
     DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage,
-    frame_converter::FrameConverter, pts_to_frame,
+    frame_converter::FrameConverter, pts_to_frame, record_pts_hole,
 };
 
 #[derive(Clone)]
@@ -70,7 +70,6 @@ struct PendingRequest {
 }
 
 const MAX_FRAME_LOOKBACK_TOLERANCE: u32 = 2;
-const MAX_FRAME_FALLBACK_DISTANCE: u32 = 90;
 
 fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
     let height = frame.height();
@@ -250,6 +249,17 @@ impl FfmpegDecoder {
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             let mut last_active_frame = None::<u32>;
+            // pts holes (start frame -> first frame after the hole) discovered
+            // from decode-order jumps; facts about the file, so they survive
+            // resets and cache eviction.
+            let mut pts_holes = BTreeMap::<u32, u32>::new();
+            // Content of the most recently served VFR hold, kept across
+            // requests so a hole keeps rendering its true frame even after
+            // the pre-hole frame leaves the cache.
+            let mut gap_hold: Option<OutputFrame> = None;
+            // Previous vended frame number since the last reset, for pts-hole
+            // discovery (the reader vends in pts order between resets).
+            let mut prev_vended: Option<u32> = None;
 
             let last_sent_frame = Rc::new(RefCell::new(None::<OutputFrame>));
             let first_ever_frame = Rc::new(RefCell::new(None::<OutputFrame>));
@@ -273,6 +283,14 @@ impl FfmpegDecoder {
 
                 let mut sw_cache = BTreeMap::<u32, CachedFrame>::new();
                 let mut sw_last_active_frame = None::<u32>;
+                // pts holes (start frame -> first frame after the hole) from
+                // decode-order jumps; facts about the file that survive resets
+                // and cache eviction.
+                let mut sw_pts_holes = BTreeMap::<u32, u32>::new();
+                // Content of the most recently served VFR hold.
+                let mut sw_gap_hold: Option<OutputFrame> = None;
+                // Previous vended frame number since the last reset.
+                let mut sw_prev_vended: Option<u32> = None;
                 let sw_last_sent_frame = Rc::new(RefCell::new(None::<OutputFrame>));
                 let sw_first_ever_frame = Rc::new(RefCell::new(None::<OutputFrame>));
                 let mut sw_frames = sw_this.frames();
@@ -289,6 +307,9 @@ impl FfmpegDecoder {
                     sw_cache.insert(current_frame, cache_frame);
                     *sw_first_ever_frame.borrow_mut() = Some(output.clone());
                     *sw_last_sent_frame.borrow_mut() = Some(output);
+                    // The pre-decoded frame is a real vend: without seeding
+                    // this, an opening static hold would never be recorded.
+                    sw_prev_vended = Some(current_frame);
                 }
 
                 let sw_decoder_type = DecoderType::FFmpegSoftware;
@@ -391,6 +412,29 @@ impl FfmpegDecoder {
                             sw_frames = sw_this.frames();
                             *sw_last_sent_frame.borrow_mut() = None;
                             sw_cache.clear();
+                            sw_prev_vended = None;
+                        }
+
+                        // Requests inside a KNOWN pts hole are answered with the
+                        // hole's start frame — the true VFR hold — without
+                        // touching the decoder; see the hardware path above.
+                        if !is_backward_seek
+                            && let Some(hole_start) = sw_pts_holes
+                                .range(..=requested_frame)
+                                .next_back()
+                                .filter(|&(_, &end)| requested_frame < end)
+                                .map(|(&start, _)| start)
+                        {
+                            let data = sw_cache
+                                .get_mut(&hole_start)
+                                .map(|c| c.produce(&mut sw_converter))
+                                .or_else(|| sw_gap_hold.clone().filter(|h| h.number == hole_start));
+                            if let Some(data) = data {
+                                sw_gap_hold = Some(data.clone());
+                                *sw_last_sent_frame.borrow_mut() = Some(data.clone());
+                                let _ = reply.send(data.frame);
+                                continue;
+                            }
                         }
 
                         if reply.is_closed() {
@@ -443,25 +487,46 @@ impl FfmpegDecoder {
                             sw_frames = sw_this.frames();
                             *sw_last_sent_frame.borrow_mut() = None;
                             sw_cache.clear();
+                            sw_prev_vended = None;
                         }
 
                         let mut exit = false;
+                        // Newest vended frame below the cache window: after a reset
+                        // the reader re-vends from the keyframe before the request,
+                        // and that frame is the true VFR hold for a request inside
+                        // a pts hole.
+                        let mut hold_candidate: Option<(u32, CachedFrame)> = None;
 
                         for frame in &mut sw_frames {
                             if reply_cell.borrow().as_ref().is_none_or(|r| r.is_closed()) {
                                 respond.take();
+                                // The frame just pulled is discarded: it breaks
+                                // the vend continuity that hole discovery
+                                // relies on.
+                                sw_prev_vended = None;
                                 break;
                             }
 
                             let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
+                                // A skipped frame breaks the vend continuity
+                                // that hole discovery relies on.
+                                sw_prev_vended = None;
                                 continue;
                             };
 
                             let Some(pts) = frame.pts() else {
+                                sw_prev_vended = None;
                                 continue;
                             };
                             let current_frame =
                                 pts_to_frame(pts - sw_start_time, sw_time_base, fps);
+
+                            if let Some(prev) = sw_prev_vended
+                                && current_frame > prev + 1
+                            {
+                                record_pts_hole(&mut sw_pts_holes, prev, current_frame);
+                            }
+                            sw_prev_vended = Some(current_frame);
 
                             let mut cache_frame = CachedFrame::Raw {
                                 frame,
@@ -476,16 +541,19 @@ impl FfmpegDecoder {
                             let exceeds_cache_bounds = current_frame > cache_max;
                             let too_small_for_cache_bounds = current_frame < cache_min;
 
-                            let cache_frame = if !too_small_for_cache_bounds {
-                                cache_frame.produce(&mut sw_converter);
-
-                                if current_frame == requested_frame
-                                    && let Some(respond) = respond.take()
-                                {
-                                    let output = cache_frame.produce(&mut sw_converter);
-                                    (respond)(output);
-                                    break;
+                            if too_small_for_cache_bounds {
+                                // Keep the newest pre-request frame as the VFR hold
+                                // candidate instead of discarding it; a frame below
+                                // the cache window can never exceed the request, so
+                                // nothing else in this iteration applies to it.
+                                if current_frame <= requested_frame {
+                                    hold_candidate = Some((current_frame, cache_frame));
                                 }
+                                continue;
+                            }
+
+                            {
+                                cache_frame.produce(&mut sw_converter);
 
                                 if sw_cache.len() >= FRAME_CACHE_SIZE {
                                     if let Some(last_active_frame) = &sw_last_active_frame {
@@ -505,28 +573,90 @@ impl FfmpegDecoder {
                                 }
 
                                 sw_cache.insert(current_frame, cache_frame);
-                                sw_cache.get_mut(&current_frame).unwrap()
-                            } else {
-                                &mut cache_frame
-                            };
+
+                                // Serve exact matches from the cache so
+                                // sequentially played frames stay available as
+                                // at-or-before holds for later gap requests.
+                                if current_frame == requested_frame
+                                    && let Some(respond) = respond.take()
+                                {
+                                    let output = sw_cache
+                                        .get_mut(&current_frame)
+                                        .unwrap()
+                                        .produce(&mut sw_converter);
+                                    (respond)(output);
+                                    break;
+                                }
+                            }
 
                             if current_frame > requested_frame && respond.is_some() {
-                                let last_sent_frame_clone = sw_last_sent_frame.borrow().clone();
-
-                                if let Some((respond, last_frame)) = last_sent_frame_clone
-                                    .filter(|l| {
-                                        l.number <= requested_frame
-                                            && requested_frame.saturating_sub(l.number)
-                                                <= MAX_FRAME_FALLBACK_DISTANCE
+                                // A frame at-or-before the request is the true content for
+                                // that time in a VFR recording: a pts gap means the frame
+                                // stayed on screen, however long the gap is. Prefer the
+                                // newest such frame among the cache, the hold candidate a
+                                // reset re-vended, and the persistent gap hold.
+                                let cached_before = sw_cache
+                                    .range(..=requested_frame)
+                                    .next_back()
+                                    .map(|(&n, _)| n);
+                                let candidate_number = hold_candidate
+                                    .as_ref()
+                                    .map(|(n, _)| *n)
+                                    .filter(|&n| n <= requested_frame);
+                                let hold_before = sw_gap_hold.clone().filter(|h| {
+                                    sw_pts_holes.get(&h.number).is_some_and(|&end| {
+                                        h.number <= requested_frame && requested_frame < end
                                     })
-                                    .and_then(|l| Some((respond.take()?, l)))
+                                });
+                                let last_before = sw_last_sent_frame
+                                    .borrow()
+                                    .as_ref()
+                                    .filter(|l| l.number <= requested_frame)
+                                    .cloned();
+                                let best_number = [
+                                    cached_before,
+                                    candidate_number,
+                                    hold_before.as_ref().map(|h| h.number),
+                                    last_before.as_ref().map(|l| l.number),
+                                ]
+                                .into_iter()
+                                .flatten()
+                                .max();
+
+                                if let Some(best_number) = best_number
+                                    && let Some(respond) = respond.take()
                                 {
-                                    (respond)(last_frame);
+                                    let output = if cached_before == Some(best_number) {
+                                        sw_cache
+                                            .get_mut(&best_number)
+                                            .unwrap()
+                                            .produce(&mut sw_converter)
+                                    } else if candidate_number == Some(best_number) {
+                                        let (_, mut candidate) = hold_candidate.take().unwrap();
+                                        candidate.produce(&mut sw_converter)
+                                    } else if hold_before.as_ref().map(|h| h.number)
+                                        == Some(best_number)
+                                    {
+                                        hold_before.unwrap()
+                                    } else {
+                                        last_before.unwrap()
+                                    };
+                                    sw_gap_hold = Some(output.clone());
+                                    (respond)(output);
                                 } else if let Some(respond) = respond.take() {
-                                    let output = cache_frame.produce(&mut sw_converter);
-                                    *sw_last_sent_frame.borrow_mut() = Some(output.clone());
+                                    let output = sw_cache
+                                        .get_mut(&current_frame)
+                                        .unwrap()
+                                        .produce(&mut sw_converter);
                                     (respond)(output);
                                 }
+
+                                // The request is answered; stop here so the
+                                // next sample stays in the decoder for the
+                                // next request. Pulling it now would discard
+                                // it at the reply guard and poison the vend
+                                // continuity that hole discovery relies on.
+                                break;
                             }
 
                             exit = exit || exceeds_cache_bounds;
@@ -539,18 +669,55 @@ impl FfmpegDecoder {
                         sw_last_active_frame = Some(requested_frame);
 
                         if let Some(respond) = respond.take() {
-                            let best_cached = sw_cache
+                            // The newest frame at-or-before the request is always a
+                            // valid VFR hold, regardless of how far back it is —
+                            // whether it is cached, was re-vended below the cache
+                            // window by a reset, or is the persistent gap hold.
+                            let cached_before = sw_cache
                                 .range(..=requested_frame)
                                 .next_back()
-                                .filter(|(k, _)| {
-                                    requested_frame.saturating_sub(**k)
-                                        <= MAX_FRAME_FALLBACK_DISTANCE
+                                .map(|(&n, _)| n);
+                            let candidate_number = hold_candidate
+                                .as_ref()
+                                .map(|(n, _)| *n)
+                                .filter(|&n| n <= requested_frame);
+                            let hold_before = sw_gap_hold.clone().filter(|h| {
+                                sw_pts_holes.get(&h.number).is_some_and(|&end| {
+                                    h.number <= requested_frame && requested_frame < end
                                 })
-                                .map(|(_, v)| v);
+                            });
+                            let last_before = sw_last_sent_frame
+                                .borrow()
+                                .as_ref()
+                                .filter(|l| l.number <= requested_frame)
+                                .cloned();
+                            let best_number = [
+                                cached_before,
+                                candidate_number,
+                                hold_before.as_ref().map(|h| h.number),
+                                last_before.as_ref().map(|l| l.number),
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .max();
 
-                            if let Some(cached) = best_cached {
-                                let output = cached.clone().produce(&mut sw_converter);
-                                *sw_last_sent_frame.borrow_mut() = Some(output.clone());
+                            if let Some(best_number) = best_number {
+                                let output = if cached_before == Some(best_number) {
+                                    sw_cache
+                                        .get_mut(&best_number)
+                                        .unwrap()
+                                        .produce(&mut sw_converter)
+                                } else if candidate_number == Some(best_number) {
+                                    let (_, mut candidate) = hold_candidate.take().unwrap();
+                                    candidate.produce(&mut sw_converter)
+                                } else if hold_before.as_ref().map(|h| h.number)
+                                    == Some(best_number)
+                                {
+                                    hold_before.unwrap()
+                                } else {
+                                    last_before.unwrap()
+                                };
+                                sw_gap_hold = Some(output.clone());
                                 (respond)(output);
                             } else {
                                 let last_frame_clone = sw_last_sent_frame.borrow().clone();
@@ -592,6 +759,9 @@ impl FfmpegDecoder {
                 cache.insert(current_frame, cache_frame);
                 *first_ever_frame.borrow_mut() = Some(output.clone());
                 *last_sent_frame.borrow_mut() = Some(output);
+                // The pre-decoded frame is a real vend: without seeding this,
+                // an opening static hold would never be recorded.
+                prev_vended = Some(current_frame);
                 info!(
                     "FFmpeg decoder '{}': pre-decoded first frame {} ({}x{})",
                     name, current_frame, video_width, video_height
@@ -701,6 +871,34 @@ impl FfmpegDecoder {
                         frames = this.frames();
                         *last_sent_frame.borrow_mut() = None;
                         cache.clear();
+                        prev_vended = None;
+                    }
+
+                    // Requests inside a KNOWN pts hole are answered with the
+                    // hole's start frame — the true VFR hold (the frame simply
+                    // stayed on screen) — without touching the decoder. This
+                    // keeps the post-hole frames cached and the reader parked,
+                    // however long the hole runs. Only recorded holes qualify: a
+                    // bare "some cached frame lies beyond the request" test would
+                    // also match disjoint cache islands left by seeks, and
+                    // serving stale content there would freeze playback.
+                    if !is_backward_seek
+                        && let Some(hole_start) = pts_holes
+                            .range(..=requested_frame)
+                            .next_back()
+                            .filter(|&(_, &end)| requested_frame < end)
+                            .map(|(&start, _)| start)
+                    {
+                        let data = cache
+                            .get_mut(&hole_start)
+                            .map(|c| c.produce(&mut converter))
+                            .or_else(|| gap_hold.clone().filter(|h| h.number == hole_start));
+                        if let Some(data) = data {
+                            gap_hold = Some(data.clone());
+                            *last_sent_frame.borrow_mut() = Some(data.clone());
+                            let _ = reply.send(data.frame);
+                            continue;
+                        }
                     }
 
                     if reply.is_closed() {
@@ -752,24 +950,44 @@ impl FfmpegDecoder {
                         frames = this.frames();
                         *last_sent_frame.borrow_mut() = None;
                         cache.clear();
+                        prev_vended = None;
                     }
 
                     let mut exit = false;
+                    // Newest vended frame below the cache window: after a reset
+                    // the reader re-vends from the keyframe before the request,
+                    // and that frame is the true VFR hold for a request inside
+                    // a pts hole.
+                    let mut hold_candidate: Option<(u32, CachedFrame)> = None;
 
                     for frame in &mut frames {
                         if reply_cell.borrow().as_ref().is_none_or(|r| r.is_closed()) {
                             respond.take();
+                            // The frame just pulled is discarded: it breaks the
+                            // vend continuity that hole discovery relies on.
+                            prev_vended = None;
                             break;
                         }
 
                         let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
+                            // A skipped frame breaks the vend continuity that
+                            // hole discovery relies on.
+                            prev_vended = None;
                             continue;
                         };
 
                         let Some(pts) = frame.pts() else {
+                            prev_vended = None;
                             continue;
                         };
                         let current_frame = pts_to_frame(pts - start_time, time_base, fps);
+
+                        if let Some(prev) = prev_vended
+                            && current_frame > prev + 1
+                        {
+                            record_pts_hole(&mut pts_holes, prev, current_frame);
+                        }
+                        prev_vended = Some(current_frame);
 
                         let mut cache_frame = CachedFrame::Raw {
                             frame,
@@ -784,17 +1002,19 @@ impl FfmpegDecoder {
                         let exceeds_cache_bounds = current_frame > cache_max;
                         let too_small_for_cache_bounds = current_frame < cache_min;
 
-                        let cache_frame = if !too_small_for_cache_bounds {
-                            cache_frame.produce(&mut converter);
-
-                            if current_frame == requested_frame
-                                && let Some(respond) = respond.take()
-                            {
-                                let output = cache_frame.produce(&mut converter);
-                                (respond)(output);
-
-                                break;
+                        if too_small_for_cache_bounds {
+                            // Keep the newest pre-request frame as the VFR hold
+                            // candidate instead of discarding it; a frame below
+                            // the cache window can never exceed the request, so
+                            // nothing else in this iteration applies to it.
+                            if current_frame <= requested_frame {
+                                hold_candidate = Some((current_frame, cache_frame));
                             }
+                            continue;
+                        }
+
+                        {
+                            cache_frame.produce(&mut converter);
 
                             if cache.len() >= FRAME_CACHE_SIZE {
                                 if let Some(last_active_frame) = &last_active_frame {
@@ -816,28 +1036,85 @@ impl FfmpegDecoder {
                             }
 
                             cache.insert(current_frame, cache_frame);
-                            cache.get_mut(&current_frame).unwrap()
-                        } else {
-                            &mut cache_frame
-                        };
+
+                            // Serve exact matches from the cache so
+                            // sequentially played frames stay available as
+                            // at-or-before holds for later gap requests.
+                            if current_frame == requested_frame
+                                && let Some(respond) = respond.take()
+                            {
+                                let output = cache
+                                    .get_mut(&current_frame)
+                                    .unwrap()
+                                    .produce(&mut converter);
+                                (respond)(output);
+                                break;
+                            }
+                        }
 
                         if current_frame > requested_frame && respond.is_some() {
-                            let last_sent_frame_clone = last_sent_frame.borrow().clone();
-
-                            if let Some((respond, last_frame)) = last_sent_frame_clone
-                                .filter(|l| {
-                                    l.number <= requested_frame
-                                        && requested_frame.saturating_sub(l.number)
-                                            <= MAX_FRAME_FALLBACK_DISTANCE
+                            // A frame at-or-before the request is the true content for
+                            // that time in a VFR recording: a pts gap means the frame
+                            // stayed on screen, however long the gap is. Prefer the
+                            // newest such frame among the cache, the hold candidate a
+                            // reset re-vended, and the persistent gap hold.
+                            let cached_before =
+                                cache.range(..=requested_frame).next_back().map(|(&n, _)| n);
+                            let candidate_number = hold_candidate
+                                .as_ref()
+                                .map(|(n, _)| *n)
+                                .filter(|&n| n <= requested_frame);
+                            let hold_before = gap_hold.clone().filter(|h| {
+                                pts_holes.get(&h.number).is_some_and(|&end| {
+                                    h.number <= requested_frame && requested_frame < end
                                 })
-                                .and_then(|l| Some((respond.take()?, l)))
+                            });
+                            let last_before = last_sent_frame
+                                .borrow()
+                                .as_ref()
+                                .filter(|l| l.number <= requested_frame)
+                                .cloned();
+                            let best_number = [
+                                cached_before,
+                                candidate_number,
+                                hold_before.as_ref().map(|h| h.number),
+                                last_before.as_ref().map(|l| l.number),
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .max();
+
+                            if let Some(best_number) = best_number
+                                && let Some(respond) = respond.take()
                             {
-                                (respond)(last_frame);
+                                let output = if cached_before == Some(best_number) {
+                                    cache.get_mut(&best_number).unwrap().produce(&mut converter)
+                                } else if candidate_number == Some(best_number) {
+                                    let (_, mut candidate) = hold_candidate.take().unwrap();
+                                    candidate.produce(&mut converter)
+                                } else if hold_before.as_ref().map(|h| h.number)
+                                    == Some(best_number)
+                                {
+                                    hold_before.unwrap()
+                                } else {
+                                    last_before.unwrap()
+                                };
+                                gap_hold = Some(output.clone());
+                                (respond)(output);
                             } else if let Some(respond) = respond.take() {
-                                let output = cache_frame.produce(&mut converter);
-                                *last_sent_frame.borrow_mut() = Some(output.clone());
+                                let output = cache
+                                    .get_mut(&current_frame)
+                                    .unwrap()
+                                    .produce(&mut converter);
                                 (respond)(output);
                             }
+
+                            // The request is answered; stop here so the next
+                            // sample stays in the decoder for the next
+                            // request. Pulling it now would discard it at the
+                            // reply guard and poison the vend continuity that
+                            // hole discovery relies on.
+                            break;
                         }
 
                         exit = exit || exceeds_cache_bounds;
@@ -850,17 +1127,48 @@ impl FfmpegDecoder {
                     last_active_frame = Some(requested_frame);
 
                     if let Some(respond) = respond.take() {
-                        let best_cached = cache
-                            .range(..=requested_frame)
-                            .next_back()
-                            .filter(|(k, _)| {
-                                requested_frame.saturating_sub(**k) <= MAX_FRAME_FALLBACK_DISTANCE
+                        // The newest frame at-or-before the request is always a valid
+                        // VFR hold, regardless of how far back it is — whether it is
+                        // cached, was re-vended below the cache window by a reset, or
+                        // is the persistent gap hold.
+                        let cached_before =
+                            cache.range(..=requested_frame).next_back().map(|(&n, _)| n);
+                        let candidate_number = hold_candidate
+                            .as_ref()
+                            .map(|(n, _)| *n)
+                            .filter(|&n| n <= requested_frame);
+                        let hold_before = gap_hold.clone().filter(|h| {
+                            pts_holes.get(&h.number).is_some_and(|&end| {
+                                h.number <= requested_frame && requested_frame < end
                             })
-                            .map(|(_, v)| v);
+                        });
+                        let last_before = last_sent_frame
+                            .borrow()
+                            .as_ref()
+                            .filter(|l| l.number <= requested_frame)
+                            .cloned();
+                        let best_number = [
+                            cached_before,
+                            candidate_number,
+                            hold_before.as_ref().map(|h| h.number),
+                            last_before.as_ref().map(|l| l.number),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .max();
 
-                        if let Some(cached) = best_cached {
-                            let output = cached.clone().produce(&mut converter);
-                            *last_sent_frame.borrow_mut() = Some(output.clone());
+                        if let Some(best_number) = best_number {
+                            let output = if cached_before == Some(best_number) {
+                                cache.get_mut(&best_number).unwrap().produce(&mut converter)
+                            } else if candidate_number == Some(best_number) {
+                                let (_, mut candidate) = hold_candidate.take().unwrap();
+                                candidate.produce(&mut converter)
+                            } else if hold_before.as_ref().map(|h| h.number) == Some(best_number) {
+                                hold_before.unwrap()
+                            } else {
+                                last_before.unwrap()
+                            };
+                            gap_hold = Some(output.clone());
                             (respond)(output);
                         } else {
                             let last_frame_clone = last_sent_frame.borrow().clone();

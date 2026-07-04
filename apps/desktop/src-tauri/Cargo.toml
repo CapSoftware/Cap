@@ -29,7 +29,7 @@ tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
 tauri-plugin-dialog = "2.2.0"
 tauri-plugin-fs = "2.2.0"
 tauri-plugin-global-shortcut = "2.2.0"
-tauri-plugin-http = "2.2.0"
+tauri-plugin-http = "=2.5.2"
 tauri-plugin-notification = "2.2.0"
 tauri-plugin-os = "2.2.0"
 tauri-plugin-process = "2.2.0"

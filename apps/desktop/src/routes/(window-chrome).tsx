@@ -143,7 +143,7 @@ function Inner(props: ParentProps) {
 	return (
 		<div
 			data-tauri-drag-region="false"
-			class="cap-window-body flex overflow-hidden flex-col flex-1 animate-in fade-in"
+			class="cap-window-body flex overflow-hidden flex-col flex-1"
 		>
 			{props.children}
 		</div>

@@ -28,6 +28,10 @@ use tracing::*;
 const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 60;
 const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
 const LARGE_FORWARD_JUMP_SECS: f64 = 2.0;
+/// How far a timestamp may lead the pipeline wall clock before a forward jump
+/// is treated as a source-clock glitch instead of a real delivery gap. Covers
+/// driver timestamp skew and warmup baseline offset.
+const FORWARD_JUMP_WALL_TOLERANCE_SECS: f64 = 0.3;
 
 const HEALTH_CHANNEL_CAPACITY: usize = 32;
 
@@ -620,6 +624,7 @@ fn video_mux_send_error(frame_count: u64, error: anyhow::Error) -> anyhow::Error
 pub(crate) struct AudioTimestampGenerator {
     sample_rate: u32,
     total_samples: u64,
+    clock_samples_advanced: u64,
     master_clock: Option<Arc<MasterClock>>,
 }
 
@@ -631,37 +636,69 @@ impl AudioTimestampGenerator {
         Self {
             sample_rate,
             total_samples: 0,
+            clock_samples_advanced: 0,
             master_clock: None,
         }
     }
 
+    #[cfg(test)]
     fn from_master_clock(master_clock: Arc<MasterClock>) -> Self {
+        let rate = master_clock.sample_rate();
+        Self::from_master_clock_with_rate(master_clock, rate)
+    }
+
+    /// The generator converts counted samples into time, so it must run at
+    /// the audio source's real sample rate. The shared master clock may run
+    /// at a different (default 48kHz) rate: counting a 44.1kHz mic's samples
+    /// against a 48kHz clock makes the audio timeline lag real time and the
+    /// gap tracker "corrects" the difference with bogus silence — the
+    /// recording then plays at the wrong speed.
+    fn from_master_clock_with_rate(master_clock: Arc<MasterClock>, sample_rate: u32) -> Self {
         Self {
-            sample_rate: master_clock.sample_rate(),
+            sample_rate: if sample_rate > 0 {
+                sample_rate
+            } else {
+                master_clock.sample_rate()
+            },
             total_samples: 0,
+            clock_samples_advanced: 0,
             master_clock: Some(master_clock),
+        }
+    }
+
+    fn advance_clock(&mut self) {
+        let Some(clock) = &self.master_clock else {
+            return;
+        };
+        // Convert source-rate samples into clock-rate samples so the shared
+        // clock advances by real time regardless of the source's rate. The
+        // conversion runs on the cumulative total: converting each buffer
+        // independently truncates up to one clock sample per call, which
+        // accumulates into real drift for non-integer ratios (44.1k -> 48k).
+        let target = if clock.sample_rate() == self.sample_rate {
+            self.total_samples
+        } else {
+            (self.total_samples as u128 * clock.sample_rate() as u128
+                / u128::from(self.sample_rate.max(1))) as u64
+        };
+        let delta = target.saturating_sub(self.clock_samples_advanced);
+        self.clock_samples_advanced = target;
+        if delta > 0 {
+            clock.advance_samples(delta);
         }
     }
 
     fn next_timestamp(&mut self, frame_samples: u64) -> Duration {
         let timestamp_nanos = samples_to_nanos(self.total_samples, self.sample_rate);
         self.total_samples += frame_samples;
-        if let Some(clock) = &self.master_clock
-            && frame_samples > 0
-        {
-            clock.advance_samples(frame_samples);
-        }
+        self.advance_clock();
         Duration::from_nanos(timestamp_nanos)
     }
 
     fn advance_by_duration(&mut self, duration: Duration) -> u64 {
         let samples = (duration.as_secs_f64() * self.sample_rate as f64).round() as u64;
         self.total_samples += samples;
-        if let Some(clock) = &self.master_clock
-            && samples > 0
-        {
-            clock.advance_samples(samples);
-        }
+        self.advance_clock();
         samples
     }
 }
@@ -1015,6 +1052,7 @@ impl TimestampAnomalyTracker {
         &mut self,
         timestamp: Timestamp,
         timestamps: Timestamps,
+        wall_elapsed: Duration,
     ) -> Result<Duration, TimestampAnomalyError> {
         let now = Instant::now();
 
@@ -1040,7 +1078,7 @@ impl TimestampAnomalyTracker {
         {
             let jump_secs = forward_jump.as_secs_f64();
             if jump_secs > LARGE_FORWARD_JUMP_SECS {
-                let result = self.handle_forward_jump(last, adjusted, jump_secs, now);
+                let result = self.handle_forward_jump(last, adjusted, jump_secs, now, wall_elapsed);
                 self.last_valid_wall_clock = Some(now);
                 return result;
             }
@@ -1123,15 +1161,54 @@ impl TimestampAnomalyTracker {
         current: Duration,
         jump_secs: f64,
         now: Instant,
+        wall_elapsed: Duration,
     ) -> Result<Duration, TimestampAnomalyError> {
-        let wall_clock_confirmed = self.last_valid_wall_clock.is_some_and(|last_wc| {
+        let arrival_confirmed = self.last_valid_wall_clock.is_some_and(|last_wc| {
             let wall_clock_gap_secs = now.duration_since(last_wc).as_secs_f64();
             wall_clock_gap_secs >= jump_secs * 0.5
         });
+        // A frame captured in real time can never be stamped ahead of the
+        // wall clock, so a jump landing at-or-behind it is a real delivery
+        // gap even when downstream queueing bunched the arrivals together
+        // (a loaded encoder drains the pre-gap backlog and the post-gap
+        // frame back-to-back, defeating the arrival-spacing check above).
+        // Only future-stamped jumps are source-clock glitches.
+        let within_wall_clock =
+            current.as_secs_f64() <= wall_elapsed.as_secs_f64() + FORWARD_JUMP_WALL_TOLERANCE_SECS;
+        let wall_clock_confirmed = arrival_confirmed || within_wall_clock;
 
         self.total_forward_skew_secs += jump_secs;
         if jump_secs > self.max_forward_skew_secs {
             self.max_forward_skew_secs = jump_secs;
+        }
+
+        if wall_clock_confirmed {
+            // Frame delivery paused for about as long as the timestamp jump:
+            // this is a real gap (static screen, stream restart, sleep/wake),
+            // not a source-clock glitch. The gap must stay in the timeline —
+            // collapsing it desyncs video from audio whenever it happens
+            // before the wall-clock anchor exists to re-expand it.
+            let wall_clock_gap_secs = self
+                .last_valid_wall_clock
+                .map(|wc| now.duration_since(wc).as_secs_f64())
+                .unwrap_or(0.0);
+
+            self.wall_clock_confirmed_jumps += 1;
+            self.consecutive_anomalies = 0;
+            self.last_valid_duration = Some(current);
+
+            info!(
+                stream = self.stream_name,
+                forward_secs = jump_secs,
+                wall_clock_gap_secs = format!("{:.3}", wall_clock_gap_secs),
+                last_valid_ms = last.as_millis(),
+                current_ms = current.as_millis(),
+                resync_count = self.resync_count,
+                confirmed_jumps = self.wall_clock_confirmed_jumps,
+                "Wall-clock-confirmed forward jump (gap in frame delivery), accepting new baseline"
+            );
+
+            return Ok(current);
         }
 
         let expected_increment = Duration::from_millis(33);
@@ -1142,25 +1219,7 @@ impl TimestampAnomalyTracker {
         self.resync_count += 1;
         self.did_resync = true;
 
-        if wall_clock_confirmed {
-            let wall_clock_gap_secs = self
-                .last_valid_wall_clock
-                .map(|wc| now.duration_since(wc).as_secs_f64())
-                .unwrap_or(0.0);
-
-            self.wall_clock_confirmed_jumps += 1;
-
-            info!(
-                stream = self.stream_name,
-                forward_secs = jump_secs,
-                wall_clock_gap_secs = format!("{:.3}", wall_clock_gap_secs),
-                last_valid_ms = last.as_millis(),
-                current_ms = current.as_millis(),
-                resync_count = self.resync_count,
-                confirmed_jumps = self.wall_clock_confirmed_jumps,
-                "Wall-clock-confirmed forward jump (system sleep/wake), accepting new baseline"
-            );
-        } else {
+        {
             self.anomaly_count += 1;
 
             let wall_clock_gap_secs = self
@@ -1595,6 +1654,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
 
         let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
         let video_frame_count = Arc::new(AtomicU64::new(0));
+        let video_timestamp_span = Arc::new(VideoTimestampSpan::default());
 
         let video_start_gate = has_audio_sources.then(VideoStartGate::new);
 
@@ -1608,6 +1668,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             timestamps,
             shared_pause.clone(),
             video_frame_count.clone(),
+            video_timestamp_span.clone(),
             master_clock.clone(),
             video_info,
             video_start_gate.clone(),
@@ -1641,6 +1702,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             pause_flag: build_ctx.pause_flag,
             cancel_token: build_ctx.stop_token,
             video_frame_count,
+            video_timestamp_span,
             health_rx: Some(build_ctx.health_rx),
             audio_gap_summary,
         })
@@ -1724,6 +1786,7 @@ impl OutputPipelineBuilder<NoVideo> {
             pause_flag: build_ctx.pause_flag,
             cancel_token: build_ctx.stop_token,
             video_frame_count: Arc::new(AtomicU64::new(0)),
+            video_timestamp_span: Arc::new(VideoTimestampSpan::default()),
             health_rx: Some(build_ctx.health_rx),
             audio_gap_summary,
         })
@@ -1890,6 +1953,42 @@ fn estimate_video_frame_duration_ns(video_info: &VideoInfo) -> u64 {
     1_000_000_000 / fps as u64
 }
 
+/// Span of the video timestamps actually sent to the muxer, used to report
+/// the real encoded media duration. Capture is VFR (static screens, dropped
+/// frames), so `frame_count / fps` under-reports the duration by the length
+/// of every gap.
+#[derive(Debug)]
+pub struct VideoTimestampSpan {
+    first_ns: AtomicU64,
+    last_ns: AtomicU64,
+}
+
+impl Default for VideoTimestampSpan {
+    fn default() -> Self {
+        Self {
+            first_ns: AtomicU64::new(u64::MAX),
+            last_ns: AtomicU64::new(0),
+        }
+    }
+}
+
+impl VideoTimestampSpan {
+    fn record(&self, timestamp: Duration) {
+        let ns = timestamp.as_nanos().min(u64::MAX as u128) as u64;
+        self.first_ns.fetch_min(ns, Ordering::AcqRel);
+        self.last_ns.fetch_max(ns, Ordering::AcqRel);
+    }
+
+    pub fn get(&self) -> Option<(Duration, Duration)> {
+        let first = self.first_ns.load(Ordering::Acquire);
+        if first == u64::MAX {
+            return None;
+        }
+        let last = self.last_ns.load(Ordering::Acquire).max(first);
+        Some((Duration::from_nanos(first), Duration::from_nanos(last)))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: VideoSource>(
     setup_ctx: &mut SetupCtx,
@@ -1901,6 +2000,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     timestamps: Timestamps,
     shared_pause: SharedWallClockPause,
     frame_counter: Arc<AtomicU64>,
+    timestamp_span: Arc<VideoTimestampSpan>,
     master_clock: Arc<MasterClock>,
     video_info: VideoInfo,
     video_start_gate: Option<VideoStartGate>,
@@ -1975,11 +2075,24 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         );
                     }
 
+                    // Excise accumulated pause time from the content timeline
+                    // before anomaly tracking. Audio already excises pauses
+                    // (paused frames are dropped and sample counting carries
+                    // on), and wall_clock_elapsed below subtracts pauses too;
+                    // leaving the pause in the video timestamps would make a
+                    // resume look like a wall-clock-confirmed capture gap and
+                    // poison the drift anchor with pause-inflated time.
                     let remapped_ts = Timestamp::Instant(
-                        timestamps.instant() + remap.duration(),
+                        timestamps.instant()
+                            + remap.duration().saturating_sub(total_pause_duration),
                     );
 
-                    let raw_duration = match anomaly_tracker.process_timestamp(remapped_ts, timestamps) {
+                    let wall_clock_elapsed = timestamps
+                        .instant()
+                        .elapsed()
+                        .saturating_sub(total_pause_duration);
+
+                    let raw_duration = match anomaly_tracker.process_timestamp(remapped_ts, timestamps, wall_clock_elapsed) {
                         Ok(d) => d,
                         Err(TimestampAnomalyError::TooManyConsecutiveAnomalies { count }) => {
                             return Err(anyhow!(
@@ -1995,10 +2108,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             "Timeline resync detected (anomaly collapsed jump); wall-clock anchor covers the gap"
                         );
                     }
-
-                    let raw_wall_clock = timestamps.instant().elapsed();
-                    let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause_duration);
                     let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
+                    timestamp_span.record(duration);
 
                     if frame_count.is_multiple_of(300) {
                         let drift_ratio = if raw_duration.as_secs_f64() > 0.0 {
@@ -2071,27 +2182,37 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                                 "Published video start timestamp to encoder-pair gate (drain path)"
                             );
                         }
+                        // Excise pauses exactly like the main loop above, so
+                        // drained tail frames stay on the same content timeline.
                         let remapped_ts = Timestamp::Instant(
-                            timestamps.instant() + remap.duration(),
+                            timestamps.instant()
+                                + remap
+                                    .duration()
+                                    .saturating_sub(shared_pause.total_pause_duration()),
                         );
 
-                        let raw_duration =
-                            match anomaly_tracker.process_timestamp(remapped_ts, timestamps) {
-                                Ok(d) => d,
-                                Err(_) => {
-                                    warn!("Timestamp anomaly during drain, skipping frame");
-                                    skipped += 1;
-                                    continue;
-                                }
-                            };
+                        let wall_clock_elapsed = timestamps
+                            .instant()
+                            .elapsed()
+                            .saturating_sub(shared_pause.total_pause_duration());
+
+                        let raw_duration = match anomaly_tracker.process_timestamp(
+                            remapped_ts,
+                            timestamps,
+                            wall_clock_elapsed,
+                        ) {
+                            Ok(d) => d,
+                            Err(_) => {
+                                warn!("Timestamp anomaly during drain, skipping frame");
+                                skipped += 1;
+                                continue;
+                            }
+                        };
 
                         let _ = anomaly_tracker.take_resync_flag();
-
-                        let raw_wall_clock = timestamps.instant().elapsed();
-                        let total_pause = shared_pause.total_pause_duration();
-                        let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause);
                         let duration =
                             drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
+                        timestamp_span.record(duration);
 
                         match muxer.lock().await.send_video_frame(frame, duration) {
                             Ok(()) => {}
@@ -2191,8 +2312,10 @@ impl PreparedAudioSources {
             let stop_token = stop_token.child_token();
             let muxer = muxer.clone();
             async move {
-                let mut timestamp_generator =
-                    AudioTimestampGenerator::from_master_clock(master_clock.clone());
+                let mut timestamp_generator = AudioTimestampGenerator::from_master_clock_with_rate(
+                    master_clock.clone(),
+                    audio_info.sample_rate,
+                );
                 let sample_rate = audio_info.sample_rate;
                 let mut dropped_during_pause: u64 = 0;
                 let mut frame_count: u64 = 0;
@@ -2741,6 +2864,7 @@ pub struct OutputPipeline {
     pause_flag: Arc<AtomicBool>,
     cancel_token: CancellationToken,
     video_frame_count: Arc<AtomicU64>,
+    video_timestamp_span: Arc<VideoTimestampSpan>,
     health_rx: Option<HealthReceiver>,
     audio_gap_summary: Arc<OnceLock<AudioGapSummary>>,
 }
@@ -2750,6 +2874,9 @@ pub struct FinishedOutputPipeline {
     pub first_timestamp: Timestamp,
     pub video_info: Option<VideoInfo>,
     pub video_frame_count: u64,
+    /// First and last video timestamps sent to the muxer; the real encoded
+    /// media span for VFR content.
+    pub video_timestamp_span: Option<(Duration, Duration)>,
     pub audio_gap_summary: Option<AudioGapSummary>,
 }
 
@@ -2842,6 +2969,7 @@ impl OutputPipeline {
             first_timestamp,
             video_info: self.video_info,
             video_frame_count: self.video_frame_count.load(Ordering::Acquire),
+            video_timestamp_span: self.video_timestamp_span.get(),
             audio_gap_summary: self.audio_gap_summary.get().copied(),
         })
     }
@@ -3741,7 +3869,9 @@ mod tests {
 
             for i in 0..10u64 {
                 let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
-                tracker.process_timestamp(ts, timestamps).unwrap();
+                tracker
+                    .process_timestamp(ts, timestamps, Duration::from_millis(i * 33))
+                    .unwrap();
             }
 
             assert_eq!(tracker.anomaly_count, 0);
@@ -3757,7 +3887,9 @@ mod tests {
 
             for i in 0..5u64 {
                 let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
-                tracker.process_timestamp(ts, timestamps).unwrap();
+                tracker
+                    .process_timestamp(ts, timestamps, Duration::from_millis(i * 33))
+                    .unwrap();
             }
 
             assert_eq!(tracker.anomaly_count, 0);
@@ -3765,7 +3897,9 @@ mod tests {
             tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
 
             let jump_ts = make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000));
-            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+            tracker
+                .process_timestamp(jump_ts, timestamps, Duration::from_millis(4 * 33))
+                .unwrap();
 
             assert_eq!(tracker.anomaly_count, 0);
             assert_eq!(tracker.wall_clock_confirmed_jumps, 1);
@@ -3779,13 +3913,17 @@ mod tests {
 
             for i in 0..5u64 {
                 let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
-                tracker.process_timestamp(ts, timestamps).unwrap();
+                tracker
+                    .process_timestamp(ts, timestamps, Duration::from_millis(i * 33))
+                    .unwrap();
             }
 
             assert_eq!(tracker.anomaly_count, 0);
 
             let jump_ts = make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000));
-            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+            tracker
+                .process_timestamp(jump_ts, timestamps, Duration::from_millis(4 * 33))
+                .unwrap();
 
             assert_eq!(tracker.anomaly_count, 1);
             assert_eq!(tracker.wall_clock_confirmed_jumps, 0);
@@ -3799,22 +3937,38 @@ mod tests {
 
             for i in 0..5u64 {
                 let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
-                tracker.process_timestamp(ts, timestamps).unwrap();
+                tracker
+                    .process_timestamp(ts, timestamps, Duration::from_millis(i * 33))
+                    .unwrap();
             }
 
             tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
 
             let jump_ts = make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000));
-            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+            let accepted = tracker
+                .process_timestamp(jump_ts, timestamps, Duration::from_millis(4 * 33))
+                .unwrap();
 
+            // A wall-clock-confirmed jump is a real gap in frame delivery and
+            // passes through unmodified — it is not a resync.
             assert!(
-                tracker.take_resync_flag(),
-                "Resync flag should be set after wall-clock-confirmed jump"
+                !tracker.take_resync_flag(),
+                "Confirmed gap must not be treated as a timeline resync"
+            );
+            assert!(
+                (accepted.as_secs_f64() - (4.0 * 0.033 + 3.0)).abs() < 0.05,
+                "confirmed gap must pass through, got {accepted:?}"
             );
 
             let next_ts =
                 make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000 + 33 + 3000));
-            tracker.process_timestamp(next_ts, timestamps).unwrap();
+            tracker
+                .process_timestamp(
+                    next_ts,
+                    timestamps,
+                    Duration::from_millis(4 * 33 + 3000 + 33),
+                )
+                .unwrap();
 
             assert!(
                 tracker.take_resync_flag(),
@@ -3831,27 +3985,104 @@ mod tests {
 
             for i in 0..3u64 {
                 let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
-                tracker.process_timestamp(ts, timestamps).unwrap();
+                tracker
+                    .process_timestamp(ts, timestamps, Duration::from_millis(i * 33))
+                    .unwrap();
             }
 
             tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
 
             let jump1 = make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000));
-            tracker.process_timestamp(jump1, timestamps).unwrap();
+            tracker
+                .process_timestamp(jump1, timestamps, Duration::from_millis(2 * 33))
+                .unwrap();
             tracker.take_resync_flag();
 
             let normal = make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000 + 33));
-            tracker.process_timestamp(normal, timestamps).unwrap();
+            tracker
+                .process_timestamp(
+                    normal,
+                    timestamps,
+                    Duration::from_millis(2 * 33 + 3000 + 33),
+                )
+                .unwrap();
 
             tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(5));
 
             let jump2 =
                 make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000 + 66 + 5000));
-            tracker.process_timestamp(jump2, timestamps).unwrap();
+            tracker
+                .process_timestamp(jump2, timestamps, Duration::from_millis(2 * 33 + 3000 + 66))
+                .unwrap();
 
             assert_eq!(tracker.anomaly_count, 0);
             assert_eq!(tracker.wall_clock_confirmed_jumps, 2);
-            assert_eq!(tracker.resync_count, 2);
+            assert_eq!(
+                tracker.resync_count, 0,
+                "confirmed gaps pass through; they are not timeline resyncs"
+            );
+        }
+
+        // A loaded encoder can drain the pre-gap backlog and the post-gap
+        // frame back-to-back, so the arrival-spacing heuristic sees no wall
+        // gap even though the capture timestamps carry a real >2s delivery
+        // gap. The timestamps staying at-or-behind the wall clock is what
+        // proves the gap real; collapsing it here permanently desynced any
+        // recording whose gap began before the drift anchor existed.
+        #[test]
+        fn bunched_real_gap_behind_wall_clock_is_accepted() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            // Frames 0..0.5s processed in a burst (arrival gaps ~0).
+            for i in 0..15u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker
+                    .process_timestamp(ts, timestamps, Duration::from_millis(i * 33))
+                    .unwrap();
+            }
+
+            // The post-gap frame arrives immediately after (bunched), but its
+            // timestamp (4.9s) is behind the wall clock (5.0s): a real gap.
+            let jump_ts = make_timestamp(timestamps, Duration::from_millis(4900));
+            let accepted = tracker
+                .process_timestamp(jump_ts, timestamps, Duration::from_millis(5000))
+                .unwrap();
+
+            assert!(
+                (accepted.as_secs_f64() - 4.9).abs() < 0.05,
+                "real gap must pass through, got {accepted:?}"
+            );
+            assert_eq!(tracker.anomaly_count, 0);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 1);
+        }
+
+        // The inverse case: a timestamp landing ahead of the wall clock can
+        // only be a source-clock glitch — no real frame is stamped in the
+        // future — so it must still be collapsed, bunched arrival or not.
+        #[test]
+        fn future_stamped_jump_is_still_collapsed() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..15u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker
+                    .process_timestamp(ts, timestamps, Duration::from_millis(i * 33))
+                    .unwrap();
+            }
+
+            let jump_ts = make_timestamp(timestamps, Duration::from_millis(4900));
+            let collapsed = tracker
+                .process_timestamp(jump_ts, timestamps, Duration::from_millis(15 * 33))
+                .unwrap();
+
+            assert!(
+                collapsed.as_secs_f64() < 1.0,
+                "future-stamped glitch must be collapsed, got {collapsed:?}"
+            );
+            assert_eq!(tracker.anomaly_count, 1);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 0);
         }
 
         #[test]
@@ -3862,7 +4093,9 @@ mod tests {
             assert!(tracker.wall_clock_start.is_none());
 
             let ts = make_timestamp(timestamps, Duration::ZERO);
-            tracker.process_timestamp(ts, timestamps).unwrap();
+            tracker
+                .process_timestamp(ts, timestamps, Duration::ZERO)
+                .unwrap();
 
             assert!(tracker.wall_clock_start.is_some());
         }
@@ -3874,13 +4107,17 @@ mod tests {
 
             for i in 0..3u64 {
                 let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
-                tracker.process_timestamp(ts, timestamps).unwrap();
+                tracker
+                    .process_timestamp(ts, timestamps, Duration::from_millis(i * 33))
+                    .unwrap();
             }
 
             tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
 
             let jump_ts = make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000));
-            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+            tracker
+                .process_timestamp(jump_ts, timestamps, Duration::from_millis(2 * 33))
+                .unwrap();
 
             assert_eq!(tracker.wall_clock_confirmed_jumps, 1);
             assert_eq!(tracker.anomaly_count, 0);
@@ -3901,7 +4138,9 @@ mod tests {
         ) -> f64 {
             let remapped =
                 Timestamp::Instant(timestamps.instant() + Duration::from_secs_f64(source_secs));
-            let raw = anomaly.process_timestamp(remapped, timestamps).unwrap();
+            let raw = anomaly
+                .process_timestamp(remapped, timestamps, Duration::from_secs_f64(wall_secs))
+                .unwrap();
             let _ = anomaly.take_resync_flag();
             drift
                 .calculate_timestamp(raw, Duration::from_secs_f64(wall_secs))
@@ -4365,10 +4604,14 @@ mod tests {
 
         #[test]
         fn returns_timeout_when_thread_does_not_exit_in_time() {
-            let handle = std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_millis(100));
+            // The worker blocks until released, so it can never beat the
+            // timeout however unfairly a loaded machine schedules threads.
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let handle = std::thread::spawn(move || {
+                let _ = release_rx.recv();
                 Ok(())
             });
+            let _release_tx = release_tx;
 
             match wait_for_blocking_thread_finish(handle, Duration::from_millis(5), "test-worker") {
                 BlockingThreadFinish::TimedOut(error) => {
@@ -5278,6 +5521,54 @@ mod tests {
                 max_skew < Duration::from_millis(250),
                 "video drifted from the wall clock by {max_skew:?} (correction failed)"
             );
+        }
+
+        // A static screen (or a capture-stream restart) stops frame delivery
+        // entirely. The gap must survive into the output timeline: collapsing
+        // it compresses video relative to audio and desyncs the recording.
+        #[test]
+        fn video_timeline_preserves_capture_gaps() {
+            let mut video = VideoDriftTracker::new();
+            let interval = 1.0 / 30.0;
+
+            let mut outs = Vec::new();
+            for v in 0..150u64 {
+                let t = Duration::from_secs_f64(v as f64 * interval);
+                outs.push(video.calculate_timestamp(t, t));
+            }
+            // 4s with no frames delivered, then delivery resumes with
+            // timestamps that include the gap.
+            for v in 150..300u64 {
+                let t = Duration::from_secs_f64(v as f64 * interval + 4.0);
+                outs.push(video.calculate_timestamp(t, t));
+            }
+
+            let gap = outs[150].saturating_sub(outs[149]);
+            assert!(
+                gap >= Duration::from_secs_f64(3.5),
+                "capture gap collapsed to {gap:?} in the output timeline"
+            );
+
+            let span = outs[299].saturating_sub(outs[0]);
+            let real = 299.0 * interval + 4.0;
+            assert!(
+                (span.as_secs_f64() - real).abs() < 0.3,
+                "output span {span:?} does not match real elapsed time {real:.2}s"
+            );
+        }
+
+        #[test]
+        fn video_timestamp_span_reports_first_and_last_sent() {
+            let span = VideoTimestampSpan::default();
+            assert!(span.get().is_none(), "unset span must be None");
+
+            span.record(Duration::from_millis(100));
+            span.record(Duration::from_millis(133));
+            span.record(Duration::from_millis(4000)); // across a capture gap
+
+            let (first, last) = span.get().expect("span should be set");
+            assert_eq!(first, Duration::from_millis(100));
+            assert_eq!(last, Duration::from_millis(4000));
         }
     }
 }
