@@ -2461,8 +2461,7 @@ impl CapWindow {
             .resizable(id.resizable())
             .accept_first_mouse(true)
             .shadow(true)
-            .theme(theme)
-            .devtools(cfg!(debug_assertions));
+            .theme(theme);
 
         if let Some(min) = id.min_size() {
             builder = builder
