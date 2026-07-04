@@ -116,6 +116,26 @@ impl EditorInstance {
         frame_cb: Box<dyn FnMut(editor::EditorFrameOutput) + Send>,
         shared_device: Option<SharedWgpuDevice>,
     ) -> Result<Arc<Self>, String> {
+        Self::new_with_audio_output(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            Arc::new(crate::AudioOutput::new()),
+        )
+        .await
+    }
+
+    /// Like [`EditorInstance::new`] but with a caller-provided audio output,
+    /// letting harnesses substitute a headless sink while everything else
+    /// (decoders, renderer, playback) runs the production path.
+    pub async fn new_with_audio_output(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: Box<dyn FnMut(editor::EditorFrameOutput) + Send>,
+        shared_device: Option<SharedWgpuDevice>,
+        audio_output: Arc<crate::AudioOutput>,
+    ) -> Result<Arc<Self>, String> {
         if !project_path.exists() {
             return Err(format!("Video path {} not found!", project_path.display()));
         }
@@ -246,9 +266,13 @@ impl EditorInstance {
         // Segment setup (decoder init + kicking off audio decodes) is
         // independent of the GPU/render setup below, so run it concurrently on
         // its own task.
-        let force_ffmpeg_for_editor = cfg!(target_os = "windows");
+        // The env override lets headless harnesses on runners whose
+        // VideoToolbox is too slow for real-time playback fall back to the
+        // FFmpeg decoder.
+        let force_ffmpeg_for_editor = cfg!(target_os = "windows")
+            || std::env::var_os("CAP_EDITOR_FORCE_FFMPEG_DECODER").is_some();
         if force_ffmpeg_for_editor {
-            tracing::info!("Using FFmpeg decoder for Windows editor preview");
+            tracing::info!("Using FFmpeg decoder for editor preview");
         }
 
         let segments_task = tokio::spawn({
@@ -260,7 +284,6 @@ impl EditorInstance {
         // Open the session's audio output stream now (in the background) so
         // the first play press doesn't wait on the device — Bluetooth outputs
         // in particular can take seconds to wake.
-        let audio_output = Arc::new(crate::AudioOutput::new());
         let has_declared_audio = match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { segment } => segment.audio.is_some(),
             StudioRecordingMeta::MultipleSegments { inner } => inner

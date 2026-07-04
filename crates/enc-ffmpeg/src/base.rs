@@ -66,6 +66,44 @@ impl EncoderBase {
         }
     }
 
+    /// Stamps the frame's pts from its capture timestamp using an explicit
+    /// tick rate. Audio input frames must be stamped in *input sample rate*
+    /// units — the resampler rescales them to the encoder's output rate —
+    /// whereas [`Self::update_pts`] uses the encoder's own (output) time
+    /// base. Mixing the two conventions plays non-48kHz microphones at the
+    /// wrong speed.
+    pub fn update_pts_with_rate(
+        &mut self,
+        frame: &mut frame::Frame,
+        timestamp: Duration,
+        rate: f64,
+    ) {
+        if timestamp != Duration::MAX {
+            let pts = (timestamp.as_secs_f64() * rate).round() as i64;
+            let first_pts = *self.first_pts.get_or_insert(pts);
+            let mut pts = pts - first_pts;
+            if let Some(last) = self.last_frame_pts
+                && pts <= last
+            {
+                pts = last + 1;
+            }
+            self.last_frame_pts = Some(pts);
+            frame.set_pts(Some(pts));
+        } else if let Some(pts) = frame.pts() {
+            let first_pts = *self.first_pts.get_or_insert(pts);
+            let mut pts = pts - first_pts;
+            if let Some(last) = self.last_frame_pts
+                && pts <= last
+            {
+                pts = last + 1;
+            }
+            self.last_frame_pts = Some(pts);
+            frame.set_pts(Some(pts));
+        } else {
+            tracing::error!("Frame has no pts");
+        }
+    }
+
     pub fn send_frame(
         &mut self,
         frame: &frame::Frame,

@@ -13,10 +13,10 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc as std_mpsc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use cap_audio::FromSampleBytes;
+use cap_audio::{AudioData, FromSampleBytes};
 #[cfg(not(target_os = "windows"))]
 use cap_audio::{LatencyCorrectionConfig, LatencyCorrector, default_output_latency_hint};
 use cap_media_info::AudioInfo;
@@ -77,6 +77,18 @@ impl Default for AudioOutput {
     }
 }
 
+/// Sample rate of the headless sink; matches the pipeline's master clock.
+pub const HEADLESS_SAMPLE_RATE: u32 = 48_000;
+/// Channel count of the headless sink.
+pub const HEADLESS_CHANNELS: u16 = 2;
+/// Frames per pulled block in the headless sink (a typical device period).
+pub const HEADLESS_BLOCK_FRAMES: usize = 512;
+
+/// Receives every interleaved f32 block the headless sink pulls, together
+/// with the deadline at which a real output device would start playing the
+/// block's first sample.
+pub type HeadlessAudioTap = Box<dyn FnMut(&[f32], Instant) + Send>;
+
 impl AudioOutput {
     pub fn new() -> Self {
         let (control_tx, control_rx) = std_mpsc::channel();
@@ -88,6 +100,27 @@ impl AudioOutput {
             // Sends will fail and playback degrades to video-only, matching
             // the behaviour when no output device exists.
             error!("Failed to spawn audio output thread: {e}");
+        }
+
+        Self {
+            control_tx,
+            next_generation: AtomicU64::new(0),
+        }
+    }
+
+    /// An output that renders into `tap` instead of a device, pulling blocks
+    /// on a real-time schedule the way a sound card would. Runs the exact
+    /// production source pipeline (pre-render buffer, playhead sync policy),
+    /// so sync harnesses can observe what a device would have played without
+    /// needing audio hardware.
+    pub fn new_headless(tap: HeadlessAudioTap) -> Self {
+        let (control_tx, control_rx) = std_mpsc::channel();
+
+        if let Err(e) = std::thread::Builder::new()
+            .name("cap-audio-headless".into())
+            .spawn(move || control_thread_headless(control_rx, tap))
+        {
+            error!("Failed to spawn headless audio output thread: {e}");
         }
 
         Self {
@@ -210,6 +243,239 @@ fn control_thread(control_rx: std_mpsc::Receiver<ControlMsg>) {
     info!("Audio output thread finished");
 }
 
+/// Applies pending install/remove commands to the active source. Shared by
+/// the live cpal callback and the headless sink.
+fn drain_source_commands<T: FromSampleBytes>(
+    active: &mut Option<ActiveSource<T>>,
+    source_rx: &std_mpsc::Receiver<SourceCommand<T>>,
+) {
+    while let Ok(command) = source_rx.try_recv() {
+        match command {
+            SourceCommand::Install(source) => *active = Some(*source),
+            SourceCommand::Remove { generation } => {
+                let matches = generation.is_none()
+                    || active
+                        .as_ref()
+                        .map(|s| Some(s.generation) == generation)
+                        .unwrap_or(false);
+                if matches {
+                    *active = None;
+                }
+            }
+        }
+    }
+}
+
+/// Renders one output block from the active source: applies the video
+/// playhead sync policy, fills the buffer and acknowledges the first
+/// consumed block. Shared by the live cpal callback and the headless sink so
+/// harnesses exercise the exact production logic.
+fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
+    source: &mut ActiveSource<T>,
+    buffer: &mut [T],
+    latency_secs: f64,
+) {
+    if source.playhead_rx.has_changed().unwrap_or(false) {
+        let video_playhead = *source.playhead_rx.borrow_and_update();
+        let jump = (video_playhead - source.last_video_playhead).abs();
+        let audible_playhead = source.buffer.current_audible_playhead(latency_secs);
+        let drift = (video_playhead - audible_playhead).abs();
+
+        if jump > 0.05 || drift > 0.04 {
+            source.buffer.set_playhead(video_playhead + latency_secs);
+        }
+
+        source.last_video_playhead = video_playhead;
+    }
+
+    source.buffer.fill(buffer);
+
+    if let Some(ack) = source.ack.take() {
+        let _ = ack.send(());
+    }
+}
+
+/// Builds the per-playback source from a play spec and hands it to the
+/// output via `install_tx`. `use_device_latency_hint` is false for the
+/// headless sink, which models a zero-latency device.
+fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
+    spec: Box<PlaySpec>,
+    generation: u64,
+    ack: std_mpsc::Sender<()>,
+    output_info: AudioInfo,
+    use_device_latency_hint: bool,
+    install_tx: &std_mpsc::Sender<SourceCommand<T>>,
+) -> Result<(), String> {
+    let PlaySpec {
+        segments,
+        music,
+        project,
+        duration_secs,
+        start_playhead_secs,
+        playhead_rx,
+    } = *spec;
+
+    if !(duration_secs.is_finite() && duration_secs > 0.0) {
+        return Err(format!(
+            "Invalid audio pre-render duration: {duration_secs}"
+        ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    let latency_corrector = {
+        let hint = if use_device_latency_hint {
+            default_output_latency_hint(output_info.sample_rate, output_info.buffer_size)
+        } else {
+            None
+        };
+        if let Some(hint) = hint
+            && hint.latency_secs > 0.0
+        {
+            if hint.transport.is_wireless() {
+                info!(
+                    "Applying wireless audio output latency hint: {:.1} ms",
+                    hint.latency_secs * 1_000.0
+                );
+            } else {
+                info!(
+                    "Applying audio output latency hint: {:.1} ms",
+                    hint.latency_secs * 1_000.0
+                );
+            }
+        }
+        LatencyCorrector::new(hint, LatencyCorrectionConfig::default())
+    };
+    #[cfg(not(target_os = "windows"))]
+    let initial_latency_secs = latency_corrector.initial_output_latency_secs();
+    #[cfg(target_os = "windows")]
+    let initial_latency_secs = {
+        let _ = use_device_latency_hint;
+        0.0
+    };
+
+    let start_playhead = start_playhead_secs + initial_latency_secs;
+    let mut buffer = PrerenderedAudioBuffer::<T>::new(
+        segments,
+        music,
+        &project,
+        output_info,
+        duration_secs,
+        start_playhead,
+    );
+    buffer.set_playhead(start_playhead);
+    // A few ms: guarantees the callback reads real samples at the
+    // playhead, never leading silence.
+    buffer.wait_until_ready(PRERENDER_READY_TIMEOUT);
+
+    install_tx
+        .send(SourceCommand::Install(Box::new(ActiveSource {
+            generation,
+            buffer,
+            playhead_rx,
+            last_video_playhead: start_playhead_secs,
+            ack: Some(ack),
+            #[cfg(not(target_os = "windows"))]
+            latency_corrector,
+        })))
+        .map_err(|_| "Audio callback channel closed".to_string())
+}
+
+/// Control loop for the headless sink: a pump thread pulls blocks on a
+/// real-time schedule (as a device would) and hands every block to `tap`.
+fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: HeadlessAudioTap) {
+    let output_info = AudioInfo::new_raw(
+        AudioData::SAMPLE_FORMAT,
+        HEADLESS_SAMPLE_RATE,
+        HEADLESS_CHANNELS,
+    );
+
+    let (source_tx, source_rx) = std_mpsc::channel::<SourceCommand<f32>>();
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let pump = {
+        let stop = stop.clone();
+        let channels = usize::from(HEADLESS_CHANNELS);
+        std::thread::Builder::new()
+            .name("cap-audio-headless-pump".into())
+            .spawn(move || {
+                let mut buffer = vec![0.0f32; HEADLESS_BLOCK_FRAMES * channels];
+                let mut active: Option<ActiveSource<f32>> = None;
+                let block = Duration::from_secs_f64(
+                    HEADLESS_BLOCK_FRAMES as f64 / f64::from(HEADLESS_SAMPLE_RATE),
+                );
+                let start = Instant::now();
+                let mut n: u32 = 0;
+
+                while !stop.load(Ordering::Acquire) {
+                    // Absolute schedule: a device consumes samples isochronously,
+                    // so late wakeups must not stretch the sample clock.
+                    let deadline = start + block * n;
+                    let now = Instant::now();
+                    if deadline > now {
+                        std::thread::sleep(deadline - now);
+                    }
+
+                    drain_source_commands(&mut active, &source_rx);
+                    match active.as_mut() {
+                        Some(source) => render_source_block(source, &mut buffer, 0.0),
+                        None => buffer.fill(0.0),
+                    }
+                    tap(&buffer, deadline);
+                    n = n.saturating_add(1);
+                }
+            })
+    };
+    let pump = match pump {
+        Ok(handle) => Some(handle),
+        Err(e) => {
+            error!("Failed to spawn headless audio pump: {e}");
+            None
+        }
+    };
+
+    while let Ok(msg) = control_rx.recv() {
+        match msg {
+            ControlMsg::EnsureStream => {}
+            ControlMsg::Play {
+                spec,
+                generation,
+                result_tx,
+            } => {
+                let (ack_tx, ack_rx) = std_mpsc::channel();
+                let ok = pump.is_some()
+                    && match install_source::<f32>(
+                        spec,
+                        generation,
+                        ack_tx,
+                        output_info,
+                        false,
+                        &source_tx,
+                    ) {
+                        Ok(()) => ack_rx.recv_timeout(SOURCE_ACK_TIMEOUT).is_ok(),
+                        Err(e) => {
+                            error!("Failed to install headless audio source: {e}");
+                            false
+                        }
+                    };
+                let _ = result_tx.send(ok);
+            }
+            ControlMsg::StopPlayback { generation } => {
+                let _ = source_tx.send(SourceCommand::Remove {
+                    generation: Some(generation),
+                });
+            }
+            ControlMsg::Shutdown => break,
+        }
+    }
+
+    stop.store(true, Ordering::Release);
+    if let Some(pump) = pump {
+        let _ = pump.join();
+    }
+
+    info!("Headless audio output thread finished");
+}
+
 fn handle_play(state: &mut Option<StreamState>, spec: Box<PlaySpec>, generation: u64) -> bool {
     if !ensure_stream(state) {
         return false;
@@ -318,21 +584,7 @@ where
         .build_output_stream(
             &config,
             move |buffer: &mut [T], info| {
-                while let Ok(command) = source_rx.try_recv() {
-                    match command {
-                        SourceCommand::Install(source) => active = Some(*source),
-                        SourceCommand::Remove { generation } => {
-                            let matches = generation.is_none()
-                                || active
-                                    .as_ref()
-                                    .map(|s| Some(s.generation) == generation)
-                                    .unwrap_or(false);
-                            if matches {
-                                active = None;
-                            }
-                        }
-                    }
-                }
+                drain_source_commands(&mut active, &source_rx);
 
                 let Some(source) = active.as_mut() else {
                     buffer.fill(T::EQUILIBRIUM);
@@ -347,24 +599,7 @@ where
                     0.0
                 };
 
-                if source.playhead_rx.has_changed().unwrap_or(false) {
-                    let video_playhead = *source.playhead_rx.borrow_and_update();
-                    let jump = (video_playhead - source.last_video_playhead).abs();
-                    let audible_playhead = source.buffer.current_audible_playhead(latency_secs);
-                    let drift = (video_playhead - audible_playhead).abs();
-
-                    if jump > 0.05 || drift > 0.04 {
-                        source.buffer.set_playhead(video_playhead + latency_secs);
-                    }
-
-                    source.last_video_playhead = video_playhead;
-                }
-
-                source.buffer.fill(buffer);
-
-                if let Some(ack) = source.ack.take() {
-                    let _ = ack.send(());
-                }
+                render_source_block(source, buffer, latency_secs);
             },
             {
                 let failed = failed.clone();
@@ -384,72 +619,7 @@ where
     let install_tx = source_tx.clone();
     let install = Box::new(
         move |spec: Box<PlaySpec>, generation: u64, ack: std_mpsc::Sender<()>| {
-            let PlaySpec {
-                segments,
-                music,
-                project,
-                duration_secs,
-                start_playhead_secs,
-                playhead_rx,
-            } = *spec;
-
-            if !(duration_secs.is_finite() && duration_secs > 0.0) {
-                return Err(format!(
-                    "Invalid audio pre-render duration: {duration_secs}"
-                ));
-            }
-
-            #[cfg(not(target_os = "windows"))]
-            let latency_corrector = {
-                let hint =
-                    default_output_latency_hint(output_info.sample_rate, output_info.buffer_size);
-                if let Some(hint) = hint
-                    && hint.latency_secs > 0.0
-                {
-                    if hint.transport.is_wireless() {
-                        info!(
-                            "Applying wireless audio output latency hint: {:.1} ms",
-                            hint.latency_secs * 1_000.0
-                        );
-                    } else {
-                        info!(
-                            "Applying audio output latency hint: {:.1} ms",
-                            hint.latency_secs * 1_000.0
-                        );
-                    }
-                }
-                LatencyCorrector::new(hint, LatencyCorrectionConfig::default())
-            };
-            #[cfg(not(target_os = "windows"))]
-            let initial_latency_secs = latency_corrector.initial_output_latency_secs();
-            #[cfg(target_os = "windows")]
-            let initial_latency_secs = 0.0;
-
-            let start_playhead = start_playhead_secs + initial_latency_secs;
-            let mut buffer = PrerenderedAudioBuffer::<T>::new(
-                segments,
-                music,
-                &project,
-                output_info,
-                duration_secs,
-                start_playhead,
-            );
-            buffer.set_playhead(start_playhead);
-            // A few ms: guarantees the callback reads real samples at the
-            // playhead, never leading silence.
-            buffer.wait_until_ready(PRERENDER_READY_TIMEOUT);
-
-            install_tx
-                .send(SourceCommand::Install(Box::new(ActiveSource {
-                    generation,
-                    buffer,
-                    playhead_rx,
-                    last_video_playhead: start_playhead_secs,
-                    ack: Some(ack),
-                    #[cfg(not(target_os = "windows"))]
-                    latency_corrector,
-                })))
-                .map_err(|_| "Audio callback channel closed".to_string())
+            install_source::<T>(spec, generation, ack, output_info, true, &install_tx)
         },
     );
 

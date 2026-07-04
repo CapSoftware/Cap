@@ -620,6 +620,7 @@ fn video_mux_send_error(frame_count: u64, error: anyhow::Error) -> anyhow::Error
 pub(crate) struct AudioTimestampGenerator {
     sample_rate: u32,
     total_samples: u64,
+    clock_samples_advanced: u64,
     master_clock: Option<Arc<MasterClock>>,
 }
 
@@ -631,37 +632,69 @@ impl AudioTimestampGenerator {
         Self {
             sample_rate,
             total_samples: 0,
+            clock_samples_advanced: 0,
             master_clock: None,
         }
     }
 
+    #[cfg(test)]
     fn from_master_clock(master_clock: Arc<MasterClock>) -> Self {
+        let rate = master_clock.sample_rate();
+        Self::from_master_clock_with_rate(master_clock, rate)
+    }
+
+    /// The generator converts counted samples into time, so it must run at
+    /// the audio source's real sample rate. The shared master clock may run
+    /// at a different (default 48kHz) rate: counting a 44.1kHz mic's samples
+    /// against a 48kHz clock makes the audio timeline lag real time and the
+    /// gap tracker "corrects" the difference with bogus silence — the
+    /// recording then plays at the wrong speed.
+    fn from_master_clock_with_rate(master_clock: Arc<MasterClock>, sample_rate: u32) -> Self {
         Self {
-            sample_rate: master_clock.sample_rate(),
+            sample_rate: if sample_rate > 0 {
+                sample_rate
+            } else {
+                master_clock.sample_rate()
+            },
             total_samples: 0,
+            clock_samples_advanced: 0,
             master_clock: Some(master_clock),
+        }
+    }
+
+    fn advance_clock(&mut self) {
+        let Some(clock) = &self.master_clock else {
+            return;
+        };
+        // Convert source-rate samples into clock-rate samples so the shared
+        // clock advances by real time regardless of the source's rate. The
+        // conversion runs on the cumulative total: converting each buffer
+        // independently truncates up to one clock sample per call, which
+        // accumulates into real drift for non-integer ratios (44.1k -> 48k).
+        let target = if clock.sample_rate() == self.sample_rate {
+            self.total_samples
+        } else {
+            (self.total_samples as u128 * clock.sample_rate() as u128
+                / u128::from(self.sample_rate.max(1))) as u64
+        };
+        let delta = target.saturating_sub(self.clock_samples_advanced);
+        self.clock_samples_advanced = target;
+        if delta > 0 {
+            clock.advance_samples(delta);
         }
     }
 
     fn next_timestamp(&mut self, frame_samples: u64) -> Duration {
         let timestamp_nanos = samples_to_nanos(self.total_samples, self.sample_rate);
         self.total_samples += frame_samples;
-        if let Some(clock) = &self.master_clock
-            && frame_samples > 0
-        {
-            clock.advance_samples(frame_samples);
-        }
+        self.advance_clock();
         Duration::from_nanos(timestamp_nanos)
     }
 
     fn advance_by_duration(&mut self, duration: Duration) -> u64 {
         let samples = (duration.as_secs_f64() * self.sample_rate as f64).round() as u64;
         self.total_samples += samples;
-        if let Some(clock) = &self.master_clock
-            && samples > 0
-        {
-            clock.advance_samples(samples);
-        }
+        self.advance_clock();
         samples
     }
 }
@@ -1134,21 +1167,20 @@ impl TimestampAnomalyTracker {
             self.max_forward_skew_secs = jump_secs;
         }
 
-        let expected_increment = Duration::from_millis(33);
-        let adjusted = last.saturating_add(expected_increment);
-
-        let compensation_secs = current.as_secs_f64() - adjusted.as_secs_f64();
-        self.accumulated_compensation_secs -= compensation_secs;
-        self.resync_count += 1;
-        self.did_resync = true;
-
         if wall_clock_confirmed {
+            // Frame delivery paused for about as long as the timestamp jump:
+            // this is a real gap (static screen, stream restart, sleep/wake),
+            // not a source-clock glitch. The gap must stay in the timeline —
+            // collapsing it desyncs video from audio whenever it happens
+            // before the wall-clock anchor exists to re-expand it.
             let wall_clock_gap_secs = self
                 .last_valid_wall_clock
                 .map(|wc| now.duration_since(wc).as_secs_f64())
                 .unwrap_or(0.0);
 
             self.wall_clock_confirmed_jumps += 1;
+            self.consecutive_anomalies = 0;
+            self.last_valid_duration = Some(current);
 
             info!(
                 stream = self.stream_name,
@@ -1158,9 +1190,21 @@ impl TimestampAnomalyTracker {
                 current_ms = current.as_millis(),
                 resync_count = self.resync_count,
                 confirmed_jumps = self.wall_clock_confirmed_jumps,
-                "Wall-clock-confirmed forward jump (system sleep/wake), accepting new baseline"
+                "Wall-clock-confirmed forward jump (gap in frame delivery), accepting new baseline"
             );
-        } else {
+
+            return Ok(current);
+        }
+
+        let expected_increment = Duration::from_millis(33);
+        let adjusted = last.saturating_add(expected_increment);
+
+        let compensation_secs = current.as_secs_f64() - adjusted.as_secs_f64();
+        self.accumulated_compensation_secs -= compensation_secs;
+        self.resync_count += 1;
+        self.did_resync = true;
+
+        {
             self.anomaly_count += 1;
 
             let wall_clock_gap_secs = self
@@ -1595,6 +1639,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
 
         let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
         let video_frame_count = Arc::new(AtomicU64::new(0));
+        let video_timestamp_span = Arc::new(VideoTimestampSpan::default());
 
         let video_start_gate = has_audio_sources.then(VideoStartGate::new);
 
@@ -1608,6 +1653,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             timestamps,
             shared_pause.clone(),
             video_frame_count.clone(),
+            video_timestamp_span.clone(),
             master_clock.clone(),
             video_info,
             video_start_gate.clone(),
@@ -1641,6 +1687,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             pause_flag: build_ctx.pause_flag,
             cancel_token: build_ctx.stop_token,
             video_frame_count,
+            video_timestamp_span,
             health_rx: Some(build_ctx.health_rx),
             audio_gap_summary,
         })
@@ -1724,6 +1771,7 @@ impl OutputPipelineBuilder<NoVideo> {
             pause_flag: build_ctx.pause_flag,
             cancel_token: build_ctx.stop_token,
             video_frame_count: Arc::new(AtomicU64::new(0)),
+            video_timestamp_span: Arc::new(VideoTimestampSpan::default()),
             health_rx: Some(build_ctx.health_rx),
             audio_gap_summary,
         })
@@ -1890,6 +1938,42 @@ fn estimate_video_frame_duration_ns(video_info: &VideoInfo) -> u64 {
     1_000_000_000 / fps as u64
 }
 
+/// Span of the video timestamps actually sent to the muxer, used to report
+/// the real encoded media duration. Capture is VFR (static screens, dropped
+/// frames), so `frame_count / fps` under-reports the duration by the length
+/// of every gap.
+#[derive(Debug)]
+pub struct VideoTimestampSpan {
+    first_ns: AtomicU64,
+    last_ns: AtomicU64,
+}
+
+impl Default for VideoTimestampSpan {
+    fn default() -> Self {
+        Self {
+            first_ns: AtomicU64::new(u64::MAX),
+            last_ns: AtomicU64::new(0),
+        }
+    }
+}
+
+impl VideoTimestampSpan {
+    fn record(&self, timestamp: Duration) {
+        let ns = timestamp.as_nanos().min(u64::MAX as u128) as u64;
+        self.first_ns.fetch_min(ns, Ordering::AcqRel);
+        self.last_ns.fetch_max(ns, Ordering::AcqRel);
+    }
+
+    pub fn get(&self) -> Option<(Duration, Duration)> {
+        let first = self.first_ns.load(Ordering::Acquire);
+        if first == u64::MAX {
+            return None;
+        }
+        let last = self.last_ns.load(Ordering::Acquire).max(first);
+        Some((Duration::from_nanos(first), Duration::from_nanos(last)))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: VideoSource>(
     setup_ctx: &mut SetupCtx,
@@ -1901,6 +1985,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     timestamps: Timestamps,
     shared_pause: SharedWallClockPause,
     frame_counter: Arc<AtomicU64>,
+    timestamp_span: Arc<VideoTimestampSpan>,
     master_clock: Arc<MasterClock>,
     video_info: VideoInfo,
     video_start_gate: Option<VideoStartGate>,
@@ -1975,8 +2060,16 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         );
                     }
 
+                    // Excise accumulated pause time from the content timeline
+                    // before anomaly tracking. Audio already excises pauses
+                    // (paused frames are dropped and sample counting carries
+                    // on), and wall_clock_elapsed below subtracts pauses too;
+                    // leaving the pause in the video timestamps would make a
+                    // resume look like a wall-clock-confirmed capture gap and
+                    // poison the drift anchor with pause-inflated time.
                     let remapped_ts = Timestamp::Instant(
-                        timestamps.instant() + remap.duration(),
+                        timestamps.instant()
+                            + remap.duration().saturating_sub(total_pause_duration),
                     );
 
                     let raw_duration = match anomaly_tracker.process_timestamp(remapped_ts, timestamps) {
@@ -1998,6 +2091,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     let raw_wall_clock = timestamps.instant().elapsed();
                     let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause_duration);
                     let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
+                    timestamp_span.record(duration);
 
                     if frame_count.is_multiple_of(300) {
                         let drift_ratio = if raw_duration.as_secs_f64() > 0.0 {
@@ -2070,8 +2164,13 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                                 "Published video start timestamp to encoder-pair gate (drain path)"
                             );
                         }
+                        // Excise pauses exactly like the main loop above, so
+                        // drained tail frames stay on the same content timeline.
                         let remapped_ts = Timestamp::Instant(
-                            timestamps.instant() + remap.duration(),
+                            timestamps.instant()
+                                + remap
+                                    .duration()
+                                    .saturating_sub(shared_pause.total_pause_duration()),
                         );
 
                         let raw_duration =
@@ -2091,6 +2190,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause);
                         let duration =
                             drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
+                        timestamp_span.record(duration);
 
                         match muxer.lock().await.send_video_frame(frame, duration) {
                             Ok(()) => {}
@@ -2190,8 +2290,10 @@ impl PreparedAudioSources {
             let stop_token = stop_token.child_token();
             let muxer = muxer.clone();
             async move {
-                let mut timestamp_generator =
-                    AudioTimestampGenerator::from_master_clock(master_clock.clone());
+                let mut timestamp_generator = AudioTimestampGenerator::from_master_clock_with_rate(
+                    master_clock.clone(),
+                    audio_info.sample_rate,
+                );
                 let sample_rate = audio_info.sample_rate;
                 let mut dropped_during_pause: u64 = 0;
                 let mut frame_count: u64 = 0;
@@ -2740,6 +2842,7 @@ pub struct OutputPipeline {
     pause_flag: Arc<AtomicBool>,
     cancel_token: CancellationToken,
     video_frame_count: Arc<AtomicU64>,
+    video_timestamp_span: Arc<VideoTimestampSpan>,
     health_rx: Option<HealthReceiver>,
     audio_gap_summary: Arc<OnceLock<AudioGapSummary>>,
 }
@@ -2749,6 +2852,9 @@ pub struct FinishedOutputPipeline {
     pub first_timestamp: Timestamp,
     pub video_info: Option<VideoInfo>,
     pub video_frame_count: u64,
+    /// First and last video timestamps sent to the muxer; the real encoded
+    /// media span for VFR content.
+    pub video_timestamp_span: Option<(Duration, Duration)>,
     pub audio_gap_summary: Option<AudioGapSummary>,
 }
 
@@ -2841,6 +2947,7 @@ impl OutputPipeline {
             first_timestamp,
             video_info: self.video_info,
             video_frame_count: self.video_frame_count.load(Ordering::Acquire),
+            video_timestamp_span: self.video_timestamp_span.get(),
             audio_gap_summary: self.audio_gap_summary.get().copied(),
         })
     }
@@ -3804,11 +3911,17 @@ mod tests {
             tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
 
             let jump_ts = make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000));
-            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+            let accepted = tracker.process_timestamp(jump_ts, timestamps).unwrap();
 
+            // A wall-clock-confirmed jump is a real gap in frame delivery and
+            // passes through unmodified — it is not a resync.
             assert!(
-                tracker.take_resync_flag(),
-                "Resync flag should be set after wall-clock-confirmed jump"
+                !tracker.take_resync_flag(),
+                "Confirmed gap must not be treated as a timeline resync"
+            );
+            assert!(
+                (accepted.as_secs_f64() - (4.0 * 0.033 + 3.0)).abs() < 0.05,
+                "confirmed gap must pass through, got {accepted:?}"
             );
 
             let next_ts =
@@ -3850,7 +3963,10 @@ mod tests {
 
             assert_eq!(tracker.anomaly_count, 0);
             assert_eq!(tracker.wall_clock_confirmed_jumps, 2);
-            assert_eq!(tracker.resync_count, 2);
+            assert_eq!(
+                tracker.resync_count, 0,
+                "confirmed gaps pass through; they are not timeline resyncs"
+            );
         }
 
         #[test]
@@ -4364,10 +4480,14 @@ mod tests {
 
         #[test]
         fn returns_timeout_when_thread_does_not_exit_in_time() {
-            let handle = std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_millis(100));
+            // The worker blocks until released, so it can never beat the
+            // timeout however unfairly a loaded machine schedules threads.
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let handle = std::thread::spawn(move || {
+                let _ = release_rx.recv();
                 Ok(())
             });
+            let _release_tx = release_tx;
 
             match wait_for_blocking_thread_finish(handle, Duration::from_millis(5), "test-worker") {
                 BlockingThreadFinish::TimedOut(error) => {
@@ -5277,6 +5397,54 @@ mod tests {
                 max_skew < Duration::from_millis(250),
                 "video drifted from the wall clock by {max_skew:?} (correction failed)"
             );
+        }
+
+        // A static screen (or a capture-stream restart) stops frame delivery
+        // entirely. The gap must survive into the output timeline: collapsing
+        // it compresses video relative to audio and desyncs the recording.
+        #[test]
+        fn video_timeline_preserves_capture_gaps() {
+            let mut video = VideoDriftTracker::new();
+            let interval = 1.0 / 30.0;
+
+            let mut outs = Vec::new();
+            for v in 0..150u64 {
+                let t = Duration::from_secs_f64(v as f64 * interval);
+                outs.push(video.calculate_timestamp(t, t));
+            }
+            // 4s with no frames delivered, then delivery resumes with
+            // timestamps that include the gap.
+            for v in 150..300u64 {
+                let t = Duration::from_secs_f64(v as f64 * interval + 4.0);
+                outs.push(video.calculate_timestamp(t, t));
+            }
+
+            let gap = outs[150].saturating_sub(outs[149]);
+            assert!(
+                gap >= Duration::from_secs_f64(3.5),
+                "capture gap collapsed to {gap:?} in the output timeline"
+            );
+
+            let span = outs[299].saturating_sub(outs[0]);
+            let real = 299.0 * interval + 4.0;
+            assert!(
+                (span.as_secs_f64() - real).abs() < 0.3,
+                "output span {span:?} does not match real elapsed time {real:.2}s"
+            );
+        }
+
+        #[test]
+        fn video_timestamp_span_reports_first_and_last_sent() {
+            let span = VideoTimestampSpan::default();
+            assert!(span.get().is_none(), "unset span must be None");
+
+            span.record(Duration::from_millis(100));
+            span.record(Duration::from_millis(133));
+            span.record(Duration::from_millis(4000)); // across a capture gap
+
+            let (first, last) = span.get().expect("span should be set");
+            assert_eq!(first, Duration::from_millis(100));
+            assert_eq!(last, Duration::from_millis(4000));
         }
     }
 }

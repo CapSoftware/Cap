@@ -449,6 +449,27 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
 pub const FRAME_CACHE_SIZE: usize = 90;
 const DEFAULT_MAX_FALLBACK_DISTANCE: u32 = 90;
 
+/// Records a pts hole discovered from a decode-order vend jump (frames vend
+/// in pts order, so a jump means no samples exist in between). The map stays
+/// bounded by dropping the narrowest hole — wide static-screen holds matter
+/// most.
+pub(super) fn record_pts_hole(
+    holes: &mut std::collections::BTreeMap<u32, u32>,
+    start: u32,
+    end: u32,
+) {
+    const MAX_TRACKED_HOLES: usize = 64;
+    holes.insert(start, end);
+    if holes.len() > MAX_TRACKED_HOLES
+        && let Some(narrowest) = holes
+            .iter()
+            .min_by_key(|&(&s, &e)| e.saturating_sub(s))
+            .map(|(&s, _)| s)
+    {
+        holes.remove(&narrowest);
+    }
+}
+
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
     sender: mpsc::Sender<VideoDecoderMessage>,
@@ -505,6 +526,10 @@ impl AsyncVideoDecoderHandle {
             ))
             .is_err()
         {
+            tracing::warn!(
+                time = adjusted_time,
+                "decoder thread is gone; frame request dropped"
+            );
             return None;
         }
 

@@ -757,6 +757,28 @@ impl RecoveryManager {
         if total.is_zero() { None } else { Some(total) }
     }
 
+    /// Reads the display media duration the recorder persisted into the
+    /// project's default timeline, used to cross-check the remuxed container.
+    fn expected_display_duration_from_config(
+        project_path: &Path,
+        segment_index: u32,
+    ) -> Option<std::time::Duration> {
+        let config = std::fs::read_to_string(project_path.join("project-config.json")).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&config).ok()?;
+        let segments = value.get("timeline")?.get("segments")?.as_array()?;
+        let segment = segments.iter().find(|s| {
+            s.get("recordingSegment")
+                .and_then(serde_json::Value::as_u64)
+                == Some(u64::from(segment_index))
+        })?;
+        let end = segment.get("end")?.as_f64()?;
+        let start = segment
+            .get("start")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0);
+        (end > start && end.is_finite()).then(|| std::time::Duration::from_secs_f64(end - start))
+    }
+
     pub fn recover(recording: &IncompleteRecording) -> Result<RecoveredRecording, RecoveryError> {
         Self::finalize_with_purpose(recording, RecoveryPurpose::Recover)
     }
@@ -826,6 +848,17 @@ impl RecoveryManager {
                 {
                     debug!("Failed to clean up display dir {:?}: {e}", display_dir);
                 }
+            }
+
+            // Sync invariant: the remuxed display track must match the media
+            // span the recorder persisted from its capture timestamps.
+            if display_output.is_file()
+                && let Some(expected) = Self::expected_display_duration_from_config(
+                    &recording.project_path,
+                    segment.index,
+                )
+            {
+                crate::output_validation::check_display_sync_span(&display_output, expected);
             }
 
             if let Some(camera_frags) = &segment.camera_fragments {

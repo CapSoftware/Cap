@@ -7,7 +7,9 @@ mod segments;
 mod telemetry;
 
 pub use audio::{AudioRenderer, MusicTracks};
-pub use audio_output::AudioOutput;
+pub use audio_output::{
+    AudioOutput, HEADLESS_BLOCK_FRAMES, HEADLESS_CHANNELS, HEADLESS_SAMPLE_RATE, HeadlessAudioTap,
+};
 pub use editor::{
     EditorFrameOutput, Renderer, RendererHandle, finish_renderer_layers_creation,
     start_renderer_layers_creation,

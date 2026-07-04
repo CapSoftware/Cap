@@ -1002,16 +1002,38 @@ async fn stop_recording(
                     );
                     DEFAULT_FPS
                 });
-            // Use the encoded display-media duration (frame_count / fps), not the wall-clock
-            // recording span which includes pipeline-drain latency. This is the timeline the
-            // recorder persists to project-config.json, so it is what un-edited recordings use; the
-            // editor/export fallbacks only synthesize a timeline when none is present and read the
-            // muxed container duration, which this closely (not bit-exactly) matches.
-            let display_media_duration = if display_fps > 0 {
-                s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
-            } else {
-                0.0
+            // Use the encoded display-media span (first to last muxed timestamp plus one
+            // nominal frame), not the wall-clock recording span which includes
+            // pipeline-drain latency, and not frame_count / fps, which under-reports VFR
+            // content by the length of every capture gap (static screens, dropped frames).
+            // This is the timeline the recorder persists to project-config.json, so it is
+            // what un-edited recordings use.
+            let display_media_duration = match s.pipeline.screen.video_timestamp_span {
+                Some((first, last)) if display_fps > 0 => {
+                    (last - first).as_secs_f64() + 1.0 / f64::from(display_fps)
+                }
+                _ if display_fps > 0 => {
+                    s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
+                }
+                _ => 0.0,
             };
+
+            // Non-fragmented recordings have their final display file already;
+            // verify the muxed container matches the timestamps we sent it.
+            // Fragmented recordings get the same check after remux in recovery.
+            if s.pipeline
+                .screen
+                .path
+                .extension()
+                .is_some_and(|e| e == "mp4")
+                && s.pipeline.screen.path.is_file()
+                && display_media_duration > 0.0
+            {
+                crate::output_validation::check_display_sync_span(
+                    &s.pipeline.screen.path,
+                    Duration::from_secs_f64(display_media_duration),
+                );
+            }
 
             SegmentOutput {
                 meta: MultipleSegment {
@@ -1809,6 +1831,7 @@ mod tests {
             first_timestamp,
             video_info,
             video_frame_count,
+            video_timestamp_span: None,
             audio_gap_summary: None,
         }
     }

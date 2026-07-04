@@ -84,7 +84,6 @@ pub struct SegmentedVideoEncoder {
     segment_start_time: Option<Duration>,
     last_frame_timestamp: Option<Duration>,
     frames_in_segment: u32,
-    encoded_frame_count: u64,
 
     completed_segments: Vec<VideoSegmentInfo>,
 
@@ -281,7 +280,6 @@ impl SegmentedVideoEncoder {
             segment_start_time: None,
             last_frame_timestamp: None,
             frames_in_segment: 0,
-            encoded_frame_count: 0,
             completed_segments: Vec::new(),
             pending_segment_indices: Vec::new(),
             frames_since_pending_flush: 0,
@@ -341,10 +339,12 @@ impl SegmentedVideoEncoder {
 
         self.last_frame_timestamp = Some(timestamp);
 
-        let encoder_timestamp = self.next_encoder_timestamp();
+        // Encode with the frame's real capture-derived timestamp. The encoder
+        // anchors pts at the first frame, so capture gaps (static content,
+        // stream restarts, dropped frames) stay in the timeline instead of
+        // compressing it and drifting video ahead of audio.
         self.encoder
-            .queue_frame(frame, encoder_timestamp, &mut self.output)?;
-        self.encoded_frame_count += 1;
+            .queue_frame(frame, timestamp, &mut self.output)?;
         self.frames_in_segment += 1;
 
         if is_first_frame {
@@ -365,12 +365,6 @@ impl SegmentedVideoEncoder {
         }
 
         Ok(())
-    }
-
-    fn next_encoder_timestamp(&self) -> Duration {
-        let frame_rate_num = self.codec_info.frame_rate_num.max(1) as f64;
-        let frame_rate_den = self.codec_info.frame_rate_den.max(1) as f64;
-        Duration::from_secs_f64(self.encoded_frame_count as f64 * frame_rate_den / frame_rate_num)
     }
 
     fn notify_segment(&self, event: SegmentCompletedEvent) {
@@ -993,6 +987,88 @@ mod tests {
             .iter()
             .all(|e| e.media_type == SegmentMediaType::Video);
         assert!(all_video, "all events should be video type");
+    }
+
+    #[test]
+    fn encoded_pts_preserve_capture_timestamps_across_gaps() {
+        ffmpeg::init().ok();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_millis(500),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Three frames at ~30fps, a 1.9s capture gap (static screen /
+        // stream restart), then three more frames. The encoded pts must
+        // reflect the gap instead of collapsing to a frame-counter grid,
+        // otherwise every dropped frame desyncs video from audio.
+        let timestamps_ms: [u64; 6] = [0, 33, 66, 2000, 2033, 2066];
+        for ts_ms in timestamps_ms {
+            let frame = create_test_frame(320, 240);
+            encoder
+                .queue_frame(frame, Duration::from_millis(ts_ms))
+                .unwrap();
+        }
+
+        encoder.finish().unwrap();
+
+        // fMP4 segments concatenated after the init segment form a valid mp4.
+        let mut segment_paths: Vec<PathBuf> = std::fs::read_dir(&base_path)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "m4s"))
+            .collect();
+        segment_paths.sort();
+        assert!(
+            !segment_paths.is_empty(),
+            "encoder should have produced media segments"
+        );
+
+        let concat_path = base_path.join("concat_test.mp4");
+        let mut concatenated = std::fs::read(base_path.join(INIT_SEGMENT_NAME)).unwrap();
+        for segment in &segment_paths {
+            concatenated.extend(std::fs::read(segment).unwrap());
+        }
+        std::fs::write(&concat_path, concatenated).unwrap();
+
+        let mut input = format::input(&concat_path).unwrap();
+        let stream_index = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .unwrap()
+            .index();
+        let time_base = input.stream(stream_index).unwrap().time_base();
+        let tb = time_base.numerator() as f64 / time_base.denominator() as f64;
+
+        let mut pts_secs: Vec<f64> = input
+            .packets()
+            .filter_map(|(stream, packet)| {
+                (stream.index() == stream_index)
+                    .then_some(packet.pts())
+                    .flatten()
+            })
+            .map(|pts| pts as f64 * tb)
+            .collect();
+        pts_secs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        assert_eq!(pts_secs.len(), timestamps_ms.len());
+
+        for (pts, expected_ms) in pts_secs.iter().zip(timestamps_ms) {
+            let expected = expected_ms as f64 / 1000.0;
+            assert!(
+                (pts - expected).abs() < 0.005,
+                "encoded pts {pts:.3}s should match capture timestamp {expected:.3}s \
+                 (all pts: {pts_secs:?})"
+            );
+        }
     }
 
     #[test]

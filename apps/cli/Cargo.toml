@@ -8,7 +8,11 @@ clap = { version = "4.5.23", features = ["derive"] }
 clap_complete = "4.5.38"
 cap-project = { path = "../../crates/project" }
 cap-recording = { path = "../../crates/recording" }
+cap-editor = { path = "../../crates/editor" }
 cap-export = { path = "../../crates/export" }
+cap-media-info = { path = "../../crates/media-info" }
+cap-timestamp = { path = "../../crates/timestamp" }
+relative-path = "1.9.3"
 cap-automation = { path = "../../crates/automation" }
 cap-camera = { path = "../../crates/camera" }
 cap-cli-install = { path = "../../crates/cli-install" }
@@ -28,6 +32,9 @@ image = "0.25.2"
 chrono = "0.4.31"
 tracing.workspace = true
 tracing-subscriber = "0.3.19"
+cpal = { workspace = true }
+winit = "0.30"
+softbuffer = "0.4"
 workspace-hack = { version = "0.1", path = "../../crates/workspace-hack" }
 
 [target.'cfg(unix)'.dependencies]

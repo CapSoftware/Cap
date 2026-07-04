@@ -393,6 +393,10 @@ impl RecordingSegmentDecoders {
 
             let camera_frame = camera.flatten();
 
+            if screen.is_none() {
+                tracing::warn!(segment_time, "screen decoder returned no frame");
+            }
+
             Some(DecodedSegmentFrames {
                 screen_frame: Some(screen?),
                 camera_frame,
