@@ -103,11 +103,10 @@ function Header() {
 			data-tauri-drag-region="deep"
 		>
 			{ctx.state()?.items}
-			{isWindows && <CaptionControlsWindows11 class="ml-auto!" />}
+			{/* This is temporary until the re-strcture of window-chrome.
+			    Then we'll use native captions on Windows and GTK-4 window controls on Linux */}
+			{isWindows || (isLinux && <CaptionControlsWindows11 class="ml-auto!" />)}
 			{isMacOS && !isSettings() && <div class="h-full w-[70px]" />}
-			{isLinux && (
-				<CaptionControlsWindows11 class="mr-auto! flex-row-reverse" />
-			)}
 		</header>
 	);
 }
