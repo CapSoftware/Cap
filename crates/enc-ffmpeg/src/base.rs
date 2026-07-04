@@ -13,6 +13,14 @@ pub struct EncoderBase {
     first_pts: Option<i64>,
     last_frame_pts: Option<i64>,
     last_written_dts: Option<i64>,
+    /// One-packet reorder buffer: a packet is written once its successor is
+    /// known so a synthesized duration can be replaced with the real dts
+    /// delta. Fragmenting muxers place each fragment at the accumulated
+    /// duration of the previous one, and the last sample of a fragment uses
+    /// the packet duration verbatim — a nominal duration there collapses any
+    /// capture gap that lands on a fragment cut, playing post-gap content
+    /// during the gap. The bool records whether the duration was synthesized.
+    held_packet: Option<(Packet, bool)>,
 }
 
 impl EncoderBase {
@@ -23,6 +31,7 @@ impl EncoderBase {
             last_frame_pts: None,
             stream_index,
             last_written_dts: None,
+            held_packet: None,
         }
     }
 
@@ -133,7 +142,8 @@ impl EncoderBase {
                 _ => {}
             }
 
-            if self.packet.duration() <= 0
+            let duration_synthesized = self.packet.duration() <= 0;
+            if duration_synthesized
                 && let Some(duration) = nominal_packet_duration(
                     output.stream(self.stream_index).unwrap().time_base(),
                     encoder.frame_rate(),
@@ -161,7 +171,18 @@ impl EncoderBase {
             }
 
             self.last_written_dts = self.packet.dts();
-            self.packet.write_interleaved(output)?;
+
+            let current = std::mem::replace(&mut self.packet, Packet::empty());
+            if let Some((mut previous, previous_synthesized)) = self.held_packet.take() {
+                if previous_synthesized
+                    && let (Some(prev_dts), Some(cur_dts)) = (previous.dts(), current.dts())
+                    && cur_dts > prev_dts
+                {
+                    previous.set_duration(cur_dts - prev_dts);
+                }
+                previous.write_interleaved(output)?;
+            }
+            self.held_packet = Some((current, duration_synthesized));
         }
 
         Ok(())
@@ -174,7 +195,13 @@ impl EncoderBase {
     ) -> Result<(), ffmpeg::Error> {
         encoder.send_eof()?;
 
-        self.process_packets(output, encoder)
+        self.process_packets(output, encoder)?;
+
+        if let Some((previous, _)) = self.held_packet.take() {
+            previous.write_interleaved(output)?;
+        }
+
+        Ok(())
     }
 }
 

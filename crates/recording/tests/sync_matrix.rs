@@ -29,9 +29,10 @@ use cap_timestamp::{Timestamp, Timestamps};
 use serde::Serialize;
 
 const CONTENT_SECS: f64 = 4.0;
-/// Absolute tolerance for a muxed pts vs the sent capture timestamp. Covers
-/// warmup anchoring, emission jitter and encoder rounding, plus scheduler
-/// noise on shared CI runners.
+/// Absolute tolerance for a muxed pts vs the sent capture timestamp,
+/// measured from each side's own origin (first sent frame vs first muxed
+/// pts). Covers warmup anchoring, emission jitter and encoder rounding,
+/// plus scheduler noise on shared CI runners.
 const ABS_TOLERANCE_SECS: f64 = 0.25;
 /// Tolerance for the relative structure (pts deltas vs sent deltas), which is
 /// what actually determines sync drift. The bug class this guards against
@@ -304,9 +305,18 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
     // floor in frames as well. The bug class this guards produces errors of
     // a second or more either way.
     let rel_tolerance = REL_TOLERANCE_SECS.max(2.5 / f64::from(case.fps));
+    // The muxed timeline's origin is the first DELIVERED frame: the pipeline
+    // zeroes each track at its first frame and the recorder persists the
+    // track's start_time for cross-track alignment. A random case whose
+    // leading frames were dropped therefore legitimately muxes pts starting
+    // near 0, not at sent[0]; compare against the origin-normalized sent
+    // timeline. The fixed absolute bound stays valid at any frame rate the
+    // generator produces (fps >= 10 keeps rel_tolerance <= ABS_TOLERANCE):
+    // a constant whole-track offset does not scale with frame period.
+    let sent_origin = sent[0];
     for (i, (&p, &s)) in pts.iter().zip(&sent).enumerate() {
-        max_abs = max_abs.max((p - s).abs());
-        let rel = ((p - pts[0]) - (s - sent[0])).abs();
+        max_abs = max_abs.max((p - (s - sent_origin)).abs());
+        let rel = ((p - pts[0]) - (s - sent_origin)).abs();
         max_rel = max_rel.max(rel);
         if rel > rel_tolerance {
             return Err(format!(

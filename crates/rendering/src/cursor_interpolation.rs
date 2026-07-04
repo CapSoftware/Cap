@@ -15,6 +15,21 @@ const DECIMATE_FPS: f64 = 60.0;
 const DECIMATE_MIN_DIST_UV: f64 = 1.0 / 1920.0;
 const SIMULATION_STEP_MS: f64 = 1000.0 / 60.0;
 const SPRING_SETTLE_EXTRA_MS: f64 = 300.0;
+/// Per-step one-pole coefficient for adapting the phase lead when the active
+/// spring profile changes; ~130ms time constant at the 60Hz simulation step,
+/// so profile switches ease in without popping the target.
+const LEAD_SMOOTHING: f64 = 0.12;
+
+/// A spring-mass-damper chasing a moving target trails it by friction/tension
+/// seconds at steady state (independent of mass). Sampling the target that far
+/// ahead cancels the trail so the smoothed cursor sits where the real cursor
+/// was at render time instead of visibly lagging behind the video.
+fn spring_lag_ms(config: &SpringMassDamperSimulationConfig) -> f64 {
+    if config.tension <= 0.0 {
+        return 0.0;
+    }
+    f64::from(config.friction / config.tension) * 1000.0
+}
 
 const DEFAULT_CLICK_SPRING: SpringMassDamperSimulationConfig = SpringMassDamperSimulationConfig {
     tension: 530.0,
@@ -169,6 +184,9 @@ fn position_at_time_hinted(
     time_ms: f64,
     hint: &mut usize,
 ) -> (f64, f64) {
+    while *hint > 0 && moves[*hint].time_ms > time_ms {
+        *hint -= 1;
+    }
     while *hint + 1 < moves.len() && moves[*hint + 1].time_ms <= time_ms {
         *hint += 1;
     }
@@ -362,7 +380,8 @@ fn build_smoothed_timeline(
 
     let capacity = ((settle_end / SIMULATION_STEP_MS).ceil() as usize) + 2;
     let mut events = Vec::with_capacity(capacity);
-    let mut move_hint: usize = 0;
+    let mut target_hint: usize = 0;
+    let mut cid_hint: usize = 0;
 
     events.push(SmoothedCursorEvent {
         time: 0.0,
@@ -372,12 +391,23 @@ fn build_smoothed_timeline(
     });
 
     let mut t_ms = SIMULATION_STEP_MS;
+    let mut lead_ms = spring_lag_ms(&smoothing_config);
 
     while t_ms <= settle_end {
         let clamped_t = t_ms.min(end_time_ms);
 
-        let (cx, cy) = position_at_time_hinted(moves, clamped_t, &mut move_hint);
-        let cid = cursor_id_at_time(moves, clamped_t, move_hint).to_string();
+        context.advance_to(t_ms);
+        let config = presets.config(context.profile(t_ms));
+        sim.set_config(config);
+        lead_ms += (spring_lag_ms(&config) - lead_ms) * LEAD_SMOOTHING;
+
+        // The spring's target leads the raw path by the profile's own lag so
+        // the smoothed output lands on the real cursor position at time t.
+        // The drawn cursor icon must not lead: it samples the raw timeline.
+        let lead_t = (clamped_t + lead_ms).min(end_time_ms);
+        let (cx, cy) = position_at_time_hinted(moves, lead_t, &mut target_hint);
+        let _ = position_at_time_hinted(moves, clamped_t, &mut cid_hint);
+        let cid = cursor_id_at_time(moves, clamped_t, cid_hint).to_string();
 
         let target = if let Some(click) =
             next_click_within(&cursor.clicks, t_ms, CLICK_LOOKAHEAD_TARGET_MS)
@@ -389,9 +419,6 @@ fn build_smoothed_timeline(
         };
 
         sim.set_target_position(target);
-
-        context.advance_to(t_ms);
-        sim.set_config(presets.config(context.profile(t_ms)));
 
         sim.run(SIMULATION_STEP_MS as f32);
 
@@ -658,6 +685,50 @@ mod tests {
 
         context.advance_to(100.0);
         assert_eq!(context.profile(100.0), SpringProfile::Default);
+    }
+
+    #[test]
+    fn smoothed_cursor_tracks_moving_target_without_lag() {
+        // Constant-velocity motion: 0.2 UV/s along x for 3 seconds, sampled
+        // every 10ms like the real recorder.
+        let velocity_uv_per_ms = 0.0002;
+        let moves: Vec<_> = (0..=300)
+            .map(|i| {
+                let t = i as f64 * 10.0;
+                cursor_move(t, 0.1 + t * velocity_uv_per_ms, 0.5)
+            })
+            .collect();
+        let cursor = CursorEvents {
+            moves,
+            clicks: vec![],
+        };
+
+        let smoothing = SpringMassDamperSimulationConfig {
+            tension: 470.0,
+            mass: 3.0,
+            friction: 70.0,
+        };
+
+        // Without phase-lead compensation the spring trails a moving target
+        // by friction/tension = 149ms, i.e. ~0.030 UV at this velocity. The
+        // compensated output must sit within a couple of simulation steps of
+        // the true position throughout steady-state motion.
+        for t_ms in [1000.0f64, 1500.0, 2000.0, 2500.0] {
+            let smoothed = interpolate_cursor_with_click_spring(
+                &cursor,
+                (t_ms / 1000.0) as f32,
+                Some(smoothing),
+                None,
+            )
+            .unwrap();
+            let expected_x = 0.1 + t_ms * velocity_uv_per_ms;
+            let err = (smoothed.position.coord.x - expected_x).abs();
+            assert!(
+                err < 0.01,
+                "smoothed cursor off by {err:.4} UV ({:.0}ms of motion) at t={t_ms}ms",
+                err / velocity_uv_per_ms
+            );
+        }
     }
 
     #[test]

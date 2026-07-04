@@ -51,6 +51,15 @@ pub enum H264EncoderError {
     PixFmtNotSupported(Pixel),
     #[error("Invalid output dimensions {width}x{height}; expected non-zero even width and height")]
     InvalidOutputDimensions { width: u32, height: u32 },
+    #[error("Hardware encoder self-test failed: {0}")]
+    SelfTest(String),
+}
+
+fn is_hardware_h264(codec_name: &str) -> bool {
+    matches!(
+        codec_name,
+        "h264_videotoolbox" | "h264_nvenc" | "h264_qsv" | "h264_amf" | "h264_mf"
+    )
 }
 
 impl H264EncoderBuilder {
@@ -155,6 +164,26 @@ impl H264EncoderBuilder {
         for (codec, encoder_options) in candidates {
             let codec_name = codec.name().to_string();
 
+            if is_hardware_h264(&codec_name)
+                && let Err(reason) = cached_hardware_self_test(
+                    codec,
+                    &encoder_options,
+                    &input_config,
+                    output_width,
+                    output_height,
+                    self.bpp,
+                    self.crf,
+                )
+            {
+                warn!(
+                    encoder = %codec_name,
+                    %reason,
+                    "Hardware H264 encoder failed pre-flight self-test, trying next candidate"
+                );
+                last_error = Some(H264EncoderError::SelfTest(reason));
+                continue;
+            }
+
             match Self::build_with_codec(
                 codec,
                 encoder_options,
@@ -167,10 +196,7 @@ impl H264EncoderBuilder {
                 self.crf,
             ) {
                 Ok(encoder) => {
-                    let is_hardware = matches!(
-                        codec_name.as_str(),
-                        "h264_videotoolbox" | "h264_nvenc" | "h264_qsv" | "h264_amf" | "h264_mf"
-                    );
+                    let is_hardware = is_hardware_h264(&codec_name);
                     let fps =
                         input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32;
                     if is_hardware {
@@ -302,6 +328,27 @@ impl H264EncoderBuilder {
 
         for (codec, encoder_options) in candidates {
             let codec_name = codec.name().to_string();
+
+            if is_hardware_h264(&codec_name)
+                && let Err(reason) = cached_hardware_self_test(
+                    codec,
+                    &encoder_options,
+                    &input_config,
+                    output_width,
+                    output_height,
+                    self.bpp,
+                    self.crf,
+                )
+            {
+                warn!(
+                    encoder = %codec_name,
+                    %reason,
+                    "Hardware H264 encoder failed pre-flight self-test, trying next candidate"
+                );
+                last_error = Some(H264EncoderError::SelfTest(reason));
+                continue;
+            }
+
             match Self::build_standalone_with_codec(
                 codec,
                 encoder_options,
@@ -1086,6 +1133,290 @@ fn get_codec_and_options(
     encoders
 }
 
+/// Some GPU driver stacks open a hardware H264 session successfully but then
+/// emit zeroed YUV — rendered as a solid green (or black) recording — with no
+/// error surfaced anywhere. Before committing a recording to a hardware
+/// encoder, encode a short neutral-gray clip and decode it back with the
+/// software decoder; if the gray does not survive the round trip, the
+/// candidate is rejected and encoder selection falls through to the next one
+/// (terminating at libx264, which never takes this path).
+///
+/// Windows-only: that is where the multi-vendor encoder/driver matrix
+/// (nvenc/amf/qsv/mf) lives and where zeroed-output reports come from.
+/// VideoToolbox is a single-vendor OS stack, and measured session creation
+/// alone costs ~1.6s — too much to add to recording start for a failure mode
+/// never observed there. Results are cached per everything that shapes the
+/// encode path (encoder, resolution, input pixel format, frame rate, bitrate
+/// inputs, and the full option set) so the cost is one-time per process, and
+/// `CAP_DISABLE_ENCODER_SELF_TEST=1` bypasses the check as an escape hatch.
+fn cached_hardware_self_test(
+    codec: Codec,
+    encoder_options: &Dictionary<'static>,
+    input_config: &VideoInfo,
+    output_width: u32,
+    output_height: u32,
+    bpp: f32,
+    crf: Option<u8>,
+) -> Result<(), String> {
+    use std::{
+        collections::HashMap,
+        fmt::Write,
+        sync::{Mutex, OnceLock},
+    };
+
+    if !cfg!(target_os = "windows") {
+        return Ok(());
+    }
+
+    if std::env::var("CAP_DISABLE_ENCODER_SELF_TEST")
+        .is_ok_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+    {
+        return Ok(());
+    }
+
+    type Cache = Mutex<HashMap<String, Result<(), String>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    // The verdict depends on everything that shapes the encoder session:
+    // options (which differ between recording and export), frame rate (the
+    // keyframe interval), the input pixel format (it selects the negotiated
+    // encode format), and the bitrate inputs — not just name and size.
+    let mut key = format!(
+        "{}|{}x{}|{:?}|{}/{}|{}|{:?}",
+        codec.name(),
+        output_width,
+        output_height,
+        input_config.pixel_format,
+        input_config.frame_rate.numerator(),
+        input_config.frame_rate.denominator(),
+        bpp,
+        crf,
+    );
+    for (k, v) in encoder_options.iter() {
+        let _ = write!(key, "|{k}={v}");
+    }
+    if let Some(result) = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&key)
+    {
+        return result.clone();
+    }
+
+    let started = std::time::Instant::now();
+    let result = hardware_encoder_self_test(
+        codec,
+        clone_options(encoder_options),
+        input_config,
+        output_width,
+        output_height,
+        bpp,
+        crf,
+    );
+    debug!(
+        encoder = %codec.name(),
+        width = output_width,
+        height = output_height,
+        elapsed_ms = started.elapsed().as_millis(),
+        ok = result.is_ok(),
+        "Hardware H264 encoder self-test finished"
+    );
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(key, result.clone());
+    result
+}
+
+fn clone_options(options: &Dictionary<'static>) -> Dictionary<'static> {
+    let mut copy = Dictionary::new();
+    for (k, v) in options.iter() {
+        copy.set(k, v);
+    }
+    copy
+}
+
+fn hardware_encoder_self_test(
+    codec: Codec,
+    encoder_options: Dictionary<'static>,
+    input_config: &VideoInfo,
+    output_width: u32,
+    output_height: u32,
+    bpp: f32,
+    crf: Option<u8>,
+) -> Result<(), String> {
+    // A throwaway encoder with production settings; frames are built directly
+    // in the negotiated output format, so no converter is needed.
+    let opened = open_video_encoder_inner(
+        codec,
+        encoder_options,
+        input_config,
+        output_width,
+        output_height,
+        bpp,
+        true,
+        crf,
+        false,
+    )
+    .map_err(|e| format!("test encoder open: {e}"))?;
+    let mut encoder = opened.encoder;
+
+    // Mid-gray is neutral in both RGB (128,128,128) and YUV (Y=128, U=V=128)
+    // representations, so filling every plane with 128 produces a valid gray
+    // frame in any format the encoder negotiated.
+    let mut test_frame = frame::Video::new(opened.output_format, output_width, output_height);
+    for i in 0..test_frame.planes() {
+        test_frame.data_mut(i).fill(128);
+    }
+
+    let fps = {
+        let num = input_config.frame_rate.numerator().max(1);
+        let den = input_config.frame_rate.denominator().max(1);
+        (f64::from(num) / f64::from(den)).max(1.0)
+    };
+    let pts_step = ((f64::from(input_config.time_base.denominator().max(1)) / fps) as i64).max(1);
+
+    fn drain_packets(encoder: &mut encoder::Video, packets: &mut Vec<ffmpeg::Packet>) {
+        loop {
+            let mut packet = ffmpeg::Packet::empty();
+            if encoder.receive_packet(&mut packet).is_err() {
+                break;
+            }
+            packets.push(packet);
+        }
+    }
+
+    let mut packets = Vec::new();
+    const TEST_FRAME_COUNT: i64 = 8;
+    for i in 0..TEST_FRAME_COUNT {
+        test_frame.set_pts(Some(i * pts_step));
+        encoder
+            .send_frame(&test_frame)
+            .map_err(|e| format!("send_frame: {e}"))?;
+        drain_packets(&mut encoder, &mut packets);
+    }
+    encoder.send_eof().map_err(|e| format!("send_eof: {e}"))?;
+    drain_packets(&mut encoder, &mut packets);
+
+    if packets.is_empty() {
+        return Err("encoder produced no packets".to_string());
+    }
+
+    let decoder_codec = ffmpeg::codec::decoder::find(ffmpeg::codec::Id::H264)
+        .ok_or_else(|| "no software H264 decoder available".to_string())?;
+    let mut decoder_ctx = context::Context::new_with_codec(decoder_codec);
+    // Hand over out-of-band SPS/PPS when the encoder produced extradata;
+    // in-band parameter sets (the common case without GLOBAL_HEADER) decode
+    // without it.
+    unsafe {
+        let enc = encoder.as_ptr();
+        if !(*enc).extradata.is_null() && (*enc).extradata_size > 0 {
+            let size = (*enc).extradata_size as usize;
+            let buf =
+                ffmpeg::ffi::av_mallocz(size + ffmpeg::ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize)
+                    .cast::<u8>();
+            if !buf.is_null() {
+                std::ptr::copy_nonoverlapping((*enc).extradata, buf, size);
+                let dec = decoder_ctx.as_mut_ptr();
+                (*dec).extradata = buf;
+                (*dec).extradata_size = size as i32;
+            }
+        }
+    }
+    let mut decoder = decoder_ctx
+        .decoder()
+        .video()
+        .map_err(|e| format!("test decoder open: {e}"))?;
+
+    let mut decoded = frame::Video::empty();
+    let mut decoded_count = 0usize;
+    for packet in &packets {
+        if decoder.send_packet(packet).is_err() {
+            continue;
+        }
+        while decoder.receive_frame(&mut decoded).is_ok() {
+            decoded_count += 1;
+            verify_neutral_gray(&decoded)?;
+        }
+    }
+    let _ = decoder.send_eof();
+    while decoder.receive_frame(&mut decoded).is_ok() {
+        decoded_count += 1;
+        verify_neutral_gray(&decoded)?;
+    }
+
+    if decoded_count == 0 {
+        return Err(format!(
+            "none of {} encoded packets decoded to a frame",
+            packets.len()
+        ));
+    }
+
+    Ok(())
+}
+
+/// Asserts a decoded self-test frame still carries the neutral-gray content
+/// that was encoded. A zeroed-YUV frame (Y=U=V=0, rendered green) or a black
+/// frame (Y=16) fails by a wide margin; any functioning encoder reproduces a
+/// flat gray I-frame nearly losslessly.
+fn verify_neutral_gray(frame: &frame::Video) -> Result<(), String> {
+    const TOLERANCE: f64 = 32.0;
+
+    fn plane_mean(frame: &frame::Video, plane: usize, row_bytes: usize, rows: usize) -> f64 {
+        let stride = frame.stride(plane);
+        let data = frame.data(plane);
+        let mut sum = 0u64;
+        let mut count = 0u64;
+        for row in 0..rows {
+            let start = row * stride;
+            let Some(slice) = data.get(start..start + row_bytes) else {
+                break;
+            };
+            sum += slice.iter().map(|&b| u64::from(b)).sum::<u64>();
+            count += row_bytes as u64;
+        }
+        if count == 0 {
+            return f64::NAN;
+        }
+        sum as f64 / count as f64
+    }
+
+    let width = frame.width() as usize;
+    let height = frame.height() as usize;
+    let means: Vec<f64> = match frame.format() {
+        format::Pixel::YUV420P | format::Pixel::YUVJ420P => vec![
+            plane_mean(frame, 0, width, height),
+            plane_mean(frame, 1, width.div_ceil(2), height.div_ceil(2)),
+            plane_mean(frame, 2, width.div_ceil(2), height.div_ceil(2)),
+        ],
+        format::Pixel::NV12 => vec![
+            plane_mean(frame, 0, width, height),
+            plane_mean(frame, 1, width, height.div_ceil(2)),
+        ],
+        // Our encoders are configured for 8-bit 4:2:0; anything else decoding
+        // out of the test stream is itself evidence the session is not doing
+        // what was asked. Fail closed — the cost is falling back to the next
+        // candidate, never accepting output we could not verify.
+        other => {
+            return Err(format!(
+                "decoded self-test frame has unexpected pixel format {other:?}"
+            ));
+        }
+    };
+
+    for (plane, mean) in means.iter().enumerate() {
+        if !mean.is_finite() || (mean - 128.0).abs() > TOLERANCE {
+            return Err(format!(
+                "decoded plane {plane} mean {mean:.1} deviates from neutral gray 128 \
+                 (zeroed or corrupted encoder output)"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
     // higher frame rates don't really need double the bitrate lets be real
     let frame_rate_multiplier = ((frame_rate as f64 - 30.0).max(0.0) * 0.6) + 30.0;
@@ -1093,4 +1424,39 @@ fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
     let pixels_per_second = area * frame_rate_multiplier;
 
     (pixels_per_second * bpp as f64) as usize
+}
+
+#[cfg(test)]
+mod self_test_tests {
+    use super::*;
+
+    fn yuv420p_frame(y: u8, u: u8, v: u8) -> frame::Video {
+        let mut frame = frame::Video::new(format::Pixel::YUV420P, 64, 48);
+        frame.data_mut(0).fill(y);
+        frame.data_mut(1).fill(u);
+        frame.data_mut(2).fill(v);
+        frame
+    }
+
+    #[test]
+    fn verifier_accepts_gray_and_rejects_zeroed_or_black() {
+        assert!(verify_neutral_gray(&yuv420p_frame(128, 128, 128)).is_ok());
+        assert!(verify_neutral_gray(&yuv420p_frame(120, 132, 125)).is_ok());
+        // Zeroed YUV is what renders as the solid-green display.
+        assert!(verify_neutral_gray(&yuv420p_frame(0, 0, 0)).is_err());
+        // A black frame means the encoder dropped the content entirely.
+        assert!(verify_neutral_gray(&yuv420p_frame(16, 128, 128)).is_err());
+    }
+
+    #[test]
+    fn self_test_round_trip_passes_on_software_encoder() {
+        ffmpeg::init().ok();
+        let codec = encoder::find_by_name("libx264").expect("libx264 available");
+        let mut options = Dictionary::new();
+        options.set("preset", "ultrafast");
+
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
+        hardware_encoder_self_test(codec, options, &config, 160, 120, 0.3, None)
+            .expect("healthy encoder passes the round trip");
+    }
 }
