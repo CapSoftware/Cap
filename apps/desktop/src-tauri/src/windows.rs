@@ -843,6 +843,18 @@ impl CapWindowId {
             Self::Debug | Self::Editor { .. } | Self::ScreenshotEditor { .. } | Self::Settings
         )
     }
+
+    pub fn appears_transparent(&self) -> bool {
+        matches!(
+            self,
+            Self::Camera
+                | Self::CaptureArea
+                | Self::RecordingControls
+                | Self::RecordingsOverlay
+                | Self::TargetSelectOverlay { .. }
+                | Self::WindowCaptureOccluder { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Type, Deserialize)]
@@ -1428,7 +1440,7 @@ impl CapWindow {
                         format!("/target-select-overlay?displayId={display_id}&isHoveredDisplay={is_hovered_display}{target_mode_param}"),
                     )
                     .fullscreen(false)
-                    .shadow(false)
+
                     .content_protected(should_protect)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
@@ -1588,7 +1600,7 @@ impl CapWindow {
                 builder.build()?
             }
             Self::Editor { .. } => {
-                let open_started = std::time::Instant::now();
+                let _open_started = std::time::Instant::now();
                 hide_recording_windows(app, false);
 
                 let window = match self
@@ -1676,7 +1688,6 @@ impl CapWindow {
                     .window_builder(app, "/upgrade")
                     .focused(true)
                     .always_on_top(true)
-                    .shadow(true)
                     .build()?;
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(950.0, 850.0);
@@ -1704,7 +1715,6 @@ impl CapWindow {
                     .window_builder(app, "/mode-select")
                     .maximizable(false)
                     .focused(true)
-                    .shadow(true)
                     .build()?;
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(580.0, 340.0);
@@ -1737,7 +1747,6 @@ impl CapWindow {
                     .maximizable(false)
                     .transparent(true)
                     .focused(true)
-                    .shadow(true)
                     .build()?;
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(width, height);
@@ -1831,7 +1840,6 @@ impl CapWindow {
                         .unwrap_or_else(|| CapWindowId::Camera.label());
                     let mut window_builder = self
                         .window_builder_with_label(app, "/camera", label)
-                        .shadow(false)
                         .fullscreen(false)
                         .always_on_top(true)
                         .visible_on_all_workspaces(true)
@@ -2069,7 +2077,6 @@ impl CapWindow {
                 let mut window_builder = self
                     .window_builder(app, "/window-capture-occluder")
                     .fullscreen(false)
-                    .shadow(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
@@ -2105,7 +2112,6 @@ impl CapWindow {
                 let mut window_builder = self
                     .window_builder(app, "/capture-area")
                     .fullscreen(false)
-                    .shadow(false)
                     .always_on_top(true)
                     .content_protected(should_protect)
                     .skip_taskbar(true)
@@ -2186,7 +2192,6 @@ impl CapWindow {
                 let window = {
                     self.window_builder(app, "/in-progress-recording")
                         .fullscreen(false)
-                        .shadow(false)
                         .always_on_top(true)
                         .transparent(true)
                         .visible_on_all_workspaces(true)
@@ -2204,7 +2209,6 @@ impl CapWindow {
                 let window = self
                     .window_builder(app, "/in-progress-recording")
                     .fullscreen(false)
-                    .shadow(false)
                     .always_on_top(true)
                     .transparent(true)
                     .visible_on_all_workspaces(true)
@@ -2223,7 +2227,6 @@ impl CapWindow {
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
-                    .shadow(false)
                     .always_on_top(true)
                     .transparent(true)
                     .visible_on_all_workspaces(true)
@@ -2335,7 +2338,6 @@ impl CapWindow {
                 let window = self
                     .window_builder(app, "/recordings-overlay")
                     .fullscreen(false)
-                    .shadow(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .accept_first_mouse(true)
@@ -2461,7 +2463,7 @@ impl CapWindow {
             .visible(false)
             .resizable(id.resizable())
             .accept_first_mouse(true)
-            .shadow(true)
+            .shadow(!id.appears_transparent())
             .theme(theme);
 
         if let Some(min) = id.min_size() {
