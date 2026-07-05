@@ -11,6 +11,10 @@ import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
+import {
+	CanvasElementsOverlay,
+	SnapGuidesOverlay,
+} from "./CanvasElementsOverlay";
 import { CaptionOverlay } from "./CaptionOverlay";
 import { CaptionsRegenerateBadge } from "./CaptionsRegenerateBadge";
 import { createCaptionTrackSegments } from "./captions";
@@ -626,10 +630,12 @@ function PreviewCanvas() {
 						id="canvas"
 					/>
 					<Show when={hasFrame()}>
+						<CanvasElementsOverlay size={size()} />
 						<MaskOverlay size={size()} />
 						<CaptionOverlay size={size()} />
 						<TextOverlay size={size()} />
 						<SplitScreenOverlay size={size()} />
+						<SnapGuidesOverlay size={size()} />
 						<PerformanceOverlay size={size()} />
 					</Show>
 				</div>

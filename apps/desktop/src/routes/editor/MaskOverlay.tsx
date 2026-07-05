@@ -3,8 +3,10 @@ import { cx } from "cva";
 import { createMemo, createRoot, For, Show } from "solid-js";
 import { produce } from "solid-js/store";
 
+import { useCanvasSnapTargets } from "./CanvasElementsOverlay";
 import { useEditorContext } from "./context";
 import { evaluateMask, type MaskSegment } from "./masks";
+import { SNAP_PX, snapMovingRect } from "./snapping";
 
 type MaskOverlayProps = {
 	size: { width: number; height: number };
@@ -186,6 +188,7 @@ export function MaskOverlay(props: MaskOverlayProps) {
 						>
 							<MaskOverlayContent
 								size={props.size}
+								maskIndex={index}
 								maskState={maskState}
 								updateSegment={updateSegment}
 								projectHistory={projectHistory}
@@ -200,11 +203,14 @@ export function MaskOverlay(props: MaskOverlayProps) {
 
 function MaskOverlayContent(props: {
 	size: { width: number; height: number };
+	maskIndex: number;
 	maskState: () => ReturnType<typeof evaluateMask>;
 	updateSegment: (fn: (segment: MaskSegment) => void) => void;
 	projectHistory: ReturnType<typeof useEditorContext>["projectHistory"];
 }) {
 	const { projectHistory, updateSegment } = props;
+	const { setSnapGuides } = useEditorContext();
+	const snapTargetsFor = useCanvasSnapTargets();
 
 	function createMouseDownDrag<T>(
 		setup: () => T,
@@ -228,6 +234,7 @@ function MaskOverlayContent(props: {
 
 			function finish() {
 				resumeHistory();
+				setSnapGuides([]);
 				dispose();
 			}
 
@@ -255,14 +262,37 @@ function MaskOverlayContent(props: {
 	const onMove = createMouseDownDrag(
 		() => ({
 			startPos: { ...state().position },
+			startSize: { ...state().size },
+			targets: snapTargetsFor({ mask: props.maskIndex }),
 		}),
-		(e, { startPos }, initialMouse) => {
+		(e, { startPos, startSize, targets }, initialMouse) => {
 			const dx = (e.clientX - initialMouse.x) / props.size.width;
 			const dy = (e.clientY - initialMouse.y) / props.size.height;
 
+			let snapDx = 0;
+			let snapDy = 0;
+			if (e.shiftKey) {
+				setSnapGuides([]);
+			} else {
+				const snap = snapMovingRect(
+					{
+						x: startPos.x + dx - startSize.x / 2,
+						y: startPos.y + dy - startSize.y / 2,
+						w: startSize.x,
+						h: startSize.y,
+					},
+					targets,
+					SNAP_PX / props.size.width,
+					SNAP_PX / props.size.height,
+				);
+				snapDx = snap.dx;
+				snapDy = snap.dy;
+				setSnapGuides(snap.guides);
+			}
+
 			updateSegment((s) => {
-				s.center.x = Math.max(0, Math.min(1, startPos.x + dx));
-				s.center.y = Math.max(0, Math.min(1, startPos.y + dy));
+				s.center.x = Math.max(0, Math.min(1, startPos.x + dx + snapDx));
+				s.center.y = Math.max(0, Math.min(1, startPos.y + dy + snapDy));
 			});
 		},
 	);

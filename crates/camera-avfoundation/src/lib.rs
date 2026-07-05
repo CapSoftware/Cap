@@ -86,6 +86,7 @@ pub type OutputDelegateCallback = Box<dyn FnMut(CallbackData)>;
 pub struct CallbackOutputDelegateInner {
     callback: OutputDelegateCallback,
     stream_start: Option<(Instant, Duration)>,
+    dropped_frames: u64,
 }
 
 impl CallbackOutputDelegateInner {
@@ -93,6 +94,7 @@ impl CallbackOutputDelegateInner {
         Self {
             callback,
             stream_start: None,
+            dropped_frames: 0,
         }
     }
 }
@@ -146,6 +148,39 @@ impl VideoDataOutputSampleBufDelegateImpl for CallbackOutputDelegate {
 
         if result.is_err() {
             warn!("Suppressed panic in AVFoundation output delegate");
+        }
+    }
+
+    extern "C" fn impl_capture_output_did_drop_sample_buf_from_connection(
+        &mut self,
+        _cmd: Option<&cidre::objc::Sel>,
+        _output: &av::CaptureOutput,
+        sample_buf: &cm::SampleBuf,
+        _connection: &av::CaptureConnection,
+    ) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let inner = self.inner_mut();
+            inner.dropped_frames += 1;
+
+            if inner.dropped_frames == 1 || inner.dropped_frames.is_multiple_of(100) {
+                let reason = sample_buf
+                    .attach(
+                        cm::sample_buffer::buf_attach_keys::dropped_frame_reason(),
+                        std::ptr::null_mut(),
+                    )
+                    .map(|value| value.desc().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                warn!(
+                    count = inner.dropped_frames,
+                    reason = %reason,
+                    "AVFoundation dropped camera sample buffer(s)"
+                );
+            }
+        }));
+
+        if result.is_err() {
+            warn!("Suppressed panic in AVFoundation drop delegate");
         }
     }
 }

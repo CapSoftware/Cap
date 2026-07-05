@@ -83,12 +83,28 @@ fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32
             let y_size = (y_stride * height) as usize;
             let uv_height = height / 2;
             let u_size = (u_stride * uv_height) as usize;
-            let v_size = (v_stride * uv_height) as usize;
 
-            let mut data = Vec::with_capacity(y_size + u_size + v_size);
+            let mut data = Vec::with_capacity(y_size + 2 * u_size);
             data.extend_from_slice(&frame.data(0)[..y_size]);
             data.extend_from_slice(&frame.data(1)[..u_size]);
-            data.extend_from_slice(&frame.data(2)[..v_size]);
+
+            // Downstream consumers index both chroma planes with the single
+            // advertised uv_stride (the U stride). FFmpeg almost always gives
+            // U and V identical linesizes, but if they ever differ, repack the
+            // V rows to the U stride — otherwise every V row shifts and the
+            // whole image takes on a uniform wrong-chroma cast.
+            if v_stride == u_stride {
+                data.extend_from_slice(&frame.data(2)[..u_size]);
+            } else {
+                let row_bytes = u_stride.min(v_stride) as usize;
+                let pad = u_stride as usize - row_bytes;
+                let v_data = frame.data(2);
+                for row in 0..uv_height as usize {
+                    let start = row * v_stride as usize;
+                    data.extend_from_slice(&v_data[start..start + row_bytes]);
+                    data.resize(data.len() + pad, 128);
+                }
+            }
 
             Some((data, PixelFormat::Yuv420p, y_stride, u_stride))
         }

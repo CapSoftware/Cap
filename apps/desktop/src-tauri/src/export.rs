@@ -4,7 +4,7 @@ use cap_export::{ExporterBase, make_cursor_only_project};
 use cap_project::{RecordingMeta, XY};
 use cap_rendering::{
     FrameRenderer, ProjectRecordingsMeta, ProjectUniforms, RenderSegment, RenderVideoConstants,
-    RendererLayers, ZoomFocusInterpolator, spring_mass_damper::SpringMassDamperSimulationConfig,
+    RendererLayers, ZoomTransformTimeline,
 };
 use futures::FutureExt;
 use image::codecs::jpeg::JpegEncoder;
@@ -1543,25 +1543,12 @@ async fn generate_export_preview_inner(
         .map(|t| t.duration())
         .unwrap_or(0.0);
 
-    let cursor_smoothing =
-        (!project_config.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-            tension: project_config.cursor.tension,
-            mass: project_config.cursor.mass,
-            friction: project_config.cursor.friction,
-        });
-
-    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+    let mut zoom_timeline = ZoomTransformTimeline::from_project(
+        &project_config,
         &render_segment.cursor,
-        cursor_smoothing,
-        project_config.cursor.click_spring_config(),
-        project_config.screen_movement_spring,
         total_duration,
-        project_config
-            .timeline
-            .as_ref()
-            .map(|t| t.zoom_segments.as_slice())
-            .unwrap_or(&[]),
     );
+    zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
 
     let uniforms = ProjectUniforms::new(
         &render_constants,
@@ -1572,7 +1559,7 @@ async fn generate_export_preview_inner(
         &render_segment.cursor,
         &segment_frames,
         total_duration,
-        &zoom_focus_interpolator,
+        &zoom_timeline,
     );
 
     let mut frame_renderer = FrameRenderer::new(&render_constants);
@@ -1804,25 +1791,9 @@ async fn generate_export_preview_fast_inner(
         .map(|t| t.duration())
         .unwrap_or(0.0);
 
-    let cursor_smoothing =
-        (!project_config.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-            tension: project_config.cursor.tension,
-            mass: project_config.cursor.mass,
-            friction: project_config.cursor.friction,
-        });
-
-    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-        &segment_media.cursor,
-        cursor_smoothing,
-        project_config.cursor.click_spring_config(),
-        project_config.screen_movement_spring,
-        total_duration,
-        project_config
-            .timeline
-            .as_ref()
-            .map(|t| t.zoom_segments.as_slice())
-            .unwrap_or(&[]),
-    );
+    let mut zoom_timeline =
+        ZoomTransformTimeline::from_project(&project_config, &segment_media.cursor, total_duration);
+    zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
 
     let uniforms = ProjectUniforms::new(
         &editor.render_constants,
@@ -1833,7 +1804,7 @@ async fn generate_export_preview_fast_inner(
         &segment_media.cursor,
         &segment_frames,
         total_duration,
-        &zoom_focus_interpolator,
+        &zoom_timeline,
     );
 
     let mut frame_renderer = FrameRenderer::new(&editor.render_constants);

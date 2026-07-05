@@ -109,6 +109,7 @@ function InProgressRecordingInner() {
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
 	const [startingDismissed, setStartingDismissed] = createSignal(false);
 	const [stopRequested, setStopRequested] = createSignal(false);
+	const [teardownInFlight, setTeardownInFlight] = createSignal(false);
 	const [interactiveAreaRef, setInteractiveAreaRef] =
 		createSignal<HTMLDivElement | null>(null);
 	let settingsButtonRef: HTMLButtonElement | undefined;
@@ -255,6 +256,10 @@ function InProgressRecordingInner() {
 	});
 
 	createEffect(() => {
+		// While restart/delete teardown is running the query data is stale;
+		// reconciling against it would resurrect the discarded recording's state.
+		if (teardownInFlight()) return;
+
 		const s = state();
 		const recording = currentRecording.data as
 			| CurrentRecording
@@ -445,10 +450,13 @@ function InProgressRecordingInner() {
 
 			if (!shouldRestart) return;
 
-			await handleRecordingResult(commands.restartRecording(), undefined);
-
-			setState({ variant: "recording" });
-			setTime(Date.now());
+			setTeardownInFlight(true);
+			setState({ variant: "initializing" });
+			try {
+				await handleRecordingResult(commands.restartRecording(), undefined);
+			} finally {
+				setTeardownInFlight(false);
+			}
 		},
 	}));
 
@@ -461,9 +469,14 @@ function InProgressRecordingInner() {
 
 			if (!shouldDelete) return;
 
-			await commands.deleteRecording();
-
+			setTeardownInFlight(true);
 			setState({ variant: "stopped" });
+			void getCurrentWindow().hide();
+			try {
+				await commands.deleteRecording();
+			} finally {
+				setTeardownInFlight(false);
+			}
 		},
 	}));
 

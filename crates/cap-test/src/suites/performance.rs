@@ -6,7 +6,7 @@ use cap_export::{
 use cap_project::{ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
 use cap_rendering::{
     FrameRenderer, ProjectRecordingsMeta, ProjectUniforms, RenderVideoConstants, RendererLayers,
-    ZoomFocusInterpolator, spring_mass_damper::SpringMassDamperSimulationConfig,
+    ZoomTransformTimeline,
 };
 use chrono::Utc;
 use std::{
@@ -414,12 +414,13 @@ async fn benchmark_playback(
 
     let mut frame_renderer = FrameRenderer::new(&context.render_constants);
     let mut layers = create_layers(&context)?;
-    let cursor_smoothing =
-        (!context.project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-            tension: context.project.cursor.tension,
-            mass: context.project.cursor.mass,
-            friction: context.project.cursor.friction,
-        });
+    let mut zoom_timelines: Vec<ZoomTransformTimeline> = context
+        .segments
+        .iter()
+        .map(|segment_media| {
+            ZoomTransformTimeline::from_project(&context.project, &segment_media.cursor, duration)
+        })
+        .collect();
 
     let mut metrics = PlaybackMetrics {
         requested_frames,
@@ -479,19 +480,9 @@ async fn benchmark_playback(
             continue;
         };
 
-        let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-            &segment_media.cursor,
-            cursor_smoothing,
-            context.project.cursor.click_spring_config(),
-            context.project.screen_movement_spring,
-            duration,
-            context
-                .project
-                .timeline
-                .as_ref()
-                .map(|t| t.zoom_segments.as_slice())
-                .unwrap_or(&[]),
-        );
+        let clip_index = segment.recording_clip as usize;
+        let zoom_timeline = &mut zoom_timelines[clip_index];
+        zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / PLAYBACK_FPS as f32);
 
         let uniforms = ProjectUniforms::new(
             &context.render_constants,
@@ -502,7 +493,7 @@ async fn benchmark_playback(
             &segment_media.cursor,
             &segment_frames,
             duration,
-            &zoom_focus_interpolator,
+            zoom_timeline,
         );
 
         let render_start = Instant::now();
@@ -676,25 +667,9 @@ async fn render_single_frame(context: &FixtureContext) -> Result<()> {
         .get_frames_initial(0.0, !context.project.camera.hide, true, clip_offsets)
         .await
         .ok_or_else(|| anyhow::anyhow!("Initial frame decode returned no frame"))?;
-    let cursor_smoothing =
-        (!context.project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-            tension: context.project.cursor.tension,
-            mass: context.project.cursor.mass,
-            friction: context.project.cursor.friction,
-        });
-    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-        &segment_media.cursor,
-        cursor_smoothing,
-        context.project.cursor.click_spring_config(),
-        context.project.screen_movement_spring,
-        duration,
-        context
-            .project
-            .timeline
-            .as_ref()
-            .map(|t| t.zoom_segments.as_slice())
-            .unwrap_or(&[]),
-    );
+    let mut zoom_timeline =
+        ZoomTransformTimeline::from_project(&context.project, &segment_media.cursor, duration);
+    zoom_timeline.ensure_precomputed_until(1.0 / PLAYBACK_FPS as f32);
     let uniforms = ProjectUniforms::new(
         &context.render_constants,
         &context.project,
@@ -704,7 +679,7 @@ async fn render_single_frame(context: &FixtureContext) -> Result<()> {
         &segment_media.cursor,
         &frames,
         duration,
-        &zoom_focus_interpolator,
+        &zoom_timeline,
     );
 
     frame_renderer

@@ -13,7 +13,9 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import type { TextSegment as TauriTextSegment } from "~/utils/tauri";
+import { useCanvasSnapTargets } from "./CanvasElementsOverlay";
 import { FPS, useEditorContext } from "./context";
+import { SNAP_PX, snapMovingRect } from "./snapping";
 import type { TextSegment } from "./text";
 
 type TextOverlayProps = {
@@ -21,8 +23,14 @@ type TextOverlayProps = {
 };
 
 export function TextOverlay(props: TextOverlayProps) {
-	const { project, setProject, editorState, setEditorState, projectHistory } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		editorState,
+		setEditorState,
+		projectHistory,
+		setSnapGuides,
+	} = useEditorContext();
 
 	const currentAbsoluteTime = () =>
 		editorState.previewTime ?? editorState.playbackTime ?? 0;
@@ -89,6 +97,7 @@ export function TextOverlay(props: TextOverlayProps) {
 				throttledUpdate.clear();
 				handleUpdate(finalEvent);
 				resumeHistory();
+				setSnapGuides([]);
 				dispose();
 			}
 
@@ -195,6 +204,8 @@ function TextSegmentOverlay(props: {
 	clamp: (value: number, min: number, max: number) => number;
 }) {
 	const segment = createMemo(() => normalizeSegment(props.segment));
+	const { setSnapGuides } = useEditorContext();
+	const snapTargetsFor = useCanvasSnapTargets();
 	let hiddenMeasureRef: HTMLDivElement | undefined;
 	const [mounted, setMounted] = createSignal(false);
 	const [isResizing, setIsResizing] = createSignal(false);
@@ -312,17 +323,39 @@ function TextSegmentOverlay(props: {
 			return {
 				startPos: { ...seg.center },
 				startSize: { ...seg.size },
+				targets: snapTargetsFor({ text: props.index }),
 			};
 		},
-		(e, { startPos }, initialMouse) => {
+		(e, { startPos, startSize, targets }, initialMouse) => {
 			const dx = (e.clientX - initialMouse.x) / props.size.width;
 			const dy = (e.clientY - initialMouse.y) / props.size.height;
 
 			const minPadding = 0.02;
 
+			let snapDx = 0;
+			let snapDy = 0;
+			if (e.shiftKey) {
+				setSnapGuides([]);
+			} else {
+				const snap = snapMovingRect(
+					{
+						x: startPos.x + dx - startSize.x / 2,
+						y: startPos.y + dy - startSize.y / 2,
+						w: startSize.x,
+						h: startSize.y,
+					},
+					targets,
+					SNAP_PX / props.size.width,
+					SNAP_PX / props.size.height,
+				);
+				snapDx = snap.dx;
+				snapDy = snap.dy;
+				setSnapGuides(snap.guides);
+			}
+
 			props.updateSegment((s) => {
-				const newX = startPos.x + dx;
-				const newY = startPos.y + dy;
+				const newX = startPos.x + dx + snapDx;
+				const newY = startPos.y + dy + snapDy;
 
 				const halfW = s.size.x / 2;
 				const halfH = s.size.y / 2;

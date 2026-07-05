@@ -8,7 +8,7 @@ use cap_project::{
 };
 use cap_rendering::{
     DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RenderVideoConstants,
-    RendererLayers, ZoomFocusInterpolator,
+    RendererLayers, ZoomTransformTimeline,
 };
 use image::{
     GenericImageView, ImageEncoder, RgbImage, buffer::ConvertBuffer, codecs::png::PngEncoder,
@@ -398,18 +398,9 @@ impl ScreenshotEditorInstances {
                     ProjectUniforms::get_base_size(&constants.options, &current_config);
 
                 let cursor_events = cap_project::CursorEvents::default();
-                let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-                    &cursor_events,
-                    None,
-                    current_config.cursor.click_spring_config(),
-                    current_config.screen_movement_spring,
-                    0.0,
-                    current_config
-                        .timeline
-                        .as_ref()
-                        .map(|t| t.zoom_segments.as_slice())
-                        .unwrap_or(&[]),
-                );
+                let mut zoom_timeline =
+                    ZoomTransformTimeline::from_project(&current_config, &cursor_events, 0.0);
+                zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
 
                 let uniforms = ProjectUniforms::new(
                     &constants,
@@ -420,7 +411,7 @@ impl ScreenshotEditorInstances {
                     &cursor_events,
                     &segment_frames,
                     0.0,
-                    &zoom_focus_interpolator,
+                    &zoom_timeline,
                 );
 
                 let render_started = Instant::now();
@@ -868,14 +859,14 @@ pub async fn prewarm_screenshot_renderer() {
 
     let (base_w, base_h) = ProjectUniforms::get_base_size(&constants.options, &config);
     let cursor_events = cap_project::CursorEvents::default();
-    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-        &cursor_events,
+    let mut zoom_timeline = ZoomTransformTimeline::new(
+        &[],
         None,
-        config.cursor.click_spring_config(),
+        &cursor_events,
         config.screen_movement_spring,
         0.0,
-        &[],
     );
+    zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
     let uniforms = ProjectUniforms::new(
         &constants,
         &config,
@@ -885,7 +876,7 @@ pub async fn prewarm_screenshot_renderer() {
         &cursor_events,
         &segment_frames,
         0.0,
-        &zoom_focus_interpolator,
+        &zoom_timeline,
     );
 
     match frame_renderer
@@ -1666,18 +1657,8 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
         segment_has_camera: false,
     };
     let cursor_events = cap_project::CursorEvents::default();
-    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-        &cursor_events,
-        None,
-        config.cursor.click_spring_config(),
-        config.screen_movement_spring,
-        0.0,
-        config
-            .timeline
-            .as_ref()
-            .map(|timeline| timeline.zoom_segments.as_slice())
-            .unwrap_or(&[]),
-    );
+    let mut zoom_timeline = ZoomTransformTimeline::from_project(&config, &cursor_events, 0.0);
+    zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
     let uniforms = ProjectUniforms::new(
         &constants,
         &config,
@@ -1687,7 +1668,7 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
         &cursor_events,
         &segment_frames,
         0.0,
-        &zoom_focus_interpolator,
+        &zoom_timeline,
     );
     let rendered_frame = frame_renderer
         .render_immediate(

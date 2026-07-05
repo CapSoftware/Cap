@@ -5,7 +5,8 @@ use std::{
 };
 
 use cap_editor::{
-    EditorFrameOutput, EditorInstance, Renderer, create_segments, finish_renderer_layers_creation,
+    EditorFrameOutput, EditorInstance, FrameLayout, Renderer, create_segments,
+    finish_renderer_layers_creation,
     start_renderer_layers_creation,
 };
 use cap_project::{ProjectConfiguration, RecordingMeta, RecordingMetaInner};
@@ -86,7 +87,7 @@ async fn profile_startup_stages(
 
     let renderer = Renderer::spawn(
         render_constants,
-        Box::new(|_: EditorFrameOutput| {}),
+        Box::new(|_: EditorFrameOutput, _: FrameLayout| {}),
         layers_rx,
     )?;
     push_stage(&mut stages, "spawn renderer", &mut stage_start);
@@ -189,7 +190,7 @@ async fn main() {
         let editor = EditorInstance::new(
             recording_path.clone(),
             |_| {},
-            Box::new(move |_: EditorFrameOutput| {
+            Box::new(move |_: EditorFrameOutput, _: FrameLayout| {
                 let _ = frame_tx.send(());
             }),
             None,

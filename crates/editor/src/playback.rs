@@ -1,7 +1,7 @@
 use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{
     DecodedSegmentFrames, PrecomputedCursorTimeline, ProjectUniforms, RenderVideoConstants,
-    ZoomFocusInterpolator, spring_mass_damper::SpringMassDamperSimulationConfig,
+    ZoomTransformTimeline, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
@@ -576,40 +576,18 @@ impl Playback {
                         .collect()
                 };
 
-            let build_zoom_interpolators =
-                |project: &ProjectConfiguration,
-                 cursor_timelines: &[Arc<PrecomputedCursorTimeline>]|
-                 -> Vec<ZoomFocusInterpolator> {
+            let build_zoom_timelines =
+                |project: &ProjectConfiguration| -> Vec<ZoomTransformTimeline> {
                     self.segment_medias
                         .iter()
-                        .zip(cursor_timelines.iter())
-                        .map(|(seg, precomputed)| {
-                            let cursor_smoothing =
-                                (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-                                    tension: project.cursor.tension,
-                                    mass: project.cursor.mass,
-                                    friction: project.cursor.friction,
-                                });
-                            ZoomFocusInterpolator::new_arc_with_precomputed_cursor(
-                                seg.cursor.clone(),
-                                cursor_smoothing,
-                                project.cursor.click_spring_config(),
-                                project.screen_movement_spring,
-                                duration,
-                                project
-                                    .timeline
-                                    .as_ref()
-                                    .map(|t| t.zoom_segments.as_slice())
-                                    .unwrap_or(&[]),
-                                Some(precomputed.clone()),
-                            )
+                        .map(|seg| {
+                            ZoomTransformTimeline::from_project(project, &seg.cursor, duration)
                         })
                         .collect()
                 };
 
             let mut cursor_timelines = build_cursor_timelines(&cached_project);
-            let mut zoom_interpolators =
-                build_zoom_interpolators(&cached_project, &cursor_timelines);
+            let mut zoom_timelines = build_zoom_timelines(&cached_project);
 
             if !*stop_rx.borrow()
                 && let Some(prefetched_idx) = prefetch_buffer
@@ -625,24 +603,23 @@ impl Playback {
                     let segment_frames = Arc::new(prefetched.segment_frames);
 
                     let zoom_until = (frame_number as f32 + 1.0) / fps as f32;
-                    if let Some(interp) = zoom_interpolators.get_mut(segment_index as usize) {
-                        interp.ensure_precomputed_until(zoom_until);
+                    if let Some(timeline) = zoom_timelines.get_mut(segment_index as usize) {
+                        timeline.ensure_precomputed_until(zoom_until);
                     }
-                    let zoom_focus_interpolator = zoom_interpolators.get(segment_index as usize);
+                    let zoom_timeline = zoom_timelines.get(segment_index as usize);
 
-                    let empty_interp;
-                    let zoom_ref = match zoom_focus_interpolator {
-                        Some(interp) => interp,
+                    let empty_timeline;
+                    let zoom_ref = match zoom_timeline {
+                        Some(timeline) => timeline,
                         None => {
-                            empty_interp = ZoomFocusInterpolator::new_arc(
-                                segment_media.cursor.clone(),
+                            empty_timeline = ZoomTransformTimeline::new(
+                                &[],
                                 None,
-                                cached_project.cursor.click_spring_config(),
+                                &segment_media.cursor,
                                 cached_project.screen_movement_spring,
                                 duration,
-                                &[],
                             );
-                            &empty_interp
+                            &empty_timeline
                         }
                     };
 
@@ -752,8 +729,7 @@ impl Playback {
                 if self.project.has_changed().unwrap_or(false) {
                     cached_project = self.project.borrow_and_update().clone();
                     cursor_timelines = build_cursor_timelines(&cached_project);
-                    zoom_interpolators =
-                        build_zoom_interpolators(&cached_project, &cursor_timelines);
+                    zoom_timelines = build_zoom_timelines(&cached_project);
                 }
 
                 let frame_offset = frame_number.saturating_sub(self.start_frame_number) as f64;
@@ -1041,24 +1017,23 @@ impl Playback {
                     }
 
                     let zoom_until = (frame_number as f32 + 1.0) / fps as f32;
-                    if let Some(interp) = zoom_interpolators.get_mut(segment_index as usize) {
-                        interp.ensure_precomputed_until(zoom_until);
+                    if let Some(timeline) = zoom_timelines.get_mut(segment_index as usize) {
+                        timeline.ensure_precomputed_until(zoom_until);
                     }
-                    let zoom_focus_interpolator = zoom_interpolators.get(segment_index as usize);
+                    let zoom_timeline = zoom_timelines.get(segment_index as usize);
 
-                    let empty_interp;
-                    let zoom_ref = match zoom_focus_interpolator {
-                        Some(interp) => interp,
+                    let empty_timeline;
+                    let zoom_ref = match zoom_timeline {
+                        Some(timeline) => timeline,
                         None => {
-                            empty_interp = ZoomFocusInterpolator::new_arc(
-                                segment_media.cursor.clone(),
+                            empty_timeline = ZoomTransformTimeline::new(
+                                &[],
                                 None,
-                                cached_project.cursor.click_spring_config(),
+                                &segment_media.cursor,
                                 cached_project.screen_movement_spring,
                                 duration,
-                                &[],
                             );
-                            &empty_interp
+                            &empty_timeline
                         }
                     };
 

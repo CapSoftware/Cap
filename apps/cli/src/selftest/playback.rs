@@ -392,9 +392,9 @@ async fn measure_playback(
     let epoch = Instant::now();
 
     let video_events: Arc<Mutex<Vec<(f64, f64)>>> = Arc::new(Mutex::new(Vec::new()));
-    let frame_cb: Box<dyn FnMut(EditorFrameOutput) + Send> = Box::new({
+    let frame_cb: cap_editor::EditorFrameCallback = Box::new({
         let video_events = video_events.clone();
-        move |output| {
+        move |output, _layout| {
             let now = Instant::now();
             if let EditorFrameOutput::Rgba(frame) = output {
                 if let Some(luma) = mean_center_luma_rgba(

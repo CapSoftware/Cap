@@ -31,6 +31,7 @@ import {
 	createSignal,
 	For,
 	Index,
+	lazy,
 	on,
 	onMount,
 	Show,
@@ -98,7 +99,6 @@ import {
 	MIN_VOLUME_DB,
 } from "./audio";
 import { BrandColorsDropdown } from "./BrandColorsDropdown";
-import { CaptionsTab } from "./CaptionsTab";
 import { syncCaptionWordsWithText } from "./captions";
 import { getColorPreviewBorderColor, hexToRgb, RgbInput } from "./color-utils";
 import { type CornerRoundingType, useEditorContext } from "./context";
@@ -130,6 +130,14 @@ import {
 	topSlideAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
+
+// Split out of the sidebar chunk: the captions tab is not visible at first
+// paint (Kobalte only mounts the selected tab), and its code is heavy. The
+// render site wraps it in a local <Suspense> so the chunk load stays inside
+// the tab instead of bubbling to the editor's top-level Suspense.
+const CaptionsTab = lazy(() =>
+	import("./CaptionsTab").then((m) => ({ default: m.CaptionsTab })),
+);
 
 type BackgroundSourceTab = BackgroundSource["type"] | "desktop" | "none";
 
@@ -343,7 +351,7 @@ const CURSOR_ANIMATION_STYLE_OPTIONS = [
 		value: "slow",
 		label: "Slow",
 		description: "Relaxed easing with a gentle follow and higher inertia.",
-		preset: { tension: 65, mass: 1.8, friction: 16 },
+		preset: { tension: 200, mass: 2.25, friction: 40 },
 	},
 	{
 		value: "smooth",
@@ -355,7 +363,7 @@ const CURSOR_ANIMATION_STYLE_OPTIONS = [
 		value: "mellow",
 		label: "Mellow",
 		description: "Balanced smoothing for everyday tutorials and walkthroughs.",
-		preset: { tension: 120, mass: 1.1, friction: 18 },
+		preset: { tension: 470, mass: 3, friction: 70 },
 	},
 	{
 		value: "fast",
@@ -858,7 +866,7 @@ export function ConfigSidebar() {
 											value={[project.cursor.tension]}
 											onChange={(v) => setCursorPhysics("tension", v[0])}
 											minValue={1}
-											maxValue={500}
+											maxValue={600}
 											step={1}
 										/>
 									</Field>
@@ -867,7 +875,7 @@ export function ConfigSidebar() {
 											value={[project.cursor.friction]}
 											onChange={(v) => setCursorPhysics("friction", v[0])}
 											minValue={0}
-											maxValue={50}
+											maxValue={200}
 											step={0.1}
 										/>
 									</Field>
@@ -876,7 +884,7 @@ export function ConfigSidebar() {
 											value={[project.cursor.mass]}
 											onChange={(v) => setCursorPhysics("mass", v[0])}
 											minValue={0.1}
-											maxValue={10}
+											maxValue={15}
 											step={0.01}
 										/>
 									</Field>
@@ -956,7 +964,9 @@ export function ConfigSidebar() {
 					value={TAB_IDS.captions}
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
-					<CaptionsTab brandColorSwatches={brandColorSwatches()} />
+					<Suspense>
+						<CaptionsTab brandColorSwatches={brandColorSwatches()} />
+					</Suspense>
 				</KTabs.Content>
 				<KTabs.Content
 					value={TAB_IDS.keyboard}
@@ -2500,6 +2510,18 @@ function BackgroundConfig(props: {
 					step={0.1}
 					formatTooltip="%"
 				/>
+				<Show when={project.background.displayPosition}>
+					<div class="flex justify-between items-center mt-3">
+						<span class="text-xs text-gray-11">
+							Custom screen position (dragged on canvas)
+						</span>
+						<EditorButton
+							onClick={() => setProject("background", "displayPosition", null)}
+						>
+							Reset
+						</EditorButton>
+					</div>
+				</Show>
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
 				<div class="flex flex-col gap-3">
@@ -2726,8 +2748,12 @@ function BackgroundConfig(props: {
 
 function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 	const { project, setProject } = useEditorContext();
-	const cameraPositionValue = createMemo(
-		() => `${project.camera.position.x}:${project.camera.position.y}`,
+	// A camera dragged on the preview canvas has a manual position; none of
+	// the preset dots match until it is reset.
+	const cameraPositionValue = createMemo(() =>
+		project.camera.manualPosition
+			? "custom"
+			: `${project.camera.position.x}:${project.camera.position.y}`,
 	);
 
 	return (
@@ -2750,9 +2776,12 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 									(position) => position === y,
 								);
 								if (!xPosition || !yPosition) return;
-								setProject("camera", "position", {
-									x: xPosition,
-									y: yPosition,
+								batch(() => {
+									setProject("camera", "position", {
+										x: xPosition,
+										y: yPosition,
+									});
+									setProject("camera", "manualPosition", null);
 								});
 							}}
 							class="mt-3 rounded-lg border border-gray-3 bg-gray-2 w-full h-30 relative"
@@ -2792,6 +2821,18 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 								}}
 							</For>
 						</KRadioGroup>
+						<Show when={project.camera.manualPosition}>
+							<div class="flex justify-between items-center mt-3">
+								<span class="text-xs text-gray-11">
+									Custom position (dragged on canvas)
+								</span>
+								<EditorButton
+									onClick={() => setProject("camera", "manualPosition", null)}
+								>
+									Reset
+								</EditorButton>
+							</div>
+						</Show>
 					</div>
 					<Subfield name="Hide Camera">
 						<Toggle
@@ -4576,6 +4617,8 @@ function SceneSegmentConfig(props: {
 				return "Shows only the screen recording";
 			case "splitScreen":
 				return "Screen and camera side by side (auto-stacks in portrait)";
+			case "floating":
+				return "Screen and camera float side by side as rounded cards over the background";
 			default:
 				return "Shows both screen and camera";
 		}
@@ -4625,7 +4668,10 @@ function SceneSegmentConfig(props: {
 							);
 							// Seed identity overrides so the new split segment renders
 							// correctly and the fine-tune controls have values to bind to.
-							if (mode === "splitScreen" && !props.segment.splitLayout)
+							if (
+								(mode === "splitScreen" || mode === "floating") &&
+								!props.segment.splitLayout
+							)
 								setProject(
 									"timeline",
 									"sceneSegments",
@@ -4656,6 +4702,14 @@ function SceneSegmentConfig(props: {
 						>
 							<IconLucideColumns2 class="size-3.5" />
 							Split Screen
+						</KTabs.Trigger>
+						<KTabs.Trigger
+							value="floating"
+							disabled={!hasCamera()}
+							class={SCENE_MODE_TRIGGER_CLASS}
+						>
+							<IconLucidePanelRight class="size-3.5" />
+							Floating
 						</KTabs.Trigger>
 					</KTabs.List>
 					<div class="p-2.5 rounded-md bg-gray-2 border border-gray-3">
@@ -4707,7 +4761,12 @@ function SceneSegmentConfig(props: {
 				</div>
 			</Field>
 
-			<Show when={props.segment.mode === "splitScreen"}>
+			<Show
+				when={
+					props.segment.mode === "splitScreen" ||
+					props.segment.mode === "floating"
+				}
+			>
 				<div class="w-full border-t border-dashed border-gray-5" />
 				<Field name="Screen Zoom" icon={<IconCapEnlarge class="size-4" />}>
 					<Slider

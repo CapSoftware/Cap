@@ -6,7 +6,7 @@ use std::{
 };
 
 use cap_editor::{
-    EditorFrameOutput, Playback, PlaybackFrameSource, PlaybackRenderOutputFormat,
+    EditorFrameOutput, FrameLayout, Playback, PlaybackFrameSource, PlaybackRenderOutputFormat,
     PlaybackSkipReason, PlaybackTelemetry, PlaybackTelemetryEvent, Renderer,
     finish_renderer_layers_creation, start_renderer_layers_creation,
 };
@@ -512,7 +512,7 @@ async fn main() {
 
     let (telemetry, mut telemetry_rx) = PlaybackTelemetry::channel();
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<usize>();
-    let frame_cb = Box::new(move |output: EditorFrameOutput| {
+    let frame_cb = Box::new(move |output: EditorFrameOutput, _: FrameLayout| {
         let bytes = match output {
             EditorFrameOutput::Nv12(frame) => {
                 let metadata_bytes = match frame.format {

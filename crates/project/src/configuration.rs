@@ -238,6 +238,9 @@ pub struct BackgroundConfiguration {
     pub rounding_type: CornerStyle,
     pub inset: u32,
     pub crop: Option<Crop>,
+    /// Normalized (0-1) center of the display rect in output-frame space.
+    /// `None` keeps the display centered.
+    pub display_position: Option<XY<f64>>,
     pub shadow: f32,
     pub advanced_shadow: Option<ShadowConfiguration>,
     pub border: Option<BorderConfiguration>,
@@ -264,6 +267,7 @@ impl Default for BackgroundConfiguration {
             rounding_type: CornerStyle::default(),
             inset: 0,
             crop: None,
+            display_position: None,
             shadow: 73.6,
             advanced_shadow: Some(ShadowConfiguration::default()),
             border: None, // Border is disabled by default for backwards compatibility
@@ -330,6 +334,9 @@ pub struct Camera {
     pub hide: bool,
     pub mirror: bool,
     pub position: CameraPosition,
+    /// Normalized (0-1) center of the camera rect in output-frame space.
+    /// Overrides `position` when set.
+    pub manual_position: Option<XY<f64>>,
     pub size: f32,
     #[serde(alias = "zoom_size")]
     pub zoom_size: Option<f32>,
@@ -374,6 +381,7 @@ impl Default for Camera {
             hide: false,
             mirror: false,
             position: CameraPosition::default(),
+            manual_position: None,
             size: 30.0,
             zoom_size: Some(Self::default_zoom_size()),
             rounding: Self::default_rounding(),
@@ -824,6 +832,10 @@ pub enum SceneMode {
     CameraOnly,
     HideCamera,
     SplitScreen,
+    /// Like [`SceneMode::SplitScreen`], but the screen and camera render as
+    /// padded, rounded, shadowed cards floating over the background instead
+    /// of full-bleed halves. Shares [`SplitLayout`] for per-pane pan/zoom.
+    Floating,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
@@ -1526,5 +1538,137 @@ mod tests {
 
         assert_eq!(config.cursor.motion_blur, 1.0);
         assert_eq!(config.screen_motion_blur, 1.0);
+    }
+
+    #[test]
+    fn load_without_manual_positions_defaults_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut value = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object
+            .get_mut("camera")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("manualPosition");
+        object
+            .get_mut("background")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("displayPosition");
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        assert!(config.camera.manual_position.is_none());
+        assert!(config.background.display_position.is_none());
+    }
+
+    #[test]
+    fn manual_positions_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut config = ProjectConfiguration::default();
+        config.camera.manual_position = Some(XY::new(0.25, 0.75));
+        config.background.display_position = Some(XY::new(0.5, 0.4));
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = ProjectConfiguration::load(dir.path()).unwrap();
+
+        assert_eq!(loaded.camera.manual_position, Some(XY::new(0.25, 0.75)));
+        assert_eq!(loaded.background.display_position, Some(XY::new(0.5, 0.4)));
+    }
+
+    #[test]
+    fn legacy_config_without_motion_rework_fields_resolves_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Hand-written pre-rework project-config.json: zoom segments carry
+        // only start/end/amount/mode (no glideDirection / glideSpeed /
+        // instantAnimation / edgeSnapRatio), the cursor uses the old spring
+        // triple, and the camera uses the position enum.
+        let legacy_json = r#"{
+            "camera": {
+                "hide": false,
+                "mirror": false,
+                "position": { "x": "left", "y": "top" },
+                "size": 25.0
+            },
+            "cursor": {
+                "animationStyle": "custom",
+                "tension": 120.0,
+                "mass": 2.0,
+                "friction": 32.0
+            },
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": [
+                    { "start": 1.0, "end": 3.0, "amount": 2.0, "mode": "auto" },
+                    {
+                        "start": 5.0,
+                        "end": 7.0,
+                        "amount": 1.5,
+                        "mode": { "manual": { "x": 0.25, "y": 0.75 } }
+                    }
+                ]
+            }
+        }"#;
+        std::fs::write(dir.path().join("project-config.json"), legacy_json).unwrap();
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let timeline = config.timeline.as_ref().expect("timeline should load");
+        assert_eq!(timeline.zoom_segments.len(), 2);
+        for segment in &timeline.zoom_segments {
+            assert_eq!(segment.glide_direction, GlideDirection::None);
+            assert_eq!(segment.glide_speed, 0.5);
+            assert!(!segment.instant_animation);
+            assert_eq!(segment.edge_snap_ratio, 0.25);
+        }
+        assert!(matches!(timeline.zoom_segments[0].mode, ZoomMode::Auto));
+        assert!(matches!(
+            timeline.zoom_segments[1].mode,
+            ZoomMode::Manual { x, y }
+                if (x - 0.25).abs() < f32::EPSILON && (y - 0.75).abs() < f32::EPSILON
+        ));
+
+        // The old cursor spring triple survives untouched.
+        assert_eq!(config.cursor.animation_style, CursorAnimationStyle::Custom);
+        assert_eq!(config.cursor.tension, 120.0);
+        assert_eq!(config.cursor.mass, 2.0);
+        assert_eq!(config.cursor.friction, 32.0);
+
+        // The camera position enum still parses.
+        assert!(matches!(config.camera.position.x, CameraXPosition::Left));
+        assert!(matches!(config.camera.position.y, CameraYPosition::Top));
+
+        // Config written back by the load migration must round-trip with the
+        // resolved defaults intact.
+        let reloaded = ProjectConfiguration::load(dir.path()).unwrap();
+        let reloaded_timeline = reloaded.timeline.as_ref().unwrap();
+        assert_eq!(reloaded_timeline.zoom_segments.len(), 2);
+        assert_eq!(reloaded_timeline.zoom_segments[0].glide_speed, 0.5);
+        assert_eq!(reloaded_timeline.zoom_segments[0].edge_snap_ratio, 0.25);
+        assert!(!reloaded_timeline.zoom_segments[0].instant_animation);
+
+        // The screen movement spring (which drives the new zoom timeline)
+        // resolves to its default for legacy configs.
+        let spring = config.screen_movement_spring;
+        let default_spring = ScreenMovementSpring::default();
+        assert_eq!(spring.stiffness, default_spring.stiffness);
+        assert_eq!(spring.damping, default_spring.damping);
+        assert_eq!(spring.mass, default_spring.mass);
     }
 }

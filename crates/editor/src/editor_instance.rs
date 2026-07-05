@@ -8,8 +8,7 @@ use cap_project::{
 };
 use cap_rendering::{
     ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
-    SegmentVideoPaths, SharedWgpuDevice, Video, ZoomFocusInterpolator, get_duration,
-    spring_mass_damper::SpringMassDamperSimulationConfig,
+    SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline, get_duration,
 };
 use std::{
     path::{Path, PathBuf},
@@ -113,7 +112,7 @@ impl EditorInstance {
     pub async fn new(
         project_path: PathBuf,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
-        frame_cb: Box<dyn FnMut(editor::EditorFrameOutput) + Send>,
+        frame_cb: editor::EditorFrameCallback,
         shared_device: Option<SharedWgpuDevice>,
     ) -> Result<Arc<Self>, String> {
         Self::new_with_audio_output(
@@ -132,7 +131,7 @@ impl EditorInstance {
     pub async fn new_with_audio_output(
         project_path: PathBuf,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
-        frame_cb: Box<dyn FnMut(editor::EditorFrameOutput) + Send>,
+        frame_cb: editor::EditorFrameCallback,
         shared_device: Option<SharedWgpuDevice>,
         audio_output: Arc<crate::AudioOutput>,
     ) -> Result<Arc<Self>, String> {
@@ -612,22 +611,17 @@ impl EditorInstance {
                                 .map(|t| t.duration())
                                 .unwrap_or(0.0);
 
-                            let cursor_smoothing = (!project.cursor.raw).then_some(
-                                SpringMassDamperSimulationConfig {
-                                    tension: project.cursor.tension,
-                                    mass: project.cursor.mass,
-                                    friction: project.cursor.friction,
-                                },
-                            );
-
-                            let zoom_focus_interpolator = ZoomFocusInterpolator::new_arc(
-                                segment_medias.cursor.clone(),
-                                cursor_smoothing,
-                                project.cursor.click_spring_config(),
-                                project.screen_movement_spring,
+                            // Scrub renders sample the same precomputed spring
+                            // timeline playback and export use (the old focus
+                            // interpolator was never precomputed here and fell
+                            // back to a divergent direct interpolation).
+                            let mut zoom_timeline = ZoomTransformTimeline::from_project(
+                                &project,
+                                &segment_medias.cursor,
                                 total_duration,
-                                project.timeline.as_ref().map(|t| t.zoom_segments.as_slice()).unwrap_or(&[]),
                             );
+                            zoom_timeline
+                                .ensure_precomputed_until((frame_number as f32 + 1.0) / fps as f32);
 
                             let mut next_segment_frames = segment_frames_opt;
                             let mut rendered = false;
@@ -646,7 +640,7 @@ impl EditorInstance {
                                     &segment_medias.cursor,
                                     &segment_frames,
                                     total_duration,
-                                    &zoom_focus_interpolator,
+                                    &zoom_timeline,
                                 );
 
                                 if self

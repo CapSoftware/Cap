@@ -199,17 +199,31 @@ pub async fn create_watch_frame_ws(
         {
             let packed = {
                 let borrowed = camera_rx.borrow();
-                borrowed.as_deref().map(pack_ws_frame)
+                borrowed
+                    .as_deref()
+                    .map(|frame| (pack_ws_frame(frame), frame.created_at.elapsed()))
             };
-            if let Some(packed) = packed
-                && let Err(e) = socket.send(Message::Binary(packed)).await
-            {
-                if is_normal_socket_disconnect(&e) {
-                    tracing::debug!("Initial frame send skipped because socket closed: {:?}", e);
-                } else {
-                    tracing::error!("Failed to send initial frame to socket: {:?}", e);
+            match packed {
+                Some((packed, frame_age)) => {
+                    if let Err(e) = socket.send(Message::Binary(packed)).await {
+                        if is_normal_socket_disconnect(&e) {
+                            tracing::debug!(
+                                "Initial frame send skipped because socket closed: {:?}",
+                                e
+                            );
+                        } else {
+                            tracing::error!("Failed to send initial frame to socket: {:?}", e);
+                        }
+                        return;
+                    }
+                    tracing::info!(
+                        frame_age_ms = frame_age.as_millis() as u64,
+                        "Editor open: initial frame delivered to new socket"
+                    );
                 }
-                return;
+                None => {
+                    tracing::info!("Editor open: socket connected before any frame was rendered");
+                }
             }
         }
 

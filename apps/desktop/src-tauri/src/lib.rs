@@ -196,6 +196,46 @@ mod tests {
             XY::new(1248, 702)
         );
     }
+
+    #[test]
+    fn graphics_recovery_only_engages_for_gpu_init_deaths() {
+        use crash_sentinel::UnexpectedTermination;
+
+        // Clean previous exit: never engage.
+        assert!(!should_engage_graphics_recovery(None));
+
+        // Died outside GPU init (force-quit, power loss, OS kill): a healthy GPU
+        // machine must keep hardware rendering.
+        assert!(!should_engage_graphics_recovery(Some(
+            UnexpectedTermination {
+                during_gpu_init: false,
+                in_graphics_recovery: false,
+            }
+        )));
+
+        // Died during GPU bring-up on hardware: engage software recovery.
+        assert!(should_engage_graphics_recovery(Some(
+            UnexpectedTermination {
+                during_gpu_init: true,
+                in_graphics_recovery: false,
+            }
+        )));
+
+        // A recovery-mode session that also died must not chain into recovery
+        // forever; retry hardware.
+        assert!(!should_engage_graphics_recovery(Some(
+            UnexpectedTermination {
+                during_gpu_init: true,
+                in_graphics_recovery: true,
+            }
+        )));
+        assert!(!should_engage_graphics_recovery(Some(
+            UnexpectedTermination {
+                during_gpu_init: false,
+                in_graphics_recovery: true,
+            }
+        )));
+    }
 }
 
 #[derive(Default)]
@@ -2693,6 +2733,27 @@ struct EditorStateChanged {
     playhead_position: u32,
 }
 
+/// Rendered display/camera placement of the latest preview frame, in
+/// output-frame pixels — consumed by the editor's on-canvas layout overlay.
+#[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone, PartialEq)]
+pub(crate) struct FrameLayoutEvent {
+    display: [f32; 4],
+    camera: Option<[f32; 4]>,
+    output_width: u32,
+    output_height: u32,
+}
+
+impl From<cap_editor::FrameLayout> for FrameLayoutEvent {
+    fn from(layout: cap_editor::FrameLayout) -> Self {
+        Self {
+            display: layout.display,
+            camera: layout.camera,
+            output_width: layout.output_size[0],
+            output_height: layout.output_size[1],
+        }
+    }
+}
+
 impl EditorStateChanged {
     fn new(s: &EditorState) -> Self {
         Self {
@@ -4385,26 +4446,50 @@ type FilteredRegistry = tracing_subscriber::layer::Layered<
 pub type DynLoggingLayer = Box<dyn tracing_subscriber::Layer<FilteredRegistry> + Send + Sync>;
 type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>, FilteredRegistry>;
 
+/// Software recovery exists to break GPU-driver crash loops: a process that died
+/// while wgpu adapter/device initialisation was in flight. Any other unexpected
+/// termination (force-quit, power loss, OS kill, a hung shutdown) says nothing
+/// about the GPU, and forcing the WARP software rasterizer would cripple editor
+/// playback (seconds-per-frame renders) on perfectly healthy hardware. A previous
+/// session that was *already* in software recovery and still died shows software
+/// mode isn't saving the machine, so retry hardware rather than chaining recovery
+/// launches forever.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn should_engage_graphics_recovery(
+    previous_termination: Option<crash_sentinel::UnexpectedTermination>,
+) -> bool {
+    previous_termination.is_some_and(|prev| prev.during_gpu_init && !prev.in_graphics_recovery)
+}
+
 #[cfg(target_os = "windows")]
-fn configure_windows_graphics_recovery(previous_session_terminated_unexpectedly: bool) {
-    if previous_session_terminated_unexpectedly {
+fn configure_windows_graphics_recovery(
+    previous_termination: Option<crash_sentinel::UnexpectedTermination>,
+) {
+    if should_engage_graphics_recovery(previous_termination) {
         cap_rendering::set_force_software_wgpu_adapter(true);
+        crash_sentinel::mark_graphics_recovery();
         warn!(
-            "Previous Cap session terminated unexpectedly; using Windows software graphics recovery mode for this launch"
+            "Previous Cap session terminated during GPU initialisation; using Windows software graphics recovery mode for this launch"
+        );
+    } else if previous_termination.is_some() {
+        info!(
+            "Previous session terminated unexpectedly, but not during first-time GPU initialisation; keeping hardware graphics"
         );
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-fn configure_windows_graphics_recovery(_previous_session_terminated_unexpectedly: bool) {}
+fn configure_windows_graphics_recovery(
+    _previous_termination: Option<crash_sentinel::UnexpectedTermination>,
+) {
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     // Arm the unexpected-termination sentinel before anything else can crash, and
     // report any previous session that died without a clean shutdown.
-    let previous_session_terminated_unexpectedly =
-        crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
-    configure_windows_graphics_recovery(previous_session_terminated_unexpectedly);
+    let previous_termination = crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
+    configure_windows_graphics_recovery(previous_termination);
 
     ffmpeg::init()
         .map_err(|e| {
@@ -4587,6 +4672,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             NewScreenshotAdded,
             RenderFrameEvent,
             EditorStateChanged,
+            FrameLayoutEvent,
             CurrentRecordingChanged,
             RecordingStarted,
             RecordingStopped,
@@ -5980,7 +6066,7 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
 async fn create_editor_instance_impl(
     app: &AppHandle,
     path: PathBuf,
-    frame_cb: Box<dyn FnMut(cap_editor::EditorFrameOutput) + Send>,
+    frame_cb: cap_editor::EditorFrameCallback,
 ) -> Result<(Arc<EditorInstance>, tauri::EventId), String> {
     let app = app.clone();
 

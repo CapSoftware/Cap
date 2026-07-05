@@ -8,7 +8,7 @@ use cap_editor::create_segments;
 use cap_project::{ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     FrameRenderer, PrecomputedCursorTimeline, ProjectRecordingsMeta, ProjectUniforms,
-    RenderSegment, RenderVideoConstants, RenderedFrame, RendererLayers, ZoomFocusInterpolator,
+    RenderSegment, RenderVideoConstants, RenderedFrame, RendererLayers, ZoomTransformTimeline,
     render_video_to_channel, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 
@@ -198,22 +198,13 @@ async fn export_sequence_render_matches_editor_reference_for_real_recording()
                 })
                 .collect();
 
-        let mut zoom_focus_interpolators: Vec<ZoomFocusInterpolator> = reference_render_segments
+        let mut zoom_timelines: Vec<ZoomTransformTimeline> = reference_render_segments
             .iter()
-            .zip(precomputed_cursor_timelines.iter())
-            .map(|(segment, precomputed_cursor)| {
-                ZoomFocusInterpolator::new_with_precomputed_cursor(
+            .map(|segment| {
+                ZoomTransformTimeline::from_project(
+                    &project_config,
                     &segment.cursor,
-                    cursor_smoothing,
-                    click_spring,
-                    project_config.screen_movement_spring,
                     total_duration,
-                    project_config
-                        .timeline
-                        .as_ref()
-                        .map(|timeline| timeline.zoom_segments.as_slice())
-                        .unwrap_or(&[]),
-                    Some(precomputed_cursor.clone()),
                 )
             })
             .collect();
@@ -253,7 +244,7 @@ async fn export_sequence_render_matches_editor_reference_for_real_recording()
                 .find(|clip| clip.index == timeline_segment.recording_clip);
 
             let zoom_until = (frame_number as f32 + 1.0) / 60.0;
-            zoom_focus_interpolators[clip_index].ensure_precomputed_until(zoom_until);
+            zoom_timelines[clip_index].ensure_precomputed_until(zoom_until);
 
             let decoded = render_segment
                 .decoders
@@ -275,7 +266,7 @@ async fn export_sequence_render_matches_editor_reference_for_real_recording()
                 &render_segment.cursor,
                 &decoded,
                 total_duration,
-                &zoom_focus_interpolators[clip_index],
+                &zoom_timelines[clip_index],
                 &precomputed_cursor_timelines[clip_index],
             );
 

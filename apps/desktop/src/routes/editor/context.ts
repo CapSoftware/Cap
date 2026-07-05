@@ -27,7 +27,7 @@ import {
 	normalizeCaptionSettings,
 } from "~/store/captions";
 import { defaultKeyboardSettings } from "~/store/keyboard";
-
+import { createTauriEventListener } from "~/utils/createEventListener";
 import { createPresets } from "~/utils/createPresets";
 import { createCustomDomainQuery } from "~/utils/queries";
 import {
@@ -40,6 +40,7 @@ import {
 	commands,
 	type EditorPreviewQuality,
 	events,
+	type FrameLayoutEvent,
 	type FramesRendered,
 	type ImportedAudioTrack,
 	type MultipleSegments,
@@ -59,6 +60,7 @@ import {
 } from "./audio";
 import { deriveCaptionTrackSegments, mapEditedTimeToSource } from "./captions";
 import type { MaskSegment } from "./masks";
+import type { SnapGuide } from "./snapping";
 import type { TextSegment } from "./text";
 import {
 	getUsedTrackCount,
@@ -1006,6 +1008,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			previewTime: null as number | null,
 			playbackTime: 0,
 			playing: false,
+			// On-canvas selection of the screen recording / camera boxes.
+			// Kept separate from timeline.selection, which drives the sidebar
+			// selection panel and is pattern-matched by many consumers.
+			canvasSelection: null as null | { type: "display" } | { type: "camera" },
 			captions: {
 				isGenerating: false,
 				isDownloading: false,
@@ -1079,6 +1085,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				audioReplace: null as number | null,
 			},
 		});
+
+		// Active smart-guide lines while an overlay drag is snapping; published
+		// by whichever overlay owns the drag, rendered once above the canvas.
+		const [snapGuides, setSnapGuides] = createSignal<SnapGuide[]>([]);
 
 		// Plain signals, not resources: audio decodes in the background after
 		// the editor opens, so these can resolve late — they must never suspend
@@ -1271,6 +1281,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			projectHistory: createStoreHistory(project, setProject),
 			editorState,
 			setEditorState,
+			snapGuides,
+			setSnapGuides,
 			totalDuration,
 			zoomOutLimit,
 			exportState,
@@ -1337,6 +1349,12 @@ export type TransformedMeta = ReturnType<typeof transformMeta>;
 
 const createEditorInstanceContext = () => {
 	const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
+
+	// Rendered display/camera placement of the latest preview frame, emitted
+	// by the renderer so on-canvas overlays hit-test exactly what was drawn.
+	const [latestFrameLayout, setLatestFrameLayout] =
+		createSignal<FrameLayoutEvent | null>(null);
+	createTauriEventListener(events.frameLayoutEvent, setLatestFrameLayout);
 
 	const [_isConnected, setIsConnected] = createSignal(false);
 	const [isWorkerReady, setIsWorkerReady] = createSignal(false);
@@ -1433,6 +1451,7 @@ const createEditorInstanceContext = () => {
 		editorInstance,
 		refetchEditorInstance,
 		latestFrame,
+		latestFrameLayout,
 		presets: createPresets(),
 		metaQuery,
 		isWorkerReady,

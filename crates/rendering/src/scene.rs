@@ -2,6 +2,16 @@ use cap_project::{SceneMode, SceneSegment};
 
 pub const MIN_GAP_FOR_TRANSITION: f64 = 0.5;
 
+fn same_mode(a: &SceneMode, b: &SceneMode) -> bool {
+    std::mem::discriminant(a) == std::mem::discriminant(b)
+}
+
+/// Modes where the screen and camera share the frame side-by-side (the
+/// compositor morphs both layers toward per-pane target rects).
+fn is_split_mode(mode: &SceneMode) -> bool {
+    matches!(mode, SceneMode::SplitScreen | SceneMode::Floating)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SceneSegmentsCursor<'a> {
     time: f64,
@@ -62,8 +72,15 @@ pub struct InterpolatedScene {
     pub camera_only_blur: f64,
     /// 0.0 = no split layout, 1.0 = fully side-by-side. Ramps with
     /// `transition_progress` when entering/leaving [`SceneMode::SplitScreen`]
-    /// so the compositor morphs the screen+camera rects toward their halves.
+    /// or [`SceneMode::Floating`] so the compositor morphs the screen+camera
+    /// rects toward their panes.
     pub split_factor: f64,
+    /// Share of the split that is the floating-cards variant
+    /// ([`SceneMode::Floating`]). Always <= `split_factor`; the compositor
+    /// blends the pane targets from full-bleed halves toward padded cards by
+    /// `floating_factor / split_factor` and keeps rounding/shadow chrome alive
+    /// in proportion to it.
+    pub floating_factor: f64,
 }
 
 impl InterpolatedScene {
@@ -81,7 +98,8 @@ impl InterpolatedScene {
             screen_blur: 0.0,
             camera_only_zoom: 1.0,
             camera_only_blur: 0.0,
-            split_factor: if matches!(scene_mode, SceneMode::SplitScreen) {
+            split_factor: if is_split_mode(&scene_mode) { 1.0 } else { 0.0 },
+            floating_factor: if matches!(scene_mode, SceneMode::Floating) {
                 1.0
             } else {
                 0.0
@@ -102,14 +120,7 @@ impl InterpolatedScene {
                 // Check if we should skip transition for small gaps
                 let prev_mode = if let Some(prev_seg) = cursor.prev_segment {
                     let gap = segment.start - prev_seg.end;
-                    let same_mode = matches!(
-                        (&prev_seg.mode, &segment.mode),
-                        (SceneMode::CameraOnly, SceneMode::CameraOnly)
-                            | (SceneMode::Default, SceneMode::Default)
-                            | (SceneMode::HideCamera, SceneMode::HideCamera)
-                            | (SceneMode::SplitScreen, SceneMode::SplitScreen)
-                    );
-                    if gap < MIN_GAP_FOR_TRANSITION && same_mode {
+                    if gap < MIN_GAP_FOR_TRANSITION && same_mode(&prev_seg.mode, &segment.mode) {
                         // Small gap between same modes, no transition needed
                         return InterpolatedScene::from_single_mode(segment.mode);
                     } else if gap > 0.01 {
@@ -127,14 +138,7 @@ impl InterpolatedScene {
                     let gap = next_seg.start - segment.end;
 
                     // For small gaps between same-mode segments, don't transition
-                    let same_mode = matches!(
-                        (&segment.mode, &next_seg.mode),
-                        (SceneMode::CameraOnly, SceneMode::CameraOnly)
-                            | (SceneMode::Default, SceneMode::Default)
-                            | (SceneMode::HideCamera, SceneMode::HideCamera)
-                            | (SceneMode::SplitScreen, SceneMode::SplitScreen)
-                    );
-                    if gap < MIN_GAP_FOR_TRANSITION && same_mode {
+                    if gap < MIN_GAP_FOR_TRANSITION && same_mode(&segment.mode, &next_seg.mode) {
                         // Keep the current mode without transitioning
                         (segment.mode, segment.mode, 1.0)
                     } else if gap > 0.01 {
@@ -177,14 +181,7 @@ impl InterpolatedScene {
                 let gap = next_segment.start - prev_seg.end;
 
                 // For small gaps between same-mode segments, stay in that mode
-                let same_mode = matches!(
-                    (&prev_seg.mode, &next_segment.mode),
-                    (SceneMode::CameraOnly, SceneMode::CameraOnly)
-                        | (SceneMode::Default, SceneMode::Default)
-                        | (SceneMode::HideCamera, SceneMode::HideCamera)
-                        | (SceneMode::SplitScreen, SceneMode::SplitScreen)
-                );
-                if gap < MIN_GAP_FOR_TRANSITION && same_mode {
+                if gap < MIN_GAP_FOR_TRANSITION && same_mode(&prev_seg.mode, &next_segment.mode) {
                     (prev_seg.mode, prev_seg.mode, 1.0)
                 } else if cursor.time >= transition_start {
                     // Start transitioning into the next segment
@@ -279,9 +276,18 @@ impl InterpolatedScene {
             0.0
         };
 
-        let from_split = matches!(current_mode, SceneMode::SplitScreen);
-        let to_split = matches!(next_mode, SceneMode::SplitScreen);
+        let from_split = is_split_mode(&current_mode);
+        let to_split = is_split_mode(&next_mode);
         let split_factor = match (from_split, to_split) {
+            (true, true) => 1.0,
+            (false, true) => transition_progress,
+            (true, false) => 1.0 - transition_progress,
+            (false, false) => 0.0,
+        };
+
+        let from_floating = matches!(current_mode, SceneMode::Floating);
+        let to_floating = matches!(next_mode, SceneMode::Floating);
+        let floating_factor = match (from_floating, to_floating) {
             (true, true) => 1.0,
             (false, true) => transition_progress,
             (true, false) => 1.0 - transition_progress,
@@ -304,6 +310,7 @@ impl InterpolatedScene {
             camera_only_zoom,
             camera_only_blur,
             split_factor,
+            floating_factor,
         }
     }
 
@@ -312,9 +319,10 @@ impl InterpolatedScene {
             SceneMode::Default => (1.0, 1.0, 1.0),
             SceneMode::CameraOnly => (1.0, 1.0, 1.0),
             SceneMode::HideCamera => (0.0, 1.0, 1.0),
-            // Both panes fully visible; the split geometry (50/50 halves) is
-            // applied in the compositor, driven by `split_factor`.
-            SceneMode::SplitScreen => (1.0, 1.0, 1.0),
+            // Both panes fully visible; the split geometry (50/50 halves or
+            // floating cards) is applied in the compositor, driven by
+            // `split_factor` + `floating_factor`.
+            SceneMode::SplitScreen | SceneMode::Floating => (1.0, 1.0, 1.0),
         }
     }
 

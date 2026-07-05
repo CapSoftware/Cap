@@ -3,8 +3,8 @@ use std::time::Instant;
 
 use cap_project::{CursorEvents, ProjectConfiguration};
 use cap_rendering::{
-    DecodedSegmentFrames, FrameRenderer, Nv12RenderedFrame, ProjectUniforms, RenderVideoConstants,
-    RenderedFrame, RendererLayers,
+    DecodedSegmentFrames, FrameLayout, FrameRenderer, Nv12RenderedFrame, ProjectUniforms,
+    RenderVideoConstants, RenderedFrame, RendererLayers,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -35,9 +35,11 @@ pub enum EditorFrameOutput {
 
 pub type RendererLayersReceiver = oneshot::Receiver<RendererLayers>;
 
+pub type EditorFrameCallback = Box<dyn FnMut(EditorFrameOutput, FrameLayout) + Send>;
+
 pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
-    frame_cb: Box<dyn FnMut(EditorFrameOutput) + Send>,
+    frame_cb: EditorFrameCallback,
     render_constants: Arc<RenderVideoConstants>,
     layers_rx: RendererLayersReceiver,
     telemetry: Option<PlaybackTelemetry>,
@@ -84,7 +86,7 @@ pub async fn finish_renderer_layers_creation(
 impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
-        frame_cb: Box<dyn FnMut(EditorFrameOutput) + Send>,
+        frame_cb: EditorFrameCallback,
         layers_rx: RendererLayersReceiver,
     ) -> Result<RendererHandle, String> {
         Self::spawn_with_telemetry(render_constants, frame_cb, layers_rx, None)
@@ -92,7 +94,7 @@ impl Renderer {
 
     pub fn spawn_with_telemetry(
         render_constants: Arc<RenderVideoConstants>,
-        frame_cb: Box<dyn FnMut(EditorFrameOutput) + Send>,
+        frame_cb: EditorFrameCallback,
         layers_rx: RendererLayersReceiver,
         telemetry: Option<PlaybackTelemetry>,
     ) -> Result<RendererHandle, String> {
@@ -242,6 +244,7 @@ impl Renderer {
 
             let render_start = Instant::now();
             let input_frame_number = current.uniforms.frame_number;
+            let frame_layout = current.uniforms.frame_layout();
             match frame_renderer
                 .render_immediate_with_timings(
                     current.segment_frames,
@@ -257,7 +260,7 @@ impl Renderer {
                     let frame_number = frame.frame_number;
                     let output_format = PlaybackRenderOutputFormat::Rgba;
                     let callback_start = Instant::now();
-                    (frame_cb)(EditorFrameOutput::Rgba(frame));
+                    (frame_cb)(EditorFrameOutput::Rgba(frame), frame_layout);
                     let callback_duration = callback_start.elapsed();
                     if let Some(telemetry) = &telemetry {
                         telemetry.emit(PlaybackTelemetryEvent::RendererFrame {

@@ -1293,6 +1293,7 @@ dependencies = [
  "serde",
  "specta",
  "thiserror 1.0.69",
+ "tracing",
  "v4l",
  "windows 0.60.0",
  "windows-core 0.60.1",

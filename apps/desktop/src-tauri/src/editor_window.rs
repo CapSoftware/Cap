@@ -4,11 +4,57 @@ use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
 
 use cap_rendering::GpuOutputFormat;
+use tauri_specta::Event;
 
 use crate::{
-    create_editor_instance_impl,
+    FrameLayoutEvent, create_editor_instance_impl,
     frame_ws::{WSFrame, WSFrameFormat, create_watch_frame_ws},
 };
+
+/// Forwards rendered frames to the preview websocket and mirrors each frame's
+/// display/camera placement to the webview so overlay hit-boxes always match
+/// what was actually rendered.
+fn make_frame_callback(
+    app: AppHandle,
+    frame_tx: watch::Sender<Option<Arc<WSFrame>>>,
+) -> cap_editor::EditorFrameCallback {
+    Box::new(move |output, layout| {
+        let ws_frame = match output {
+            cap_editor::EditorFrameOutput::Nv12(frame) => {
+                let ws_format = match frame.format {
+                    GpuOutputFormat::Nv12 => WSFrameFormat::Nv12 { full_range: false },
+                    GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
+                };
+                WSFrame {
+                    data: Arc::new(frame.data.into_vec()),
+                    width: frame.width,
+                    height: frame.height,
+                    stride: frame.y_stride,
+                    frame_number: frame.frame_number,
+                    target_time_ns: frame.target_time_ns,
+                    format: ws_format,
+                    created_at: Instant::now(),
+                }
+            }
+            cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
+                data: frame.data,
+                width: frame.width,
+                height: frame.height,
+                stride: frame.padded_bytes_per_row,
+                frame_number: frame.frame_number,
+                target_time_ns: frame.target_time_ns,
+                format: WSFrameFormat::Rgba,
+                created_at: Instant::now(),
+            },
+        };
+        let _ = frame_tx.send(Some(std::sync::Arc::new(ws_frame)));
+
+        // Emitted unconditionally: a prewarmed instance renders before the
+        // webview attaches its listener, so deduping here would leave a
+        // fresh window without layout data until the next config change.
+        let _ = FrameLayoutEvent::from(layout).emit(&app);
+    })
+}
 
 pub struct EditorInstance {
     inner: Arc<cap_editor::EditorInstance>,
@@ -28,42 +74,8 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
     let (frame_tx, frame_rx) = watch::channel(None);
 
     let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx, Default::default()).await;
-    let (inner, render_frame_event_id) = create_editor_instance_impl(
-        &app,
-        path,
-        Box::new(move |output| {
-            let ws_frame = match output {
-                cap_editor::EditorFrameOutput::Nv12(frame) => {
-                    let ws_format = match frame.format {
-                        GpuOutputFormat::Nv12 => WSFrameFormat::Nv12 { full_range: false },
-                        GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
-                    };
-                    WSFrame {
-                        data: Arc::new(frame.data.into_vec()),
-                        width: frame.width,
-                        height: frame.height,
-                        stride: frame.y_stride,
-                        frame_number: frame.frame_number,
-                        target_time_ns: frame.target_time_ns,
-                        format: ws_format,
-                        created_at: Instant::now(),
-                    }
-                }
-                cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
-                    data: frame.data,
-                    width: frame.width,
-                    height: frame.height,
-                    stride: frame.padded_bytes_per_row,
-                    frame_number: frame.frame_number,
-                    target_time_ns: frame.target_time_ns,
-                    format: WSFrameFormat::Rgba,
-                    created_at: Instant::now(),
-                },
-            };
-            let _ = frame_tx.send(Some(std::sync::Arc::new(ws_frame)));
-        }),
-    )
-    .await?;
+    let (inner, render_frame_event_id) =
+        create_editor_instance_impl(&app, path, make_frame_callback(app.clone(), frame_tx)).await?;
 
     Ok(Arc::new(EditorInstance {
         inner,
@@ -326,6 +338,7 @@ impl EditorInstances {
 
         match instances.entry(window.label().to_string()) {
             Entry::Vacant(entry) => {
+                let requested_at = Instant::now();
                 let pending = PendingEditorInstances::get(window.app_handle());
 
                 if let Some(mut prewarmed_rx) = pending.take_prewarmed(window.label()).await {
@@ -333,12 +346,19 @@ impl EditorInstances {
                         if let Some(result) = prewarmed_rx.borrow_and_update().clone() {
                             let instance = result?;
                             entry.insert(instance.clone());
+                            tracing::info!(
+                                wait_ms = requested_at.elapsed().as_millis() as u64,
+                                "Editor open: instance served from prewarm"
+                            );
                             return Ok(instance);
                         }
                         if prewarmed_rx.changed().await.is_err() {
                             break;
                         }
                     }
+                    tracing::warn!(
+                        "Editor open: prewarm channel closed without a result, building on demand"
+                    );
                 }
 
                 let (frame_tx, frame_rx) = watch::channel(None);
@@ -349,39 +369,7 @@ impl EditorInstances {
                 let (inner, render_frame_event_id) = create_editor_instance_impl(
                     window.app_handle(),
                     path,
-                    Box::new(move |output| {
-                        let ws_frame = match output {
-                            cap_editor::EditorFrameOutput::Nv12(frame) => {
-                                let ws_format = match frame.format {
-                                    GpuOutputFormat::Nv12 => {
-                                        WSFrameFormat::Nv12 { full_range: false }
-                                    }
-                                    GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
-                                };
-                                WSFrame {
-                                    data: Arc::new(frame.data.into_vec()),
-                                    width: frame.width,
-                                    height: frame.height,
-                                    stride: frame.y_stride,
-                                    frame_number: frame.frame_number,
-                                    target_time_ns: frame.target_time_ns,
-                                    format: ws_format,
-                                    created_at: Instant::now(),
-                                }
-                            }
-                            cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
-                                data: frame.data,
-                                width: frame.width,
-                                height: frame.height,
-                                stride: frame.padded_bytes_per_row,
-                                frame_number: frame.frame_number,
-                                target_time_ns: frame.target_time_ns,
-                                format: WSFrameFormat::Rgba,
-                                created_at: Instant::now(),
-                            },
-                        };
-                        let _ = frame_tx.send(Some(std::sync::Arc::new(ws_frame)));
-                    }),
+                    make_frame_callback(app_handle.clone(), frame_tx),
                 )
                 .await?;
 
@@ -394,6 +382,11 @@ impl EditorInstances {
                 });
 
                 entry.insert(instance.clone());
+
+                tracing::info!(
+                    build_ms = requested_at.elapsed().as_millis() as u64,
+                    "Editor open: instance built on demand (no prewarm hit)"
+                );
 
                 Ok(instance)
             }

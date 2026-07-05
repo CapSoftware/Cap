@@ -11,7 +11,9 @@ import {
 import { produce } from "solid-js/store";
 import { defaultCaptionSettings } from "~/store/captions";
 import type { CaptionTrackSegment } from "~/utils/tauri";
+import { useCanvasSnapTargets } from "./CanvasElementsOverlay";
 import { FPS, useEditorContext } from "./context";
+import { SNAP_PX, type SnapTargets, snapMovingRect } from "./snapping";
 
 type CaptionOverlayProps = {
 	size: { width: number; height: number };
@@ -41,8 +43,15 @@ function positionYFactor(position: string) {
 }
 
 export function CaptionOverlay(props: CaptionOverlayProps) {
-	const { project, setProject, editorState, setEditorState, projectHistory } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		editorState,
+		setEditorState,
+		projectHistory,
+		setSnapGuides,
+	} = useEditorContext();
+	const snapTargetsFor = useCanvasSnapTargets();
 	const [measuredSize, setMeasuredSize] = createSignal({ width: 1, height: 1 });
 	let hiddenMeasureRef: HTMLDivElement | undefined;
 
@@ -188,12 +197,14 @@ export function CaptionOverlay(props: CaptionOverlayProps) {
 		setup: () => {
 			center: { x: number; y: number };
 			rect: ReturnType<typeof rect>;
+			targets: SnapTargets;
 		},
 		update: (
 			event: MouseEvent,
 			initial: {
 				center: { x: number; y: number };
 				rect: ReturnType<typeof rect>;
+				targets: SnapTargets;
 			},
 			initialMouse: { x: number; y: number },
 		) => void,
@@ -216,6 +227,7 @@ export function CaptionOverlay(props: CaptionOverlayProps) {
 				throttledUpdate.clear();
 				handleUpdate(finalEvent);
 				resumeHistory();
+				setSnapGuides([]);
 				dispose();
 			}
 
@@ -242,7 +254,7 @@ export function CaptionOverlay(props: CaptionOverlayProps) {
 							x: (currentRect.left + currentRect.width / 2) / props.size.width,
 							y: (currentRect.top + currentRect.height / 2) / props.size.height,
 						};
-			return { center, rect: currentRect };
+			return { center, rect: currentRect, targets: snapTargetsFor(null) };
 		},
 		(event, initial, initialMouse) => {
 			if (props.size.width <= 0 || props.size.height <= 0) return;
@@ -252,9 +264,30 @@ export function CaptionOverlay(props: CaptionOverlayProps) {
 			const halfWidth = initial.rect.width / props.size.width / 2;
 			const halfHeight = initial.rect.height / props.size.height / 2;
 
+			let snapDx = 0;
+			let snapDy = 0;
+			if (event.shiftKey) {
+				setSnapGuides([]);
+			} else {
+				const snap = snapMovingRect(
+					{
+						x: initial.center.x + dx - halfWidth,
+						y: initial.center.y + dy - halfHeight,
+						w: halfWidth * 2,
+						h: halfHeight * 2,
+					},
+					initial.targets,
+					SNAP_PX / props.size.width,
+					SNAP_PX / props.size.height,
+				);
+				snapDx = snap.dx;
+				snapDy = snap.dy;
+				setSnapGuides(snap.guides);
+			}
+
 			updateManualPosition({
-				x: clamp(initial.center.x + dx, halfWidth, 1 - halfWidth),
-				y: clamp(initial.center.y + dy, halfHeight, 1 - halfHeight),
+				x: clamp(initial.center.x + dx + snapDx, halfWidth, 1 - halfWidth),
+				y: clamp(initial.center.y + dy + snapDy, halfHeight, 1 - halfHeight),
 			});
 		},
 	);

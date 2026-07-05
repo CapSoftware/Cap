@@ -96,9 +96,15 @@ fn find_device(info: &CameraInfo) -> Option<arc::R<av::CaptureDevice>> {
         .map(|v| v.retained())
 }
 
+fn fourcc_display(fourcc: u32) -> String {
+    let mut bytes = fourcc.to_be_bytes();
+    cidre::four_cc_to_str(&mut bytes).to_string()
+}
+
 pub(super) fn start_capturing_impl(
     camera: &CameraInfo,
     format: Format,
+    mode: CaptureMode,
     mut callback: impl FnMut(CapturedFrame) + 'static,
 ) -> Result<AVFoundationRecordingHandle, StartCapturingError> {
     let mut device = find_device(camera)
@@ -109,9 +115,17 @@ pub(super) fn start_capturing_impl(
         av::capture::DeviceInput::with_device(&device).map_err(AVFoundationError::Static)?;
 
     let queue = dispatch::Queue::new();
+    let mut missing_image_bufs: u64 = 0;
     let delegate =
         CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(move |data| {
             if data.sample_buf.image_buf().is_none() {
+                missing_image_bufs += 1;
+                if missing_image_bufs == 1 || missing_image_bufs.is_multiple_of(100) {
+                    tracing::warn!(
+                        count = missing_image_bufs,
+                        "Camera output delivered sample buffer(s) without an image buffer"
+                    );
+                }
                 return;
             };
 
@@ -124,7 +138,6 @@ pub(super) fn start_capturing_impl(
     let mut output = av::capture::VideoDataOutput::new();
     let mut session = av::capture::Session::new();
     let mut added_input = false;
-    let pixel_format = format.native().format_desc().media_sub_type();
 
     session.configure(|s| {
         if s.can_add_input(&input) {
@@ -144,28 +157,52 @@ pub(super) fn start_capturing_impl(
         .into());
     }
 
-    let video_settings = ns::Dictionary::with_keys_values(
-        &[cv::pixel_buffer_keys::pixel_format().as_ns()],
-        &[ns::Number::with_u32(pixel_format).as_id_ref()],
-    );
-    output
-        .set_video_settings(Some(video_settings.as_ref()))
-        .map_err(|err| {
-            AVFoundationError::Message(format!("Failed to set camera video settings: {err}"))
-        })?;
+    if mode == CaptureMode::Native {
+        let pixel_format = format.native().format_desc().media_sub_type();
+        let is_available = output
+            .available_video_cv_pixel_formats()
+            .iter()
+            .any(|n| n.as_u32() == pixel_format);
+
+        if is_available {
+            let video_settings = ns::Dictionary::with_keys_values(
+                &[cv::pixel_buffer_keys::pixel_format().as_ns()],
+                &[ns::Number::with_u32(pixel_format).as_id_ref()],
+            );
+            if let Err(err) = output.set_video_settings(Some(video_settings.as_ref())) {
+                tracing::warn!(
+                    pixel_format = %fourcc_display(pixel_format),
+                    "Failed to request native camera pixel format, using default conversion: {err}"
+                );
+            }
+        } else {
+            tracing::warn!(
+                pixel_format = %fourcc_display(pixel_format),
+                "Native camera pixel format not offered by video output, using default conversion"
+            );
+        }
+    }
 
     output.set_sample_buf_delegate(Some(delegate.as_ref()), Some(&queue));
 
-    // The device config must stay locked while running starts,
-    // otherwise start_running can overwrite the active format on macOS
-    // https://stackoverflow.com/questions/36689578/avfoundation-capturing-video-with-custom-resolution
     {
         let _session_lifecycle_guard = avfoundation_session_lifecycle_guard();
-        let mut _lock = device.config_lock().map_err(AVFoundationError::Retained)?;
 
-        _lock.set_active_format(format.native());
+        match mode {
+            CaptureMode::Native => {
+                // The device config must stay locked while running starts,
+                // otherwise start_running can overwrite the active format on macOS
+                // https://stackoverflow.com/questions/36689578/avfoundation-capturing-video-with-custom-resolution
+                let mut _lock = device.config_lock().map_err(AVFoundationError::Retained)?;
 
-        session.start_running();
+                _lock.set_active_format(format.native());
+
+                session.start_running();
+            }
+            CaptureMode::Compatibility => {
+                session.start_running();
+            }
+        }
     }
 
     Ok(AVFoundationRecordingHandle {

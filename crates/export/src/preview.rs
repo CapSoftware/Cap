@@ -2,10 +2,7 @@ use std::path::PathBuf;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use cap_project::{RecordingMeta, XY};
-use cap_rendering::{
-    FrameRenderer, ProjectUniforms, RendererLayers, ZoomFocusInterpolator,
-    spring_mass_damper::SpringMassDamperSimulationConfig,
-};
+use cap_rendering::{FrameRenderer, ProjectUniforms, RendererLayers, ZoomTransformTimeline};
 use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
 
@@ -97,26 +94,12 @@ async fn render_preview_with_base(
         &exporter_base.project_config,
     );
 
-    let cursor_smoothing =
-        (!exporter_base.project_config.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-            tension: exporter_base.project_config.cursor.tension,
-            mass: exporter_base.project_config.cursor.mass,
-            friction: exporter_base.project_config.cursor.friction,
-        });
-
-    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+    let mut zoom_timeline = ZoomTransformTimeline::from_project(
+        &exporter_base.project_config,
         &segment_media.cursor,
-        cursor_smoothing,
-        exporter_base.project_config.cursor.click_spring_config(),
-        exporter_base.project_config.screen_movement_spring,
         total_duration,
-        exporter_base
-            .project_config
-            .timeline
-            .as_ref()
-            .map(|t| t.zoom_segments.as_slice())
-            .unwrap_or(&[]),
     );
+    zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
 
     let uniforms = ProjectUniforms::new(
         &exporter_base.render_constants,
@@ -127,7 +110,7 @@ async fn render_preview_with_base(
         &segment_media.cursor,
         &segment_frames,
         total_duration,
-        &zoom_focus_interpolator,
+        &zoom_timeline,
     );
 
     let mut frame_renderer = FrameRenderer::new(&exporter_base.render_constants);

@@ -2639,10 +2639,23 @@ pub async fn restart_recording(
     let _ = CurrentRecordingChanged.emit(&app);
 
     let inputs = recording.inputs().clone();
+    let recording_dir = recording.recording_dir().clone();
 
-    discard_recording(&app, recording).await?;
+    // Cleanup of the discarded recording must not block or abort the restart:
+    // the old recording is already cancelled at this point, and the new one
+    // writes to a fresh directory.
+    if let Some(video_id) = cancel_discarded_recording(&app, recording).await {
+        let app = app.clone();
+        tokio::spawn(async move {
+            if let Err(err) = delete_remote_instant_video(&app, &video_id).await {
+                warn!("Failed to delete remote instant video while restarting: {err}");
+            }
+        });
+    }
 
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    if let Err(err) = remove_recording_dir(&recording_dir).await {
+        warn!("Failed to delete recording files while restarting: {err}");
+    }
 
     start_recording(app.clone(), state, inputs).await
 }
@@ -2660,16 +2673,16 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         CurrentRecordingChanged.emit(&app).ok();
         RecordingStopped {}.emit(&app).ok();
 
+        if let Some(window) = CapWindowId::RecordingControls.get(&app) {
+            let _ = window.hide();
+        }
+
         let delete_result = discard_recording(&app, recording).await;
 
         let settings = GeneralSettingsStore::get(&app)
             .ok()
             .flatten()
             .unwrap_or_default();
-
-        if let Some(window) = CapWindowId::RecordingControls.get(&app) {
-            let _ = window.hide();
-        }
 
         match settings.post_deletion_behaviour {
             PostDeletionBehaviour::DoNothing => {}

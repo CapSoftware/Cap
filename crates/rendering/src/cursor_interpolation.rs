@@ -7,8 +7,12 @@ use crate::{
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
 };
 
-const CLICK_LOOKAHEAD_TARGET_MS: f64 = 140.0;
-const CLICK_SPRING_WINDOW_MS: f64 = 120.0;
+/// Screen Studio's verified anticipation windows: the spring target snaps to
+/// the click position once the next click is <=500ms away, and the spring
+/// profile stiffens 175ms before the click. The early snap relies on the
+/// spring gliding there; no extra heuristics.
+const CLICK_LOOKAHEAD_TARGET_MS: f64 = 500.0;
+const CLICK_SPRING_WINDOW_MS: f64 = 175.0;
 const SHAKE_THRESHOLD_UV: f64 = 0.015;
 const SHAKE_DETECTION_WINDOW_MS: f64 = 100.0;
 const DECIMATE_FPS: f64 = 60.0;
@@ -685,6 +689,68 @@ mod tests {
 
         context.advance_to(100.0);
         assert_eq!(context.profile(100.0), SpringProfile::Default);
+    }
+
+    #[test]
+    fn spring_context_stiffens_175ms_before_click() {
+        let clicks = vec![click_event(300.0, true)];
+        let mut context = CursorSpringContext::new(&clicks);
+
+        context.advance_to(100.0);
+        assert_eq!(context.profile(100.0), SpringProfile::Default);
+
+        context.advance_to(150.0);
+        assert_eq!(context.profile(150.0), SpringProfile::Snappy);
+    }
+
+    #[test]
+    fn click_target_snap_glides_ahead_of_click() {
+        let mut moves: Vec<_> = (0..=5)
+            .map(|i| cursor_move(f64::from(i) * 100.0, 0.1, 0.1))
+            .collect();
+        moves.push(cursor_move(600.0, 0.9, 0.9));
+        let clicks = vec![click_event(600.0, true)];
+        let cursor = CursorEvents { moves, clicks };
+
+        let smoothing = SpringMassDamperSimulationConfig {
+            tension: 470.0,
+            mass: 3.0,
+            friction: 70.0,
+        };
+
+        let x_at = |t_ms: f64| {
+            interpolate_cursor_with_click_spring(
+                &cursor,
+                (t_ms / 1000.0) as f32,
+                Some(smoothing),
+                None,
+            )
+            .unwrap()
+            .position
+            .coord
+            .x
+        };
+
+        // The click at 600ms enters the 500ms lookahead window at t=100ms:
+        // before that the spring rests on the raw path, after it the target
+        // is the click position and the spring glides there early.
+        let before_window = x_at(80.0);
+        assert!(
+            before_window < 0.12,
+            "moved before lookahead window opened: x={before_window:.4}"
+        );
+
+        let mid_glide = x_at(300.0);
+        assert!(
+            mid_glide > 0.4,
+            "no anticipation glide toward click by t=300ms: x={mid_glide:.4}"
+        );
+
+        let near_click = x_at(590.0);
+        assert!(
+            near_click > 0.8,
+            "cursor not near click position just before click: x={near_click:.4}"
+        );
     }
 
     #[test]

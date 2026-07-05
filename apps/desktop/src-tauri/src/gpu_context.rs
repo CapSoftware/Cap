@@ -49,7 +49,28 @@ pub struct SharedGpuContext {
 
 static GPU: OnceCell<Option<SharedGpuContext>> = OnceCell::const_new();
 
+/// Marks the crash sentinel while GPU adapter/device initialisation is in flight, so
+/// a process death inside that window is attributable to graphics bring-up. Dropping
+/// the guard (including during unwind from a caught panic) disarms the marker — a
+/// survivable failure is not a GPU crash.
+struct GpuInitPhaseGuard;
+
+impl GpuInitPhaseGuard {
+    fn arm() -> Self {
+        crate::crash_sentinel::enter_gpu_init_phase();
+        Self
+    }
+}
+
+impl Drop for GpuInitPhaseGuard {
+    fn drop(&mut self) {
+        crate::crash_sentinel::exit_gpu_init_phase();
+    }
+}
+
 async fn init_gpu_inner() -> Option<SharedGpuContext> {
+    let _gpu_init_phase = GpuInitPhaseGuard::arm();
+
     let instance = cap_rendering::create_wgpu_instance().await;
 
     let force_software_adapter = cap_rendering::force_software_wgpu_adapter();

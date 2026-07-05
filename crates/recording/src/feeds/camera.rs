@@ -28,6 +28,9 @@ use crate::ffmpeg::FFmpegVideoFrame;
 use crate::output_pipeline::NativeCameraFrame;
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
+/// Outer deadline for camera readiness. Must cover both capture attempts on
+/// macOS (native + compatibility fallback) plus session teardown in between.
+const CAMERA_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[cfg(target_os = "macos")]
 static CAMERA_CAPTURE_LIFECYCLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -407,6 +410,7 @@ fn spawn_camera_setup(
                     native_frame_recipient,
                     ffmpeg_sender_count,
                     native_sender_count,
+                    &done_rx_thread,
                 )
                 .await;
 
@@ -542,7 +546,7 @@ fn camera_ready_future(
     flow: CameraSetupFlow,
 ) -> BoxFuture<'static, Result<(CameraInfo, VideoInfo), SetInputError>> {
     async move {
-        match tokio::time::timeout(CAMERA_INIT_TIMEOUT, ready).await {
+        match tokio::time::timeout(CAMERA_READY_TIMEOUT, ready).await {
             Ok(result) => result.map(|v| (v.camera_info, v.video_info)),
             Err(err) => {
                 if matches!(flow, CameraSetupFlow::Open) {
@@ -775,16 +779,86 @@ async fn setup_camera(
     native_recipient: Recipient<NewNativeFrame>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    cancel_rx: &mpsc::Receiver<()>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
     let format = select_camera_format(&camera, settings)?;
+
+    {
+        let mut fourcc = format.native().format_desc().media_sub_type().to_be_bytes();
+        tracing::info!(
+            camera = camera.display_name(),
+            width = format.width(),
+            height = format.height(),
+            frame_rate = format.frame_rate(),
+            pixel_format = cidre::four_cc_to_str(&mut fourcc),
+            "Starting camera capture"
+        );
+    }
+
+    let first_attempt = start_camera_capture_attempt(
+        &camera,
+        format.clone(),
+        cap_camera::CaptureMode::Native,
+        recipient.clone(),
+        native_recipient.clone(),
+        ffmpeg_sender_count.clone(),
+        native_sender_count.clone(),
+    )
+    .await;
+
+    match first_attempt {
+        Ok(result) => Ok(result),
+        // Some cameras start a session but never deliver frames when the
+        // native format is pinned (seen on Apple cameras on macOS 26.4 beta).
+        // Retry once letting AVFoundation negotiate everything itself.
+        Err(err @ (SetInputError::Timeout(_) | SetInputError::StartCapturing(_))) => {
+            if cancel_rx.try_recv().is_ok() {
+                return Err(err);
+            }
+
+            warn!(
+                camera = camera.display_name(),
+                "Camera produced no frames in native mode ({err}), retrying in compatibility mode"
+            );
+
+            tokio::time::sleep(Duration::from_millis(150)).await;
+
+            start_camera_capture_attempt(
+                &camera,
+                format,
+                cap_camera::CaptureMode::Compatibility,
+                recipient,
+                native_recipient,
+                ffmpeg_sender_count,
+                native_sender_count,
+            )
+            .await
+            .inspect(|_| {
+                tracing::info!("Camera capture recovered in compatibility mode");
+            })
+        }
+        Err(err) => Err(err),
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn start_camera_capture_attempt(
+    camera: &cap_camera::CameraInfo,
+    format: cap_camera::Format,
+    mode: cap_camera::CaptureMode,
+    recipient: Recipient<NewFrame>,
+    native_recipient: Recipient<NewNativeFrame>,
+    ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+) -> Result<SetupCameraResult, SetInputError> {
     let frame_rate = format.frame_rate().round().max(1.0) as u32;
 
     let (ready_tx, ready_rx) = oneshot::channel();
     let mut ready_signal = Some(ready_tx);
 
     let capture_handle = camera
-        .start_capturing(format.clone(), move |frame| {
+        .start_capturing_with_mode(format.clone(), mode, move |frame| {
             let callback_num =
                 CAMERA_CALLBACK_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -850,7 +924,7 @@ async fn setup_camera(
 
     Ok(SetupCameraResult {
         handle: capture_handle,
-        camera_info: camera,
+        camera_info: camera.clone(),
         video_info,
     })
 }
@@ -863,6 +937,7 @@ async fn setup_camera(
     native_recipient: Recipient<NewNativeFrame>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    _cancel_rx: &mpsc::Receiver<()>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
     let format = select_camera_format(&camera, settings)?;
@@ -978,6 +1053,7 @@ async fn setup_camera(
     _native_recipient: Recipient<NewNativeFrame>,
     _ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     _native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    _cancel_rx: &mpsc::Receiver<()>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
     let format = select_camera_format(&camera, settings)?;
@@ -1438,7 +1514,7 @@ impl Message<Lock> for CameraFeed {
 
         if let Some(connecting) = &mut state.connecting {
             let ready = &mut connecting.ready;
-            let data = tokio::time::timeout(CAMERA_INIT_TIMEOUT, ready)
+            let data = tokio::time::timeout(CAMERA_READY_TIMEOUT, ready)
                 .await
                 .map_err(|err| {
                     LockFeedError::InitializeFailed(SetInputError::Timeout(err.to_string()))

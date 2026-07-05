@@ -17,11 +17,13 @@ import {
 	createSignal,
 	ErrorBoundary,
 	For,
+	lazy,
 	Match,
 	on,
 	onCleanup,
 	onMount,
 	Show,
+	Suspense,
 	Switch,
 } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -39,7 +41,6 @@ import { Toggle } from "~/components/Toggle";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands, events } from "~/utils/tauri";
-import { ClipsSidebar } from "./ClipsSidebar";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
 	EditorContextProvider,
@@ -51,13 +52,27 @@ import {
 	useEditorInstanceContext,
 } from "./context";
 import { EditorErrorScreen } from "./EditorErrorScreen";
-import { ExportPage } from "./ExportPage";
 import { Header } from "./Header";
 import { ImportProgress } from "./ImportProgress";
 import { PlayerContent } from "./Player";
 import { Timeline } from "./Timeline";
-import { TranscriptPanel } from "./TranscriptPage";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
+
+// Deferred surfaces: these are not visible at first paint (export mode,
+// transcript panel, clips sidebar), so their code is split out of the editor
+// chunk to keep webview parse time — the dominant editor-open cost on
+// WebView2 — off the critical path. Each render site wraps them in a local
+// <Suspense> so the chunk load never bubbles up to the top-level editor
+// Suspense (which would flash the whole UI back to the skeleton).
+const ClipsSidebar = lazy(() =>
+	import("./ClipsSidebar").then((m) => ({ default: m.ClipsSidebar })),
+);
+const ExportPage = lazy(() =>
+	import("./ExportPage").then((m) => ({ default: m.ExportPage })),
+);
+const TranscriptPanel = lazy(() =>
+	import("./TranscriptPage").then((m) => ({ default: m.TranscriptPanel })),
+);
 
 const DEFAULT_TIMELINE_HEIGHT = 260;
 const MIN_PLAYER_CONTENT_HEIGHT = 320;
@@ -639,7 +654,14 @@ function Inner() {
 	};
 
 	return (
-		<Show when={!fullscreenMode()} fallback={<ExportPage />}>
+		<Show
+			when={!fullscreenMode()}
+			fallback={
+				<Suspense>
+					<ExportPage />
+				</Suspense>
+			}
+		>
 			<div class="flex flex-col flex-1 min-h-0">
 				<Header />
 				<div class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5">
@@ -704,10 +726,12 @@ function Inner() {
 										<ConfigSidebar />
 									</div>
 									<Show when={clipsSidebarMounted()}>
-										<ClipsSidebar
-											open={isClipsMode()}
-											class={isClipsMode() ? undefined : "hidden"}
-										/>
+										<Suspense>
+											<ClipsSidebar
+												open={isClipsMode()}
+												class={isClipsMode() ? undefined : "hidden"}
+											/>
+										</Suspense>
 									</Show>
 								</div>
 							</Show>
@@ -736,7 +760,9 @@ function Inner() {
 										"min-width": "0",
 									}}
 								>
-									<TranscriptPanel />
+									<Suspense>
+										<TranscriptPanel />
+									</Suspense>
 								</div>
 							</Show>
 						</div>
