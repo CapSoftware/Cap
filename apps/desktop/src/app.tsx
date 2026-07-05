@@ -199,11 +199,7 @@ function Inner() {
 					/>
 					<Route path="/capture-area" component={CaptureAreaPage} />
 					<Route path="/debug" component={DebugPage} />
-					<Route
-						path="/editor"
-						info={{ autoShow: false }}
-						component={EditorPage}
-					/>
+					<Route path="/editor" component={EditorPage} />
 					<Route
 						path="/in-progress-recording"
 						component={InProgressRecordingPage}
