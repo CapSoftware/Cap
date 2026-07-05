@@ -22,8 +22,7 @@
 		}
 	},
 	"background": {
-		"service_worker": "assets/service-worker.js",
-		"type": "module"
+		"service_worker": "assets/service-worker.js"
 	},
 	"options_page": "options.html",
 	"permissions": [

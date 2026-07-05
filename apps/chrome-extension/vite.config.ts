@@ -35,10 +35,6 @@ export default defineConfig({
 				recorder: resolve(__dirname, "recorder.html"),
 				"camera-preview": resolve(__dirname, "camera-preview.html"),
 				"camera-permission": resolve(__dirname, "camera-permission.html"),
-				"service-worker": resolve(
-					__dirname,
-					"src/background/service-worker.ts",
-				),
 			},
 			output: {
 				entryFileNames: "assets/[name].js",

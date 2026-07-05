@@ -30,8 +30,7 @@
 		}
 	},
 	"background": {
-		"scripts": ["assets/service-worker.js"],
-		"type": "module"
+		"scripts": ["assets/service-worker.js"]
 	},
 	"options_ui": {
 		"page": "options.html",

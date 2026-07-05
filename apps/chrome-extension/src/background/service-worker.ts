@@ -95,8 +95,11 @@ let recordingStartInFlight: Promise<OffscreenResponse> | null = null;
 // Content scripts read the webcam "dismissed" flag and the cached preview
 // frame from chrome.storage.session, which is only exposed to trusted
 // contexts unless the access level is widened. Without this every session
-// storage call from a content script fails.
-chrome.storage.session.setAccessLevel({
+// storage call from a content script fails. Firefox does not implement
+// setAccessLevel at all — calling it unconditionally throws and kills the
+// whole background script — so content scripts there rely on the runtime
+// message fallbacks instead of the session-storage mirror.
+chrome.storage.session.setAccessLevel?.({
 	accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS",
 });
 
