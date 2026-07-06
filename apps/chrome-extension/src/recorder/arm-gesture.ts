@@ -13,6 +13,7 @@ export const awaitCaptureGesture = async (throwIfCanceled: () => void) => {
 	if (TARGET !== "firefox") return;
 	const container = document.getElementById("arm-capture");
 	const button = document.getElementById("arm-capture-button");
+	const idleState = document.getElementById("idle-state");
 	if (
 		!(container instanceof HTMLElement) ||
 		!(button instanceof HTMLButtonElement)
@@ -20,6 +21,7 @@ export const awaitCaptureGesture = async (throwIfCanceled: () => void) => {
 		return;
 	}
 
+	if (idleState) idleState.hidden = true;
 	container.hidden = false;
 	try {
 		await new Promise<void>((resolve, reject) => {
@@ -40,6 +42,7 @@ export const awaitCaptureGesture = async (throwIfCanceled: () => void) => {
 		});
 	} finally {
 		container.hidden = true;
+		if (idleState) idleState.hidden = false;
 	}
 };
 

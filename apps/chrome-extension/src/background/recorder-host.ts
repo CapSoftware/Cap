@@ -9,8 +9,8 @@ import { capabilities } from "../platform/capabilities";
 // once idle, so this module only ever has to create and find it.
 export const RECORDER_URL = "recorder.html";
 
-const RECORDER_WINDOW_WIDTH = 400;
-const RECORDER_WINDOW_HEIGHT = 360;
+const RECORDER_WINDOW_WIDTH = 440;
+const RECORDER_WINDOW_HEIGHT = 400;
 const RECORDER_READY_TIMEOUT_MS = 10_000;
 const RECORDER_READY_POLL_INTERVAL_MS = 100;
 
@@ -77,18 +77,54 @@ const createOffscreenDocument = () =>
 		);
 	});
 
-const createRecorderWindow = (interactive: boolean) =>
-	new Promise<void>((resolve, reject) => {
-		// state cannot be combined with bounds or focus in windows.create.
-		const createData: chrome.windows.CreateData = interactive
-			? {
-					url: RECORDER_URL,
-					type: "popup",
-					focused: true,
-					width: RECORDER_WINDOW_WIDTH,
-					height: RECORDER_WINDOW_HEIGHT,
-				}
-			: { url: RECORDER_URL, type: "popup", state: "minimized" };
+// Center the interactive recorder window over the browser window the user is
+// looking at, so the arm dialog reads as part of the flow rather than a stray
+// popup.
+const getCenteredBounds = () =>
+	new Promise<{ left?: number; top?: number }>((resolve) => {
+		chrome.windows.getLastFocused((focusedWindow) => {
+			if (
+				chrome.runtime.lastError ||
+				focusedWindow?.left === undefined ||
+				focusedWindow.top === undefined ||
+				!focusedWindow.width ||
+				!focusedWindow.height
+			) {
+				resolve({});
+				return;
+			}
+			resolve({
+				left: Math.max(
+					0,
+					Math.round(
+						focusedWindow.left +
+							(focusedWindow.width - RECORDER_WINDOW_WIDTH) / 2,
+					),
+				),
+				top: Math.max(
+					0,
+					Math.round(
+						focusedWindow.top +
+							(focusedWindow.height - RECORDER_WINDOW_HEIGHT) / 2,
+					),
+				),
+			});
+		});
+	});
+
+const createRecorderWindow = async (interactive: boolean) => {
+	// state cannot be combined with bounds or focus in windows.create.
+	const createData: chrome.windows.CreateData = interactive
+		? {
+				url: RECORDER_URL,
+				type: "popup",
+				focused: true,
+				width: RECORDER_WINDOW_WIDTH,
+				height: RECORDER_WINDOW_HEIGHT,
+				...(await getCenteredBounds()),
+			}
+		: { url: RECORDER_URL, type: "popup", state: "minimized" };
+	await new Promise<void>((resolve, reject) => {
 		chrome.windows.create(createData, () => {
 			const error = chrome.runtime.lastError;
 			if (error) {
@@ -98,6 +134,7 @@ const createRecorderWindow = (interactive: boolean) =>
 			resolve();
 		});
 	});
+};
 
 const pingRecorder = () =>
 	new Promise<boolean>((resolve) => {
