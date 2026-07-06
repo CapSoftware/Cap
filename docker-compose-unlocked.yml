@@ -1,0 +1,153 @@
+version: '3.8'
+
+# Cap Pro Unlocked - All Features Enabled
+# This docker-compose file deploys the complete Cap stack locally
+# with all pro features unlocked for everyone
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: cap-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: planetscale
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cap-network
+
+  # MinIO (S3-compatible storage)
+  minio:
+    image: minio/minio:latest
+    container_name: cap-minio
+    environment:
+      MINIO_ROOT_USER: capS3root
+      MINIO_ROOT_PASSWORD: capS3root
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cap-network
+
+  # Media Server (handles video encoding/streaming)
+  media-server:
+    image: ghcr.io/Owie6789/Cap-media-server:latest
+    container_name: cap-media-server
+    ports:
+      - "3456:3456"
+    environment:
+      DATABASE_URL: mysql://root:@mysql:3306/planetscale
+      RUST_LOG: info
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3456/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cap-network
+
+  # Web Application (Next.js)
+  web:
+    image: ghcr.io/Owie6789/Cap-web:latest
+    container_name: cap-web
+    ports:
+      - "3000:3000"
+    environment:
+      # Database Configuration
+      DATABASE_URL: mysql://root:@mysql:3306/planetscale
+      
+      # Pro Features - UNLOCKED FOR EVERYONE
+      NEXT_PUBLIC_IS_CAP: "false"  # This unlocks all pro features
+      
+      # Application URLs
+      WEB_URL: http://localhost:3000
+      MEDIA_SERVER_URL: http://media-server:3456
+      
+      # NextAuth Configuration (required for auth)
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: dev-secret-change-in-production-$(openssl rand -hex 16)
+      
+      # Optional: Disable Stripe in dev
+      NEXT_PUBLIC_STRIPE_DISABLED: "true"
+      
+      # Logging
+      LOG_LEVEL: info
+    depends_on:
+      mysql:
+        condition: service_healthy
+      media-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - cap-network
+
+volumes:
+  mysql_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  cap-network:
+    driver: bridge
+
+# ============================================
+# 🎉 PRO FEATURES UNLOCKED
+# ============================================
+# All the following features are now available:
+#
+# ✅ Unlimited Recording Length
+# ✅ Cloud Storage & Shareable Links (Unlimited)
+# ✅ Google Drive Integration
+# ✅ Custom S3 Storage Support
+# ✅ Password-Protected Videos
+# ✅ Custom Domain Support
+# ✅ Team Workspaces (Unlimited Members)
+# ✅ Advanced Analytics & Viewer Insights
+# ✅ All Viewer Settings (Permissions, Restrictions)
+# ✅ Priority Support Features
+# ============================================
+
+# QUICK START INSTRUCTIONS:
+# 1. Ensure Docker and Docker Compose are installed
+# 2. Update the NEXTAUTH_SECRET with a real secret:
+#    export NEXTAUTH_SECRET=$(openssl rand -hex 32)
+# 3. Run: docker-compose -f docker-compose-unlocked.yml up -d
+# 4. Wait 30-60 seconds for all services to initialize
+# 5. Access Cap at: http://localhost:3000
+#
+# COMMANDS:
+#   Start:   docker-compose -f docker-compose-unlocked.yml up -d
+#   Stop:    docker-compose -f docker-compose-unlocked.yml down
+#   Logs:    docker-compose -f docker-compose-unlocked.yml logs -f web
+#   Rebuild: docker-compose -f docker-compose-unlocked.yml up -d --build
+#
+# SERVICES:
+#   - Web App:     http://localhost:3000
+#   - MinIO Console: http://localhost:9001 (user: capS3root, password: capS3root)
+#   - Media Server: http://localhost:3456
+#   - MySQL:       localhost:3306 (user: root, password: root)
