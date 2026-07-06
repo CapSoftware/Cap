@@ -53,7 +53,9 @@ fn patch_native_app_menu(nsapp: &NSApplication) {
 
     // Quit (last item) — native terminate: gets the icon on macOS 15+
     // and routes through applicationShouldTerminate: which we already own
-    let last = app_submenu.numberOfItems() - 1;
+    let Some(last) = app_submenu.numberOfItems().checked_sub(1) else {
+        return;
+    };
     if let Some(item) = app_submenu.itemAtIndex(last) {
         unsafe {
             item.setAction(Some(sel!(terminate:)));
