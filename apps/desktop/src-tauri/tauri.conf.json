@@ -125,6 +125,8 @@
 					"conformsTo": ["com.apple.package"]
 				}
 			}
-		]
+		],
+		"copyright": "Copyright (c) 2023-present Cap Software, Inc.",
+		"homepage": "https://cap.so/home"
 	}
 }
