@@ -1083,6 +1083,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				hoveredMaskTime: null as number | null,
 				audioPicker: null as number | null,
 				audioReplace: null as number | null,
+				// Index of a just-created text segment that should open its
+				// inline canvas editor as soon as its overlay mounts (set by the
+				// Add-track picker, consumed by TextOverlay).
+				pendingTextEdit: null as number | null,
 			},
 		});
 

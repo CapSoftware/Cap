@@ -596,9 +596,15 @@ export type BackgroundBlurMode = "off" | "light" | "heavy"
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; roundingType: CornerStyle; inset: number; crop: Crop | null; 
 /**
  * Normalized (0-1) center of the display rect in output-frame space.
- * `None` keeps the display centered.
+ * `None` keeps the display centered. When a frame is active this is the
+ * center of the framed card (chrome included), not the bare video.
  */
-displayPosition: XY<number> | null; shadow: number; advancedShadow: ShadowConfiguration | null; border: BorderConfiguration | null }
+displayPosition: XY<number> | null; shadow: number; advancedShadow: ShadowConfiguration | null; border: BorderConfiguration | null; 
+/**
+ * Decorative frame around the recording. `None` (or `FrameStyle::None`)
+ * renders the bare video exactly as before the feature existed.
+ */
+frame: FrameConfiguration | null }
 export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number]; alpha?: number } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number; noise_intensity?: number | null; noise_scale?: number | null; animated?: boolean | null; animation_speed?: number | null }
 export type BorderConfiguration = { enabled: boolean; width: number; color: [number, number, number]; opacity: number }
 export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; 
@@ -645,7 +651,13 @@ export type CliInstallStatus = { installDir: string; shimPath: string; targetPat
  */
 pathConfigured: boolean }
 export type ClickSpringConfig = { tension: number; mass: number; friction: number }
-export type ClipConfiguration = { index: number; offsets: ClipOffsets }
+export type ClipConfiguration = { index: number; offsets: ClipOffsets; 
+/**
+ * Whether `offsets` were computed automatically (recording start-time
+ * alignment + device sync calibration) rather than entered by the user.
+ * Cleared by the editor UI once the user edits an offset.
+ */
+offsetsAutoCalculated?: boolean }
 export type ClipOffsets = { camera?: number; mic?: number; system_audio?: number }
 export type ClipboardSource = "raw" | "rendered"
 export type CommercialLicense = { licenseKey: string; expiryDate: number | null; refresh: number; activatedOn: number }
@@ -678,13 +690,57 @@ export type ExportProfile = { format: ExportFormat; fps?: number; resolutionBase
 export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format: "Gif" } & GifExportSettings) | ({ format: "Mov" } & MovExportSettings)
 export type FileType = "recording" | "screenshot"
 export type Flags = { captions: boolean }
+export type FrameConfiguration = { style: FrameStyle; theme: FrameTheme; 
+/**
+ * Text shown in the browser style's URL pill.
+ */
+url: string; 
+/**
+ * Text shown in the macOS window style's title bar.
+ */
+title: string }
 /**
  * Rendered display/camera placement of the latest preview frame, in
  * output-frame pixels — consumed by the editor's on-canvas layout overlay.
  */
 export type FrameLayoutEvent = { display: [number, number, number, number]; camera: [number, number, number, number] | null; output_width: number; output_height: number }
+/**
+ * Decorative frame drawn around the screen recording (browser window,
+ * macOS window, MacBook bezel, ...). The video is inset inside the frame's
+ * chrome; the framed card as a whole follows padding / position / zoom
+ * exactly like the bare video does today.
+ */
+export type FrameStyle = 
+/**
+ * No frame: the video renders bare, exactly as before this feature.
+ */
+"none" | 
+/**
+ * A macOS window title bar with traffic-light buttons.
+ */
+"macOS" | 
+/**
+ * A Windows 11 window title bar with minimize/maximize/close controls.
+ */
+"windows" | 
+/**
+ * A browser toolbar: traffic lights plus a centered URL pill.
+ */
+"browser" | 
+/**
+ * A MacBook mockup: black bezel, aluminum body and deck.
+ */
+"macbook"
+export type FrameTheme = "dark" | "light"
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; appearance?: Appearance; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean; recordingsPath?: string | null }
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; appearance?: Appearance; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean; recordingsPath?: string | null; 
+/**
+ * App version at which camera background blur was disabled after a crash
+ * was attributed to the blur pipeline; `None` means blur is allowed.
+ * Cleared automatically when the app version changes (one retry per
+ * update, since a new ort/wgpu/driver stack may have fixed the crash).
+ */
+cameraBlurDisabledByCrash?: string | null }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
 export type GifQuality = { 
 /**
@@ -753,7 +809,16 @@ export type PostDeletionBehaviour = "doNothing" | "reopenRecordingWindow"
 export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
 export type Preset = { name: string; config: ProjectConfiguration }
 export type PresetsStore = { presets: Preset[]; default: number | null }
-export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline: TimelineConfiguration | null; captions: CaptionsData | null; keyboard: KeyboardData | null; clips: ClipConfiguration[]; annotations: Annotation[]; screenMotionBlur?: number; screenMovementSpring?: ScreenMovementSpring }
+export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline: TimelineConfiguration | null; captions: CaptionsData | null; keyboard: KeyboardData | null; clips: ClipConfiguration[]; annotations: Annotation[]; screenMotionBlur?: number; screenMovementSpring?: ScreenMovementSpring; 
+/**
+ * How text segment font sizes are interpreted. 0 (legacy): the renderer
+ * multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the
+ * box. 1: `font_size` alone determines glyph size (1080p-relative);
+ * legacy configs are migrated on load by baking the box factor into
+ * `font_size`. The field-level default keeps old files at 0 while
+ * `Default::default()` produces the current version.
+ */
+textSizeVersion?: number }
 export type ProjectRecordingsMeta = { segments: SegmentRecordings[] }
 export type RecordingAction = "Started" | "InvalidAuthentication" | "UpgradeRequired"
 export type RecordingDeleted = { path: string }

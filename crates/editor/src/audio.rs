@@ -1313,11 +1313,11 @@ mod tests {
             clips: vec![
                 ClipConfiguration {
                     index: 0,
-                    offsets: Default::default(),
+                    ..Default::default()
                 },
                 ClipConfiguration {
                     index: 1,
-                    offsets: Default::default(),
+                    ..Default::default()
                 },
             ],
             ..Default::default()
@@ -1440,7 +1440,7 @@ mod tests {
             }),
             clips: vec![ClipConfiguration {
                 index: 0,
-                offsets: Default::default(),
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -1530,7 +1530,7 @@ mod tests {
             }),
             clips: vec![ClipConfiguration {
                 index: 0,
-                offsets: Default::default(),
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -1568,7 +1568,7 @@ mod tests {
             }),
             clips: vec![ClipConfiguration {
                 index: 0,
-                offsets: Default::default(),
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -1707,7 +1707,7 @@ mod tests {
             }),
             clips: vec![ClipConfiguration {
                 index: 0,
-                offsets: Default::default(),
+                ..Default::default()
             }],
             ..Default::default()
         }

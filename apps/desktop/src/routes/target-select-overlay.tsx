@@ -314,10 +314,29 @@ function Inner() {
 	});
 
 	const unsubOnEscapePress = events.onEscapePress.listen(() => {
-		setOptions("targetMode", null);
+		setOptions({ targetMode: null, targetModeDismissal: "cancelled" });
 		commands.closeTargetSelectOverlays();
 	});
 	onCleanup(() => unsubOnEscapePress.then((f) => f()));
+
+	// Dismiss the picker because a recording is starting. The dismissal reason
+	// rides along with `targetMode: null` so the main window never has to guess
+	// (from possibly-stale query state) whether it may reveal itself again.
+	const dismissPickerForRecordingStart = () => {
+		if (options.mode === "screenshot") return;
+		const targetModeDismissal =
+			options.mode === "instant" ? "recordingInstant" : "recordingStudio";
+		if (options.targetModeSource === "editor") {
+			setOptions({
+				targetMode: null,
+				targetModeSource: "editorRecording",
+				targetModeDismissal,
+			});
+		} else {
+			setOptions({ targetMode: null, targetModeDismissal });
+		}
+		commands.closeTargetSelectOverlays();
+	};
 
 	// This prevents browser keyboard shortcuts from firing.
 	// Eg. on Windows Ctrl+P would open the print dialog without this
@@ -340,8 +359,12 @@ function Inner() {
 					<RecordingControls
 						target={{ variant: "cameraOnly" } as ScreenCaptureTarget}
 						showBackground
+						onRecordingStart={dismissPickerForRecordingStart}
 						onClose={() => {
-							setOptions("targetMode", null);
+							setOptions({
+								targetMode: null,
+								targetModeDismissal: "cancelled",
+							});
 							commands.closeTargetSelectOverlays();
 						}}
 					/>
@@ -390,8 +413,12 @@ function Inner() {
 						<RecordingControls
 							setToggleModeSelect={setToggleModeSelect}
 							target={{ variant: "display", id: displayId() }}
+							onRecordingStart={dismissPickerForRecordingStart}
 							onClose={() => {
-								setOptions("targetMode", null);
+								setOptions({
+									targetMode: null,
+									targetModeDismissal: "cancelled",
+								});
 								commands.closeTargetSelectOverlays();
 							}}
 						/>
@@ -625,20 +652,33 @@ function Inner() {
 												}}
 												onRecordingStart={() => {
 													setOriginalCameraBounds(null);
-													if (options.targetModeSource === "editor") {
-														setOptions({
-															targetMode: null,
-															targetModeSource: "editorRecording",
-														});
+													if (options.mode === "screenshot") {
+														// The window variant has always dismissed the picker
+														// for screenshots too; keep that, tagged as such.
+														if (options.targetModeSource === "editor") {
+															setOptions({
+																targetMode: null,
+																targetModeSource: "editorRecording",
+																targetModeDismissal: "screenshot",
+															});
+														} else {
+															setOptions({
+																targetMode: null,
+																targetModeDismissal: "screenshot",
+															});
+														}
+														commands.closeTargetSelectOverlays();
 													} else {
-														setOptions("targetMode", null);
+														dismissPickerForRecordingStart();
 													}
-													commands.closeTargetSelectOverlays();
 												}}
 												onClose={() => {
 													setSelectedWindow(null);
 													setLockedIcon(null);
-													setOptions("targetMode", null);
+													setOptions({
+														targetMode: null,
+														targetModeDismissal: "cancelled",
+													});
 													commands.closeTargetSelectOverlays();
 												}}
 											/>
@@ -1126,9 +1166,15 @@ function Inner() {
 											}}
 											disabled={!isValid()}
 											showBackground={controllerInside()}
-											onRecordingStart={() => setOriginalCameraBounds(null)}
+											onRecordingStart={() => {
+												setOriginalCameraBounds(null);
+												dismissPickerForRecordingStart();
+											}}
 											onClose={() => {
-												setOptions("targetMode", null);
+												setOptions({
+													targetMode: null,
+													targetModeDismissal: "cancelled",
+												});
 												commands.closeTargetSelectOverlays();
 											}}
 										/>
@@ -1673,7 +1719,10 @@ function RecordingControls(props: {
 								if (props.onClose) {
 									props.onClose();
 								} else {
-									setOptions("targetMode", null);
+									setOptions({
+										targetMode: null,
+										targetModeDismissal: "cancelled",
+									});
 									commands.setEditorRecordingTarget(null);
 									commands.closeTargetSelectOverlays();
 								}

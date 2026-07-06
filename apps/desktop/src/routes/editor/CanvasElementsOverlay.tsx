@@ -118,8 +118,12 @@ export function useCanvasSnapTargets() {
 			});
 		});
 
+		// The classic camera-inset margin lines only make sense for the camera
+		// and display; for text/mask boxes they just cause spurious re-snaps
+		// right next to the frame-edge lines.
+		const wantsMargin = exclude === "camera" || exclude === "display";
 		return buildSnapTargets(rects, {
-			margin: layout ? classicMargin(layout) : undefined,
+			margin: layout && wantsMargin ? classicMargin(layout) : undefined,
 		});
 	};
 }
@@ -174,11 +178,28 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 		project.timeline?.sceneSegments?.find((s) => t >= s.start && t < s.end)
 			?.mode ?? "default";
 
-	const zoomActive = () => {
+	const activeZoomIndex = () => {
 		const t = time();
-		return (project.timeline?.zoomSegments ?? []).some(
+		const index = (project.timeline?.zoomSegments ?? []).findIndex(
 			(s) => t >= s.start && t < s.end,
 		);
+		return index === -1 ? null : index;
+	};
+	const zoomActive = () => activeZoomIndex() !== null;
+
+	// Jumping to the zoom segment is the clearest answer to "why is this
+	// locked?" — the segment highlights in the timeline and its settings open
+	// in the sidebar, where the zoom can be adjusted or deleted.
+	const selectActiveZoom = () => {
+		const index = activeZoomIndex();
+		if (index === null) return;
+		batch(() => {
+			setEditorState("canvasSelection", null);
+			setEditorState("timeline", "selection", {
+				type: "zoom",
+				indices: [index],
+			});
+		});
 	};
 
 	// Optimistic rects follow the pointer at input rate during a drag; the
@@ -488,19 +509,27 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 				const frameAspect = W / H;
 				// Normalized display width at padding 0 (aspect-fit).
 				const maxWidth = Math.min(1, contentAspect / frameAspect);
-				const padding0 = project.background.padding;
-				// Two-point linear model width(padding); only affects pointer
-				// gain — the box re-anchors to the real rect every frame.
-				const gain =
-					padding0 > 0 && rect.w < maxWidth
-						? (1 - rect.w / maxWidth) / padding0
-						: 0.0044;
+				// Mirror of the renderer's sizing law (get_base_size /
+				// display_base_offset in crates/rendering):
+				//   width = maxWidth / (1 + paddingScale * padding)
+				// with padding in [0, 100] and paddingScale = 2k * 0.4 / 100
+				// (0.4 = SCREEN_MAX_PADDING). Without a fixed aspect ratio the
+				// padded base keeps the content aspect (k = 1); with one,
+				// padding is measured against the crop's larger dimension
+				// while the fit is constrained by a single axis, so k rescales
+				// that basis onto the constrained axis.
+				const k = !project.aspectRatio
+					? 1
+					: contentAspect <= frameAspect
+						? Math.max(1, contentAspect)
+						: Math.max(1, 1 / contentAspect);
+				const paddingScale = (2 * k * 0.4) / 100;
 
 				return {
 					rect,
 					targets: snapTargetsFor("display"),
 					maxWidth,
-					gain,
+					paddingScale,
 					moved: false,
 				};
 			},
@@ -511,18 +540,19 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 				};
 				const scale = resolveScale(e, state, initialMouse, dirX, dirY, anchor);
 
-				const newWidth = clamp(
-					state.rect.w * scale,
-					state.maxWidth * Math.max(1 - state.gain * 100, 0.05),
-					state.maxWidth,
-				);
+				// Invert the renderer's law for the dragged width, then re-derive
+				// the outline from the clamped padding so the outline always lands
+				// exactly where the renderer will draw the display — including at
+				// the minimum size (padding 100).
+				const targetWidth = Math.max(state.rect.w * scale, 1e-6);
 				const newPadding = clamp(
-					(1 - newWidth / state.maxWidth) / state.gain,
+					(state.maxWidth / targetWidth - 1) / state.paddingScale,
 					0,
 					100,
 				);
 				setProject("background", "padding", newPadding);
 
+				const newWidth = state.maxWidth / (1 + state.paddingScale * newPadding);
 				const applied = newWidth / state.rect.w;
 				const w = state.rect.w * applied;
 				const h = state.rect.h * applied;
@@ -611,7 +641,15 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 							selected={selection()?.type === "display"}
 							draggable={displayDraggable()}
 							resizable={displayDraggable()}
-							lockedHint="Screen position is locked while a zoom is active"
+							locked={
+								displayDraggable()
+									? null
+									: {
+											message: "Screen is locked while a zoom is active",
+											actionLabel: "Edit zoom",
+											onAction: selectActiveZoom,
+										}
+							}
 							onMouseDown={(e) => {
 								if (e.button !== 0) return;
 								if (selection()?.type !== "display") select("display");
@@ -630,7 +668,15 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 							selected={selection()?.type === "camera"}
 							draggable
 							resizable={cameraResizable()}
-							lockedHint="Camera size is controlled by the zoom settings while a zoom is active"
+							locked={
+								cameraResizable()
+									? null
+									: {
+											message: "Camera size follows the zoom — drag to move",
+											actionLabel: "Edit zoom",
+											onAction: selectActiveZoom,
+										}
+							}
 							onMouseDown={(e) => {
 								if (e.button !== 0) return;
 								if (selection()?.type !== "camera") select("camera");
@@ -652,7 +698,11 @@ function ElementBox(props: {
 	selected: boolean;
 	draggable: boolean;
 	resizable: boolean;
-	lockedHint: string;
+	locked?: {
+		message: string;
+		actionLabel: string;
+		onAction: () => void;
+	} | null;
 	onMouseDown: (e: MouseEvent) => void;
 	resizeHandler: (dirX: 1 | -1, dirY: 1 | -1) => (e: MouseEvent) => void;
 }) {
@@ -667,6 +717,17 @@ function ElementBox(props: {
 			top: topPx >= 28 ? "-24px" : `${Math.max(6, 6 - topPx)}px`,
 		};
 	};
+
+	// The lock banner pins to the top-center of the CANVAS, not the box: small
+	// boxes (camera) can't fit the text, and edge-hugging boxes would push it
+	// into the letterbox clip. Coordinates convert canvas space to box-local
+	// space. Reaching it from a small box means leaving the box, so it also
+	// shows while the element is selected — attempting to drag/resize selects,
+	// which pins the banner until the user clicks elsewhere.
+	const lockedBannerStyle = () => ({
+		left: `${props.size.width / 2 - props.rect.x * props.size.width}px`,
+		top: `${10 - props.rect.y * props.size.height}px`,
+	});
 
 	const flush = () => ({
 		left: props.rect.x * props.size.width <= 6,
@@ -738,7 +799,6 @@ function ElementBox(props: {
 				width: `${props.rect.w * props.size.width}px`,
 				height: `${props.rect.h * props.size.height}px`,
 			}}
-			title={props.draggable && props.resizable ? undefined : props.lockedHint}
 			onMouseDown={props.onMouseDown}
 			onMouseEnter={() => setHovered(true)}
 			onMouseLeave={() => setHovered(false)}
@@ -755,25 +815,45 @@ function ElementBox(props: {
 			/>
 			<Show when={props.selected || hovered()}>
 				<div
-					class="absolute px-1.5 py-0.5 text-[11px] font-medium text-white bg-blue-9 rounded pointer-events-none select-none"
+					class="absolute flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium text-white bg-blue-9 rounded pointer-events-none select-none"
 					style={labelStyle()}
 				>
 					{props.label}
-					{!props.resizable && " (locked during zoom)"}
+					<Show when={props.locked}>
+						<IconLucideLock class="size-2.5" />
+					</Show>
 				</div>
+			</Show>
+			<Show when={props.selected || hovered() ? props.locked : null}>
+				{(locked) => (
+					<div
+						class="absolute z-10 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-lg bg-black/80 py-1.5 pr-1.5 pl-3 text-xs text-white shadow-md pointer-events-auto select-none"
+						style={lockedBannerStyle()}
+						onMouseDown={(e) => e.stopPropagation()}
+					>
+						<IconLucideLock class="size-3 shrink-0 opacity-80" />
+						<span>{locked().message}</span>
+						<button
+							type="button"
+							class="rounded-md bg-white/15 px-2 py-0.5 font-semibold transition-colors hover:bg-white/25 active:bg-white/30"
+							onClick={locked().onAction}
+						>
+							{locked().actionLabel}
+						</button>
+					</div>
+				)}
 			</Show>
 			<Show when={showHandles()}>
 				<For each={corners()}>
 					{(corner) => (
+						// The hit target must not change size on hover — the grow
+						// effect lives on an inner, pointer-events-none span,
+						// otherwise the handle scales out from under the cursor and
+						// hover flickers in a mouseenter/leave loop.
 						<div
 							class={cx(
-								"absolute w-3 h-3 rounded-full border border-white shadow-xs",
-								props.resizable
-									? cx(
-											"bg-blue-9 transition-transform hover:scale-125",
-											corner.cursor,
-										)
-									: "bg-gray-8 cursor-not-allowed opacity-60",
+								"absolute w-3 h-3 group/handle",
+								props.resizable ? corner.cursor : "cursor-not-allowed",
 								corner.class,
 							)}
 							onMouseDown={(e) => {
@@ -784,7 +864,16 @@ function ElementBox(props: {
 								}
 								props.resizeHandler(corner.dirX, corner.dirY)(e);
 							}}
-						/>
+						>
+							<span
+								class={cx(
+									"block size-full rounded-full border border-white shadow-xs pointer-events-none",
+									props.resizable
+										? "bg-blue-9 transition-transform group-hover/handle:scale-125"
+										: "bg-gray-8 opacity-60",
+								)}
+							/>
+						</div>
 					)}
 				</For>
 			</Show>

@@ -94,6 +94,7 @@ declare global {
   const IconLucideLayout: typeof import('~icons/lucide/layout.jsx')['default']
   const IconLucideLoader2: typeof import('~icons/lucide/loader2.jsx')['default']
   const IconLucideLoaderCircle: typeof import('~icons/lucide/loader-circle.jsx')['default']
+  const IconLucideLock: typeof import('~icons/lucide/lock.jsx')['default']
   const IconLucideMaximize: typeof import('~icons/lucide/maximize.jsx')['default']
   const IconLucideMaximize2: typeof import('~icons/lucide/maximize2.jsx')['default']
   const IconLucideMessageSquarePlus: typeof import('~icons/lucide/message-square-plus.jsx')['default']

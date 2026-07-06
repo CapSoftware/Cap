@@ -10,8 +10,10 @@ members = [
 [workspace.dependencies]
 anyhow = { version = "1.0.102" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
-# stopped and released on drop on macOS
-cpal = { git = "https://github.com/CapSoftware/cpal", rev = "3cc779a7b4ca" }
+# stopped and released on drop on macOS, plus zeroing of WASAPI capture
+# packets flagged AUDCLNT_BUFFERFLAGS_SILENT (loopback of an idle endpoint
+# otherwise surfaces unspecified buffer contents as audio).
+cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
 tokio = { version = "1.52.2", features = [
     "macros",

@@ -245,6 +245,7 @@ impl EditorInstance {
                                 index: i as u32,
                                 offsets: segment
                                     .calculate_audio_offsets_with_calibration(calibration_offset),
+                                offsets_auto_calculated: true,
                             }
                         })
                         .collect();
@@ -253,6 +254,7 @@ impl EditorInstance {
                     project.clips = vec![cap_project::ClipConfiguration {
                         index: 0,
                         offsets: cap_project::ClipOffsets::default(),
+                        offsets_auto_calculated: false,
                     }];
                 }
             }
@@ -619,6 +621,7 @@ impl EditorInstance {
                                 &project,
                                 &segment_medias.cursor,
                                 total_duration,
+                                self.render_constants.options.screen_size,
                             );
                             zoom_timeline
                                 .ensure_precomputed_until((frame_number as f32 + 1.0) / fps as f32);

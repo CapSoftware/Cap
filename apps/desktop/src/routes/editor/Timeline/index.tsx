@@ -33,9 +33,15 @@ import {
 	transcribeEditorCaptions,
 } from "../captions";
 import { FPS, type TimelineTrackType, useEditorContext } from "../context";
-import type { MaskSegment } from "../masks";
-import type { TextSegment } from "../text";
-import { getTrackRowsWithCount, getUsedTrackCount } from "../timelineTracks";
+import { defaultMaskSegment, type MaskSegment } from "../masks";
+import { autoTextColorAt, defaultTextSegment, type TextSegment } from "../text";
+import {
+	getSegmentTrack,
+	getTrackRowsWithCount,
+	getUsedTrackCount,
+	placeSegmentAtTime,
+	sortTrackSegments,
+} from "../timelineTracks";
 import { formatTime } from "../utils";
 import { type AudioSegmentDragState, AudioTrack } from "./AudioTrack";
 import { type CaptionSegmentDragState, CaptionsTrack } from "./CaptionsTrack";
@@ -54,6 +60,7 @@ const TRACK_GUTTER = 112;
 const TRACK_ICON_WIDTH = TRACK_GUTTER - TRACK_GUTTER_GAP;
 const TIMELINE_HEADER_HEIGHT = 32;
 const PLAYHEAD_TOP_OFFSET = 24;
+const START_SNAP_PX = 10;
 
 const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
 	clip: () => <IconLucideClapperboard class="size-4" />,
@@ -154,6 +161,7 @@ export function Timeline(props: {
 		projectActions,
 		meta,
 		previewResolutionBase,
+		canvasControls,
 	} = useEditorContext();
 
 	const duration = () => editorInstance.recordingDuration;
@@ -338,20 +346,122 @@ export function Timeline(props: {
 		}
 	}
 
+	// Adding from the picker drops a ready-to-edit segment at the playhead
+	// rather than an empty lane the user then has to click into: the first
+	// existing lane with room at the playhead is reused, otherwise a new lane
+	// is stacked on. Same 1s / 80px sizing as the tracks' click-to-add.
 	function handleAddTrack(type: TimelineTrackType) {
-		if (type === "text") {
-			setEditorState("timeline", "tracks", "text", trackState().text + 1);
-			return;
-		}
-
-		if (type === "mask") {
-			setEditorState("timeline", "tracks", "mask", trackState().mask + 1);
-			return;
-		}
-
 		if (type === "audio") {
-			setEditorState("timeline", "tracks", "audio", trackState().audio + 1);
+			const segments = project.timeline?.audioSegments ?? [];
+			const laneCount = Math.max(
+				trackState().audio,
+				getUsedTrackCount(segments),
+			);
+			let lane = laneCount;
+			for (let i = 0; i < laneCount; i++) {
+				if (!segments.some((segment) => getSegmentTrack(segment) === i)) {
+					lane = i;
+					break;
+				}
+			}
+			batch(() => {
+				setEditorState(
+					"timeline",
+					"tracks",
+					"audio",
+					Math.max(laneCount, lane + 1),
+				);
+				openAudioPicker(lane);
+			});
+			return;
 		}
+
+		if (type !== "text" && type !== "mask") return;
+
+		const segments: Array<{ start: number; end: number; track?: number }> =
+			(type === "text"
+				? project.timeline?.textSegments
+				: project.timeline?.maskSegments) ?? [];
+		const length = Math.min(Math.max(1, secsPerPixel() * 80), totalDuration());
+		const time = editorState.playbackTime ?? 0;
+		const laneCount = Math.max(trackState()[type], getUsedTrackCount(segments));
+
+		let lane = laneCount;
+		let placement: { start: number; end: number } | null = null;
+		for (let i = 0; i < laneCount; i++) {
+			const candidate = placeSegmentAtTime(
+				segments.filter((segment) => getSegmentTrack(segment) === i),
+				time,
+				length,
+				totalDuration(),
+			);
+			if (candidate) {
+				lane = i;
+				placement = candidate;
+				break;
+			}
+		}
+		placement ??= placeSegmentAtTime([], time, length, totalDuration());
+		if (!placement) {
+			setEditorState("timeline", "tracks", type, trackState()[type] + 1);
+			return;
+		}
+		const { start, end } = placement;
+
+		batch(() => {
+			setEditorState("timeline", "tracks", type, Math.max(laneCount, lane + 1));
+			if (type === "text") {
+				setProject(
+					"timeline",
+					"textSegments",
+					produce((segments) => {
+						segments ??= [];
+						segments.push({
+							...defaultTextSegment(start, end),
+							color: autoTextColorAt(canvasControls()),
+							track: lane,
+						});
+						sortTrackSegments(segments);
+					}),
+				);
+			} else {
+				setProject(
+					"timeline",
+					"maskSegments",
+					produce((segments) => {
+						segments ??= [];
+						segments.push({ ...defaultMaskSegment(start, end), track: lane });
+						sortTrackSegments(segments);
+					}),
+				);
+			}
+
+			const updated: Array<{ start: number; end: number; track?: number }> =
+				(type === "text"
+					? project.timeline?.textSegments
+					: project.timeline?.maskSegments) ?? [];
+			const newIndex = updated.findIndex(
+				(segment) =>
+					segment.start === start && getSegmentTrack(segment) === lane,
+			);
+			if (newIndex === -1) return;
+
+			// Select right away so the canvas overlay and config sidebar are
+			// ready to use; text additionally opens its inline editor.
+			setEditorState("timeline", "selection", { type, indices: [newIndex] });
+			if (type === "text") {
+				setEditorState("timeline", "pendingTextEdit", newIndex);
+			}
+
+			// Keep the playhead inside the new segment (past any fade-in) so
+			// the preview actually shows what was just added. Clear any stale
+			// hover-scrub time — overlay visibility keys off previewTime first,
+			// and a leftover value could hide the segment we just selected.
+			const pad = Math.min(0.15, length / 4);
+			const target = Math.min(Math.max(time, start + pad), end - pad);
+			if (target !== time) setEditorState("playbackTime", target);
+			setEditorState("previewTime", null);
+		});
 	}
 
 	function handleDeleteTrackLane(
@@ -655,7 +765,11 @@ export function Timeline(props: {
 			if (!metrics) return;
 			const rawTime =
 				secsPerPixel() * (e.clientX - metrics.left) + transform().position;
-			const newTime = Math.min(Math.max(0, rawTime), totalDuration());
+			// Snap to the very start when the cursor lands within a few pixels
+			// of the timeline origin so hitting exactly 0:00 isn't a battle
+			const snappedTime =
+				rawTime / secsPerPixel() <= START_SNAP_PX ? 0 : rawTime;
+			const newTime = Math.min(Math.max(0, snappedTime), totalDuration());
 
 			// If playing, some backends require restart to seek reliably
 			if (editorState.playing) {
@@ -863,9 +977,10 @@ export function Timeline(props: {
 						setEditorState("previewTime", null);
 						return;
 					}
+					const hoverTime = transform().position + secsPerPixel() * offsetX;
 					setEditorState(
 						"previewTime",
-						transform().position + secsPerPixel() * offsetX,
+						hoverTime / secsPerPixel() <= START_SNAP_PX ? 0 : hoverTime,
 					);
 				}}
 				onMouseEnter={() => setEditorState("timeline", "hoveredTrack", null)}
@@ -910,8 +1025,14 @@ export function Timeline(props: {
 						/>
 					</div>
 				</div>
-				<Show when={!editorState.playing && editorState.previewTime}>
-					{(time) => (
+				<Show
+					when={
+						!editorState.playing && editorState.previewTime !== null
+							? { time: editorState.previewTime }
+							: null
+					}
+				>
+					{(preview) => (
 						<div
 							class={cx(
 								"flex absolute bottom-0 z-20 justify-center items-center w-px pointer-events-none bg-linear-to-b to-120%",
@@ -921,7 +1042,8 @@ export function Timeline(props: {
 								left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
 								top: `${PLAYHEAD_TOP_OFFSET}px`,
 								transform: `translateX(${
-									(time() - transform().position) / secsPerPixel()
+									((preview().time ?? 0) - transform().position) /
+									secsPerPixel()
 								}px)`,
 							}}
 						>
@@ -1162,7 +1284,7 @@ function TimelineMarkings() {
 			<Index each={Array.from({ length: markingCount() })}>
 				{(_, index) => {
 					const second = () => getMarkingTime(index);
-					const isVisible = () => second() > 0;
+					const isVisible = () => second() >= 0;
 					const showLabel = () => second() % 1 === 0;
 					const translateX = () =>
 						(second() - transform().position) / secsPerPixel() - 1;
@@ -1176,7 +1298,14 @@ function TimelineMarkings() {
 							}}
 						>
 							<Show when={showLabel()}>
-								<div class="absolute -top-4.5 -translate-x-1/2">
+								<div
+									class={cx(
+										"absolute -top-4.5",
+										// Left-anchor the origin label so it doesn't overhang
+										// into the track icon gutter and get covered
+										second() !== 0 && "-translate-x-1/2",
+									)}
+								>
 									{formatTime(second())}
 								</div>
 							</Show>

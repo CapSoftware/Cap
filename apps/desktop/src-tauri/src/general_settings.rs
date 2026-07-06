@@ -224,6 +224,12 @@ pub struct GeneralSettingsStore {
     pub out_of_process_muxer: bool,
     #[serde(default)]
     pub recordings_path: Option<String>,
+    /// App version at which camera background blur was disabled after a crash
+    /// was attributed to the blur pipeline; `None` means blur is allowed.
+    /// Cleared automatically when the app version changes (one retry per
+    /// update, since a new ort/wgpu/driver stack may have fixed the crash).
+    #[serde(default)]
+    pub camera_blur_disabled_by_crash: Option<String>,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -301,7 +307,9 @@ impl Default for GeneralSettingsStore {
             server_url: default_server_url(),
             recording_countdown: Some(3),
             enable_native_camera_preview: default_enable_native_camera_preview(),
-            auto_zoom_on_clicks: false,
+            // Keep aligned with the field's serde `default_true`: auto zooms
+            // are on by default, matching configs that never stored the key.
+            auto_zoom_on_clicks: true,
             capture_keyboard_events: cap_recording::DEFAULT_CAPTURE_KEYBOARD_EVENTS,
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             excluded_windows: default_excluded_windows(),
@@ -319,6 +327,7 @@ impl Default for GeneralSettingsStore {
             enable_telemetry: true,
             out_of_process_muxer: cap_recording::DEFAULT_OUT_OF_PROCESS_MUXER,
             recordings_path: None,
+            camera_blur_disabled_by_crash: None,
         }
     }
 }

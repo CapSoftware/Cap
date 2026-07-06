@@ -150,6 +150,20 @@ export const isSystemAudioSupported = queryOptions({
 type CameraCaptureTarget = ScreenCaptureTarget | { variant: "cameraOnly" };
 type ExtendedRecordingTargetMode = RecordingTargetMode | "camera" | null;
 type RecordingTargetModeSource = "main" | "editor" | "editorRecording" | null;
+/**
+ * Why the target picker was last dismissed. Written in the same `setOptions`
+ * call that sets `targetMode: null`, so it reaches other webviews atomically
+ * with the dismissal. The main window's reveal logic keys off this instead of
+ * reconstructing the outcome from query data or effect ordering — the hidden
+ * main webview can be suspended by WebKit, which makes any state it derives
+ * "at dismissal time" arbitrarily stale.
+ */
+export type TargetModeDismissal =
+	| "recordingStudio"
+	| "recordingInstant"
+	| "screenshot"
+	| "superseded"
+	| "cancelled";
 
 export function createOptionsQuery() {
 	const PERSIST_KEY = "recording-options-query-2";
@@ -160,6 +174,7 @@ export function createOptionsQuery() {
 		captureSystemAudio?: boolean;
 		targetMode?: ExtendedRecordingTargetMode;
 		targetModeSource?: RecordingTargetModeSource;
+		targetModeDismissal?: TargetModeDismissal | null;
 		cameraID?: DeviceOrModelID | null;
 		organizationId?: string | null;
 		/** @deprecated */

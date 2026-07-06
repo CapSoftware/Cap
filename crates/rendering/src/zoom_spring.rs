@@ -11,8 +11,7 @@
 //! step-function targets, retargeted every 8 ms step with velocity always
 //! carried across retargets. There are no fixed animation durations and no
 //! boundary special-cases: segment starts/ends/re-aims are just target changes
-//! the spring smooths through, which is what makes the motion feel like
-//! Screen Studio's.
+//! the spring smooths through for continuous motion.
 //!
 //! The timeline lives in TIMELINE time. Cursor events are in RECORDING time,
 //! so click-cluster construction and the "active cluster at time t" lookup map
@@ -27,8 +26,8 @@
 //! export matches playback by construction.
 
 use cap_project::{
-    CursorEvents, ProjectConfiguration, ScreenMovementSpring, TimelineConfiguration, XY, ZoomMode,
-    ZoomSegment,
+    Crop, CursorEvents, ProjectConfiguration, ScreenMovementSpring, TimelineConfiguration, XY,
+    ZoomMode, ZoomSegment,
 };
 
 use crate::{
@@ -44,20 +43,73 @@ const STEP_MS: f64 = 8.0;
 /// segment and within this window of its boundaries.
 const INSTANT_SNAP_WINDOW_SECS: f64 = 0.1;
 
+/// While the zoom amount is at (or within a hair of) identity the viewport
+/// covers the whole frame regardless of the center, so the center channel is
+/// free to track its target instantly — this pre-aims upcoming zooms so they
+/// scale straight toward their focus. Any center jump while amount <= this
+/// bound moves the viewport by at most (bound - 1) of the card: sub-pixel.
+const CENTER_PREAIM_MAX_AMOUNT: f32 = 1.0005;
+
 /// Greedy click-cluster bounding-box limits, as a fraction of the visible
-/// zoomed viewport (Screen Studio: 50% width x 70% height).
+/// zoomed viewport (50% width x 70% height).
 const CLUSTER_WIDTH_RATIO: f64 = 0.5;
 const CLUSTER_HEIGHT_RATIO: f64 = 0.7;
 
-/// Clicks separated by more than this gap start a new cluster.
-const CLUSTER_MERGE_GAP_MS: f64 = 2_500.0;
-
-/// Cursor samples further apart than this are treated as an idle gap rather
-/// than interpolated across.
-const CURSOR_IDLE_GAP_MS: f64 = 66.67;
-
 /// Fallback focus when a segment has no usable cursor data.
 const FALLBACK_FOCUS: (f64, f64) = (0.5, 0.5);
+
+/// Maps raw display-UV cursor coordinates into cropped-content UV space.
+///
+/// Cursor events are normalized to the FULL recorded display, but zoom
+/// centers ([`SegmentBounds::from_amount_center`]) are proportions of the
+/// rendered (cropped) content. Without this remap a cropped recording aims
+/// its auto zoom at the wrong spot — and clustering dead-zone distances are
+/// measured in the wrong scale. Identity when the recording is uncropped.
+#[derive(Clone, Copy, Debug)]
+pub struct CursorCropMap {
+    /// Crop top-left in raw display UV.
+    offset: XY<f64>,
+    /// Crop size in raw display UV.
+    scale: XY<f64>,
+}
+
+impl CursorCropMap {
+    /// `None` when the crop covers the whole screen (identity) or when the
+    /// inputs are degenerate.
+    pub fn from_crop(crop: &Crop, screen_size: XY<u32>) -> Option<Self> {
+        if screen_size.x == 0 || screen_size.y == 0 || crop.size.x == 0 || crop.size.y == 0 {
+            return None;
+        }
+        if crop.position.x == 0
+            && crop.position.y == 0
+            && crop.size.x >= screen_size.x
+            && crop.size.y >= screen_size.y
+        {
+            return None;
+        }
+        let screen = XY::new(f64::from(screen_size.x), f64::from(screen_size.y));
+        Some(Self {
+            offset: XY::new(
+                f64::from(crop.position.x) / screen.x,
+                f64::from(crop.position.y) / screen.y,
+            ),
+            scale: XY::new(
+                f64::from(crop.size.x) / screen.x,
+                f64::from(crop.size.y) / screen.y,
+            ),
+        })
+    }
+
+    /// Raw display UV -> content UV. Positions outside the crop map outside
+    /// [0, 1]; consumers clamp at the point of use so movement into a
+    /// cropped-away strip still aims the camera at that content edge.
+    fn map(&self, x: f64, y: f64) -> (f64, f64) {
+        (
+            (x - self.offset.x) / self.scale.x,
+            (y - self.offset.y) / self.scale.y,
+        )
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct ClickCluster {
@@ -103,94 +155,40 @@ impl ClickCluster {
     }
 }
 
-fn cursor_position_at(moves: &[cap_project::CursorMoveEvent], time_ms: f64) -> Option<(f64, f64)> {
-    if moves.is_empty() {
-        return None;
-    }
-
-    if time_ms <= moves[0].time_ms {
-        return Some((moves[0].x, moves[0].y));
-    }
-
-    if let Some(last) = moves.last()
-        && time_ms >= last.time_ms
-    {
-        return Some((last.x, last.y));
-    }
-
-    let idx = moves.partition_point(|m| m.time_ms <= time_ms);
-    if idx == 0 {
-        return Some((moves[0].x, moves[0].y));
-    }
-
-    let prev = &moves[idx - 1];
-    let next = &moves[idx.min(moves.len() - 1)];
-    let dt = next.time_ms - prev.time_ms;
-
-    if dt > CURSOR_IDLE_GAP_MS {
-        return Some((prev.x, prev.y));
-    }
-
-    let t = if dt > 1e-9 {
-        ((time_ms - prev.time_ms) / dt).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-
-    Some((
-        prev.x + (next.x - prev.x) * t,
-        prev.y + (next.y - prev.y) * t,
-    ))
-}
-
-/// Greedily clusters the mouse events inside a segment's RECORDING-time range
-/// into bounding boxes limited to a fraction of the visible zoomed viewport.
-/// Clicks are preferred; when a range has none, movement positions are
-/// clustered instead so unclicked zoom ranges still aim somewhere sensible.
+/// Greedily clusters ALL mouse movement inside a segment's RECORDING-time
+/// range into bounding boxes limited to a fraction of the visible zoomed
+/// viewport. Every move participates — not just clicks — so the camera
+/// re-aims whenever the cursor travels outside the current cluster's
+/// dead-zone box (hovering into a corner pans the view there even without a
+/// click). Click positions are inherently part of the move stream, so they
+/// need no separate pass.
 pub(crate) fn build_clusters(
     cursor_events: &CursorEvents,
     segment_start_secs: f64,
     segment_end_secs: f64,
     zoom_amount: f64,
+    crop: Option<CursorCropMap>,
 ) -> Vec<ClickCluster> {
     let start_ms = segment_start_secs * 1000.0;
     let end_ms = segment_end_secs * 1000.0;
     let cluster_w = CLUSTER_WIDTH_RATIO / zoom_amount.max(1.0);
     let cluster_h = CLUSTER_HEIGHT_RATIO / zoom_amount.max(1.0);
+    // Clustering happens in CONTENT UV space: dead-zone box limits are
+    // fractions of the visible (cropped) viewport, so raw display UVs must be
+    // remapped before distances mean what the constants say they mean.
+    let map_uv = |x: f64, y: f64| crop.map_or((x, y), |c| c.map(x, y));
 
-    let click_positions: Vec<(f64, f64, f64)> = cursor_events
-        .clicks
-        .iter()
-        .filter(|click| click.down && click.time_ms >= start_ms && click.time_ms <= end_ms)
-        .filter_map(|click| {
-            cursor_position_at(&cursor_events.moves, click.time_ms)
-                .map(|(x, y)| (click.time_ms, x, y))
-        })
-        .collect();
-
-    if !click_positions.is_empty() {
-        let mut clusters = Vec::new();
-        let (first_time, first_x, first_y) = click_positions[0];
-        let mut current = ClickCluster::new(first_x, first_y, first_time);
-
-        for &(time_ms, x, y) in &click_positions[1..] {
-            if time_ms - current.last_time_ms <= CLUSTER_MERGE_GAP_MS
-                && current.can_add(x, y, cluster_w, cluster_h)
-            {
-                current.add(x, y, time_ms);
-            } else {
-                clusters.push(current);
-                current = ClickCluster::new(x, y, time_ms);
-            }
-        }
-
-        clusters.push(current);
-        return clusters;
-    }
+    // Non-finite coordinates (corrupted files, synthetic event generators)
+    // must never reach the cluster math: NaN propagates through min/max and
+    // clamp, which would poison the spring targets for the whole timeline.
+    let finite = |m: &&cap_project::CursorMoveEvent| {
+        m.x.is_finite() && m.y.is_finite() && m.time_ms.is_finite()
+    };
 
     let events_in_range: Vec<&cap_project::CursorMoveEvent> = cursor_events
         .moves
         .iter()
+        .filter(finite)
         .filter(|m| m.time_ms >= start_ms && m.time_ms <= end_ms)
         .collect();
 
@@ -198,26 +196,36 @@ pub(crate) fn build_clusters(
         let fallback = cursor_events
             .moves
             .iter()
+            .filter(finite)
             .rev()
             .find(|m| m.time_ms <= start_ms)
-            .or_else(|| cursor_events.moves.iter().find(|m| m.time_ms >= start_ms));
+            .or_else(|| {
+                cursor_events
+                    .moves
+                    .iter()
+                    .filter(finite)
+                    .find(|m| m.time_ms >= start_ms)
+            });
 
         if let Some(evt) = fallback {
-            return vec![ClickCluster::new(evt.x, evt.y, evt.time_ms)];
+            let (x, y) = map_uv(evt.x, evt.y);
+            return vec![ClickCluster::new(x, y, evt.time_ms)];
         }
         return vec![];
     }
 
     let mut clusters = Vec::new();
     let first = events_in_range[0];
-    let mut current = ClickCluster::new(first.x, first.y, first.time_ms);
+    let (first_x, first_y) = map_uv(first.x, first.y);
+    let mut current = ClickCluster::new(first_x, first_y, first.time_ms);
 
     for evt in &events_in_range[1..] {
-        if current.can_add(evt.x, evt.y, cluster_w, cluster_h) {
-            current.add(evt.x, evt.y, evt.time_ms);
+        let (x, y) = map_uv(evt.x, evt.y);
+        if current.can_add(x, y, cluster_w, cluster_h) {
+            current.add(x, y, evt.time_ms);
         } else {
             clusters.push(current);
-            current = ClickCluster::new(evt.x, evt.y, evt.time_ms);
+            current = ClickCluster::new(x, y, evt.time_ms);
         }
     }
     clusters.push(current);
@@ -296,7 +304,7 @@ fn map_timeline_to_recording_secs(map: &[TimeMapSegment], timeline_secs: f64) ->
 
 /// One precomputed step. Sample times are implicit: `samples[i]` is the state
 /// at `i * STEP_MS`, so lookup is pure index math.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct TimelineSample {
     amount: f32,
     center: XY<f32>,
@@ -347,6 +355,7 @@ impl ZoomTransformTimeline {
         cursor_events: &CursorEvents,
         spring: ScreenMovementSpring,
         duration_secs: f64,
+        crop: Option<CursorCropMap>,
     ) -> Self {
         let mut zoom_segments = zoom_segments.to_vec();
         zoom_segments.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.end.total_cmp(&b.end)));
@@ -364,6 +373,7 @@ impl ZoomTransformTimeline {
                         recording_start,
                         recording_end,
                         segment.amount,
+                        crop,
                     ))
                 }
                 ZoomMode::Manual { .. } => None,
@@ -424,13 +434,22 @@ impl ZoomTransformTimeline {
         timeline
     }
 
-    /// Convenience constructor pulling zoom segments, edit mapping and spring
-    /// config out of a [`ProjectConfiguration`].
+    /// Convenience constructor pulling zoom segments, edit mapping, spring
+    /// config and crop mapping out of a [`ProjectConfiguration`].
+    /// `screen_size` is the raw recorded display size in px
+    /// (`RenderOptions::screen_size`), needed to normalize the project's
+    /// pixel-space crop into cursor UV space.
     pub fn from_project(
         project: &ProjectConfiguration,
         cursor_events: &CursorEvents,
         duration_secs: f64,
+        screen_size: XY<u32>,
     ) -> Self {
+        let crop = project
+            .background
+            .crop
+            .as_ref()
+            .and_then(|crop| CursorCropMap::from_crop(crop, screen_size));
         Self::new(
             project
                 .timeline
@@ -441,6 +460,7 @@ impl ZoomTransformTimeline {
             cursor_events,
             project.screen_movement_spring,
             duration_secs,
+            crop,
         )
     }
 
@@ -548,6 +568,19 @@ impl ZoomTransformTimeline {
                 .set_position(XY::new(targets.amount, targets.activity));
             state.aux_sim.set_velocity(XY::new(0.0, 0.0));
         } else {
+            // While the amount spring sits at identity the viewport shows the
+            // whole frame no matter where the center is — the center channel
+            // is unobservable, so track its target instantly (free pre-aim).
+            // An incoming zoom then launches already aimed at its focus and
+            // scales straight toward it, instead of zooming about the stale
+            // center and dragging over at high magnification (a huge late pan
+            // that also detonated the motion blur). The epsilon bounds any
+            // theoretical pop to sub-pixel: (amount - 1) * |center jump| of
+            // the card, i.e. < 0.05% of the card size.
+            if state.aux_sim.position.x <= CENTER_PREAIM_MAX_AMOUNT {
+                state.center_sim.set_position(targets.center);
+                state.center_sim.set_velocity(XY::new(0.0, 0.0));
+            }
             state.center_sim.run(STEP_MS as f32);
             state.aux_sim.run(STEP_MS as f32);
         }
@@ -610,7 +643,6 @@ impl ZoomTransformTimeline {
                             .unwrap_or(FALLBACK_FOCUS);
                         SegmentBounds::calculate_follow_center(
                             (focus.0.clamp(0.0, 1.0), focus.1.clamp(0.0, 1.0)),
-                            amount,
                             segment.edge_snap_ratio,
                         )
                     }
@@ -699,21 +731,32 @@ mod tests {
             cursor,
             ScreenMovementSpring::default(),
             duration,
+            None,
         )
     }
 
     /// Max |value delta| and |slope delta| between adjacent 8ms sample
-    /// intervals across the whole precomputed range, per channel scalar.
+    /// intervals across the whole precomputed range, measured on the VISIBLE
+    /// viewport rect (bounds corners + amount), not the latent channels: the
+    /// center channel deliberately snaps to its target while the amount sits
+    /// at identity (free pre-aim, geometrically invisible), and bounds are
+    /// what the renderer — and the motion-blur velocity analysis — consume.
     fn max_step_discontinuities(timeline: &ZoomTransformTimeline) -> (f64, f64) {
         let step_secs = STEP_MS / 1000.0;
-        let values: Vec<[f64; 3]> = timeline
+        let values: Vec<[f64; 5]> = timeline
             .samples
             .iter()
             .map(|s| {
+                let bounds = SegmentBounds::from_amount_center(
+                    f64::from(s.amount),
+                    XY::new(f64::from(s.center.x), f64::from(s.center.y)),
+                );
                 [
                     f64::from(s.amount),
-                    f64::from(s.center.x),
-                    f64::from(s.center.y),
+                    bounds.top_left.x,
+                    bounds.top_left.y,
+                    bounds.bottom_right.x,
+                    bounds.bottom_right.y,
                 ]
             })
             .collect();
@@ -721,7 +764,7 @@ mod tests {
         let mut max_value_jump = 0.0f64;
         let mut max_slope_jump = 0.0f64;
         for window in values.windows(3) {
-            for channel in 0..3 {
+            for channel in 0..5 {
                 let v0 = window[0][channel];
                 let v1 = window[1][channel];
                 let v2 = window[2][channel];
@@ -937,6 +980,125 @@ mod tests {
         );
     }
 
+    /// Raw-UV viewport of a sampled zoom: (left, top, size).
+    fn visible_viewport(zoom: &InterpolatedZoom) -> (f64, f64, f64) {
+        let amount = zoom.display_amount();
+        (
+            -zoom.bounds.top_left.x / amount,
+            -zoom.bounds.top_left.y / amount,
+            1.0 / amount,
+        )
+    }
+
+    #[test]
+    fn hovering_into_a_corner_re_aims_without_a_click() {
+        // Regression for the real-recording report: clicks early near the
+        // center, then the cursor HOVERS (no click) into the bottom-right
+        // corner mid-segment. All movement participates in clustering, so
+        // leaving the dead-zone box must re-aim the camera and bring the
+        // hovered corner into the settled viewport.
+        let corner = (0.95, 0.9);
+        let mut moves = Vec::new();
+        for i in 0..50 {
+            moves.push(move_event(i as f64 * 100.0, 0.5, 0.5));
+        }
+        for i in 0..=20 {
+            let t = i as f64 / 20.0;
+            moves.push(move_event(
+                5000.0 + t * 1000.0,
+                0.5 + (corner.0 - 0.5) * t,
+                0.5 + (corner.1 - 0.5) * t,
+            ));
+        }
+        for i in 1..=30 {
+            moves.push(move_event(6000.0 + i as f64 * 200.0, corner.0, corner.1));
+        }
+        let cursor = CursorEvents {
+            moves,
+            clicks: vec![click_event(1500.0), click_event(2000.0)],
+        };
+        let segments = vec![auto_segment(1.0, 15.1, 2.0)];
+        let mut timeline = timeline_for(&segments, &cursor, 16.0);
+        timeline.precompute();
+
+        // Two seconds after arriving in the corner the spring has settled.
+        let settled = timeline.sample(8.0);
+        let (left, top, size) = visible_viewport(&settled);
+        assert!(
+            corner.0 >= left && corner.0 <= left + size,
+            "hovered corner x {} outside viewport [{left}, {}]",
+            corner.0,
+            left + size
+        );
+        assert!(
+            corner.1 >= top && corner.1 <= top + size,
+            "hovered corner y {} outside viewport [{top}, {}]",
+            corner.1,
+            top + size
+        );
+
+        // And the framing genuinely moved from the early click-cluster view.
+        let early = timeline.sample(4.0);
+        let (early_left, early_top, _) = visible_viewport(&early);
+        assert!(
+            (left - early_left).abs() > 0.1 || (top - early_top).abs() > 0.1,
+            "camera never re-aimed toward the hovered corner"
+        );
+        assert_viewport_in_bounds(&settled, "corner hover settle");
+    }
+
+    #[test]
+    fn hostile_cursor_data_never_breaks_the_timeline() {
+        // Simulated/corrupted input: NaN and infinite coordinates, positions
+        // far outside the crop (cursor on another monitor), and full-screen
+        // teleports between consecutive events (automation tools). The
+        // timeline must stay finite, in bounds and smooth throughout.
+        let moves = vec![
+            move_event(0.0, 0.5, 0.5),
+            move_event(500.0, f64::NAN, 0.5),
+            move_event(600.0, 0.5, f64::INFINITY),
+            move_event(1000.0, -3.0, 7.5),
+            move_event(1500.0, 0.02, 0.98),
+            move_event(1550.0, 0.98, 0.02),
+            move_event(1600.0, 0.02, 0.02),
+            move_event(1650.0, 0.98, 0.98),
+            move_event(4000.0, 1.4, -0.4),
+            move_event(8000.0, 0.5, 0.5),
+        ];
+        let cursor = CursorEvents {
+            moves,
+            clicks: vec![click_event(f64::NAN), click_event(1500.0)],
+        };
+        let segments = vec![auto_segment(0.5, 9.0, 2.0)];
+        let mut timeline = timeline_for(&segments, &cursor, 10.0);
+        timeline.precompute();
+
+        for sample in &timeline.samples {
+            assert!(
+                sample.amount.is_finite()
+                    && sample.center.x.is_finite()
+                    && sample.center.y.is_finite()
+                    && sample.activity.is_finite(),
+                "non-finite sample: {sample:?}"
+            );
+        }
+        let mut t = 0.0f32;
+        while t <= 10.0 {
+            let zoom = timeline.sample(t);
+            assert!(
+                zoom.bounds.top_left.x.is_finite() && zoom.bounds.bottom_right.y.is_finite(),
+                "non-finite bounds at t={t}"
+            );
+            assert_viewport_in_bounds(&zoom, &format!("hostile input at t={t}"));
+            t += 0.037;
+        }
+        let (max_value_jump, _) = max_step_discontinuities(&timeline);
+        assert!(
+            max_value_jump < 0.08,
+            "teleporting input caused a visible jump: {max_value_jump}"
+        );
+    }
+
     #[test]
     fn empty_cursor_events_fall_back_to_centered_focus() {
         let cursor = CursorEvents::default();
@@ -949,8 +1111,8 @@ mod tests {
         let expected = SegmentBounds::from_amount_center(
             2.0,
             XY::new(
-                SegmentBounds::calculate_follow_center(FALLBACK_FOCUS, 2.0, 0.25).0,
-                SegmentBounds::calculate_follow_center(FALLBACK_FOCUS, 2.0, 0.25).1,
+                SegmentBounds::calculate_follow_center(FALLBACK_FOCUS, 0.25).0,
+                SegmentBounds::calculate_follow_center(FALLBACK_FOCUS, 0.25).1,
             ),
         );
         assert!((settled.bounds.top_left.x - expected.top_left.x).abs() < 1e-3);
@@ -973,6 +1135,55 @@ mod tests {
         assert!((settled.bounds.top_left.y - expected.top_left.y).abs() < 1e-3);
         assert!((settled.bounds.bottom_right.x - expected.bottom_right.x).abs() < 1e-3);
         assert!((settled.bounds.bottom_right.y - expected.bottom_right.y).abs() < 1e-3);
+    }
+
+    #[test]
+    fn manual_corner_zoom_launches_already_aimed() {
+        // A manual zoom to the top-left corner must scale straight into the
+        // corner from the first visible frame — not zoom about the stale
+        // (centered) framing and pan over at high magnification. While the
+        // amount is at identity the center is unobservable, so the timeline
+        // pre-aims it; with a corner-flush target (0,0) the viewport's
+        // top-left then stays pinned to the content's top-left for the whole
+        // ramp.
+        let cursor = CursorEvents::default();
+        let segments = vec![manual_segment(1.0, 5.0, 2.862, 0.0, 0.0)];
+        let mut timeline = timeline_for(&segments, &cursor, 6.0);
+        timeline.precompute();
+
+        for t in [1.05f32, 1.2, 1.5, 2.0, 3.0] {
+            let z = timeline.sample(t);
+            assert!(
+                z.bounds.top_left.x.abs() < 5e-3 && z.bounds.top_left.y.abs() < 5e-3,
+                "viewport must stay corner-anchored during the ramp at t={t}: {:?}",
+                z.bounds
+            );
+        }
+
+        // Guard against the assertion above passing trivially (identity
+        // bounds also have top_left = 0): the zoom must actually engage and
+        // settle on the full manual amount.
+        let settled = timeline.sample(4.5);
+        assert!(
+            (settled.display_amount() - 2.862).abs() < 1e-2,
+            "zoom failed to settle on the manual amount: {}",
+            settled.display_amount()
+        );
+
+        // And the pre-aim must never cause a visible pop: the viewport stays
+        // continuous across the segment start. Thresholds mirror the other
+        // continuity tests — a 2.862x ramp legitimately sweeps ~0.054/step at
+        // peak spring velocity, while a center pop at (say) amount 1.5 would
+        // jump ~0.25 in one step.
+        let (max_value_jump, max_slope_jump) = max_step_discontinuities(&timeline);
+        assert!(
+            max_value_jump < 0.1,
+            "pre-aim introduced a step discontinuity: {max_value_jump}"
+        );
+        assert!(
+            max_slope_jump < 4.0,
+            "pre-aim introduced a velocity discontinuity: {max_slope_jump}/s"
+        );
     }
 
     #[test]
@@ -1142,6 +1353,7 @@ mod tests {
             &cursor,
             ScreenMovementSpring::default(),
             10.0,
+            None,
         );
         timeline.precompute();
 
@@ -1150,14 +1362,114 @@ mod tests {
         let toward_bottom_right = SegmentBounds::from_amount_center(
             2.0,
             XY::new(
-                SegmentBounds::calculate_follow_center((0.9, 0.9), 2.0, 0.25).0,
-                SegmentBounds::calculate_follow_center((0.9, 0.9), 2.0, 0.25).1,
+                SegmentBounds::calculate_follow_center((0.9, 0.9), 0.25).0,
+                SegmentBounds::calculate_follow_center((0.9, 0.9), 0.25).1,
             ),
         );
         assert!(
             (settled.bounds.top_left.x - toward_bottom_right.top_left.x).abs() < 1e-2,
             "expected framing near {:?}, got {:?}",
             toward_bottom_right,
+            settled.bounds
+        );
+    }
+
+    #[test]
+    fn crop_map_identity_cases() {
+        let screen = XY::new(1000u32, 1000u32);
+        // Full-screen crop is the identity: no map.
+        let full = Crop {
+            position: XY::new(0, 0),
+            size: XY::new(1000, 1000),
+        };
+        assert!(CursorCropMap::from_crop(&full, screen).is_none());
+        // Degenerate inputs never produce a map.
+        let degenerate = Crop {
+            position: XY::new(0, 0),
+            size: XY::new(0, 500),
+        };
+        assert!(CursorCropMap::from_crop(&degenerate, screen).is_none());
+        assert!(CursorCropMap::from_crop(&full, XY::new(0, 0)).is_none());
+    }
+
+    #[test]
+    fn crop_remaps_auto_zoom_focus_into_content_space() {
+        // Screen 1000x1000 cropped to the bottom half: content = y 500..1000.
+        let crop = Crop {
+            position: XY::new(0, 500),
+            size: XY::new(1000, 500),
+        };
+        let map = CursorCropMap::from_crop(&crop, XY::new(1000, 1000)).unwrap();
+
+        // Cursor parked at raw (0.5, 0.75) = the exact CENTER of the visible
+        // content. Uncropped this raw y would edge-snap to a bottom-flush
+        // framing; content-space it must settle centered.
+        let cursor = CursorEvents {
+            moves: vec![move_event(0.0, 0.5, 0.75), move_event(8_000.0, 0.5, 0.75)],
+            clicks: vec![],
+        };
+        let segments = vec![auto_segment(0.5, 8.0, 2.0)];
+        let mut with_crop = ZoomTransformTimeline::new(
+            &segments,
+            None,
+            &cursor,
+            ScreenMovementSpring::default(),
+            10.0,
+            Some(map),
+        );
+        with_crop.precompute();
+
+        let settled = with_crop.sample(6.0);
+        let centered = SegmentBounds::from_amount_center(2.0, XY::new(0.5, 0.5));
+        assert!(
+            (settled.bounds.top_left.y - centered.top_left.y).abs() < 1e-2,
+            "expected centered framing {:?}, got {:?}",
+            centered,
+            settled.bounds
+        );
+
+        let mut without_crop = timeline_for(&segments, &cursor, 10.0);
+        without_crop.precompute();
+        let raw_settled = without_crop.sample(6.0);
+        assert!(
+            (raw_settled.bounds.top_left.y - centered.top_left.y).abs() > 0.2,
+            "control: uncropped framing should NOT be centered, got {:?}",
+            raw_settled.bounds
+        );
+    }
+
+    #[test]
+    fn cursor_in_cropped_away_region_aims_at_content_edge() {
+        // Bottom-half crop; the cursor hovers in the removed TOP strip
+        // (raw y = 0.05 -> content y < 0). The framing must clamp to a
+        // top-flush viewport, not wander or blow up.
+        let crop = Crop {
+            position: XY::new(0, 500),
+            size: XY::new(1000, 500),
+        };
+        let map = CursorCropMap::from_crop(&crop, XY::new(1000, 1000)).unwrap();
+
+        let cursor = CursorEvents {
+            moves: vec![move_event(0.0, 0.5, 0.05), move_event(8_000.0, 0.5, 0.05)],
+            clicks: vec![],
+        };
+        let segments = vec![auto_segment(0.5, 8.0, 2.0)];
+        let mut timeline = ZoomTransformTimeline::new(
+            &segments,
+            None,
+            &cursor,
+            ScreenMovementSpring::default(),
+            10.0,
+            Some(map),
+        );
+        timeline.precompute();
+
+        let settled = timeline.sample(6.0);
+        let top_flush = SegmentBounds::from_amount_center(2.0, XY::new(0.5, 0.0));
+        assert!(
+            (settled.bounds.top_left.y - top_flush.top_left.y).abs() < 1e-2,
+            "expected top-flush framing {:?}, got {:?}",
+            top_flush,
             settled.bounds
         );
     }

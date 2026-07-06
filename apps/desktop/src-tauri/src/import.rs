@@ -395,8 +395,13 @@ fn add_clip_configs(
 
         if let Some(existing) = config.clips.iter_mut().find(|clip| clip.index == index) {
             existing.offsets = offsets;
+            existing.offsets_auto_calculated = true;
         } else {
-            config.clips.push(ClipConfiguration { index, offsets });
+            config.clips.push(ClipConfiguration {
+                index,
+                offsets,
+                offsets_auto_calculated: true,
+            });
         }
     }
 }

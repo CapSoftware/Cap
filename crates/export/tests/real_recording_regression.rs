@@ -205,6 +205,7 @@ async fn export_sequence_render_matches_editor_reference_for_real_recording()
                     &project_config,
                     &segment.cursor,
                     total_duration,
+                    render_constants.options.screen_size,
                 )
             })
             .collect();

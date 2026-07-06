@@ -147,13 +147,24 @@ fn macos_sync_activation_policy(app: &tauri::AppHandle, should_show_dock: bool) 
     }
 }
 
+// Changing the activation policy (which `set_dock_visibility` also does under
+// the hood) while any window owns a fullscreen Space makes AppKit throw an
+// NSException that aborts the process when it unwinds into Rust. Callers must
+// leave the policy alone until fullscreen exits.
+#[cfg(target_os = "macos")]
+fn macos_any_window_fullscreen(app: &tauri::AppHandle) -> bool {
+    app.webview_windows()
+        .values()
+        .any(|window| window.is_fullscreen().unwrap_or(false))
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn prepare_macos_panel_window(
     app: &tauri::AppHandle,
 ) -> MacosPanelWindowActivationGuard {
     let prev = MACOS_PENDING_PANEL_WINDOWS.fetch_add(1, Ordering::AcqRel);
 
-    if prev == 0 {
+    if prev == 0 && !macos_any_window_fullscreen(app) {
         if let Err(err) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
             tracing::warn!("Failed to prepare macOS panel activation policy: {err}");
         }
@@ -165,6 +176,10 @@ pub(crate) fn prepare_macos_panel_window(
 #[cfg(target_os = "macos")]
 pub(crate) fn sync_macos_dock_visibility(app: &tauri::AppHandle) {
     if MACOS_PENDING_PANEL_WINDOWS.load(Ordering::Acquire) > 0 {
+        return;
+    }
+
+    if macos_any_window_fullscreen(app) {
         return;
     }
 

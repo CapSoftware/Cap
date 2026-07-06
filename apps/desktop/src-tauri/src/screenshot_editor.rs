@@ -398,8 +398,12 @@ impl ScreenshotEditorInstances {
                     ProjectUniforms::get_base_size(&constants.options, &current_config);
 
                 let cursor_events = cap_project::CursorEvents::default();
-                let mut zoom_timeline =
-                    ZoomTransformTimeline::from_project(&current_config, &cursor_events, 0.0);
+                let mut zoom_timeline = ZoomTransformTimeline::from_project(
+                    &current_config,
+                    &cursor_events,
+                    0.0,
+                    constants.options.screen_size,
+                );
                 zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
 
                 let uniforms = ProjectUniforms::new(
@@ -865,6 +869,7 @@ pub async fn prewarm_screenshot_renderer() {
         &cursor_events,
         config.screen_movement_spring,
         0.0,
+        None,
     );
     zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
     let uniforms = ProjectUniforms::new(
@@ -1657,7 +1662,12 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
         segment_has_camera: false,
     };
     let cursor_events = cap_project::CursorEvents::default();
-    let mut zoom_timeline = ZoomTransformTimeline::from_project(&config, &cursor_events, 0.0);
+    let mut zoom_timeline = ZoomTransformTimeline::from_project(
+        &config,
+        &cursor_events,
+        0.0,
+        constants.options.screen_size,
+    );
     zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
     let uniforms = ProjectUniforms::new(
         &constants,

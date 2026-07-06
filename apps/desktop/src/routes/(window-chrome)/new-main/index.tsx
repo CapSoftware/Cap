@@ -1744,16 +1744,6 @@ function Page() {
 		setShouldRevealMainWindowAfterPicker,
 	] = createSignal(false);
 
-	// Remember the mode of the in-flight recording. currentRecording.data goes
-	// null the instant a recording ends, so capture it while it's live to decide
-	// what to do with the main window afterwards.
-	let lastRecordingMode: string | null = null;
-	let wasRecordingForPicker = false;
-	createEffect(() => {
-		const rec = currentRecording.data;
-		if (rec) lastRecordingMode = rec.mode;
-	});
-
 	createEffect(() => {
 		const pickerActive = rawOptions.targetMode != null;
 		const pickerSource = rawOptions.targetModeSource ?? "main";
@@ -1777,25 +1767,38 @@ function Page() {
 			setHasHiddenMainWindowForPicker(false);
 			const shouldRevealMainWindow = shouldRevealMainWindowAfterPicker();
 			setShouldRevealMainWindowAfterPicker(false);
-			// After a studio recording the editor takes over the foreground, so keep
-			// the main window hidden. For a cancelled picker or a finished instant
-			// recording, bring the main window back.
-			if (
-				shouldRevealMainWindow &&
-				!(wasRecordingForPicker && lastRecordingMode === "studio")
-			) {
+			// Whether the main window may come back is decided by WHY the picker
+			// was dismissed, which travels with the dismissal itself
+			// (targetModeDismissal is written in the same setOptions call that
+			// nulls targetMode). Reconstructing the outcome here from query state
+			// or effect ordering is unsound: this webview is hidden and may have
+			// been suspended, so those signals can be stale by a whole recording.
+			// A studio recording hands the foreground to the editor and this
+			// window is always-on-top — revealing it then covers the editor.
+			const dismissal = rawOptions.targetModeDismissal ?? "cancelled";
+			const dismissalReveals =
+				dismissal === "cancelled" ||
+				dismissal === "screenshot" ||
+				dismissal === "recordingInstant";
+			if (shouldRevealMainWindow && dismissalReveals) {
 				const currentWindow = getCurrentWindow();
 				void currentWindow.show();
 				void currentWindow.setFocus();
 			}
 		}
-
-		wasRecordingForPicker = recording;
 	});
 	onCleanup(() => {
 		if (!hasHiddenMainWindowForPicker()) return;
 		setHasHiddenMainWindowForPicker(false);
-		if (shouldRevealMainWindowAfterPicker()) void getCurrentWindow().show();
+		// Restore on dispose only when the picker is still open with no recording
+		// in flight (e.g. dev HMR mid-picker). Disposal after a recording started
+		// must not resurface the main window over the recording UI or the editor.
+		if (
+			shouldRevealMainWindowAfterPicker() &&
+			rawOptions.targetMode != null &&
+			!currentRecording.data
+		)
+			void getCurrentWindow().show();
 	});
 
 	const handleMouseEnter = () => {
@@ -2079,8 +2082,7 @@ function Page() {
 		}
 	};
 
-	createEffect(() => {
-		if (!isRecording()) return;
+	const closeAllMenuPanels = () => {
 		setDisplayMenuOpen(false);
 		setWindowMenuOpen(false);
 		setRecordingsMenuOpen(false);
@@ -2092,6 +2094,11 @@ function Page() {
 		setMicrophoneInitialSettings(null);
 		setOpenCameraSettingsWhenReady(false);
 		setOpenMicrophoneSettingsWhenReady(false);
+	};
+
+	createEffect(() => {
+		if (!isRecording()) return;
+		closeAllMenuPanels();
 	});
 
 	const setMicInput = createMutation(() => ({
@@ -2130,7 +2137,11 @@ function Page() {
 			await commands.openTargetSelectOverlays(null, null, targetMode);
 			setOptions({ targetMode, targetModeSource: "main" });
 		} else {
-			setOptions({ targetMode, targetModeSource: null });
+			setOptions({
+				targetMode,
+				targetModeSource: null,
+				targetModeDismissal: "cancelled",
+			});
 			await currentWindow.show();
 			await currentWindow.setFocus();
 			void commands.closeTargetSelectOverlays().catch((error) => {
@@ -2186,7 +2197,16 @@ function Page() {
 						targetModeSource: "main",
 					});
 				} else {
-					setOptions({ targetMode: newTargetMode });
+					// Rust clears the target mode when it shows the main window
+					// itself (e.g. tray "Open Main Window"), so this dismissal may
+					// reveal — matching the window Rust just made visible anyway.
+					// Closing the window only hides it, so panel state from the
+					// previous session survives — reset to the main screen.
+					closeAllMenuPanels();
+					setOptions({
+						targetMode: newTargetMode,
+						targetModeDismissal: "cancelled",
+					});
 					await commands.closeTargetSelectOverlays();
 				}
 			},
@@ -2362,7 +2382,8 @@ function Page() {
 			);
 			setOptions({ targetMode: nextMode, targetModeSource: "main" });
 		} else {
-			setOptions("targetMode", nextMode);
+			// Toggling the active mode off is a user cancel of the picker.
+			setOptions({ targetMode: nextMode, targetModeDismissal: "cancelled" });
 			await commands.closeTargetSelectOverlays();
 		}
 	};

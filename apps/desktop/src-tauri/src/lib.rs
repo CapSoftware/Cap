@@ -210,6 +210,7 @@ mod tests {
             UnexpectedTermination {
                 during_gpu_init: false,
                 in_graphics_recovery: false,
+                blur_active: false,
             }
         )));
 
@@ -218,6 +219,7 @@ mod tests {
             UnexpectedTermination {
                 during_gpu_init: true,
                 in_graphics_recovery: false,
+                blur_active: false,
             }
         )));
 
@@ -227,14 +229,65 @@ mod tests {
             UnexpectedTermination {
                 during_gpu_init: true,
                 in_graphics_recovery: true,
+                blur_active: false,
             }
         )));
         assert!(!should_engage_graphics_recovery(Some(
             UnexpectedTermination {
                 during_gpu_init: false,
                 in_graphics_recovery: true,
+                blur_active: false,
             }
         )));
+    }
+
+    #[test]
+    fn camera_blur_crash_recovery_disables_and_heals_on_update() {
+        use crash_sentinel::UnexpectedTermination;
+
+        let died_with_blur = Some(UnexpectedTermination {
+            during_gpu_init: false,
+            in_graphics_recovery: false,
+            blur_active: true,
+        });
+        let died_without_blur = Some(UnexpectedTermination {
+            during_gpu_init: false,
+            in_graphics_recovery: false,
+            blur_active: false,
+        });
+
+        // Clean exit, blur never disabled: stays enabled.
+        assert_eq!(next_camera_blur_disabled_version(None, None, "1.0"), None);
+
+        // Deaths unrelated to blur must not disable it.
+        assert_eq!(
+            next_camera_blur_disabled_version(None, died_without_blur, "1.0"),
+            None
+        );
+
+        // A death with blur active disables it at the current version.
+        assert_eq!(
+            next_camera_blur_disabled_version(None, died_with_blur, "1.0"),
+            Some("1.0".into())
+        );
+
+        // The disable persists across clean launches of the same version.
+        assert_eq!(
+            next_camera_blur_disabled_version(Some("1.0"), None, "1.0"),
+            Some("1.0".into())
+        );
+
+        // An app update heals: the new stack gets one retry.
+        assert_eq!(
+            next_camera_blur_disabled_version(Some("1.0"), None, "1.1"),
+            None
+        );
+
+        // But a fresh blur-attributed death beats version optimism.
+        assert_eq!(
+            next_camera_blur_disabled_version(Some("1.0"), died_with_blur, "1.1"),
+            Some("1.1".into())
+        );
     }
 }
 
@@ -4484,12 +4537,88 @@ fn configure_windows_graphics_recovery(
 ) {
 }
 
+/// Decides what `camera_blur_disabled_by_crash` should hold for this launch: a
+/// death with the blur pipeline active disables blur at the current version
+/// (fresh crash evidence beats version optimism), an existing disable carries
+/// over within the same app version, and an app update clears it so the new
+/// ort/wgpu/driver stack gets one retry.
+fn next_camera_blur_disabled_version(
+    stored: Option<&str>,
+    previous_termination: Option<crash_sentinel::UnexpectedTermination>,
+    current_version: &str,
+) -> Option<String> {
+    if previous_termination.is_some_and(|prev| prev.blur_active) {
+        return Some(current_version.to_string());
+    }
+    stored.filter(|v| *v == current_version).map(String::from)
+}
+
+/// Breaks the camera-background-blur crash loop: a native DirectML/driver crash
+/// never reaches a panic handler, and the blur toggle is persisted frontend-side,
+/// so without this the next camera open repeats the crash forever. Blur init is
+/// lazy (first camera frame / editor render), so running this during setup is
+/// early enough. Windows-only at runtime (matching graphics recovery) but
+/// compiled everywhere so non-Windows builds keep it honest.
+fn configure_camera_blur_recovery(
+    app: &AppHandle,
+    previous_termination: Option<crash_sentinel::UnexpectedTermination>,
+) {
+    if !cfg!(target_os = "windows") {
+        return;
+    }
+
+    let current_version = env!("CARGO_PKG_VERSION");
+    let stored = GeneralSettingsStore::get(app)
+        .ok()
+        .flatten()
+        .and_then(|settings| settings.camera_blur_disabled_by_crash);
+    let next =
+        next_camera_blur_disabled_version(stored.as_deref(), previous_termination, current_version);
+
+    if next != stored {
+        let value = next.clone();
+        if let Err(error) = GeneralSettingsStore::update(app, |settings| {
+            settings.camera_blur_disabled_by_crash = value;
+        }) {
+            warn!(%error, "Failed to persist camera blur crash-recovery state");
+        }
+    }
+
+    if next.is_some() {
+        cap_camera_effects::set_blur_disabled(true);
+        crash_sentinel::mark_blur_recovery();
+        if stored.is_none() {
+            error!(
+                "Previous Cap session died with camera background blur active; disabling blur until the next app update"
+            );
+        } else {
+            warn!("Camera background blur remains disabled by crash recovery for this launch");
+        }
+    } else if stored.is_some() {
+        info!(
+            prev_version = stored.as_deref(),
+            "App version changed; re-enabling camera background blur for one retry"
+        );
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     // Arm the unexpected-termination sentinel before anything else can crash, and
     // report any previous session that died without a clean shutdown.
     let previous_termination = crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
     configure_windows_graphics_recovery(previous_termination);
+
+    // Keep the sentinel's blur marker in sync with live BlurProcessor instances
+    // (camera preview and editor render alike), so a native blur crash is
+    // attributable on the next launch.
+    cap_camera_effects::set_blur_session_observer(|active| {
+        if active {
+            crash_sentinel::enter_blur_session();
+        } else {
+            crash_sentinel::exit_blur_session();
+        }
+    });
 
     ffmpeg::init()
         .map_err(|e| {
@@ -4869,6 +4998,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);
+            configure_camera_blur_recovery(&app, previous_termination);
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());

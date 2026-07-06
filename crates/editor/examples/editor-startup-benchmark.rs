@@ -6,8 +6,7 @@ use std::{
 
 use cap_editor::{
     EditorFrameOutput, EditorInstance, FrameLayout, Renderer, create_segments,
-    finish_renderer_layers_creation,
-    start_renderer_layers_creation,
+    finish_renderer_layers_creation, start_renderer_layers_creation,
 };
 use cap_project::{ProjectConfiguration, RecordingMeta, RecordingMetaInner};
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};

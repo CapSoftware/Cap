@@ -24,6 +24,7 @@ import {
 	serializeProjectConfiguration,
 	useEditorContext,
 } from "./context";
+import { FrameButton } from "./FrameButton";
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
@@ -294,6 +295,7 @@ export function PlayerContent() {
 					>
 						Crop
 					</EditorButton>
+					<FrameButton />
 				</div>
 				<div class="flex items-center gap-2">
 					<span class="text-xs font-medium text-gray-11">Preview quality</span>

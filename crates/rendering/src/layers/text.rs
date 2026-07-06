@@ -64,9 +64,27 @@ impl TextLayer {
             let width = (text.bounds[2] - text.bounds[0]).max(1.0);
             let height = (text.bounds[3] - text.bounds[1]).max(1.0);
 
+            // Shape with a little more width than the editor-measured box:
+            // the webview and cosmic-text can disagree by a few pixels per
+            // line, and without slack a line that fit in the editor wraps in
+            // the render. The room is split evenly so centered lines stay
+            // centered. Boxes already spanning the frame keep their exact
+            // width — there the editor genuinely wrapped too.
+            let output_width = (output_size.0 as f32).max(1.0);
+            let wrap_width = if width < output_width * 0.98 {
+                (width * 1.05 + 4.0).min(output_width.max(width))
+            } else {
+                width
+            };
+            let wrap_dx = (wrap_width - width) / 2.0;
+
             let metrics = Metrics::new(text.font_size, text.font_size * 1.2);
             let mut buffer = Buffer::new(&mut self.font_system, metrics);
-            buffer.set_size(&mut self.font_system, Some(width), Some(height));
+            // The box only constrains wrapping; height is unbounded so every
+            // line is laid out even when the configured box is a little
+            // shorter than the shaped text (e.g. font metric differences
+            // between the editor's measurement and cosmic-text).
+            buffer.set_size(&mut self.font_system, Some(wrap_width), None);
             buffer.set_wrap(&mut self.font_system, glyphon::Wrap::Word);
 
             let family = match text.font_family.trim() {
@@ -104,15 +122,22 @@ impl TextLayer {
 
             buffer.shape_until_scroll(&mut self.font_system, false);
 
+            // Clip horizontally at the (slack-expanded) wrap box, but extend
+            // the bottom to the laid-out text height so descenders and extra
+            // lines never get cut off; glyphon intersects these bounds with
+            // the viewport.
+            let laid_out_height = buffer.layout_runs().count() as f32 * metrics.line_height;
             let bounds = TextBounds {
-                left: text.bounds[0].floor() as i32,
+                left: (text.bounds[0] - wrap_dx).floor() as i32,
                 top: text.bounds[1].floor() as i32,
-                right: (text.bounds[0] + width).ceil() as i32,
-                bottom: (text.bounds[1] + height).ceil() as i32,
+                right: (text.bounds[0] + width + wrap_dx).ceil() as i32,
+                bottom: (text.bounds[1] + height.max(laid_out_height)).ceil() as i32,
             };
 
             self.buffers.push(buffer);
-            text_area_data.push((bounds, text.bounds[0], text.bounds[1], color));
+            // The buffer origin shifts left by the slack so centered lines
+            // stay centered on the box.
+            text_area_data.push((bounds, text.bounds[0] - wrap_dx, text.bounds[1], color));
         }
 
         let text_areas = self

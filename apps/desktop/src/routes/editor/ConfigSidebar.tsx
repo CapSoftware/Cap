@@ -116,7 +116,11 @@ import {
 } from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
-import type { TextSegment } from "./text";
+import {
+	TEXT_FONT_SIZE_MAX,
+	TEXT_FONT_SIZE_MIN,
+	type TextSegment,
+} from "./text";
 import {
 	ComingSoonTooltip,
 	EditorButton,
@@ -331,7 +335,7 @@ type CursorPresetValues = {
 	friction: number;
 };
 
-const DEFAULT_MOTION_BLUR = 0.5;
+const DEFAULT_MOTION_BLUR = 1.0;
 
 const CURSOR_TYPE_OPTIONS = [
 	{
@@ -3241,7 +3245,7 @@ function TextSegmentConfig(props: {
 }) {
 	const { setProject } = useEditorContext();
 	const clampNumber = (value: number, min: number, max: number) =>
-		Math.min(Math.max(Number.isFinite(value) ? value : min), max);
+		Math.min(Math.max(Number.isFinite(value) ? value : min, min), max);
 
 	const updateSegment = (fn: (segment: TextSegment) => void) => {
 		setProject(
@@ -3286,28 +3290,39 @@ function TextSegmentConfig(props: {
 			</Field>
 			<Field name="Size" icon={<IconCapEnlarge class="size-4" />}>
 				<Slider
-					value={[clampNumber(props.segment.fontSize, 8, 200)]}
+					value={[
+						clampNumber(
+							props.segment.fontSize,
+							TEXT_FONT_SIZE_MIN,
+							TEXT_FONT_SIZE_MAX,
+						),
+					]}
 					onChange={([value]) =>
 						updateSegment((segment) => {
-							const newFontSize = clampNumber(value, 8, 200);
+							const newFontSize = clampNumber(
+								value,
+								TEXT_FONT_SIZE_MIN,
+								TEXT_FONT_SIZE_MAX,
+							);
 							const oldFontSize = segment.fontSize || 48;
 							const scale = newFontSize / oldFontSize;
 
 							segment.fontSize = newFontSize;
 
-							if (
-								segment.size &&
-								segment.size.x > 0.025 &&
-								segment.size.y > 0.025
-							) {
-								const maxSize = 0.95;
-								segment.size.x = Math.min(segment.size.x * scale, maxSize);
-								segment.size.y = Math.min(segment.size.y * scale, maxSize);
+							// Scale the box with the font so line wrapping is
+							// preserved; keep the top edge fixed since the renderer
+							// anchors text at the top of the box (the canvas overlay
+							// re-hugs the box to the exact glyph bounds when visible).
+							if (segment.size && segment.center) {
+								const topEdge = segment.center.y - segment.size.y / 2;
+								segment.size.x = Math.min(segment.size.x * scale, 1);
+								segment.size.y = segment.size.y * scale;
+								segment.center.y = topEdge + segment.size.y / 2;
 							}
 						})
 					}
-					minValue={8}
-					maxValue={200}
+					minValue={TEXT_FONT_SIZE_MIN}
+					maxValue={TEXT_FONT_SIZE_MAX}
 					step={1}
 				/>
 			</Field>
@@ -4362,6 +4377,8 @@ function ClipSegmentConfig(props: {
 	const clipConfig = () =>
 		project.clips?.find((c) => c.index === props.segmentIndex);
 	const offsets = () => clipConfig()?.offsets || {};
+	const offsetsAutoCalculated = () =>
+		clipConfig()?.offsetsAutoCalculated === true;
 
 	function setOffset(type: keyof ClipOffsets, offset: number) {
 		if (Number.isNaN(offset)) return;
@@ -4379,6 +4396,7 @@ function ClipSegmentConfig(props: {
 				}
 
 				clip.offsets[type] = offset / 1000;
+				clip.offsetsAutoCalculated = false;
 			}),
 		);
 	}
@@ -4445,12 +4463,19 @@ function ClipSegmentConfig(props: {
 				<p class="text-gray-11">
 					These settings apply to all segments for the current clip
 				</p>
+				<Show when={offsetsAutoCalculated()}>
+					<p class="text-gray-11">
+						Cap calculated these offsets automatically to keep audio in sync
+						with the video. Adjust them if anything still sounds off.
+					</p>
+				</Show>
 			</div>
 
 			{meta().hasSystemAudio && (
 				<SourceOffsetField
 					name="System Audio Offset"
 					value={offsets().system_audio}
+					autoCalculated={offsetsAutoCalculated()}
 					onChange={(offset) => {
 						setOffset("system_audio", offset);
 					}}
@@ -4460,6 +4485,7 @@ function ClipSegmentConfig(props: {
 				<SourceOffsetField
 					name="Microphone Offset"
 					value={offsets().mic}
+					autoCalculated={offsetsAutoCalculated()}
 					onChange={(offset) => {
 						setOffset("mic", offset);
 					}}
@@ -4469,6 +4495,7 @@ function ClipSegmentConfig(props: {
 				<SourceOffsetField
 					name="Camera Offset"
 					value={offsets().camera}
+					autoCalculated={offsetsAutoCalculated()}
 					onChange={(offset) => {
 						setOffset("camera", offset);
 					}}
@@ -4493,6 +4520,7 @@ function SourceOffsetField(props: {
 	name: string;
 	// seconds
 	value?: number;
+	autoCalculated?: boolean;
 	onChange: (value: number) => void;
 }) {
 	const rawValue = () => Math.round((props.value ?? 0) * 1000);
@@ -4500,7 +4528,10 @@ function SourceOffsetField(props: {
 	const [value, setValue] = createSignal(rawValue().toString());
 
 	return (
-		<Field name={props.name}>
+		<Field
+			name={props.name}
+			badge={props.autoCalculated ? "Auto-synced" : undefined}
+		>
 			<div class="flex flex-row justify-between items-center -mt-2 w-full">
 				<div class="flex flex-row items-end space-x-1">
 					<NumberField.Root

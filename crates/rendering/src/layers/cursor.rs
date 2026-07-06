@@ -17,12 +17,18 @@ const CLICK_SHRINK_SIZE: f32 = 0.8;
 const CURSOR_IDLE_MIN_DELAY_MS: f64 = 500.0;
 const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
 const CURSOR_IDLE_RESUME_LOOKAHEAD_MS: f64 = 250.0;
-const CURSOR_VECTOR_CAP: f32 = 64.0;
-const CURSOR_MIN_MOTION_NORMALIZED: f32 = 0.004;
-const CURSOR_FULL_MOTION_NORMALIZED: f32 = 0.035;
+/// Smear length ceiling in output px. Screen Studio semantics: the smear
+/// length equals the cursor's per-frame travel scaled by the user amount —
+/// linear, with no response curve — so this only bounds pathological
+/// single-frame teleports, not real flicks (spring motion peaks well below
+/// it at 60fps).
+const CURSOR_VECTOR_CAP: f32 = 480.0;
 const CURSOR_BASELINE_FPS: f32 = 60.0;
 const CURSOR_MULTIPLIER: f32 = 1.0;
-const CURSOR_MAX_STRENGTH: f32 = 1.0;
+/// Upper bound on amount * (fps/60). Generous: it must not clip the fps
+/// normalization at high frame rates (120fps needs 2x to keep the real-time
+/// shutter constant).
+const CURSOR_MAX_STRENGTH: f32 = 4.0;
 
 /// The size to render the svg to.
 static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
@@ -367,16 +373,19 @@ impl CursorLayer {
             return;
         };
 
+        // Out-of-band positions (cursor in a cropped-away region, spring
+        // overshoot past a display edge) still render: the shader's
+        // screen_bounds clip confines the sprite to the display card, so it
+        // slides off the card edge and back instead of popping in and out.
+        // Only non-finite data hides it outright.
         let cursor_uv = &interpolated_cursor.position.coord;
-        if !(0.0..=1.0).contains(&cursor_uv.x) || !(0.0..=1.0).contains(&cursor_uv.y) {
+        if !cursor_uv.x.is_finite() || !cursor_uv.y.is_finite() {
             self.bind_group = None;
             return;
         }
 
         let fps = uniforms.frame_rate.max(1) as f32;
         let screen_size = constants.options.screen_size;
-        let screen_diag =
-            (((screen_size.x as f32).powi(2) + (screen_size.y as f32).powi(2)).sqrt()).max(1.0);
         let fps_scale = fps / CURSOR_BASELINE_FPS;
         let cursor_strength = (uniforms.motion_blur_amount * CURSOR_MULTIPLIER * fps_scale)
             .clamp(0.0, CURSOR_MAX_STRENGTH);
@@ -402,13 +411,11 @@ impl CursorLayer {
             child_motion
         };
 
-        let normalized_motion = ((combined_motion_px.x / screen_diag).powi(2)
-            + (combined_motion_px.y / screen_diag).powi(2))
-        .sqrt();
-        let motion_response = cursor_motion_response(normalized_motion);
-        let effective_cursor_strength = cursor_strength * motion_response;
-        let scaled_motion = if effective_cursor_strength > f32::EPSILON {
-            cursor_blur_vector(combined_motion_px, effective_cursor_strength)
+        // Screen Studio semantics: smear length = per-frame travel x amount,
+        // linear all the way down (a sub-pixel kernel is the identity, so no
+        // response ramp is needed to avoid popping).
+        let scaled_motion = if cursor_strength > f32::EPSILON {
+            cursor_blur_vector(combined_motion_px, cursor_strength)
         } else {
             XY::new(0.0, 0.0)
         };
@@ -599,7 +606,13 @@ impl CursorLayer {
             motion_vector_strength: [
                 scaled_motion.x,
                 scaled_motion.y,
-                effective_cursor_strength,
+                // Pure on/off gate: the amount is baked into the smear
+                // length (scaled_motion), never an opacity mix.
+                if cursor_strength > f32::EPSILON {
+                    1.0
+                } else {
+                    0.0
+                },
                 cursor_opacity,
             ],
             rotation_params: [
@@ -682,20 +695,6 @@ fn finite_positive_or(value: f32, fallback: f32) -> f32 {
 
 fn cursor_blur_vector(motion: XY<f32>, strength: f32) -> XY<f32> {
     clamp_cursor_vector(motion * strength)
-}
-
-fn cursor_motion_response(amount: f32) -> f32 {
-    if amount <= CURSOR_MIN_MOTION_NORMALIZED {
-        return 0.0;
-    }
-    if amount >= CURSOR_FULL_MOTION_NORMALIZED {
-        return 1.0;
-    }
-
-    let t = ((amount - CURSOR_MIN_MOTION_NORMALIZED)
-        / (CURSOR_FULL_MOTION_NORMALIZED - CURSOR_MIN_MOTION_NORMALIZED))
-        .clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 fn clamp_cursor_vector(vec: XY<f32>) -> XY<f32> {
@@ -1018,29 +1017,28 @@ mod tests {
     }
 
     #[test]
-    fn cursor_blur_vector_caps_fast_motion() {
-        let motion = cursor_blur_vector(XY::new(800.0, 0.0), CURSOR_MAX_STRENGTH);
-        let len = (motion.x * motion.x + motion.y * motion.y).sqrt();
+    fn cursor_blur_vector_is_linear_in_travel_and_amount() {
+        // Screen Studio semantics: smear length == per-frame travel x amount,
+        // with no response curve shortening slow-to-medium motion.
+        let motion = cursor_blur_vector(XY::new(40.0, -30.0), 0.5);
+        assert!((motion.x - 20.0).abs() < 1e-4);
+        assert!((motion.y + 15.0).abs() < 1e-4);
 
-        assert!(len <= CURSOR_VECTOR_CAP + f32::EPSILON);
+        let full = cursor_blur_vector(XY::new(40.0, -30.0), 1.0);
+        assert!((full.x - 40.0).abs() < 1e-4);
+        assert!((full.y + 30.0).abs() < 1e-4);
     }
 
     #[test]
-    fn cursor_motion_response_ramps_with_velocity() {
-        assert_eq!(
-            cursor_motion_response(CURSOR_MIN_MOTION_NORMALIZED * 0.5),
-            0.0
-        );
+    fn cursor_blur_vector_caps_only_teleports() {
+        // Real flicks stay untouched...
+        let flick = cursor_blur_vector(XY::new(200.0, 0.0), 1.0);
+        assert!((flick.x - 200.0).abs() < 1e-4);
 
-        let mid = cursor_motion_response(
-            (CURSOR_MIN_MOTION_NORMALIZED + CURSOR_FULL_MOTION_NORMALIZED) * 0.5,
-        );
-
-        assert!(mid > 0.0 && mid < 1.0);
-        assert_eq!(
-            cursor_motion_response(CURSOR_FULL_MOTION_NORMALIZED * 1.5),
-            1.0
-        );
+        // ...only pathological single-frame jumps hit the safety cap.
+        let teleport = cursor_blur_vector(XY::new(5000.0, 0.0), 1.0);
+        let len = (teleport.x * teleport.x + teleport.y * teleport.y).sqrt();
+        assert!(len <= CURSOR_VECTOR_CAP + f32::EPSILON);
     }
 
     #[test]

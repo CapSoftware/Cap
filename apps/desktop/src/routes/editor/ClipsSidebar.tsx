@@ -304,7 +304,16 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 	const resetRecordingTarget = () => {
 		const targetMode = untrack(() => rawOptions.targetMode);
 		if (targetMode != null) {
-			setOptions("targetMode", null);
+			const source = untrack(() => rawOptions.targetModeSource) ?? "main";
+			// "superseded" only for a picker the editor owns: the editor is taking
+			// it over, so the main window must not treat the dismissal as a cancel
+			// and resurface itself. A main-owned picker dismissed from here keeps
+			// cancel semantics — the main window hid itself for that picker and
+			// must stay reachable.
+			setOptions({
+				targetMode: null,
+				targetModeDismissal: source === "main" ? "cancelled" : "superseded",
+			});
 			void commands.closeTargetSelectOverlays().catch(() => {});
 		}
 		void commands.setEditorRecordingTarget(null).catch(() => {});

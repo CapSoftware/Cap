@@ -158,6 +158,39 @@ fn hide_recording_windows(app: &AppHandle, restore_target_select_overlays: bool)
     }
 }
 
+/// Release the live camera preview feed after `hide_recording_windows` when a
+/// foreground window (Settings, an editor) takes over. Hiding the camera window
+/// alone leaves the capture session running, so the OS camera-in-use indicator
+/// stays lit while the user is in the editor. `restore_main_window_inputs`
+/// re-attaches the feed when the main window comes back.
+fn release_camera_preview_if_idle(app: &AppHandle) {
+    let is_recording = app
+        .try_state::<ArcLock<App>>()
+        .and_then(|state| {
+            state
+                .try_read()
+                .ok()
+                .map(|state| state.is_recording_active_or_pending())
+        })
+        .unwrap_or(true);
+
+    if is_recording {
+        return;
+    }
+
+    let app = app.clone();
+    tokio::spawn(async move {
+        if let Some(state) = app.try_state::<ArcLock<App>>() {
+            let app_state = &mut *state.write().await;
+            app_state.camera_preview.pause();
+            let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
+            app_state.camera_in_use = false;
+        } else {
+            warn!("App state unavailable while pausing camera preview");
+        }
+    });
+}
+
 fn bump_camera_window_session(app: &AppHandle) -> u64 {
     app.state::<Arc<AtomicU64>>().fetch_add(1, Ordering::AcqRel) + 1
 }
@@ -1141,30 +1174,7 @@ impl CapWindow {
 
         if matches!(self, Self::Settings { .. }) {
             hide_recording_windows(app, true);
-
-            let is_recording = app
-                .try_state::<ArcLock<App>>()
-                .and_then(|state| {
-                    state
-                        .try_read()
-                        .ok()
-                        .map(|state| state.is_recording_active_or_pending())
-                })
-                .unwrap_or(true);
-
-            if !is_recording {
-                let app = app.clone();
-                tokio::spawn(async move {
-                    if let Some(state) = app.try_state::<ArcLock<App>>() {
-                        let app_state = &mut *state.write().await;
-                        app_state.camera_preview.pause();
-                        let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
-                        app_state.camera_in_use = false;
-                    } else {
-                        warn!("App state unavailable while pausing camera preview");
-                    }
-                });
-            }
+            release_camera_preview_if_idle(app);
         }
 
         #[cfg(target_os = "macos")]
@@ -1602,6 +1612,7 @@ impl CapWindow {
             Self::Editor { .. } => {
                 let _open_started = std::time::Instant::now();
                 hide_recording_windows(app, false);
+                release_camera_preview_if_idle(app);
 
                 let window = match self
                     .window_builder(app, "/editor")
@@ -1636,6 +1647,7 @@ impl CapWindow {
             }
             Self::ScreenshotEditor { path } => {
                 hide_recording_windows(app, false);
+                release_camera_preview_if_idle(app);
 
                 let window_label = self.id(app).label();
                 let pending = PendingScreenshotEditorInstances::get(app);

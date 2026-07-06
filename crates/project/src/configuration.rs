@@ -228,6 +228,66 @@ pub struct BorderConfiguration {
     pub opacity: f32,
 }
 
+/// Decorative frame drawn around the screen recording (browser window,
+/// macOS window, MacBook bezel, ...). The video is inset inside the frame's
+/// chrome; the framed card as a whole follows padding / position / zoom
+/// exactly like the bare video does today.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FrameStyle {
+    /// No frame: the video renders bare, exactly as before this feature.
+    #[default]
+    None,
+    /// A macOS window title bar with traffic-light buttons.
+    MacOS,
+    /// A Windows 11 window title bar with minimize/maximize/close controls.
+    Windows,
+    /// A browser toolbar: traffic lights plus a centered URL pill.
+    Browser,
+    /// A MacBook mockup: black bezel, aluminum body and deck.
+    Macbook,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FrameTheme {
+    #[default]
+    Dark,
+    Light,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FrameConfiguration {
+    pub style: FrameStyle,
+    pub theme: FrameTheme,
+    /// Text shown in the browser style's URL pill.
+    pub url: String,
+    /// Text shown in the macOS window style's title bar.
+    pub title: String,
+}
+
+impl Default for FrameConfiguration {
+    fn default() -> Self {
+        Self {
+            style: FrameStyle::None,
+            theme: FrameTheme::default(),
+            url: "Cap.so".to_string(),
+            title: String::new(),
+        }
+    }
+}
+
+impl FrameConfiguration {
+    pub fn active_style(config: Option<&FrameConfiguration>) -> FrameStyle {
+        config.map(|f| f.style).unwrap_or(FrameStyle::None)
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.style != FrameStyle::None
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BackgroundConfiguration {
@@ -239,11 +299,15 @@ pub struct BackgroundConfiguration {
     pub inset: u32,
     pub crop: Option<Crop>,
     /// Normalized (0-1) center of the display rect in output-frame space.
-    /// `None` keeps the display centered.
+    /// `None` keeps the display centered. When a frame is active this is the
+    /// center of the framed card (chrome included), not the bare video.
     pub display_position: Option<XY<f64>>,
     pub shadow: f32,
     pub advanced_shadow: Option<ShadowConfiguration>,
     pub border: Option<BorderConfiguration>,
+    /// Decorative frame around the recording. `None` (or `FrameStyle::None`)
+    /// renders the bare video exactly as before the feature existed.
+    pub frame: Option<FrameConfiguration>,
 }
 
 impl Default for BorderConfiguration {
@@ -271,6 +335,7 @@ impl Default for BackgroundConfiguration {
             shadow: 73.6,
             advanced_shadow: Some(ShadowConfiguration::default()),
             border: None, // Border is disabled by default for backwards compatibility
+            frame: None,  // No decorative frame by default
         }
     }
 }
@@ -571,7 +636,9 @@ impl Default for CursorConfiguration {
             mass: 3.0,
             friction: 70.0,
             raw: false,
-            motion_blur: 0.5,
+            // Matches default_screen_motion_blur (the editor drives both
+            // fields with one slider, and load() re-couples them).
+            motion_blur: 1.0,
             use_svg: true,
             rotation_amount: Self::default_rotation_amount(),
             base_rotation: 0.0,
@@ -1195,6 +1262,11 @@ pub struct ClipOffsets {
 pub struct ClipConfiguration {
     pub index: u32,
     pub offsets: ClipOffsets,
+    /// Whether `offsets` were computed automatically (recording start-time
+    /// alignment + device sync calibration) rather than entered by the user.
+    /// Cleared by the editor UI once the user edits an offset.
+    #[serde(default)]
+    pub offsets_auto_calculated: bool,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -1338,7 +1410,17 @@ pub struct ProjectConfiguration {
     pub screen_motion_blur: f32,
     #[serde(default)]
     pub screen_movement_spring: ScreenMovementSpring,
+    /// How text segment font sizes are interpreted. 0 (legacy): the renderer
+    /// multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the
+    /// box. 1: `font_size` alone determines glyph size (1080p-relative);
+    /// legacy configs are migrated on load by baking the box factor into
+    /// `font_size`. The field-level default keeps old files at 0 while
+    /// `Default::default()` produces the current version.
+    #[serde(default)]
+    pub text_size_version: u32,
 }
+
+pub const TEXT_SIZE_VERSION: u32 = 1;
 
 fn camera_config_needs_migration(value: &Value) -> bool {
     value
@@ -1368,13 +1450,17 @@ impl Default for ProjectConfiguration {
             hidden_text_segments: Default::default(),
             screen_motion_blur: Self::default_screen_motion_blur(),
             screen_movement_spring: Default::default(),
+            text_size_version: TEXT_SIZE_VERSION,
         }
     }
 }
 
 impl ProjectConfiguration {
     fn default_screen_motion_blur() -> f32 {
-        0.5
+        // Screen Studio's default blur amount is 1.0; with length-based blur
+        // semantics (amount scales the smear length, output fully blurred)
+        // 1.0 reproduces its out-of-the-box look.
+        1.0
     }
 
     pub fn validate(&self) -> Result<(), AnnotationValidationError> {
@@ -1414,11 +1500,34 @@ impl ProjectConfiguration {
         } else {
             config.screen_motion_blur = screen_motion_blur;
         }
+
+        // Legacy text configs coupled glyph size to the box: the renderer
+        // multiplied font_size by size.y / 0.2. Bake that factor into
+        // font_size so the new decoupled law renders them identically.
+        let mut needs_text_size_migration = false;
+        if config.text_size_version == 0 {
+            if let Some(timeline) = config.timeline.as_mut() {
+                for segment in &mut timeline.text_segments {
+                    let scale = (segment.size.y / 0.2).clamp(0.25, 4.0) as f32;
+                    let migrated = (segment.font_size * scale).clamp(1.0, 480.0);
+                    if (migrated - segment.font_size).abs() > f32::EPSILON {
+                        segment.font_size = migrated;
+                        needs_text_size_migration = true;
+                    }
+                }
+            }
+            config.text_size_version = TEXT_SIZE_VERSION;
+        }
+
         config
             .validate()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 
-        if needs_camera_migration || needs_motion_blur_clamp || needs_screen_motion_blur_migration {
+        if needs_camera_migration
+            || needs_motion_blur_clamp
+            || needs_screen_motion_blur_migration
+            || needs_text_size_migration
+        {
             match config.write(project_path) {
                 Ok(_) => {
                     eprintln!("Updated project-config.json migrated settings");
@@ -1500,11 +1609,14 @@ mod tests {
     }
 
     #[test]
-    fn default_motion_blur_is_half() {
+    fn default_motion_blur_is_full() {
+        // 1.0 matches Screen Studio's default amount under length-based blur
+        // semantics; the two fields must agree because the editor drives them
+        // with one slider and load() re-couples them.
         let config = ProjectConfiguration::default();
 
-        assert_eq!(config.cursor.motion_blur, 0.5);
-        assert_eq!(config.screen_motion_blur, 0.5);
+        assert_eq!(config.cursor.motion_blur, 1.0);
+        assert_eq!(config.screen_motion_blur, 1.0);
     }
 
     #[test]
@@ -1587,6 +1699,98 @@ mod tests {
 
         assert_eq!(loaded.camera.manual_position, Some(XY::new(0.25, 0.75)));
         assert_eq!(loaded.background.display_position, Some(XY::new(0.5, 0.4)));
+    }
+
+    fn write_config_with_text_segment(
+        project_path: &std::path::Path,
+        font_size: f32,
+        size_y: f64,
+        text_size_version: Option<u32>,
+    ) {
+        let config = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: vec![TextSegment {
+                    start: 0.0,
+                    end: 1.0,
+                    track: 0,
+                    enabled: true,
+                    content: "Text".to_string(),
+                    center: XY::new(0.5, 0.5),
+                    size: XY::new(0.35, size_y),
+                    font_family: "sans-serif".to_string(),
+                    font_size,
+                    font_weight: 700.0,
+                    italic: false,
+                    color: "#ffffff".to_string(),
+                    fade_duration: 0.15,
+                }],
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+            }),
+            ..Default::default()
+        };
+
+        let mut value = serde_json::to_value(&config).unwrap();
+        let object = value.as_object_mut().unwrap();
+        match text_size_version {
+            Some(version) => {
+                object.insert("textSizeVersion".to_string(), Value::from(version));
+            }
+            None => {
+                object.remove("textSizeVersion");
+            }
+        }
+        std::fs::write(
+            project_path.join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn legacy_text_segment_bakes_box_scale_into_font_size() {
+        let dir = tempfile::tempdir().unwrap();
+        // Legacy renderer drew this at 96 * (0.4 / 0.2) = 2x glyph scale.
+        write_config_with_text_segment(dir.path(), 96.0, 0.4, None);
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let segment = &config.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.font_size, 192.0);
+        assert_eq!(config.text_size_version, TEXT_SIZE_VERSION);
+
+        // The migration must persist so it never runs twice.
+        let reloaded = ProjectConfiguration::load(dir.path()).unwrap();
+        let segment = &reloaded.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.font_size, 192.0);
+    }
+
+    #[test]
+    fn legacy_text_segment_at_base_height_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_text_segment(dir.path(), 48.0, 0.2, None);
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let segment = &config.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.font_size, 48.0);
+        assert_eq!(config.text_size_version, TEXT_SIZE_VERSION);
+    }
+
+    #[test]
+    fn current_text_config_is_not_rebaked() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_text_segment(dir.path(), 96.0, 0.4, Some(TEXT_SIZE_VERSION));
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let segment = &config.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.font_size, 96.0);
     }
 
     #[test]

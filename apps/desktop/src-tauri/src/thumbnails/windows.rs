@@ -9,11 +9,15 @@ pub async fn capture_display_thumbnail(display: &scap_targets::Display) -> Optio
 
     let (tx, rx) = std::sync::mpsc::channel();
 
-    let settings = Settings {
+    let mut settings = Settings {
         is_cursor_capture_enabled: Some(false),
         pixel_format: scap_direct3d::PixelFormat::R8G8B8A8Unorm,
         ..Default::default()
     };
+
+    if let Ok(true) = Settings::can_is_border_required() {
+        settings.is_border_required = Some(false);
+    }
 
     let mut capturer = Capturer::new(
         item,
@@ -148,11 +152,15 @@ pub async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<S
 
     let (tx, rx) = std::sync::mpsc::channel();
 
-    let settings = Settings {
+    let mut settings = Settings {
         is_cursor_capture_enabled: Some(false),
         pixel_format: scap_direct3d::PixelFormat::R8G8B8A8Unorm,
         ..Default::default()
     };
+
+    if let Ok(true) = Settings::can_is_border_required() {
+        settings.is_border_required = Some(false);
+    }
 
     let mut capturer = Capturer::new(
         item,

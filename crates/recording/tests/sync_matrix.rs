@@ -534,7 +534,6 @@ async fn run_audio_case(case: AudioCase) -> Result<String, String> {
     let emit = {
         let base = timestamps.instant();
         let mut tx = tx;
-        let info = info;
         tokio::spawn(async move {
             use futures::SinkExt;
             for k in 0..total_chunks {
@@ -601,6 +600,359 @@ async fn run_audio_case(case: AudioCase) -> Result<String, String> {
 fn bytemuck_cast_f32(data: &mut [u8]) -> &mut [f32] {
     let len = data.len() / 4;
     unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<f32>(), len) }
+}
+
+/// Tolerance for where audible content sits inside a decoded track. Bounded
+/// by the emission chunk size, the muxer gap threshold (70ms), codec frame
+/// granularity and CI scheduler noise.
+const CONTENT_POSITION_TOLERANCE_SECS: f64 = 0.25;
+
+/// System-audio (WASAPI-loopback-style) delivery: packets only exist while
+/// something plays. The recorder sees a late first packet, dead zones with no
+/// delivery at all, and possibly nothing after the last sound. The muxed
+/// track must still span the whole recording with every burst at its true
+/// wall-clock position and `first_timestamp` at the recording epoch.
+struct SystemAudioCase {
+    /// (start_secs, end_secs) of each burst of real packet delivery.
+    bursts: Vec<(f64, f64)>,
+    /// Wall-clock stop point of the recording.
+    total_secs: f64,
+}
+
+/// Emits loopback-style bursts on `tx` in real time, using 80ms chunks (the
+/// buffer size our Windows loopback capturer targets).
+///
+/// Returns the sender when done: real capture sources hold their channel
+/// open until the recording stops (the mic feed and the system-audio watcher
+/// both keep sender clones), so the test must too — dropping it early would
+/// end the mux loop through channel-closure instead of stop-cancellation.
+fn spawn_burst_emitter(
+    mut tx: futures::channel::mpsc::Sender<AudioFrame>,
+    info: AudioInfo,
+    timestamps: Timestamps,
+    bursts: Vec<(f64, f64)>,
+) -> tokio::task::JoinHandle<futures::channel::mpsc::Sender<AudioFrame>> {
+    const CHUNK_SECS: f64 = 0.08;
+    let rate = info.sample_rate;
+    let channels = info.channels;
+    let base = timestamps.instant();
+
+    tokio::spawn(async move {
+        use futures::SinkExt;
+        for (start, end) in bursts {
+            let chunk_frames = (f64::from(rate) * CHUNK_SECS) as usize;
+            let chunks = ((end - start) / CHUNK_SECS).round() as usize;
+            for k in 0..chunks {
+                let t = start + k as f64 * CHUNK_SECS;
+                tokio::time::sleep_until((base + Duration::from_secs_f64(t)).into()).await;
+                let mut frame = ffmpeg::frame::Audio::new(
+                    ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                    chunk_frames,
+                    info.channel_layout(),
+                );
+                frame.set_rate(rate);
+                for (i, sample) in bytemuck_cast_f32(frame.data_mut(0)).iter_mut().enumerate() {
+                    let n = (i / channels) as f32 + (t * f64::from(rate)) as f32;
+                    *sample = (n * 440.0 * 2.0 * std::f32::consts::PI / rate as f32).sin() * 0.4;
+                }
+                let frame =
+                    AudioFrame::new(frame, Timestamp::Instant(base + Duration::from_secs_f64(t)));
+                if tx.send(frame).await.is_err() {
+                    return tx;
+                }
+            }
+        }
+        tx
+    })
+}
+
+/// Decodes the first channel and returns (windowed rms envelope, window secs).
+fn read_audio_envelope(path: &Path, win_secs: f64) -> Result<(Vec<f64>, f64), String> {
+    let mut ictx = ffmpeg::format::input(&path).map_err(|e| format!("open {e}"))?;
+    let stream = ictx
+        .streams()
+        .best(ffmpeg::media::Type::Audio)
+        .ok_or("no audio stream")?;
+    let index = stream.index();
+    let ctx = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+        .map_err(|e| format!("params: {e}"))?;
+    let mut decoder = ctx.decoder().audio().map_err(|e| format!("decoder: {e}"))?;
+
+    let mut samples: Vec<f64> = Vec::new();
+    let mut rate = 0u32;
+    let mut frame = ffmpeg::frame::Audio::empty();
+    let drain = |decoder: &mut ffmpeg::decoder::Audio,
+                 samples: &mut Vec<f64>,
+                 rate: &mut u32,
+                 frame: &mut ffmpeg::frame::Audio| {
+        while decoder.receive_frame(frame).is_ok() {
+            *rate = frame.rate();
+            if let ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar) =
+                frame.format()
+            {
+                samples.extend(
+                    frame.plane::<f32>(0)[..frame.samples()]
+                        .iter()
+                        .map(|&v| f64::from(v)),
+                );
+            }
+        }
+    };
+    for (s, packet) in ictx.packets() {
+        if s.index() != index {
+            continue;
+        }
+        if decoder.send_packet(&packet).is_ok() {
+            drain(&mut decoder, &mut samples, &mut rate, &mut frame);
+        }
+    }
+    let _ = decoder.send_eof();
+    drain(&mut decoder, &mut samples, &mut rate, &mut frame);
+
+    if rate == 0 || samples.is_empty() {
+        return Err("no audio decoded".to_string());
+    }
+    let win = ((f64::from(rate) * win_secs) as usize).max(1);
+    let env: Vec<f64> = samples
+        .chunks(win)
+        .map(|c| (c.iter().map(|v| v * v).sum::<f64>() / c.len() as f64).sqrt())
+        .collect();
+    Ok((env, win as f64 / f64::from(rate)))
+}
+
+/// Regions of the envelope above `thresh`, merged across single-window dips,
+/// dropping blips shorter than 0.15s.
+fn active_spans(env: &[f64], win_secs: f64, thresh: f64) -> Vec<(f64, f64)> {
+    let mut spans: Vec<(f64, f64)> = Vec::new();
+    let mut current: Option<(usize, usize)> = None;
+    for (i, &v) in env.iter().enumerate() {
+        if v > thresh {
+            current = match current {
+                Some((s, _)) => Some((s, i)),
+                None => Some((i, i)),
+            };
+        } else if let Some((s, e)) = current
+            && i > e + 1
+        {
+            spans.push((s as f64 * win_secs, (e + 1) as f64 * win_secs));
+            current = None;
+        }
+    }
+    if let Some((s, e)) = current {
+        spans.push((s as f64 * win_secs, (e + 1) as f64 * win_secs));
+    }
+    spans.retain(|(s, e)| e - s >= 0.15);
+    spans
+}
+
+fn check_spans(
+    decoded: &[(f64, f64)],
+    expected: &[(f64, f64)],
+    track_offset_secs: f64,
+) -> Result<(), String> {
+    if decoded.len() != expected.len() {
+        return Err(format!(
+            "expected {} audible bursts at {:?}, decoded {} at {:?} \
+             (track offset {track_offset_secs:.3}s)",
+            expected.len(),
+            expected,
+            decoded.len(),
+            decoded,
+        ));
+    }
+    for ((ds, de), (es, ee)) in decoded.iter().zip(expected) {
+        // Positions are compared on the recording (epoch) timeline: the
+        // decoded in-track position plus the track's start offset.
+        let (ds, de) = (ds + track_offset_secs, de + track_offset_secs);
+        if (ds - es).abs() > CONTENT_POSITION_TOLERANCE_SECS
+            || (de - ee).abs() > CONTENT_POSITION_TOLERANCE_SECS
+        {
+            return Err(format!(
+                "burst decoded at {ds:.3}..{de:.3}s on the recording timeline, \
+                 emitted at {es:.3}..{ee:.3}s"
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn run_system_audio_case(case: SystemAudioCase) -> Result<String, String> {
+    use cap_recording::AudioAnchor;
+
+    let SystemAudioCase { bursts, total_secs } = case;
+    let temp = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
+    let out_path = temp.path().join("system_audio.ogg");
+
+    let info = AudioInfo::new(Sample::F32(Type::Packed), 48_000, 2)
+        .map_err(|e| format!("audio info: {e:?}"))?;
+    let (tx, rx) = futures::channel::mpsc::channel::<AudioFrame>(32);
+    let timestamps = Timestamps::now();
+
+    let emit = spawn_burst_emitter(tx, info, timestamps, bursts.clone());
+
+    let pipeline = OutputPipeline::builder(out_path.clone())
+        .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(info, rx))
+        .with_timestamps(timestamps)
+        .with_audio_anchor(AudioAnchor::PipelineEpoch)
+        .build::<OggMuxer>(())
+        .await
+        .map_err(|e| format!("pipeline build: {e}"))?;
+
+    let held_tx = emit.await.map_err(|e| format!("emit join: {e}"))?;
+    tokio::time::sleep_until((timestamps.instant() + Duration::from_secs_f64(total_secs)).into())
+        .await;
+    let stop_lag = timestamps.instant().elapsed().as_secs_f64() - total_secs;
+    let finished = pipeline.stop().await.map_err(|e| format!("stop: {e}"))?;
+    drop(held_tx);
+    if stop_lag > 1.5 {
+        return Ok(format!(
+            "skipped: runner fell {stop_lag:.1}s behind real-time emission"
+        ));
+    }
+
+    // An intermittent track is anchored at the recording epoch, never at its
+    // first packet: a late first sound must not be able to become the
+    // cross-track start_time anchor.
+    let start_offset = finished
+        .first_timestamp
+        .signed_duration_since_secs(timestamps);
+    if start_offset.abs() > 0.05 {
+        return Err(format!(
+            "track start {start_offset:.3}s from the epoch; \
+             an intermittent source must anchor at the recording start"
+        ));
+    }
+
+    // Head silence, dead-zone silence and tail silence must all be
+    // materialized: the track spans the whole recording.
+    let (duration, _, _) = read_audio_stats(&out_path)?;
+    if (duration - total_secs).abs() > AUDIO_DURATION_TOLERANCE_SECS + stop_lag {
+        return Err(format!(
+            "decoded duration {duration:.3}s vs recording span {total_secs:.3}s; \
+             silence between/around bursts was not materialized"
+        ));
+    }
+
+    // Every burst must sit at its true wall-clock position.
+    let (env, win) = read_audio_envelope(&out_path, 0.05)?;
+    let spans = active_spans(&env, win, 0.08);
+    check_spans(&spans, &bursts, start_offset)?;
+
+    Ok(format!(
+        "duration {duration:.3}s, start {start_offset:+.3}s, {} bursts in place",
+        spans.len()
+    ))
+}
+
+/// The reported regression shape: a continuous mic and an intermittent
+/// system-audio source recorded simultaneously (separate pipelines sharing
+/// the recording epoch, exactly like studio mode). Every piece of content in
+/// BOTH tracks must resolve to its true wall-clock position through each
+/// track's own start_time — the presence of system audio must not move the
+/// mic, and vice versa.
+async fn run_mic_with_system_audio_case() -> Result<String, String> {
+    use cap_recording::AudioAnchor;
+
+    const MIC_START_SECS: f64 = 0.15;
+    const TOTAL_SECS: f64 = 4.5;
+    let system_bursts: Vec<(f64, f64)> = vec![(1.2, 2.0), (3.4, 4.1)];
+
+    let temp = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
+    let mic_path = temp.path().join("audio-input.ogg");
+    let sys_path = temp.path().join("system_audio.ogg");
+
+    let info = AudioInfo::new(Sample::F32(Type::Packed), 48_000, 2)
+        .map_err(|e| format!("audio info: {e:?}"))?;
+    let timestamps = Timestamps::now();
+
+    let (mic_tx, mic_rx) = futures::channel::mpsc::channel::<AudioFrame>(32);
+    let (sys_tx, sys_rx) = futures::channel::mpsc::channel::<AudioFrame>(32);
+
+    // The mic delivers continuously from device-ready at 0.15s to stop.
+    let mic_emit =
+        spawn_burst_emitter(mic_tx, info, timestamps, vec![(MIC_START_SECS, TOTAL_SECS)]);
+    let sys_emit = spawn_burst_emitter(sys_tx, info, timestamps, system_bursts.clone());
+
+    let mic_pipeline = OutputPipeline::builder(mic_path.clone())
+        .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(info, mic_rx))
+        .with_timestamps(timestamps)
+        .build::<OggMuxer>(())
+        .await
+        .map_err(|e| format!("mic pipeline build: {e}"))?;
+    let sys_pipeline = OutputPipeline::builder(sys_path.clone())
+        .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(info, sys_rx))
+        .with_timestamps(timestamps)
+        .with_audio_anchor(AudioAnchor::PipelineEpoch)
+        .build::<OggMuxer>(())
+        .await
+        .map_err(|e| format!("system pipeline build: {e}"))?;
+
+    let (mic_join, sys_join) = tokio::join!(mic_emit, sys_emit);
+    let mic_held_tx = mic_join.map_err(|e| format!("mic emit join: {e}"))?;
+    let sys_held_tx = sys_join.map_err(|e| format!("sys emit join: {e}"))?;
+    tokio::time::sleep_until((timestamps.instant() + Duration::from_secs_f64(TOTAL_SECS)).into())
+        .await;
+    let stop_lag = timestamps.instant().elapsed().as_secs_f64() - TOTAL_SECS;
+    let (mic_finished, sys_finished) = tokio::join!(mic_pipeline.stop(), sys_pipeline.stop());
+    let mic_finished = mic_finished.map_err(|e| format!("mic stop: {e}"))?;
+    let sys_finished = sys_finished.map_err(|e| format!("sys stop: {e}"))?;
+    drop((mic_held_tx, sys_held_tx));
+    if stop_lag > 1.5 {
+        return Ok(format!(
+            "skipped: runner fell {stop_lag:.1}s behind real-time emission"
+        ));
+    }
+
+    // Mic keeps first-frame anchoring: its start_time is device-ready.
+    let mic_start = mic_finished
+        .first_timestamp
+        .signed_duration_since_secs(timestamps);
+    if (mic_start - MIC_START_SECS).abs() > 0.05 {
+        return Err(format!(
+            "mic start_time {mic_start:.3}s, expected {MIC_START_SECS:.3}s: \
+             recording system audio simultaneously must not move the mic anchor"
+        ));
+    }
+
+    let sys_start = sys_finished
+        .first_timestamp
+        .signed_duration_since_secs(timestamps);
+    if sys_start.abs() > 0.05 {
+        return Err(format!(
+            "system audio start_time {sys_start:.3}s, expected the epoch"
+        ));
+    }
+
+    // Content must land at its true wall-clock position through each track's
+    // own start offset — this is exactly the invariant the editor's
+    // start_time-based alignment depends on.
+    let (mic_env, mic_win) = read_audio_envelope(&mic_path, 0.05)?;
+    let mic_spans = active_spans(&mic_env, mic_win, 0.08);
+    check_spans(&mic_spans, &[(MIC_START_SECS, TOTAL_SECS)], mic_start)?;
+
+    let (sys_env, sys_win) = read_audio_envelope(&sys_path, 0.05)?;
+    let sys_spans = active_spans(&sys_env, sys_win, 0.08);
+    check_spans(&sys_spans, &system_bursts, sys_start)?;
+
+    // Both tracks span to the stop point (tail silence materialized).
+    let (mic_duration, _, _) = read_audio_stats(&mic_path)?;
+    let mic_expected = TOTAL_SECS - MIC_START_SECS;
+    if (mic_duration - mic_expected).abs() > AUDIO_DURATION_TOLERANCE_SECS + stop_lag {
+        return Err(format!(
+            "mic duration {mic_duration:.3}s vs expected {mic_expected:.3}s"
+        ));
+    }
+    let (sys_duration, _, _) = read_audio_stats(&sys_path)?;
+    if (sys_duration - TOTAL_SECS).abs() > AUDIO_DURATION_TOLERANCE_SECS + stop_lag {
+        return Err(format!(
+            "system audio duration {sys_duration:.3}s vs recording span {TOTAL_SECS:.3}s"
+        ));
+    }
+
+    Ok(format!(
+        "mic start {mic_start:.3}s dur {mic_duration:.3}s; \
+         system start {sys_start:+.3}s dur {sys_duration:.3}s; all content in place"
+    ))
 }
 
 /// Concatenates a fragmented-mp4 segment directory (init.mp4 + *.m4s) into a
@@ -855,6 +1207,52 @@ async fn synthetic_device_matrix_preserves_sync() {
         let outcome = run_audio_case(AudioCase::curated(rate, channels)).await;
         record(&mut results, name, outcome);
     }
+
+    // System-audio delivery shapes: WASAPI-loopback-style intermittent
+    // sources that only produce packets while sound plays. These guard the
+    // epoch anchoring + silence materialization that keep an intermittent
+    // track from desyncing (or re-anchoring) the whole recording.
+    let system_audio_cases: Vec<(&str, SystemAudioCase)> = vec![
+        (
+            "system-audio/late-first-sound",
+            SystemAudioCase {
+                bursts: vec![(1.4, 2.6)],
+                total_secs: 4.0,
+            },
+        ),
+        (
+            "system-audio/dead-zone",
+            SystemAudioCase {
+                bursts: vec![(0.2, 1.2), (3.0, 3.8)],
+                total_secs: 4.5,
+            },
+        ),
+        (
+            "system-audio/silent-throughout",
+            SystemAudioCase {
+                bursts: vec![],
+                total_secs: 3.0,
+            },
+        ),
+        (
+            "system-audio/bursty-notifications",
+            SystemAudioCase {
+                bursts: vec![(0.4, 0.8), (1.6, 2.0), (2.8, 3.2)],
+                total_secs: 4.0,
+            },
+        ),
+    ];
+
+    for (name, case) in system_audio_cases {
+        let outcome = run_system_audio_case(case).await;
+        record(&mut results, name.to_string(), outcome);
+    }
+
+    record(
+        &mut results,
+        "system-audio/with-mic".to_string(),
+        run_mic_with_system_audio_case().await,
+    );
 
     // Non-predetermined coverage: random device shapes and delivery
     // pathologies, combined audio+video like a real studio recording.

@@ -144,12 +144,19 @@ fn onnx_runtime_candidates() -> Vec<PathBuf> {
     candidates
 }
 
+// `error_on_failure` is load-bearing in both registrars: without it ort swallows
+// registration failures and returns Ok (it only logs through its own internal
+// logger), so a CPU-only runtime DLL would make the "registered" log a false
+// positive while inference silently runs on CPU.
+
 #[cfg(target_os = "macos")]
 fn try_register_coreml(
     builder: ort::session::builder::SessionBuilder,
 ) -> ort::session::builder::SessionBuilder {
     match builder.with_execution_providers([
-        ort::execution_providers::CoreMLExecutionProvider::default().build(),
+        ort::execution_providers::CoreMLExecutionProvider::default()
+            .build()
+            .error_on_failure(),
     ]) {
         Ok(b) => {
             tracing::info!("Camera background blur: CoreML execution provider registered");
@@ -167,7 +174,9 @@ fn try_register_directml(
     builder: ort::session::builder::SessionBuilder,
 ) -> ort::session::builder::SessionBuilder {
     match builder.with_execution_providers([
-        ort::execution_providers::DirectMLExecutionProvider::default().build(),
+        ort::execution_providers::DirectMLExecutionProvider::default()
+            .build()
+            .error_on_failure(),
     ]) {
         Ok(b) => {
             tracing::info!("Camera background blur: DirectML execution provider registered");

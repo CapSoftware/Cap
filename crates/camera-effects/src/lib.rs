@@ -1,12 +1,54 @@
 mod blur_pipeline;
 mod segmentation;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use blur_pipeline::{BlurPassInputs, BlurPipeline, CompositePipeline};
 use segmentation::SegmentationModel;
+
+static BLUR_DISABLED: AtomicBool = AtomicBool::new(false);
+static BLUR_SESSION_OBSERVER: OnceLock<fn(bool)> = OnceLock::new();
+
+/// Globally disables camera background blur: `BlurProcessor::new` fails fast and
+/// every call site degrades to its unblurred fallback. Set by the desktop app's
+/// crash recovery when a previous session died with the blur pipeline active
+/// (native DirectML/driver crashes never reach a panic handler).
+pub fn set_blur_disabled(disabled: bool) {
+    BLUR_DISABLED.store(disabled, Ordering::Release);
+}
+
+pub fn blur_disabled() -> bool {
+    BLUR_DISABLED.load(Ordering::Acquire)
+}
+
+/// Registers a callback invoked with `true` while any `BlurProcessor` exists
+/// (from just before the ONNX/GPU session is created until drop), so a host can
+/// attribute a hard process death to the blur pipeline. Processes that never
+/// register (cap-exporter, the CLI) get a no-op and unchanged behavior.
+pub fn set_blur_session_observer(observer: fn(bool)) {
+    let _ = BLUR_SESSION_OBSERVER.set(observer);
+}
+
+fn notify_blur_session(active: bool) {
+    if let Some(observer) = BLUR_SESSION_OBSERVER.get() {
+        observer(active);
+    }
+}
+
+/// Pairs the observer's `true` notification with exactly one `false`, whether
+/// init fails, init panics, or the processor is eventually dropped. Declared as
+/// the LAST field of `BlurProcessor` so the disarm runs only after the ONNX
+/// session and GPU resources have finished their own (native, crashable)
+/// teardown.
+struct BlurSessionHandle;
+
+impl Drop for BlurSessionHandle {
+    fn drop(&mut self) {
+        notify_blur_session(false);
+    }
+}
 
 const READBACK_PENDING: u8 = 0;
 const READBACK_READY_OK: u8 = 1;
@@ -51,6 +93,8 @@ pub struct BlurProcessor {
     mask_initialized: bool,
     mask_dirty: bool,
     output_generation: u64,
+    // Keep last: must drop after every other field (see BlurSessionHandle).
+    _blur_session: BlurSessionHandle,
 }
 
 struct DownsamplePipeline {
@@ -149,6 +193,21 @@ struct ProcessorTextures {
 
 impl BlurProcessor {
     pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat) -> anyhow::Result<Self> {
+        if blur_disabled() {
+            anyhow::bail!("camera background blur disabled by crash recovery");
+        }
+
+        // Armed before the ONNX session is created: model load and the first
+        // GPU work are both native-crash sites we need attributed to blur.
+        notify_blur_session(true);
+        Self::new_inner(device, output_format, BlurSessionHandle)
+    }
+
+    fn new_inner(
+        device: &wgpu::Device,
+        output_format: wgpu::TextureFormat,
+        blur_session: BlurSessionHandle,
+    ) -> anyhow::Result<Self> {
         let model = SegmentationModel::new()?;
         let blur_pipeline = BlurPipeline::new(device);
         let composite_pipeline = CompositePipeline::new(device, output_format);
@@ -203,6 +262,7 @@ impl BlurProcessor {
             mask_initialized: false,
             mask_dirty: true,
             output_generation: 0,
+            _blur_session: blur_session,
         })
     }
 

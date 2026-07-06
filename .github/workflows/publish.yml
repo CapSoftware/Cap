@@ -268,7 +268,7 @@ jobs:
       # ("runner received a shutdown signal"). The runner already ships an
       # active /swapfile (resizing it fails with "Text file busy"), so add a
       # large swapfile on the roomy /mnt disk on top of the existing swap.
-      # Linux-only; macOS/Windows are unaffected.
+      # macOS runs on xlarge runners and is unaffected.
       - name: Increase swap space (Linux)
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -281,6 +281,18 @@ jobs:
           sudo swapon /mnt/swapfile
           swapon --show
           free -h
+
+      # The same fat-LTO link exhausts commit on the 16GB Windows runner
+      # ("rustc-LLVM ERROR: out of memory" while linking cap-desktop), so
+      # raise the pagefile on the roomy D: disk — the Windows analog of the
+      # Linux swapfile above.
+      - name: Increase pagefile size (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        uses: al-cheb/configure-pagefile-action@a3b6ebd6b634da88790d9c58d4b37a7f4a7b8708 # v1.4
+        with:
+          minimum-size: 16GB
+          maximum-size: 24GB
+          disk-root: "D:"
 
       - name: Build app
         working-directory: apps/desktop

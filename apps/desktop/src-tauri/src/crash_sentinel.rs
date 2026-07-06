@@ -35,12 +35,28 @@ struct SessionRecord {
     /// mode, so a follow-up crash doesn't chain into recovery forever.
     #[serde(default)]
     graphics_recovery: bool,
+    /// True while any camera-background-blur processor is alive (ONNX/DirectML
+    /// session + dedicated GPU work), and for a linger period after the last
+    /// one is released — deferred driver/D3D12 faults have been observed
+    /// killing the process tens of seconds after blur teardown. Native crashes
+    /// in that stack never reach a panic handler; if the process dies inside
+    /// this window the next launch attributes the death to blur and disables it.
+    #[serde(default)]
+    blur_active: bool,
+    /// True when this session already ran with blur disabled by crash recovery,
+    /// for diagnostics on the next-launch report.
+    #[serde(default)]
+    blur_recovery: bool,
 }
 
 struct ActiveSession {
     path: PathBuf,
     record: SessionRecord,
     gpu_init_depth: u32,
+    blur_session_depth: u32,
+    /// Bumped on every blur enter/exit so a scheduled linger-disarm can tell
+    /// whether blur activity happened after it was scheduled.
+    blur_generation: u64,
 }
 
 static SESSION: Mutex<Option<ActiveSession>> = Mutex::new(None);
@@ -54,6 +70,8 @@ pub struct UnexpectedTermination {
     pub during_gpu_init: bool,
     /// The session was already running in software-graphics recovery mode.
     pub in_graphics_recovery: bool,
+    /// The process died while a camera-background-blur processor was alive.
+    pub blur_active: bool,
 }
 
 /// Arm the sentinel for this session and, if a previous session's sentinel survived,
@@ -76,6 +94,7 @@ pub fn init(logs_dir: &Path, app_version: &str) -> Option<UnexpectedTermination>
                 previous_termination = Some(UnexpectedTermination {
                     during_gpu_init: prev.gpu_init_phase,
                     in_graphics_recovery: prev.graphics_recovery,
+                    blur_active: prev.blur_active,
                 });
             }
             Err(error) => {
@@ -101,6 +120,8 @@ pub fn init(logs_dir: &Path, app_version: &str) -> Option<UnexpectedTermination>
         liquid_glass: "unknown".to_string(),
         gpu_init_phase: false,
         graphics_recovery: false,
+        blur_active: false,
+        blur_recovery: false,
     };
 
     write_record(&path, &record);
@@ -115,6 +136,8 @@ pub fn init(logs_dir: &Path, app_version: &str) -> Option<UnexpectedTermination>
         path,
         record,
         gpu_init_depth: 0,
+        blur_session_depth: 0,
+        blur_generation: 0,
     });
 
     previous_termination
@@ -147,6 +170,79 @@ pub fn exit_gpu_init_phase() {
             write_record(&session.path, &session.record);
         }
     }
+}
+
+/// How long `blur_active` stays armed after the last blur processor is
+/// released. Deferred D3D12/DML/driver faults have been observed killing the
+/// process up to ~50s after blur teardown finished (the fault surfaces
+/// asynchronously); disarming immediately would miss exactly those deaths and
+/// leave the crash loop unbroken.
+const BLUR_DISARM_LINGER: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Arm the blur marker while a camera-background-blur processor is alive. If the
+/// process dies inside this window the next launch sees `blur_active` and can
+/// disable blur. Nestable (editor render + camera preview can overlap); the
+/// marker persists until a linger period after the last exit call.
+pub fn enter_blur_session() {
+    if let Ok(mut guard) = SESSION.lock()
+        && let Some(session) = guard.as_mut()
+    {
+        session.blur_session_depth += 1;
+        session.blur_generation = session.blur_generation.wrapping_add(1);
+        if !session.record.blur_active {
+            session.record.blur_active = true;
+            write_record(&session.path, &session.record);
+        }
+    }
+}
+
+/// Schedule the blur marker to disarm once the linger window passes with no new
+/// blur session. The generation check makes a stale disarm from an earlier
+/// exit a no-op if blur was re-armed in the meantime.
+pub fn exit_blur_session() {
+    let scheduled_generation = {
+        let Ok(mut guard) = SESSION.lock() else {
+            return;
+        };
+        let Some(session) = guard.as_mut() else {
+            return;
+        };
+        session.blur_session_depth = session.blur_session_depth.saturating_sub(1);
+        session.blur_generation = session.blur_generation.wrapping_add(1);
+        if session.blur_session_depth != 0 || !session.record.blur_active {
+            return;
+        }
+        session.blur_generation
+    };
+
+    std::thread::spawn(move || {
+        std::thread::sleep(BLUR_DISARM_LINGER);
+        if let Ok(mut guard) = SESSION.lock()
+            && let Some(session) = guard.as_mut()
+            && session.blur_generation == scheduled_generation
+            && session.blur_session_depth == 0
+            && session.record.blur_active
+        {
+            session.record.blur_active = false;
+            write_record(&session.path, &session.record);
+        }
+    });
+}
+
+/// Record that this session is running with camera background blur disabled by
+/// crash recovery, for diagnostics on a follow-up unexpected-termination report.
+pub fn mark_blur_recovery() {
+    if let Ok(mut guard) = SESSION.lock()
+        && let Some(session) = guard.as_mut()
+        && !session.record.blur_recovery
+    {
+        session.record.blur_recovery = true;
+        write_record(&session.path, &session.record);
+    }
+
+    sentry::configure_scope(|scope| {
+        scope.set_tag("camera_blur_recovery", "true");
+    });
 }
 
 /// Record that this session is running in software-graphics recovery mode, so an
@@ -203,6 +299,8 @@ fn report_unexpected_termination(prev: &SessionRecord) {
         prev_liquid_glass = %prev.liquid_glass,
         prev_gpu_init_phase = prev.gpu_init_phase,
         prev_graphics_recovery = prev.graphics_recovery,
+        prev_blur_active = prev.blur_active,
+        prev_blur_recovery = prev.blur_recovery,
         "Previous Cap session terminated without a clean shutdown"
     );
 
@@ -215,6 +313,8 @@ fn report_unexpected_termination(prev: &SessionRecord) {
             scope.set_tag("prev.macos_liquid_glass", &prev.liquid_glass);
             scope.set_tag("prev.gpu_init_phase", prev.gpu_init_phase.to_string());
             scope.set_tag("prev.graphics_recovery", prev.graphics_recovery.to_string());
+            scope.set_tag("prev.blur_active", prev.blur_active.to_string());
+            scope.set_tag("prev.blur_recovery", prev.blur_recovery.to_string());
             scope.set_extra("prev.pid", prev.pid.into());
             scope.set_extra("prev.started_at", prev.started_at.clone().into());
         },

@@ -654,7 +654,13 @@ export function ZoomTrack(props: {
 												</Match>
 												<Match when={true}>
 													<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
-														<span class="opacity-70">Zoom</span>
+														<span class="opacity-70">
+															{ctx.width() >= 140
+																? segment().mode === "auto"
+																	? "Automatic Zoom"
+																	: "Manual Zoom"
+																: "Zoom"}
+														</span>
 														<div class="flex gap-1 items-center text-md">
 															<IconLucideSearch class="size-3.5" />
 															{zoomPercentage()}

@@ -719,13 +719,24 @@ const WIRED_GAP_THRESHOLD: Duration = Duration::from_millis(70);
 const WIRELESS_GAP_THRESHOLD: Duration = Duration::from_millis(160);
 const AUDIO_WALL_CLOCK_TOLERANCE: Duration = Duration::from_millis(100);
 const AUDIO_OVERLAP_TOLERANCE: Duration = Duration::from_millis(5);
-const MAX_SILENCE_INSERTION: Duration = Duration::from_secs(1);
-const MAX_AUDIO_TAIL_PADDING: Duration = Duration::from_millis(300);
+const LONG_SILENCE_LOG_THRESHOLD: Duration = Duration::from_secs(1);
+/// Cap on individual synthesized-silence frames; long fills are emitted as a
+/// sequence of frames so a multi-second dead zone doesn't allocate one giant
+/// buffer.
+const SILENCE_FRAME_MAX: Duration = Duration::from_secs(1);
 
-fn audio_tail_padding_duration(audio_elapsed: Duration, target_elapsed: Duration) -> Duration {
-    target_elapsed
-        .saturating_sub(audio_elapsed)
-        .min(MAX_AUDIO_TAIL_PADDING)
+/// How much trailing silence the track needs to reach the stop point.
+/// `track_target_elapsed` must be in the track's own timeline (epoch-relative
+/// target minus the track's start offset); both the previous overshoot
+/// (mic tracks padded past the stop point) and the previous shortfall
+/// (a system-audio track whose last sound came long before stop stayed
+/// short) came from comparing an epoch-relative target against the
+/// track-local timeline.
+fn audio_tail_padding_duration(
+    audio_elapsed: Duration,
+    track_target_elapsed: Duration,
+) -> Duration {
+    track_target_elapsed.saturating_sub(audio_elapsed)
 }
 
 const STARTUP_OVERLAP_DROP_FRAME_COUNT: u64 = 3;
@@ -810,6 +821,20 @@ impl AudioGapTracker {
         }
     }
 
+    fn started(&self) -> bool {
+        self.first_frame_ts.is_some()
+    }
+
+    /// Offset of this track's timeline zero from the pipeline epoch: the
+    /// capture time of the first muxed frame, or zero when the track is
+    /// anchored at the epoch itself.
+    fn track_start_offset(&self) -> Option<Duration> {
+        let secs = self
+            .first_frame_ts?
+            .signed_duration_since_secs(self.reference);
+        Some(Duration::from_secs_f64(secs.max(0.0)))
+    }
+
     fn capture_elapsed(
         &self,
         current_frame_ts: Timestamp,
@@ -849,7 +874,14 @@ impl AudioGapTracker {
 
         let gap = capture_elapsed.saturating_sub(sample_based_elapsed);
         if gap > self.gap_threshold {
-            Some(gap.min(MAX_SILENCE_INSERTION))
+            // The full gap is inserted: capture_elapsed is already clamped to
+            // wall-clock elapsed (+tolerance), so a large value here is a real
+            // silent stretch (e.g. WASAPI loopback delivers nothing while the
+            // system plays no sound), not a bogus timestamp. Truncating it
+            // (the old 1s cap) placed the audio that follows a long dead zone
+            // up to the truncated amount too early until repeated insertions
+            // converged, smearing the first seconds after the gap.
+            Some(gap)
         } else {
             None
         }
@@ -892,6 +924,34 @@ impl AudioGapTracker {
             self.last_silence_log = Some(Instant::now());
         }
     }
+}
+
+/// Send `total_samples` of synthesized silence starting at the track-local
+/// sample position `start_samples`, split into frames of at most
+/// [`SILENCE_FRAME_MAX`]. Each frame's mux timestamp is derived from the
+/// running sample count so long fills stay sample-accurate.
+async fn send_silence_frames<TMuxer: AudioMuxer>(
+    muxer: &Arc<Mutex<TMuxer>>,
+    audio_info: &AudioInfo,
+    frame_ts: Timestamp,
+    start_samples: u64,
+    total_samples: u64,
+) -> anyhow::Result<()> {
+    let sample_rate = audio_info.sample_rate;
+    let chunk_max = ((sample_rate.max(1) as u64) * SILENCE_FRAME_MAX.as_millis() as u64) / 1000;
+    let chunk_max = chunk_max.max(1);
+    let mut sent = 0u64;
+    while sent < total_samples {
+        let n = (total_samples - sent).min(chunk_max);
+        let elapsed = Duration::from_nanos(samples_to_nanos(start_samples + sent, sample_rate));
+        let silence = create_silence_frame(audio_info, n as usize);
+        muxer
+            .lock()
+            .await
+            .send_audio_frame(AudioFrame::new(silence, frame_ts), elapsed)?;
+        sent += n;
+    }
+    Ok(())
 }
 
 fn create_silence_frame(audio_info: &AudioInfo, sample_count: usize) -> ffmpeg::frame::Audio {
@@ -1433,8 +1493,28 @@ impl OutputPipeline {
             audio_sources: vec![],
             timestamps,
             master_clock: None,
+            audio_anchor: AudioAnchor::FirstFrame,
         }
     }
+}
+
+/// Where the audio track's timeline zero (and therefore its persisted
+/// `start_time`) is anchored.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum AudioAnchor {
+    /// Timeline zero is the capture timestamp of the first frame the muxer
+    /// sees. Right for device-backed sources (microphone, camera audio):
+    /// the device produces samples continuously once live, so the first
+    /// frame marks "device ready" and downstream start-time alignment cuts
+    /// all tracks to the latest-starting device.
+    FirstFrame,
+    /// Timeline zero is the pipeline epoch; silence is synthesized from the
+    /// epoch up to the first captured frame. Right for intermittent sources
+    /// (WASAPI loopback system audio) where the first packet marks "first
+    /// sound played", not "source ready" — anchoring such a track at its
+    /// first frame would let a late first sound become the cross-track
+    /// alignment anchor and cut the head off every other track.
+    PipelineEpoch,
 }
 
 pub struct SetupCtx {
@@ -1496,6 +1576,7 @@ pub struct OutputPipelineBuilder<TVideo> {
     audio_sources: Vec<AudioSourceSetupFn>,
     timestamps: Timestamps,
     master_clock: Option<Arc<MasterClock>>,
+    audio_anchor: AudioAnchor,
 }
 
 pub struct NoVideo;
@@ -1534,6 +1615,13 @@ impl<THasVideo> OutputPipelineBuilder<THasVideo> {
     pub fn set_master_clock(&mut self, master_clock: Arc<MasterClock>) {
         self.master_clock = Some(master_clock);
     }
+
+    /// Anchor the audio track at the pipeline epoch instead of the first
+    /// captured frame. See [`AudioAnchor::PipelineEpoch`].
+    pub fn with_audio_anchor(mut self, anchor: AudioAnchor) -> Self {
+        self.audio_anchor = anchor;
+        self
+    }
 }
 
 impl OutputPipelineBuilder<NoVideo> {
@@ -1547,6 +1635,7 @@ impl OutputPipelineBuilder<NoVideo> {
             audio_sources: self.audio_sources,
             timestamps: self.timestamps,
             master_clock: self.master_clock,
+            audio_anchor: self.audio_anchor,
         }
     }
 }
@@ -1612,6 +1701,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             timestamps,
             path,
             master_clock,
+            audio_anchor,
             ..
         } = self;
 
@@ -1690,6 +1780,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             video_start_gate,
             build_ctx.stop_signal,
             audio_gap_summary.clone(),
+            audio_anchor,
         )
         .await?;
 
@@ -1719,6 +1810,7 @@ impl OutputPipelineBuilder<NoVideo> {
             timestamps,
             path,
             master_clock,
+            audio_anchor,
             ..
         } = self;
 
@@ -1774,6 +1866,7 @@ impl OutputPipelineBuilder<NoVideo> {
             None,
             build_ctx.stop_signal,
             audio_gap_summary.clone(),
+            audio_anchor,
         )
         .await?;
 
@@ -1845,6 +1938,7 @@ async fn finish_build(
     video_start_gate: Option<VideoStartGate>,
     stop_signal: PipelineStopSignal,
     gap_summary_slot: Arc<OnceLock<AudioGapSummary>>,
+    audio_anchor: AudioAnchor,
 ) -> anyhow::Result<()> {
     if let Some(audio) = audio {
         audio.configure(
@@ -1857,6 +1951,7 @@ async fn finish_build(
             has_video,
             video_start_gate,
             gap_summary_slot,
+            audio_anchor,
         );
     }
 
@@ -2301,11 +2396,19 @@ impl PreparedAudioSources {
         has_video: bool,
         video_start_gate: Option<VideoStartGate>,
         gap_summary_slot: Arc<OnceLock<AudioGapSummary>>,
+        audio_anchor: AudioAnchor,
     ) {
         let audio_info = self.audio_info;
         let has_wireless_source = self.has_wireless_source;
         let health_tx = setup_ctx.health_tx().clone();
         let master_clock = setup_ctx.master_clock().clone();
+
+        if audio_anchor == AudioAnchor::PipelineEpoch && video_start_gate.is_some() {
+            warn!(
+                "PipelineEpoch audio anchor is ignored when a video start gate \
+                 aligns audio to the video track"
+            );
+        }
 
         setup_ctx.tasks().spawn("mux-audio", {
             let stop_token = stop_token.child_token();
@@ -2338,6 +2441,8 @@ impl PreparedAudioSources {
                                     has_video,
                                     origin: FrameProcessOrigin::Live,
                                     observed_at: Instant::now(),
+                                    timestamps,
+                                    anchor: audio_anchor,
                                 },
                                 AudioFrameProcessState {
                                     timestamp_generator: &mut timestamp_generator,
@@ -2398,6 +2503,8 @@ impl PreparedAudioSources {
                                     has_video,
                                     origin: FrameProcessOrigin::Drain,
                                     observed_at: Instant::now(),
+                                    timestamps,
+                                    anchor: audio_anchor,
                                 },
                                 AudioFrameProcessState {
                                     timestamp_generator: &mut timestamp_generator,
@@ -2449,21 +2556,44 @@ impl PreparedAudioSources {
                 if let Some(target_elapsed) = cancellation_target_elapsed
                     && !audio_degraded
                 {
+                    // An epoch-anchored track that never received a frame
+                    // (e.g. WASAPI loopback with no sound played the whole
+                    // recording) still spans the recording: anchor it now so
+                    // the fill below covers the full duration and the track
+                    // reports a valid start.
+                    if audio_anchor == AudioAnchor::PipelineEpoch && !gap_tracker.started() {
+                        let epoch_ts = Timestamp::Instant(timestamps.instant());
+                        gap_tracker.mark_started(epoch_ts, timestamps.instant());
+                        if let Some(first_tx) = first_tx.take() {
+                            let _ = first_tx.send(epoch_ts);
+                        }
+                        info!("No audio frames arrived; anchoring silent track at epoch");
+                    }
+
                     let audio_elapsed = timestamp_generator.next_timestamp(0);
-                    let tail_padding = audio_tail_padding_duration(audio_elapsed, target_elapsed);
+                    // target_elapsed is epoch-relative; the audio timeline is
+                    // track-local (zero = first muxed frame, or the epoch when
+                    // head-anchored), so remove the track's start offset
+                    // before comparing.
+                    let track_target = gap_tracker
+                        .track_start_offset()
+                        .map(|offset| target_elapsed.saturating_sub(offset))
+                        .unwrap_or(target_elapsed);
+                    let tail_padding = audio_tail_padding_duration(audio_elapsed, track_target);
+                    let start_samples = timestamp_generator.total_samples;
                     let tail_samples = timestamp_generator.advance_by_duration(tail_padding);
 
                     if tail_samples > 0 {
-                        let silence = create_silence_frame(&audio_info, tail_samples as usize);
-                        let silence_frame = AudioFrame::new(
-                            silence,
-                            Timestamp::Instant(timestamps.instant() + audio_elapsed),
-                        );
+                        let frame_ts = Timestamp::Instant(timestamps.instant() + audio_elapsed);
 
-                        if let Err(e) = muxer
-                            .lock()
-                            .await
-                            .send_audio_frame(silence_frame, audio_elapsed)
+                        if let Err(e) = send_silence_frames(
+                            &muxer,
+                            &audio_info,
+                            frame_ts,
+                            start_samples,
+                            tail_samples,
+                        )
+                        .await
                         {
                             if has_video {
                                 warn!(
@@ -2491,6 +2621,7 @@ impl PreparedAudioSources {
                                 padding_ms = tail_padding.as_millis() as u64,
                                 samples = tail_samples,
                                 audio_end_ms = audio_elapsed.as_millis() as u64,
+                                track_target_ms = track_target.as_millis() as u64,
                                 target_ms = target_elapsed.as_millis() as u64,
                                 "Padded audio tail with silence"
                             );
@@ -2569,6 +2700,8 @@ struct AudioFrameProcessContext<'a, TMutex: AudioMuxer> {
     has_video: bool,
     origin: FrameProcessOrigin,
     observed_at: Instant,
+    timestamps: Timestamps,
+    anchor: AudioAnchor,
 }
 
 struct AudioFrameProcessState<'a> {
@@ -2621,11 +2754,79 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
         }
     }
 
-    if let Some(first_tx) = state.first_tx.take() {
-        let _ = first_tx.send(frame.timestamp);
+    let observed_at = ctx.observed_at;
+
+    // Epoch-anchored tracks (intermittent sources like WASAPI loopback):
+    // timeline zero is the pipeline epoch, so the stretch between the epoch
+    // and the first captured frame is real recorded silence — synthesize it
+    // and report the epoch as the track start. Pause time never reaches the
+    // sample timeline, so it is excised from the head like everywhere else.
+    if ctx.anchor == AudioAnchor::PipelineEpoch
+        && ctx.video_start_gate.is_none()
+        && !state.gap_tracker.started()
+    {
+        let epoch_ts = Timestamp::Instant(ctx.timestamps.instant());
+        state
+            .gap_tracker
+            .mark_started(epoch_ts, ctx.timestamps.instant());
+
+        let head_secs = frame.timestamp.signed_duration_since_secs(ctx.timestamps);
+        let head = Duration::from_secs_f64(head_secs.max(0.0))
+            .saturating_sub(total_pause_duration)
+            // A capture timestamp can't credibly predate more wall time than
+            // has actually elapsed since the epoch.
+            .min(observed_at.saturating_duration_since(ctx.timestamps.instant()));
+
+        if !head.is_zero() {
+            let start_samples = state.timestamp_generator.total_samples;
+            let head_samples = state.timestamp_generator.advance_by_duration(head);
+
+            if head_samples > 0 {
+                info!(
+                    head_ms = head.as_millis() as u64,
+                    samples = head_samples,
+                    "Anchoring audio track at pipeline epoch; \
+                     filling head with silence up to first captured frame"
+                );
+
+                if let Err(e) = send_silence_frames(
+                    ctx.muxer,
+                    ctx.audio_info,
+                    epoch_ts,
+                    start_samples,
+                    head_samples,
+                )
+                .await
+                {
+                    if ctx.has_video {
+                        warn!(
+                            "Audio muxer rejected head silence, \
+                             degrading to video-only: {e}"
+                        );
+                        emit_health(
+                            ctx.health_tx,
+                            PipelineHealthEvent::AudioDegradedToVideoOnly {
+                                reason: format!("Head silence rejected: {e}"),
+                            },
+                        );
+                        return Ok(AudioFrameOutcome::AudioDegraded);
+                    }
+                    return Err(anyhow!("Audio muxer stopped accepting head silence: {e}"));
+                }
+            }
+        }
     }
 
-    let observed_at = ctx.observed_at;
+    if let Some(first_tx) = state.first_tx.take() {
+        let anchor_ts =
+            if ctx.anchor == AudioAnchor::PipelineEpoch && ctx.video_start_gate.is_none() {
+                Timestamp::Instant(ctx.timestamps.instant())
+            } else {
+                frame.timestamp
+            };
+        let _ = first_tx.send(anchor_ts);
+    }
+
     state.gap_tracker.mark_started(frame.timestamp, observed_at);
 
     let sample_based_before = state.timestamp_generator.next_timestamp(0);
@@ -2677,35 +2878,44 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
         total_pause_duration,
         observed_at,
     ) {
+        let start_samples = state.timestamp_generator.total_samples;
         let silence_samples = state.timestamp_generator.advance_by_duration(gap_duration);
 
         if silence_samples > 0 {
-            let silence = create_silence_frame(ctx.audio_info, silence_samples as usize);
-
-            let silence_frame = AudioFrame::new(silence, frame.timestamp);
-
-            if gap_duration >= MAX_SILENCE_INSERTION {
-                error!(
+            if gap_duration >= LONG_SILENCE_LOG_THRESHOLD {
+                // Long gaps are expected for intermittent sources (loopback
+                // system audio while nothing plays); the wall-clock clamp in
+                // capture_elapsed already vouched that this much real time
+                // passed.
+                info!(
                     gap_ms = gap_duration.as_millis(),
-                    "Audio gap exceeded 1s cap, \
-                     something may be seriously wrong"
+                    "Long audio gap; filling with silence"
                 );
             }
 
             state.gap_tracker.record_insertion(gap_duration);
 
-            emit_health(
-                ctx.health_tx,
-                PipelineHealthEvent::AudioGapDetected {
-                    gap_ms: gap_duration.as_millis() as u64,
-                },
-            );
+            // For device-backed sources a delivery gap is a real anomaly
+            // worth surfacing; for epoch-anchored intermittent sources
+            // (loopback system audio) silent stretches are the normal shape
+            // of the stream, not a health problem.
+            if ctx.anchor == AudioAnchor::FirstFrame {
+                emit_health(
+                    ctx.health_tx,
+                    PipelineHealthEvent::AudioGapDetected {
+                        gap_ms: gap_duration.as_millis() as u64,
+                    },
+                );
+            }
 
-            if let Err(e) = ctx
-                .muxer
-                .lock()
-                .await
-                .send_audio_frame(silence_frame, sample_based_before)
+            if let Err(e) = send_silence_frames(
+                ctx.muxer,
+                ctx.audio_info,
+                frame.timestamp,
+                start_samples,
+                silence_samples,
+            )
+            .await
             {
                 if ctx.has_video {
                     warn!(
@@ -3360,7 +3570,7 @@ mod tests {
         }
 
         #[test]
-        fn allows_wall_clock_confirmed_stall_up_to_cap() {
+        fn wall_clock_confirmed_stall_inserts_full_gap() {
             let timestamps = Timestamps::now();
             let first_ts = Timestamp::Instant(timestamps.instant());
             let first_wall_clock = Instant::now();
@@ -3377,7 +3587,33 @@ mod tests {
                 )
                 .expect("wall-clock-confirmed stall should insert silence");
 
-            assert_eq!(gap, MAX_SILENCE_INSERTION);
+            // The full wall-clock-validated gap is inserted; truncating it
+            // would place post-gap audio too early.
+            assert_eq!(gap, Duration::from_millis(1460));
+        }
+
+        #[test]
+        fn long_dead_zone_inserts_full_gap_in_one_detection() {
+            // WASAPI loopback delivers nothing while the system is silent; a
+            // frame arriving after a long dead zone must account for the
+            // whole stretch at once so its content lands at capture time.
+            let timestamps = Timestamps::now();
+            let first_ts = Timestamp::Instant(timestamps.instant());
+            let first_wall_clock = Instant::now();
+            let mut tracker = AudioGapTracker::new(false, timestamps);
+
+            tracker.mark_started(first_ts, first_wall_clock);
+
+            let gap = tracker
+                .detect_gap(
+                    Timestamp::Instant(timestamps.instant() + Duration::from_secs(30)),
+                    Duration::from_secs(2),
+                    Duration::ZERO,
+                    first_wall_clock + Duration::from_secs(30),
+                )
+                .expect("dead zone should insert silence");
+
+            assert_eq!(gap, Duration::from_secs(28));
         }
 
         #[test]
@@ -3430,10 +3666,13 @@ mod tests {
         }
 
         #[test]
-        fn caps_tail_padding() {
+        fn fills_long_tail_gap_completely() {
+            // A track whose source stopped delivering long before the stop
+            // point is padded to the full track-relative target so it spans
+            // the recording (the old 300ms cap left such tracks short).
             assert_eq!(
                 audio_tail_padding_duration(Duration::from_millis(100), Duration::from_secs(2)),
-                MAX_AUDIO_TAIL_PADDING
+                Duration::from_millis(1900)
             );
         }
     }
@@ -5183,6 +5422,7 @@ mod tests {
             first_tx: Option<oneshot::Sender<Timestamp>>,
             frame_count: u64,
             dropped_during_pause: u64,
+            anchor: AudioAnchor,
         }
 
         impl AudioTimelineHarness {
@@ -5209,6 +5449,14 @@ mod tests {
                     first_tx: None,
                     frame_count: 0,
                     dropped_during_pause: 0,
+                    anchor: AudioAnchor::FirstFrame,
+                }
+            }
+
+            fn new_epoch_anchored() -> Self {
+                Self {
+                    anchor: AudioAnchor::PipelineEpoch,
+                    ..Self::new()
                 }
             }
 
@@ -5247,6 +5495,8 @@ mod tests {
                         has_video: true,
                         origin: FrameProcessOrigin::Live,
                         observed_at,
+                        timestamps: self.timestamps,
+                        anchor: self.anchor,
                     },
                     AudioFrameProcessState {
                         timestamp_generator: &mut self.timestamp_generator,
@@ -5420,6 +5670,148 @@ mod tests {
                 0,
                 "no real audio frame may be discarded for late-but-present delivery"
             );
+        }
+
+        // System audio (WASAPI loopback) may deliver its first packet long after
+        // the recording starts — the first packet marks "first sound played",
+        // not "source ready". An epoch-anchored track reports the pipeline
+        // epoch as its start and synthesizes head silence, so a late first
+        // sound can never become the cross-track alignment anchor and cut the
+        // head off the display/mic tracks.
+        #[tokio::test(flavor = "current_thread")]
+        async fn epoch_anchor_fills_head_and_reports_epoch_start() {
+            let mut harness = AudioTimelineHarness::new_epoch_anchored();
+            let (tx, mut rx) = oneshot::channel();
+            harness.first_tx = Some(tx);
+
+            let first_frame_at = Duration::from_millis(2_500);
+            assert!(matches!(
+                harness
+                    .process_at(first_frame_at, first_frame_at, 960)
+                    .await,
+                AudioFrameOutcome::Sent
+            ));
+
+            let start = rx
+                .try_recv()
+                .unwrap()
+                .expect("first timestamp must be reported");
+            assert!(
+                start.signed_duration_since_secs(harness.timestamps).abs() < 1e-9,
+                "track start must be the pipeline epoch, not the first frame"
+            );
+
+            let committed = harness.committed_audio();
+            let expected =
+                first_frame_at + Duration::from_secs_f64(960.0 / TEST_SAMPLE_RATE as f64);
+            assert!(
+                abs_skew(committed, expected) <= Duration::from_millis(1),
+                "timeline must cover head silence + frame, got {committed:?}"
+            );
+
+            let sent = harness.sent();
+            let head_samples: usize = sent[..sent.len() - 1].iter().map(|f| f.samples).sum();
+            assert_eq!(
+                head_samples,
+                (TEST_SAMPLE_RATE as f64 * 2.5) as usize,
+                "head silence must cover exactly epoch..first frame"
+            );
+            assert!(
+                sent[..sent.len() - 1]
+                    .iter()
+                    .all(|f| f.samples <= TEST_SAMPLE_RATE as usize),
+                "head silence must be chunked to at most 1s frames"
+            );
+            let real = sent.last().unwrap().clone();
+            assert_eq!(real.samples, 960);
+            assert!(
+                abs_skew(real.timestamp, first_frame_at) <= Duration::from_millis(1),
+                "first real frame must land at its capture offset from the epoch"
+            );
+            for pair in sent.windows(2) {
+                assert!(pair[1].timestamp >= pair[0].timestamp);
+            }
+            assert_eq!(
+                harness.total_silence(),
+                Duration::ZERO,
+                "head anchoring must not count as gap-repair silence"
+            );
+        }
+
+        // While the system plays nothing, loopback delivers nothing; when
+        // sound resumes after a long dead zone the resumed content must land
+        // at its capture time in one detection, not smeared early by a
+        // truncated insertion.
+        #[tokio::test(flavor = "current_thread")]
+        async fn epoch_anchor_dead_zone_resumes_at_capture_time() {
+            let mut harness = AudioTimelineHarness::new_epoch_anchored();
+
+            let frame_dur = Duration::from_secs_f64(960.0 / TEST_SAMPLE_RATE as f64);
+            assert!(matches!(
+                harness
+                    .process_at(Duration::from_millis(50), Duration::from_millis(50), 960)
+                    .await,
+                AudioFrameOutcome::Sent
+            ));
+
+            let resume_at = Duration::from_secs(30);
+            assert!(matches!(
+                harness.process_at(resume_at, resume_at, 960).await,
+                AudioFrameOutcome::Sent
+            ));
+
+            let committed = harness.committed_audio();
+            assert!(
+                abs_skew(committed, resume_at + frame_dur) <= Duration::from_millis(5),
+                "post-dead-zone audio must land at capture time, got {committed:?}"
+            );
+
+            let sent = harness.sent();
+            let last = sent.last().unwrap();
+            assert_eq!(last.samples, 960);
+            assert!(
+                abs_skew(last.timestamp, resume_at) <= Duration::from_millis(5),
+                "resumed frame must be muxed at its capture offset, got {:?}",
+                last.timestamp
+            );
+            assert!(
+                sent.iter().all(|f| f.samples <= TEST_SAMPLE_RATE as usize),
+                "gap silence must be chunked to at most 1s frames"
+            );
+            for pair in sent.windows(2) {
+                assert!(pair[1].timestamp >= pair[0].timestamp);
+            }
+        }
+
+        // Device-backed tracks (microphone) keep the first-frame anchor: the
+        // track starts when the device produces its first samples.
+        #[tokio::test(flavor = "current_thread")]
+        async fn first_frame_anchor_reports_first_frame_start() {
+            let mut harness = AudioTimelineHarness::new();
+            let (tx, mut rx) = oneshot::channel();
+            harness.first_tx = Some(tx);
+
+            let first_frame_at = Duration::from_millis(2_500);
+            assert!(matches!(
+                harness
+                    .process_at(first_frame_at, first_frame_at, 960)
+                    .await,
+                AudioFrameOutcome::Sent
+            ));
+
+            let start = rx
+                .try_recv()
+                .unwrap()
+                .expect("first timestamp must be reported");
+            assert!(
+                (start.signed_duration_since_secs(harness.timestamps) - 2.5).abs() < 1e-6,
+                "mic-style tracks must still report the first frame as start"
+            );
+
+            let sent = harness.sent();
+            assert_eq!(sent.len(), 1, "no head silence for first-frame anchoring");
+            assert_eq!(sent[0].samples, 960);
+            assert_eq!(sent[0].timestamp, Duration::ZERO);
         }
 
         // 5m30s simulated recording at 48kHz with a 0.1% slow mic clock and eight stalls

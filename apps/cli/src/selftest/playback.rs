@@ -585,7 +585,14 @@ mod fixture {
     const AUDIO_RATE: u32 = 48_000;
     const AUDIO_CHUNK_SECS: f64 = 0.02;
     const BEEP_FREQ: f32 = 1_000.0;
-    const BEEP_AMPLITUDE: f32 = 0.5;
+    /// Two tracks beep in unison (mic + system audio); keep their sum
+    /// comfortably below full scale.
+    const BEEP_AMPLITUDE: f32 = 0.35;
+    /// The mic device becomes ready shortly after the recording starts, like
+    /// real capture hardware. Its start_time (the latest across tracks, since
+    /// system audio anchors at the epoch) becomes the playback anchor, so the
+    /// fixture exercises the cross-track start_time offset math.
+    const FIXTURE_MIC_START_SECS: f64 = 0.3;
 
     struct Pattern {
         events: Vec<f64>,
@@ -625,6 +632,7 @@ mod fixture {
         std::fs::create_dir_all(&segment_dir)
             .map_err(|e| format!("failed to create fixture directories: {e}"))?;
         let display_path = segment_dir.join("display.mp4");
+        let mic_path = segment_dir.join("audio-input.ogg");
         let audio_path = segment_dir.join("system_audio.ogg");
 
         let timestamps = Timestamps::now();
@@ -669,55 +677,96 @@ mod fixture {
             })
         };
 
-        // Audio leg: silence with 1 kHz beep bursts aligned to the flashes.
+        // Audio legs: 1 kHz beep bursts aligned to the flashes on BOTH audio
+        // tracks so any relative shift between them (or against video) splits
+        // the beep clusters and fails the sync gates.
+        //
+        // The mic delivers continuously from device-ready to stop, like real
+        // capture hardware. System audio delivers loopback-style: chunks
+        // exist ONLY while a beep plays (WASAPI loopback produces no packets
+        // while the system is silent), so the recorder must synthesize the
+        // head/gap/tail silence to keep the track on the recording timeline.
         let audio_info = AudioInfo::new(Sample::F32(Type::Packed), AUDIO_RATE, 2)
             .map_err(|e| format!("audio info: {e:?}"))?;
-        let (audio_tx, audio_rx) = futures::channel::mpsc::channel::<AudioFrame>(32);
-        let audio_emit = {
+
+        let beep_chunk = move |chunk_t: f64, events: &[f64]| {
+            let chunk_frames = (f64::from(AUDIO_RATE) * AUDIO_CHUNK_SECS) as usize;
+            let mut frame = ffmpeg::frame::Audio::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                chunk_frames,
+                audio_info.channel_layout(),
+            );
+            frame.set_rate(AUDIO_RATE);
+            let data = frame.data_mut(0);
+            let samples = unsafe {
+                std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<f32>(), data.len() / 4)
+            };
+            for (i, sample) in samples.iter_mut().enumerate() {
+                let t = chunk_t + (i / 2) as f64 / f64::from(AUDIO_RATE);
+                *sample = if in_flash(events, t) {
+                    (t as f32 * BEEP_FREQ * 2.0 * std::f32::consts::PI).sin() * BEEP_AMPLITUDE
+                } else {
+                    0.0
+                };
+            }
+            frame
+        };
+
+        // Both emitters return their sender when done: real capture sources
+        // keep the channel open until the recording stops, and the muxer's
+        // stop-time tail fill only runs on stop-cancellation, not on
+        // channel-closure.
+        let (mic_tx, mic_rx) = futures::channel::mpsc::channel::<AudioFrame>(32);
+        let mic_emit = {
             let events = pattern.events.clone();
             let total_secs = pattern.total_secs;
             let base = timestamps.instant();
-            let mut tx = audio_tx;
-            let info = audio_info;
+            let mut tx = mic_tx;
             tokio::spawn(async move {
                 use futures::SinkExt;
-                let chunk_frames = (f64::from(AUDIO_RATE) * AUDIO_CHUNK_SECS) as usize;
+                let first_chunk = (FIXTURE_MIC_START_SECS / AUDIO_CHUNK_SECS).ceil() as usize;
                 let total_chunks = (total_secs / AUDIO_CHUNK_SECS).ceil() as usize;
-                for k in 0..total_chunks {
+                for k in first_chunk..total_chunks {
                     let chunk_t = k as f64 * AUDIO_CHUNK_SECS;
                     tokio::time::sleep_until((base + Duration::from_secs_f64(chunk_t)).into())
                         .await;
-                    let mut frame = ffmpeg::frame::Audio::new(
-                        ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
-                        chunk_frames,
-                        info.channel_layout(),
-                    );
-                    frame.set_rate(AUDIO_RATE);
-                    let data = frame.data_mut(0);
-                    let samples = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            data.as_mut_ptr().cast::<f32>(),
-                            data.len() / 4,
-                        )
-                    };
-                    for (i, sample) in samples.iter_mut().enumerate() {
-                        let n = (k * chunk_frames + i / 2) as f64;
-                        let t = n / f64::from(AUDIO_RATE);
-                        *sample = if in_flash(&events, t) {
-                            (t as f32 * BEEP_FREQ * 2.0 * std::f32::consts::PI).sin()
-                                * BEEP_AMPLITUDE
-                        } else {
-                            0.0
-                        };
-                    }
                     let frame = AudioFrame::new(
-                        frame,
+                        beep_chunk(chunk_t, &events),
                         Timestamp::Instant(base + Duration::from_secs_f64(chunk_t)),
                     );
                     if tx.send(frame).await.is_err() {
                         break;
                     }
                 }
+                tx
+            })
+        };
+
+        let (sys_tx, sys_rx) = futures::channel::mpsc::channel::<AudioFrame>(32);
+        let sys_emit = {
+            let events = pattern.events.clone();
+            let base = timestamps.instant();
+            let mut tx = sys_tx;
+            tokio::spawn(async move {
+                use futures::SinkExt;
+                for &event in &events {
+                    let first_chunk = (event / AUDIO_CHUNK_SECS).floor() as usize;
+                    let last_chunk =
+                        ((event + FIXTURE_FLASH_SECS) / AUDIO_CHUNK_SECS).ceil() as usize;
+                    for k in first_chunk..last_chunk {
+                        let chunk_t = k as f64 * AUDIO_CHUNK_SECS;
+                        tokio::time::sleep_until((base + Duration::from_secs_f64(chunk_t)).into())
+                            .await;
+                        let frame = AudioFrame::new(
+                            beep_chunk(chunk_t, &events),
+                            Timestamp::Instant(base + Duration::from_secs_f64(chunk_t)),
+                        );
+                        if tx.send(frame).await.is_err() {
+                            return tx;
+                        }
+                    }
+                }
+                tx
             })
         };
 
@@ -729,21 +778,33 @@ mod fixture {
             .build::<Mp4Muxer>(())
             .await
             .map_err(|e| format!("video pipeline: {e}"))?;
-        let audio_pipeline = OutputPipeline::builder(audio_path.clone())
+        let mic_pipeline = OutputPipeline::builder(mic_path.clone())
             .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
-                audio_info, audio_rx,
+                audio_info, mic_rx,
             ))
             .with_timestamps(timestamps)
             .build::<OggMuxer>(())
             .await
-            .map_err(|e| format!("audio pipeline: {e}"))?;
+            .map_err(|e| format!("mic pipeline: {e}"))?;
+        let sys_pipeline = OutputPipeline::builder(audio_path.clone())
+            .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                audio_info, sys_rx,
+            ))
+            .with_timestamps(timestamps)
+            // System audio anchors at the recording epoch, exactly like the
+            // studio recorder configures it.
+            .with_audio_anchor(cap_recording::AudioAnchor::PipelineEpoch)
+            .build::<OggMuxer>(())
+            .await
+            .map_err(|e| format!("system audio pipeline: {e}"))?;
 
         video_emit
             .await
             .map_err(|e| format!("video emit join: {e}"))?;
-        audio_emit
+        let mic_held_tx = mic_emit.await.map_err(|e| format!("mic emit join: {e}"))?;
+        let sys_held_tx = sys_emit
             .await
-            .map_err(|e| format!("audio emit join: {e}"))?;
+            .map_err(|e| format!("system audio emit join: {e}"))?;
         // Let the stream tails flush through the encoders.
         tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -751,10 +812,15 @@ mod fixture {
             .stop()
             .await
             .map_err(|e| format!("video pipeline stop: {e}"))?;
-        let finished_audio = audio_pipeline
+        let finished_mic = mic_pipeline
             .stop()
             .await
-            .map_err(|e| format!("audio pipeline stop: {e}"))?;
+            .map_err(|e| format!("mic pipeline stop: {e}"))?;
+        let finished_sys = sys_pipeline
+            .stop()
+            .await
+            .map_err(|e| format!("system audio pipeline stop: {e}"))?;
+        drop((mic_held_tx, sys_held_tx));
 
         // Persist metadata the way the studio recorder does: start times are
         // each track's first timestamp on the shared clock, and the timeline
@@ -762,7 +828,10 @@ mod fixture {
         let display_start = finished_video
             .first_timestamp
             .signed_duration_since_secs(timestamps);
-        let audio_start = finished_audio
+        let mic_start = finished_mic
+            .first_timestamp
+            .signed_duration_since_secs(timestamps);
+        let sys_start = finished_sys
             .first_timestamp
             .signed_duration_since_secs(timestamps);
         let display_duration = finished_video
@@ -770,33 +839,43 @@ mod fixture {
             .map(|(first, last)| (last - first).as_secs_f64() + 1.0 / f64::from(FIXTURE_FPS))
             .ok_or("fixture video reported no timestamp span")?;
 
+        let to_project_gap_summary =
+            |s: cap_recording::AudioGapSummary| cap_project::AudioGapSummary {
+                total_overlap_trimmed_ms: s.total_overlap_trimmed_ms,
+                startup_overlap_trimmed_ms: s.startup_overlap_trimmed_ms,
+                overlap_dropped_frames: s.overlap_dropped_frames,
+                startup_overlap_drops: s.startup_overlap_drops,
+            };
+
+        let segment = MultipleSegment {
+            display: VideoMeta {
+                path: RelativePathBuf::from("content/segments/segment-0/display.mp4"),
+                fps: FIXTURE_FPS,
+                start_time: Some(display_start),
+                device_id: None,
+            },
+            camera: None,
+            mic: Some(AudioMeta {
+                path: RelativePathBuf::from("content/segments/segment-0/audio-input.ogg"),
+                start_time: Some(mic_start),
+                device_id: None,
+                gap_summary: finished_mic.audio_gap_summary.map(to_project_gap_summary),
+            }),
+            system_audio: Some(AudioMeta {
+                path: RelativePathBuf::from("content/segments/segment-0/system_audio.ogg"),
+                start_time: Some(sys_start),
+                device_id: None,
+                gap_summary: finished_sys.audio_gap_summary.map(to_project_gap_summary),
+            }),
+            cursor: None,
+            keyboard: None,
+        };
+        // Clip offsets exactly as the studio recorder persists them.
+        let offsets = segment.calculate_audio_offsets();
+
         let meta = StudioRecordingMeta::MultipleSegments {
             inner: MultipleSegments {
-                segments: vec![MultipleSegment {
-                    display: VideoMeta {
-                        path: RelativePathBuf::from("content/segments/segment-0/display.mp4"),
-                        fps: FIXTURE_FPS,
-                        start_time: Some(display_start),
-                        device_id: None,
-                    },
-                    camera: None,
-                    mic: None,
-                    system_audio: Some(AudioMeta {
-                        path: RelativePathBuf::from("content/segments/segment-0/system_audio.ogg"),
-                        start_time: Some(audio_start),
-                        device_id: None,
-                        gap_summary: finished_audio.audio_gap_summary.map(|s| {
-                            cap_project::AudioGapSummary {
-                                total_overlap_trimmed_ms: s.total_overlap_trimmed_ms,
-                                startup_overlap_trimmed_ms: s.startup_overlap_trimmed_ms,
-                                overlap_dropped_frames: s.overlap_dropped_frames,
-                                startup_overlap_drops: s.startup_overlap_drops,
-                            }
-                        }),
-                    }),
-                    cursor: None,
-                    keyboard: None,
-                }],
+                segments: vec![segment],
                 cursors: Default::default(),
                 status: Some(StudioRecordingStatus::Complete),
             },
@@ -833,7 +912,8 @@ mod fixture {
             }),
             clips: vec![ClipConfiguration {
                 index: 0,
-                offsets: Default::default(),
+                offsets,
+                offsets_auto_calculated: true,
             }],
             ..Default::default()
         };

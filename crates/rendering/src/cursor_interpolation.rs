@@ -7,8 +7,8 @@ use crate::{
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
 };
 
-/// Screen Studio's verified anticipation windows: the spring target snaps to
-/// the click position once the next click is <=500ms away, and the spring
+/// Click anticipation windows: the spring target snaps to the click position
+/// once the next click is <=500ms away, and the spring
 /// profile stiffens 175ms before the click. The early snap relies on the
 /// spring gliding there; no extra heuristics.
 const CLICK_LOOKAHEAD_TARGET_MS: f64 = 500.0;

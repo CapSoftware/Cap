@@ -3057,8 +3057,16 @@ async fn handle_recording_end(
 
     let main_window = CapWindowId::Main.get(&handle);
 
+    // When the finish path handed the foreground to an editor window, leave
+    // the main window alone: un-minimizing it here (Windows `Close` behaviour
+    // minimizes; macOS `Minimise` miniaturizes) would restore it on top of the
+    // editor that just opened.
+    let editor_took_foreground = matches!(&res, Some(Ok(true)));
+
     if let Some(window) = main_window {
-        window.unminimize().ok();
+        if !editor_took_foreground {
+            window.unminimize().ok();
+        }
         if let Err(err) = app.ensure_selected_mic_ready().await {
             warn!("Failed to restore microphone preview after recording: {err}");
         }
@@ -3086,7 +3094,7 @@ async fn handle_recording_end(
     CurrentRecordingChanged.emit(&handle).ok();
 
     if let Some(res) = res {
-        res?;
+        let _editor_took_foreground: bool = res?;
     }
 
     Ok(())
@@ -3104,11 +3112,14 @@ fn compute_studio_duration_secs(recording_dir: &std::path::Path) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Returns `true` when an editor window took the foreground (in-editor
+/// re-record, or the post-recording behaviour opened the editor). Callers use
+/// this to keep the main window suppressed so it can't cover the editor.
 async fn apply_post_studio_editor_behaviour(
     app: &AppHandle,
     recording_dir: PathBuf,
     duration_secs: f64,
-) {
+) -> bool {
     if let Some(editor_path) = EditorRecordingTarget::take(app) {
         if let Some(editor_window) = editor_window_for_path(app, &editor_path) {
             let _ = editor_window.unminimize();
@@ -3122,7 +3133,7 @@ async fn apply_post_studio_editor_behaviour(
         }
         .emit(app);
 
-        return;
+        return true;
     }
 
     let default = GeneralSettingsStore::get(app)
@@ -3143,6 +3154,8 @@ async fn apply_post_studio_editor_behaviour(
             }
             .show(app)
             .await;
+
+            true
         }
         Some(PostStudioRecordingBehaviour::ShowOverlay) => {
             let _ = CapWindow::RecordingsOverlay.show(app).await;
@@ -3155,21 +3168,26 @@ async fn apply_post_studio_editor_behaviour(
                 }
                 .emit(&app);
             });
+
+            false
         }
         None => {
             let _ = NewStudioRecordingAdded {
                 path: recording_dir,
             }
             .emit(app);
+
+            false
         }
     }
 }
 
-// runs when a recording successfully finishes
+// runs when a recording successfully finishes; Ok(true) means an editor
+// window took the foreground and the main window must stay suppressed
 async fn handle_recording_finish(
     app: &AppHandle,
     completed_recording: CompletedRecording,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let recording_dir = completed_recording.project_path().clone();
 
     let screenshots_dir = recording_dir.join("screenshots");
@@ -3203,7 +3221,8 @@ async fn handle_recording_finish(
                 finalizing_state.start_finalizing(recording_dir.clone());
 
                 let duration = compute_studio_duration_secs(&recording_dir);
-                apply_post_studio_editor_behaviour(app, recording_dir.clone(), duration).await;
+                let editor_took_foreground =
+                    apply_post_studio_editor_behaviour(app, recording_dir.clone(), duration).await;
 
                 AppSounds::StopRecording.play();
 
@@ -3243,7 +3262,7 @@ async fn handle_recording_finish(
                         .finish_finalizing(&recording_dir_for_finalize);
                 });
 
-                return Ok(());
+                return Ok(editor_took_foreground);
             }
 
             let updated_studio_meta = recording.meta.clone();
@@ -3304,7 +3323,7 @@ async fn handle_recording_finish(
                 }
                 .emit(app)
                 .ok();
-                return Ok(());
+                return Ok(false);
             }
 
             let app = app.clone();
@@ -3444,6 +3463,7 @@ async fn handle_recording_finish(
         );
     }
 
+    let mut editor_took_foreground = false;
     if let RecordingMetaInner::Studio(_) = meta_inner {
         let duration = compute_studio_duration_secs(&recording_dir);
         crate::automation::run_studio_recording_automations(
@@ -3451,13 +3471,14 @@ async fn handle_recording_finish(
             recording_dir.clone(),
             duration,
         );
-        apply_post_studio_editor_behaviour(app, recording_dir, duration).await;
+        editor_took_foreground =
+            apply_post_studio_editor_behaviour(app, recording_dir, duration).await;
     }
 
     // Play sound to indicate recording has stopped
     AppSounds::StopRecording.play();
 
-    Ok(())
+    Ok(editor_took_foreground)
 }
 
 async fn finalize_studio_recording(
@@ -4088,7 +4109,7 @@ mod tests {
     }
 
     #[test]
-    fn merges_clicks_with_screen_studio_gap() {
+    fn merges_clicks_with_three_second_gap() {
         let clicks = vec![click_event(1_200.0), click_event(4_200.0)];
         let moves = vec![
             move_event(1_500.0, 0.10, 0.12),

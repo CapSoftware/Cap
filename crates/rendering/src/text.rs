@@ -1,7 +1,13 @@
 use cap_project::{TextSegment, XY};
 
-const BASE_TEXT_HEIGHT: f64 = 0.2;
-const MAX_FONT_SIZE_PX: f32 = 256.0;
+/// Text font sizes are authored against a 1080p-tall reference frame and
+/// scaled to the output height, so a project renders identically at every
+/// export resolution. `size` only positions and wraps the text — it never
+/// affects glyph size (that coupling is baked away by the config migration
+/// in cap_project).
+const REFERENCE_HEIGHT: f32 = 1080.0;
+pub const MIN_FONT_SIZE: f32 = 8.0;
+pub const MAX_FONT_SIZE: f32 = 480.0;
 
 #[derive(Debug, Clone)]
 pub struct PreparedText {
@@ -40,7 +46,7 @@ pub fn prepare_texts(
     let height_scale = if output_size.y == 0 {
         1.0
     } else {
-        output_size.y as f32 / 1080.0
+        output_size.y as f32 / REFERENCE_HEIGHT
     };
 
     for (i, segment) in segments.iter().enumerate() {
@@ -60,17 +66,16 @@ pub fn prepare_texts(
             segment.size.x.clamp(0.01, 2.0),
             segment.size.y.clamp(0.01, 2.0),
         );
-        let size_scale = (size.y / BASE_TEXT_HEIGHT).clamp(0.25, 4.0) as f32;
 
         let width = (size.x * output_size.x as f64).max(1.0) as f32;
         let height = (size.y * output_size.y as f64).max(1.0) as f32;
-        let half_w = width / 2.0;
-        let half_h = height / 2.0;
 
-        let left = (center.x as f32 * output_size.x as f32 - half_w).max(0.0);
-        let top = (center.y as f32 * output_size.y as f32 - half_h).max(0.0);
-        let right = (left + width).min(output_size.x as f32);
-        let bottom = (top + height).min(output_size.y as f32);
+        // The box may overhang frame edges (the editor allows dragging up to
+        // half the box outside); glyphon culls anything past the viewport.
+        let left = center.x as f32 * output_size.x as f32 - width / 2.0;
+        let top = center.y as f32 * output_size.y as f32 - height / 2.0;
+        let right = left + width;
+        let bottom = top + height;
 
         let fade_duration = segment.fade_duration.max(0.0);
         let opacity = if fade_duration > 0.0 {
@@ -90,8 +95,7 @@ pub fn prepare_texts(
             bounds: [left, top, right, bottom],
             color: parse_color(&segment.color),
             font_family: segment.font_family.clone(),
-            font_size: ((segment.font_size * size_scale).max(1.0) * height_scale)
-                .min(MAX_FONT_SIZE_PX),
+            font_size: segment.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE) * height_scale,
             font_weight: segment.font_weight,
             italic: segment.italic,
             opacity,

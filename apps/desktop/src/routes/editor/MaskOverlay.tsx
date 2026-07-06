@@ -144,7 +144,7 @@ export function MaskOverlay(props: MaskOverlayProps) {
 						getMaskRectAtTime(hovered().segment, getMaskTime(hovered().index));
 					return (
 						<div
-							class="absolute z-20 pointer-events-none rounded-md border-2 border-gray-11/65 bg-gray-9/5 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]"
+							class="absolute z-20 pointer-events-none rounded-md border-2 border-gray-11/65 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]"
 							style={{
 								left: `${rect().left}px`,
 								top: `${rect().top}px`,
@@ -163,8 +163,8 @@ export function MaskOverlay(props: MaskOverlayProps) {
 					const maskState = () => evaluateMask(segment, getMaskTime(index));
 					const overlayClass = () =>
 						cx(
-							"border-transparent bg-transparent hover:border-gray-11/65 hover:bg-gray-9/5",
-							isHovered() && "border-gray-11/65 bg-gray-9/5",
+							"border-transparent bg-transparent hover:border-gray-11/65",
+							isHovered() && "border-gray-11/65",
 						);
 
 					return (
@@ -335,7 +335,7 @@ function MaskOverlayContent(props: {
 			}}
 			onMouseDown={onMove}
 		>
-			<div class="absolute inset-0 rounded-md border-2 border-gray-12 bg-gray-9/10 cursor-move" />
+			<div class="absolute inset-0 rounded-md border-2 border-gray-12 cursor-move" />
 
 			<ResizeHandle
 				class="top-0 left-0 -translate-x-1/2 -translate-y-1/2 cursor-nw-resize"

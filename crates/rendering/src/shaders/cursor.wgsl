@@ -21,7 +21,12 @@ var t_cursor: texture_2d<f32>;
 var s_cursor: sampler;
 
 const MAX_ROTATION_RADIANS: f32 = 0.34906584;
-const MAX_CURSOR_BLUR_UV: f32 = 0.24;
+// Smear length ceiling in sprite-UV (1.0 = one cursor-sprite width). A fast
+// flick travels several sprite widths per frame, and the smear length must
+// track it (Screen Studio semantics); this only bounds pathological
+// teleports. The vertex quad expands by the same vector, so the geometry
+// always contains the full streak.
+const MAX_CURSOR_BLUR_UV: f32 = 4.0;
 
 fn cursor_velocity_uv() -> vec2<f32> {
     let motion_vec = uniforms.motion_vector_strength.xy;
@@ -98,17 +103,35 @@ fn sample_cursor(uv: vec2<f32>) -> vec4<f32> {
     return textureSample(t_cursor, s_cursor, uv);
 }
 
+// Confine the sprite to the display card (screen_bounds is the card's
+// content rect in output px): a cursor whose source position is outside the
+// visible crop slides off the card edge instead of floating over the
+// background. Feathered ~1px to match the card's antialiased edge.
+fn screen_bounds_mask(frag_pos: vec2<f32>) -> f32 {
+    let b = uniforms.screen_bounds;
+    let inside = min(
+        min(frag_pos.x - b.x, b.z - frag_pos.x),
+        min(frag_pos.y - b.y, b.w - frag_pos.y),
+    );
+    return clamp(inside + 0.5, 0.0, 1.0);
+}
+
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let velocity_uv = cursor_velocity_uv();
     let blur_strength = uniforms.motion_vector_strength.z;
-    let opacity = uniforms.motion_vector_strength.w;
+    let opacity = uniforms.motion_vector_strength.w * screen_bounds_mask(input.position.xy);
     let base_color = sample_cursor(input.uv);
 
     if (length(velocity_uv) < 0.005 || blur_strength < 0.001) {
         return base_color * opacity;
     }
 
+    // 21-tap box along the motion vector, output fully blurred: the amount
+    // scales the smear LENGTH (baked into velocity_uv on the CPU side), never
+    // a crossfade with the sharp sprite — a sharp copy over a smear reads as
+    // ghosting. Transparent taps shorten the effective alpha, which is what
+    // stretches and fades the sprite along fast motion.
     let kernel_size = 21.0;
     let k = kernel_size - 1.0;
     var color = base_color;
@@ -120,6 +143,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     color /= kernel_size;
-    let blur_mix = clamp(blur_strength, 0.0, 1.0);
-    return mix(base_color, color, blur_mix) * opacity;
+    return color * opacity;
 }

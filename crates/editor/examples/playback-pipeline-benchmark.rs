@@ -487,7 +487,12 @@ async fn run_full_pipeline_benchmark(
     let mut zoom_timelines: Vec<ZoomTransformTimeline> = segments
         .iter()
         .map(|segment_media| {
-            ZoomTransformTimeline::from_project(project, &segment_media.cursor, duration)
+            ZoomTransformTimeline::from_project(
+                project,
+                &segment_media.cursor,
+                duration,
+                render_constants.options.screen_size,
+            )
         })
         .collect();
 
@@ -683,7 +688,12 @@ async fn run_scrubbing_benchmark(
     let mut zoom_timelines: Vec<ZoomTransformTimeline> = segments
         .iter()
         .map(|segment_media| {
-            ZoomTransformTimeline::from_project(project, &segment_media.cursor, duration)
+            ZoomTransformTimeline::from_project(
+                project,
+                &segment_media.cursor,
+                duration,
+                render_constants.options.screen_size,
+            )
         })
         .collect();
 

@@ -1,8 +1,8 @@
 use anyhow::Result;
 use cap_project::{
     AspectRatio, Camera, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, CornerStyle,
-    Crop, CursorEvents, CursorType, MaskKind, ProjectConfiguration, RecordingMeta, SceneMode,
-    StudioRecordingMeta, XY,
+    Crop, CursorEvents, CursorType, FrameConfiguration, FrameStyle, MaskKind, ProjectConfiguration,
+    RecordingMeta, SceneMode, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -17,7 +17,7 @@ use frame_pipeline::{
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
-    KeyboardLayer, MaskLayer, TextLayer,
+    FrameLayer, KeyboardLayer, MaskLayer, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -35,6 +35,7 @@ mod cursor_interpolation;
 #[cfg(target_os = "windows")]
 pub mod d3d_texture;
 pub mod decoder;
+pub mod frame_chrome;
 mod frame_pipeline;
 #[cfg(target_os = "macos")]
 pub mod iosurface_texture;
@@ -68,7 +69,7 @@ use mask::interpolate_masks;
 use scene::*;
 use text::{PreparedText, prepare_texts};
 use zoom::*;
-pub use zoom_spring::ZoomTransformTimeline;
+pub use zoom_spring::{CursorCropMap, ZoomTransformTimeline};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Nv12RenderStartupBreakdownMs {
@@ -583,7 +584,14 @@ pub async fn render_video_to_channel(
 
     let mut zoom_timelines: Vec<ZoomTransformTimeline> = render_segments
         .iter()
-        .map(|segment| ZoomTransformTimeline::from_project(project, &segment.cursor, duration))
+        .map(|segment| {
+            ZoomTransformTimeline::from_project(
+                project,
+                &segment.cursor,
+                duration,
+                constants.options.screen_size,
+            )
+        })
         .collect();
 
     let mut frame_number = 0;
@@ -920,7 +928,14 @@ pub async fn render_video_to_channel_nv12(
     let zoom_build_start = Instant::now();
     let mut zoom_timelines: Vec<ZoomTransformTimeline> = render_segments
         .iter()
-        .map(|segment| ZoomTransformTimeline::from_project(project, &segment.cursor, duration))
+        .map(|segment| {
+            ZoomTransformTimeline::from_project(
+                project,
+                &segment.cursor,
+                duration,
+                constants.options.screen_size,
+            )
+        })
         .collect();
     for timeline in &mut zoom_timelines {
         timeline.precompute();
@@ -1861,6 +1876,12 @@ pub struct ProjectUniforms {
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
     camera_only: Option<CompositeVideoFrameUniforms>,
+    /// Decorative frame chrome around the display; `None` when no frame style
+    /// is active.
+    pub frame_chrome: Option<frame_chrome::FrameChromeUniforms>,
+    /// Final placement of the outer display card (chrome included) in output
+    /// px. Equals `display.target_bounds` when no frame is active.
+    display_outer_bounds: [f32; 4],
     interpolated_cursor: Option<InterpolatedCursorPosition>,
     pub prev_cursor: Option<InterpolatedCursorPosition>,
     pub project: ProjectConfiguration,
@@ -1947,9 +1968,14 @@ struct MotionAnalysis {
     movement_px: XY<f32>,
     movement_uv: XY<f32>,
     movement_magnitude: f32,
+    /// Length of the per-frame (width, height) size delta in px. Compared
+    /// against the center delta to decide zoom-vs-move dominance.
+    size_delta_px: f32,
     zoom_center_uv: XY<f32>,
     zoom_magnitude: f32,
-    zooming_out: bool,
+    /// Forces the zoom (radial) branch regardless of dominance — used by
+    /// scene transitions that inject synthetic zoom blur.
+    prefer_zoom: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1979,12 +2005,20 @@ fn analyze_motion(current: &MotionBounds, previous: &MotionBounds) -> MotionAnal
 
     let current_size = current.size();
     let previous_size = previous.size();
-    let min_current = current_size.x.min(current_size.y);
-    let min_previous = previous_size.x.min(previous_size.y);
-    let base_span = min_current.max(min_previous).max(1.0) as f32;
 
-    let movement_uv = XY::new(movement_px.x / base_span, movement_px.y / base_span);
+    // Normalize per axis (the shader converts UV back to px by multiplying
+    // each axis by its own target size); a shared min-span divisor would
+    // stretch the smear on the longer axis of a non-square card.
+    let span_x = (current_size.x.max(previous_size.x)).max(1.0) as f32;
+    let span_y = (current_size.y.max(previous_size.y)).max(1.0) as f32;
+    let movement_uv = XY::new(movement_px.x / span_x, movement_px.y / span_y);
     let movement_magnitude = (movement_uv.x * movement_uv.x + movement_uv.y * movement_uv.y).sqrt();
+
+    let size_delta = XY::new(
+        (current_size.x - previous_size.x) as f32,
+        (current_size.y - previous_size.y) as f32,
+    );
+    let size_delta_px = (size_delta.x * size_delta.x + size_delta.y * size_delta.y).sqrt();
 
     let prev_diag = previous.diagonal();
     let curr_diag = current.diagonal();
@@ -2003,8 +2037,8 @@ fn analyze_motion(current: &MotionBounds, previous: &MotionBounds) -> MotionAnal
     analysis.movement_px = movement_px;
     analysis.movement_uv = movement_uv;
     analysis.movement_magnitude = movement_magnitude;
+    analysis.size_delta_px = size_delta_px;
     analysis.zoom_magnitude = zoom_magnitude;
-    analysis.zooming_out = curr_diag < prev_diag;
     let clamp_uv = |v: f32| {
         if v.is_finite() {
             v.clamp(0.0, 1.0)
@@ -2015,18 +2049,6 @@ fn analyze_motion(current: &MotionBounds, previous: &MotionBounds) -> MotionAnal
     let zoom_center_uv = current.point_to_uv(zoom_center_point);
     analysis.zoom_center_uv = XY::new(clamp_uv(zoom_center_uv.x), clamp_uv(zoom_center_uv.y));
     analysis
-}
-
-fn smooth_motion_response(amount: f32, start: f32, full: f32) -> f32 {
-    if amount <= start {
-        return 0.0;
-    }
-    if amount >= full {
-        return 1.0;
-    }
-
-    let t = ((amount - start) / (full - start)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 fn zoom_vanishing_point(current: &MotionBounds, previous: &MotionBounds) -> Option<XY<f64>> {
@@ -2068,6 +2090,14 @@ fn clamp_vector(vec: XY<f32>, max_len: f32) -> XY<f32> {
     }
 }
 
+/// Screen Studio blur semantics: the user amount scales the LENGTH of the
+/// smear (linear in the per-frame delta, no response curve) and the shader
+/// outputs the fully blurred result — strength is a pure on/off gate, never a
+/// crossfade with the sharp frame. Per frame the dominant delta wins: a size
+/// change larger than the center shift renders radial zoom blur, anything
+/// else a directional smear. Both fade out naturally because a zero-length
+/// kernel is the identity, so no threshold ramp is needed — just a ~1px
+/// activation floor to skip imperceptible work.
 fn resolve_motion_descriptor(
     analysis: &MotionAnalysis,
     base_amount: f32,
@@ -2078,50 +2108,38 @@ fn resolve_motion_descriptor(
         return MotionBlurDescriptor::none();
     }
 
-    let zoom_metric = analysis.zoom_magnitude;
-    let move_metric = analysis.movement_magnitude;
-    let zoom_response = smooth_motion_response(
-        zoom_metric,
-        ZOOM_MOTION_START_THRESHOLD,
-        ZOOM_MOTION_FULL_THRESHOLD,
-    );
-    let move_response = smooth_motion_response(
-        move_metric,
-        MOVE_MOTION_START_THRESHOLD,
-        MOVE_MOTION_FULL_THRESHOLD,
-    );
-    let zoom_strength = base_amount * zoom_multiplier;
-    let move_strength = base_amount * move_multiplier;
+    let move_px = (analysis.movement_px.x * analysis.movement_px.x
+        + analysis.movement_px.y * analysis.movement_px.y)
+        .sqrt();
+    let zoom_dominant = analysis.prefer_zoom || analysis.size_delta_px > move_px;
 
-    if zoom_response > 0.0 && zoom_strength > 0.0 {
-        let zoom_multiplier = if analysis.zooming_out {
-            ZOOM_OUT_BLUR_MULTIPLIER
+    if zoom_dominant {
+        let zoom_strength = base_amount * zoom_multiplier;
+        if zoom_strength <= 0.0
+            || (analysis.size_delta_px < MOTION_ACTIVATION_PX && !analysis.prefer_zoom)
+        {
+            return MotionBlurDescriptor::none();
+        }
+        let zoom_cap = if analysis.prefer_zoom {
+            TRANSITION_ZOOM_CAP
         } else {
-            ZOOM_IN_BLUR_MULTIPLIER
+            MAX_ZOOM_BLUR_AMOUNT
         };
-        let max_zoom_amount = if analysis.zooming_out {
-            MAX_ZOOM_OUT_AMOUNT
-        } else {
-            MAX_ZOOM_IN_AMOUNT
-        };
-        let zoom_amount =
-            (zoom_metric * zoom_strength * zoom_response * zoom_multiplier).min(max_zoom_amount);
-        MotionBlurDescriptor::zoom(
-            analysis.zoom_center_uv,
-            zoom_amount,
-            (zoom_strength * zoom_response).min(1.0),
-        )
-    } else if move_response > 0.0 && move_strength > 0.0 {
-        let vector = XY::new(
-            analysis.movement_uv.x * move_strength * move_response,
-            analysis.movement_uv.y * move_strength * move_response,
-        );
-        MotionBlurDescriptor::movement(
-            clamp_vector(vector, MOTION_VECTOR_CAP),
-            (move_strength * move_response).min(1.0),
-        )
+        let zoom_amount = (analysis.zoom_magnitude * zoom_strength).min(zoom_cap);
+        if zoom_amount <= f32::EPSILON {
+            return MotionBlurDescriptor::none();
+        }
+        MotionBlurDescriptor::zoom(analysis.zoom_center_uv, zoom_amount, 1.0)
     } else {
-        MotionBlurDescriptor::none()
+        let move_strength = base_amount * move_multiplier;
+        if move_strength <= 0.0 || move_px < MOTION_ACTIVATION_PX {
+            return MotionBlurDescriptor::none();
+        }
+        let vector = XY::new(
+            analysis.movement_uv.x * move_strength,
+            analysis.movement_uv.y * move_strength,
+        );
+        MotionBlurDescriptor::movement(clamp_vector(vector, MOTION_VECTOR_CAP), 1.0)
     }
 }
 
@@ -2160,20 +2178,28 @@ const FLOATING_ROUNDING_FRAC: f32 = 0.028;
 const SCREEN_MAX_PADDING: f64 = 0.4;
 
 const MOTION_BLUR_BASELINE_FPS: f32 = 60.0;
-const DISPLAY_MOTION_SAMPLE_FRAMES: u32 = 3;
-const MOVE_MOTION_START_THRESHOLD: f32 = 0.001;
-const MOVE_MOTION_FULL_THRESHOLD: f32 = 0.028;
-const ZOOM_MOTION_START_THRESHOLD: f32 = 0.0005;
-const ZOOM_MOTION_FULL_THRESHOLD: f32 = 0.045;
-const MOTION_VECTOR_CAP: f32 = 0.045;
-const MAX_ZOOM_IN_AMOUNT: f32 = 0.08;
-const MAX_ZOOM_OUT_AMOUNT: f32 = 0.014;
-const ZOOM_IN_BLUR_MULTIPLIER: f32 = 0.65;
-const ZOOM_OUT_BLUR_MULTIPLIER: f32 = 0.06;
+/// Velocity is measured strictly against the previous frame (Screen Studio
+/// samples frame f vs f-1); averaging over more frames lags peaks and lets
+/// blur linger after motion stops.
+const DISPLAY_MOTION_SAMPLE_FRAMES: u32 = 1;
+/// Skip blur when the per-frame delta is under ~1px — a sub-pixel kernel is
+/// visually the identity, so there is no pop at the boundary.
+const MOTION_ACTIVATION_PX: f32 = 1.0;
+/// Safety ceiling on the smear length (in display-card UV, 1.0 = the card's
+/// smaller axis). Real spring motion peaks around 0.05-0.10; this only guards
+/// pathological single-frame teleports.
+const MOTION_VECTOR_CAP: f32 = 0.15;
+/// Safety ceiling on the radial zoom strength (|1 - diag ratio| per frame,
+/// scaled by the user amount). Real zoom springs peak around 0.05-0.06.
+const MAX_ZOOM_BLUR_AMOUNT: f32 = 0.5;
 const DISPLAY_MOVE_MULTIPLIER: f32 = 1.0;
 const DISPLAY_ZOOM_MULTIPLIER: f32 = 1.0;
 const CAMERA_MULTIPLIER: f32 = 1.0;
 const CAMERA_ONLY_MULTIPLIER: f32 = 0.45;
+/// Ceiling for synthetic transition blur (scene morphs, camera-only
+/// entrances). These are art-directed effects that predate the proportional
+/// model and are tuned to their own visual scale, not to real velocity.
+const TRANSITION_ZOOM_CAP: f32 = 0.08;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MotionBlurMode {
@@ -2241,7 +2267,9 @@ impl MotionBlurDescriptor {
 
 /// Final rendered placement of the display and camera layers in output-frame
 /// pixels ([x0, y0, x1, y1]), used by the editor preview for hit-testing the
-/// on-canvas move/resize overlays.
+/// on-canvas move/resize overlays. `display` is the outer card — chrome
+/// included when a decorative frame is active — so the overlay handles glue
+/// to what the user actually sees.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameLayout {
     pub display: [f32; 4],
@@ -2249,10 +2277,20 @@ pub struct FrameLayout {
     pub output_size: [u32; 2],
 }
 
+/// Unzoomed placement of the display card in output-frame pixels. Without a
+/// decorative frame, outer == content.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DisplayLayout {
+    pub outer_offset: XY<f64>,
+    pub outer_size: XY<f64>,
+    pub content_offset: XY<f64>,
+    pub content_size: XY<f64>,
+}
+
 impl ProjectUniforms {
     pub fn frame_layout(&self) -> FrameLayout {
         FrameLayout {
-            display: self.display.target_bounds,
+            display: self.display_outer_bounds,
             camera: self.camera.as_ref().map(|c| c.target_bounds),
             output_size: [self.output_size.0, self.output_size.1],
         }
@@ -2355,22 +2393,73 @@ impl ProjectUniforms {
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        let base = Self::display_base_offset(options, project, resolution_base);
+        Coord::new(Self::display_layout(options, project, resolution_base).content_offset)
+    }
 
-        let Some(position) = project.background.display_position else {
-            return base;
+    /// Placement of the display card in output-frame pixels.
+    ///
+    /// Without a decorative frame the outer card IS the video, so the two
+    /// rects are identical and every value matches the pre-frames math
+    /// exactly. With a frame active, the outer card (video + chrome insets)
+    /// is what fits the padded box, is centered / positioned by
+    /// `display_position`, and is scaled by zoom; the video content rect sits
+    /// inside it. Cursor and zoom math flow through the content rect via
+    /// [`Self::display_offset`] / [`Self::display_size`].
+    pub(crate) fn display_layout(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
+    ) -> DisplayLayout {
+        let base = Self::display_base_offset(options, project, resolution_base).coord;
+        let output_size = Self::get_output_size(options, project, resolution_base);
+        let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
+        // Same op order as the legacy display_size (end - offset - offset) so
+        // the no-frame path stays bit-exact.
+        let box_size = (output_size - base) - base;
+
+        let style = FrameConfiguration::active_style(project.background.frame.as_ref());
+        let (outer_offset, outer_size, content_offset, content_size) = if style == FrameStyle::None
+        {
+            (base, box_size, base, box_size)
+        } else {
+            let insets = frame_chrome::chrome_insets(style);
+            let crop = Self::get_crop(options, project);
+            let aspect = (crop.size.x as f64 / f64::from(crop.size.y.max(1))).max(f64::EPSILON);
+            // Insets are fractions of the content height; solve for the
+            // largest content that keeps the outer card inside the box.
+            let outer_w_per_h = aspect + insets.left + insets.right;
+            let outer_h_per_h = 1.0 + insets.top + insets.bottom;
+            let content_h = (box_size.x / outer_w_per_h)
+                .min(box_size.y / outer_h_per_h)
+                .max(1.0);
+            let content_size = XY::new(content_h * aspect, content_h);
+            let outer_size = XY::new(content_h * outer_w_per_h, content_h * outer_h_per_h);
+            let outer_offset = base + (box_size - outer_size) / 2.0;
+            let content_offset =
+                outer_offset + XY::new(insets.left * content_h, insets.top * content_h);
+            (outer_offset, outer_size, content_offset, content_size)
         };
 
-        let output_size = Self::get_output_size(options, project, resolution_base);
         // The center may sit anywhere in-frame, so the display can overhang
         // the edges (revealing background) but can never be dragged fully
         // out of view.
-        let delta = XY::new(
-            (position.x.clamp(0.0, 1.0) - 0.5) * output_size.0 as f64,
-            (position.y.clamp(0.0, 1.0) - 0.5) * output_size.1 as f64,
-        );
+        let delta = project
+            .background
+            .display_position
+            .map(|position| {
+                XY::new(
+                    (position.x.clamp(0.0, 1.0) - 0.5) * output_size.x,
+                    (position.y.clamp(0.0, 1.0) - 0.5) * output_size.y,
+                )
+            })
+            .unwrap_or(XY::new(0.0, 0.0));
 
-        Coord::new(base.coord + delta)
+        DisplayLayout {
+            outer_offset: outer_offset + delta,
+            outer_size,
+            content_offset: content_offset + delta,
+            content_size,
+        }
     }
 
     fn display_base_offset(
@@ -2453,14 +2542,7 @@ impl ProjectUniforms {
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        let output_size = Self::get_output_size(options, project, resolution_base);
-        let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
-
-        let display_offset = Self::display_base_offset(options, project, resolution_base);
-
-        let end = Coord::new(output_size) - display_offset;
-
-        end - display_offset
+        Coord::new(Self::display_layout(options, project, resolution_base).content_size)
     }
 
     fn display_bounds(
@@ -2493,9 +2575,14 @@ impl ProjectUniforms {
         analysis.movement_px = analysis.movement_px / frame_span;
         analysis.movement_uv = analysis.movement_uv / frame_span;
         analysis.movement_magnitude /= frame_span;
+        analysis.size_delta_px /= frame_span;
         analysis.zoom_magnitude /= frame_span;
         if extra_zoom > 0.0 {
+            // Scene transitions inject synthetic radial blur; they also move
+            // the bounds a lot, so force the zoom branch past the dominance
+            // check or the pan delta would win and hide it.
             analysis.zoom_magnitude = (analysis.zoom_magnitude + extra_zoom).min(3.0);
+            analysis.prefer_zoom = true;
         }
 
         let descriptor = resolve_motion_descriptor(
@@ -2504,7 +2591,10 @@ impl ProjectUniforms {
             DISPLAY_MOVE_MULTIPLIER,
             DISPLAY_ZOOM_MULTIPLIER,
         );
-        let parent_vector = if analysis.movement_magnitude > MOVE_MOTION_START_THRESHOLD {
+        let move_px = (analysis.movement_px.x * analysis.movement_px.x
+            + analysis.movement_px.y * analysis.movement_px.y)
+            .sqrt();
+        let parent_vector = if move_px >= MOTION_ACTIVATION_PX {
             analysis.movement_px
         } else {
             XY::new(0.0, 0.0)
@@ -2932,7 +3022,7 @@ impl ProjectUniforms {
             None
         };
 
-        let (display, display_motion_parent) = {
+        let (display, display_motion_parent, frame_chrome, display_outer_bounds) = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
             let size = [options.screen_size.x as f32, options.screen_size.y as f32];
 
@@ -2945,8 +3035,10 @@ impl ProjectUniforms {
                 (crop.position.y + crop.size.y) as f64,
             ));
 
-            let display_offset = Self::display_offset(options, project, resolution_base);
-            let display_size = Self::display_size(options, project, resolution_base);
+            let layout = Self::display_layout(options, project, resolution_base);
+            let display_offset = Coord::<FrameSpace>::new(layout.content_offset);
+            let display_size = Coord::<FrameSpace>::new(layout.content_size);
+            let frame_config = project.background.frame.clone().filter(|f| f.is_active());
 
             let (start, end) = Self::display_bounds(&zoom, display_offset, display_size);
             let (prev_start, prev_end) =
@@ -3010,6 +3102,132 @@ impl ProjectUniforms {
             ];
             let final_min_axis = final_target_size[0].min(final_target_size[1]) as f64;
 
+            let display_rounding_px =
+                (project.background.rounding / 100.0 * 0.5 * final_min_axis) as f32 * split_fade
+                    + floating_rounding_px * floating_t;
+            let frame_active = frame_config.is_some();
+            // With a frame active the card decoration (shadow/border) moves to
+            // the chrome pass; the video keeps only the floating-card shadow
+            // that appears as a Floating scene morphs in (the chrome itself
+            // fades out with any split, so nothing double-draws).
+            let display_decoration_fade = if frame_active {
+                floating_t
+            } else {
+                chrome_fade
+            };
+            // Top-bar frame styles butt the video flush under the chrome bar,
+            // so the video's top corners go square (bottom corners keep the
+            // card rounding). As a split/floating scene morphs in the chrome
+            // fades out, so the multipliers relax back to uniform rounding.
+            let display_corner_radii = match frame_config.as_ref().map(|f| f.style) {
+                Some(FrameStyle::MacOS | FrameStyle::Windows | FrameStyle::Browser) => {
+                    [split_t, split_t, 1.0, 1.0]
+                }
+                _ => [1.0; 4],
+            };
+            let border_color = if let Some(b) = project.background.border.as_ref() {
+                [
+                    b.color[0] as f32 / 255.0,
+                    b.color[1] as f32 / 255.0,
+                    b.color[2] as f32 / 255.0,
+                    (b.opacity / 100.0).clamp(0.0, 1.0),
+                ]
+            } else {
+                [0.0, 0.0, 0.0, 0.0]
+            };
+            let border_on = project
+                .background
+                .border
+                .as_ref()
+                .is_some_and(|b| b.enabled);
+
+            let frame_chrome = frame_config.map(|frame| {
+                // The chrome rect is the outer card pushed through the exact
+                // same zoom transform as the video content rect.
+                let zoom_scale = zoom.bounds.bottom_right - zoom.bounds.top_left;
+                let zoomed = |p: XY<f64>| start.coord + (p - layout.content_offset) * zoom_scale;
+                let outer_start = zoomed(layout.outer_offset);
+                let outer_end = zoomed(layout.outer_offset + layout.outer_size);
+                let base_outer_bounds = [
+                    outer_start.x as f32,
+                    outer_start.y as f32,
+                    outer_end.x as f32,
+                    outer_end.y as f32,
+                ];
+                // Follow the same split morph as the video so the chrome hugs
+                // the card while it fades out.
+                let chrome_bounds = split_layout.as_ref().map_or(base_outer_bounds, |s| {
+                    lerp_bounds(base_outer_bounds, s.screen.target, split_t)
+                });
+                let chrome_size = [
+                    chrome_bounds[2] - chrome_bounds[0],
+                    chrome_bounds[3] - chrome_bounds[1],
+                ];
+                let decorated = frame_chrome::style_uses_card_decoration(frame.style);
+
+                frame_chrome::FrameChromeUniforms {
+                    composite: CompositeVideoFrameUniforms {
+                        output_size: [output_size.x as f32, output_size.y as f32],
+                        // frame_size/crop_bounds are texture-dependent; the
+                        // frame layer fills them once the texture exists.
+                        frame_size: [1.0, 1.0],
+                        crop_bounds: [0.0, 0.0, 1.0, 1.0],
+                        target_bounds: chrome_bounds,
+                        target_size: chrome_size,
+                        rounding_px: if decorated { display_rounding_px } else { 0.0 },
+                        rounding_type: rounding_type_value(project.background.rounding_type),
+                        mirror_x: 0.0,
+                        motion_blur_vector: descriptor.movement_vector_uv,
+                        motion_blur_zoom_center: descriptor.zoom_center_uv,
+                        motion_blur_params: [
+                            descriptor.mode.as_f32(),
+                            descriptor.strength,
+                            descriptor.zoom_amount,
+                            0.0,
+                        ],
+                        shadow: if decorated {
+                            project.background.shadow * split_fade
+                        } else {
+                            0.0
+                        },
+                        shadow_size: project
+                            .background
+                            .advanced_shadow
+                            .as_ref()
+                            .map_or(50.0, |s| s.size),
+                        shadow_opacity: project
+                            .background
+                            .advanced_shadow
+                            .as_ref()
+                            .map_or(18.0, |s| s.opacity)
+                            * split_fade,
+                        shadow_blur: project
+                            .background
+                            .advanced_shadow
+                            .as_ref()
+                            .map_or(50.0, |s| s.blur),
+                        opacity: scene.screen_opacity as f32 * split_fade,
+                        border_enabled: if decorated && border_on { 1.0 } else { 0.0 },
+                        border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
+                        preserve_source_alpha: 1.0,
+                        _padding1: [0.0; 3],
+                        border_color,
+                        corner_radii: [1.0; 4],
+                    },
+                    style: frame.style,
+                    theme: frame.theme,
+                    url: frame.url,
+                    title: frame.title,
+                    raster_size: layout.outer_size,
+                    content_height: layout.content_size.y,
+                }
+            });
+
+            let display_outer_bounds = frame_chrome
+                .as_ref()
+                .map(|f| f.composite.target_bounds)
+                .unwrap_or(final_target_bounds);
+
             (
                 CompositeVideoFrameUniforms {
                     output_size: [output_size.x as f32, output_size.y as f32],
@@ -3017,10 +3235,7 @@ impl ProjectUniforms {
                     crop_bounds: final_crop_bounds,
                     target_bounds: final_target_bounds,
                     target_size: final_target_size,
-                    rounding_px: (project.background.rounding / 100.0 * 0.5 * final_min_axis)
-                        as f32
-                        * split_fade
-                        + floating_rounding_px * floating_t,
+                    rounding_px: display_rounding_px,
                     rounding_type: rounding_type_value(project.background.rounding_type),
                     mirror_x: 0.0,
                     motion_blur_vector: descriptor.movement_vector_uv,
@@ -3031,7 +3246,7 @@ impl ProjectUniforms {
                         descriptor.zoom_amount,
                         0.0,
                     ],
-                    shadow: project.background.shadow * chrome_fade,
+                    shadow: project.background.shadow * display_decoration_fade,
                     shadow_size: project
                         .background
                         .advanced_shadow
@@ -3042,23 +3257,14 @@ impl ProjectUniforms {
                         .advanced_shadow
                         .as_ref()
                         .map_or(18.0, |s| s.opacity)
-                        * chrome_fade,
+                        * display_decoration_fade,
                     shadow_blur: project
                         .background
                         .advanced_shadow
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
                     opacity: scene.screen_opacity as f32,
-                    border_enabled: if project
-                        .background
-                        .border
-                        .as_ref()
-                        .is_some_and(|b| b.enabled)
-                    {
-                        1.0
-                    } else {
-                        0.0
-                    },
+                    border_enabled: if border_on && !frame_active { 1.0 } else { 0.0 },
                     border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
                     preserve_source_alpha: if options.preserve_screen_alpha {
                         1.0
@@ -3066,18 +3272,12 @@ impl ProjectUniforms {
                         0.0
                     },
                     _padding1: [0.0; 3],
-                    border_color: if let Some(b) = project.background.border.as_ref() {
-                        [
-                            b.color[0] as f32 / 255.0,
-                            b.color[1] as f32 / 255.0,
-                            b.color[2] as f32 / 255.0,
-                            (b.opacity / 100.0).clamp(0.0, 1.0),
-                        ]
-                    } else {
-                        [0.0, 0.0, 0.0, 0.0]
-                    },
+                    border_color,
+                    corner_radii: display_corner_radii,
                 },
                 display_parent_motion_px,
+                frame_chrome,
+                display_outer_bounds,
             )
         };
 
@@ -3273,6 +3473,7 @@ impl ProjectUniforms {
                     preserve_source_alpha: 0.0,
                     _padding1: [0.0; 3],
                     border_color: [0.0, 0.0, 0.0, 0.0],
+                    corner_radii: [1.0; 4],
                 }
             });
 
@@ -3328,10 +3529,14 @@ impl ProjectUniforms {
                 let camera_only_descriptor = if camera_only_blur <= f32::EPSILON {
                     MotionBlurDescriptor::none()
                 } else {
+                    // Synthetic transition blur (not velocity-derived): keep
+                    // its ray length on the old visual scale — the shader no
+                    // longer softens via a sharp/blur crossfade, so the
+                    // amount alone sets the look.
                     MotionBlurDescriptor::zoom(
                         XY::new(0.5, 0.5),
-                        (camera_only_blur * 0.75).min(MAX_ZOOM_IN_AMOUNT),
-                        camera_only_blur,
+                        (camera_only_blur * 0.75).min(TRANSITION_ZOOM_CAP),
+                        1.0,
                     )
                 };
 
@@ -3365,6 +3570,7 @@ impl ProjectUniforms {
                     preserve_source_alpha: 0.0,
                     _padding1: [0.0; 3],
                     border_color: [0.0, 0.0, 0.0, 0.0],
+                    corner_radii: [1.0; 4],
                 }
             });
 
@@ -3401,6 +3607,8 @@ impl ProjectUniforms {
             display,
             camera,
             camera_only,
+            frame_chrome,
+            display_outer_bounds,
             project: project.clone(),
             zoom,
             scene,
@@ -3552,6 +3760,80 @@ mod tests {
     }
 
     #[test]
+    fn frame_none_layout_has_identical_outer_and_content_rects() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 25.0;
+
+        let layout = ProjectUniforms::display_layout(&options, &project, XY::new(2688, 1512));
+
+        assert_eq!(layout.outer_offset, layout.content_offset);
+        assert_eq!(layout.outer_size, layout.content_size);
+    }
+
+    #[test]
+    fn frame_chrome_insets_video_within_centered_outer_card() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 10.0;
+        project.background.frame = Some(cap_project::FrameConfiguration {
+            style: FrameStyle::Browser,
+            ..Default::default()
+        });
+
+        let resolution_base = XY::new(2112, 1188);
+        let (out_w, out_h) = ProjectUniforms::get_output_size(&options, &project, resolution_base);
+        let layout = ProjectUniforms::display_layout(&options, &project, resolution_base);
+        let insets = frame_chrome::chrome_insets(FrameStyle::Browser);
+
+        // The video keeps the recording's aspect ratio.
+        let content_aspect = layout.content_size.x / layout.content_size.y;
+        assert!((content_aspect - 1920.0 / 1080.0).abs() < 1e-9);
+
+        // The browser toolbar insets the video from the outer card's top.
+        assert!(
+            (layout.content_offset.y
+                - (layout.outer_offset.y + insets.top * layout.content_size.y))
+                .abs()
+                < 1e-9
+        );
+        assert_eq!(layout.content_offset.x, layout.outer_offset.x);
+
+        // The outer card (not the video) is centered in the output.
+        let outer_center_x = layout.outer_offset.x + layout.outer_size.x / 2.0;
+        let outer_center_y = layout.outer_offset.y + layout.outer_size.y / 2.0;
+        assert!((outer_center_x - out_w as f64 / 2.0).abs() < 1.0);
+        assert!((outer_center_y - out_h as f64 / 2.0).abs() < 1.0);
+
+        // And it stays inside the frame.
+        assert!(layout.outer_offset.x >= 0.0 && layout.outer_offset.y >= 0.0);
+        assert!(layout.outer_offset.x + layout.outer_size.x <= out_w as f64 + 1e-6);
+        assert!(layout.outer_offset.y + layout.outer_size.y <= out_h as f64 + 1e-6);
+    }
+
+    #[test]
+    fn frame_display_position_shifts_outer_and_content_together() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 20.0;
+        project.background.frame = Some(cap_project::FrameConfiguration {
+            style: FrameStyle::MacOS,
+            ..Default::default()
+        });
+
+        let resolution_base = XY::new(2304, 1296);
+        let centered = ProjectUniforms::display_layout(&options, &project, resolution_base);
+        project.background.display_position = Some(XY::new(0.25, 0.75));
+        let moved = ProjectUniforms::display_layout(&options, &project, resolution_base);
+
+        let outer_delta = moved.outer_offset - centered.outer_offset;
+        let content_delta = moved.content_offset - centered.content_offset;
+        assert_eq!(outer_delta, content_delta);
+        assert_eq!(moved.outer_size, centered.outer_size);
+        assert_eq!(moved.content_size, centered.content_size);
+    }
+
+    #[test]
     fn display_position_center_matches_legacy_centered_layout() {
         let options = render_options(1920, 1080);
         let mut legacy = ProjectConfiguration::default();
@@ -3633,31 +3915,34 @@ mod tests {
     }
 
     #[test]
-    fn display_zoom_out_motion_blur_is_subtle() {
-        let previous = motion_bounds(XY::new(-960.0, -540.0), XY::new(2880.0, 1620.0));
-        let current = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+    fn display_zoom_blur_is_symmetric_in_and_out() {
+        // Screen Studio treats zoom-in and zoom-out identically: the radial
+        // amount is |1 - diag ratio| either way.
+        let small = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+        let large = motion_bounds(XY::new(-960.0, -540.0), XY::new(2880.0, 1620.0));
 
-        let blur =
-            ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.0, 1.0);
+        let zoom_in =
+            ProjectUniforms::compute_display_motion_blur(large, small, true, 1.0, 0.0, 1.0);
+        let zoom_out =
+            ProjectUniforms::compute_display_motion_blur(small, large, true, 1.0, 0.0, 1.0);
 
-        assert_eq!(blur.descriptor.mode, MotionBlurMode::Zoom);
-        assert!(blur.descriptor.zoom_amount <= 0.014);
+        assert_eq!(zoom_in.descriptor.mode, MotionBlurMode::Zoom);
+        assert_eq!(zoom_out.descriptor.mode, MotionBlurMode::Zoom);
+        // in: diag 2200->4400 => |1 - 2| = 1 (capped); out: |1 - 0.5| = 0.5.
+        // Both must land in the same order of magnitude — no 10x asymmetry.
+        assert!(zoom_in.descriptor.zoom_amount > 0.0);
+        assert!(zoom_out.descriptor.zoom_amount > 0.0);
+        assert!(zoom_in.descriptor.zoom_amount <= MAX_ZOOM_BLUR_AMOUNT);
+        assert!(zoom_out.descriptor.zoom_amount <= MAX_ZOOM_BLUR_AMOUNT);
+        assert_eq!(zoom_in.descriptor.strength, 1.0);
+        assert_eq!(zoom_out.descriptor.strength, 1.0);
     }
 
     #[test]
-    fn display_zoom_in_motion_blur_is_subtle() {
-        let previous = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
-        let current = motion_bounds(XY::new(-960.0, -540.0), XY::new(2880.0, 1620.0));
-
-        let blur =
-            ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.0, 1.0);
-
-        assert_eq!(blur.descriptor.mode, MotionBlurMode::Zoom);
-        assert!(blur.descriptor.zoom_amount <= 0.08);
-    }
-
-    #[test]
-    fn display_movement_motion_blur_ramps_with_velocity() {
+    fn display_movement_blur_length_is_linear_in_velocity() {
+        // The smear length must track the per-frame delta linearly (Screen
+        // Studio semantics) — no response curve shortening medium speeds and
+        // no crossfade: strength is a pure gate pinned at 1.
         let base = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
         let slow = motion_bounds(XY::new(0.5, 0.0), XY::new(1920.5, 1080.0));
         let medium = motion_bounds(XY::new(12.0, 0.0), XY::new(1932.0, 1080.0));
@@ -3670,11 +3955,39 @@ mod tests {
         let fast_blur =
             ProjectUniforms::compute_display_motion_blur(fast, base, true, 1.0, 0.0, 1.0);
 
+        // Sub-pixel motion stays off (identity kernel, no visible pop).
         assert_eq!(slow_blur.descriptor.mode, MotionBlurMode::None);
         assert_eq!(medium_blur.descriptor.mode, MotionBlurMode::Movement);
-        assert!(medium_blur.descriptor.strength > 0.0);
-        assert!(medium_blur.descriptor.strength < fast_blur.descriptor.strength);
+        assert_eq!(medium_blur.descriptor.strength, 1.0);
         assert_eq!(fast_blur.descriptor.strength, 1.0);
+
+        // 12px and 48px x-deltas normalize against the card's own x span
+        // (1920): lengths are exact and scale 4x.
+        let len = |d: &MotionBlurDescriptor| {
+            (d.movement_vector_uv[0].powi(2) + d.movement_vector_uv[1].powi(2)).sqrt()
+        };
+        let medium_len = len(&medium_blur.descriptor);
+        let fast_len = len(&fast_blur.descriptor);
+        assert!((medium_len - 12.0 / 1920.0).abs() < 1e-6);
+        assert!((fast_len - 4.0 * medium_len).abs() < 1e-6);
+    }
+
+    #[test]
+    fn display_movement_blur_scales_with_user_amount() {
+        let base = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+        let moved = motion_bounds(XY::new(24.0, 0.0), XY::new(1944.0, 1080.0));
+
+        let half = ProjectUniforms::compute_display_motion_blur(moved, base, true, 0.5, 0.0, 1.0);
+        let full = ProjectUniforms::compute_display_motion_blur(moved, base, true, 1.0, 0.0, 1.0);
+
+        // The amount scales the smear LENGTH, not an opacity mix.
+        assert!(
+            (half.descriptor.movement_vector_uv[0] * 2.0 - full.descriptor.movement_vector_uv[0])
+                .abs()
+                < 1e-6
+        );
+        assert_eq!(half.descriptor.strength, 1.0);
+        assert_eq!(full.descriptor.strength, 1.0);
     }
 
     #[test]
@@ -3692,40 +4005,37 @@ mod tests {
     }
 
     #[test]
-    fn display_scale_change_prefers_stable_zoom_blur_over_pan_blur() {
+    fn display_dominant_delta_picks_blur_mode() {
+        // Size change dominating the center shift => radial zoom blur.
         let previous = motion_bounds(XY::new(-800.0, -700.0), XY::new(3040.0, 1460.0));
         let current = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
-
         let blur =
             ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.0, 1.0);
-
         assert_eq!(blur.descriptor.mode, MotionBlurMode::Zoom);
+
+        // Center shift dominating a tiny size ripple => directional smear,
+        // even though the size did change (the old zoom-priority rule turned
+        // fast re-aim pans into weak radial blur instead of a streak).
+        let previous = motion_bounds(XY::new(0.0, 0.0), XY::new(3840.0, 2160.0));
+        let current = motion_bounds(XY::new(-40.0, -22.0), XY::new(3802.0, 2139.0));
+        let blur =
+            ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.0, 1.0);
+        assert_eq!(blur.descriptor.mode, MotionBlurMode::Movement);
     }
 
     #[test]
-    fn display_zoom_out_remains_visible_with_stabilized_sampling() {
-        let previous = motion_bounds(XY::new(-960.0, -540.0), XY::new(2880.0, 1620.0));
-        let current = motion_bounds(XY::new(-480.0, -270.0), XY::new(2400.0, 1350.0));
+    fn display_scene_transition_forces_zoom_blur() {
+        // Scene morphs inject synthetic radial blur; the pan delta must not
+        // win the dominance vote, and the amount stays on the transition's
+        // own visual scale.
+        let previous = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+        let current = motion_bounds(XY::new(200.0, 0.0), XY::new(2120.0, 1080.0));
 
         let blur =
-            ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.0, 3.0);
+            ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.8, 1.0);
 
         assert_eq!(blur.descriptor.mode, MotionBlurMode::Zoom);
-        assert!(blur.descriptor.zoom_amount > 0.003);
-        assert!(blur.descriptor.zoom_amount <= MAX_ZOOM_OUT_AMOUNT);
-    }
-
-    #[test]
-    fn display_motion_sample_span_normalizes_blur_velocity() {
-        let base = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
-        let moved = motion_bounds(XY::new(48.0, 0.0), XY::new(1968.0, 1080.0));
-
-        let one_frame =
-            ProjectUniforms::compute_display_motion_blur(moved, base, true, 1.0, 0.0, 1.0);
-        let three_frame =
-            ProjectUniforms::compute_display_motion_blur(moved, base, true, 1.0, 0.0, 3.0);
-
-        assert!(three_frame.descriptor.strength < one_frame.descriptor.strength);
+        assert!(blur.descriptor.zoom_amount <= TRANSITION_ZOOM_CAP + f32::EPSILON);
     }
 }
 
@@ -4165,6 +4475,7 @@ impl<'a> FrameRenderer<'a> {
 pub struct RendererLayers {
     background: BackgroundLayer,
     background_blur: BlurLayer,
+    frame: FrameLayer,
     display: DisplayLayer,
     cursor: CursorLayer,
     camera: CameraLayer,
@@ -4194,6 +4505,7 @@ impl RendererLayers {
         Self {
             background: BackgroundLayer::new(device),
             background_blur: BlurLayer::new(device),
+            frame: FrameLayer::new(device, shared_composite_pipeline.clone()),
             display: DisplayLayer::new_with_all_shared_pipelines(
                 device,
                 shared_yuv_pipelines.clone(),
@@ -4356,6 +4668,7 @@ impl RendererLayers {
         }
 
         if render_display {
+            self.frame.prepare(constants, uniforms);
             self.display.prepare(
                 &constants.device,
                 &constants.queue,
@@ -4497,6 +4810,7 @@ impl RendererLayers {
 
         let start = Instant::now();
         if render_display {
+            self.frame.prepare(constants, uniforms);
             let display_ready = self.display.prepare_with_encoder(
                 &constants.device,
                 &constants.queue,
@@ -4672,6 +4986,11 @@ impl RendererLayers {
         } else {
             true
         };
+
+        if should_render_screen && self.frame.has_content() {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.frame.render(&mut pass);
+        }
 
         if should_render_screen {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);

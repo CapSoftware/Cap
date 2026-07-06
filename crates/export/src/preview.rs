@@ -98,6 +98,7 @@ async fn render_preview_with_base(
         &exporter_base.project_config,
         &segment_media.cursor,
         total_duration,
+        exporter_base.render_constants.options.screen_size,
     );
     zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
 

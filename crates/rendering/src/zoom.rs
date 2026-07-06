@@ -62,25 +62,20 @@ impl SegmentBounds {
     }
 
     /// Maps a focus position (UV space) to a `from_amount_center`-space center
-    /// for auto zooms: edge-snap each axis, then compress into the band that
-    /// keeps a comfortable margin around the focus at the given zoom amount.
+    /// for auto zooms: edge-snap each axis, then clamp to [0, 1].
+    ///
+    /// `from_amount_center` places the center scalar PROPORTIONALLY across the
+    /// frame (s = 0 is top-left-flush, s = 1 is bottom-right-flush), so the
+    /// full [0, 1] range is exactly the set of in-bounds framings and a focus
+    /// snapped to 1.0 puts the frame corner-flush with the content corner —
+    /// no centered-viewport band, which would make corners unreachable.
     pub(crate) fn calculate_follow_center(
         focus_pos: (f64, f64),
-        zoom_amount: f64,
         edge_snap_ratio: f64,
     ) -> (f64, f64) {
-        let snapped = (
-            Self::snap_to_edges(focus_pos.0, edge_snap_ratio),
-            Self::snap_to_edges(focus_pos.1, edge_snap_ratio),
-        );
-
-        let viewport_half = 0.5 / zoom_amount.max(1.0);
-        let min_center = viewport_half;
-        let max_center = 1.0 - viewport_half;
-
         (
-            (min_center + snapped.0 * (max_center - min_center)).clamp(min_center, max_center),
-            (min_center + snapped.1 * (max_center - min_center)).clamp(min_center, max_center),
+            Self::snap_to_edges(focus_pos.0, edge_snap_ratio).clamp(0.0, 1.0),
+            Self::snap_to_edges(focus_pos.1, edge_snap_ratio).clamp(0.0, 1.0),
         )
     }
 }
@@ -185,17 +180,22 @@ mod test {
     }
 
     #[test]
-    fn follow_center_maps_focus_across_band() {
+    fn follow_center_maps_focus_proportionally() {
         // Center focus stays centered.
-        let (cx, cy) = SegmentBounds::calculate_follow_center((0.5, 0.5), 2.0, 0.0);
+        let (cx, cy) = SegmentBounds::calculate_follow_center((0.5, 0.5), 0.0);
         assert!((cx - 0.5).abs() < 1e-6);
         assert!((cy - 0.5).abs() < 1e-6);
 
-        // Extreme focus clamps to the band edge for the zoom amount.
-        let (left, _) = SegmentBounds::calculate_follow_center((0.0, 0.5), 2.0, 0.0);
-        assert!((left - 0.25).abs() < 1e-6);
-        let (right, _) = SegmentBounds::calculate_follow_center((1.0, 0.5), 2.0, 0.0);
-        assert!((right - 0.75).abs() < 1e-6);
+        // Extreme focus reaches the corner-flush framings so edge/corner
+        // content is actually reachable (proportional placement semantics).
+        let (left, _) = SegmentBounds::calculate_follow_center((0.0, 0.5), 0.0);
+        assert!(left.abs() < 1e-6);
+        let (right, _) = SegmentBounds::calculate_follow_center((1.0, 0.5), 0.0);
+        assert!((right - 1.0).abs() < 1e-6);
+
+        // A corner-flush framing keeps the frame fully covered at any amount.
+        let bounds = SegmentBounds::from_amount_center(2.0, XY::new(1.0, 1.0));
+        assert!(bounds.top_left.x <= 0.0 && bounds.bottom_right.x >= 1.0);
     }
 
     #[test]

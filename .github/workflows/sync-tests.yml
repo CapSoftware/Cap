@@ -81,12 +81,52 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers libvulkan1
 
+      # Hosted Windows runners have no audio endpoint, so WASAPI loopback
+      # capture (system audio) cannot run at all without a virtual sound
+      # card. Scream provides a signed null render device; with it installed,
+      # the loopback keepalive, AUDCLNT_BUFFERFLAGS_SILENT zeroing and QPC
+      # capture timestamps are exercised against a real audio engine.
+      #
+      # Pinned to 3.6: later releases (3.8/4.0) were signed after the 2021
+      # kernel cross-signing deprecation and PnP blocks their install on an
+      # interactive consent prompt, which hangs headless runners. The step
+      # timeout turns any such hang into a fast failure.
+      - name: Install virtual audio device (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/duncanthrax/scream/releases/download/3.6/Scream3.6.zip -OutFile Scream3.6.zip
+          $expected = "25ea5e778b4e6995a98d448b9b5f6d321f681663f1aeeec69d8e63183d008b19"
+          $actual = (Get-FileHash -Algorithm SHA256 Scream3.6.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Scream3.6.zip SHA-256 mismatch: got $actual, expected $expected" }
+          Expand-Archive -Path Scream3.6.zip -DestinationPath Scream
+          $cert = (Get-AuthenticodeSignature Scream\Install\driver\Scream.sys).SignerCertificate
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new("TrustedPublisher", "LocalMachine")
+          $store.Open("ReadWrite")
+          $store.Add($cert)
+          $store.Close()
+          Scream\Install\helpers\devcon.exe install Scream\Install\driver\Scream.inf *Scream
+          if ($LASTEXITCODE -gt 1) { throw "devcon install failed with exit code $LASTEXITCODE" }
+          Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
+
       - name: Timestamp pipeline unit + property tests
         shell: bash
         run: |
           cargo test --locked -p cap-timestamp -p cap-enc-ffmpeg
           cargo test --locked -p cap-recording --lib
           cargo test --locked -p cap-rendering
+
+      # Runs against the Scream endpoint installed above; the env var turns
+      # a missing endpoint (driver install regression) into a hard failure
+      # instead of a silent skip.
+      - name: WASAPI loopback endpoint tests (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          CAP_REQUIRE_AUDIO_ENDPOINT: "1"
+        run: |
+          cargo test --locked -p cap-recording --test windows_loopback -- --nocapture
 
       - name: Synthetic device matrix
         id: matrix

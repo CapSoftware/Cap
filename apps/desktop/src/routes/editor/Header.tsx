@@ -121,22 +121,6 @@ export function Header() {
 					<span class="text-sm text-gray-11">.cap</span>
 				</div>
 				<div class="flex-1 h-full" />
-				<EditorButton
-					onClick={() => {
-						if (clearTimelineSelection()) return;
-					}}
-					tooltipText="Captions"
-					leftIcon={<IconCapCaptions class="w-5" />}
-					comingSoon={true}
-				/>
-				<EditorButton
-					onClick={() => {
-						if (clearTimelineSelection()) return;
-					}}
-					tooltipText="Performance"
-					leftIcon={<IconCapGauge class="w-[18px]" />}
-					comingSoon={true}
-				/>
 			</div>
 
 			<div class="flex flex-row items-center justify-center gap-2 px-4 border-x border-black-transparent-10">

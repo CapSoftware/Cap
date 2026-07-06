@@ -581,7 +581,12 @@ impl Playback {
                     self.segment_medias
                         .iter()
                         .map(|seg| {
-                            ZoomTransformTimeline::from_project(project, &seg.cursor, duration)
+                            ZoomTransformTimeline::from_project(
+                                project,
+                                &seg.cursor,
+                                duration,
+                                self.render_constants.options.screen_size,
+                            )
                         })
                         .collect()
                 };
@@ -618,6 +623,7 @@ impl Playback {
                                 &segment_media.cursor,
                                 cached_project.screen_movement_spring,
                                 duration,
+                                None,
                             );
                             &empty_timeline
                         }
@@ -1032,6 +1038,7 @@ impl Playback {
                                 &segment_media.cursor,
                                 cached_project.screen_movement_spring,
                                 duration,
+                                None,
                             );
                             &empty_timeline
                         }

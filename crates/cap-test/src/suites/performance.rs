@@ -418,7 +418,12 @@ async fn benchmark_playback(
         .segments
         .iter()
         .map(|segment_media| {
-            ZoomTransformTimeline::from_project(&context.project, &segment_media.cursor, duration)
+            ZoomTransformTimeline::from_project(
+                &context.project,
+                &segment_media.cursor,
+                duration,
+                context.render_constants.options.screen_size,
+            )
         })
         .collect();
 
@@ -667,8 +672,12 @@ async fn render_single_frame(context: &FixtureContext) -> Result<()> {
         .get_frames_initial(0.0, !context.project.camera.hide, true, clip_offsets)
         .await
         .ok_or_else(|| anyhow::anyhow!("Initial frame decode returned no frame"))?;
-    let mut zoom_timeline =
-        ZoomTransformTimeline::from_project(&context.project, &segment_media.cursor, duration);
+    let mut zoom_timeline = ZoomTransformTimeline::from_project(
+        &context.project,
+        &segment_media.cursor,
+        duration,
+        context.render_constants.options.screen_size,
+    );
     zoom_timeline.ensure_precomputed_until(1.0 / PLAYBACK_FPS as f32);
     let uniforms = ProjectUniforms::new(
         &context.render_constants,

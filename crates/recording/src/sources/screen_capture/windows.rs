@@ -1344,6 +1344,14 @@ impl output_pipeline::AudioSource for SystemAudioSource {
 
         async move {
             let capturer = setup_result.map_err(|e| anyhow!("{e}"))?;
+            if capturer.has_silence_keepalive() {
+                info!("System audio loopback silence keepalive active");
+            } else {
+                warn!(
+                    "System audio loopback has no silence keepalive; \
+                     capture will only produce packets while other apps play audio"
+                );
+            }
             if let Ok(mut guard) = state.lock() {
                 guard.capturer = Some(capturer);
             }
