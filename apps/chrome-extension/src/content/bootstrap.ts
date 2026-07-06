@@ -1,9 +1,11 @@
+import { TARGET } from "../platform/target";
 import {
 	isOverlayMessage,
 	isRecordingStatusBroadcast,
 } from "../shared/messages";
 import {
 	RECORDING_STATE_KEY,
+	SHARED_STATE_AREA,
 	SHARED_UI_STATE_KEY,
 } from "../shared/storage-keys";
 
@@ -72,8 +74,41 @@ const bootstrap = () => {
 	let modulePromise: Promise<void> | null = null;
 	let moduleStarted = false;
 
+	const loadOverlayModule = (): Promise<OverlayModule> => {
+		if (TARGET !== "firefox") {
+			return import(/* @vite-ignore */ overlayModuleUrl);
+		}
+		// Firefox content scripts cannot dynamic-import extension modules
+		// (bugzilla 1536094). The Firefox build ships the overlay as a classic
+		// IIFE exposing CapOverlay; ask the service worker to executeScript it
+		// into this same isolated world. This is the one message the bootstrap
+		// sends, and only once a tab actually needs UI.
+		return new Promise((resolve, reject) => {
+			chrome.runtime.sendMessage(
+				{ target: "service-worker", type: "inject-overlay-module" },
+				(response?: { ok?: boolean; error?: string }) => {
+					if (chrome.runtime.lastError) {
+						reject(
+							new Error(chrome.runtime.lastError.message ?? "Send failed"),
+						);
+						return;
+					}
+					const module = (globalThis as { CapOverlay?: OverlayModule })
+						.CapOverlay;
+					if (response?.ok && module) {
+						resolve(module);
+						return;
+					}
+					reject(
+						new Error(response?.error ?? "Overlay module injection failed"),
+					);
+				},
+			);
+		});
+	};
+
 	const startOverlayModule = () => {
-		modulePromise ??= import(/* @vite-ignore */ overlayModuleUrl)
+		modulePromise ??= loadOverlayModule()
 			.then((module: OverlayModule) => {
 				moduleStarted = true;
 				// The module registers its own runtime and storage listeners;
@@ -84,8 +119,11 @@ const bootstrap = () => {
 				chrome.storage.onChanged.removeListener(handleStorageChange);
 				module.init(pendingMessages);
 			})
-			.catch(() => {
-				// Leave the trigger listeners armed so a later signal retries.
+			.catch((error: unknown) => {
+				// Leave the trigger listeners armed so a later signal retries. The
+				// failure is otherwise invisible ("clicking the icon does nothing"),
+				// so leave a trace for debugging.
+				console.error("[cap] overlay module load failed", error);
 				modulePromise = null;
 			});
 		return modulePromise;
@@ -95,7 +133,7 @@ const bootstrap = () => {
 		changes: Record<string, chrome.storage.StorageChange>,
 		areaName: string,
 	) => {
-		if (areaName !== "session") return;
+		if (areaName !== SHARED_STATE_AREA) return;
 		if (
 			isUiPhase(changes[RECORDING_STATE_KEY]?.newValue) ||
 			readPanelOpen(changes[SHARED_UI_STATE_KEY]?.newValue)
@@ -157,11 +195,16 @@ const bootstrap = () => {
 		});
 	}
 
-	// One cheap session-storage read decides whether this page needs UI right
-	// away: a recording in progress or the recorder panel open (the panel
-	// follows the user across tabs).
+	// One cheap storage read decides whether this page needs UI right away: a
+	// recording in progress or the recorder panel open (the panel follows the
+	// user across tabs). The shared state lives in storage.session on Chrome
+	// and storage.local on Firefox (see SHARED_STATE_AREA).
 	try {
-		chrome.storage.session.get(
+		const sharedStateStorage =
+			SHARED_STATE_AREA === "session"
+				? chrome.storage.session
+				: chrome.storage.local;
+		sharedStateStorage.get(
 			[RECORDING_STATE_KEY, SHARED_UI_STATE_KEY],
 			(items) => {
 				if (chrome.runtime.lastError || !items) return;

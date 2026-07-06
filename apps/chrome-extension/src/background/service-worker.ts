@@ -17,6 +17,7 @@ import {
 	clearAuthError,
 	clearCachedBootstrap,
 	clearPendingAuth,
+	clearSharedSessionState,
 	isOverlayTokenRegistered,
 	loadAuth,
 	loadAuthError,
@@ -101,6 +102,12 @@ let recordingStartInFlight: Promise<OffscreenResponse> | null = null;
 // message fallbacks instead of the session-storage mirror.
 chrome.storage.session.setAccessLevel?.({
 	accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS",
+});
+
+// On Firefox the shared "session" keys live in storage.local; drop them at
+// browser startup so stale recording/UI state does not outlive the session.
+chrome.runtime.onStartup.addListener(() => {
+	void clearSharedSessionState().catch(() => undefined);
 });
 
 const getActiveTab = () =>
@@ -1574,6 +1581,29 @@ const handleRequest = async (
 	if (message.type === "open-recorder-panel") {
 		await openRecorderPanel(sender.tab);
 		return { ok: true };
+	}
+
+	// Firefox content scripts cannot dynamic-import extension modules
+	// (bugzilla 1536094), so the bootstrap asks for the overlay bundle to be
+	// injected into its isolated world instead.
+	if (message.type === "inject-overlay-module") {
+		const tabId = sender.tab?.id;
+		if (tabId === undefined) {
+			return { ok: false, error: "Overlay injection needs a tab sender" };
+		}
+		return new Promise<ServiceWorkerResponse>((resolve) => {
+			chrome.scripting.executeScript(
+				{ target: { tabId }, files: ["content/overlay.js"] },
+				() => {
+					const error = chrome.runtime.lastError;
+					resolve(
+						error
+							? { ok: false, error: error.message ?? "Injection failed" }
+							: { ok: true },
+					);
+				},
+			);
+		});
 	}
 
 	if (

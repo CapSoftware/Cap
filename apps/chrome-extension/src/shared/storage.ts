@@ -1,4 +1,8 @@
-import { RECORDING_STATE_KEY, SHARED_UI_STATE_KEY } from "./storage-keys";
+import {
+	RECORDING_STATE_KEY,
+	SHARED_STATE_AREA,
+	SHARED_UI_STATE_KEY,
+} from "./storage-keys";
 import type {
 	BootstrapData,
 	CapturePreferences,
@@ -14,7 +18,7 @@ import type {
 	WebcamPreviewFrame,
 } from "./types";
 
-export { RECORDING_STATE_KEY, SHARED_UI_STATE_KEY };
+export { RECORDING_STATE_KEY, SHARED_STATE_AREA, SHARED_UI_STATE_KEY };
 
 export const SETTINGS_KEY = "cap-extension-settings";
 export const AUTH_KEY = "cap-extension-auth";
@@ -133,20 +137,42 @@ const removeLocal = (keys: string[] | string) =>
 		chrome.storage.local.remove(keys, resolve);
 	});
 
+const sharedStateStorage = () =>
+	SHARED_STATE_AREA === "session"
+		? chrome.storage.session
+		: chrome.storage.local;
+
 const getSession = (keys: string[]) =>
 	new Promise<Record<string, unknown>>((resolve) => {
-		chrome.storage.session.get(keys, (items) => resolve(items));
+		sharedStateStorage().get(keys, (items) => resolve(items));
 	});
 
 const setSession = (items: Record<string, unknown>) =>
 	new Promise<void>((resolve) => {
-		chrome.storage.session.set(items, resolve);
+		sharedStateStorage().set(items, resolve);
 	});
 
 const removeSession = (keys: string[] | string) =>
 	new Promise<void>((resolve) => {
-		chrome.storage.session.remove(keys, resolve);
+		sharedStateStorage().remove(keys, resolve);
 	});
+
+// On Firefox the shared "session" keys live in storage.local (see
+// SHARED_STATE_AREA); the background calls this at browser startup so stale
+// recording/UI state does not survive a restart the way it never would have
+// in real session storage.
+export const clearSharedSessionState = () =>
+	SHARED_STATE_AREA === "session"
+		? Promise.resolve()
+		: removeLocal([
+				RECORDING_STATE_KEY,
+				SHARED_UI_STATE_KEY,
+				AUTH_ERROR_KEY,
+				OVERLAY_TOKENS_KEY,
+				UPLOAD_PROGRESS_TAB_KEY,
+				WEBCAM_PREVIEW_DISMISSED_KEY,
+				LAST_WEBCAM_PREVIEW_FRAME_KEY,
+			]);
 
 export const loadSettings = async () => {
 	const result = await getLocal([SETTINGS_KEY]);
