@@ -4642,7 +4642,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
     let specta_builder = tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
-            log,
             set_mic_input,
             set_camera_input,
             set_native_camera_preview_enabled,
@@ -6376,12 +6375,6 @@ fn format_project_name(
         recording_mode,
         datetime,
     )
-}
-
-#[tauri::command(async)]
-#[specta::specta]
-fn log(window: tauri::WebviewWindow, string: String) {
-    println!("[{}] {}", window.label(), string);
 }
 
 #[tauri::command(async)]
