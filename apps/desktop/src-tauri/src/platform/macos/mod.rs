@@ -464,6 +464,8 @@ impl WebviewWindowExt for WebviewWindow {
                     tracing::error!("NSWindow not ready");
                     return;
                 };
+                // SAFETY: Tauri runs this on the main thread
+                let mtm = unsafe { MainThreadMarker::new_unchecked() };
                 let nswindow = unsafe { &*ns_window.cast::<NSWindow>() };
                 f(mtm, nswindow);
             }
