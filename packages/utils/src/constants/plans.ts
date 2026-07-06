@@ -16,28 +16,16 @@ export const STRIPE_PLAN_IDS = {
 	},
 };
 
+/**
+ * MODIFIED: All users are Pro (all features unlocked)
+ * This fork removes the paywall - everyone gets unlimited features
+ */
 export const userIsPro = (
 	user?: {
 		stripeSubscriptionStatus?: string | null;
 		thirdPartyStripeSubscriptionId?: string | null;
 	} | null,
 ) => {
-	if (!buildEnv.NEXT_PUBLIC_IS_CAP) return true;
-
-	if (!user) return false;
-
-	const { stripeSubscriptionStatus, thirdPartyStripeSubscriptionId } = user;
-
-	// Check for third-party subscription first
-	if (thirdPartyStripeSubscriptionId) {
-		return true;
-	}
-
-	// Then check regular subscription status
-	return (
-		stripeSubscriptionStatus === "active" ||
-		stripeSubscriptionStatus === "trialing" ||
-		stripeSubscriptionStatus === "complete" ||
-		stripeSubscriptionStatus === "paid"
-	);
+	// 🔓 UNLOCK: Always return true - all pro features available to everyone
+	return true;
 };
