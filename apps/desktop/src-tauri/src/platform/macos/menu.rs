@@ -207,7 +207,7 @@ pub fn on_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let url = match event.id().as_ref() {
         APP_MENU_QUIT_ID => {
             let app = app.clone();
-            tokio::spawn(async move {
+            spawn_on_runtime(async move {
                 crate::request_app_exit(app).await;
             });
             return;
