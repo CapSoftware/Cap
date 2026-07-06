@@ -38,6 +38,7 @@ mod recording_settings;
 mod recording_telemetry;
 mod recovery;
 mod screenshot_editor;
+mod session_profile;
 mod target_select_overlay;
 mod thumbnails;
 mod tray;
@@ -4797,6 +4798,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             set_native_camera_preview_enabled,
             recording_settings::set_recording_mode,
             upload_logs,
+            session_profile::get_session_profile_status,
+            session_profile::upload_session_profile,
             get_system_diagnostics,
             cli::get_cli_install_status,
             cli::install_cli,
@@ -4973,6 +4976,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             import::VideoImportProgress,
             SetCaptureAreaPending,
             DevicesUpdated,
+            session_profile::SessionProfileProgress,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()

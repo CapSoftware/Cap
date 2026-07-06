@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Manager};
 
-async fn get_latest_log_file(app: &AppHandle) -> Option<PathBuf> {
+pub async fn get_latest_log_file(app: &AppHandle) -> Option<PathBuf> {
     let logs_dir = app
         .state::<ArcLock<crate::App>>()
         .read()
@@ -39,7 +39,7 @@ async fn get_latest_log_file(app: &AppHandle) -> Option<PathBuf> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LogUploadDiagnostics {
+pub struct LogUploadDiagnostics {
     hardware: HardwareInfo,
     system: cap_recording::diagnostics::SystemDiagnostics,
     displays: Vec<DisplayDiagnostics>,
@@ -133,7 +133,7 @@ fn collect_storage_info(recordings_path: &std::path::Path) -> Option<StorageInfo
     })
 }
 
-fn collect_diagnostics_for_upload(
+pub fn collect_diagnostics_for_upload(
     recordings_dir: &std::path::Path,
     app_data_dir: &std::path::Path,
     is_recording: bool,
@@ -172,6 +172,145 @@ fn collect_diagnostics_for_upload(
             app_data_dir: app_data_dir.display().to_string(),
         },
     }
+}
+
+/// Builds a concise, human-readable Markdown summary of the collected
+/// diagnostics suitable for posting to chat (e.g. Discord). The full
+/// machine-readable diagnostics should still be shipped alongside this.
+pub fn summarize_diagnostics(diagnostics: &LogUploadDiagnostics) -> String {
+    let value = serde_json::to_value(diagnostics).unwrap_or(serde_json::Value::Null);
+    let mut lines: Vec<String> = Vec::new();
+
+    if let Some(hardware) = value.get("hardware") {
+        let cpu = hardware
+            .get("cpuBrand")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown");
+        let cores = hardware
+            .get("cpuCores")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let arch = hardware
+            .get("architecture")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        lines.push(format!("**CPU:** {cpu} ({cores} cores, {arch})"));
+
+        let total = hardware
+            .get("totalMemoryMb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let available = hardware
+            .get("availableMemoryMb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        lines.push(format!("**Memory:** {available} MB free / {total} MB"));
+    }
+
+    let system = value.get("system");
+
+    let os_line = system
+        .and_then(|s| s.get("macosVersion"))
+        .and_then(|v| v.get("displayName"))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            system
+                .and_then(|s| s.get("windowsVersion"))
+                .and_then(|v| v.get("displayName"))
+                .and_then(|v| v.as_str())
+        });
+    if let Some(os) = os_line {
+        lines.push(format!("**OS:** {os}"));
+    } else if let Some(kernel) = system
+        .and_then(|s| s.get("kernelVersion"))
+        .and_then(|v| v.as_str())
+    {
+        lines.push(format!("**Kernel:** {kernel}"));
+    }
+
+    let gpu = system
+        .and_then(|s| s.get("gpuName"))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            system
+                .and_then(|s| s.get("gpuInfo"))
+                .and_then(|v| v.get("description"))
+                .and_then(|v| v.as_str())
+        });
+    if let Some(gpu) = gpu {
+        lines.push(format!("**GPU:** {gpu}"));
+    }
+
+    if let Some(encoders) = system
+        .and_then(|s| s.get("availableEncoders"))
+        .and_then(|v| v.as_array())
+    {
+        let list: Vec<&str> = encoders.iter().filter_map(|e| e.as_str()).collect();
+        if !list.is_empty() {
+            lines.push(format!("**Encoders:** {}", list.join(", ")));
+        }
+    }
+
+    let capture_supported = system
+        .and_then(|s| s.get("screenCaptureSupported"))
+        .and_then(|v| v.as_bool())
+        .or_else(|| {
+            system
+                .and_then(|s| s.get("graphicsCaptureSupported"))
+                .and_then(|v| v.as_bool())
+        });
+    if let Some(supported) = capture_supported {
+        lines.push(format!(
+            "**Screen Capture:** {}",
+            if supported {
+                "✅ Supported"
+            } else {
+                "❌ Not Supported"
+            }
+        ));
+    }
+
+    if let Some(displays) = value.get("displays").and_then(|v| v.as_array()) {
+        lines.push(format!("**Displays:** {}", displays.len()));
+    }
+    if let Some(cameras) = value.get("cameras").and_then(|v| v.as_array()) {
+        lines.push(format!("**Cameras:** {}", cameras.len()));
+    }
+    if let Some(microphones) = value.get("microphones").and_then(|v| v.as_array()) {
+        lines.push(format!("**Mics:** {}", microphones.len()));
+    }
+
+    if let Some(permissions) = value.get("permissions") {
+        let screen = permissions
+            .get("screenRecording")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let camera = permissions
+            .get("camera")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let microphone = permissions
+            .get("microphone")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        lines.push(format!(
+            "**Permissions:** Screen: {screen}, Camera: {camera}, Mic: {microphone}"
+        ));
+    }
+
+    if let Some(storage) = value.get("storage").filter(|v| !v.is_null()) {
+        let available = storage
+            .get("availableSpaceMb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let total = storage
+            .get("totalSpaceMb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        lines.push(format!("**Disk:** {available} MB free / {total} MB"));
+    }
+
+    lines.join("\n")
 }
 
 pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {

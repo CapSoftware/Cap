@@ -20,6 +20,12 @@ async setRecordingMode(mode: RecordingMode) : Promise<null> {
 async uploadLogs() : Promise<null> {
     return await TAURI_INVOKE("upload_logs");
 },
+async getSessionProfileStatus() : Promise<SessionProfileStatus> {
+    return await TAURI_INVOKE("get_session_profile_status");
+},
+async uploadSessionProfile(note: string | null) : Promise<SessionProfileUploadResult> {
+    return await TAURI_INVOKE("upload_session_profile", { note });
+},
 async getSystemDiagnostics() : Promise<SystemDiagnostics> {
     return await TAURI_INVOKE("get_system_diagnostics");
 },
@@ -495,6 +501,7 @@ requestScreenCapturePrewarm: RequestScreenCapturePrewarm,
 requestScrollToSettingsSection: RequestScrollToSettingsSection,
 requestSetTargetMode: RequestSetTargetMode,
 requestStartRecording: RequestStartRecording,
+sessionProfileProgress: SessionProfileProgress,
 setCaptureAreaPending: SetCaptureAreaPending,
 targetUnderCursor: TargetUnderCursor,
 uploadProgressEvent: UploadProgressEvent,
@@ -523,6 +530,7 @@ requestScreenCapturePrewarm: "request-screen-capture-prewarm",
 requestScrollToSettingsSection: "request-scroll-to-settings-section",
 requestSetTargetMode: "request-set-target-mode",
 requestStartRecording: "request-start-recording",
+sessionProfileProgress: "session-profile-progress",
 setCaptureAreaPending: "set-capture-area-pending",
 targetUnderCursor: "target-under-cursor",
 uploadProgressEvent: "upload-progress-event",
@@ -862,6 +870,11 @@ export type ScreenshotSharingState = { link: string; contentHash: string | null 
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }
 export type SerializedScreenshotEditorInstance = { framesSocketUrl: string; path: string; config: ProjectConfiguration | null; prettyName: string; imageWidth: number; imageHeight: number }
+export type SessionProfileProgress = { stage: SessionProfileStage; progress: number; message: string }
+export type SessionProfileRecording = { mode: RecordingMode; prettyName: string; path: string; modifiedAt: number | null; sizeBytes: number }
+export type SessionProfileStage = "collecting" | "compressing" | "uploading" | "notifying" | "done"
+export type SessionProfileStatus = { studio: SessionProfileRecording | null; instant: SessionProfileRecording | null }
+export type SessionProfileUploadResult = { uploaded: boolean; downloadUrl: string | null; discordDelivered: boolean; includedModes: RecordingMode[]; bundleSizeBytes: number }
 export type SetCaptureAreaPending = boolean
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string; content_hash?: string | null }

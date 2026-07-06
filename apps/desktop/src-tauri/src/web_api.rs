@@ -50,7 +50,7 @@ impl From<String> for AuthedApiError {
     }
 }
 
-fn apply_env_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+pub(crate) fn apply_env_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     let mut req = req
         .header("X-Cap-Desktop-Version", env!("CARGO_PKG_VERSION"))
         .header("X-Cap-Desktop-Features", "googleDriveUpload");

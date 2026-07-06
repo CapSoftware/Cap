@@ -2,6 +2,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { sendEmail } from "@cap/database/emails/config";
 import { Feedback } from "@cap/database/emails/feedback";
+import { nanoId } from "@cap/database/helpers";
 import {
 	authApiKeys,
 	organizationMembers,
@@ -11,7 +12,7 @@ import {
 import { buildEnv, serverEnv } from "@cap/env";
 import { stripe, userIsPro } from "@cap/utils";
 import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
-import { ImageUploads } from "@cap/web-backend";
+import { ImageUploads, S3Buckets } from "@cap/web-backend";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq, isNull } from "drizzle-orm";
@@ -436,6 +437,216 @@ app.post(
 			});
 		} catch (_error) {
 			return c.json({ error: "Failed to submit feedback" }, { status: 500 });
+		}
+	},
+);
+
+const SESSION_PROFILE_PREFIX = "desktop-session-profiles";
+const SESSION_PROFILE_UPLOAD_EXPIRY_SECONDS = 6 * 60 * 60;
+const SESSION_PROFILE_DOWNLOAD_EXPIRY_SECONDS = 7 * 24 * 60 * 60;
+const DISCORD_MESSAGE_MAX_LENGTH = 2000;
+
+function sanitizeSessionProfileFileName(fileName: string): string {
+	const base = fileName.split(/[\\/]/).pop() ?? "";
+	const cleaned = base.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/^\.+/, "");
+	const trimmed = cleaned.slice(0, 128);
+	return trimmed.length > 0 ? trimmed : "session-profile.zip";
+}
+
+function formatBytes(bytes: number): string {
+	if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+	const units = ["B", "KB", "MB", "GB", "TB"];
+	const exponent = Math.min(
+		Math.floor(Math.log(bytes) / Math.log(1024)),
+		units.length - 1,
+	);
+	const value = bytes / 1024 ** exponent;
+	return `${value.toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
+}
+
+function formatDuration(seconds: number): string {
+	if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
+	const total = Math.round(seconds);
+	const mins = Math.floor(total / 60);
+	const secs = total % 60;
+	return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+}
+
+const sessionProfileNotifySchema = z.object({
+	id: z.string().min(1).max(64),
+	key: z.string().min(1),
+	note: z.string().max(4000).optional(),
+	os: z.string().max(64).optional(),
+	version: z.string().max(64).optional(),
+	sizeBytes: z.number().nonnegative().optional(),
+	recordings: z
+		.array(
+			z.object({
+				mode: z.enum(["studio", "instant"]),
+				prettyName: z.string().max(256),
+				durationSeconds: z.number().nonnegative().optional(),
+				sizeBytes: z.number().nonnegative().optional(),
+			}),
+		)
+		.max(8)
+		.default([]),
+	diagnosticsSummary: z.string().max(4000).optional(),
+});
+
+app.post(
+	"/session-profile/create",
+	withAuth,
+	zValidator(
+		"json",
+		z.object({
+			fileName: z.string().min(1).max(256),
+		}),
+	),
+	async (c) => {
+		const user = c.get("user");
+		const { fileName } = c.req.valid("json");
+
+		const id = nanoId();
+		const safeName = sanitizeSessionProfileFileName(fileName);
+		const key = `${SESSION_PROFILE_PREFIX}/${user.id}/${id}/${safeName}`;
+
+		try {
+			const uploadUrl = await Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+				return yield* bucket.getPresignedPutUrl(
+					key,
+					{},
+					{
+						expiresIn: SESSION_PROFILE_UPLOAD_EXPIRY_SECONDS,
+					},
+				);
+			}).pipe(runPromise);
+
+			return c.json({ id, key, uploadUrl });
+		} catch (error) {
+			console.error("Failed to create session profile upload URL:", error);
+			return c.json(
+				{ error: "Failed to create session profile upload URL" },
+				{ status: 500 },
+			);
+		}
+	},
+);
+
+app.post(
+	"/session-profile/notify",
+	withAuth,
+	zValidator("json", sessionProfileNotifySchema),
+	async (c) => {
+		const user = c.get("user");
+		const {
+			id,
+			key,
+			note,
+			os,
+			version,
+			sizeBytes,
+			recordings,
+			diagnosticsSummary,
+		} = c.req.valid("json");
+
+		const expectedPrefix = `${SESSION_PROFILE_PREFIX}/${user.id}/${id}/`;
+		if (!key.startsWith(expectedPrefix) || key.includes("..")) {
+			return c.json({ error: "Invalid object key" }, { status: 400 });
+		}
+
+		try {
+			const downloadUrl = await Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+				return yield* bucket.getSignedObjectUrl(key, {
+					expiresIn: SESSION_PROFILE_DOWNLOAD_EXPIRY_SECONDS,
+				});
+			}).pipe(runPromise);
+
+			const discordWebhookUrl = serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
+			let discordDelivered = false;
+
+			if (discordWebhookUrl) {
+				const recordingLines = recordings.map((recording) => {
+					const label = recording.mode === "studio" ? "Studio" : "Instant";
+					const details = [
+						recording.durationSeconds !== undefined
+							? formatDuration(recording.durationSeconds)
+							: null,
+						recording.sizeBytes !== undefined
+							? formatBytes(recording.sizeBytes)
+							: null,
+					]
+						.filter(Boolean)
+						.join(", ");
+					return `• **${label}:** ${recording.prettyName}${
+						details ? ` (${details})` : ""
+					}`;
+				});
+
+				const header = [
+					"🧪 **New Session Profile**",
+					"",
+					`**User:** ${user.email} (${user.id})`,
+					os ? `**Platform:** ${os}` : null,
+					version ? `**App Version:** ${version}` : null,
+					sizeBytes !== undefined
+						? `**Bundle Size:** ${formatBytes(sizeBytes)}`
+						: null,
+					note ? `**Note:** ${note}` : null,
+					recordingLines.length > 0 ? "" : null,
+					recordingLines.length > 0 ? "**Recordings:**" : null,
+					...recordingLines,
+					"",
+					`**Download (expires in 7 days):** ${downloadUrl}`,
+					diagnosticsSummary ? "" : null,
+					diagnosticsSummary || null,
+				]
+					.filter((line): line is string => line !== null)
+					.join("\n");
+
+				const content =
+					header.length > DISCORD_MESSAGE_MAX_LENGTH
+						? `${header.slice(0, DISCORD_MESSAGE_MAX_LENGTH - 1)}…`
+						: header;
+
+				// Discord delivery is best-effort: the bundle is already in S3 and
+				// the download URL is valid, so a webhook failure must not turn the
+				// whole request into a 500 (which would make the client re-upload).
+				try {
+					const response = await fetch(discordWebhookUrl, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							content,
+							allowed_mentions: { parse: [] },
+						}),
+					});
+
+					if (response.ok) {
+						discordDelivered = true;
+					} else {
+						console.error(
+							"Failed to send session profile to Discord:",
+							response.status,
+							await response.text(),
+						);
+					}
+				} catch (discordError) {
+					console.error(
+						"Failed to send session profile to Discord:",
+						discordError,
+					);
+				}
+			}
+
+			return c.json({ success: true, downloadUrl, discordDelivered });
+		} catch (error) {
+			console.error("Failed to notify session profile:", error);
+			return c.json(
+				{ error: "Failed to notify session profile" },
+				{ status: 500 },
+			);
 		}
 	},
 );

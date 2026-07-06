@@ -96,6 +96,8 @@ scap-screencapturekit = { path = "../../../crates/scap-screencapturekit" }
 scap-direct3d = { path = "../../../crates/scap-direct3d" }
 
 flume.workspace = true
+zip = { version = "4", default-features = false, features = ["deflate"] }
+walkdir = "2"
 tracing-subscriber = "0.3.19"
 tracing-appender = "0.2.3"
 dirs = "6.0.0"
