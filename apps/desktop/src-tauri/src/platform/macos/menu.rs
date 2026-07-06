@@ -76,7 +76,7 @@ unsafe fn setup_terminate_handler(nsapp: &NSApplication) {
     unsafe extern "C-unwind" fn applicationShouldTerminate(
         _: &objc2::runtime::AnyObject,
         _: objc2::runtime::Sel,
-        _: *mut objc2::runtime::AnyObject,
+        _: *mut objc2_app_kit::NSApplication,
     ) -> isize {
         match MACOS_NATIVE_TERMINATE_APP.get() {
             Some(app) => {
@@ -99,7 +99,11 @@ unsafe fn setup_terminate_handler(nsapp: &NSApplication) {
             delegate_class,
             sel!(applicationShouldTerminate:),
             std::mem::transmute::<
-                unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> isize,
+                unsafe extern "C-unwind" fn(
+                    &AnyObject,
+                    Sel,
+                    *mut objc2_app_kit::NSApplication,
+                ) -> isize,
                 unsafe extern "C-unwind" fn(),
             >(applicationShouldTerminate),
             c"q@:@".as_ptr(), // NSInteger
@@ -122,8 +126,8 @@ pub fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         &[
             &PredefinedMenuItem::minimize(app, None)?,
             &PredefinedMenuItem::maximize(app, None)?,
+            &PredefinedMenuItem::bring_all_to_front(app, None)?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::close_window(app, None)?,
         ],
     )?;
 
@@ -169,6 +173,7 @@ pub fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
                     &PredefinedMenuItem::separator(app)?,
                     &PredefinedMenuItem::hide(app, None)?,
                     &PredefinedMenuItem::hide_others(app, None)?,
+                    &PredefinedMenuItem::show_all(app, None)?,
                     &PredefinedMenuItem::separator(app)?,
                     &PredefinedMenuItem::quit(app, None)?,
                 ],
