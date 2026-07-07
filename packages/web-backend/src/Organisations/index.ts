@@ -47,9 +47,8 @@ export class Organisations extends Effect.Service<Organisations>()(
 					)
 					.pipe(
 						Effect.flatMap(EffectArray.get(0)),
-						Effect.catchTag(
-							"NoSuchElementException",
-							() => new Organisation.NotFoundError(),
+						Effect.catchTag("NoSuchElementException", () =>
+							Effect.fail(new Organisation.NotFoundError()),
 						),
 						Policy.withPolicy(policy.isAdminOrOwner(payload.id)),
 					);
@@ -87,9 +86,8 @@ export class Organisations extends Effect.Service<Organisations>()(
 					)
 					.pipe(
 						Effect.flatMap(EffectArray.get(0)),
-						Effect.catchTag(
-							"NoSuchElementException",
-							() => new Organisation.NotFoundError(),
+						Effect.catchTag("NoSuchElementException", () =>
+							Effect.fail(new Organisation.NotFoundError()),
 						),
 					);
 

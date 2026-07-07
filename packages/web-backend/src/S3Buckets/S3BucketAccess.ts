@@ -36,7 +36,9 @@ const wrapS3Promise = <T>(
 			),
 		);
 	}).pipe(
-		Effect.catchTag("UnknownException", (cause) => new S3Error({ cause })),
+		Effect.catchTag("UnknownException", (cause) =>
+			Effect.fail(new S3Error({ cause })),
+		),
 	);
 
 export const createS3BucketAccess = Effect.gen(function* () {

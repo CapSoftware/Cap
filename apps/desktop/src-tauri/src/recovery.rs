@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use tauri::AppHandle;
 use tracing::info;
 
-use crate::{create_screenshot, general_settings::GeneralSettingsStore};
+use crate::create_screenshot;
 
 const RECOVERY_CUTOFF_DATE: (i32, u32, u32) = (2025, 12, 31);
 
@@ -44,14 +44,12 @@ pub struct IncompleteRecordingInfo {
 pub async fn find_incomplete_recordings(
     app: AppHandle,
 ) -> Result<Vec<IncompleteRecordingInfo>, String> {
-    let recordings_dir = GeneralSettingsStore::recordings_dir(&app);
-
-    if !recordings_dir.exists() {
-        return Ok(Vec::new());
-    }
+    let recordings_dirs = crate::recordings_locations::known_recordings_dirs(&app);
 
     let result = tokio::task::spawn_blocking(move || {
-        let incomplete_list = RecoveryManager::find_incomplete(&recordings_dir);
+        let incomplete_list = recordings_dirs
+            .iter()
+            .flat_map(|dir| RecoveryManager::find_incomplete(dir));
 
         incomplete_list
             .into_iter()

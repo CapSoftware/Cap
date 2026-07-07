@@ -1,6 +1,6 @@
 use crate::{
     AudioFrame, SetupCtx, output_pipeline,
-    screen_capture::{ScreenCaptureConfig, ScreenCaptureFormat},
+    screen_capture::{ScreenCaptureConfig, ScreenCaptureFormat, cadence::FrameCadenceGate},
 };
 use ::windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
@@ -465,6 +465,12 @@ struct CreateCapturerParams<'a> {
     video_tx: &'a mpsc::Sender<VideoFrame>,
     video_frame_counter: &'a Arc<AtomicU32>,
     video_drop_counter: &'a Arc<AtomicU32>,
+    /// Decimated by the cadence gate: expected on high-refresh monitors,
+    /// tracked separately from drops so it never trips drop-rate health.
+    video_decimated_counter: &'a Arc<AtomicU32>,
+    /// Nominal frame interval in QPC hundred-nanosecond units; `None`
+    /// disables rate capping.
+    cadence_interval_hns: Option<i64>,
     expected_width: u32,
     expected_height: u32,
     frame_scaler: Arc<Mutex<WindowsFrameScaler>>,
@@ -489,6 +495,8 @@ fn create_d3d_capturer(
         {
             let video_frame_counter = params.video_frame_counter.clone();
             let video_drop_counter = params.video_drop_counter.clone();
+            let video_decimated_counter = params.video_decimated_counter.clone();
+            let mut cadence_gate = params.cadence_interval_hns.map(FrameCadenceGate::new);
             let mut tx = params.video_tx.clone();
             let expected_width = params.expected_width;
             let expected_height = params.expected_height;
@@ -497,9 +505,21 @@ fn create_d3d_capturer(
             let scaled_frame_count = params.scaled_frame_count.clone();
             let stall_health_tx = params.stall_health_tx.clone();
             move |frame| {
-                let timestamp = frame.inner().SystemRelativeTime()?;
+                let capture_time = frame.inner().SystemRelativeTime()?;
+
+                // WGC delivers a frame per screen update — up to the monitor
+                // refresh rate on systems without MinUpdateInterval support —
+                // so cap delivery at the nominal rate before any conversion
+                // or channel work.
+                if let Some(gate) = cadence_gate.as_mut()
+                    && !gate.admit(capture_time.Duration)
+                {
+                    video_decimated_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                    return Ok(());
+                }
+
                 let timestamp = Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(
-                    timestamp.Duration,
+                    capture_time.Duration,
                 ));
 
                 let frame_width = frame.width();
@@ -627,6 +647,18 @@ impl output_pipeline::VideoSource for VideoSource {
         let scaling_logged: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let scaled_frame_count: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
+        // Belt-and-braces alongside WGC's MinUpdateInterval: on systems where
+        // that API is unsupported (or silently ineffective) the gate keeps
+        // high-refresh monitors from recording far more frames than the
+        // nominal rate. For sources at or below nominal it admits everything.
+        let cadence_interval_hns = if std::env::var("CAP_DISABLE_CAPTURE_CADENCE").is_ok() {
+            info!("Capture cadence gate disabled via CAP_DISABLE_CAPTURE_CADENCE");
+            None
+        } else {
+            let fps = video_info.fps();
+            (fps > 0).then(|| 10_000_000i64 / fps as i64)
+        };
+
         let stats_health_tx = ctx.health_tx().clone();
         ctx.tasks().spawn_thread("d3d-capture-thread", {
             let restart_counter = restart_counter.clone();
@@ -639,6 +671,7 @@ impl output_pipeline::VideoSource for VideoSource {
 
                 let video_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
                 let video_drop_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+                let video_decimated_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
                 let cancel_token = CancellationToken::new();
                 let mut error_tx = error_tx;
                 let mut d3d_device = d3d_device;
@@ -652,6 +685,8 @@ impl output_pipeline::VideoSource for VideoSource {
                             video_tx: &video_tx,
                             video_frame_counter: &video_frame_counter,
                             video_drop_counter: &video_drop_counter,
+                            video_decimated_counter: &video_decimated_counter,
+                            cadence_interval_hns,
                             expected_width,
                             expected_height,
                             frame_scaler: frame_scaler.clone(),
@@ -682,6 +717,7 @@ impl output_pipeline::VideoSource for VideoSource {
                     {
                         let video_frame_counter = video_frame_counter.clone();
                         let video_drop_counter = video_drop_counter.clone();
+                        let video_decimated_counter = video_decimated_counter.clone();
                         let restart_counter = restart_counter.clone();
                         let scaled_frame_count = scaled_frame_count.clone();
                         let stats_health_tx = stats_health_tx.clone();
@@ -690,8 +726,13 @@ impl output_pipeline::VideoSource for VideoSource {
                                 tokio::time::sleep(Duration::from_secs(5)).await;
                                 let captured = video_frame_counter.load(atomic::Ordering::Relaxed);
                                 let dropped = video_drop_counter.load(atomic::Ordering::Relaxed);
+                                let decimated =
+                                    video_decimated_counter.load(atomic::Ordering::Relaxed);
                                 let restarts = restart_counter.load(atomic::Ordering::Relaxed);
                                 let scaled = scaled_frame_count.load(atomic::Ordering::Relaxed);
+                                // Decimated frames are the cadence gate doing
+                                // its job on a high-refresh monitor, not a
+                                // health problem; keep them out of drop rate.
                                 let total = captured + dropped;
                                 if dropped > 0 || restarts > 0 || scaled > 0 {
                                     let drop_pct = if total > 0 {
@@ -703,6 +744,7 @@ impl output_pipeline::VideoSource for VideoSource {
                                         captured = captured,
                                         dropped = dropped,
                                         drop_pct = format!("{:.1}%", drop_pct),
+                                        decimated = decimated,
                                         restarts = restarts,
                                         scaled_frames = scaled,
                                         "Screen capture stats"
@@ -717,7 +759,11 @@ impl output_pipeline::VideoSource for VideoSource {
                                         );
                                     }
                                 } else {
-                                    debug!(captured = captured, "Screen capture frames");
+                                    debug!(
+                                        captured = captured,
+                                        decimated = decimated,
+                                        "Screen capture frames"
+                                    );
                                 }
                             }
                         }

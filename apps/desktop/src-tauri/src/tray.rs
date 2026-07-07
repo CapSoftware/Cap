@@ -171,12 +171,6 @@ struct PreviousItemsCache {
     items: Vec<CachedPreviousItem>,
 }
 
-fn recordings_path(app: &AppHandle) -> PathBuf {
-    let path = app.path().app_data_dir().unwrap().join("recordings");
-    std::fs::create_dir_all(&path).unwrap_or_default();
-    path
-}
-
 fn screenshots_path(app: &AppHandle) -> PathBuf {
     let path = app.path().app_data_dir().unwrap().join("screenshots");
     std::fs::create_dir_all(&path).unwrap_or_default();
@@ -292,10 +286,10 @@ fn load_all_previous_items(app: &AppHandle, load_thumbnails: bool) -> Vec<Cached
     let mut items = Vec::new();
     let screenshots_dir = screenshots_path(app);
 
-    let recordings_dir = recordings_path(app);
-    if recordings_dir.exists()
-        && let Ok(entries) = std::fs::read_dir(&recordings_dir)
-    {
+    for recordings_dir in crate::recordings_locations::known_recordings_dirs(app) {
+        let Ok(entries) = std::fs::read_dir(&recordings_dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             if let Some(item) = load_single_item(&entry.path(), &screenshots_dir, load_thumbnails) {
                 items.push(item);
@@ -1105,6 +1099,20 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
 
             if let Some(path) = path {
                 add_new_item_to_cache(&cache_clone, &app_handle, path);
+                refresh_tray_menu(&app_handle, &cache_clone);
+            }
+        }
+    });
+
+    crate::recordings_locations::RecordingsMigrationProgress::listen_any(&app, {
+        let app_handle = app.clone();
+        let cache_clone = cache.clone();
+        move |event| {
+            // Rebuild once when a storage-folder migration finishes: moved
+            // projects changed paths, so cached entries are stale.
+            if event.payload.done == event.payload.total {
+                let items = load_all_previous_items(&app_handle, false);
+                cache_clone.lock().unwrap().items = items;
                 refresh_tray_menu(&app_handle, &cache_clone);
             }
         }

@@ -101,6 +101,37 @@ fn fourcc_display(fourcc: u32) -> String {
     cidre::four_cc_to_str(&mut bytes).to_string()
 }
 
+/// The min frame duration of the format's frame-rate range matching the
+/// selected rate. Formats are enumerated per frame-rate range, so without
+/// this the device free-runs at the format's default rate (often the
+/// fastest range, e.g. 60fps) while the pipeline assumes the selected one.
+fn min_frame_duration_for_rate(
+    format: &av::capture::device::Format,
+    frame_rate: f32,
+) -> Option<cm::Time> {
+    let mut best: Option<(f32, cm::Time)> = None;
+
+    for fr_range in format.video_supported_frame_rate_ranges().iter() {
+        // SAFETY: trust me bro it crashes on intel mac otherwise
+        let fr_range = unsafe {
+            &*(fr_range as *const av::capture::device::FrameRateRange).cast::<AVFrameRateRange>()
+        };
+
+        let min = unsafe { fr_range.minFrameDuration() };
+        if min.value <= 0 || min.timescale <= 0 {
+            continue;
+        }
+
+        let range_rate = min.timescale as f32 / min.value as f32;
+        let rate_diff = (range_rate - frame_rate).abs();
+        if best.is_none_or(|(best_diff, _)| rate_diff < best_diff) {
+            best = Some((rate_diff, cm::Time::new(min.value, min.timescale)));
+        }
+    }
+
+    best.and_then(|(rate_diff, duration)| (rate_diff < 1.0).then_some(duration))
+}
+
 pub(super) fn start_capturing_impl(
     camera: &CameraInfo,
     format: Format,
@@ -196,6 +227,28 @@ pub(super) fn start_capturing_impl(
                 let mut _lock = device.config_lock().map_err(AVFoundationError::Retained)?;
 
                 _lock.set_active_format(format.native());
+
+                // Setting the active format resets the frame durations to the
+                // format's defaults, which can be a faster rate than the
+                // selected one (the device would then deliver e.g. 60fps
+                // while the pipeline records it as 30fps, stretching the
+                // recording). Cap delivery at the selected rate; leave the
+                // max duration alone so low-light rate reduction still works.
+                if let Some(duration) =
+                    min_frame_duration_for_rate(format.native(), format.frame_rate())
+                {
+                    if let Err(err) = _lock.set_active_video_min_frame_duration(duration) {
+                        tracing::warn!(
+                            frame_rate = format.frame_rate(),
+                            "Failed to set camera min frame duration: {err}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(
+                        frame_rate = format.frame_rate(),
+                        "No frame-rate range matches the selected camera rate, using device default"
+                    );
+                }
 
                 session.start_running();
             }

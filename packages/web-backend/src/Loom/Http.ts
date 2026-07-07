@@ -17,7 +17,9 @@ export const LoomHttpLive = HttpApiBuilder.group(
 			return handlers.handle("importVideo", ({ payload }) =>
 				Effect.gen(function* () {
 					const workflows = yield* _workflows.pipe(
-						Effect.catchAll(() => new HttpApiError.ServiceUnavailable()),
+						Effect.catchAll(() =>
+							Effect.fail(new HttpApiError.ServiceUnavailable()),
+						),
 					);
 
 					const user = yield* CurrentUser;
@@ -30,9 +32,8 @@ export const LoomHttpLive = HttpApiBuilder.group(
 							loom: payload.loom,
 						})
 						.pipe(
-							Effect.catchTag(
-								"RpcClientError",
-								() => new Http.InternalServerError({ cause: "unknown" }),
+							Effect.catchTag("RpcClientError", () =>
+								Effect.fail(new Http.InternalServerError({ cause: "unknown" })),
 							),
 						);
 

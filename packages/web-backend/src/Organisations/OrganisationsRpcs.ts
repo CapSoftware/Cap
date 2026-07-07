@@ -27,8 +27,9 @@ export const OrganisationsRpcsLive = Organisation.OrganisationRpcs.toLayer(
 			OrganisationUpdate: (data) =>
 				orgs.update(data).pipe(
 					Effect.catchTags({
-						DatabaseError: () => new InternalError({ type: "database" }),
-						S3Error: () => new InternalError({ type: "s3" }),
+						DatabaseError: () =>
+							Effect.fail(new InternalError({ type: "database" })),
+						S3Error: () => Effect.fail(new InternalError({ type: "s3" })),
 					}),
 				),
 			OrganisationSoftDelete: (data) =>

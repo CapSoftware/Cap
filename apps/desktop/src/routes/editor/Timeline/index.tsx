@@ -585,6 +585,29 @@ export function Timeline(props: {
 		resumeHistory();
 	}
 
+	// Zoom and Scene are permanent tracks — deleting from them clears every
+	// segment on the track instead of hiding the track row itself.
+	function handleClearTrackSegments(type: "zoom" | "scene") {
+		const resumeHistory = projectHistory.pause();
+
+		batch(() => {
+			if (editorState.timeline.selection?.type === type) {
+				setEditorState("timeline", "selection", null);
+			}
+
+			setProject(
+				produce((project) => {
+					const timeline = project.timeline;
+					if (!timeline) return;
+					if (type === "zoom") timeline.zoomSegments = [];
+					else timeline.sceneSegments = [];
+				}),
+			);
+		});
+
+		resumeHistory();
+	}
+
 	async function handleOpenTrackMenu(
 		e: MouseEvent,
 		type: "text" | "mask" | "audio",
@@ -1192,7 +1215,18 @@ export function Timeline(props: {
 									</TrackRow>
 								)}
 							</For>
-							<TrackRow icon={trackIcons.zoom} label="Zoom" type="zoom">
+							<TrackRow
+								icon={trackIcons.zoom}
+								label="Zoom"
+								type="zoom"
+								onDelete={
+									(project.timeline?.zoomSegments?.length ?? 0) > 0
+										? () => handleClearTrackSegments("zoom")
+										: undefined
+								}
+								deleteLabel="Clear all"
+								deleteTitle="Delete all zoom segments"
+							>
 								<ZoomTrack
 									onDragStateChanged={(v) => {
 										zoomSegmentDragState = v;
@@ -1201,7 +1235,18 @@ export function Timeline(props: {
 								/>
 							</TrackRow>
 							<Show when={sceneTrackVisible()}>
-								<TrackRow icon={trackIcons.scene} label="Scene" type="scene">
+								<TrackRow
+									icon={trackIcons.scene}
+									label="Scene"
+									type="scene"
+									onDelete={
+										(project.timeline?.sceneSegments?.length ?? 0) > 0
+											? () => handleClearTrackSegments("scene")
+											: undefined
+									}
+									deleteLabel="Clear all"
+									deleteTitle="Delete all scene segments"
+								>
 									<SceneTrack
 										onDragStateChanged={(v) => {
 											sceneSegmentDragState = v;
@@ -1224,6 +1269,8 @@ function TrackRow(props: {
 	type: TimelineTrackType;
 	children: JSX.Element;
 	onDelete?: () => void;
+	deleteLabel?: string;
+	deleteTitle?: string;
 	onContextMenu?: (e: MouseEvent) => void;
 }) {
 	return (
@@ -1232,27 +1279,29 @@ function TrackRow(props: {
 				class="group/icon relative shrink-0"
 				style={{ width: `${TRACK_ICON_WIDTH}px` }}
 			>
-				<TrackIcon
-					icon={props.icon()}
-					label={props.label}
-					type={props.type}
-					class={
-						props.onDelete
-							? "transition-opacity group-hover/icon:pointer-events-none group-hover/icon:opacity-0"
-							: undefined
-					}
-				/>
+				<TrackIcon icon={props.icon()} label={props.label} type={props.type} />
 				<Show when={props.onDelete}>
 					<button
-						class="absolute left-1/2 top-1/2 z-20 pointer-events-none flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-md border border-red-400/70 bg-red-500 text-white opacity-0 shadow-sm transition-opacity group-hover/icon:pointer-events-auto group-hover/icon:opacity-100"
+						type="button"
+						class={cx(
+							"absolute inset-x-0 top-0 z-20 flex h-13 flex-col items-center justify-center gap-0.5 rounded-xl text-white",
+							"bg-linear-to-b from-red-500 to-red-600",
+							"shadow-[0_2px_8px_-4px_rgba(220,38,38,0.55),inset_0_1px_0_0_rgba(255,255,255,0.2)]",
+							"pointer-events-none opacity-0 transition-opacity duration-150",
+							"group-hover/icon:pointer-events-auto group-hover/icon:opacity-100",
+							"hover:brightness-[1.06] active:brightness-95",
+						)}
 						onClick={(e) => {
 							e.stopPropagation();
 							props.onDelete?.();
 						}}
 						onMouseDown={(e) => e.stopPropagation()}
-						title="Delete track"
+						title={props.deleteTitle ?? "Delete track"}
 					>
-						<IconCapTrash class="size-3.5" />
+						<IconCapTrash class="size-4" />
+						<span class="text-[0.625rem] leading-none font-medium">
+							{props.deleteLabel ?? "Delete"}
+						</span>
 					</button>
 				</Show>
 			</div>

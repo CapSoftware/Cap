@@ -2595,6 +2595,41 @@ fn lock_window_text_scale(_window: &WebviewWindow<Wry>) {
 // mirrored monitors, making it invisible and unreachable. We therefore only protect
 // Cap's own windows while a recording is actually active, which is the only time the
 // exclusion is meaningful.
+//
+// On desktops that are themselves delivered through a capture-based stream (Shadow
+// and other cloud PCs, RDP, VMs), even recording-gated exclusion hides the recording
+// controls from the user and trips DRM detectors (Shadow error S:102), so exclusion
+// is skipped entirely there — Cap's windows then appear in recordings, which is the
+// lesser evil. Overridable via the CAP_WINDOW_CAPTURE_EXCLUSION env var.
+#[cfg(target_os = "windows")]
+pub fn capture_exclusion_hides_ui() -> bool {
+    static LAST_LOGGED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+    let reason = crate::platform::win::capture_streamed_display_reason();
+
+    if let Ok(mut last) = LAST_LOGGED.lock()
+        && *last != reason
+    {
+        match &reason {
+            Some(reason) => warn!(
+                %reason,
+                "Skipping window capture exclusion: this desktop is viewed through a \
+                 capture-based stream, so excluded windows would be invisible to the user. \
+                 Cap's windows will appear in recordings."
+            ),
+            None => info!("Window capture exclusion re-enabled"),
+        }
+        *last = reason.clone();
+    }
+
+    reason.is_some()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn capture_exclusion_hides_ui() -> bool {
+    false
+}
+
 fn content_protection_enabled(app: &AppHandle<Wry>) -> bool {
     app.try_state::<ArcLock<crate::App>>()
         .and_then(|state| {
@@ -2620,10 +2655,14 @@ fn window_matches_exclusion_list(app: &AppHandle<Wry>, window_title: &str) -> bo
 }
 
 fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
-    content_protection_enabled(app) && window_matches_exclusion_list(app, window_title)
+    content_protection_enabled(app)
+        && !capture_exclusion_hides_ui()
+        && window_matches_exclusion_list(app, window_title)
 }
 
 pub fn apply_content_protection(app: &AppHandle<Wry>, enabled: bool) {
+    let enabled = enabled && !capture_exclusion_hides_ui();
+
     for (label, window) in app.webview_windows() {
         let Ok(id) = CapWindowId::from_str(&label) else {
             continue;

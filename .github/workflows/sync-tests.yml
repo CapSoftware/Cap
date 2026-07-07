@@ -117,6 +117,15 @@ jobs:
           cargo test --locked -p cap-recording --lib
           cargo test --locked -p cap-rendering
 
+      # The AVFoundation encoder (studio camera/display on macOS) has its own
+      # pts handling; its fps-matrix duration tests guard against re-timing
+      # sources that deliver at a different rate than configured.
+      - name: AVFoundation encoder tests (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cargo test --locked -p cap-enc-avfoundation
+
       # Runs against the Scream endpoint installed above; the env var turns
       # a missing endpoint (driver install regression) into a hard failure
       # instead of a silent skip.

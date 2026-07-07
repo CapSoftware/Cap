@@ -335,7 +335,19 @@ function Inner() {
 		} else {
 			setOptions({ targetMode: null, targetModeDismissal });
 		}
-		commands.closeTargetSelectOverlays();
+		// Hide rather than close: startRecording is invoked from THIS webview right
+		// after dismissal, and closing destroys the webview before the invoke is
+		// dispatched — the recording then silently never starts. The backend closes
+		// these windows itself once the recording is underway, and the start handler
+		// closes them if the command fails.
+		void WebviewWindow.getAll().then((all) => {
+			for (const win of all) {
+				if (win.label.startsWith("target-select-overlay-")) {
+					void win.setIgnoreCursorEvents(true);
+					void win.hide();
+				}
+			}
+		});
 	};
 
 	// This prevents browser keyboard shortcuts from firing.
@@ -1742,20 +1754,27 @@ function RecordingControls(props: {
 								}
 								if (startDisabled()) return;
 
-								if (props.target.variant === "area") {
+								// Snapshot before onRecordingStart: dismissing the picker
+								// (targetMode: null) disposes the <Match> branch that owns
+								// this component, and the display/area target props call its
+								// narrowed accessor — reading props.target afterwards throws
+								// "Stale read from <Match>." and the recording never starts.
+								const target = props.target;
+
+								if (target.variant === "area") {
 									setOptions(
 										"captureTarget",
 										reconcile({
 											variant: "area",
-											screen: props.target.screen,
+											screen: target.screen,
 											bounds: {
 												position: {
-													x: props.target.bounds.position.x,
-													y: props.target.bounds.position.y,
+													x: target.bounds.position.x,
+													y: target.bounds.position.y,
 												},
 												size: {
-													width: props.target.bounds.size.width,
-													height: props.target.bounds.size.height,
+													width: target.bounds.size.width,
+													height: target.bounds.size.height,
 												},
 											},
 										}),
@@ -1774,10 +1793,10 @@ function RecordingControls(props: {
 											}
 										}
 
-										const path = await commands.takeScreenshot(props.target);
+										const path = await commands.takeScreenshot(target);
 										const shouldOpenEditor =
 											await commands.automationShouldOpenScreenshotEditor(
-												props.target,
+												target,
 											);
 										if (shouldOpenEditor) {
 											await commands.showWindow({ ScreenshotEditor: { path } });
@@ -1793,12 +1812,23 @@ function RecordingControls(props: {
 
 								commands
 									.startRecording({
-										capture_target: props.target,
+										capture_target: target,
 										mode: rawOptions.mode,
 										capture_system_audio: rawOptions.captureSystemAudio,
 									})
+									.then((action) => {
+										// On success the backend closes the overlay windows; the
+										// non-Started actions leave our hidden windows behind.
+										// User-facing feedback for them arrives via the backend's
+										// StartFailed event in the main window.
+										if (action !== "Started")
+											void commands.closeTargetSelectOverlays();
+									})
 									.catch((e: unknown) => {
 										const msg = e instanceof Error ? e.message : String(e);
+										// This webview is hidden by now, so the toast is a
+										// best-effort extra — the visible feedback comes from the
+										// backend's StartFailed event toasted in the main window.
 										if (
 											msg.includes("no longer available") ||
 											msg.includes("DeviceNotFound")
@@ -1809,6 +1839,14 @@ function RecordingControls(props: {
 										} else {
 											toast.error(`Failed to start recording: ${msg}`);
 										}
+										// An IPC-level rejection never reaches the backend, so no
+										// StartFailed event fires; the picker flow hid the main
+										// window and dismissal closed the overlays — without this,
+										// the whole app visually vanishes with no recording.
+										void commands.showWindow({
+											Main: { init_target_mode: null },
+										});
+										void commands.closeTargetSelectOverlays();
 									});
 							}}
 						>

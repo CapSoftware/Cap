@@ -36,9 +36,8 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 				Policy.policy((user) =>
 					Effect.gen(function* () {
 						const folder = yield* (yield* repo.getById(id)).pipe(
-							Effect.catchTag(
-								"NoSuchElementException",
-								() => new Policy.PolicyDeniedError(),
+							Effect.catchTag("NoSuchElementException", () =>
+								Effect.fail(new Policy.PolicyDeniedError()),
 							),
 						);
 

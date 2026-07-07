@@ -1391,7 +1391,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1463,6 +1463,7 @@ dependencies = [
  "scap-direct3d",
  "scap-screencapturekit",
  "scap-targets",
+ "semver",
  "sentry",
  "serde",
  "serde_json",

@@ -1353,11 +1353,7 @@ fn transcode_video(
 pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<PathBuf, String> {
     info!("Starting video import from: {:?}", source_path);
 
-    let recordings_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("recordings");
+    let recordings_dir = crate::general_settings::GeneralSettingsStore::recordings_dir(&app);
 
     let project_name = generate_project_name(&source_path);
     let sanitized_name = sanitize_filename(&project_name);

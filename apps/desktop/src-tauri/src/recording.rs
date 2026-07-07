@@ -1127,10 +1127,26 @@ pub enum RecordingEvent {
     Paused,
     Resumed,
     Failed { error: String },
+    // Emitted when start_recording aborts before any recording exists. Distinct from
+    // `Failed` because the in-progress window treats `Failed` as "the active recording
+    // died", which would misreport a healthy recording when a second start is refused.
+    StartFailed { error: String },
     InputLost { input: RecordingInputKind },
     InputRestored { input: RecordingInputKind },
     Degraded { reason: String },
     Recovered,
+}
+
+/// Every abort path out of `start_recording` must be observable: in the log, and as an
+/// event the main window surfaces to the user. The picker overlay that invoked the
+/// command is often already closed (or being torn down) when the error comes back, so
+/// an error returned to the caller alone can vanish without a trace.
+fn notify_recording_start_failed(app: &AppHandle, error: &str) {
+    error!(%error, "Recording failed to start");
+    let _ = RecordingEvent::StartFailed {
+        error: error.to_string(),
+    }
+    .emit(app);
 }
 
 #[derive(Serialize, Type)]
@@ -1480,7 +1496,15 @@ pub async fn start_recording(
 
     {
         let mut app_state = state_mtx.write().await;
-        app_state.set_pending_recording(inputs.mode, inputs.capture_target.clone())?;
+        if let Err(error) =
+            app_state.set_pending_recording(inputs.mode, inputs.capture_target.clone())
+        {
+            drop(app_state);
+            // Deliberately no clear_pending_recording: the pending/active state that
+            // caused the refusal belongs to another recording and must survive.
+            notify_recording_start_failed(&app, &error);
+            return Err(error);
+        }
         if is_camera_only {
             app_state.was_camera_only_recording = true;
         }
@@ -1491,8 +1515,10 @@ pub async fn start_recording(
             match $expr {
                 Ok(value) => value,
                 Err(err) => {
+                    let error = ($map_err)(err);
                     state_mtx.write().await.clear_pending_recording();
-                    return Err(($map_err)(err));
+                    notify_recording_start_failed(&app, &error);
+                    return Err(error);
                 }
             }
         };
@@ -1502,8 +1528,10 @@ pub async fn start_recording(
         let operation_lock = app.state::<CameraWindowOperationLock>();
         let _operation_guard = operation_lock.lock().await;
         if let Err(err) = (CapWindow::Camera { centered: true }).show(&app).await {
+            let error = format!("Failed to show centered camera window: {err}");
             state_mtx.write().await.clear_pending_recording();
-            return Err(format!("Failed to show centered camera window: {err}"));
+            notify_recording_start_failed(&app, &error);
+            return Err(error);
         }
     }
 
@@ -1527,7 +1555,7 @@ pub async fn start_recording(
     let filename = project_name.replace(":", ".");
     let filename = format!("{}.cap", sanitize_filename::sanitize(&filename));
 
-    let recordings_base_dir = app.path().app_data_dir().unwrap().join("recordings");
+    let recordings_base_dir = GeneralSettingsStore::recordings_dir(&app);
 
     pending_try!(ensure_dir(&recordings_base_dir), |e| format!(
         "Failed to create recordings directory: {e}"
@@ -1537,16 +1565,18 @@ pub async fn start_recording(
         Ok(bytes) => {
             if bytes <= cap_utils::disk_space::LOW_DISK_STOP_BYTES {
                 let gb = bytes as f64 / 1_073_741_824.0;
+                let error = format!(
+                    "Not enough disk space to start recording ({:.2} GB free). Free up at least {} MB and try again.",
+                    gb,
+                    (cap_utils::disk_space::LOW_DISK_STOP_BYTES / (1024 * 1024))
+                );
                 error!(
                     bytes_remaining = bytes,
                     "Refusing to start recording: disk full"
                 );
                 state_mtx.write().await.clear_pending_recording();
-                return Err(format!(
-                    "Not enough disk space to start recording ({:.2} GB free). Free up at least {} MB and try again.",
-                    gb,
-                    (cap_utils::disk_space::LOW_DISK_STOP_BYTES / (1024 * 1024))
-                ));
+                notify_recording_start_failed(&app, &error);
+                return Err(error);
             }
             if bytes <= cap_utils::disk_space::LOW_DISK_WARN_BYTES {
                 let gb = bytes as f64 / 1_073_741_824.0;
@@ -1580,8 +1610,10 @@ pub async fn start_recording(
     );
 
     if let Some(window) = CapWindowId::Camera.get(&app)
-        && let Err(error) =
-            window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio))
+        && let Err(error) = window.set_content_protected(
+            matches!(inputs.mode, RecordingMode::Studio)
+                && !crate::windows::capture_exclusion_hides_ui(),
+        )
     {
         warn!(%error, "Failed to update camera window content protection");
     }
@@ -1589,8 +1621,10 @@ pub async fn start_recording(
     let (video_upload_info, instant_mode_max_resolution) = match inputs.mode {
         RecordingMode::Instant => {
             let Some(auth) = AuthStore::get(&app).ok().flatten() else {
+                let error = "Please sign in to use instant recording".to_string();
                 state_mtx.write().await.clear_pending_recording();
-                return Err("Please sign in to use instant recording".to_string());
+                notify_recording_start_failed(&app, &error);
+                return Err(error);
             };
             let instant_mode_max_resolution = if auth.is_upgraded() {
                 general_settings
@@ -1620,16 +1654,27 @@ pub async fn start_recording(
                 Ok(meta) => meta,
                 Err(AuthedApiError::InvalidAuthentication) => {
                     state_mtx.write().await.clear_pending_recording();
+                    // Returned as an action rather than an error, but the picker that
+                    // invoked us may already be gone — surface it as a start failure too.
+                    notify_recording_start_failed(
+                        &app,
+                        "Your session has expired. Please sign in again to use instant recording.",
+                    );
                     return Ok(RecordingAction::InvalidAuthentication);
                 }
                 Err(AuthedApiError::UpgradeRequired) => {
                     state_mtx.write().await.clear_pending_recording();
+                    notify_recording_start_failed(
+                        &app,
+                        "Instant recording requires an upgraded plan.",
+                    );
                     return Ok(RecordingAction::UpgradeRequired);
                 }
                 Err(err) => {
-                    error!("Error creating instant mode video: {err}");
+                    let error = format!("Could not create the shareable link: {err}");
                     state_mtx.write().await.clear_pending_recording();
-                    return Err(err.to_string());
+                    notify_recording_start_failed(&app, &error);
+                    return Err(error);
                 }
             };
 
@@ -1647,8 +1692,10 @@ pub async fn start_recording(
         }
         RecordingMode::Studio => (None, cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION),
         RecordingMode::Screenshot => {
+            let error = "Use take_screenshot for screenshots".to_string();
             state_mtx.write().await.clear_pending_recording();
-            return Err("Use take_screenshot for screenshots".to_string());
+            notify_recording_start_failed(&app, &error);
+            return Err(error);
         }
     };
 
@@ -1723,7 +1770,7 @@ pub async fn start_recording(
     if let Some(editor_target) = EditorRecordingTarget::current(&app)
         && let Some(editor_window) = editor_window_for_path(&app, &editor_target)
     {
-        let _ = editor_window.set_content_protected(true);
+        let _ = editor_window.set_content_protected(!crate::windows::capture_exclusion_hides_ui());
         let _ = editor_window.minimize();
     }
 

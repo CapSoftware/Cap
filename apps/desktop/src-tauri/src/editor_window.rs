@@ -394,6 +394,21 @@ impl EditorInstances {
         }
     }
 
+    /// Project paths of every currently open editor. Used to avoid touching
+    /// projects that are in use (e.g. when migrating recordings between
+    /// storage folders).
+    pub async fn open_project_paths(app: &AppHandle) -> Vec<PathBuf> {
+        let Some(instances) = app.try_state::<EditorInstances>() else {
+            return Vec::new();
+        };
+
+        let instances = instances.0.read().await;
+        instances
+            .values()
+            .map(|instance| instance.project_path.clone())
+            .collect()
+    }
+
     pub async fn remove(window: Window) {
         let Some(instances) = window.try_state::<EditorInstances>() else {
             return;

@@ -48,12 +48,7 @@ impl EncoderBase {
             let pts = (timestamp.as_secs_f64() * rate).round() as i64;
             let first_pts = self.first_pts.get_or_insert(pts);
 
-            let pts = normalize_input_pts(
-                pts - *first_pts,
-                self.last_frame_pts,
-                encoder.time_base(),
-                encoder.frame_rate(),
-            );
+            let pts = normalize_input_pts(pts - *first_pts, self.last_frame_pts);
             self.last_frame_pts = Some(pts);
             frame.set_pts(Some(pts));
         } else {
@@ -64,12 +59,7 @@ impl EncoderBase {
 
             let first_pts = self.first_pts.get_or_insert(pts);
 
-            let pts = normalize_input_pts(
-                pts - *first_pts,
-                self.last_frame_pts,
-                encoder.time_base(),
-                encoder.frame_rate(),
-            );
+            let pts = normalize_input_pts(pts - *first_pts, self.last_frame_pts);
             self.last_frame_pts = Some(pts);
             frame.set_pts(Some(pts));
         }
@@ -223,12 +213,7 @@ fn nominal_packet_duration(time_base: Rational, frame_rate: Rational) -> Option<
         .filter(|ticks| *ticks > 0)
 }
 
-fn normalize_input_pts(
-    pts: i64,
-    last_pts: Option<i64>,
-    time_base: Rational,
-    frame_rate: Rational,
-) -> i64 {
+fn normalize_input_pts(pts: i64, last_pts: Option<i64>) -> i64 {
     let Some(last_pts) = last_pts else {
         return pts;
     };
@@ -237,5 +222,31 @@ fn normalize_input_pts(
         return pts;
     }
 
-    last_pts + nominal_packet_duration(time_base, frame_rate).unwrap_or(1)
+    // A tie or backwards timestamp carries no time — advance a single tick
+    // so pts stay strictly monotonic and the real timestamps immediately
+    // take over again. Any larger bump outruns a source delivering faster
+    // than the nominal rate (each corrected frame pushes the next one into
+    // correction too), re-timing the recording to the bump cadence.
+    last_pts + 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_input_pts_passes_monotonic_input_through() {
+        // Any strictly-forward delta passes untouched, even sub-frame ones
+        // from sources far faster than the nominal rate (1000fps = 1ms).
+        assert_eq!(normalize_input_pts(16_667, Some(0)), 16_667);
+        assert_eq!(normalize_input_pts(1_000, Some(0)), 1_000);
+    }
+
+    #[test]
+    fn normalize_input_pts_bumps_non_monotonic_input_by_one_tick() {
+        // Any larger bump outruns a fast source: each corrected frame pushes
+        // the next into correction too, re-timing the whole recording.
+        assert_eq!(normalize_input_pts(90_000, Some(100_000)), 100_001);
+        assert_eq!(normalize_input_pts(100_000, Some(100_000)), 100_001);
+    }
 }

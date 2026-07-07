@@ -573,6 +573,89 @@ fn get_video_fps_inner(path: &Path) -> Option<u32> {
     Some((rate.numerator() as f64 / rate.denominator() as f64).round() as u32)
 }
 
+/// How closely a video track's packet timestamps follow a fixed ladder of
+/// `1/nominal_fps` steps. Recordings stamped by the pre-fix pipeline (snap
+/// ladder + full-frame monotonic bump) advance exactly one nominal tick per
+/// frame, so every delta conforms; genuinely capture-timed tracks jitter and
+/// gap. Note a healthy vsync-locked track can also conform — conformance
+/// alone does not prove a stretch, it only rules one out.
+pub struct LadderProbe {
+    pub deltas: usize,
+    pub conforming: usize,
+}
+
+impl LadderProbe {
+    /// True when there is enough evidence and essentially every step matches
+    /// the nominal cadence. The slack absorbs pause/resume resyncs, which
+    /// leave a handful of oversized steps in an otherwise perfect ladder.
+    pub fn is_ladder(&self) -> bool {
+        const MIN_DELTAS: usize = 30;
+        const MIN_CONFORMANCE: f64 = 0.98;
+        self.deltas >= MIN_DELTAS && self.conforming as f64 / self.deltas as f64 >= MIN_CONFORMANCE
+    }
+}
+
+pub fn probe_video_pts_ladder(path: &Path, nominal_fps: u32) -> Option<LadderProbe> {
+    suppress_ffmpeg_logs();
+    let result = probe_video_pts_ladder_inner(path, nominal_fps);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn probe_video_pts_ladder_inner(path: &Path, nominal_fps: u32) -> Option<LadderProbe> {
+    // 60s at 60fps; enough to judge a track without reading huge files whole.
+    const MAX_DELTAS: usize = 3600;
+
+    if nominal_fps == 0 {
+        return None;
+    }
+
+    let mut ictx = avformat::input(path).ok()?;
+    let (stream_index, expected_ticks) = {
+        let stream = ictx.streams().best(ffmpeg::media::Type::Video)?;
+        let tb = stream.time_base();
+        if tb.numerator() <= 0 || tb.denominator() <= 0 {
+            return None;
+        }
+        let ticks =
+            (tb.denominator() as f64 / (tb.numerator() as f64 * nominal_fps as f64)).round() as i64;
+        if ticks < 1 {
+            return None;
+        }
+        (stream.index(), ticks)
+    };
+
+    let mut probe = LadderProbe {
+        deltas: 0,
+        conforming: 0,
+    };
+    let mut prev_ts: Option<i64> = None;
+
+    for (stream, packet) in ictx.packets() {
+        if stream.index() != stream_index {
+            continue;
+        }
+        let Some(ts) = packet.dts().or(packet.pts()) else {
+            continue;
+        };
+        if let Some(prev) = prev_ts {
+            let delta = ts - prev;
+            if delta > 0 {
+                probe.deltas += 1;
+                if (delta - expected_ticks).abs() <= 1 {
+                    probe.conforming += 1;
+                }
+            }
+        }
+        prev_ts = Some(ts);
+        if probe.deltas >= MAX_DELTAS {
+            break;
+        }
+    }
+
+    Some(probe)
+}
+
 pub fn probe_m4s_can_decode_with_init(
     init_path: &Path,
     segment_path: &Path,
@@ -662,6 +745,100 @@ fn remux_to_regular_mp4(input_path: &Path, output_path: &Path) -> Result<(), Rem
 
 pub fn remux_file(input_path: &Path, output_path: &Path) -> Result<(), RemuxError> {
     remux_to_regular_mp4(input_path, output_path)
+}
+
+/// Stream-copies the video track of `input_path` to `output_path` with every
+/// timestamp multiplied by `scale`. Used to repair recordings whose video
+/// track was stamped at the wrong rate (e.g. a 60fps camera recorded as
+/// 30fps, leaving the track twice as long as the wall-clock recording).
+/// Audio/data streams are not carried over — callers use this on video-only
+/// tracks.
+pub fn rescale_video_timestamps(
+    input_path: &Path,
+    output_path: &Path,
+    scale: f64,
+) -> Result<(), RemuxError> {
+    suppress_ffmpeg_logs();
+    let result = rescale_video_timestamps_inner(input_path, output_path, scale);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn rescale_video_timestamps_inner(
+    input_path: &Path,
+    output_path: &Path,
+    scale: f64,
+) -> Result<(), RemuxError> {
+    // Fine-grained output timescale so the scaled timestamps lose at most
+    // ~11us to rounding regardless of the input's track timescale.
+    const OUTPUT_TIMESCALE: i32 = 90_000;
+
+    let mut ictx = avformat::input(input_path)?;
+    let mut octx = avformat::output(output_path)?;
+
+    let mut stream_mapping: Vec<Option<usize>> = Vec::new();
+    let mut output_stream_index = 0usize;
+
+    for input_stream in ictx.streams() {
+        let codec_params = input_stream.parameters();
+
+        if codec_params.medium() == ffmpeg::media::Type::Video {
+            stream_mapping.push(Some(output_stream_index));
+            output_stream_index += 1;
+
+            let mut output_stream = octx.add_stream(None)?;
+            output_stream.set_parameters(codec_params);
+            unsafe {
+                (*output_stream.as_mut_ptr()).time_base =
+                    ffmpeg::Rational::new(1, OUTPUT_TIMESCALE).into();
+            }
+        } else {
+            stream_mapping.push(None);
+        }
+    }
+
+    octx.write_header()?;
+
+    let mut last_dts: Vec<i64> = vec![i64::MIN; output_stream_index];
+
+    for (input_stream, packet) in ictx.packets() {
+        let input_stream_index = input_stream.index();
+
+        if let Some(Some(output_index)) = stream_mapping.get(input_stream_index) {
+            let output_index = *output_index;
+            let mut packet = packet;
+            let input_time_base = input_stream.time_base();
+            let output_time_base = octx.stream(output_index).unwrap().time_base();
+
+            let tick_scale = scale * f64::from(input_time_base) / f64::from(output_time_base);
+            let rescale = |ts: i64| (ts as f64 * tick_scale).round() as i64;
+
+            let scaled_pts = packet.pts().map(rescale);
+            let mut scaled_dts = rescale(packet.dts().unwrap_or(0));
+
+            if last_dts[output_index] != i64::MIN && scaled_dts <= last_dts[output_index] {
+                scaled_dts = last_dts[output_index] + 1;
+            }
+            last_dts[output_index] = scaled_dts;
+
+            let scaled_duration = (packet.duration() as f64 * tick_scale).round() as i64;
+
+            unsafe {
+                (*packet.as_mut_ptr()).dts = scaled_dts;
+                (*packet.as_mut_ptr()).pts = scaled_pts.unwrap_or(scaled_dts).max(scaled_dts);
+                (*packet.as_mut_ptr()).duration = scaled_duration.max(0);
+            }
+
+            packet.set_stream(output_index);
+            packet.set_position(-1);
+
+            packet.write_interleaved(&mut octx)?;
+        }
+    }
+
+    octx.write_trailer()?;
+
+    Ok(())
 }
 
 pub fn merge_video_audio(
@@ -779,6 +956,131 @@ fn merge_video_audio_inner(
 #[cfg(test)]
 mod tests {
     use super::build_seek_probe_positions;
+    use super::probe_video_pts_ladder;
+    use std::time::Duration;
+
+    /// Encodes a small mp4 whose frames are stamped with the given
+    /// timestamps, mirroring how recordings reach disk.
+    fn encode_test_mp4(dir: &std::path::Path, timestamps: &[Duration]) -> std::path::PathBuf {
+        use crate::h264::H264Encoder;
+        use crate::mp4::MP4File;
+        use cap_media_info::VideoInfo;
+
+        ffmpeg::init().ok();
+
+        let video_info = VideoInfo {
+            pixel_format: cap_media_info::Pixel::NV12,
+            width: 320,
+            height: 240,
+            time_base: ffmpeg::Rational(1, 1_000_000),
+            frame_rate: ffmpeg::Rational(30, 1),
+        };
+
+        let path = dir.join("ladder_probe_test.mp4");
+        let mut file = MP4File::init(
+            "ladder-probe-test",
+            path.clone(),
+            false,
+            |o| H264Encoder::builder(video_info).build(o),
+            |_| None,
+        )
+        .unwrap();
+
+        for ts in timestamps {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
+            for plane_idx in 0..frame.planes() {
+                for byte in frame.data_mut(plane_idx).iter_mut() {
+                    *byte = 128;
+                }
+            }
+            file.queue_video_frame(frame, *ts).unwrap();
+        }
+        file.finish().unwrap();
+
+        dir.join("ladder_probe_test.mp4")
+    }
+
+    #[test]
+    fn ladder_probe_detects_synthetic_cfr_stamping() {
+        let dir = tempfile::tempdir().unwrap();
+        // The defective pipeline's output: exactly one nominal tick per
+        // frame, regardless of how fast frames really arrived.
+        let timestamps: Vec<Duration> = (0..120)
+            .map(|i| Duration::from_nanos(i * 1_000_000_000 / 30))
+            .collect();
+        let path = encode_test_mp4(dir.path(), &timestamps);
+
+        let probe = probe_video_pts_ladder(&path, 30).unwrap();
+        assert!(
+            probe.is_ladder(),
+            "conforming {}/{}",
+            probe.conforming,
+            probe.deltas
+        );
+    }
+
+    #[test]
+    fn ladder_probe_tolerates_a_pause_gap() {
+        let dir = tempfile::tempdir().unwrap();
+        // A pause/resume leaves one oversized step in an otherwise perfect
+        // ladder; the track is still synthetic.
+        let timestamps: Vec<Duration> = (0..120)
+            .map(|i| {
+                let gap = if i >= 60 { 5_000_000_000u64 } else { 0 };
+                Duration::from_nanos(i * 1_000_000_000 / 30 + gap)
+            })
+            .collect();
+        let path = encode_test_mp4(dir.path(), &timestamps);
+
+        let probe = probe_video_pts_ladder(&path, 30).unwrap();
+        assert!(
+            probe.is_ladder(),
+            "conforming {}/{}",
+            probe.conforming,
+            probe.deltas
+        );
+    }
+
+    #[test]
+    fn ladder_probe_rejects_capture_timed_tracks() {
+        let dir = tempfile::tempdir().unwrap();
+        // Real capture timestamps jitter by milliseconds around the nominal
+        // cadence; deterministic pseudo-jitter stands in for QPC noise.
+        let timestamps: Vec<Duration> = (0..120)
+            .map(|i| {
+                let jitter_us = ((i * 7919) % 7000) as u64; // 0..7ms
+                Duration::from_nanos(i * 1_000_000_000 / 30 + jitter_us * 1_000)
+            })
+            .collect();
+        let path = encode_test_mp4(dir.path(), &timestamps);
+
+        let probe = probe_video_pts_ladder(&path, 30).unwrap();
+        assert!(
+            !probe.is_ladder(),
+            "conforming {}/{}",
+            probe.conforming,
+            probe.deltas
+        );
+    }
+
+    #[test]
+    fn ladder_probe_rejects_faster_uniform_cadence() {
+        let dir = tempfile::tempdir().unwrap();
+        // A healed (or genuinely high-rate, correctly-timed) track is
+        // uniform at a rate other than nominal — not the nominal ladder.
+        let timestamps: Vec<Duration> = (0..120)
+            .map(|i| Duration::from_nanos(i * 1_000_000_000 / 67))
+            .collect();
+        let path = encode_test_mp4(dir.path(), &timestamps);
+
+        let probe = probe_video_pts_ladder(&path, 30).unwrap();
+        assert!(
+            !probe.is_ladder(),
+            "conforming {}/{}",
+            probe.conforming,
+            probe.deltas
+        );
+    }
 
     #[test]
     fn seek_probe_positions_cover_start_middle_and_end() {

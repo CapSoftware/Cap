@@ -117,16 +117,19 @@ export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 				const resp = yield* http
 					.get(payload.loom.video.downloadUrl)
 					.pipe(
-						Effect.catchAll((cause) => new Loom.ExternalLoomError({ cause })),
+						Effect.catchAll((cause) =>
+							Effect.fail(new Loom.ExternalLoomError({ cause })),
+						),
 					);
 				const contentLength = yield* Headers.get(
 					resp.headers,
 					"content-length",
 				).pipe(
 					Option.map((v) => Number(v)),
-					Effect.catchTag(
-						"NoSuchElementException",
-						() => new Loom.VideoInvalidError({ cause: "InvalidContentLength" }),
+					Effect.catchTag("NoSuchElementException", () =>
+						Effect.fail(
+							new Loom.VideoInvalidError({ cause: "InvalidContentLength" }),
+						),
 					),
 				);
 				yield* Effect.log(`Downloading ${contentLength} bytes`);

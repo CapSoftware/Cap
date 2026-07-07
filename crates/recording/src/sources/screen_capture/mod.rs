@@ -8,6 +8,8 @@ use specta::Type;
 use std::time::SystemTime;
 use tracing::*;
 
+pub mod cadence;
+
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]

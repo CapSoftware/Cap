@@ -5,7 +5,6 @@ import { getVersion } from "@tauri-apps/api/app";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import * as shell from "@tauri-apps/plugin-shell";
-import { check } from "@tauri-apps/plugin-updater";
 import {
 	createEffect,
 	createMemo,
@@ -22,7 +21,7 @@ import { authStore, userProfileStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
 import { RevealWindowWithSuspense } from "~/utils/RevealWindow";
-import { getUpdaterCheckOptions } from "~/utils/updater";
+import { commands } from "~/utils/tauri";
 import {
 	apiClient,
 	getConfiguredServerUrl,
@@ -410,7 +409,7 @@ export default function Settings(props: RouteSectionProps) {
 		setIsCheckingForUpdates(true);
 
 		try {
-			const update = await check(getUpdaterCheckOptions());
+			const update = await commands.updatesCheck();
 
 			if (!update) {
 				await dialog.message(

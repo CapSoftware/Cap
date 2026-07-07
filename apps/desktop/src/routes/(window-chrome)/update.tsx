@@ -2,9 +2,15 @@ import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { check } from "@tauri-apps/plugin-updater";
-import { createResource, createSignal, Match, Show, Switch } from "solid-js";
-import { getUpdaterCheckOptions } from "~/utils/updater";
+import {
+	createResource,
+	createSignal,
+	Match,
+	onCleanup,
+	Show,
+	Switch,
+} from "solid-js";
+import { commands, events } from "~/utils/tauri";
 
 export default function () {
 	const navigate = useNavigate();
@@ -12,7 +18,7 @@ export default function () {
 
 	const [update] = createResource(async () => {
 		try {
-			const update = await check(getUpdaterCheckOptions());
+			const update = await commands.updatesCheck();
 			if (!update) return;
 			return update;
 		} catch (e) {
@@ -46,51 +52,37 @@ export default function () {
 				}
 				keyed
 			>
-				{(update) => {
+				{(_update) => {
 					type UpdateStatus =
 						| { type: "downloading"; progress: number; contentLength?: number }
 						| { type: "done" };
 
-					const [updateStatus, updateStatusActions] =
-						createResource<UpdateStatus>(
-							() =>
-								new Promise<UpdateStatus>((resolve) => {
-									update
-										.downloadAndInstall((e) => {
-											if (e.event === "Started") {
-												resolve({
-													type: "downloading",
-													progress: 0,
-													contentLength: e.data.contentLength,
-												});
-											} else if (e.event === "Progress") {
-												const status = updateStatus();
-												if (
-													!status ||
-													status.type !== "downloading" ||
-													status.contentLength === undefined
-												)
-													return;
-												updateStatusActions.mutate({
-													...status,
-													progress: e.data.chunkLength + status.progress,
-												});
-											}
-										})
-										.then(async () => {
-											updateStatusActions.mutate({ type: "done" });
-											getCurrentWindow().requestUserAttention(
-												UserAttentionType.Informational,
-											);
-										})
-										.catch((e) => {
-											console.error("Failed to download/install update:", e);
-											setUpdateError(
-												"Failed to download or install the update.",
-											);
-										});
-								}),
-						);
+					const [updateStatus, setUpdateStatus] = createSignal<UpdateStatus>();
+
+					const unlisten = events.updateDownloadProgress.listen((e) => {
+						if (updateStatus()?.type === "done") return;
+						setUpdateStatus({
+							type: "downloading",
+							progress: e.payload.downloaded,
+							contentLength: e.payload.total ?? undefined,
+						});
+					});
+					onCleanup(() => {
+						unlisten.then((cleanup) => cleanup());
+					});
+
+					commands
+						.updatesDownloadAndInstall()
+						.then(() => {
+							setUpdateStatus({ type: "done" });
+							getCurrentWindow().requestUserAttention(
+								UserAttentionType.Informational,
+							);
+						})
+						.catch((e) => {
+							console.error("Failed to download/install update:", e);
+							setUpdateError("Failed to download or install the update.");
+						});
 
 					return (
 						<div>

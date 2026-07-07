@@ -41,6 +41,7 @@ import {
 	type PostDeletionBehaviour,
 	type PostStudioRecordingBehaviour,
 	type StudioRecordingQuality,
+	type UpdateChannel,
 	type WindowExclusion,
 } from "~/utils/tauri";
 import IconLucideAlertTriangle from "~icons/lucide/alert-triangle";
@@ -646,6 +647,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							const path = await commands.pickRecordingsFolder();
 							if (path !== null) {
 								setSettings("recordingsPath", path);
+								await offerRecordingsMigration();
 							}
 						} catch (e) {
 							toast.error(
@@ -657,6 +659,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						try {
 							await commands.resetRecordingsFolder();
 							setSettings("recordingsPath", null);
+							await offerRecordingsMigration();
 						} catch (e) {
 							toast.error(
 								`Failed to reset recordings folder: ${e instanceof Error ? e.message : String(e)}`,
@@ -682,6 +685,18 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					onReset={handleResetExclusions}
 					isLoading={windows.loading}
 					isWindows={ostype === "windows"}
+				/>
+
+				<UpdatesSection
+					value={settings.updateChannel ?? "stable"}
+					onChange={async (channel) => {
+						await handleChange("updateChannel", channel);
+						try {
+							await commands.updatesChannelChanged();
+						} catch (error) {
+							console.error("Failed to notify update channel change", error);
+						}
+					}}
 				/>
 
 				<ServerURLSetting
@@ -711,6 +726,59 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			</SettingsPageContent>
 		</div>
 	);
+}
+
+async function offerRecordingsMigration() {
+	let count = 0;
+	try {
+		count = await commands.countRecordingsToMigrate();
+	} catch {
+		// Recordings in other folders stay visible in the library either way,
+		// so a failed scan just means we don't offer the move.
+		return;
+	}
+	if (count === 0) return;
+
+	const plural = count === 1 ? "recording" : "recordings";
+	const shouldMove = await confirm(
+		`Move your ${count} existing ${plural} to the new location? Recordings stay in your library either way.`,
+	);
+	if (!shouldMove) return;
+
+	const toastId = toast.loading(`Moving ${count} ${plural}…`);
+	let unlisten: (() => void) | undefined;
+	try {
+		unlisten = await events.recordingsMigrationProgress.listen((e) => {
+			toast.loading(
+				`Moving recordings… ${Math.min(e.payload.done + 1, e.payload.total)}/${e.payload.total}`,
+				{ id: toastId },
+			);
+		});
+
+		const summary = await commands.migrateRecordingsToCurrentDir();
+
+		const parts = [
+			`Moved ${summary.moved} ${summary.moved === 1 ? "recording" : "recordings"}`,
+		];
+		if (summary.skippedInUse > 0) {
+			parts.push(`${summary.skippedInUse} in use — left in place`);
+		}
+		if (summary.failed.length > 0) {
+			parts.push(
+				`${summary.failed.length} failed — kept in the original folder`,
+			);
+			toast.error(parts.join(" · "), { id: toastId });
+		} else {
+			toast.success(parts.join(" · "), { id: toastId });
+		}
+	} catch (e) {
+		toast.error(
+			`Failed to move recordings: ${e instanceof Error ? e.message : String(e)}`,
+			{ id: toastId },
+		);
+	} finally {
+		unlisten?.();
+	}
 }
 
 function StorageSection(props: {
@@ -761,6 +829,71 @@ function TelemetryCard(props: {
 					onChange={props.onChange}
 				/>
 			</SectionRows>
+		</Section>
+	);
+}
+
+type UpdateChannelOption = {
+	value: UpdateChannel;
+	label: string;
+	description: string;
+};
+
+const UPDATE_CHANNEL_OPTIONS: UpdateChannelOption[] = [
+	{
+		value: "stable",
+		label: "Stable",
+		description: "Versioned releases (recommended)",
+	},
+	{
+		value: "nightly",
+		label: "Nightly",
+		description:
+			"The newest builds, updated automatically in the background when you're not recording or exporting. May be unstable.",
+	},
+];
+
+function UpdatesSection(props: {
+	value: UpdateChannel;
+	onChange: (value: UpdateChannel) => void;
+}) {
+	const currentOption = createMemo(
+		() =>
+			UPDATE_CHANNEL_OPTIONS.find((option) => option.value === props.value) ??
+			UPDATE_CHANNEL_OPTIONS[0],
+	);
+
+	return (
+		<Section title="Updates" description="Choose which Cap builds you receive.">
+			<SectionCard>
+				<div class="flex flex-col gap-3 px-4 py-4">
+					<div class="flex justify-between items-start gap-4">
+						<div class="flex flex-col gap-0.5 min-w-0">
+							<p class="text-[13px] text-gray-12">Update channel</p>
+							<p class="text-xs leading-snug text-gray-10">
+								Which release channel Cap updates from.
+							</p>
+						</div>
+						<SegmentedControl
+							value={props.value}
+							onChange={props.onChange}
+							options={UPDATE_CHANNEL_OPTIONS.map((option) => ({
+								value: option.value,
+								label: option.label,
+							}))}
+						/>
+					</div>
+					<div class="flex flex-col gap-1.5 px-3 py-2.5 rounded-lg bg-gray-3">
+						<p class="text-xs text-gray-12">{currentOption().description}</p>
+						<Show when={props.value === "nightly"}>
+							<p class="text-[11px] text-gray-10 leading-snug">
+								Switching back to Stable will return you to the latest stable
+								version, which may be older than your current build.
+							</p>
+						</Show>
+					</div>
+				</div>
+			</SectionCard>
 		</Section>
 	);
 }

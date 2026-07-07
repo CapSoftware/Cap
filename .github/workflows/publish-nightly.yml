@@ -1,0 +1,109 @@
+name: "publish-nightly"
+
+# Builds main as a nightly release and publishes it automatically to the
+# CrabNebula "nightly" channel (only users who opt into the nightly update
+# channel in Cap's settings receive it; the default channel and the website's
+# `latest` download URLs never see these releases).
+#
+# Versioning: {next-unreleased-version}-nightly.{YYYYMMDDHHMM}, e.g.
+# 0.5.5-nightly.202607070300. Semver prerelease ordering makes every nightly
+# sort below the stable version it precedes, so promoting 0.5.5 later still
+# updates nightly users.
+#
+# The cap-nightly-v{version} tag is created only after a successful publish,
+# so the no-new-commits guard compares against the last nightly that actually
+# shipped, and promote-nightly.yml can only promote nightlies users could run.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if there are no new commits since the last nightly"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: publish-nightly
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skip: ${{ steps.guard.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for new commits since last nightly
+        id: guard
+        shell: bash
+        run: |
+          LAST_TAG=$(git for-each-ref --sort=-creatordate --format '%(refname:short)' 'refs/tags/cap-nightly-v*' | head -n1)
+          if [[ -n "$LAST_TAG" && "$(git rev-list -n1 "$LAST_TAG")" == "$GITHUB_SHA" && "${{ inputs.force }}" != "true" ]]; then
+            echo "No new commits since $LAST_TAG - skipping nightly build."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Last nightly tag: ${LAST_TAG:-'(none)'}"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read base version
+        if: ${{ steps.guard.outputs.skip != 'true' }}
+        uses: SebRollen/toml-action@v1.0.2
+        id: read_version
+        with:
+          file: apps/desktop/src-tauri/Cargo.toml
+          field: "package.version"
+
+      - name: Compute nightly version
+        if: ${{ steps.guard.outputs.skip != 'true' }}
+        id: version
+        shell: bash
+        run: |
+          BASE="${{ steps.read_version.outputs.value }}"
+          # If Cargo.toml still holds an already-tagged version, nightlies
+          # belong to the next patch release.
+          if git rev-parse -q --verify "refs/tags/cap-v$BASE" >/dev/null; then
+            BASE=$(echo "$BASE" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')
+          fi
+          VERSION="$BASE-nightly.$(date -u +%Y%m%d%H%M)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Nightly version: $VERSION"
+
+  release:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.skip != 'true' }}
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    uses: ./.github/workflows/desktop-release.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      channel: nightly
+      sha: ${{ github.sha }}
+      auto_publish: true
+    secrets: inherit
+
+  tag:
+    needs: [prepare, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Tag published nightly
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: "refs/tags/cap-nightly-v${{ needs.prepare.outputs.version }}",
+              sha: context.sha,
+            });

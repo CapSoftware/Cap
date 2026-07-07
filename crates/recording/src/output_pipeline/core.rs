@@ -3811,6 +3811,128 @@ mod tests {
             );
         }
 
+        /// Deterministic pseudo-random stream for jitter/fps sampling.
+        struct ChainRng(u64);
+
+        impl ChainRng {
+            fn next_f64(&mut self) -> f64 {
+                self.0 = self
+                    .0
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (self.0 >> 11) as f64 / (1u64 << 53) as f64
+            }
+        }
+
+        /// Runs a synthetic source delivering at `actual_fps` (with optional
+        /// bounded timestamp jitter) through the full video timestamp chain —
+        /// SourceClockState remap, anomaly tracking, drift correction — as
+        /// configured for `nominal_fps`, and asserts the mux timestamps stay
+        /// monotonic and track the wall clock. This is what keeps video in
+        /// sync with the sample-counted audio leg regardless of what rate a
+        /// device actually delivers.
+        fn assert_chain_tracks_wall_clock(
+            actual_fps: f64,
+            nominal_fps: u32,
+            jitter_frac: f64,
+            seed: u64,
+            span_secs: f64,
+        ) {
+            let timestamps = Timestamps::now();
+            let master_clock = MasterClock::new(timestamps, 48_000);
+            let mut source_clock = SourceClockState::new("video");
+            let mut anomaly_tracker = TimestampAnomalyTracker::new("video");
+            let mut drift_tracker = VideoDriftTracker::new();
+            let mut rng = ChainRng(seed);
+
+            let combo = format!(
+                "actual={actual_fps}fps nominal={nominal_fps}fps jitter={jitter_frac} seed={seed}"
+            );
+
+            let nominal_frame_duration_ns = 1_000_000_000u64 / u64::from(nominal_fps.max(1));
+            let real_delta_secs = 1.0 / actual_fps;
+
+            let start = timestamps.instant();
+            let frames = (span_secs * actual_fps) as u32;
+            let mut last_duration = Duration::ZERO;
+            let mut last_elapsed = Duration::ZERO;
+
+            for i in 0..frames {
+                let jitter_secs = (rng.next_f64() * 2.0 - 1.0) * jitter_frac * real_delta_secs;
+                let elapsed =
+                    Duration::from_secs_f64((i as f64 * real_delta_secs + jitter_secs).max(0.0));
+                last_elapsed = elapsed;
+                let frame_ts = Timestamp::Instant(start + elapsed);
+
+                let remap = source_clock.remap(&master_clock, frame_ts, nominal_frame_duration_ns);
+                let remapped_ts = Timestamp::Instant(timestamps.instant() + remap.duration());
+
+                let raw_duration = anomaly_tracker
+                    .process_timestamp(remapped_ts, timestamps, elapsed)
+                    .unwrap_or_else(|e| {
+                        panic!("[{combo}] anomaly error at frame {i}: {e:?}");
+                    });
+                let duration = drift_tracker.calculate_timestamp(raw_duration, elapsed);
+
+                assert!(
+                    duration >= last_duration,
+                    "[{combo}] frame {i}: mux timestamp went backwards \
+                     ({last_duration:?} -> {duration:?})"
+                );
+                last_duration = duration;
+            }
+
+            let error = last_duration.as_secs_f64() - last_elapsed.as_secs_f64();
+            assert!(
+                error.abs() < 0.2,
+                "[{combo}] final mux timestamp {last_duration:?} should track the wall clock \
+                 {last_elapsed:?} (off by {error:.3}s; re-timing to the nominal rate would be \
+                 off by {:.1}s)",
+                last_elapsed.as_secs_f64() * (nominal_fps as f64 / actual_fps - 1.0)
+            );
+        }
+
+        /// Regression: a camera free-running at 60fps while the pipeline is
+        /// configured for 30fps (AVFoundation format default vs the selected
+        /// frame-rate range) must still produce wall-clock durations. The
+        /// smoothing ladder previously re-timed such sources to the nominal
+        /// rate in a non-monotonic sawtooth, which the encoder then locked
+        /// into nominal CFR — recordings came out exactly 2x too long with
+        /// the video at 0.5x speed.
+        #[test]
+        fn fps_mismatch_chain_keeps_wall_clock_durations() {
+            // ~6.8s at 60fps into a 30fps config: the shape of the original
+            // report (410 frames).
+            assert_chain_tracks_wall_clock(60.0, 30, 0.0, 1, 6.83);
+        }
+
+        /// Whatever a device actually delivers — slow trickles, standard
+        /// rates, or a 1000fps camera — the video timeline must track the
+        /// wall clock so it stays in sync with audio.
+        #[test]
+        fn chain_tracks_wall_clock_across_fps_matrix() {
+            for nominal_fps in [24u32, 30, 60] {
+                for actual_fps in [
+                    10.0, 15.0, 24.0, 25.0, 29.97, 30.0, 48.0, 60.0, 90.0, 120.0, 240.0, 500.0,
+                    1000.0,
+                ] {
+                    assert_chain_tracks_wall_clock(actual_fps, nominal_fps, 0.0, 2, 5.0);
+                }
+            }
+        }
+
+        /// Randomized (seeded, deterministic) delivery rates with timestamp
+        /// jitter: real capture cadences are never exact.
+        #[test]
+        fn chain_tracks_wall_clock_with_random_fps_and_jitter() {
+            let mut rng = ChainRng(0xCA9_5EED);
+            for round in 0..20 {
+                let actual_fps = 5.0 + rng.next_f64() * 995.0;
+                let nominal_fps = [24u32, 30, 60][(rng.next_f64() * 3.0) as usize % 3];
+                assert_chain_tracks_wall_clock(actual_fps, nominal_fps, 0.3, 1000 + round, 4.0);
+            }
+        }
+
         #[test]
         fn simulates_real_world_camera_scenario() {
             let mut tracker = VideoDriftTracker::new();
