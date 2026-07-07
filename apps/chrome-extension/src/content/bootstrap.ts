@@ -3,6 +3,7 @@ import {
 	isOverlayMessage,
 	isRecordingStatusBroadcast,
 } from "../shared/messages";
+import { sendServiceWorkerMessage } from "../shared/runtime";
 import {
 	RECORDING_STATE_KEY,
 	SHARED_STATE_AREA,
@@ -83,26 +84,15 @@ const bootstrap = () => {
 		// IIFE exposing CapOverlay; ask the service worker to executeScript it
 		// into this same isolated world. This is the one message the bootstrap
 		// sends, and only once a tab actually needs UI.
-		return new Promise((resolve, reject) => {
-			chrome.runtime.sendMessage(
-				{ target: "service-worker", type: "inject-overlay-module" },
-				(response?: { ok?: boolean; error?: string }) => {
-					if (chrome.runtime.lastError) {
-						reject(
-							new Error(chrome.runtime.lastError.message ?? "Send failed"),
-						);
-						return;
-					}
-					const module = (globalThis as { CapOverlay?: OverlayModule })
-						.CapOverlay;
-					if (response?.ok && module) {
-						resolve(module);
-						return;
-					}
-					reject(
-						new Error(response?.error ?? "Overlay module injection failed"),
-					);
-				},
+		return sendServiceWorkerMessage({
+			target: "service-worker",
+			type: "inject-overlay-module",
+		}).then((response) => {
+			const module = (globalThis as { CapOverlay?: OverlayModule }).CapOverlay;
+			if (response.ok && module) return module;
+			throw new Error(
+				("error" in response ? response.error : undefined) ??
+					"Overlay module injection failed",
 			);
 		});
 	};

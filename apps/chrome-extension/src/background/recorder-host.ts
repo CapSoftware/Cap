@@ -1,4 +1,5 @@
 import { capabilities } from "../platform/capabilities";
+import { wait } from "../shared/runtime";
 
 // The recorder document (recorder.html) hosts capture, upload, device
 // enumeration, the mic probe and the camera-preview relay. On Chrome it runs
@@ -21,20 +22,16 @@ type RecorderContext = {
 	windowId?: number;
 };
 
+// Match by document URL only: Chrome reports the recorder as an
+// OFFSCREEN_DOCUMENT context while Firefox's popup window may surface as TAB
+// (or another type — the spec leaves extension pages in popup windows
+// underspecified). Only the recorder document ever has this URL, so the URL
+// filter alone is unambiguous on both browsers.
 const getRecorderContexts = async (): Promise<RecorderContext[]> => {
 	const recorderUrl = chrome.runtime.getURL(RECORDER_URL);
-	// String literals rather than the chrome.runtime.ContextType enum object,
-	// which Firefox does not guarantee to expose.
-	const contextType = (
-		capabilities.supportsOffscreen ? "OFFSCREEN_DOCUMENT" : "TAB"
-	) as chrome.runtime.ContextType;
 	return new Promise((resolve) => {
-		chrome.runtime.getContexts(
-			{
-				contextTypes: [contextType],
-				documentUrls: [recorderUrl],
-			},
-			(contexts) => resolve(contexts ?? []),
+		chrome.runtime.getContexts({ documentUrls: [recorderUrl] }, (contexts) =>
+			resolve(contexts ?? []),
 		);
 	});
 };
@@ -42,8 +39,8 @@ const getRecorderContexts = async (): Promise<RecorderContext[]> => {
 export const hasRecorderHost = async () =>
 	(await getRecorderContexts()).length > 0;
 
-const getRecorderWindowId = async () => {
-	for (const context of await getRecorderContexts()) {
+const recorderWindowIdFrom = (contexts: RecorderContext[]) => {
+	for (const context of contexts) {
 		if (typeof context.windowId === "number" && context.windowId >= 0) {
 			return context.windowId;
 		}
@@ -124,16 +121,32 @@ const createRecorderWindow = async (interactive: boolean) => {
 				...(await getCenteredBounds()),
 			}
 		: { url: RECORDER_URL, type: "popup", state: "minimized" };
-	await new Promise<void>((resolve, reject) => {
-		chrome.windows.create(createData, () => {
+	const windowId = await new Promise<number | undefined>((resolve, reject) => {
+		chrome.windows.create(createData, (created) => {
 			const error = chrome.runtime.lastError;
 			if (error) {
 				reject(new Error(error.message ?? "Failed to open the Cap recorder"));
 				return;
 			}
-			resolve();
+			resolve(created?.id);
 		});
 	});
+
+	try {
+		await waitForRecorderReady();
+	} catch (error) {
+		// Close the unresponsive window, or every later ensureRecorderHost call
+		// would find its context, assume the host is healthy, and fail forever.
+		if (windowId !== undefined) {
+			await new Promise<void>((resolve) => {
+				chrome.windows.remove(windowId, () => {
+					void chrome.runtime.lastError;
+					resolve();
+				});
+			});
+		}
+		throw error;
+	}
 };
 
 const pingRecorder = () =>
@@ -154,41 +167,41 @@ const waitForRecorderReady = async () => {
 	const deadline = Date.now() + RECORDER_READY_TIMEOUT_MS;
 	while (Date.now() < deadline) {
 		if (await pingRecorder()) return;
-		await new Promise((resolve) => {
-			globalThis.setTimeout(resolve, RECORDER_READY_POLL_INTERVAL_MS);
-		});
+		await wait(RECORDER_READY_POLL_INTERVAL_MS);
 	}
 	throw new Error("The Cap recorder window did not become ready in time");
 };
 
-export const ensureRecorderHost = async (
-	options: { interactive?: boolean } = {},
-) => {
-	const contexts = await getRecorderContexts();
-	if (contexts.length > 0) return;
-
-	recorderHostCreation ??= (
-		capabilities.supportsOffscreen
-			? createOffscreenDocument()
-			: createRecorderWindow(options.interactive === true).then(
-					waitForRecorderReady,
-				)
-	).finally(() => {
-		recorderHostCreation = null;
-	});
-	await recorderHostCreation;
-};
-
-// Brings the Firefox recorder window forward so the user can click its arm
-// button (and see any permission prompts anchored to it). No-op on Chrome.
-export const focusRecorderHost = async () => {
-	if (capabilities.supportsOffscreen) return;
-	const windowId = await getRecorderWindowId();
-	if (windowId === null) return;
-	await new Promise<void>((resolve) => {
+const focusRecorderWindow = (windowId: number) =>
+	new Promise<void>((resolve) => {
 		chrome.windows.update(windowId, { focused: true, state: "normal" }, () => {
 			void chrome.runtime.lastError;
 			resolve();
 		});
 	});
+
+// Ensures the recorder document exists; with `interactive` it also brings the
+// Firefox recorder window forward so the user can click its arm button (and
+// see permission prompts anchored to it). Chrome's offscreen document has no
+// window, so `interactive` is a no-op there.
+export const ensureRecorderHost = async (
+	options: { interactive?: boolean } = {},
+) => {
+	const contexts = await getRecorderContexts();
+	if (contexts.length > 0) {
+		if (options.interactive === true && !capabilities.supportsOffscreen) {
+			const windowId = recorderWindowIdFrom(contexts);
+			if (windowId !== null) await focusRecorderWindow(windowId);
+		}
+		return;
+	}
+
+	recorderHostCreation ??= (
+		capabilities.supportsOffscreen
+			? createOffscreenDocument()
+			: createRecorderWindow(options.interactive === true)
+	).finally(() => {
+		recorderHostCreation = null;
+	});
+	await recorderHostCreation;
 };

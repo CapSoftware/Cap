@@ -23,6 +23,19 @@ export const awaitCaptureGesture = async (throwIfCanceled: () => void) => {
 
 	if (idleState) idleState.hidden = true;
 	container.hidden = false;
+	// Belt and braces: if any code path brought this document up minimized
+	// (e.g. a host created for device enumeration), surface it — a hidden arm
+	// button would otherwise wait forever for a click no one can make.
+	chrome.windows.getCurrent((currentWindow) => {
+		if (chrome.runtime.lastError || currentWindow?.id === undefined) return;
+		chrome.windows.update(
+			currentWindow.id,
+			{ state: "normal", focused: true },
+			() => {
+				void chrome.runtime.lastError;
+			},
+		);
+	});
 	try {
 		await new Promise<void>((resolve, reject) => {
 			const onClick = () => {

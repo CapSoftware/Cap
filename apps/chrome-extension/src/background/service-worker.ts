@@ -12,6 +12,7 @@ import {
 	isServiceWorkerRequest,
 } from "../shared/messages";
 import { rememberRecordingMode } from "../shared/preferences";
+import { wait } from "../shared/runtime";
 import {
 	clearAuth,
 	clearAuthError,
@@ -59,11 +60,7 @@ import type {
 	ServiceWorkerRequest,
 	ServiceWorkerResponse,
 } from "../shared/types";
-import {
-	ensureRecorderHost,
-	focusRecorderHost,
-	hasRecorderHost,
-} from "./recorder-host";
+import { ensureRecorderHost, hasRecorderHost } from "./recorder-host";
 
 // popup.html is web-accessible with use_dynamic_url so sites cannot fingerprint
 // the extension via the overlay iframe's static URL; that same flag makes its
@@ -204,11 +201,6 @@ const focusTab = async (tabId: number) => {
 	await activateTab(tabId);
 };
 
-const wait = (durationMs: number) =>
-	new Promise<void>((resolve) => {
-		globalThis.setTimeout(resolve, durationMs);
-	});
-
 const isTransientOffscreenMessageError = (error: unknown) => {
 	if (!(error instanceof Error)) return false;
 	const message = error.message.toLowerCase();
@@ -231,15 +223,19 @@ const sendOffscreenRuntimeMessage = (message: OffscreenRequest) =>
 
 const sendOffscreen = async (
 	message: OffscreenRequest,
-	options: { createIfMissing?: boolean } = {},
+	options: { createIfMissing?: boolean; interactive?: boolean } = {},
 ) => {
+	// `interactive` must survive into the retry path: recreating the Firefox
+	// recorder window minimized for a start-recording message would leave its
+	// arm button waiting for a click no one can make.
+	const hostOptions = { interactive: options.interactive === true };
 	if (options.createIfMissing === false) {
 		const hasDocument = await hasRecorderHost();
 		if (!hasDocument) {
 			return { ok: true, status: recordingStatus } satisfies OffscreenResponse;
 		}
 	} else {
-		await ensureRecorderHost();
+		await ensureRecorderHost(hostOptions);
 	}
 
 	let lastError: unknown;
@@ -256,7 +252,7 @@ const sendOffscreen = async (
 				break;
 			}
 			await wait(OFFSCREEN_MESSAGE_RETRY_DELAY_MS);
-			await ensureRecorderHost();
+			await ensureRecorderHost(hostOptions);
 		}
 	}
 
@@ -1175,21 +1171,22 @@ const performRecordingStart = async (mode: RecordingMode) => {
 	// per-tab on demand and the bootstrap lazy-loads the overlay UI.
 	try {
 		// On Firefox the recorder document must collect a click (transient
-		// activation for getDisplayMedia), so make sure its window exists and
-		// is in front before asking it to start. Both calls are cheap no-ops
-		// beyond document creation on Chrome.
-		await ensureRecorderHost({ interactive: true });
-		await focusRecorderHost();
-		return await sendOffscreen({
-			target: "offscreen",
-			type: "start-recording",
-			mode,
-			settings: recordingSettings,
-			auth,
-			bootstrap,
-			tabId,
-			tabStreamId,
-		});
+		// activation for getDisplayMedia), so its window is created — or
+		// surfaced — in front of the user. A no-op beyond document creation on
+		// Chrome.
+		return await sendOffscreen(
+			{
+				target: "offscreen",
+				type: "start-recording",
+				mode,
+				settings: recordingSettings,
+				auth,
+				bootstrap,
+				tabId,
+				tabStreamId,
+			},
+			{ interactive: true },
+		);
 	} catch (error) {
 		// The recorder panel closes as soon as the status leaves "idle", so a
 		// silent reset would leave the user with no feedback at all. Broadcast

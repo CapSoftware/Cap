@@ -137,6 +137,10 @@ const removeLocal = (keys: string[] | string) =>
 		chrome.storage.local.remove(keys, resolve);
 	});
 
+// Any key stored through getSession/setSession/removeSession must also be
+// listed in clearSharedSessionState below: on Firefox these keys live in
+// storage.local, and that list is what restores their session-only lifetime
+// across browser restarts.
 const sharedStateStorage = () =>
 	SHARED_STATE_AREA === "session"
 		? chrome.storage.session
