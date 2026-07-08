@@ -139,6 +139,7 @@ export function isOrganizationOwnerTarget({
 }) {
 	// Prefer membership role over ownerId (see #1641).
 	if (targetRole === "owner") return true;
+	if (targetRole) return false;
 	// Fallback for legacy/missing membership records.
 	return !!targetUserId && !!ownerId && targetUserId === ownerId;
 }
