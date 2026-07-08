@@ -574,10 +574,33 @@ mod macos {
     pub(super) fn estimate_input_latency(
         sample_rate: u32,
         buffer_size_frames: u32,
-        _device_name: Option<&str>,
+        device_name: Option<&str>,
     ) -> Option<InputLatencyInfo> {
-        let device = System::default_input_device().ok()?;
+        // Resolve the actual device being recorded from; the system-default
+        // input may be a different device with very different latency
+        // characteristics (e.g. a Bluetooth headset while recording from a
+        // wired interface).
+        let device = input_device_by_name(device_name)
+            .or_else(|| System::default_input_device().ok())?;
         compute_input_latency(&device, sample_rate, buffer_size_frames).ok()
+    }
+
+    fn input_device_by_name(device_name: Option<&str>) -> Option<Device> {
+        let target = device_name?;
+        System::devices().ok()?.into_iter().find(|device| {
+            has_input_streams(device)
+                && device
+                    .name()
+                    .is_ok_and(|name| name.to_string() == target)
+        })
+    }
+
+    fn has_input_streams(device: &Device) -> bool {
+        device.streams().is_ok_and(|streams| {
+            streams
+                .iter()
+                .any(|stream| is_input_stream(stream).unwrap_or(false))
+        })
     }
 
     fn compute_input_latency(

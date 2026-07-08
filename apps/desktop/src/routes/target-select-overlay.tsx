@@ -940,11 +940,29 @@ function Inner() {
 								bounds.y + bounds.height - newHeight - padding,
 							);
 
+							// The command applies these as raw device pixels. On Windows
+							// that means converting with the scale of the display the
+							// target rect is on (the overlay's display) — the camera
+							// window's own scale is wrong when it starts on a monitor
+							// with different DPI. On macOS physical coordinates are
+							// interpreted relative to the camera window's scale, so its
+							// own factor is the correct (self-canceling) one, and on
+							// Linux scap reports logical == physical so the display
+							// ratio would collapse to 1 and lose the window scale.
+							const targetScale = (() => {
+								if (ostype() !== "windows") return scaleFactor;
+								const physicalWidth = displayInfo?.physical_size?.width;
+								const logicalWidth = displayInfo?.logical_size?.width;
+								return physicalWidth && logicalWidth && logicalWidth > 0
+									? physicalWidth / logicalWidth
+									: scaleFactor;
+							})();
+
 							setTargetState({
-								x: (newX + displayOriginX) * scaleFactor,
-								y: (newY + displayOriginY) * scaleFactor,
-								width: newWidth * scaleFactor,
-								height: newHeight * scaleFactor,
+								x: (newX + displayOriginX) * targetScale,
+								y: (newY + displayOriginY) * targetScale,
+								width: newWidth * targetScale,
+								height: newHeight * targetScale,
 							});
 						}
 					});

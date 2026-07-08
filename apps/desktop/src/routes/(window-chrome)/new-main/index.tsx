@@ -1595,36 +1595,42 @@ function createUpdateReadyToast() {
 	createTauriEventListener(events.updateReady, (update) => {
 		toast.custom(
 			(t) => (
-				<div class="flex gap-3 items-center px-4 py-3 rounded-xl border shadow-lg bg-gray-1 border-gray-4 text-gray-12">
+				// The main window is only 330px wide, so the toast must fit inside it
+				// (never exceed the viewport) and stack its actions below the message
+				// rather than racing them on one line — otherwise the card overflows
+				// the window edge and gets clipped.
+				<div class="flex flex-col gap-2.5 px-4 py-3 rounded-xl border shadow-lg bg-gray-1 border-gray-4 text-gray-12 w-[min(24rem,calc(100vw-2rem))]">
 					<p class="text-sm">
 						{update.installed
 							? `Cap ${update.version} has been installed — restart to apply`
 							: `Cap ${update.version} is ready to install`}
 					</p>
-					<button
-						type="button"
-						class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors bg-blue-9 text-white hover:bg-blue-10"
-						onClick={() => {
-							toast.dismiss(t.id);
-							const install = update.installed
-								? Promise.resolve(null)
-								: commands.updatesDownloadAndInstall();
-							// On Windows the NSIS installer restarts Cap itself, so the
-							// relaunch call is unreachable there; that matches update.tsx.
-							install
-								.then(() => relaunch())
-								.catch((e) => console.error("Failed to install update:", e));
-						}}
-					>
-						{update.installed ? "Restart now" : "Install and restart"}
-					</button>
-					<button
-						type="button"
-						class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors text-gray-11 hover:text-gray-12"
-						onClick={() => toast.dismiss(t.id)}
-					>
-						Dismiss
-					</button>
+					<div class="flex gap-2 items-center">
+						<button
+							type="button"
+							class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors bg-blue-9 text-white hover:bg-blue-10"
+							onClick={() => {
+								toast.dismiss(t.id);
+								const install = update.installed
+									? Promise.resolve(null)
+									: commands.updatesDownloadAndInstall();
+								// On Windows the NSIS installer restarts Cap itself, so the
+								// relaunch call is unreachable there; that matches update.tsx.
+								install
+									.then(() => relaunch())
+									.catch((e) => console.error("Failed to install update:", e));
+							}}
+						>
+							{update.installed ? "Restart now" : "Install and restart"}
+						</button>
+						<button
+							type="button"
+							class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors text-gray-11 hover:text-gray-12"
+							onClick={() => toast.dismiss(t.id)}
+						>
+							Dismiss
+						</button>
+					</div>
 				</div>
 			),
 			{

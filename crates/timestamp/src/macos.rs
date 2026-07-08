@@ -64,9 +64,12 @@ impl Add<Duration> for MachAbsoluteTimestamp {
 
     fn add(self, rhs: Duration) -> Self::Output {
         let info = TimeBaseInfo::new();
-        let freq = info.numer as f64 / info.denom as f64;
+        // ns = ticks * numer / denom, so ticks = ns * denom / numer.
+        // On Apple Silicon (numer/denom = 125/3) multiplying by numer/denom
+        // instead would add ~1736x the intended duration.
+        let ticks = rhs.as_nanos() as f64 * info.denom as f64 / info.numer as f64;
 
-        Self((self.0 as f64 + rhs.as_nanos() as f64 * freq) as u64)
+        Self((self.0 as f64 + ticks) as u64)
     }
 }
 
@@ -75,8 +78,52 @@ impl Sub<Duration> for MachAbsoluteTimestamp {
 
     fn sub(self, rhs: Duration) -> Self::Output {
         let info = TimeBaseInfo::new();
-        let freq = info.numer as f64 / info.denom as f64;
+        let ticks = rhs.as_nanos() as f64 * info.denom as f64 / info.numer as f64;
 
-        Self((self.0 as f64 - rhs.as_nanos() as f64 * freq) as u64)
+        Self((self.0 as f64 - ticks).max(0.0) as u64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_duration_roundtrips_through_duration_since() {
+        let base = MachAbsoluteTimestamp::now();
+        let added = base + Duration::from_millis(35);
+
+        let roundtrip = added.duration_since(base);
+        let error_us = (roundtrip.as_micros() as i128 - 35_000).abs();
+        assert!(
+            error_us < 10,
+            "35ms add must survive the tick conversion roundtrip, got {roundtrip:?}"
+        );
+    }
+
+    #[test]
+    fn sub_duration_roundtrips_through_duration_since() {
+        let base = MachAbsoluteTimestamp::now();
+        let subtracted = base - Duration::from_millis(120);
+
+        let roundtrip = base.duration_since(subtracted);
+        let error_us = (roundtrip.as_micros() as i128 - 120_000).abs();
+        assert!(
+            error_us < 10,
+            "120ms sub must survive the tick conversion roundtrip, got {roundtrip:?}"
+        );
+    }
+
+    #[test]
+    fn add_then_sub_is_identity() {
+        let base = MachAbsoluteTimestamp::now();
+        let d = Duration::from_millis(500);
+        let roundtrip = (base + d) - d;
+
+        let drift = roundtrip.duration_since(base).max(base.duration_since(roundtrip));
+        assert!(
+            drift < Duration::from_micros(10),
+            "add/sub of the same duration must cancel out, drifted {drift:?}"
+        );
     }
 }

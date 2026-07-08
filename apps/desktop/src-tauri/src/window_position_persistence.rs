@@ -1,13 +1,14 @@
+use scap_targets::DisplayId;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tokio::sync::Notify;
 
-use crate::general_settings::{GeneralSettingsStore, WindowPosition};
+use crate::general_settings::GeneralSettingsStore;
 
 #[derive(Default)]
 struct PendingState {
-    camera_position: Option<(f64, f64)>,
+    camera_position: Option<(f64, f64, Option<DisplayId>)>,
 }
 
 pub struct WindowPositionPersistence {
@@ -23,10 +24,10 @@ impl WindowPositionPersistence {
         })
     }
 
-    pub fn queue_camera(&self, x: f64, y: f64) {
+    pub fn queue_camera(&self, x: f64, y: f64, display_id: Option<DisplayId>) {
         {
             let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-            guard.camera_position = Some((x, y));
+            guard.camera_position = Some((x, y, display_id));
         }
         self.notify.notify_one();
     }
@@ -82,8 +83,8 @@ pub fn install(app: &AppHandle) {
             let write_app = app_handle.clone();
             let write_result = tokio::task::spawn_blocking(move || {
                 GeneralSettingsStore::update(&write_app, |settings| {
-                    if let Some((x, y)) = pending.camera_position {
-                        crate::update_camera_window_position_settings(settings, x, y);
+                    if let Some((x, y, display_id)) = pending.camera_position {
+                        crate::update_camera_window_position_settings(settings, x, y, display_id);
                     }
                 })
             })
@@ -100,8 +101,8 @@ pub fn install(app: &AppHandle) {
     });
 }
 
-pub fn queue_camera_position(app: &AppHandle, x: f64, y: f64) {
+pub fn queue_camera_position(app: &AppHandle, x: f64, y: f64, display_id: Option<DisplayId>) {
     if let Some(persistence) = app.try_state::<Arc<WindowPositionPersistence>>() {
-        persistence.queue_camera(x, y);
+        persistence.queue_camera(x, y, display_id);
     }
 }

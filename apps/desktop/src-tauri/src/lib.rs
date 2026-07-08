@@ -1411,23 +1411,38 @@ fn display_for_position(pos_x: f64, pos_y: f64) -> Option<Display> {
     })
 }
 
-fn display_id_for_position(pos_x: f64, pos_y: f64) -> Option<DisplayId> {
-    display_for_position(pos_x, pos_y).map(|display| display.id())
-}
-
-fn monitor_name_for_position(pos_x: f64, pos_y: f64) -> Option<String> {
-    display_for_position(pos_x, pos_y)
-        .and_then(|display| display.name())
-        .filter(|name| !name.trim().is_empty())
+// On Windows the per-monitor logical rects overlap in mixed-DPI layouts, so a
+// window's display must be resolved from its physical position; logical
+// containment (display_for_position) can match the wrong monitor there.
+#[cfg(windows)]
+fn display_for_physical_position(pos_x: f64, pos_y: f64) -> Option<Display> {
+    Display::list().into_iter().find(|display| {
+        display
+            .raw_handle()
+            .physical_bounds()
+            .is_some_and(|bounds| {
+                pos_x >= bounds.position().x()
+                    && pos_x < bounds.position().x() + bounds.size().width()
+                    && pos_y >= bounds.position().y()
+                    && pos_y < bounds.position().y() + bounds.size().height()
+            })
+    })
 }
 
 pub(crate) fn update_camera_window_position_settings(
     settings: &mut GeneralSettingsStore,
     x: f64,
     y: f64,
+    display_id: Option<DisplayId>,
 ) {
-    let display_id = display_id_for_position(x, y);
-    let monitor_name = monitor_name_for_position(x, y);
+    let display = display_id
+        .and_then(|id| Display::from_id(&id))
+        .or_else(|| display_for_position(x, y));
+    let display_id = display.as_ref().map(|display| display.id());
+    let monitor_name = display
+        .as_ref()
+        .and_then(|display| display.name())
+        .filter(|name| !name.trim().is_empty());
     let position = general_settings::WindowPosition { x, y, display_id };
     settings.camera_window_position = Some(position.clone());
     if let Some(monitor_name) = monitor_name {
@@ -4357,7 +4372,7 @@ fn set_camera_window_position(app: AppHandle, x: f64, y: f64) -> Result<(), Stri
     }
 
     GeneralSettingsStore::update(&app, |settings| {
-        update_camera_window_position_settings(settings, x, y);
+        update_camera_window_position_settings(settings, x, y, None);
     })?;
 
     Ok(())
@@ -5628,6 +5643,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     if let Ok(window_id) = CapWindowId::from_str(label) {
                         let scale_factor = window.scale_factor().unwrap_or(1.0);
                         let logical_pos = position.to_logical::<f64>(scale_factor);
+
+                        // Resolve which display the window landed on. On Windows this
+                        // must use the physical position: mixed-DPI logical rects
+                        // overlap, so logical containment can pick the wrong display.
+                        #[cfg(windows)]
+                        let moved_display =
+                            display_for_physical_position(position.x as f64, position.y as f64);
+                        #[cfg(not(windows))]
+                        let moved_display = display_for_position(logical_pos.x, logical_pos.y);
+
                         if let CapWindowId::Camera = window_id {
                             if app
                                 .try_state::<CameraWindowPositionGuard>()
@@ -5639,11 +5664,20 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 app,
                                 logical_pos.x,
                                 logical_pos.y,
+                                moved_display.map(|display| display.id()),
                             );
                         }
                     }
                 }
-                    _ => {}
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    if let Some(webview_window) = app.get_webview_window(label) {
+                        windows::update_window_rasterization_scale(
+                            &webview_window,
+                            *scale_factor,
+                        );
+                    }
+                }
+                _ => {}
                 }
             }));
 

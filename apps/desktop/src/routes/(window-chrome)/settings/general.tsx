@@ -110,6 +110,8 @@ const coversDefaultExclusion = (
 type ExtendedGeneralSettingsStore = GeneralSettingsStore;
 
 const MAX_FPS_OPTIONS = [
+	{ value: 24, label: "24 FPS" },
+	{ value: 25, label: "25 FPS" },
 	{ value: 30, label: "30 FPS" },
 	{ value: 60, label: "60 FPS (Recommended)" },
 	{ value: 120, label: "120 FPS" },

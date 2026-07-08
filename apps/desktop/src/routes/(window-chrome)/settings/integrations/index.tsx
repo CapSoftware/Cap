@@ -49,16 +49,27 @@ export default function AppsTab() {
 	const auth = authStore.createQuery();
 	const organizationSelection = createSelectedOrganization();
 	const [storage] = createResource(
-		() => organizationSelection.selectedOrganizationId(),
+		() => {
+			// Only query storage integrations when we have a valid signed-in
+			// session with organization data. A stale persisted organizationId can
+			// otherwise make `selectedOrganizationId()` truthy while signed out,
+			// firing an unauthenticated request that surfaces a raw fetch error.
+			if (!organizationSelection.signedIn()) return null;
+			return organizationSelection.selectedOrganizationId();
+		},
 		async (orgId) => {
-			if (!orgId) return null;
-			const response = await apiClient.desktop.getStorageIntegrations({
-				query: { orgId },
-				headers: await protectedHeaders(),
-			});
+			try {
+				const response = await apiClient.desktop.getStorageIntegrations({
+					query: { orgId },
+					headers: await protectedHeaders(),
+				});
 
-			if (response.status !== 200) return null;
-			return response.body;
+				if (response.status !== 200) return null;
+				return response.body;
+			} catch (error) {
+				console.error("Failed to load storage integrations", error);
+				return null;
+			}
 		},
 	);
 
