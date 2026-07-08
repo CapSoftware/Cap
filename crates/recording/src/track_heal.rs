@@ -531,8 +531,7 @@ fn evaluate_display_stretch(inputs: &DisplayStretchInputs) -> Option<StretchDeci
     }
 
     let ratio = inputs.display_secs / expected_span_secs;
-    if ratio < DISPLAY_MIN_STRETCH_RATIO
-        || ratio > DISPLAY_MAX_STRETCH_RATIO
+    if !(DISPLAY_MIN_STRETCH_RATIO..=DISPLAY_MAX_STRETCH_RATIO).contains(&ratio)
         || inputs.display_secs - expected_span_secs < DISPLAY_MIN_STRETCH_SECS
     {
         return None;

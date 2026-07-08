@@ -600,8 +600,7 @@ pub(crate) fn wait_for_blocking_thread_finish(
         if start.elapsed() > timeout {
             drop(spawn_blocking_thread_timeout_cleanup(handle, label));
             return BlockingThreadFinish::TimedOut(anyhow!(
-                "{label} did not finish within {:?}",
-                timeout
+                "{label} did not finish within {timeout:?}"
             ));
         }
 
