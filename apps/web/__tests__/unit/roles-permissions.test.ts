@@ -27,14 +27,15 @@ describe("organization role permissions", () => {
 		expect(normalizeAssignableOrganizationRole("owner")).toBeNull();
 	});
 
-	it("derives owner from organization ownership even when membership role differs", () => {
+	it("uses membership role as source-of-truth for organization roles (#1641)", () => {
+		// memberRole takes precedence over ownerId
 		expect(
 			getEffectiveOrganizationRole({
 				userId: "user-1",
 				ownerId: "user-1",
 				memberRole: "member",
 			}),
-		).toBe("owner");
+		).toBe("member");
 		expect(
 			getEffectiveOrganizationRole({
 				userId: "user-2",
@@ -48,7 +49,15 @@ describe("organization role permissions", () => {
 				ownerId: "real-owner",
 				memberRole: "owner",
 			}),
-		).toBe("member");
+		).toBe("owner");
+		// ownerId fallback when membership record is missing
+		expect(
+			getEffectiveOrganizationRole({
+				userId: "user-1",
+				ownerId: "user-1",
+				memberRole: null,
+			}),
+		).toBe("owner");
 	});
 
 	it("allows only owners and admins to view and manage organization members", () => {
