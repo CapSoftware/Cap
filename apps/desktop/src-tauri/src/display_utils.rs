@@ -9,19 +9,9 @@ pub trait MonitorExt {
         size: PhysicalSize<u32>,
         scale: f64,
     ) -> bool;
-
-    fn intersects_window(&self, window: tauri::Window) -> tauri::Result<bool>;
 }
 
 impl MonitorExt for Display {
-    fn intersects_window(&self, window: tauri::Window) -> tauri::Result<bool> {
-        Ok(self.intersects(
-            window.outer_position()?,
-            window.outer_size()?,
-            window.scale_factor()?,
-        ))
-    }
-
     fn intersects(
         &self,
         position: PhysicalPosition<i32>,

@@ -2203,9 +2203,6 @@ pub struct RecordingDeleted {
     path: PathBuf,
 }
 
-#[derive(specta::Type, tauri_specta::Event, Serialize)]
-pub struct SetCaptureAreaPending(bool);
-
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct NewScreenshotAdded {
     path: PathBuf,
@@ -4844,7 +4841,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             hotkeys::OnEscapePress,
             upload::UploadProgressEvent,
             import::VideoImportProgress,
-            SetCaptureAreaPending,
             DevicesUpdated,
             updates::UpdateDownloadProgress,
             updates::UpdateReady,
@@ -4990,7 +4986,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     CapWindowId::Onboarding.label().as_str(),
                     "window-capture-occluder",
                     "target-select-overlay",
-                    CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::RecordingControls.label().as_str(),

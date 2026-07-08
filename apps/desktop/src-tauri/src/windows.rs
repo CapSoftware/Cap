@@ -594,7 +594,6 @@ pub enum CapWindowId {
     RecordingsOverlay,
     WindowCaptureOccluder { screen_id: DisplayId },
     TargetSelectOverlay { display_id: DisplayId },
-    CaptureArea,
     Camera,
     RecordingControls,
     Upgrade,
@@ -612,7 +611,6 @@ impl FromStr for CapWindowId {
             "main" => Self::Main,
             "settings" => Self::Settings,
             s if is_camera_window_label(s) => Self::Camera,
-            "capture-area" => Self::CaptureArea,
             // legacy identifier
             "in-progress-recording" => Self::RecordingControls,
             "recordings-overlay" => Self::RecordingsOverlay,
@@ -658,7 +656,6 @@ impl std::fmt::Display for CapWindowId {
             Self::WindowCaptureOccluder { screen_id } => {
                 write!(f, "window-capture-occluder-{screen_id}")
             }
-            Self::CaptureArea => write!(f, "capture-area"),
             Self::TargetSelectOverlay { display_id } => {
                 write!(f, "target-select-overlay-{display_id}")
             }
@@ -683,7 +680,6 @@ impl CapWindowId {
         match self {
             Self::Settings => "Cap Settings".to_string(),
             Self::WindowCaptureOccluder { .. } => "Cap Window Capture Occluder".to_string(),
-            Self::CaptureArea => "Cap Capture Area".to_string(),
             Self::RecordingControls => "Cap Recording Controls".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
             Self::ScreenshotEditor { .. } => "Cap Screenshot Editor".to_string(),
@@ -727,7 +723,6 @@ impl CapWindowId {
             }
             Self::Camera
             | Self::WindowCaptureOccluder { .. }
-            | Self::CaptureArea
             | Self::RecordingsOverlay
             | Self::RecordingControls
             | Self::TargetSelectOverlay { .. } => None,
@@ -766,7 +761,6 @@ impl CapWindowId {
         matches!(
             self,
             Self::Camera
-                | Self::CaptureArea
                 | Self::RecordingControls
                 | Self::RecordingsOverlay
                 | Self::TargetSelectOverlay { .. }
@@ -793,9 +787,6 @@ pub enum CapWindow {
     TargetSelectOverlay {
         display_id: DisplayId,
         target_mode: Option<RecordingTargetMode>,
-    },
-    CaptureArea {
-        screen_id: DisplayId,
     },
     Camera {
         centered: bool,
@@ -2051,122 +2042,6 @@ impl CapWindow {
 
                 window
             }
-            Self::CaptureArea { screen_id } => {
-                let title = CapWindowId::CaptureArea.title();
-                let should_protect = should_protect_window(app, &title);
-
-                let mut window_builder = self
-                    .window_builder(app, "/capture-area")
-                    .fullscreen(false)
-                    .always_on_top(true)
-                    .content_protected(should_protect)
-                    .skip_taskbar(true)
-                    .closable(true)
-                    .decorations(false)
-                    .transparent(true);
-
-                let Some(display) = Display::from_id(screen_id) else {
-                    return Err(tauri::Error::WindowNotFound);
-                };
-
-                #[cfg(target_os = "macos")]
-                if let Some(bounds) = display.raw_handle().logical_bounds() {
-                    window_builder = window_builder
-                        .inner_size(bounds.size().width(), bounds.size().height())
-                        .position(bounds.position().x(), bounds.position().y());
-                }
-
-                // On Windows a window's DPI scale isn't known until it's placed on a
-                // monitor, so sizing/positioning from logical bounds at build time is
-                // unreliable across monitors with different DPIs — the overlay ends up
-                // sized for the wrong monitor and no longer covers the target display,
-                // which truncates area selections on HiDPI secondary monitors. Build a
-                // placeholder and fix the geometry up after the window exists (below),
-                // mirroring the TargetSelectOverlay path.
-                #[cfg(windows)]
-                {
-                    window_builder = window_builder.inner_size(100.0, 100.0).position(0.0, 0.0);
-                }
-
-                #[cfg(target_os = "linux")]
-                if let Some(bounds) = display.raw_handle().physical_bounds() {
-                    window_builder = window_builder
-                        .inner_size(bounds.size().width(), bounds.size().height())
-                        .position(bounds.position().x(), bounds.position().y());
-                }
-
-                let window = window_builder.build()?;
-
-                // Fix up the overlay geometry now that the window exists and its real
-                // per-monitor DPI is known: position with physical coordinates (which are
-                // unambiguous across monitors), then set the logical size so the window
-                // covers the full display. Verify the resulting physical size matches the
-                // display and re-apply once if the initial placement raced the DPI change.
-                #[cfg(windows)]
-                {
-                    let Some(position) = display.raw_handle().physical_position() else {
-                        warn!(display_id = %screen_id, "Missing display position for capture area overlay");
-                        return Err(tauri::Error::WindowNotFound);
-                    };
-                    let Some(logical_size) = display.logical_size() else {
-                        warn!(display_id = %screen_id, "Missing display logical size for capture area overlay");
-                        return Err(tauri::Error::WindowNotFound);
-                    };
-                    let Some(physical_size) = display.physical_size() else {
-                        warn!(display_id = %screen_id, "Missing display physical size for capture area overlay");
-                        return Err(tauri::Error::WindowNotFound);
-                    };
-                    use tauri::{LogicalSize, PhysicalPosition};
-                    let _ = window.set_size(LogicalSize::new(
-                        logical_size.width(),
-                        logical_size.height(),
-                    ));
-                    let _ = window.set_position(PhysicalPosition::new(position.x(), position.y()));
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-
-                    match window.inner_size() {
-                        Ok(actual_physical_size)
-                            if physical_size.width() != actual_physical_size.width as f64 =>
-                        {
-                            let _ = window.set_size(LogicalSize::new(
-                                logical_size.width(),
-                                logical_size.height(),
-                            ));
-                        }
-                        Ok(_) => {}
-                        Err(err) => {
-                            warn!(%err, "Failed to read capture area overlay inner size");
-                        }
-                    }
-                }
-
-                #[cfg(target_os = "linux")]
-                if let Some(bounds) = display.raw_handle().physical_bounds() {
-                    use tauri::{LogicalSize, PhysicalPosition};
-                    let _ = window.set_position(PhysicalPosition::new(
-                        bounds.position().x(),
-                        bounds.position().y(),
-                    ));
-                    let _ = window.set_size(LogicalSize::new(
-                        bounds.size().width(),
-                        bounds.size().height(),
-                    ));
-                }
-
-                #[cfg(target_os = "macos")]
-                window.with_nswindow_on_main(|_, nswindow| {
-                    nswindow.setLevel(objc2_app_kit::NSPopUpMenuWindowLevel)
-                })?;
-
-                // Hide the main window if the target monitor is the same
-                if let Some(main_window) = CapWindowId::Main.get(app)
-                    && display.intersects_window(main_window.as_ref().window())?
-                {
-                    let _ = main_window.minimize();
-                }
-
-                window
-            }
             Self::InProgressRecording {
                 countdown,
                 capture_target,
@@ -2515,7 +2390,6 @@ impl CapWindow {
             CapWindow::WindowCaptureOccluder { screen_id } => CapWindowId::WindowCaptureOccluder {
                 screen_id: screen_id.clone(),
             },
-            CapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
             CapWindow::Camera { .. } => CapWindowId::Camera,
             CapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
             CapWindow::Upgrade => CapWindowId::Upgrade,

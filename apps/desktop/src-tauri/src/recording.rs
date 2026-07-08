@@ -2782,7 +2782,6 @@ pub async fn take_screenshot(
                 id,
                 CapWindowId::TargetSelectOverlay { .. }
                     | CapWindowId::WindowCaptureOccluder { .. }
-                    | CapWindowId::CaptureArea
                     | CapWindowId::ModeSelect
                     | CapWindowId::RecordingsOverlay
             )

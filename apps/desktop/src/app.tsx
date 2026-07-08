@@ -68,7 +68,6 @@ const OnboardingPage = lazy(
 const UpgradePage = lazy(() => import("./routes/(window-chrome)/upgrade"));
 const UpdatePage = lazy(() => import("./routes/(window-chrome)/update"));
 const CameraPage = lazy(() => import("./routes/camera"));
-const CaptureAreaPage = lazy(() => import("./routes/capture-area"));
 const DebugPage = lazy(() => import("./routes/debug"));
 const EditorPage = lazy(() => import("./routes/editor"));
 const InProgressRecordingPage = lazy(
@@ -197,7 +196,6 @@ function Inner() {
 						component={CameraPage}
 						info={{ autoShow: false }}
 					/>
-					<Route path="/capture-area" component={CaptureAreaPage} />
 					<Route path="/debug" component={DebugPage} />
 					<Route path="/editor" component={EditorPage} />
 					<Route
@@ -243,7 +241,7 @@ function prewarmFontCaches() {
 			ctx.fillText("Ag", 0, 24);
 			ctx.font = "16px system-ui";
 			ctx.fillText("😀", 0, 24);
-		} catch {}
+		} catch { }
 	};
 
 	if ("requestIdleCallback" in window) requestIdleCallback(warm);
