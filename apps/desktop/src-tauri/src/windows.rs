@@ -35,7 +35,7 @@ use crate::{
 use crate::{
     App, ArcLock, CameraWindowCloseGate, CameraWindowPositionGuard, MainWindowReadyState,
     NewNotification, RequestScreenCapturePrewarm, RequestSetTargetMode,
-    camera_preview_error_message,
+    camera_preview_error_message, display_utils,
     display_utils::{
         CursorMonitorInfo, MonitorExt, display_for_saved_position, logical_point_position,
     },
@@ -560,81 +560,6 @@ fn center_camera_window(app: &AppHandle, window: &WebviewWindow) {
             .camera_preview
             .notify_window_resized(window_width as u32, window_height as u32);
     }
-}
-
-fn is_position_on_display(display_id: &DisplayId, pos_x: f64, pos_y: f64) -> bool {
-    Display::from_id(display_id)
-        .and_then(|display| display.raw_handle().logical_bounds())
-        .map(|bounds| {
-            let (x, y, width, height) = (
-                bounds.position().x(),
-                bounds.position().y(),
-                bounds.size().width(),
-                bounds.size().height(),
-            );
-
-            pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height
-        })
-        .unwrap_or(false)
-}
-
-fn display_name_for_position(pos_x: f64, pos_y: f64) -> Option<String> {
-    Display::list().into_iter().find_map(|display| {
-        let bounds = display.raw_handle().logical_bounds()?;
-        let (x, y, width, height) = (
-            bounds.position().x(),
-            bounds.position().y(),
-            bounds.size().width(),
-            bounds.size().height(),
-        );
-
-        if pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height {
-            display.name().filter(|name| !name.trim().is_empty())
-        } else {
-            None
-        }
-    })
-}
-
-fn is_position_on_monitor_name(monitor_name: &str, pos_x: f64, pos_y: f64) -> bool {
-    Display::list().into_iter().any(|display| {
-        if display.name().as_deref() != Some(monitor_name) {
-            return false;
-        }
-
-        display
-            .raw_handle()
-            .logical_bounds()
-            .map(|bounds| {
-                let (x, y, width, height) = (
-                    bounds.position().x(),
-                    bounds.position().y(),
-                    bounds.size().width(),
-                    bounds.size().height(),
-                );
-
-                pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height
-            })
-            .unwrap_or(false)
-    })
-}
-
-fn is_position_on_any_screen(pos_x: f64, pos_y: f64) -> bool {
-    for display in Display::list() {
-        if let Some(bounds) = display.raw_handle().logical_bounds() {
-            let (x, y, width, height) = (
-                bounds.position().x(),
-                bounds.position().y(),
-                bounds.size().width(),
-                bounds.size().height(),
-            );
-
-            if pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 // Recovers a window that ended up entirely off every connected display (e.g. the
@@ -1827,7 +1752,7 @@ impl CapWindow {
                         .map(|w| CursorMonitorInfo::from_window(&w))
                         .unwrap_or(cursor_monitor);
 
-                    let preferred_monitor_name = display_name_for_position(
+                    let preferred_monitor_name = display_utils::display_name_for_position(
                         camera_monitor.x + camera_monitor.width / 2.0,
                         camera_monitor.y + camera_monitor.height / 2.0,
                     );
@@ -1843,11 +1768,15 @@ impl CapWindow {
                                         .get(monitor_name)
                                         .cloned()
                                         .filter(|pos| {
-                                            is_position_on_monitor_name(monitor_name, pos.x, pos.y)
+                                            display_utils::is_position_on_monitor_name(
+                                                monitor_name,
+                                                pos.x,
+                                                pos.y,
+                                            )
                                         })
                                         .or_else(|| {
                                             settings.camera_window_position.filter(|pos| {
-                                                is_position_on_monitor_name(
+                                                display_utils::is_position_on_monitor_name(
                                                     monitor_name,
                                                     pos.x,
                                                     pos.y,
@@ -1857,9 +1786,11 @@ impl CapWindow {
                                 } else {
                                     settings.camera_window_position.filter(|pos| {
                                         if let Some(display_id) = &pos.display_id {
-                                            is_position_on_display(display_id, pos.x, pos.y)
+                                            display_utils::is_position_on_display(
+                                                display_id, pos.x, pos.y,
+                                            )
                                         } else {
-                                            is_position_on_any_screen(pos.x, pos.y)
+                                            display_utils::is_position_on_any_screen(pos.x, pos.y)
                                         }
                                     })
                                 }

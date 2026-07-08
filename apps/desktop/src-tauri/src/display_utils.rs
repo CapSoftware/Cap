@@ -309,3 +309,78 @@ fn display_containing_logical(pos_x: f64, pos_y: f64) -> Option<Display> {
         .into_iter()
         .find(|display| display_contains_logical(display, pos_x, pos_y))
 }
+
+pub fn is_position_on_display(display_id: &DisplayId, pos_x: f64, pos_y: f64) -> bool {
+    Display::from_id(display_id)
+        .and_then(|display| display.raw_handle().logical_bounds())
+        .map(|bounds| {
+            let (x, y, width, height) = (
+                bounds.position().x(),
+                bounds.position().y(),
+                bounds.size().width(),
+                bounds.size().height(),
+            );
+
+            pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height
+        })
+        .unwrap_or(false)
+}
+
+pub fn display_name_for_position(pos_x: f64, pos_y: f64) -> Option<String> {
+    Display::list().into_iter().find_map(|display| {
+        let bounds = display.raw_handle().logical_bounds()?;
+        let (x, y, width, height) = (
+            bounds.position().x(),
+            bounds.position().y(),
+            bounds.size().width(),
+            bounds.size().height(),
+        );
+
+        if pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height {
+            display.name().filter(|name| !name.trim().is_empty())
+        } else {
+            None
+        }
+    })
+}
+
+pub fn is_position_on_monitor_name(monitor_name: &str, pos_x: f64, pos_y: f64) -> bool {
+    Display::list().into_iter().any(|display| {
+        if display.name().as_deref() != Some(monitor_name) {
+            return false;
+        }
+
+        display
+            .raw_handle()
+            .logical_bounds()
+            .map(|bounds| {
+                let (x, y, width, height) = (
+                    bounds.position().x(),
+                    bounds.position().y(),
+                    bounds.size().width(),
+                    bounds.size().height(),
+                );
+
+                pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height
+            })
+            .unwrap_or(false)
+    })
+}
+
+pub fn is_position_on_any_screen(pos_x: f64, pos_y: f64) -> bool {
+    for display in Display::list() {
+        if let Some(bounds) = display.raw_handle().logical_bounds() {
+            let (x, y, width, height) = (
+                bounds.position().x(),
+                bounds.position().y(),
+                bounds.size().width(),
+                bounds.size().height(),
+            );
+
+            if pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height {
+                return true;
+            }
+        }
+    }
+    false
+}
