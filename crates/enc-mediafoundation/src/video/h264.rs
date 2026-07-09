@@ -42,6 +42,14 @@ const MAX_CONSECUTIVE_EMPTY_SAMPLES: u8 = 20;
 const MAX_INPUT_WITHOUT_OUTPUT: u32 = 30;
 const MAX_PROCESS_INPUT_FAILURES: u32 = 5;
 const ENCODER_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long `get_frame` may park before we treat the gap as an upstream stall
+/// (recording paused or capture starved) rather than a hung hardware encoder,
+/// and rebase the output-timeout clock. Must stay below
+/// `ENCODER_OPERATION_TIMEOUT` so a pause between this and the timeout is still
+/// absorbed. Live capture always returns a frame within ~one frame interval, so
+/// a block this long only ever means "we had nothing to encode", which is never
+/// the encoder's fault.
+const INPUT_WAIT_HEALTH_RESET: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct EncoderHealthStatus {
@@ -94,6 +102,15 @@ impl EncoderHealthMonitor {
 
     fn reset_process_failures(&mut self) {
         self.consecutive_process_failures = 0;
+    }
+
+    /// Rebase the output-timeout clock after `get_frame` parked for a long time
+    /// (recording paused or capture starved). That idle wall-clock time is not
+    /// an encoder stall, so it must not count toward the `Timeout` health check;
+    /// otherwise a pause longer than `ENCODER_OPERATION_TIMEOUT` trips a false
+    /// timeout on the first health check after resume and kills the recording.
+    fn notify_input_stall_recovered(&mut self) {
+        self.last_output_time = Instant::now();
     }
 
     fn check_health(&self) -> EncoderHealthStatus {
@@ -561,9 +578,19 @@ impl H264Encoder {
                     MediaFoundation::METransformNeedInput => {
                         health_monitor.record_input();
                         should_exit = true;
+                        let get_frame_started = Instant::now();
                         if !should_stop.load(Ordering::SeqCst)
                             && let Some((texture, timestamp)) = get_frame()?
                         {
+                            // `get_frame` blocks for the whole pause (frames are
+                            // dropped upstream while paused), so a long park here
+                            // is idle time, not a hardware stall. Rebase the
+                            // timeout clock so the next `check_health` at the top
+                            // of the loop doesn't false-trip `Timeout` on resume.
+                            if get_frame_started.elapsed() > INPUT_WAIT_HEALTH_RESET {
+                                health_monitor.notify_input_stall_recovered();
+                            }
+
                             let process_result = (|| -> windows::core::Result<()> {
                                 self.video_processor.process_texture(&texture)?;
                                 let input_buffer = MFCreateDXGISurfaceBuffer(

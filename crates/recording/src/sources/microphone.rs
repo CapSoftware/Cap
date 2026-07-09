@@ -227,6 +227,8 @@ impl AudioSource for Microphone {
                 "Microphone source configured"
             );
 
+            let recording_muted = feed_lock.recording_muted_handle();
+
             tokio::spawn({
                 let frame_counter = mic_frame_counter.clone();
                 let drop_counter = mic_drop_counter.clone();
@@ -235,6 +237,7 @@ impl AudioSource for Microphone {
                 let device_name = device_name.clone();
                 let health_tx = health_tx.clone();
                 let cancel = cancel.clone();
+                let recording_muted = recording_muted.clone();
                 async move {
                     let mut resampler: Option<MicResampler> = None;
                     let mut silence_mode = false;
@@ -331,10 +334,18 @@ impl AudioSource for Microphone {
                                     ))
                                 };
 
-                                let Some(audio_frame) = audio_frame else {
+                                let Some(mut audio_frame) = audio_frame else {
                                     drop_counter.fetch_add(1, Ordering::Relaxed);
                                     continue;
                                 };
+
+                                // Mute by zeroing the payload, never by withholding the
+                                // frame: cadence, sample counts, and timestamps must stay
+                                // identical to the unmuted stream so the muxer timeline
+                                // and the stall/keepalive machinery see no difference.
+                                if recording_muted.load(Ordering::Relaxed) {
+                                    silence_frame_payload(&mut audio_frame.inner);
+                                }
 
                                 let sample_count = audio_frame.samples();
                                 last_frame_duration = Duration::from_secs_f64(
@@ -586,6 +597,17 @@ fn create_silence_frame(info: &AudioInfo, sample_count: usize) -> ffmpeg::frame:
     frame
 }
 
+/// Zero a frame's sample data in place, leaving format, sample count, rate,
+/// layout, and timestamp untouched. All-zero bytes are exact silence for every
+/// sample format cpal/ffmpeg feed through here except U8 — and U8 device input
+/// is resampled to the F32 mixer format before reaching this point, so zeroed
+/// bytes are always true silence for the frames we emit.
+fn silence_frame_payload(frame: &mut ffmpeg::frame::Audio) {
+    for i in 0..frame.planes() {
+        frame.data_mut(i).fill(0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -815,6 +837,66 @@ mod tests {
                 .any(|s| s.abs() > 0.01);
             assert!(any_energy, "{channels}ch downmix produced silence");
         }
+    }
+
+    #[test]
+    fn muted_frames_keep_geometry_but_zero_payload() {
+        use cap_timestamp::Timestamp;
+        use std::time::Instant;
+
+        let target = AudioInfo::new_raw(Sample::F32(Type::Packed), 48000, 1);
+        let mut resampler =
+            MicResampler::create(44100, 2, SampleFormat::F32, &target).expect("resampler");
+
+        const FRAME_SAMPLES: usize = 1024;
+        const CHANNELS: usize = 2;
+        let mut payload = Vec::with_capacity(FRAME_SAMPLES * CHANNELS * 4);
+        for i in 0..(FRAME_SAMPLES * CHANNELS) {
+            let value = 0.5f32 * ((i % 7) as f32 - 3.0);
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let ts_instant = Instant::now();
+        let ts = Timestamp::Instant(ts_instant);
+        let mut frame = None;
+        for _ in 0..4 {
+            if let Some(f) = resampler.resample(&payload, 44100, 2, SampleFormat::F32, ts) {
+                frame = Some(f);
+            }
+        }
+        let mut frame = frame.expect("resampler produced a frame");
+
+        let samples_before = frame.samples();
+        let rate_before = frame.rate();
+        assert!(samples_before > 0);
+
+        let had_energy = frame
+            .inner
+            .data(0)
+            .chunks_exact(4)
+            .take(samples_before)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .any(|s| s.abs() > 0.001);
+        assert!(had_energy, "test signal should be non-silent before muting");
+
+        silence_frame_payload(&mut frame.inner);
+
+        // Muting must be a pure payload transformation: geometry, rate, and
+        // timestamp identical, every sample exactly zero.
+        assert_eq!(frame.samples(), samples_before);
+        assert_eq!(frame.rate(), rate_before);
+        match frame.timestamp {
+            Timestamp::Instant(i) => assert_eq!(i, ts_instant),
+            other => panic!("unexpected timestamp variant {other:?}"),
+        }
+        let all_zero = frame
+            .inner
+            .data(0)
+            .chunks_exact(4)
+            .take(frame.samples())
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .all(|s| s == 0.0);
+        assert!(all_zero, "muted frame must be exact digital silence");
     }
 
     #[test]

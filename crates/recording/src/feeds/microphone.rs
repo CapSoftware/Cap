@@ -17,7 +17,7 @@ use std::{
     ops::Deref,
     sync::{
         Arc, Weak,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, SyncSender},
     },
     time::{Duration, Instant},
@@ -1011,6 +1011,11 @@ pub struct MicrophoneFeedLock {
     buffer_size_frames: Option<u32>,
     drop_tx: Option<oneshot::Sender<()>>,
     device_name: String,
+    // Recording-scoped mute. The stream keeps flowing at its normal cadence —
+    // the recording source zeroes sample payloads while this is set — so
+    // timestamps, resampler state, and the muxer timeline are untouched by
+    // muting. A fresh lock (i.e. every new recording) always starts unmuted.
+    recording_muted: Arc<AtomicBool>,
     _token: Arc<()>,
 }
 
@@ -1033,6 +1038,18 @@ impl MicrophoneFeedLock {
 
     pub async fn dropped_message_count(&self) -> u64 {
         self.actor.ask(GetDroppedMessageCount).await.unwrap_or(0)
+    }
+
+    pub fn set_recording_muted(&self, muted: bool) {
+        self.recording_muted.store(muted, Ordering::Relaxed);
+    }
+
+    pub fn is_recording_muted(&self) -> bool {
+        self.recording_muted.load(Ordering::Relaxed)
+    }
+
+    pub fn recording_muted_handle(&self) -> Arc<AtomicBool> {
+        self.recording_muted.clone()
     }
 }
 
@@ -1481,6 +1498,7 @@ impl Message<Lock> for MicrophoneFeed {
             buffer_size_frames,
             drop_tx: Some(drop_tx),
             device_name,
+            recording_muted: Arc::new(AtomicBool::new(false)),
             _token: token,
         })
     }

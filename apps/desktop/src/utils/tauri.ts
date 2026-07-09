@@ -47,6 +47,9 @@ async resumeRecording() : Promise<null> {
 async togglePauseRecording() : Promise<null> {
     return await TAURI_INVOKE("toggle_pause_recording");
 },
+async setMicRecordingMuted(muted: boolean) : Promise<null> {
+    return await TAURI_INVOKE("set_mic_recording_muted", { muted });
+},
 async restartRecording() : Promise<RecordingAction> {
     return await TAURI_INVOKE("restart_recording");
 },
