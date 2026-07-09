@@ -237,7 +237,6 @@ export function Cropper(
 		onInteraction?: (interacting: boolean) => void;
 		onContextMenu?: (event: PointerEvent) => void;
 		ref?: CropperRef | ((ref: CropperRef) => void);
-		class?: string;
 		minSize?: Vec2;
 		maxSize?: Vec2;
 		targetSize?: Vec2;
@@ -247,6 +246,7 @@ export function Cropper(
 		snapToRatioEnabled?: boolean;
 		useBackdropFilter?: boolean;
 		allowLightMode?: boolean;
+		enableAnimation?: boolean;
 	}>,
 ) {
 	let containerRef: HTMLDivElement | undefined;
@@ -430,6 +430,10 @@ export function Cropper(
 	}
 
 	function animateToRawBounds(target: CropBounds, durationMs = 240) {
+		if (props.enableAnimation === false) {
+			setRawBounds(target);
+		}
+
 		const start = displayRawBounds();
 		if (
 			target.x === start.x &&
@@ -584,7 +588,13 @@ export function Cropper(
 
 			setContainerSize({ x: width, y: height });
 
-			setRawBoundsConstraining(boundsToRaw(preservedReal));
+			// Only reconcile against previously-preserved bounds once we've
+			// actually initialized — otherwise this clobbers rawBounds with a
+			// constrained CROP_ZERO before init() has a chance to compute the
+			// real starting crop, which is what caused the top-left flash.
+			if (initialized) {
+				setRawBoundsConstraining(boundsToRaw(preservedReal));
+			}
 
 			if (!initialized && width > 1 && height > 1) {
 				initialized = true;
@@ -597,7 +607,7 @@ export function Cropper(
 		);
 		updateContainerSize(containerRef.clientWidth, containerRef.clientHeight);
 
-		setDisplayRawBounds(rawBounds());
+		// setDisplayRawBounds(rawBounds());
 
 		function init() {
 			const bounds = computeInitialBounds();
@@ -737,6 +747,38 @@ export function Cropper(
 		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
 	});
 
+	function liveHandleFromPointer(
+		anchor: Vec2,
+		pointX: number,
+		pointY: number,
+		original: HandleSide,
+	): HandleSide {
+		const left = pointX < anchor.x;
+		const top = pointY < anchor.y;
+
+		if (original.isCorner) {
+			return (
+				HANDLES.find(
+					(h) => h.isCorner && (h.x === "l") === left && (h.y === "t") === top,
+				) ?? original
+			);
+		}
+		// Side handles only flip along their own axis, and must stay a side
+		// (y === "c" for horizontal, x === "c" for vertical) — otherwise this
+		// matches a corner that happens to share the same x/y label.
+		if (original.x !== "c") {
+			return (
+				HANDLES.find((h) => h.y === "c" && (h.x === "l") === left) ?? original
+			);
+		}
+		if (original.y !== "c") {
+			return (
+				HANDLES.find((h) => h.x === "c" && (h.y === "t") === top) ?? original
+			);
+		}
+		return original;
+	}
+
 	function onHandlePointerDown(handle: HandleSide, e: PointerEvent) {
 		if (!containerRef || e.button !== 0) return;
 		const target = e.currentTarget as HTMLElement;
@@ -815,6 +857,34 @@ export function Cropper(
 					pointY,
 				);
 			}
+		}
+
+		const anchor = context.isAltMode
+			? {
+					x: context.startBounds.x + context.startBounds.width / 2,
+					y: context.startBounds.y + context.startBounds.height / 2,
+				}
+			: {
+					x:
+						context.startBounds.x +
+						(context.originalHandle.movable.left
+							? context.startBounds.width
+							: 0),
+					y:
+						context.startBounds.y +
+						(context.originalHandle.movable.top
+							? context.startBounds.height
+							: 0),
+				};
+
+		const live = liveHandleFromPointer(
+			anchor,
+			pointX,
+			pointY,
+			context.originalHandle,
+		);
+		if (mouseState.hoveringHandle !== live) {
+			setMouseState("hoveringHandle", live);
 		}
 
 		const { min, max } = rawSizeConstraint();
@@ -1056,26 +1126,33 @@ export function Cropper(
 		on<CropBounds, number>(displayRawBounds, (b, _prevIn, prevFrameId) => {
 			if (prevFrameId) cancelAnimationFrame(prevFrameId);
 			return requestAnimationFrame(() => {
+				const x = Math.round(b.x);
+				const y = Math.round(b.y);
+				const right = Math.round(b.x + b.width);
+				const bottom = Math.round(b.y + b.height);
+				const width = right - x;
+				const height = bottom - y;
+
 				if (regionRef) {
-					regionRef.style.width = `${Math.round(b.width)}px`;
-					regionRef.style.height = `${Math.round(b.height)}px`;
-					regionRef.style.transform = `translate(${Math.round(b.x)}px,${Math.round(b.y)}px)`;
+					regionRef.style.width = `${width}px`;
+					regionRef.style.height = `${height}px`;
+					regionRef.style.transform = `translate(${x}px,${y}px)`;
 				}
 				if (occLeftRef) {
-					occLeftRef.style.width = `${Math.max(0, Math.round(b.x))}px`;
+					occLeftRef.style.width = `${Math.max(0, x)}px`;
 				}
 				if (occRightRef) {
-					occRightRef.style.left = `${Math.round(b.x + b.width)}px`;
+					occRightRef.style.left = `${right}px`;
 				}
 				if (occTopRef) {
-					occTopRef.style.left = `${Math.round(b.x)}px`;
-					occTopRef.style.width = `${Math.round(b.width)}px`;
-					occTopRef.style.height = `${Math.max(0, Math.round(b.y))}px`;
+					occTopRef.style.left = `${x}px`;
+					occTopRef.style.width = `${width}px`;
+					occTopRef.style.height = `${Math.max(0, y)}px`;
 				}
 				if (occBottomRef) {
-					occBottomRef.style.top = `${Math.round(b.y + b.height)}px`;
-					occBottomRef.style.left = `${Math.round(b.x)}px`;
-					occBottomRef.style.width = `${Math.round(b.width)}px`;
+					occBottomRef.style.top = `${bottom}px`;
+					occBottomRef.style.left = `${x}px`;
+					occBottomRef.style.width = `${width}px`;
 				}
 			});
 		}),
@@ -1136,9 +1213,10 @@ export function Cropper(
 			<div class="size-full">
 				<div
 					ref={regionRef}
-					class="absolute top-0 left-0 z-30 size-36 border border-white/50"
+					class="absolute top-0 left-0 z-30 border border-white/50"
 					style={{
 						cursor: cursorStyle() ?? "grab",
+						visibility: isReady() ? "visible" : "hidden",
 					}}
 					onDblClick={(e) => e.stopPropagation()}
 				>
@@ -1178,7 +1256,7 @@ export function Cropper(
 							handle.isCorner ? (
 								<button
 									type="button"
-									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-hidden"
+									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-hidden border border-blue-10"
 									tabIndex={-1}
 									classList={{ "opacity-0": mouseState.drag === "overlay" }}
 									style={{
@@ -1454,8 +1532,11 @@ function computeFreeResize(
 		const expTop = Math.min(distH, center.y);
 		const expBottom = Math.min(distH, container.y - center.y);
 
-		let newW = expLeft + expRight;
-		let newH = expTop + expBottom;
+		const changesX = handle.movable.left || handle.movable.right;
+		const changesY = handle.movable.top || handle.movable.bottom;
+
+		let newW = changesX ? expLeft + expRight : startBounds.width;
+		let newH = changesY ? expTop + expBottom : startBounds.height;
 
 		if (min) {
 			newW = Math.max(newW, min.x);
