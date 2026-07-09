@@ -26,6 +26,7 @@ services:
       S3_PATH_STYLE: "true"
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       RESEND_FROM_DOMAIN: ${RESEND_FROM_DOMAIN:-}
+      CAP_CHROME_EXTENSION_ID: ${CAP_CHROME_EXTENSION_ID:-}
       MEDIA_SERVER_URL: http://media-server:3456
       MEDIA_SERVER_WEBHOOK_URL: http://cap-web:3000
     ports:
