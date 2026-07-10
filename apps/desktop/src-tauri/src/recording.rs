@@ -3636,9 +3636,86 @@ async fn finalize_studio_recording(
     Ok(())
 }
 
+const AUTO_ZOOM_DEFAULT_AMOUNT: f64 = 2.0;
+const AUTO_ZOOM_MIN_AMOUNT: f64 = 1.5;
+const AUTO_ZOOM_MAX_AMOUNT: f64 = 2.5;
+const AUTO_ZOOM_FOCUS_COVERAGE: f64 = 0.85;
+const AUTO_ZOOM_MIN_ACTIVITY_SPREAD: f64 = 0.34;
+
+struct MovementBurst {
+    start_ms: f64,
+    end_ms: f64,
+    travel: f64,
+}
+
+fn detect_movement_bursts(moves: &[CursorMoveEvent], idle_gap_ms: f64) -> Vec<MovementBurst> {
+    let mut bursts = Vec::new();
+    let mut iter = moves.iter();
+    let Some(first) = iter.next() else {
+        return bursts;
+    };
+
+    let mut start_ms = first.time_ms;
+    let mut last_ms = first.time_ms;
+    let mut last_pos = (first.x, first.y);
+    let mut travel = 0.0;
+
+    for m in iter {
+        if m.time_ms - last_ms > idle_gap_ms {
+            bursts.push(MovementBurst {
+                start_ms,
+                end_ms: last_ms,
+                travel,
+            });
+            start_ms = m.time_ms;
+            travel = 0.0;
+        } else {
+            let dx = m.x - last_pos.0;
+            let dy = m.y - last_pos.1;
+            travel += (dx * dx + dy * dy).sqrt();
+        }
+        last_ms = m.time_ms;
+        last_pos = (m.x, m.y);
+    }
+
+    bursts.push(MovementBurst {
+        start_ms,
+        end_ms: last_ms,
+        travel,
+    });
+    bursts
+}
+
+fn zoom_amount_for_interval(moves: &[CursorMoveEvent], start_ms: f64, end_ms: f64) -> f64 {
+    let mut min_x = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut min_y = f64::MAX;
+    let mut max_y = f64::MIN;
+    let mut found = false;
+
+    for m in moves {
+        if m.time_ms < start_ms || m.time_ms > end_ms {
+            continue;
+        }
+        min_x = min_x.min(m.x);
+        max_x = max_x.max(m.x);
+        min_y = min_y.min(m.y);
+        max_y = max_y.max(m.y);
+        found = true;
+    }
+
+    if !found {
+        return AUTO_ZOOM_DEFAULT_AMOUNT;
+    }
+
+    let spread = (max_x - min_x).max(max_y - min_y);
+    (AUTO_ZOOM_FOCUS_COVERAGE / spread.max(AUTO_ZOOM_MIN_ACTIVITY_SPREAD))
+        .clamp(AUTO_ZOOM_MIN_AMOUNT, AUTO_ZOOM_MAX_AMOUNT)
+}
+
 fn generate_zoom_segments_from_clicks_impl(
     mut clicks: Vec<CursorClickEvent>,
-    _moves: Vec<CursorMoveEvent>,
+    mut moves: Vec<CursorMoveEvent>,
     max_duration: f64,
 ) -> Vec<ZoomSegment> {
     const MS_PER_SECOND: f64 = 1000.0;
@@ -3648,7 +3725,11 @@ fn generate_zoom_segments_from_clicks_impl(
     const CLICK_END_CLAMP_PADDING_MS: f64 = 800.0;
     const TRAILING_CLICK_IGNORE_MS: f64 = 1000.0;
     const MERGE_GAP_MS: f64 = 2500.0;
-    const AUTO_ZOOM_AMOUNT: f64 = 2.0;
+    const MOVE_IDLE_GAP_MS: f64 = 500.0;
+    const MOVE_PRE_PADDING_MS: f64 = 300.0;
+    const MOVE_POST_PADDING_MS: f64 = 1500.0;
+    const MOVE_MIN_TRAVEL: f64 = 0.1;
+    const MOVE_MIN_DURATION_MS: f64 = 240.0;
 
     if max_duration <= 0.0 {
         return Vec::new();
@@ -3666,6 +3747,11 @@ fn generate_zoom_segments_from_clicks_impl(
             .partial_cmp(&b.time_ms)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    moves.sort_by(|a, b| {
+        a.time_ms
+            .partial_cmp(&b.time_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut intervals: Vec<(f64, f64)> = Vec::new();
     for click in clicks {
@@ -3676,6 +3762,22 @@ fn generate_zoom_segments_from_clicks_impl(
 
         let start = (time_ms - CLICK_PRE_PADDING_MS).max(START_MIN_MS);
         let end = (time_ms + CLICK_POST_PADDING_MS).min(end_limit_ms);
+
+        if end > start {
+            intervals.push((start, end));
+        }
+    }
+
+    for burst in detect_movement_bursts(&moves, MOVE_IDLE_GAP_MS) {
+        if burst.start_ms >= click_cutoff_ms
+            || burst.travel < MOVE_MIN_TRAVEL
+            || burst.end_ms - burst.start_ms < MOVE_MIN_DURATION_MS
+        {
+            continue;
+        }
+
+        let start = (burst.start_ms - MOVE_PRE_PADDING_MS).max(START_MIN_MS);
+        let end = (burst.end_ms + MOVE_POST_PADDING_MS).min(end_limit_ms);
 
         if end > start {
             intervals.push((start, end));
@@ -3704,7 +3806,7 @@ fn generate_zoom_segments_from_clicks_impl(
         .map(|(start, end)| ZoomSegment {
             start: start.round() / MS_PER_SECOND,
             end: end.round() / MS_PER_SECOND,
-            amount: AUTO_ZOOM_AMOUNT,
+            amount: zoom_amount_for_interval(&moves, start, end),
             mode: ZoomMode::Auto,
             glide_direction: GlideDirection::None,
             glide_speed: 0.5,
@@ -4271,6 +4373,74 @@ mod tests {
         assert!(
             segments.is_empty(),
             "small jitter should not generate segments"
+        );
+    }
+
+    #[test]
+    fn generates_segment_for_sustained_movement_without_clicks() {
+        let moves = (0..40)
+            .map(|i| {
+                let t = 2_000.0 + (i as f64) * 30.0;
+                let x = 0.2 + (i as f64) * 0.01;
+                move_event(t, x, 0.5)
+            })
+            .collect::<Vec<_>>();
+
+        let segments = generate_zoom_segments_from_clicks_impl(Vec::new(), moves, 15.0);
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].start, 1.7);
+        assert_eq!(segments[0].end, 4.67);
+    }
+
+    #[test]
+    fn zoom_amount_adapts_to_activity_spread() {
+        let tight_moves = (0..40)
+            .map(|i| {
+                let t = 2_000.0 + (i as f64) * 30.0;
+                let x = 0.5 + ((i % 2) as f64) * 0.005;
+                move_event(t, x, 0.5)
+            })
+            .collect::<Vec<_>>();
+        let tight = generate_zoom_segments_from_clicks_impl(Vec::new(), tight_moves, 15.0);
+
+        let wide_moves = (0..40)
+            .map(|i| {
+                let t = 2_000.0 + (i as f64) * 30.0;
+                let x = 0.1 + (i as f64) * 0.02;
+                move_event(t, x, 0.5)
+            })
+            .collect::<Vec<_>>();
+        let wide = generate_zoom_segments_from_clicks_impl(Vec::new(), wide_moves, 15.0);
+
+        assert_eq!(tight.len(), 1);
+        assert_eq!(wide.len(), 1);
+        assert!(
+            tight[0].amount > wide[0].amount,
+            "tight activity should zoom closer than wide activity: {} vs {}",
+            tight[0].amount,
+            wide[0].amount
+        );
+    }
+
+    #[test]
+    fn separate_movement_bursts_stay_split_across_idle() {
+        let mut moves = Vec::new();
+        for i in 0..20 {
+            let t = 1_000.0 + (i as f64) * 30.0;
+            moves.push(move_event(t, 0.1 + (i as f64) * 0.01, 0.3));
+        }
+        for i in 0..20 {
+            let t = 9_000.0 + (i as f64) * 30.0;
+            moves.push(move_event(t, 0.9 - (i as f64) * 0.01, 0.8));
+        }
+
+        let segments = generate_zoom_segments_from_clicks_impl(Vec::new(), moves, 20.0);
+
+        assert_eq!(
+            segments.len(),
+            2,
+            "bursts separated by a long idle gap should stay separate segments"
         );
     }
 
