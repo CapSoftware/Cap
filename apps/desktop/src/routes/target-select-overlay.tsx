@@ -85,6 +85,7 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const MIN_SIZE = { width: 150, height: 150 };
 const MIN_SCREENSHOT_SIZE = { width: 1, height: 1 };
@@ -251,9 +252,7 @@ function Inner() {
 			?.bounds;
 	};
 
-	const [initialAreaBounds, setInitialAreaBounds] = createSignal(
-		createInitialBounds(),
-	);
+	const [initialAreaBounds, setInitialAreaBounds] = createSignal<CropBounds | undefined>(CROP_ZERO);
 
 	createEffect(() => {
 		const target = options.captureTarget;
@@ -1069,13 +1068,13 @@ function Inner() {
 						if (raf) cancelAnimationFrame(raf);
 					});
 
-					const controlsStyle = createMemo(() => {
-						const bounds = crop();
+					const onCropperFrame = (bounds: CropBounds) => {
+                        if (!controlsEl) return;
 						const size = controlsSize;
-						if (!size?.width || !size?.height) return undefined;
+						if (!size?.width || !size?.height) return;
 
 						if (size.width === 0 || bounds.width === 0) {
-							return { transform: "translate(-1000px, -1000px)" }; // Hide off-screen initially
+							controlsEl.style.transform = "translate(-1000px, -1000px)"; // Hide off-screen initially
 						}
 
 						const centerX =
@@ -1111,10 +1110,8 @@ function Inner() {
 							),
 						);
 
-						return {
-							transform: `translate(${finalX}px, ${finalY}px)`,
-						};
-					});
+						controlsEl.style.transform = `translate(${finalX}px, ${finalY}px)`;
+					};
 
 					createEffect(() => {
 						if (isInteracting()) return;
@@ -1204,11 +1201,9 @@ function Inner() {
 								"opacity-0 pointer-events-none": !shouldShowOverlay(),
 							}}
 						>
-							<div
-								ref={controlsEl}
-								class="fixed z-50 transition-opacity"
-								style={controlsStyle()}
-							>
+                            <div ref={controlsEl} class="fixed z-50 transition-opacity"
+                                style={{ transform: "translate(-1000px, -1000px)" }}
+                            >
 								<div class="flex flex-col items-center">
 									<Show when={options.mode !== "screenshot"}>
 										<RecordingControls
@@ -1293,6 +1288,7 @@ function Inner() {
 								snapToRatioEnabled={snapToRatioEnabled()}
 								onContextMenu={(e) => showCropOptionsMenu(e)}
 								enableAnimation={!shouldShowSelectionHint()}
+								onAnimationFrame={onCropperFrame}
 							/>
 						</div>
 					);
