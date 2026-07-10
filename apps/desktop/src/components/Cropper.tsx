@@ -601,7 +601,7 @@ export function Cropper(
 			if (!initialized && width > 1 && height > 1) {
 				initialized = true;
 				init();
-                setIsReady(true);
+				setIsReady(true);
 			}
 		};
 
@@ -794,7 +794,7 @@ export function Cropper(
 			isAltMode: e.altKey,
 			activeHandle: { ...handle },
 			originalHandle: handle,
-        };
+		};
 
 		trackPointerSession(
 			target,
@@ -842,9 +842,9 @@ export function Cropper(
 		context: ResizeSessionState,
 	) {
 		const pointX = e.clientX - context.containerRect.left;
-        const pointY = e.clientY - context.containerRect.top;
+		const pointY = e.clientY - context.containerRect.top;
 
-        if (e.altKey !== context.isAltMode) {
+		if (e.altKey !== context.isAltMode) {
 			context.isAltMode = e.altKey;
 			context.startBounds = rawBounds();
 			if (context.isAltMode) {
@@ -933,7 +933,7 @@ export function Cropper(
 			nextBounds,
 			containerSize().x,
 			containerSize().y,
-        );
+		);
 
 		setRawBounds(finalBounds);
 		if (!isAnimating()) setDisplayRawBounds(finalBounds);
@@ -1158,9 +1158,9 @@ export function Cropper(
 					occBottomRef.style.width = `${width}px`;
 				}
 				if (plusRef) {
-				    const w = Math.round(b.x + b.width) - Math.round(b.x);
-				    const h = Math.round(b.y + b.height) - Math.round(b.y);
-				    plusRef.style.transform = `translate(${Math.round(w / 2) - 2}px,${Math.round(h / 2) - 2}px) translate(-50%,-50%)`;
+					const w = Math.round(b.x + b.width) - Math.round(b.x);
+					const h = Math.round(b.y + b.height) - Math.round(b.y);
+					plusRef.style.transform = `translate(${Math.round(w / 2) - 2}px,${Math.round(h / 2) - 2}px) translate(-50%,-50%)`;
 				}
 				props.onAnimationFrame?.({ x, y, width, height });
 			});

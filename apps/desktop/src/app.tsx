@@ -241,7 +241,7 @@ function prewarmFontCaches() {
 			ctx.fillText("Ag", 0, 24);
 			ctx.font = "16px system-ui";
 			ctx.fillText("😀", 0, 24);
-		} catch { }
+		} catch {}
 	};
 
 	if ("requestIdleCallback" in window) requestIdleCallback(warm);

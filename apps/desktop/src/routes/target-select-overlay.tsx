@@ -252,7 +252,9 @@ function Inner() {
 			?.bounds;
 	};
 
-	const [initialAreaBounds, setInitialAreaBounds] = createSignal<CropBounds | undefined>(CROP_ZERO);
+	const [initialAreaBounds, setInitialAreaBounds] = createSignal<
+		CropBounds | undefined
+	>(CROP_ZERO);
 
 	createEffect(() => {
 		const target = options.captureTarget;
@@ -1069,7 +1071,7 @@ function Inner() {
 					});
 
 					const onCropperFrame = (bounds: CropBounds) => {
-                        if (!controlsEl) return;
+						if (!controlsEl) return;
 						const size = controlsSize;
 						if (!size?.width || !size?.height) return;
 
@@ -1201,9 +1203,16 @@ function Inner() {
 								"opacity-0 pointer-events-none": !shouldShowOverlay(),
 							}}
 						>
-                            <div ref={controlsEl} class="fixed z-50 transition-opacity"
-                                style={{ transform: "translate(-1000px, -1000px)" }}
-                            >
+							<div
+								ref={controlsEl}
+								data-interacting={isInteracting()}
+								style={{ transform: "translate(-1000px, -1000px)" }}
+								class="fixed z-50 transition-[opacity,filter] duration-200 cubic-bezier(0.34, 1.56, 0.64, 1)"
+								classList={{
+									"opacity-0 blur-sm": isInteracting(),
+									"opacity-100 blur-none": !isInteracting(),
+								}}
+							>
 								<div class="flex flex-col items-center">
 									<Show when={options.mode !== "screenshot"}>
 										<RecordingControls
@@ -1790,7 +1799,7 @@ function RecordingControls(props: {
 	return (
 		<>
 			<div class="flex flex-col gap-2.5 items-stretch my-2.5 w-104 max-w-[90vw]">
-				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
+				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg">
 					<div class="flex gap-2.5 items-center">
 						<div
 							onClick={() => {
@@ -1967,7 +1976,7 @@ function RecordingControls(props: {
 					</div>
 				</div>
 				<Show when={(rawOptions.mode as string) !== "screenshot"}>
-					<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
+					<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg">
 						<div class="grid grid-cols-2 gap-2 w-full">
 							<CameraSelectBase
 								disabled={devices.isPending}
