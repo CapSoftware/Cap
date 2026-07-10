@@ -27,7 +27,8 @@ use tracing::{debug, error, info, instrument, warn};
 #[cfg(target_os = "macos")]
 use crate::{
     panel_manager::{
-        DefaultPanel, PanelManager, PanelState, PanelWindowType, is_window_handle_valid,
+        DefaultPanel, PanelManager, PanelState, PanelWindowType, TargetSelectOverlayPanel,
+        is_window_handle_valid,
     },
     platform::WebviewWindowExt,
 };
@@ -1325,7 +1326,6 @@ impl CapWindow {
                         format!("/target-select-overlay?displayId={display_id}&isHoveredDisplay={is_hovered_display}{target_mode_param}"),
                     )
                     .fullscreen(false)
-
                     .content_protected(should_protect)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
@@ -1430,7 +1430,7 @@ impl CapWindow {
                             #[allow(non_upper_case_globals)]
                             const kCGMaximumWindowLevelKey: i32 = 10;
 
-                            let panel = match DefaultPanel::from_window(&window) {
+                            let panel = match TargetSelectOverlayPanel::from_window(&window) {
                                 Ok(p) => p,
                                 Err(e) => {
                                     tracing::error!(

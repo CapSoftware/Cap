@@ -8,6 +8,11 @@ use tracing::{debug, info, trace, warn};
 
 tauri_panel! {
     panel!(DefaultPanel {})
+    panel!(TargetSelectOverlayPanel {
+        config: {
+            can_become_key_window: true,
+        }
+    })
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

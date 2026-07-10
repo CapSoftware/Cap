@@ -231,13 +231,29 @@ function Inner() {
 		enabled: params.displayId !== undefined && options.targetMode === "display",
 	}));
 
+	const [lastSelectedCropArea, setLastSelectedCropArea] = makePersisted(
+		createStore<{ screen: DisplayId; bounds: CropBounds }[]>([]),
+		{ name: "capture-area" },
+	);
+
+	console.log(`${JSON.stringify(lastSelectedCropArea)}`);
+
 	const [crop, setCrop] = createSignal<CropBounds>(CROP_ZERO);
+
 	type AreaTarget = Extract<ScreenCaptureTarget, { variant: "area" }>;
 	const [pendingAreaTarget, setPendingAreaTarget] =
 		createSignal<AreaTarget | null>(null);
-	const [initialAreaBounds, setInitialAreaBounds] = createSignal<
-		CropBounds | undefined
-	>(undefined);
+
+	const createInitialBounds = () => {
+		const target = options.captureTarget;
+		if (target.variant !== "area") return;
+		return lastSelectedCropArea.find((last) => last.screen === target.screen)
+			?.bounds;
+	};
+
+	const [initialAreaBounds, setInitialAreaBounds] = createSignal(
+		createInitialBounds(),
+	);
 
 	createEffect(() => {
 		const target = options.captureTarget;
@@ -290,6 +306,11 @@ function Inner() {
 				setPendingAreaTarget(null);
 				setInitialAreaBounds(undefined);
 			}
+
+			if (!prevMode && mode === "area") {
+				setInitialAreaBounds(createInitialBounds());
+			}
+
 			return mode;
 		},
 	);
@@ -1000,6 +1021,13 @@ function Inner() {
 									setAspect(null);
 									setPendingAreaTarget(null);
 									revertCamera();
+
+									const target = options.captureTarget;
+									if (target.variant === "area") {
+										setLastSelectedCropArea((values) =>
+											values.filter((v) => v.screen !== target.screen),
+										);
+									}
 								},
 							},
 							await PredefinedMenuItem.new({
@@ -1050,7 +1078,9 @@ function Inner() {
 							return { transform: "translate(-1000px, -1000px)" }; // Hide off-screen initially
 						}
 
-						const centerX = bounds.x + bounds.width / 2;
+						const centerX =
+							Math.round(bounds.x + bounds.width / 2 - size.width / 2) +
+							size.width / 2;
 						let finalY: number;
 
 						// Try below the crop
@@ -1071,11 +1101,13 @@ function Inner() {
 							}
 						}
 
-						const finalX = Math.max(
-							SIDE_MARGIN,
-							Math.min(
-								centerX - size.width / 2,
-								window.innerWidth - size.width - SIDE_MARGIN,
+						const finalX = Math.round(
+							Math.max(
+								SIDE_MARGIN,
+								Math.min(
+									centerX - size.width / 2,
+									window.innerWidth - size.width - SIDE_MARGIN,
+								),
 							),
 						);
 
@@ -1199,6 +1231,25 @@ function Inner() {
 											onRecordingStart={() => {
 												setOriginalCameraBounds(null);
 												dismissPickerForRecordingStart();
+
+												const target = options.captureTarget;
+												if (target.variant === "area") {
+													const existingIndex = lastSelectedCropArea?.findIndex(
+														(item) => item.screen === target.screen,
+													);
+
+													if (existingIndex >= 0) {
+														setLastSelectedCropArea(existingIndex, {
+															screen: target.screen,
+															bounds: crop(),
+														});
+													} else {
+														setLastSelectedCropArea([
+															...lastSelectedCropArea,
+															{ screen: target.screen, bounds: crop() },
+														]);
+													}
+												}
 											}}
 											onClose={() => {
 												setOptions({
@@ -1241,6 +1292,7 @@ function Inner() {
 								aspectRatio={aspect() ?? undefined}
 								snapToRatioEnabled={snapToRatioEnabled()}
 								onContextMenu={(e) => showCropOptionsMenu(e)}
+								enableAnimation={!shouldShowSelectionHint()}
 							/>
 						</div>
 					);

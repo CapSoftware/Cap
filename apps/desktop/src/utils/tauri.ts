@@ -508,7 +508,6 @@ requestScreenCapturePrewarm: RequestScreenCapturePrewarm,
 requestScrollToSettingsSection: RequestScrollToSettingsSection,
 requestSetTargetMode: RequestSetTargetMode,
 requestStartRecording: RequestStartRecording,
-setCaptureAreaPending: SetCaptureAreaPending,
 targetUnderCursor: TargetUnderCursor,
 updateDownloadProgress: UpdateDownloadProgress,
 updateReady: UpdateReady,
@@ -539,7 +538,6 @@ requestScreenCapturePrewarm: "request-screen-capture-prewarm",
 requestScrollToSettingsSection: "request-scroll-to-settings-section",
 requestSetTargetMode: "request-set-target-mode",
 requestStartRecording: "request-start-recording",
-setCaptureAreaPending: "set-capture-area-pending",
 targetUnderCursor: "target-under-cursor",
 updateDownloadProgress: "update-download-progress",
 updateReady: "update-ready",
@@ -644,7 +642,7 @@ export type CameraShape = "square" | "source"
 export type CameraWithFormats = { deviceId: string; displayName: string; modelId: string | null; formats: CameraFormatInfo[]; bestFormat: CameraFormatInfo | null }
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
-export type CapWindow = { Main: { init_target_mode: RecordingTargetMode | null } } | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: DisplayId } } | { TargetSelectOverlay: { display_id: DisplayId; target_mode: RecordingTargetMode | null } } | { CaptureArea: { screen_id: DisplayId } } | { Camera: { centered: boolean } } | { InProgressRecording: { countdown: number | null; capture_target?: ScreenCaptureTarget | null } } | "Upgrade" | "ModeSelect" | { ScreenshotEditor: { path: string } } | "Onboarding"
+export type CapWindow = { Main: { init_target_mode: RecordingTargetMode | null } } | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: DisplayId } } | { TargetSelectOverlay: { display_id: DisplayId; target_mode: RecordingTargetMode | null } } | { Camera: { centered: boolean } } | { InProgressRecording: { countdown: number | null; capture_target?: ScreenCaptureTarget | null } } | "Upgrade" | "ModeSelect" | { ScreenshotEditor: { path: string } } | "Onboarding"
 export type CaptionData = { segments: CaptionSegment[]; settings: CaptionSettings | null }
 export type CaptionSegment = { id: string; start: number; end: number; text: string; words?: CaptionWord[] }
 export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position: string; italic: boolean; fontWeight: number; outline: boolean; outlineColor: string; exportWithSubtitles: boolean; highlightColor: string; fadeDuration: number; lingerDuration: number; wordTransitionDuration: number; activeWordHighlight: boolean; manualPosition: XY<number> | null; preset: string; animation: string; highlightStyle: string; uppercase: boolean }
@@ -889,7 +887,6 @@ export type ScreenshotSharingState = { link: string; contentHash: string | null 
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }
 export type SerializedScreenshotEditorInstance = { framesSocketUrl: string; path: string; config: ProjectConfiguration | null; prettyName: string; imageWidth: number; imageHeight: number }
-export type SetCaptureAreaPending = boolean
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string; content_hash?: string | null }
 export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; cursor?: string | null }
