@@ -125,8 +125,8 @@ function moveBounds(
 ): CropBounds {
 	return {
 		...bounds,
-		x: x !== null ? Math.round(x) : bounds.x,
-		y: y !== null ? Math.round(y) : bounds.y,
+		x: x !== null ? x : bounds.x,
+		y: y !== null ? y : bounds.y,
 	};
 }
 
@@ -139,10 +139,10 @@ function resizeBounds(
 	const fromX = bounds.x + bounds.width * origin.x;
 	const fromY = bounds.y + bounds.height * origin.y;
 	return {
-		x: Math.round(fromX - newWidth * origin.x),
-		y: Math.round(fromY - newHeight * origin.y),
-		width: Math.round(newWidth),
-		height: Math.round(newHeight),
+		x: fromX - newWidth * origin.x,
+		y: fromY - newHeight * origin.y,
+		width: newWidth,
+		height: newHeight,
 	};
 }
 
@@ -247,6 +247,7 @@ export function Cropper(
 		useBackdropFilter?: boolean;
 		allowLightMode?: boolean;
 		enableAnimation?: boolean;
+		onAnimationFrame?: (bounds: CropBounds) => void;
 	}>,
 ) {
 	let containerRef: HTMLDivElement | undefined;
@@ -255,6 +256,7 @@ export function Cropper(
 	let occBottomRef: HTMLDivElement | undefined;
 	let occLeftRef: HTMLDivElement | undefined;
 	let occRightRef: HTMLDivElement | undefined;
+	let plusRef: HTMLDivElement | undefined;
 
 	const resolvedChildren = children(() => props.children);
 
@@ -494,8 +496,8 @@ export function Cropper(
 		const startBoundsReal = initialCrop ?? {
 			x: 0,
 			y: 0,
-			width: Math.round(target.x / 2),
-			height: Math.round(target.y / 2),
+			width: target.x / 2,
+			height: target.y / 2,
 		};
 
 		let bounds = boundsToRaw(startBoundsReal);
@@ -599,6 +601,7 @@ export function Cropper(
 			if (!initialized && width > 1 && height > 1) {
 				initialized = true;
 				init();
+                setIsReady(true);
 			}
 		};
 
@@ -607,13 +610,10 @@ export function Cropper(
 		);
 		updateContainerSize(containerRef.clientWidth, containerRef.clientHeight);
 
-		// setDisplayRawBounds(rawBounds());
-
 		function init() {
 			const bounds = computeInitialBounds();
 			setRawBoundsConstraining(bounds);
 			setDisplayRawBounds(bounds);
-			setIsReady(true);
 		}
 
 		if (props.ref) {
@@ -794,7 +794,7 @@ export function Cropper(
 			isAltMode: e.altKey,
 			activeHandle: { ...handle },
 			originalHandle: handle,
-		};
+        };
 
 		trackPointerSession(
 			target,
@@ -842,9 +842,9 @@ export function Cropper(
 		context: ResizeSessionState,
 	) {
 		const pointX = e.clientX - context.containerRect.left;
-		const pointY = e.clientY - context.containerRect.top;
+        const pointY = e.clientY - context.containerRect.top;
 
-		if (e.altKey !== context.isAltMode) {
+        if (e.altKey !== context.isAltMode) {
 			context.isAltMode = e.altKey;
 			context.startBounds = rawBounds();
 			if (context.isAltMode) {
@@ -884,7 +884,9 @@ export function Cropper(
 			context.originalHandle,
 		);
 		if (mouseState.hoveringHandle !== live) {
-			setMouseState("hoveringHandle", live);
+			// Always clone to avoid possibly mutating the state directly.
+			// Without cloning, the handles can become mutated and break the functionality.
+			setMouseState("hoveringHandle", { ...live });
 		}
 
 		const { min, max } = rawSizeConstraint();
@@ -931,7 +933,7 @@ export function Cropper(
 			nextBounds,
 			containerSize().x,
 			containerSize().y,
-		);
+        );
 
 		setRawBounds(finalBounds);
 		if (!isAnimating()) setDisplayRawBounds(finalBounds);
@@ -1126,6 +1128,7 @@ export function Cropper(
 		on<CropBounds, number>(displayRawBounds, (b, _prevIn, prevFrameId) => {
 			if (prevFrameId) cancelAnimationFrame(prevFrameId);
 			return requestAnimationFrame(() => {
+				if (!isReady()) return;
 				const x = Math.round(b.x);
 				const y = Math.round(b.y);
 				const right = Math.round(b.x + b.width);
@@ -1154,6 +1157,12 @@ export function Cropper(
 					occBottomRef.style.left = `${x}px`;
 					occBottomRef.style.width = `${width}px`;
 				}
+				if (plusRef) {
+				    const w = Math.round(b.x + b.width) - Math.round(b.x);
+				    const h = Math.round(b.y + b.height) - Math.round(b.y);
+				    plusRef.style.transform = `translate(${Math.round(w / 2) - 2}px,${Math.round(h / 2) - 2}px) translate(-50%,-50%)`;
+				}
+				props.onAnimationFrame?.({ x, y, width, height });
 			});
 		}),
 	);
@@ -1228,8 +1237,17 @@ export function Cropper(
 						onPointerDown={onRegionPointerDown}
 					/>
 
-					<Show when={altDown()}>
-						<div class="absolute opacity-70 pointer-events-none flex items-center justify-center size-full">
+					<Show when={altDown() && !boundsTooSmall()}>
+						<div
+							ref={(el) => {
+								plusRef = el;
+								const b = displayRawBounds();
+								const w = Math.round(b.x + b.width) - Math.round(b.x);
+								const h = Math.round(b.y + b.height) - Math.round(b.y);
+								el.style.transform = `translate(${Math.round(w / 2) - 1}px,${Math.round(h / 2) - 1}px) translate(-50%,-50%)`;
+							}}
+							class="absolute top-0 left-0 opacity-70 pointer-events-none"
+						>
 							<IconLucidePlus class="pointer-events-none size-6" />
 						</div>
 					</Show>
@@ -1256,7 +1274,7 @@ export function Cropper(
 							handle.isCorner ? (
 								<button
 									type="button"
-									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-hidden border border-blue-10"
+									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-hidden"
 									tabIndex={-1}
 									classList={{ "opacity-0": mouseState.drag === "overlay" }}
 									style={{
@@ -1498,10 +1516,10 @@ function computeAspectRatioResize(
 	finalBounds = slideBoundsIntoContainer(finalBounds, container.x, container.y);
 
 	return {
-		x: Math.round(finalBounds.x),
-		y: Math.round(finalBounds.y),
-		width: Math.round(Math.max(1, finalBounds.width)),
-		height: Math.round(Math.max(1, finalBounds.height)),
+		x: finalBounds.x,
+		y: finalBounds.y,
+		width: Math.max(1, finalBounds.width),
+		height: Math.max(1, finalBounds.height),
 	};
 }
 
@@ -1558,10 +1576,10 @@ function computeFreeResize(
 		}
 
 		bounds = {
-			x: Math.round(center.x - newW / 2),
-			y: Math.round(center.y - newH / 2),
-			width: Math.round(newW),
-			height: Math.round(newH),
+			x: center.x - newW / 2,
+			y: center.y - newH / 2,
+			width: newW,
+			height: newH,
 		};
 	} else {
 		const anchor = {
@@ -1630,10 +1648,10 @@ function computeFreeResize(
 		}
 
 		bounds = {
-			x: Math.round(newX),
-			y: Math.round(newY),
-			width: Math.round(newW),
-			height: Math.round(newH),
+			x: newX,
+			y: newY,
+			width: newW,
+			height: newH,
 		};
 	}
 	return { bounds, snappedRatio };
