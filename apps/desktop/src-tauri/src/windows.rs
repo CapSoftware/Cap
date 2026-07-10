@@ -1419,7 +1419,9 @@ impl CapWindow {
                         let panel_activation_guard = panel_activation_guard;
                         move || {
                             let _panel_activation_guard = panel_activation_guard;
-                            use objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
+                            use objc2_app_kit::{
+                                NSStatusWindowLevel, NSWindowCollectionBehavior, NSWindowStyleMask,
+                            };
                             use tauri_nspanel::Panel;
 
                             #[link(name = "CoreGraphics", kind = "framework")]
@@ -1443,13 +1445,11 @@ impl CapWindow {
                             };
 
                             panel.set_collection_behavior(
-                                NSWindowCollectionBehavior::FullScreenPrimary
+                                NSWindowCollectionBehavior::FullScreenAuxiliary
                                     | NSWindowCollectionBehavior::CanJoinAllSpaces,
                             );
 
-                            let max_level =
-                                unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
-                            panel.set_level(i64::from(max_level - 1));
+                            panel.set_level((NSStatusWindowLevel + 1) as i64);
                             panel.set_style_mask(NSWindowStyleMask::NonactivatingPanel);
 
                             panel.order_front_regardless();
