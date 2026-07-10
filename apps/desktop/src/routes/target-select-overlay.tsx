@@ -1029,6 +1029,7 @@ function Inner() {
 											values.filter((v) => v.screen !== target.screen),
 										);
 									}
+									setInitialAreaBounds(undefined);
 								},
 							},
 							await PredefinedMenuItem.new({
@@ -1205,12 +1206,12 @@ function Inner() {
 						>
 							<div
 								ref={controlsEl}
-								data-interacting={isInteracting()}
 								style={{ transform: "translate(-1000px, -1000px)" }}
 								class="fixed z-50 transition-[opacity,filter] duration-200 cubic-bezier(0.34, 1.56, 0.64, 1)"
 								classList={{
 									"opacity-0 blur-sm": isInteracting(),
 									"opacity-100 blur-none": !isInteracting(),
+									hidden: shouldShowSelectionHint(),
 								}}
 							>
 								<div class="flex flex-col items-center">
