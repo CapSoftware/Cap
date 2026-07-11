@@ -1020,7 +1020,7 @@ function Inner() {
 							}),
 							{
 								item: "Separator",
-							} as PredefinedMenuItemOptions,
+							} satisfies PredefinedMenuItemOptions,
 							{
 								text: "Reset saved selection",
 								action: () => {

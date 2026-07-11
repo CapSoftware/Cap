@@ -281,7 +281,7 @@ export function Cropper(
 		() => displayRawBounds().width <= 30 || displayRawBounds().height <= 30,
 	);
 
-	const [pointerState, setMouseState] = createStore<
+	const [pointerState, setPointerState] = createStore<
 		({ drag: null | "region" | "overlay" } | { drag: "handle" }) & {
 			hoveringHandle: HandleSide | null;
 			cursor: string | null;
@@ -664,7 +664,7 @@ export function Cropper(
 		disposeActivePointerSession();
 		stopAnimation();
 		e.stopPropagation();
-		setMouseState({ drag: "region" });
+		setPointerState({ drag: "region" });
 		let currentBounds = rawBounds();
 		const containerRect = containerRef.getBoundingClientRect();
 		const startOffset = {
@@ -688,7 +688,7 @@ export function Cropper(
 				if (!isAnimating()) setDisplayRawBounds(currentBounds);
 			},
 			() => {
-				setMouseState({ drag: null });
+				setPointerState({ drag: null });
 			},
 		);
 	}
@@ -793,7 +793,7 @@ export function Cropper(
 		e.stopPropagation();
 
 		stopAnimation();
-		setMouseState({ drag: "handle", cursor: handle.cursor });
+		setPointerState({ drag: "handle", cursor: handle.cursor });
 
 		const context: ResizeSessionState = {
 			containerRect: containerRef.getBoundingClientRect(),
@@ -808,7 +808,7 @@ export function Cropper(
 			e.pointerId,
 			(e) => handleResizePointerMove(e, context),
 			() => {
-				setMouseState({ drag: null });
+				setPointerState({ drag: null });
 			},
 		);
 	}
@@ -893,7 +893,7 @@ export function Cropper(
 		if (pointerState.hoveringHandle !== live) {
 			// Always clone to avoid possibly mutating the state directly.
 			// Without cloning, the handles can become mutated and break the functionality.
-			setMouseState("hoveringHandle", { ...live });
+			setPointerState("hoveringHandle", { ...live });
 		}
 
 		const { min, max } = rawSizeConstraint();
@@ -983,7 +983,7 @@ export function Cropper(
 		const SE_HANDLE_INDEX = 3; // use bottom-right as the temporary handle
 		const handle = HANDLES[SE_HANDLE_INDEX];
 
-		setMouseState({ drag: "overlay", cursor: "crosshair" });
+		setPointerState({ drag: "overlay", cursor: "crosshair" });
 
 		const containerRect = containerRef.getBoundingClientRect();
 		const startPoint = {
@@ -1011,7 +1011,7 @@ export function Cropper(
 			e.pointerId,
 			(e) => handleResizePointerMove(e, context),
 			() => {
-				setMouseState({ drag: null, cursor: null });
+				setPointerState({ drag: null, cursor: null });
 				const bounds = rawBounds();
 				if (bounds.width < 5 || bounds.height < 5) {
 					setRawBounds(initialBounds);
@@ -1299,7 +1299,7 @@ export function Cropper(
 											: { bottom: "-12px" }),
 									}}
 									onMouseEnter={() =>
-										setMouseState("hoveringHandle", { ...handle })
+										setPointerState("hoveringHandle", { ...handle })
 									}
 									onDblClick={[onHandleDoubleClick, handle]}
 									onPointerDown={[onHandlePointerDown, handle]}
@@ -1385,7 +1385,7 @@ export function Cropper(
 														}),
 									}}
 									onMouseEnter={() =>
-										setMouseState("hoveringHandle", { ...handle })
+										setPointerState("hoveringHandle", { ...handle })
 									}
 									onDblClick={[onHandleDoubleClick, handle]}
 									onPointerDown={[onHandlePointerDown, handle]}
