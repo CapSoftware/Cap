@@ -1,7 +1,7 @@
 import { Route, Router } from "@solidjs/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { message } from "@tauri-apps/plugin-dialog";
-import { lazy, onMount, Suspense } from "solid-js";
+import { createEffect, lazy, onMount, Suspense } from "solid-js";
 import { Toaster } from "solid-toast";
 
 import "@cap/ui-solid/main.css";
@@ -15,6 +15,7 @@ import SettingsLayout from "./routes/(window-chrome)/settings";
 import { initAnonymousUser } from "./utils/analytics";
 import { AutoRevealWindowOnReady } from "./utils/RevealWindow";
 import titlebar from "./utils/titlebar-state";
+import { usePrefersDarkMode } from "./utils/use-media-query";
 
 const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
 const SettingsGeneralPage = lazy(
@@ -109,11 +110,11 @@ export default function App() {
 }
 
 function Inner() {
-	const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
-	const apply = () =>
-		document.documentElement.classList.toggle("dark", prefersDark.matches);
-	apply();
-	createEventListener(prefersDark, "change", apply);
+	const prefersDark = usePrefersDarkMode();
+
+	createEffect(() =>
+		document.documentElement.classList.toggle("dark", prefersDark()),
+	);
 
 	onMount(() => {
 		initAnonymousUser();

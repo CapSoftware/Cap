@@ -78,6 +78,7 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
+import { usePrefersReducedMotion } from "~/utils/use-media-query";
 import { CameraSelectBase } from "./(window-chrome)/new-main/CameraSelect";
 import InfoPill from "./(window-chrome)/new-main/InfoPill";
 import { MicrophoneSelectBase } from "./(window-chrome)/new-main/MicrophoneSelect";
@@ -1209,6 +1210,8 @@ function Inner() {
 						}
 					});
 
+					const reducedMotion = usePrefersReducedMotion();
+
 					return (
 						<div
 							class="fixed w-screen h-screen"
@@ -1219,10 +1222,12 @@ function Inner() {
 							<div
 								ref={controlsEl}
 								style={{ transform: "translate(-1000px, -1000px)" }}
-								class="fixed z-50 transition-[opacity,filter] duration-200 cubic-bezier(0.34, 1.56, 0.64, 1)"
+								class="fixed z-50"
 								classList={{
 									"opacity-0 blur-sm": isInteracting(),
 									"opacity-100 blur-none": !isInteracting(),
+									"transition-[opacity,filter] duration-200 cubic-bezier(0.34, 1.56, 0.64, 1)":
+										!reducedMotion(),
 									hidden: shouldShowSelectionHint(),
 								}}
 							>
@@ -1813,7 +1818,7 @@ function RecordingControls(props: {
 	return (
 		<>
 			<div class="flex flex-col gap-2.5 items-stretch my-2.5 w-104 max-w-[90vw]">
-				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg">
+				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg contrast-more:bg-gray-1!">
 					<div class="flex gap-2.5 items-center">
 						<div
 							onClick={() => {
@@ -1990,7 +1995,7 @@ function RecordingControls(props: {
 					</div>
 				</div>
 				<Show when={(rawOptions.mode as string) !== "screenshot"}>
-					<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg">
+					<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg contrast-more:bg-gray-2!">
 						<div class="grid grid-cols-2 gap-2 w-full">
 							<CameraSelectBase
 								disabled={devices.isPending}
@@ -2031,22 +2036,20 @@ function RecordingControls(props: {
 					</div>
 				</Show>
 			</div>
-			<div class="flex justify-center items-center w-full">
-				<div
-					onClick={() => props.setToggleModeSelect?.(true)}
-					class="flex gap-1 justify-center items-center self-center mb-5 transition-opacity duration-200 w-fit hover:opacity-60"
-					classList={{
-						"bg-black/50 p-2 rounded-lg border border-white/10 hover:bg-black/50 hover:opacity-80":
-							props.showBackground,
-						"hover:opacity-60": !props.showBackground,
-					}}
-				>
-					<IconCapInfo class="opacity-70 will-change-transform size-3" />
-					<p class="text-sm text-white drop-shadow-md">
-						<span class="opacity-70">What is </span>
-						<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
-					</p>
-				</div>
+			<div
+				onClick={() => props.setToggleModeSelect?.(true)}
+				class="flex gap-1 justify-center items-center self-center mb-5 motion-safe:transition-opacity duration-200 w-fit hover:opacity-60 contrast-more:hover:opacity-100"
+				classList={{
+					"bg-black/50 p-2 rounded-lg border border-white/10 hover:bg-black/50 hover:opacity-80 contrast-more:border-white! contrast-more:bg-black!":
+						props.showBackground,
+					"hover:opacity-60": !props.showBackground,
+				}}
+			>
+				<IconCapInfo class="opacity-70 will-change-transform size-3 contrast-more:opacity-100" />
+				<p class="text-sm text-white drop-shadow-md contrast-more:drop-shadow-none">
+					<span class="opacity-70 contrast-more:opacity-100">What is </span>
+					<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
+				</p>
 			</div>
 		</>
 	);

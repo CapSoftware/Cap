@@ -22,8 +22,10 @@ import {
 import { createStore } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import { createKeyDownSignal } from "~/utils/events";
+import { MotionSafeTransition } from "~/utils/motion-safe";
 
 import { commands } from "~/utils/tauri";
+import { usePrefersReducedMotion } from "~/utils/use-media-query";
 export interface CropBounds {
 	x: number;
 	y: number;
@@ -433,8 +435,10 @@ export function Cropper(
 		};
 	}
 
+	const reducedMotion = usePrefersReducedMotion();
+
 	function animateToRawBounds(target: CropBounds, durationMs = 240) {
-		if (props.enableAnimation === false) {
+		if (props.enableAnimation === false || reducedMotion()) {
 			if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
 			animationFrameId = null;
 			setIsAnimating(false);
@@ -1189,7 +1193,7 @@ export function Cropper(
 			onContextMenu={props.onContextMenu}
 			onDblClick={() => fill()}
 		>
-			<Transition
+			<MotionSafeTransition
 				appear
 				enterActiveClass="transition-opacity duration-300 ease-in-out"
 				enterClass="opacity-0 blur-xs"
@@ -1210,7 +1214,7 @@ export function Cropper(
 						</div>
 					)}
 				</Show>
-			</Transition>
+			</MotionSafeTransition>
 
 			{resolvedChildren()}
 
@@ -1229,7 +1233,7 @@ export function Cropper(
 			<div class="size-full">
 				<div
 					ref={regionRef}
-					class="absolute top-0 left-0 z-30 border-2 border-white/50"
+					class="absolute top-0 left-0 z-30 border-2 border-white/50 contrast-more:border-white contrast-more:shadow-[0_0_0_1px_rgba(0,0,0,0.8)]"
 					style={{
 						cursor: cursorStyle() ?? "grab",
 						visibility:
@@ -1260,7 +1264,7 @@ export function Cropper(
 						</div>
 					</Show>
 
-					<Transition
+					<MotionSafeTransition
 						appear
 						enterActiveClass="transition-opacity duration-300"
 						enterClass="opacity-0"
@@ -1275,7 +1279,7 @@ export function Cropper(
 								<div class="top-0 h-full border-l border-r pointer-events-none w-[calc(100%/3)] left-[calc(100%/3)]" />
 							</div>
 						</Show>
-					</Transition>
+					</MotionSafeTransition>
 
 					<For each={HANDLES}>
 						{(handle) =>
@@ -1411,11 +1415,12 @@ export function Cropper(
 								aria-live="polite"
 							>
 								<div
-									class="h-[18px] w-11 rounded-full text-center text-xs text-gray-12 border border-white/70 dark:border-white/20 drop-shadow-md outline-1 outline-solid outline-black/80"
+									class="h-[18px] w-11 rounded-full text-center text-xs text-gray-12 border border-white/70 dark:border-white/20 contrast-more:bg-gray-1! drop-shadow-md outline-1 outline-solid outline-black/80"
 									classList={{
 										"backdrop-blur-xs bg-white/50 dark:bg-black/50 dark:backdrop-brightness-90 backdrop-brightness-200":
 											props.useBackdropFilter,
-										"bg-gray-3 opacity-80": !props.useBackdropFilter,
+										"bg-gray-3 not-contrast-more:opacity-80":
+											!props.useBackdropFilter,
 									}}
 								>
 									{bounds[0]}:{bounds[1]}

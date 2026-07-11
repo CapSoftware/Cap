@@ -1277,7 +1277,7 @@ function Dialogs() {
 														Crop area
 													</span>
 													<div
-														class="overflow-hidden relative rounded-xl border shadow-sm border-gray-3 bg-gray-3"
+														class="relative border shadow-sm border-gray-3 bg-gray-3"
 														style={{
 															width: `${boxSize().w}px`,
 															height: `${boxSize().h}px`,
@@ -1356,7 +1356,7 @@ function Dialogs() {
 														Preview
 													</span>
 													<div
-														class="flex overflow-hidden relative justify-center items-center rounded-xl border shadow-sm border-gray-3 bg-gray-3"
+														class="flex overflow-hidden relative justify-center items-center border shadow-sm border-gray-3 bg-gray-3"
 														style={{
 															width: `${boxSize().w}px`,
 															height: `${boxSize().h}px`,
