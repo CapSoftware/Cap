@@ -248,6 +248,7 @@ export function Cropper(
 		allowLightMode?: boolean;
 		enableAnimation?: boolean;
 		onAnimationFrame?: (bounds: CropBounds) => void;
+		hideSelection?: boolean;
 	}>,
 ) {
 	let containerRef: HTMLDivElement | undefined;
@@ -280,22 +281,23 @@ export function Cropper(
 		() => displayRawBounds().width <= 30 || displayRawBounds().height <= 30,
 	);
 
-	const [mouseState, setMouseState] = createStore<
-		(
-			| { drag: null | "region" | "overlay" }
-			| { drag: "handle"; cursor: string }
-		) & { hoveringHandle: HandleSide | null }
-	>({ drag: null, hoveringHandle: null });
+	const [pointerState, setMouseState] = createStore<
+		({ drag: null | "region" | "overlay" } | { drag: "handle" }) & {
+			hoveringHandle: HandleSide | null;
+			cursor: string | null;
+		}
+	>({ drag: null, hoveringHandle: null, cursor: null });
 
 	const resizing = () =>
-		mouseState.drag === "handle" || mouseState.drag === "overlay";
+		pointerState.drag === "handle" || pointerState.drag === "overlay";
+
 	const cursorStyle = () => {
-		if (mouseState.drag === "region" || mouseState.drag === "overlay")
-			return "grabbing";
-		if (mouseState.drag === "handle") return mouseState.cursor;
+		const drag = pointerState.drag;
+		if (drag === "region") return "grabbing";
+		if (drag === "handle" || drag === "overlay") return pointerState.cursor;
 	};
 
-	createEffect(() => props.onInteraction?.(mouseState.drag !== null));
+	createEffect(() => props.onInteraction?.(pointerState.drag !== null));
 
 	const [aspectState, setAspectState] = createStore({
 		snapped: null as Ratio | null,
@@ -416,8 +418,8 @@ export function Cropper(
 	}
 
 	const labelTransform = createMemo(() =>
-		resizing() && mouseState.hoveringHandle
-			? calculateLabelTransform(mouseState.hoveringHandle)
+		resizing() && pointerState.hoveringHandle
+			? calculateLabelTransform(pointerState.hoveringHandle)
 			: null,
 	);
 
@@ -433,7 +435,12 @@ export function Cropper(
 
 	function animateToRawBounds(target: CropBounds, durationMs = 240) {
 		if (props.enableAnimation === false) {
+			if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+			animationFrameId = null;
+			setIsAnimating(false);
 			setRawBounds(target);
+			setDisplayRawBounds(target);
+			return;
 		}
 
 		const start = displayRawBounds();
@@ -883,7 +890,7 @@ export function Cropper(
 			pointY,
 			context.originalHandle,
 		);
-		if (mouseState.hoveringHandle !== live) {
+		if (pointerState.hoveringHandle !== live) {
 			// Always clone to avoid possibly mutating the state directly.
 			// Without cloning, the handles can become mutated and break the functionality.
 			setMouseState("hoveringHandle", { ...live });
@@ -976,7 +983,7 @@ export function Cropper(
 		const SE_HANDLE_INDEX = 3; // use bottom-right as the temporary handle
 		const handle = HANDLES[SE_HANDLE_INDEX];
 
-		setMouseState({ drag: "overlay" });
+		setMouseState({ drag: "overlay", cursor: "crosshair" });
 
 		const containerRect = containerRef.getBoundingClientRect();
 		const startPoint = {
@@ -1004,7 +1011,7 @@ export function Cropper(
 			e.pointerId,
 			(e) => handleResizePointerMove(e, context),
 			() => {
-				setMouseState({ drag: null });
+				setMouseState({ drag: null, cursor: null });
 				const bounds = rawBounds();
 				if (bounds.width < 5 || bounds.height < 5) {
 					setRawBounds(initialBounds);
@@ -1076,7 +1083,7 @@ export function Cropper(
 	}
 
 	function handleKeyDown(e: KeyboardEvent) {
-		if (!KEY_MAPPINGS.has(e.key) || mouseState.drag !== null) return;
+		if (!KEY_MAPPINGS.has(e.key) || pointerState.drag !== null) return;
 
 		e.preventDefault();
 		e.stopPropagation();
@@ -1222,10 +1229,11 @@ export function Cropper(
 			<div class="size-full">
 				<div
 					ref={regionRef}
-					class="absolute top-0 left-0 z-30 border border-white/50"
+					class="absolute top-0 left-0 z-30 border-2 border-white/50"
 					style={{
 						cursor: cursorStyle() ?? "grab",
-						visibility: isReady() ? "visible" : "hidden",
+						visibility:
+							isReady() && !props.hideSelection ? "visible" : "hidden",
 					}}
 					onDblClick={(e) => e.stopPropagation()}
 				>
@@ -1261,7 +1269,7 @@ export function Cropper(
 						exitClass="opacity-100"
 						exitToClass="opacity-0"
 					>
-						<Show when={mouseState.drag !== null}>
+						<Show when={pointerState.drag !== null}>
 							<div class="pointer-events-none *:absolute *:border-white/40">
 								<div class="left-0 w-full border-t border-b pointer-events-none h-[calc(100%/3)] top-[calc(100%/3)]" />
 								<div class="top-0 h-full border-l border-r pointer-events-none w-[calc(100%/3)] left-[calc(100%/3)]" />
@@ -1276,12 +1284,12 @@ export function Cropper(
 									type="button"
 									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-hidden"
 									tabIndex={-1}
-									classList={{ "opacity-0": mouseState.drag === "overlay" }}
+									classList={{ "opacity-0": pointerState.drag === "overlay" }}
 									style={{
 										cursor:
-											mouseState.drag === "handle" &&
-											mouseState.hoveringHandle?.isCorner
-												? mouseState.hoveringHandle.cursor
+											pointerState.drag === "handle" &&
+											pointerState.hoveringHandle?.isCorner
+												? pointerState.hoveringHandle.cursor
 												: (cursorStyle() ?? handle.cursor),
 										...(handle.x === "l"
 											? { left: "-12px" }
@@ -1340,7 +1348,7 @@ export function Cropper(
 									tabIndex={-1}
 									style={{
 										visibility:
-											resizing() && mouseState.hoveringHandle?.isCorner
+											resizing() && pointerState.hoveringHandle?.isCorner
 												? "hidden"
 												: "visible",
 										cursor: cursorStyle() ?? handle.cursor,

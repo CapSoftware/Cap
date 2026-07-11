@@ -3,7 +3,7 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
 import { makePersisted } from "@solid-primitives/storage";
 import { useSearchParams } from "@solidjs/router";
-import { createMutation, useQuery } from "@tanstack/solid-query";
+import { useMutation, useQuery } from "@tanstack/solid-query";
 import {
 	LogicalPosition,
 	type PhysicalPosition,
@@ -14,7 +14,7 @@ import {
 	CheckMenuItem,
 	Menu,
 	MenuItem,
-	PredefinedMenuItem,
+	type PredefinedMenuItemOptions,
 } from "@tauri-apps/api/menu";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type as ostype } from "@tauri-apps/plugin-os";
@@ -85,7 +85,6 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const MIN_SIZE = { width: 150, height: 150 };
 const MIN_SCREENSHOT_SIZE = { width: 1, height: 1 };
@@ -237,8 +236,6 @@ function Inner() {
 		{ name: "capture-area" },
 	);
 
-	console.log(`${JSON.stringify(lastSelectedCropArea)}`);
-
 	const [crop, setCrop] = createSignal<CropBounds>(CROP_ZERO);
 
 	type AreaTarget = Extract<ScreenCaptureTarget, { variant: "area" }>;
@@ -254,7 +251,7 @@ function Inner() {
 
 	const [initialAreaBounds, setInitialAreaBounds] = createSignal<
 		CropBounds | undefined
-	>(CROP_ZERO);
+	>(undefined);
 
 	createEffect(() => {
 		const target = options.captureTarget;
@@ -1015,8 +1012,17 @@ function Inner() {
 						e.preventDefault();
 						e.stopPropagation();
 						const items = [
+							...createCropOptionsMenuItems({
+								aspect: aspect(),
+								snapToRatioEnabled: snapToRatioEnabled(),
+								onAspectSet: setAspect,
+								onSnapToRatioSet: setSnapToRatioEnabled,
+							}),
 							{
-								text: "Reset selection",
+								item: "Separator",
+							} as PredefinedMenuItemOptions,
+							{
+								text: "Reset saved selection",
 								action: () => {
 									cropperRef?.reset();
 									setAspect(null);
@@ -1032,15 +1038,21 @@ function Inner() {
 									setInitialAreaBounds(undefined);
 								},
 							},
-							await PredefinedMenuItem.new({
-								item: "Separator",
-							}),
-							...createCropOptionsMenuItems({
-								aspect: aspect(),
-								snapToRatioEnabled: snapToRatioEnabled(),
-								onAspectSet: setAspect,
-								onSnapToRatioSet: setSnapToRatioEnabled,
-							}),
+							{
+								text: "Reset all saved selections",
+								action: () => {
+									cropperRef?.reset();
+									setAspect(null);
+									setPendingAreaTarget(null);
+									revertCamera();
+
+									const target = options.captureTarget;
+									if (target.variant === "area") {
+										setLastSelectedCropArea([]);
+									}
+									setInitialAreaBounds(undefined);
+								},
+							},
 						];
 						const menu = await Menu.new({ items });
 						await menu.popup();
@@ -1298,6 +1310,7 @@ function Inner() {
 								snapToRatioEnabled={snapToRatioEnabled()}
 								onContextMenu={(e) => showCropOptionsMenu(e)}
 								enableAnimation={!shouldShowSelectionHint()}
+								hideSelection={shouldShowSelectionHint()}
 								onAnimationFrame={onCropperFrame}
 							/>
 						</div>
@@ -1673,7 +1686,7 @@ function RecordingControls(props: {
 	const cameras = createMemo(() => devices.data?.cameras ?? []);
 	const mics = createMemo(() => devices.data?.microphones ?? []);
 	const permissions = createMemo(() => devices.data?.permissions);
-	const setMicInput = createMutation(() => ({
+	const setMicInput = useMutation(() => ({
 		mutationFn: async (name: string | null) => {
 			const previous = rawOptions.micName ?? null;
 			if (previous !== name) setOptions("micName", name);
