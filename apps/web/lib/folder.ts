@@ -365,6 +365,23 @@ export const getChildFolders = Effect.fn(function* (
 
 	const user = yield* CurrentUser;
 	if (!user.activeOrganizationId) throw new Error("No active organization");
+	const videoCount =
+		root.variant === "space"
+			? sql<number>`(
+					SELECT COUNT(*) FROM ${spaceVideos}
+					WHERE ${spaceVideos.folderId} = ${folders.id}
+						AND ${spaceVideos.spaceId} = ${root.spaceId}
+				)`
+			: root.variant === "org"
+				? sql<number>`(
+						SELECT COUNT(*) FROM ${sharedVideos}
+						WHERE ${sharedVideos.folderId} = ${folders.id}
+							AND ${sharedVideos.organizationId} = ${root.organizationId}
+					)`
+				: sql<number>`(
+						SELECT COUNT(*) FROM ${videos}
+						WHERE ${videos.folderId} = ${folders.id}
+					)`;
 
 	const childFolders = yield* db.use((db) =>
 		db
@@ -375,9 +392,7 @@ export const getChildFolders = Effect.fn(function* (
 				public: folders.public,
 				parentId: folders.parentId,
 				organizationId: folders.organizationId,
-				videoCount: sql<number>`(
-        	SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
-	      )`,
+				videoCount,
 			})
 			.from(folders)
 			.where(
@@ -385,7 +400,9 @@ export const getChildFolders = Effect.fn(function* (
 					eq(folders.parentId, folderId),
 					root.variant === "space"
 						? eq(folders.spaceId, root.spaceId)
-						: undefined,
+						: root.variant === "org"
+							? eq(folders.spaceId, root.organizationId)
+							: isNull(folders.spaceId),
 				),
 			),
 	);

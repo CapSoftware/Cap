@@ -120,7 +120,9 @@ mod tests {
         let d = Duration::from_millis(500);
         let roundtrip = (base + d) - d;
 
-        let drift = roundtrip.duration_since(base).max(base.duration_since(roundtrip));
+        let drift = roundtrip
+            .duration_since(base)
+            .max(base.duration_since(roundtrip));
         assert!(
             drift < Duration::from_micros(10),
             "add/sub of the same duration must cancel out, drifted {drift:?}"
