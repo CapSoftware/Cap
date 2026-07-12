@@ -13,19 +13,62 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel},
+        mpsc::{RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel},
     },
     time::Duration,
 };
 use tracing::*;
 
-const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
+const DEFAULT_MUXER_BUFFER_SIZE: usize = 8;
 
 fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_MUXER_BUFFER_SIZE)
+}
+
+type ScreenFrameItem = Option<(screen_capture::ScreenFrame, Duration)>;
+
+struct LatestScreenFrame {
+    frame: screen_capture::ScreenFrame,
+    timestamp: Duration,
+    stale_frames: u64,
+    end_after_frame: bool,
+}
+
+fn recv_latest_screen_frame(
+    video_rx: &std::sync::mpsc::Receiver<ScreenFrameItem>,
+    timeout: Duration,
+) -> Result<Option<LatestScreenFrame>, RecvTimeoutError> {
+    let Some((mut frame, mut timestamp)) = video_rx.recv_timeout(timeout)? else {
+        return Ok(None);
+    };
+
+    let mut stale_frames = 0;
+    let mut end_after_frame = false;
+    loop {
+        match video_rx.try_recv() {
+            Ok(Some((next_frame, next_timestamp))) => {
+                frame = next_frame;
+                timestamp = next_timestamp;
+                stale_frames += 1;
+            }
+            Ok(None) => {
+                end_after_frame = true;
+                break;
+            }
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => return Err(RecvTimeoutError::Disconnected),
+        }
+    }
+
+    Ok(Some(LatestScreenFrame {
+        frame,
+        timestamp,
+        stale_frames,
+        end_after_frame,
+    }))
 }
 
 struct FrameDropTracker {
@@ -327,15 +370,28 @@ impl Muxer for WindowsMuxer {
                         let mut last_timestamp: Option<Duration> = None;
                         let mut frame_count: u64 = 0;
                         let mut frames_reused: u64 = 0;
+                        let mut pending_end_after_frame = false;
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
                             || {
+                                if pending_end_after_frame {
+                                    trace!("End of stream signal received after latest queued frame");
+                                    return Ok(None);
+                                }
+
                                 loop {
-                                    match video_rx.recv_timeout(frame_interval) {
-                                        Ok(Some((frame, timestamp))) => {
-                                            last_texture = Some(frame.texture().clone());
-                                            last_timestamp = Some(timestamp);
+                                    match recv_latest_screen_frame(&video_rx, frame_interval) {
+                                        Ok(Some(latest)) => {
+                                            if latest.stale_frames > 0 {
+                                                debug!(
+                                                    stale_frames = latest.stale_frames,
+                                                    "Dropped stale queued screen frames before encoding latest"
+                                                );
+                                            }
+                                            pending_end_after_frame = latest.end_after_frame;
+                                            last_texture = Some(latest.frame.texture().clone());
+                                            last_timestamp = Some(latest.timestamp);
                                         }
                                         Ok(None) => {
                                             trace!("End of stream signal received");
@@ -426,19 +482,31 @@ impl Muxer for WindowsMuxer {
                         let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
                         let mut first_timestamp: Option<Duration> = None;
                         let mut last_timestamp: Option<Duration> = None;
+                        let mut pending_end_after_frame = false;
 
                         loop {
-                            let (ffmpeg_frame, ts) = match video_rx.recv_timeout(frame_interval) {
-                                Ok(Some((frame, timestamp))) => {
-                                    last_timestamp = Some(timestamp);
-                                    match frame.as_ffmpeg() {
+                            if pending_end_after_frame {
+                                break;
+                            }
+
+                            let (ffmpeg_frame, ts) = match recv_latest_screen_frame(&video_rx, frame_interval) {
+                                Ok(Some(latest)) => {
+                                    if latest.stale_frames > 0 {
+                                        debug!(
+                                            stale_frames = latest.stale_frames,
+                                            "Dropped stale queued screen frames before encoding latest"
+                                        );
+                                    }
+                                    pending_end_after_frame = latest.end_after_frame;
+                                    last_timestamp = Some(latest.timestamp);
+                                    match latest.frame.as_ffmpeg() {
                                         Ok(f) => {
                                             last_ffmpeg_frame = Some(f.clone());
-                                            (Some(f), timestamp)
+                                            (Some(f), latest.timestamp)
                                         }
                                         Err(e) => {
                                             warn!("Failed to convert frame: {e:?}");
-                                            (last_ffmpeg_frame.clone(), timestamp)
+                                            (last_ffmpeg_frame.clone(), latest.timestamp)
                                         }
                                     }
                                 }

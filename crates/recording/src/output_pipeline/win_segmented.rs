@@ -8,7 +8,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{SyncSender, sync_channel},
+        mpsc::{RecvError, SyncSender, TryRecvError, sync_channel},
     },
     thread::JoinHandle,
     time::Duration,
@@ -53,6 +53,46 @@ struct SegmentState {
     video_tx: SyncSender<Option<(screen_capture::ScreenFrame, Duration)>>,
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
+}
+
+struct LatestScreenFrame {
+    frame: screen_capture::ScreenFrame,
+    timestamp: Duration,
+    stale_frames: u64,
+    end_after_frame: bool,
+}
+
+fn recv_latest_screen_frame(
+    video_rx: &std::sync::mpsc::Receiver<Option<(screen_capture::ScreenFrame, Duration)>>,
+) -> Result<Option<LatestScreenFrame>, RecvError> {
+    let Some((mut frame, mut timestamp)) = video_rx.recv()? else {
+        return Ok(None);
+    };
+
+    let mut stale_frames = 0;
+    let mut end_after_frame = false;
+    loop {
+        match video_rx.try_recv() {
+            Ok(Some((next_frame, next_timestamp))) => {
+                frame = next_frame;
+                timestamp = next_timestamp;
+                stale_frames += 1;
+            }
+            Ok(None) => {
+                end_after_frame = true;
+                break;
+            }
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => return Err(RecvError),
+        }
+    }
+
+    Ok(Some(LatestScreenFrame {
+        frame,
+        timestamp,
+        stale_frames,
+        end_after_frame,
+    }))
 }
 
 struct PauseTracker {
@@ -531,23 +571,36 @@ impl WindowsSegmentedMuxer {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder for segment");
                         let mut first_timestamp: Option<Duration> = None;
+                        let mut pending_end_after_frame = false;
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
                             || {
-                                let Ok(Some((frame, timestamp))) = video_rx.recv() else {
+                                if pending_end_after_frame {
+                                    return Ok(None);
+                                }
+
+                                let Ok(Some(latest)) = recv_latest_screen_frame(&video_rx) else {
                                     trace!("No more frames available for segment");
                                     return Ok(None);
                                 };
 
+                                if latest.stale_frames > 0 {
+                                    debug!(
+                                        stale_frames = latest.stale_frames,
+                                        "Dropped stale queued segment screen frames before encoding latest"
+                                    );
+                                }
+                                pending_end_after_frame = latest.end_after_frame;
+
                                 let relative = if let Some(first) = first_timestamp {
-                                    timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
+                                    latest.timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
                                 } else {
-                                    first_timestamp = Some(timestamp);
+                                    first_timestamp = Some(latest.timestamp);
                                     Duration::ZERO
                                 };
                                 let frame_time = duration_to_timespan(relative);
 
-                                Ok(Some((frame.texture().clone(), frame_time)))
+                                Ok(Some((latest.frame.texture().clone(), frame_time)))
                             },
                             |output_sample| {
                                 let mut output = match output_clone.lock() {
@@ -590,19 +643,29 @@ impl WindowsSegmentedMuxer {
                         }
                     }
                     either::Right(mut encoder) => {
-                        while let Ok(Some((frame, time))) = video_rx.recv() {
+                        while let Ok(Some(latest)) = recv_latest_screen_frame(&video_rx) {
+                            if latest.stale_frames > 0 {
+                                debug!(
+                                    stale_frames = latest.stale_frames,
+                                    "Dropped stale queued segment screen frames before encoding latest"
+                                );
+                            }
                             let Ok(mut output) = output_clone.lock() else {
                                 continue;
                             };
 
-                            frame
+                            latest
+                                .frame
                                 .as_ffmpeg()
                                 .context("frame as_ffmpeg")
                                 .and_then(|frame| {
                                     encoder
-                                        .queue_frame(frame, time, &mut output)
+                                        .queue_frame(frame, latest.timestamp, &mut output)
                                         .context("queue_frame")
                                 })?;
+                            if latest.end_after_frame {
+                                break;
+                            }
                         }
 
                         Ok(())
