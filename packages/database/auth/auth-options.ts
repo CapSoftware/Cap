@@ -132,16 +132,21 @@ export const authOptions = (): NextAuthOptions => {
 
 			return _providers;
 		},
-		cookies: {
-			sessionToken: {
-				name: `next-auth.session-token`,
-				options: {
-					httpOnly: true,
-					sameSite: "none",
-					path: "/",
-					secure: true,
+		get cookies() {
+			const isSecure =
+				serverEnv().NEXTAUTH_URL?.startsWith("https://") ??
+				process.env.NODE_ENV === "production";
+			return {
+				sessionToken: {
+					name: `next-auth.session-token`,
+					options: {
+						httpOnly: true,
+						sameSite: isSecure ? "none" : "lax",
+						path: "/",
+						secure: isSecure,
+					},
 				},
-			},
+			};
 		},
 		callbacks: {
 			async signIn({ user, email, credentials }) {

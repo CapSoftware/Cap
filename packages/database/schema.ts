@@ -166,7 +166,7 @@ export const sessions = mysqlTable(
 		id: nanoId("id").notNull().primaryKey(),
 		sessionToken: varchar("sessionToken", { length: 255 }).notNull(),
 		userId: nanoId("userId").notNull().$type<User.UserId>(),
-		expires: datetime("expires").notNull(),
+		expires: datetime("expires", { mode: "date" }).notNull(),
 		created_at: timestamp("created_at").notNull().defaultNow(),
 		updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
 	},
@@ -179,7 +179,7 @@ export const sessions = mysqlTable(
 export const verificationTokens = mysqlTable("verification_tokens", {
 	identifier: varchar("identifier", { length: 255 }).primaryKey().notNull(),
 	token: varchar("token", { length: 255 }).unique().notNull(),
-	expires: datetime("expires").notNull(),
+	expires: datetime("expires", { mode: "date" }).notNull(),
 	created_at: timestamp("created_at").notNull().defaultNow(),
 	updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
 });
