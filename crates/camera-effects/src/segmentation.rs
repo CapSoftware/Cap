@@ -94,20 +94,24 @@ fn create_session() -> anyhow::Result<Session> {
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn init_runtime() -> anyhow::Result<()> {
-    let path = std::env::var_os("ORT_DYLIB_PATH")
-        .map(PathBuf::from)
-        .or_else(|| {
-            onnx_runtime_candidates()
-                .into_iter()
-                .find(|path| path.exists())
-        })
-        .context("Failed to find ONNX Runtime library")?;
+    let path = onnx_runtime_library_path().context("Failed to find ONNX Runtime library")?;
 
     let _ = ort::init_from(&path)
         .with_context(|| format!("Failed to load ONNX Runtime from {}", path.display()))?
         .commit();
 
     Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub(crate) fn onnx_runtime_library_path() -> Option<PathBuf> {
+    std::env::var_os("ORT_DYLIB_PATH")
+        .map(PathBuf::from)
+        .or_else(|| {
+            onnx_runtime_candidates()
+                .into_iter()
+                .find(|path| path.exists())
+        })
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

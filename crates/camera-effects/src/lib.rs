@@ -8,6 +8,11 @@ use std::time::{Duration, Instant};
 use blur_pipeline::{BlurPassInputs, BlurPipeline, CompositePipeline};
 use segmentation::SegmentationModel;
 
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub fn onnx_runtime_library_path() -> Option<std::path::PathBuf> {
+    segmentation::onnx_runtime_library_path()
+}
+
 static BLUR_DISABLED: AtomicBool = AtomicBool::new(false);
 static BLUR_SESSION_OBSERVER: OnceLock<fn(bool)> = OnceLock::new();
 
