@@ -13,7 +13,10 @@ import titlebarState from "~/utils/titlebar-state";
 import { WindowControlButton as ControlButton } from "./WindowControlButton";
 
 export default function (
-	props: ComponentProps<"div"> & { maximizable?: boolean },
+	props: ComponentProps<"div"> & {
+		maximizable?: boolean;
+		minimizable?: boolean;
+	},
 ) {
 	const [local, otherProps] = splitProps(props, ["class"]);
 	const currentWindow = getCurrentWindow();
@@ -42,17 +45,21 @@ export default function (
 			)}
 			{...otherProps}
 		>
-			<ControlButton
-				disabled={!titlebarState.minimizable}
-				onClick={titlebarState.minimizable ? currentWindow.minimize : undefined}
-				class={cx(
-					"max-h-20 w-[46px] rounded-none bg-transparent",
-					"hover:bg-[#0000000D] dark:hover:bg-[#FFFFFF0D] active:bg-[#00000008] dark:active:bg-[#e9e9e908]",
-					"disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40",
-				)}
-			>
-				<icons.minimizeWin />
-			</ControlButton>
+			<Show when={props.minimizable !== false}>
+				<ControlButton
+					disabled={!titlebarState.minimizable}
+					onClick={
+						titlebarState.minimizable ? currentWindow.minimize : undefined
+					}
+					class={cx(
+						"max-h-20 w-[46px] rounded-none bg-transparent",
+						"hover:bg-[#0000000D] dark:hover:bg-[#FFFFFF0D] active:bg-[#00000008] dark:active:bg-[#e9e9e908]",
+						"disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40",
+					)}
+				>
+					<icons.minimizeWin />
+				</ControlButton>
+			</Show>
 			<Show
 				when={
 					titlebarState.maximizable ||

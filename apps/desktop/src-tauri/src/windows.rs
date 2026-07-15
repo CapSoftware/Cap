@@ -55,12 +55,6 @@ use cap_recording::{feeds, sources::screen_capture::ScreenCaptureTarget};
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 20.0);
 
-#[cfg(target_os = "macos")]
-const MAIN_PANEL_LEVEL: i32 = 100;
-
-#[cfg(target_os = "macos")]
-const TELEPROMPTER_PANEL_LEVEL: objc2_app_kit::NSWindowLevel = MAIN_PANEL_LEVEL as isize + 1;
-
 #[cfg(windows)]
 const WINDOWS_WEBVIEW2_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --disable-vulkan --use-angle=d3d11";
 
@@ -738,7 +732,6 @@ impl CapWindowId {
             | Self::RecordingControls
             | Self::TargetSelectOverlay { .. } => None,
             Self::Settings => Some(Some(LogicalPosition::new(20.0, 28.0))),
-            Self::Teleprompter => Some(Some(LogicalPosition::new(14.0, 14.0))),
             _ => Some(None),
         }
     }
@@ -1434,14 +1427,6 @@ impl CapWindow {
                                 NSStatusWindowLevel, NSWindowCollectionBehavior, NSWindowStyleMask,
                             };
                             use tauri_nspanel::Panel;
-
-                            #[link(name = "CoreGraphics", kind = "framework")]
-                            unsafe extern "C" {
-                                fn CGWindowLevelForKey(key: i32) -> i32;
-                            }
-
-                            #[allow(non_upper_case_globals)]
-                            const kCGMaximumWindowLevelKey: i32 = 10;
 
                             let panel = match TargetSelectOverlayPanel::from_window(&window) {
                                 Ok(p) => p,
@@ -2483,57 +2468,43 @@ pub fn update_window_rasterization_scale(_window: &WebviewWindow<Wry>, _scale_fa
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(_window))]
-pub fn set_teleprompter_window_level(_window: tauri::Window, _always_on_top: bool) {
+#[instrument(skip(window))]
+pub fn set_window_always_on_top(
+    window: tauri::WebviewWindow,
+    always_on_top: bool,
+    _macos_level: Option<i32>,
+) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = window.set_always_on_top(always_on_top);
+
     #[cfg(target_os = "macos")]
-    if _window.label() == CapWindowId::Teleprompter.to_string() {
-        let level = if _always_on_top {
-            TELEPROMPTER_PANEL_LEVEL
+    let _ = window.with_nswindow_on_main(move |_, nswindow| {
+        nswindow.setLevel(if always_on_top {
+            _macos_level
+                .map(|lvl| lvl as isize)
+                .unwrap_or(objc2_app_kit::NSFloatingWindowLevel)
         } else {
             objc2_app_kit::NSNormalWindowLevel
-        };
-        window.with_nswindow_on_main(|_, nswindow| {
-            nswindow.setLevel(level);
-        })?;
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    if _window.label() == CapWindowId::Teleprompter.to_string()
-        && let Err(error) = _window.set_always_on_top(_always_on_top)
-    {
-        warn!(?error, "Failed to update teleprompter window level");
-    }
+        });
+    });
 }
 
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(_window))]
-pub fn set_teleprompter_window_opacity(_window: tauri::Window, _opacity: f64) {
+pub fn set_window_opacity(_window: tauri::WebviewWindow, _opacity: f64) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    if _window.label() == CapWindowId::Teleprompter.to_string() {
-        crate::platform::set_window_opacity(_window, _opacity);
+    {
+        _window
+            .with_nswindow_on_main(move |_, nswindow| {
+                nswindow.setAlphaValue(_opacity);
+            })
+            .map_err(|e| e.to_string())
     }
-}
-
-#[cfg(target_os = "macos")]
-fn position_traffic_lights_impl(
-    window: &tauri::Window,
-    controls_inset: Option<LogicalPosition<f64>>,
-) {
-    use crate::platform::delegates::{UnsafeWindowHandle, position_window_controls};
-    let c_win = window.clone();
-    window
-        .run_on_main_thread(move || {
-            let ns_window = match c_win.ns_window() {
-                Ok(handle) => handle,
-                Err(_) => return,
-            };
-            position_window_controls(
-                UnsafeWindowHandle(ns_window),
-                &controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-            );
-        })
-        .ok();
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Unsupported platform".into())
+    }
 }
 
 // Capture exclusion (WDA_EXCLUDEFROMCAPTURE / NSWindowSharingType::None) also hides

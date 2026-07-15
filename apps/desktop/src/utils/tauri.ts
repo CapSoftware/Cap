@@ -299,11 +299,11 @@ async getDisplayFrameForCropping(fps: number) : Promise<number[]> {
 async getClipThumbnail(recordingSegment: number, time: number) : Promise<string> {
     return await TAURI_INVOKE("get_clip_thumbnail", { recordingSegment, time });
 },
-async setTeleprompterWindowLevel(alwaysOnTop: boolean) : Promise<void> {
-    await TAURI_INVOKE("set_teleprompter_window_level", { alwaysOnTop });
+async setWindowAlwaysOnTop(alwaysOnTop: boolean, macosLevel: number | null) : Promise<void> {
+    await TAURI_INVOKE("set_window_always_on_top", { alwaysOnTop, macosLevel });
 },
-async setTeleprompterWindowOpacity(opacity: number) : Promise<void> {
-    await TAURI_INVOKE("set_teleprompter_window_opacity", { opacity });
+async setWindowOpacity(opacity: number) : Promise<null> {
+    return await TAURI_INVOKE("set_window_opacity", { opacity });
 },
 async applyMacosLiquidGlassBackground(enabled: boolean, radius: number) : Promise<boolean> {
     return await TAURI_INVOKE("apply_macos_liquid_glass_background", { enabled, radius });

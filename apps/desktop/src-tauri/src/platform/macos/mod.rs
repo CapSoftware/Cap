@@ -4,6 +4,7 @@ mod sc_shareable_content;
 use objc2::{MainThreadMarker, msg_send, sel};
 use objc2_app_kit::NSWindow;
 pub use sc_shareable_content::*;
+use tauri::WebviewWindow;
 
 pub fn set_window_opacity(window: tauri::Window, opacity: f64) {
     let opacity = opacity.clamp(0.45, 1.0);
