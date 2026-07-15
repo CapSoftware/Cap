@@ -183,11 +183,14 @@ function resolveResourceUrl(
 	baseUrl: string,
 	query: string,
 ): string {
-	if (resource.startsWith("http://") || resource.startsWith("https://")) {
-		return withQuery(resource, query);
+	const resolved = new URL(resource, baseUrl);
+	if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
+		throw new Error(
+			`Unsupported media resource protocol: ${resolved.protocol}`,
+		);
 	}
 
-	return withQuery(new URL(resource, baseUrl).toString(), query);
+	return withQuery(resolved.toString(), query);
 }
 
 function getFetchSignal(timeoutMs: number, abortSignal?: AbortSignal) {
@@ -318,9 +321,20 @@ export async function materializeMpdManifest(
 	const baseUrl = new URL(".", parsedUrl).toString();
 	const query = parsedUrl.search;
 	const filePath = join(dirPath, `${randomUUID()}.mpd`);
+	const rewrittenElements = content.replace(
+		/<(BaseURL|Location)(\b[^>]*)>([\s\S]*?)<\/\1>/gi,
+		(_, tag: string, attributes: string, resource: string) => {
+			const resolved = resolveResourceUrl(
+				decodeXmlAttribute(resource.trim()),
+				baseUrl,
+				query,
+			);
+			return `<${tag}${attributes}>${escapeXmlAttribute(resolved)}</${tag}>`;
+		},
+	);
 
-	const rewritten = content.replace(
-		/(initialization|media)="([^"]+)"/g,
+	const rewritten = rewrittenElements.replace(
+		/(initialization|media|sourceURL|xlink:href|href)="([^"]+)"/gi,
 		(_, attribute: string, resource: string) => {
 			const resolved = resolveResourceUrl(resource, baseUrl, query);
 			return `${attribute}="${escapeXmlAttribute(resolved)}"`;
@@ -469,11 +483,11 @@ function getDashResourceBaseUrl(
 		"BaseURL",
 	);
 	const baseUrl = adaptationBaseUrl
-		? new URL(adaptationBaseUrl, manifestBaseUrl).toString()
+		? resolveResourceUrl(adaptationBaseUrl, manifestBaseUrl, "")
 		: manifestBaseUrl;
 
 	return representationBaseUrl
-		? new URL(representationBaseUrl, baseUrl).toString()
+		? resolveResourceUrl(representationBaseUrl, baseUrl, "")
 		: baseUrl;
 }
 

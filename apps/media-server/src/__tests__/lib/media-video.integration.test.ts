@@ -340,6 +340,7 @@ describe("processVideo integration tests", () => {
 						<Period>
 							<AdaptationSet mimeType="video/mp4">
 								<Representation id="v1" bandwidth="800000">
+									<BaseURL>media/</BaseURL>
 									<SegmentList>
 										<Initialization sourceURL="init.mp4"/>
 										<SegmentURL media="seg-1.m4s"/>
@@ -361,6 +362,9 @@ describe("processVideo integration tests", () => {
 
 			expect(path.endsWith(".mpd")).toBe(true);
 			expect(requests).toBe(2);
+			expect(content).toContain(
+				"https://cdn.example/video/media/?Policy=a&amp;Signature=b",
+			);
 			expect(content).toContain("seg-1.m4s?Policy=a&amp;Signature=b");
 		} finally {
 			globalThis.fetch = originalFetch;
@@ -386,6 +390,40 @@ describe("processVideo integration tests", () => {
 				),
 			).rejects.toThrow("Failed to fetch DASH manifest: 403 Forbidden");
 			expect(requests).toBe(1);
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(manifestDir, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects local file references in remote DASH manifests", async () => {
+		const originalFetch = globalThis.fetch;
+		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-local-file-"));
+
+		globalThis.fetch = (async () =>
+			new Response(
+				`<MPD>
+					<Period>
+						<AdaptationSet mimeType="video/mp4">
+							<Representation id="v1" bandwidth="800000">
+								<BaseURL>file:///etc/</BaseURL>
+								<SegmentList>
+									<Initialization sourceURL="passwd"/>
+								</SegmentList>
+							</Representation>
+						</AdaptationSet>
+					</Period>
+				</MPD>`,
+				{ status: 200, statusText: "OK" },
+			)) as unknown as typeof fetch;
+
+		try {
+			await expect(
+				materializeStreamingInput(
+					"https://cdn.example/video/manifest.mpd",
+					manifestDir,
+				),
+			).rejects.toThrow("Unsupported media resource protocol: file:");
 		} finally {
 			globalThis.fetch = originalFetch;
 			rmSync(manifestDir, { recursive: true, force: true });
@@ -463,6 +501,28 @@ describe("processVideo integration tests", () => {
 			expect(variant).toContain(
 				"https://cdn.example/video/segment-2.ts?Policy=a&Signature=b",
 			);
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(manifestDir, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects local file references in remote HLS playlists", async () => {
+		const originalFetch = globalThis.fetch;
+		const manifestDir = mkdtempSync(join(tmpdir(), "cap-hls-local-file-"));
+
+		globalThis.fetch = (async () =>
+			new Response(
+				["#EXTM3U", "#EXTINF:1.0,", "file:///etc/passwd"].join("\n"),
+			)) as unknown as typeof fetch;
+
+		try {
+			await expect(
+				materializeStreamingInput(
+					"https://cdn.example/video/manifest.m3u8",
+					manifestDir,
+				),
+			).rejects.toThrow("Unsupported media resource protocol: file:");
 		} finally {
 			globalThis.fetch = originalFetch;
 			rmSync(manifestDir, { recursive: true, force: true });
