@@ -12,5 +12,9 @@ describe("GET /health", () => {
 		expect(data.mediaEngine.available).toBe(true);
 		expect(typeof data.mediaEngine.version).toBe("string");
 		expect(data["ff" + "mpeg"]).toBeDefined();
+		expect(typeof data.system.containerMemoryUsageMB).toBe("number");
+		expect(typeof data.system.containerMemoryLimitMB).toBe("number");
+		expect(typeof data.system.memoryPressure).toBe("number");
+		expect(typeof data.system.processRssMB).toBe("number");
 	});
 });
