@@ -465,7 +465,6 @@ export default function Teleprompter() {
 							type="range"
 							min="45"
 							max="100"
-							step="5"
 							value={state().windowOpacityPercent}
 							onInput={(event) =>
 								setState((current) => ({

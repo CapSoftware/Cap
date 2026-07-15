@@ -751,6 +751,7 @@ impl CapWindowId {
             Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (580.0, 340.0),
             Self::Onboarding => (860.0, 690.0),
+            Self::Teleprompter => (420.0, 220.0),
             _ => return None,
         })
     }
@@ -758,7 +759,11 @@ impl CapWindowId {
     pub fn resizable(&self) -> bool {
         matches!(
             self,
-            Self::Debug | Self::Editor { .. } | Self::ScreenshotEditor { .. } | Self::Settings
+            Self::Debug
+                | Self::Editor { .. }
+                | Self::ScreenshotEditor { .. }
+                | Self::Settings
+                | Self::Teleprompter
         )
     }
 
@@ -807,6 +812,7 @@ pub enum CapWindow {
         path: PathBuf,
     },
     Onboarding,
+    Teleprompter,
 }
 
 impl CapWindow {
@@ -2251,6 +2257,22 @@ impl CapWindow {
 
                 window
             }
+            Self::Teleprompter => {
+                let mut builder = self
+                    .window_builder(app, "/teleprompter")
+                    .inner_size(560.0, 320.0)
+                    .visible_on_all_workspaces(true)
+                    .always_on_top(true)
+                    .decorations(false)
+                    .skip_taskbar(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    builder = builder.transparent(true).decorations(true);
+                }
+
+                builder.build()?
+            }
         };
 
         let id = self.id(app);
@@ -2397,6 +2419,7 @@ impl CapWindow {
                 let id = s.iter().find(|(p, _)| p == path).unwrap().1;
                 CapWindowId::ScreenshotEditor { id }
             }
+            CapWindow::Teleprompter => CapWindowId::Teleprompter,
         }
     }
 }

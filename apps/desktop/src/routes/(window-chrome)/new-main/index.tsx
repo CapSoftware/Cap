@@ -77,7 +77,6 @@ import {
 	type UpdateCheckResult,
 	type UploadProgress,
 } from "~/utils/tauri";
-import { openTeleprompter } from "~/utils/teleprompter";
 import IconCapLogoFull from "~icons/cap/logo-full";
 import IconCapLogoFullDark from "~icons/cap/logo-full-dark";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
@@ -2782,7 +2781,11 @@ function Page() {
 						<Tooltip content={<span>Teleprompter</span>}>
 							<button
 								type="button"
-								onClick={() => void openTeleprompter()}
+								onClick={() => {
+									commands.showWindow("Teleprompter").then(() => {
+										commands.refreshWindowContentProtection();
+									});
+								}}
 								class="flex justify-center items-center size-5 focus:outline-hidden"
 								aria-label="Open teleprompter"
 							>
