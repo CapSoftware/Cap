@@ -48,6 +48,12 @@ services:
     environment:
       PORT: 3456
       MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:-fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210}
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const response = await fetch('http://localhost:3456/health'); process.exit(response.ok ? 0 : 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     networks:
       - cap-network
 

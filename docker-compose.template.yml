@@ -60,6 +60,12 @@ services:
       MEDIA_SERVER_WEBHOOK_SECRET: fe337b52749070bb7b5d2c78cff9948439ea73cbc1869ba39d350e6c24db53b1
     ports:
       - "3456:3456"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const response = await fetch('http://localhost:3456/health'); process.exit(response.ok ? 0 : 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   # Local S3 Strorage
   minio:
