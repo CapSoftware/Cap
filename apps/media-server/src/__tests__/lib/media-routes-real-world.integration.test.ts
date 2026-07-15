@@ -227,6 +227,7 @@ beforeEach(() => {
 	uploadedArtifacts.clear();
 	transientFixtureFailures = 0;
 	permanentFixtureFailures = 0;
+	slowFixtureCancellations = 0;
 });
 
 afterAll(() => {
