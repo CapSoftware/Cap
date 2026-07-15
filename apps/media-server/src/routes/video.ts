@@ -1771,7 +1771,9 @@ async function downloadUrlToFileOnce(
 	if (failure !== undefined) {
 		const { rm } = await import("node:fs/promises");
 		await rm(destPath, { force: true }).catch(() => {});
-		throw failure;
+		throw failure instanceof Error
+			? failure
+			: new Error("Download failed while streaming response body");
 	}
 }
 
