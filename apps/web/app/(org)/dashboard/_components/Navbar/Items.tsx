@@ -77,34 +77,34 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 
 	const manageNavigation = [
 		{
-			name: "My Caps",
+			name: "我的录制",
 			href: `/dashboard/caps`,
 			extraText: userCapsCount,
 			icon: <CapIcon />,
 			subNav: [],
 		},
 		{
-			name: "Analytics",
+			name: "数据分析",
 			href: `/dashboard/analytics`,
 			matchChildren: true,
 			icon: <ChartLineIcon />,
 			subNav: [],
 		},
 		{
-			name: "Record a Cap",
+			name: "录制 Cap",
 			href: `/dashboard/caps/record`,
 			icon: <RecordIcon />,
 			subNav: [],
 		},
 		{
-			name: "Import Media",
+			name: "导入媒体",
 			href: `/dashboard/import`,
 			matchChildren: true,
 			icon: <ImportIcon />,
 			subNav: [],
 		},
 		{
-			name: "Organization Settings",
+			name: "组织设置",
 			href: `/dashboard/settings/organization`,
 			adminOnly: true,
 			matchChildren: true,
@@ -114,7 +114,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 		...(showDeveloperDashboard
 			? [
 					{
-						name: "Developers",
+						name: "开发者",
 						href: `/dashboard/developers`,
 						ownerOnly: true,
 						matchChildren: true,
@@ -193,7 +193,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 						<Tooltip
 							disable={open || sidebarCollapsed === false}
 							position="right"
-							content={activeOrg?.organization.name ?? "No organization found"}
+							content={activeOrg?.organization.name ?? "未找到组织"}
 						>
 							<PopoverTrigger suppressHydrationWarning asChild>
 								<motion.div
@@ -226,10 +226,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 											<div className="flex items-center">
 												<SignedImageUrl
 													image={activeOrg?.organization.iconUrl}
-													name={
-														activeOrg?.organization.name ??
-														"No organization found"
-													}
+													name={activeOrg?.organization.name ?? "未找到组织"}
 													letterClass={clsx(
 														sidebarCollapsed ? "text-sm" : "text-[13px]",
 													)}
@@ -243,8 +240,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 												<div className="flex justify-between items-center w-full">
 													{!sidebarCollapsed && (
 														<p className="text-sm truncate leading-0 text-gray-12">
-															{activeOrg?.organization.name ??
-																"No organization found"}
+															{activeOrg?.organization.name ?? "未找到组织"}
 														</p>
 													)}
 													{!sidebarCollapsed && (
@@ -278,7 +274,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 														<p className="w-full text-[11px] flex-1 duration-200 truncate leading-0 text-gray-11">
 															{isDomainSetupVerified
 																? activeOrg?.organization.customDomain
-																: "No custom domain set"}
+																: "尚未设置自定义域名"}
 														</p>
 													</Link>
 												)}
@@ -292,8 +288,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 										)}
 									>
 										<Command>
-											<CommandInput placeholder="Search organizations..." />
-											<CommandEmpty>No organizations found</CommandEmpty>
+											<CommandInput placeholder="搜索组织……" />
+											<CommandEmpty>未找到组织</CommandEmpty>
 											<CommandGroup>
 												{orgData?.map((organization) => {
 													const isSelected =
@@ -350,7 +346,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 														className="flex gap-1 items-center my-2 w-[90%] mx-auto text-sm"
 													>
 														<Plus className="w-3.5 h-auto" />
-														New organization
+														新建组织
 													</Button>
 												</DialogTrigger>
 											</CommandGroup>
@@ -364,7 +360,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				</div>
 				<nav
 					className="flex flex-col flex-1 w-full min-h-0"
-					aria-label="Sidebar"
+					aria-label="侧边栏"
 				>
 					<div
 						ref={scrollRef}
@@ -439,7 +435,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									href="/dashboard/refer"
 									className="text-sm underline text-gray-10 hover:text-gray-12"
 								>
-									Earn 40% Referral
+									推荐赚取 40% 佣金
 								</Link>
 							</div>
 						)}
@@ -452,11 +448,9 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			<DialogContent className="p-0 w-full max-w-md rounded-xl bg-gray-2">
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faBuilding} />}
-					description="A new organization to share caps with your team"
+					description="创建新组织，与团队成员共享录制内容"
 				>
-					<DialogTitle className="text-lg text-gray-12">
-						Create New Organization
-					</DialogTitle>
+					<DialogTitle className="text-lg text-gray-12">创建新组织</DialogTitle>
 				</DialogHeader>
 				<div className="p-5">
 					<NewOrganization
@@ -468,7 +462,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				</div>
 				<DialogFooter>
 					<Button variant="gray" size="sm" onClick={() => setDialogOpen(false)}>
-						Cancel
+						取消
 					</Button>
 					<Button
 						variant="dark"
@@ -478,7 +472,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 						onClick={() => formRef.current?.requestSubmit()}
 						type="submit"
 					>
-						{createLoading ? "Creating..." : "Create"}
+						{createLoading ? "正在创建……" : "创建"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

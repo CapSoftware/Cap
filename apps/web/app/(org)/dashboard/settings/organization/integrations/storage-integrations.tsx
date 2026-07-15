@@ -41,7 +41,7 @@ const s3ProviderOptions = [
 	{ value: "cloudflare", label: "Cloudflare R2" },
 	{ value: "supabase", label: "Supabase" },
 	{ value: "minio", label: "MinIO" },
-	{ value: "other", label: "Other S3-Compatible" },
+	{ value: "other", label: "其他 S3 兼容服务" },
 ];
 
 const proRequiredMessage =
@@ -61,7 +61,7 @@ function StatusBadge({
 		return (
 			<span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-md bg-green-500/10 text-green-600">
 				<span className="size-1.5 rounded-full bg-green-500" />
-				Active
+				已启用
 			</span>
 		);
 	}
@@ -70,14 +70,14 @@ function StatusBadge({
 		return (
 			<span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-md bg-blue-500/10 text-blue-600">
 				<span className="size-1.5 rounded-full bg-blue-500" />
-				Connected
+				已连接
 			</span>
 		);
 	}
 
 	return (
 		<span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-md bg-gray-3 text-gray-9">
-			Not configured
+			未配置
 		</span>
 	);
 }
@@ -100,7 +100,7 @@ export function OrganizationStorageIntegrations({
 	const [folderBrowserOpen, setFolderBrowserOpen] = useState(false);
 	const [folderBrowserParent, setFolderBrowserParent] = useState({
 		id: "root",
-		name: "My Drive",
+		name: "我的云端硬盘",
 	});
 	const [folderBrowserHistory, setFolderBrowserHistory] = useState<
 		Array<{ id: string; name: string }>
@@ -144,7 +144,7 @@ export function OrganizationStorageIntegrations({
 					return;
 				}
 
-				toast.error(error instanceof Error ? error.message : "Request failed");
+				toast.error(error instanceof Error ? error.message : "请求失败");
 			}
 		});
 	};
@@ -161,7 +161,7 @@ export function OrganizationStorageIntegrations({
 					bucketName: s3Config.bucketName,
 					region: s3Config.region,
 				}),
-			"S3 configuration saved",
+			"S3 配置已保存",
 		);
 
 	const testS3 = () =>
@@ -176,25 +176,25 @@ export function OrganizationStorageIntegrations({
 					bucketName: s3Config.bucketName,
 					region: s3Config.region,
 				}),
-			"S3 connection verified",
+			"S3 连接已验证",
 		);
 
 	const connectDrive = () =>
 		runMutation(async () => {
 			const { url } = await connectOrganizationGoogleDrive(organizationId);
 			window.location.href = url;
-		}, "Opening Google Drive authorization");
+		}, "正在打开 Google 云端硬盘授权");
 
 	const disconnectDrive = () =>
 		runMutation(
 			() => disconnectOrganizationGoogleDrive(organizationId),
-			"Google Drive disconnected",
+			"Google 云端硬盘已断开连接",
 		);
 
 	const setActiveProvider = (provider: "s3" | "googleDrive") =>
 		runMutation(
 			() => setOrganizationStorageProvider({ organizationId, provider }),
-			provider === "s3" ? "S3 enabled" : "Google Drive enabled",
+			provider === "s3" ? "S3 已启用" : "Google 云端硬盘已启用",
 		);
 
 	const loadFolderBrowser = async (
@@ -220,7 +220,7 @@ export function OrganizationStorageIntegrations({
 			}
 
 			toast.error(
-				error instanceof Error ? error.message : "Failed to load Drive folders",
+				error instanceof Error ? error.message : "加载云端硬盘文件夹失败",
 			);
 		} finally {
 			setFolderBrowserLoading(false);
@@ -229,7 +229,7 @@ export function OrganizationStorageIntegrations({
 
 	const openFolderBrowser = () => {
 		startTransition(async () => {
-			await loadFolderBrowser({ id: "root", name: "My Drive" }, []);
+			await loadFolderBrowser({ id: "root", name: "我的云端硬盘" }, []);
 		});
 	};
 
@@ -260,7 +260,7 @@ export function OrganizationStorageIntegrations({
 				driveName: folder.driveName,
 			});
 			setFolderBrowserOpen(false);
-		}, "Google Drive location updated");
+		}, "Google 云端硬盘位置已更新");
 
 	const selectCurrentDriveFolder = () =>
 		selectDriveFolder({
@@ -281,28 +281,28 @@ export function OrganizationStorageIntegrations({
 	const bothConfigured =
 		!!settings.s3?.configured && !!settings.googleDrive?.connected;
 	const hasDriveLocation = !!settings.googleDrive?.folderId;
-	const selectedDriveName = settings.googleDrive?.driveName ?? "My Drive";
+	const selectedDriveName = settings.googleDrive?.driveName ?? "我的云端硬盘";
 	const selectedFolderName = settings.googleDrive?.folderName ?? null;
 	const driveIsActive =
 		bothConfigured && settings.activeProvider === "googleDrive";
 	const folderBreadcrumb = selectedFolderName
 		? `${selectedDriveName} › ${selectedFolderName}`
 		: selectedDriveName;
-	const filePathPreview = `${selectedFolderName ?? selectedDriveName} / user-id / video-id`;
+	const filePathPreview = `${selectedFolderName ?? selectedDriveName} / 用户-ID / 视频-ID`;
 
 	return (
 		<div className="flex flex-col gap-4">
 			<div className="flex items-center gap-2 px-1">
 				<InfoIcon className="size-3.5 text-gray-9 shrink-0" />
 				<p className="text-[12px] text-gray-9">
-					Storage applies to all members of {settings.organization.name}. Admins
-					and owners can manage integrations.
+					存储设置适用于 {settings.organization.name}{" "}
+					的所有成员。管理员和所有者可以管理集成。
 				</p>
 			</div>
 
 			{bothConfigured && (
 				<div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-gray-3 bg-gray-2">
-					<p className="text-[12px] text-gray-11">Active provider</p>
+					<p className="text-[12px] text-gray-11">当前存储服务</p>
 					<div className="flex items-center rounded-md bg-gray-3 p-0.5 gap-0.5">
 						<button
 							type="button"
@@ -340,7 +340,7 @@ export function OrganizationStorageIntegrations({
 				>
 					<DatabaseIcon className="size-4 shrink-0 text-gray-10" />
 					<span className="flex-1 text-[13px] font-medium text-gray-12">
-						S3-Compatible Storage
+						S3 兼容存储
 					</span>
 					<StatusBadge
 						configured={!!settings.s3?.configured}
@@ -356,19 +356,19 @@ export function OrganizationStorageIntegrations({
 				{expandedIntegration === "s3" && (
 					<div className="border-t border-gray-3 px-3.5 py-4">
 						<p className="text-[12px] text-gray-10 mb-4">
-							Connect your own bucket for full control.{" "}
+							连接你自己的存储桶以获得完整控制权。{" "}
 							<a
 								href="https://cap.so/docs/s3-config"
 								target="_blank"
 								rel="noopener noreferrer"
 								className="underline text-gray-12 hover:text-gray-11"
 							>
-								Setup guide
+								设置指南
 							</a>
 						</p>
 						<div className="grid gap-3 md:grid-cols-2">
 							<div className="flex flex-col gap-1">
-								<Label className="text-[11px]">Provider</Label>
+								<Label className="text-[11px]">服务商</Label>
 								<Select
 									value={s3Config.provider}
 									onValueChange={(value) =>
@@ -377,20 +377,20 @@ export function OrganizationStorageIntegrations({
 											provider: value,
 										}))
 									}
-									placeholder="Select provider"
+									placeholder="选择服务商"
 									options={s3ProviderOptions}
 								/>
 							</div>
 							<div className="flex flex-col gap-1">
 								<Label htmlFor={accessKeyId} className="text-[11px]">
-									Access Key ID
+									访问密钥 ID
 								</Label>
 								<Input
 									id={accessKeyId}
 									type="password"
 									value={s3Config.accessKeyId}
 									placeholder={
-										settings.s3?.configured ? "Stored securely" : "PL31OADSQNK"
+										settings.s3?.configured ? "已安全存储" : "PL31OADSQNK"
 									}
 									autoComplete="off"
 									onChange={(event) =>
@@ -403,14 +403,14 @@ export function OrganizationStorageIntegrations({
 							</div>
 							<div className="flex flex-col gap-1">
 								<Label htmlFor={secretKeyId} className="text-[11px]">
-									Secret Access Key
+									秘密访问密钥
 								</Label>
 								<Input
 									id={secretKeyId}
 									type="password"
 									value={s3Config.secretAccessKey}
 									placeholder={
-										settings.s3?.configured ? "Stored securely" : "PL31OADSQNK"
+										settings.s3?.configured ? "已安全存储" : "PL31OADSQNK"
 									}
 									autoComplete="off"
 									onChange={(event) =>
@@ -423,7 +423,7 @@ export function OrganizationStorageIntegrations({
 							</div>
 							<div className="flex flex-col gap-1">
 								<Label htmlFor={endpointId} className="text-[11px]">
-									Endpoint
+									端点
 								</Label>
 								<Input
 									id={endpointId}
@@ -439,7 +439,7 @@ export function OrganizationStorageIntegrations({
 							</div>
 							<div className="flex flex-col gap-1">
 								<Label htmlFor={bucketId} className="text-[11px]">
-									Bucket Name
+									存储桶名称
 								</Label>
 								<Input
 									id={bucketId}
@@ -455,7 +455,7 @@ export function OrganizationStorageIntegrations({
 							</div>
 							<div className="flex flex-col gap-1">
 								<Label htmlFor={regionId} className="text-[11px]">
-									Region
+									区域
 								</Label>
 								<Input
 									id={regionId}
@@ -477,7 +477,7 @@ export function OrganizationStorageIntegrations({
 								onClick={saveS3}
 								disabled={isPending}
 							>
-								Save
+								保存
 							</Button>
 							<Button
 								type="button"
@@ -486,7 +486,7 @@ export function OrganizationStorageIntegrations({
 								onClick={testS3}
 								disabled={isPending}
 							>
-								Test
+								测试
 							</Button>
 							{settings.s3?.configured && (
 								<Button
@@ -496,12 +496,12 @@ export function OrganizationStorageIntegrations({
 									onClick={() =>
 										runMutation(
 											() => removeOrganizationS3Config(organizationId),
-											"S3 configuration removed",
+											"S3 配置已移除",
 										)
 									}
 									disabled={isPending}
 								>
-									Remove
+									移除
 								</Button>
 							)}
 						</div>
@@ -566,7 +566,7 @@ export function OrganizationStorageIntegrations({
 							<div className="flex flex-col gap-3">
 								{settings.googleDrive.email && (
 									<p className="text-[12px] text-gray-10">
-										Connected as{" "}
+										连接账户：{" "}
 										<span className="text-gray-12 font-medium">
 											{settings.googleDrive.email}
 										</span>
@@ -576,20 +576,20 @@ export function OrganizationStorageIntegrations({
 								<div className="flex flex-col gap-3 rounded-lg border border-gray-3 bg-gray-2 p-3">
 									<div className="flex items-center justify-between">
 										<p className="text-[12px] font-medium text-gray-12">
-											Storage destination
+											存储位置
 										</p>
 										{driveIsActive ? (
 											<span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-md bg-green-500/10 text-green-600">
 												<span className="size-1.5 rounded-full bg-green-500" />
-												Enabled
+												已启用
 											</span>
 										) : (
 											<span className="text-[11px] text-gray-9">
 												{hasDriveLocation
 													? bothConfigured
-														? "Not enabled"
-														: "Ready to enable"
-													: "Choose a folder to enable"}
+														? "未启用"
+														: "可启用"
+													: "选择文件夹后即可启用"}
 											</span>
 										)}
 									</div>
@@ -599,7 +599,7 @@ export function OrganizationStorageIntegrations({
 											<FolderOpenIcon className="size-4 text-gray-10" />
 										</div>
 										<div className="min-w-0 flex-1">
-											<p className="text-[10px] text-gray-9">Folder</p>
+											<p className="text-[10px] text-gray-9">文件夹</p>
 											<p className="truncate text-[12px] font-medium text-gray-12">
 												{folderBreadcrumb}
 											</p>
@@ -611,14 +611,14 @@ export function OrganizationStorageIntegrations({
 											onClick={openFolderBrowser}
 											disabled={isPending || folderBrowserLoading}
 										>
-											Change
+											更改
 										</Button>
 									</div>
 
 									{hasDriveLocation && (
 										<div className="flex items-center gap-2 rounded-md bg-gray-3 px-3 py-2 text-[11px] text-gray-10">
 											<VideoIcon className="size-3.5 shrink-0 text-gray-9" />
-											<span className="text-gray-9">Recordings saved as</span>
+											<span className="text-gray-9">录制保存路径</span>
 											<span className="min-w-0 truncate text-gray-12 font-medium">
 												{filePathPreview}
 											</span>
@@ -633,7 +633,7 @@ export function OrganizationStorageIntegrations({
 												onClick={() => setActiveProvider("googleDrive")}
 												disabled={!hasDriveLocation || isPending}
 											>
-												Enable
+												启用
 											</Button>
 										</div>
 									)}
@@ -644,7 +644,7 @@ export function OrganizationStorageIntegrations({
 										<div className="flex items-center justify-between gap-2">
 											<div className="min-w-0">
 												<p className="text-[10px] text-gray-9">
-													Browsing Google Drive
+													浏览 Google 云端硬盘
 												</p>
 												<p className="truncate text-[12px] font-medium text-gray-12">
 													{folderBrowserParent.name}
@@ -661,7 +661,7 @@ export function OrganizationStorageIntegrations({
 														folderBrowserLoading
 													}
 												>
-													Back
+													返回
 												</Button>
 												<Button
 													type="button"
@@ -669,14 +669,14 @@ export function OrganizationStorageIntegrations({
 													onClick={selectCurrentDriveFolder}
 													disabled={folderBrowserLoading || isPending}
 												>
-													Use this folder
+													使用此文件夹
 												</Button>
 											</div>
 										</div>
 										<div className="flex flex-col gap-1">
 											{folderBrowserLoading ? (
 												<div className="rounded-md bg-gray-2 px-3 py-2 text-[12px] text-gray-10">
-													Loading...
+													正在加载…
 												</div>
 											) : folderBrowserFolders.length > 0 ? (
 												folderBrowserFolders.map((folder) => (
@@ -695,7 +695,7 @@ export function OrganizationStorageIntegrations({
 															onClick={() => openChildFolder(folder)}
 															disabled={folderBrowserLoading}
 														>
-															Open
+															打开
 														</Button>
 														<Button
 															type="button"
@@ -703,13 +703,13 @@ export function OrganizationStorageIntegrations({
 															onClick={() => selectDriveFolder(folder)}
 															disabled={isPending}
 														>
-															Select
+															选择
 														</Button>
 													</div>
 												))
 											) : (
 												<div className="rounded-md bg-gray-2 px-3 py-2 text-[12px] text-gray-10">
-													No folders found
+													未找到文件夹
 												</div>
 											)}
 										</div>
@@ -725,12 +725,12 @@ export function OrganizationStorageIntegrations({
 											runMutation(
 												() =>
 													getOrganizationGoogleDrivePickerToken(organizationId),
-												"Google Drive connection verified",
+												"Google 云端硬盘连接已验证",
 											)
 										}
 										disabled={isPending}
 									>
-										Test
+										测试
 									</Button>
 									<Button
 										type="button"
@@ -739,15 +739,15 @@ export function OrganizationStorageIntegrations({
 										onClick={disconnectDrive}
 										disabled={isPending}
 									>
-										Disconnect
+										断开连接
 									</Button>
 								</div>
 							</div>
 						) : (
 							<div className="flex items-center justify-between gap-3">
 								<p className="text-[12px] text-gray-10">
-									Link your Google account to store uploads in a "Cap" folder in
-									your Drive. You can change the location after connecting.
+									关联 Google
+									账户，将上传内容存储在云端硬盘的“Cap”文件夹中。连接后可以更改存储位置。
 								</p>
 								<Button
 									type="button"
@@ -755,7 +755,7 @@ export function OrganizationStorageIntegrations({
 									onClick={connectDrive}
 									disabled={isPending}
 								>
-									Connect
+									连接
 								</Button>
 							</div>
 						)}

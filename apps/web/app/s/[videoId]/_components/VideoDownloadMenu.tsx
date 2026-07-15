@@ -21,7 +21,7 @@ export function VideoDownloadMenu({
 	hasEdits,
 	align = "end",
 	triggerClassName,
-	triggerLabel = "Video options",
+	triggerLabel = "视频选项",
 }: {
 	videoId: Video.VideoId;
 	hasEdits: boolean;
@@ -43,7 +43,7 @@ export function VideoDownloadMenu({
 
 			const { downloadUrl, filename } = result;
 			const response = await fetch(downloadUrl);
-			if (!response.ok) throw new Error("Failed to download video");
+			if (!response.ok) throw new Error("下载视频失败");
 			const blob = await response.blob();
 			const blobUrl = window.URL.createObjectURL(blob);
 			const link = document.createElement("a");
@@ -58,10 +58,10 @@ export function VideoDownloadMenu({
 
 		const promise = run();
 		toast.promise(promise, {
-			loading: "Preparing download...",
-			success: "Download started",
+			loading: "正在准备下载…",
+			success: "下载已开始",
 			error: (error) =>
-				error instanceof Error ? error.message : "Failed to download video",
+				error instanceof Error ? error.message : "下载视频失败",
 		});
 		promise.catch(() => undefined).finally(() => setIsDownloading(false));
 	};
@@ -91,18 +91,14 @@ export function VideoDownloadMenu({
 							onClick={() => handleDownload("current")}
 						>
 							<Download className="size-3.5 shrink-0" aria-hidden />
-							<span className="text-sm text-gray-12">
-								Download current video
-							</span>
+							<span className="text-sm text-gray-12">下载当前视频</span>
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							className="flex gap-2 items-center"
 							onClick={() => handleDownload("original")}
 						>
 							<Download className="size-3.5 shrink-0" aria-hidden />
-							<span className="text-sm text-gray-12">
-								Download original video
-							</span>
+							<span className="text-sm text-gray-12">下载原始视频</span>
 						</DropdownMenuItem>
 					</>
 				) : (
@@ -111,7 +107,7 @@ export function VideoDownloadMenu({
 						onClick={() => handleDownload("current")}
 					>
 						<Download className="size-3.5 shrink-0" aria-hidden />
-						<span className="text-sm text-gray-12">Download video</span>
+						<span className="text-sm text-gray-12">下载视频</span>
 					</DropdownMenuItem>
 				)}
 			</DropdownMenuContent>

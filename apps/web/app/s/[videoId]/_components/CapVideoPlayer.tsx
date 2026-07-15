@@ -63,11 +63,11 @@ function getProgressStatusText(
 ) {
 	switch (status) {
 		case "processing":
-			return "Processing";
+			return "正在处理";
 		case "generating_thumbnail":
-			return "Finishing up";
+			return "即将完成";
 		default:
-			return "Uploading";
+			return "正在上传";
 	}
 }
 
@@ -484,12 +484,12 @@ export function CapVideoPlayer({
 			});
 			toast.success(
 				result.status === "started"
-					? "Video processing restarted."
-					: "Video is still processing.",
+					? "已重新开始处理视频。"
+					: "视频仍在处理中。",
 			);
 		} catch (error) {
 			console.error("Failed to retry video processing", error);
-			toast.error("Could not retry video processing.");
+			toast.error("无法重试视频处理。");
 		} finally {
 			setIsRetryingProcessing(false);
 		}
@@ -556,13 +556,11 @@ export function CapVideoPlayer({
 	const showRawPlaybackBadge =
 		showPlaybackStatusBadge && resolvedSrc.data?.type === "raw";
 	const rawPlaybackBadgeLabel =
-		uploadProgressRaw?.status === "error"
-			? "Original upload"
-			: "Optimizing video";
+		uploadProgressRaw?.status === "error" ? "原始上传文件" : "正在优化视频";
 	const rawPlaybackBadgeDescription =
 		uploadProgressRaw?.status === "error"
-			? "The processed version is unavailable right now, so this page is playing the original uploaded file instead."
-			: "This page is temporarily playing the original uploaded file while Cap finishes processing the optimized version for smoother playback and broader compatibility.";
+			? "处理后的版本目前不可用，因此此页面正在播放原始上传文件。"
+			: "Cap 正在完成优化版本的处理，此页面暂时播放原始上传文件。优化后可获得更流畅的播放和更广泛的兼容性。";
 	const blockPlaybackControls =
 		((blockPlaybackDuringProcessing || !videoLoaded) && hasActiveProgress) ||
 		showUploadFailureOverlay;
@@ -592,7 +590,7 @@ export function CapVideoPlayer({
 							disabled={isRetryingProcessing}
 							className="px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-full transition-colors disabled:opacity-60 disabled:cursor-not-allowed hover:bg-blue-600"
 						>
-							{isRetryingProcessing ? "Retrying..." : "Retry Processing"}
+							{isRetryingProcessing ? "正在重试..." : "重试处理"}
 						</button>
 					)}
 				</div>
@@ -670,7 +668,7 @@ export function CapVideoPlayer({
 					{captionsSrc && (
 						<track
 							key={captionsSrc}
-							label="English"
+							label="英语"
 							kind="captions"
 							srcLang="en"
 							src={captionsSrc}
@@ -713,7 +711,7 @@ export function CapVideoPlayer({
 									className="w-4 h-4 transform -rotate-90"
 									viewBox="0 0 20 20"
 								>
-									<title>Progress</title>
+									<title>进度</title>
 									<circle
 										cx="10"
 										cy="10"

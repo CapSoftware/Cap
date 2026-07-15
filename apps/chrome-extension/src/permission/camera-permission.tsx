@@ -20,20 +20,20 @@ type Status = "idle" | "requesting" | "ready" | "error";
 
 const headlines: Record<Status, { title: string; lede: string }> = {
 	idle: {
-		title: "Camera & microphone access",
-		lede: "Allow access once so Cap can show your camera preview and record your voice.",
+		title: "摄像头和麦克风权限",
+		lede: "只需授权一次，Cap 即可显示摄像头预览并录制你的声音。",
 	},
 	requesting: {
-		title: "Waiting for Chrome",
-		lede: "Click Allow in the browser prompt up by the address bar.",
+		title: "正在等待 Chrome",
+		lede: "请在地址栏旁的浏览器提示中点击“允许”。",
 	},
 	ready: {
-		title: "You're all set",
-		lede: "Pick the camera Cap should use. It's remembered for every recording.",
+		title: "一切就绪",
+		lede: "选择 Cap 要使用的摄像头，后续录制会记住此设置。",
 	},
 	error: {
-		title: "Cap needs access",
-		lede: "Allow access once so Cap can show your camera preview and record your voice.",
+		title: "Cap 需要访问权限",
+		lede: "只需授权一次，Cap 即可显示摄像头预览并录制你的声音。",
 	},
 };
 
@@ -44,16 +44,16 @@ const stopStream = (stream: MediaStream) => {
 };
 
 const getCameraErrorMessage = (error: unknown) => {
-	if (!(error instanceof Error)) return "Camera unavailable";
+	if (!(error instanceof Error)) return "摄像头不可用";
 	if (
 		error.name === "NotAllowedError" ||
 		error.message.toLowerCase().includes("permission")
 	) {
-		return "Chrome did not grant camera access. Click Allow in the browser prompt.";
+		return "Chrome 未授予摄像头权限，请在浏览器提示中点击“允许”。";
 	}
-	if (error.name === "NotFoundError") return "No camera was found.";
-	if (error.name === "NotReadableError") return "Camera is already in use.";
-	return error.message || "Camera unavailable";
+	if (error.name === "NotFoundError") return "未找到摄像头。";
+	if (error.name === "NotReadableError") return "摄像头正在被其他应用使用。";
+	return error.message || "摄像头不可用";
 };
 
 const getPreferredDeviceId = (
@@ -141,7 +141,7 @@ function App() {
 		if (!settings) return;
 		if (!navigator.mediaDevices?.getUserMedia) {
 			setStatus("error");
-			setError("Camera access is not available in this browser.");
+			setError("此浏览器不支持摄像头访问。");
 			return;
 		}
 
@@ -235,7 +235,7 @@ function App() {
 				{status === "ready" && devices.length > 0 && (
 					<div className="card device-card">
 						<label className="field">
-							<span>Camera Cap should use</span>
+							<span>Cap 使用的摄像头</span>
 							<select
 								value={selectedDeviceId}
 								onChange={(event) =>
@@ -261,7 +261,7 @@ function App() {
 									d="M 4 13 L 9.5 18 L 20 6"
 								/>
 							</svg>
-							Camera preview is enabled.
+							摄像头预览已启用。
 						</p>
 					</div>
 				)}
@@ -278,10 +278,10 @@ function App() {
 						onClick={() => void requestAccess()}
 					>
 						{status === "requesting"
-							? "Waiting for Chrome…"
+							? "正在等待 Chrome…"
 							: status === "ready"
-								? "Re-check access"
-								: "Allow camera & microphone"}
+								? "重新检查权限"
+								: "允许摄像头和麦克风"}
 					</button>
 					{status === "ready" && (
 						<button
@@ -289,7 +289,7 @@ function App() {
 							className="cta ghost"
 							onClick={() => void requestAccess()}
 						>
-							Refresh list
+							刷新列表
 						</button>
 					)}
 				</div>
@@ -302,7 +302,7 @@ function App() {
 				</svg>
 			</main>
 			<p className="footnote">
-				Chrome remembers this. Cap only uses your camera while you record.
+				Chrome 会记住此设置。Cap 只会在录制时使用摄像头。
 			</p>
 		</>
 	);

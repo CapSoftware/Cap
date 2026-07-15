@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { RecordVideoPage } from "./RecordVideoPage";
 
 export const metadata: Metadata = {
-	title: "Record a Cap",
+	title: "录制 Cap",
 };
 
 export default function RecordVideoRoute() {

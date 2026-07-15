@@ -13,11 +13,11 @@ export const Filters: Array<FilterType> = [
 ];
 
 export const FilterLabels: Record<FilterType, string> = {
-	all: "All",
-	comment: "Comments",
-	reply: "Replies",
-	view: "Views",
-	reaction: "Reactions",
+	all: "全部",
+	comment: "评论",
+	reply: "回复",
+	view: "观看",
+	reaction: "回应",
 };
 
 export const matchNotificationFilter = (

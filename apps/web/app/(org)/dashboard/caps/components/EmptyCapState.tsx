@@ -27,10 +27,10 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
 				</div>
 				<div className="flex flex-col items-center px-5">
 					<p className="mb-1 text-xl font-semibold text-gray-12">
-						Hey{userName ? ` ${userName}` : ""}! Record your first Cap
+						你好{userName ? `，${userName}` : ""}！录制你的第一个 Cap
 					</p>
 					<p className="max-w-md text-gray-10 text-md">
-						Craft your narrative with Cap - get projects done quicker.
+						用 Cap 清晰表达，加快项目进度。
 					</p>
 				</div>
 				<div className="flex flex-wrap gap-3 justify-center items-center mt-4">
@@ -40,15 +40,15 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
 						variant="primary"
 					>
 						<FontAwesomeIcon className="size-3.5" icon={faDownload} />
-						Download Cap
+						下载 Cap
 					</Button>
-					<p className="text-sm text-gray-10">or</p>
+					<p className="text-sm text-gray-10">或</p>
 					<WebRecorderDialog />
-					<p className="text-sm text-gray-10">or</p>
+					<p className="text-sm text-gray-10">或</p>
 					<ChromeRecorderButton
 						className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium`}
 					/>
-					<p className="text-sm text-gray-10">or</p>
+					<p className="text-sm text-gray-10">或</p>
 					<UploadCapButton />
 				</div>
 			</div>

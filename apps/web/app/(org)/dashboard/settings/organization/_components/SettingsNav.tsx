@@ -9,17 +9,17 @@ import { usePathname } from "next/navigation";
 export function SettingsNav() {
 	const pathname = usePathname();
 	const tabs = [
-		{ label: "General", href: "/dashboard/settings/organization" },
+		{ label: "常规", href: "/dashboard/settings/organization" },
 		{
-			label: "Preferences",
+			label: "偏好设置",
 			href: "/dashboard/settings/organization/preferences",
 		},
 		{
-			label: "Integrations",
+			label: "集成",
 			href: "/dashboard/settings/organization/integrations",
 		},
 		{
-			label: buildEnv.NEXT_PUBLIC_IS_CAP ? "Billing & Members" : "Members",
+			label: buildEnv.NEXT_PUBLIC_IS_CAP ? "账单与成员" : "成员",
 			href: "/dashboard/settings/organization/billing",
 		},
 	] as const;

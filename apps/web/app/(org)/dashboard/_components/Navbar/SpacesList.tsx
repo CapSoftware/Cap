@@ -56,17 +56,17 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 		try {
 			const result = await deleteSpace(pendingDeleteSpace.id);
 			if (result.success) {
-				toast.success("Space deleted successfully");
+				toast.success("空间已删除");
 				router.refresh();
 				if (params.spaceId === pendingDeleteSpace.id) {
 					router.push("/dashboard");
 				}
 			} else {
-				toast.error(result.error || "Failed to delete space");
+				toast.error(result.error || "删除空间失败");
 			}
 		} catch (error) {
-			console.error("Error deleting space:", error);
-			toast.error("Failed to delete space");
+			console.error("删除空间时出错：", error);
+			toast.error("删除空间失败");
 		} finally {
 			setRemoving(false);
 			setConfirmOpen(false);
@@ -114,14 +114,14 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 
 			if (result.success) {
 				const space = spacesData.find((s) => s.id === spaceId);
-				toast.success(`Shared "${cap.name}" to ${space?.name || "space"}`);
+				toast.success(`已将“${cap.name}”分享到${space?.name || "空间"}`);
 				router.refresh();
 			} else {
-				toast.error(result.error || "Failed to share cap");
+				toast.error(result.error || "分享录制内容失败");
 			}
 		} catch (error) {
-			console.error("Error sharing cap:", error);
-			toast.error("Failed to share cap");
+			console.error("分享录制内容时出错：", error);
+			toast.error("分享录制内容失败");
 		}
 	};
 
@@ -142,9 +142,9 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 						sidebarCollapsed ? "hidden" : "flex",
 					)}
 				>
-					Spaces
+					空间
 				</h2>
-				<Tooltip position="right" content="Create space">
+				<Tooltip position="right" content="创建空间">
 					<Button
 						className={clsx(
 							"p-0 min-w-[unset] hover:bg-gray-3",
@@ -167,7 +167,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 			</div>
 
 			<Tooltip
-				content="Browse spaces"
+				content="浏览空间"
 				disable={sidebarCollapsed === false}
 				position="right"
 			>
@@ -200,7 +200,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 							sidebarCollapsed ? "hidden" : "ml-2.5",
 						)}
 					>
-						Browse spaces
+						浏览空间
 					</p>
 				</Link>
 			</Tooltip>
@@ -294,7 +294,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 													className={
 														"flex justify-center items-center ml-auto rounded-full opacity-0 transition-all group size-6 group-hover:opacity-100 hover:bg-gray-4"
 													}
-													aria-label={`Delete ${space.name} space`}
+													aria-label={`删除空间 ${space.name}`}
 												>
 													<FontAwesomeIcon
 														icon={faXmark}
@@ -322,14 +322,14 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 			<ConfirmationDialog
 				open={confirmOpen}
 				icon={<FontAwesomeIcon icon={faLayerGroup} />}
-				title="Delete space"
+				title="删除空间"
 				description={
 					pendingDeleteSpace
-						? `Are you sure you want to delete the space "${pendingDeleteSpace.name}"? This action cannot be undone.`
+						? `确定要删除空间“${pendingDeleteSpace.name}”吗？此操作无法撤销。`
 						: ""
 				}
-				confirmLabel={removing ? "Deleting..." : "Delete"}
-				cancelLabel="Cancel"
+				confirmLabel={removing ? "正在删除……" : "删除"}
+				cancelLabel="取消"
 				loading={removing}
 				onConfirm={confirmRemoveSpace}
 				onCancel={() => {
@@ -370,7 +370,9 @@ const SpaceToggleControl = ({
 				onClick={() => setShowAllSpaces(true)}
 				className="flex justify-between items-center p-2 w-full truncate rounded-xl transition-colors cursor-pointer text-gray-10 hover:text-gray-12 hover:bg-gray-3"
 			>
-				<span className="text-sm text-gray-10">+ {hiddenSpacesCount} more</span>
+				<span className="text-sm text-gray-10">
+					另外 {hiddenSpacesCount} 个
+				</span>
 				<ChevronDown size={16} className="ml-2" />
 			</button>
 		);
@@ -382,7 +384,7 @@ const SpaceToggleControl = ({
 				onClick={() => setShowAllSpaces(false)}
 				className="flex justify-between items-center p-2 w-full truncate rounded-xl transition-colors cursor-pointer text-gray-10 hover:text-gray-12 hover:bg-gray-3"
 			>
-				<span className="text-sm text-gray-10">Show less</span>
+				<span className="text-sm text-gray-10">收起</span>
 				<ChevronUp size={16} className="ml-2" />
 			</button>
 		);

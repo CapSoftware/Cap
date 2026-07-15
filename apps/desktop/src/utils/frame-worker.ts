@@ -986,7 +986,7 @@ function processFrameBytesSync(
 		releaseCallback?.();
 		return {
 			type: "error",
-			message: "Received frame too small to contain metadata",
+			message: "接收到的帧过小，无法包含元数据",
 		};
 	}
 
@@ -995,7 +995,7 @@ function processFrameBytesSync(
 		releaseCallback?.();
 		return {
 			type: "error",
-			message: "Failed to parse frame metadata",
+			message: "无法解析帧元数据",
 		};
 	}
 

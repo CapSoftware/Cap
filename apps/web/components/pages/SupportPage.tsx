@@ -21,51 +21,49 @@ type SupportChannel = {
 
 const supportChannels: SupportChannel[] = [
 	{
-		title: "Join our Discord",
+		title: "加入 Discord",
 		description:
-			"Chat with the Cap team and community in real time. The fastest way to get help, share feedback, and stay up to date.",
+			"与 Cap 团队和社区实时交流，这是获取帮助、分享反馈和了解最新动态的最快方式。",
 		icon: MessageCircle,
 		href: "https://discord.gg/y8gdQ3WRN3",
-		cta: "Open Discord",
+		cta: "打开 Discord",
 		isExternal: true,
 	},
 	{
-		title: "Email support",
-		description:
-			"Have a question, billing issue, or something you'd rather keep private? Send us an email and we'll get back to you.",
+		title: "邮件支持",
+		description: "遇到问题、账单事项或希望私下沟通？发送邮件，我们会尽快回复。",
 		icon: Mail,
 		href: "mailto:support@cap.so",
 		cta: "support@cap.so",
 	},
 	{
-		title: "Read the docs",
-		description:
-			"Guides, tutorials, and references covering recording, sharing, self-hosting, and everything in between.",
+		title: "阅读文档",
+		description: "查阅涵盖录制、分享、自行托管等内容的指南、教程和参考资料。",
 		icon: BookOpen,
 		href: "/docs",
-		cta: "Browse docs",
+		cta: "浏览文档",
 	},
 	{
-		title: "Report an issue",
+		title: "报告问题",
 		description:
-			"Found a bug or want to request a feature? Cap is open source, so you can open an issue directly on GitHub.",
+			"发现错误或希望提出功能建议？Cap 是开源项目，你可以直接在 GitHub 上创建议题。",
 		icon: Github,
 		href: "https://github.com/CapSoftware/Cap/issues",
-		cta: "Open an issue",
+		cta: "创建议题",
 		isExternal: true,
 	},
 ];
 
 const quickLinks = [
-	{ label: "FAQs", href: "/faq" },
-	{ label: "Self-hosting guide", href: "/self-hosting" },
+	{ label: "常见问题", href: "/faq" },
+	{ label: "自行托管指南", href: "/self-hosting" },
 	{
-		label: "System status",
+		label: "系统状态",
 		href: "https://cap.openstatus.dev/",
 		isExternal: true,
 	},
-	{ label: "Trust portal", href: "https://trust.cap.so", isExternal: true },
-	{ label: "Download Cap", href: "/download" },
+	{ label: "信任中心", href: "https://trust.cap.so", isExternal: true },
+	{ label: "下载 Cap", href: "/download" },
 ];
 
 export const SupportPage = () => {
@@ -75,14 +73,14 @@ export const SupportPage = () => {
 				<div className="mx-auto max-w-[760px] pt-16 pb-24 md:pt-24 md:pb-32">
 					<div className="mb-16 text-center md:mb-20">
 						<p className="mb-4 text-sm font-medium tracking-widest uppercase text-gray-9">
-							Support
+							支持
 						</p>
 						<h1 className="text-[2rem] leading-[2.5rem] md:text-[3.25rem] md:leading-[3.75rem] text-gray-12 mb-6">
-							How can we help?
+							需要什么帮助？
 						</h1>
 						<p className="mx-auto max-w-[560px] text-lg md:text-xl leading-relaxed text-gray-10">
-							Whether you're stuck, curious, or just want to say hi, here's how
-							to reach the Cap team and community.
+							无论你遇到困难、心存疑问，还是只想打个招呼，都可以通过以下方式联系
+							Cap 团队和社区。
 						</p>
 					</div>
 
@@ -116,7 +114,7 @@ export const SupportPage = () => {
 					<div className="mt-16 md:mt-20">
 						<div className="h-px bg-gray-4" />
 						<h2 className="mt-12 mb-5 text-2xl md:text-3xl text-gray-12">
-							More resources
+							更多资源
 						</h2>
 						<ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 							{quickLinks.map((link) => (

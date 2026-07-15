@@ -39,7 +39,7 @@ export const AdminMobileNav = () => {
 							<div className="flex justify-end items-center mb-6 w-full rounded-full">
 								<button
 									type="button"
-									aria-label="Close navigation menu"
+									aria-label="关闭导航菜单"
 									onClick={() => setSidebarOpen(false)}
 									className="flex justify-center items-center rounded-full"
 								>

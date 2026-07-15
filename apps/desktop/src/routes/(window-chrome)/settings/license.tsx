@@ -30,13 +30,13 @@ export default function Page() {
 						<div class="flex flex-col items-center p-6 mx-auto space-y-3 w-full max-w-md text-white rounded-3xl border bg-gray-2 border-gray-3">
 							<div class="flex flex-col gap-2 items-center">
 								<h3 class="text-2xl font-medium text-gray-12">
-									Cap Pro License
+									Cap Pro 许可证
 								</h3>
 							</div>
 							<p class="text-center text-gray-11">
-								Your account is upgraded to{" "}
-								<span class="font-semibold text-blue-500">Cap Pro</span> and
-								already includes a commercial license.
+								你的账户已升级为{" "}
+								<span class="font-semibold text-blue-500">Cap Pro</span>
+								，并已包含商业许可证。
 							</p>
 						</div>
 					</div>
@@ -47,13 +47,11 @@ export default function Page() {
 							<div class="space-y-6">
 								<div class="flex flex-col gap-2 items-center mb-4 text-center">
 									<span class="text-2xl text-green-400 fa fa-briefcase" />
-									<h3 class="text-2xl font-medium text-gray-12">
-										Commercial License
-									</h3>
+									<h3 class="text-2xl font-medium text-gray-12">商业许可证</h3>
 								</div>
 								<div>
 									<label class="block mb-2 text-sm text-gray-12">
-										License Key
+										许可证密钥
 									</label>
 									<pre class="overflow-x-auto p-3 font-mono text-xs rounded-lg border border-gray-4 text-gray-9 bg-gray-3">
 										{license().licenseKey}
@@ -62,7 +60,7 @@ export default function Page() {
 								<Show when={license().expiryDate}>
 									{(expiry) => (
 										<div class="space-y-1">
-											<label class="text-sm text-gray-12">Expires</label>
+											<label class="text-sm text-gray-12">到期时间</label>
 											<p class="text-gray-10">
 												{new Date(expiry()).toLocaleDateString()}
 											</p>
@@ -82,7 +80,7 @@ export default function Page() {
 											});
 										}}
 									>
-										Deactivate License
+										停用许可证
 									</Button>
 								</div>
 							</div>
@@ -141,9 +139,9 @@ function LicenseKeyActivate(props: {
 					return (
 						<div class="p-6 mx-auto w-full rounded-xl border text-gray-12 bg-gray-2 border-gray-3">
 							<div class="space-y-3">
-								<h3 class="mb-2 text-xl text-center">Have a license key?</h3>
+								<h3 class="mb-2 text-xl text-center">已有许可证密钥？</h3>
 								<Input
-									placeholder="License key"
+									placeholder="许可证密钥"
 									value={licenseKey()}
 									onInput={(e) => setLicenseKey(e.currentTarget.value)}
 									class="w-full bg-gray-3 border-gray-4"
@@ -158,9 +156,7 @@ function LicenseKeyActivate(props: {
 											activateLicenseKey.mutate({ licenseKey: licenseKey() })
 										}
 									>
-										{activateLicenseKey.isPending
-											? "Activating..."
-											: "Activate License"}
+										{activateLicenseKey.isPending ? "正在激活……" : "激活许可证"}
 									</Button>
 								</div>
 								<Show when={activateLicenseKey.isError}>
@@ -235,11 +231,9 @@ function CommercialLicensePurchase() {
 						<Commercial class="w-[200px]" />
 						<div class="space-y-1 text-center">
 							<h3 class="text-2xl font-medium tracking-tight leading-5">
-								Commercial License
+								商业许可证
 							</h3>
-							<p class="mt-2 text-sm text-(--text-tertiary)">
-								For commercial use
-							</p>
+							<p class="mt-2 text-sm text-(--text-tertiary)">适用于商业用途</p>
 						</div>
 						<div class="flex flex-col justify-center items-center mt-5">
 							<h3 class="text-4xl leading-6">
@@ -247,7 +241,7 @@ function CommercialLicensePurchase() {
 								<span class="text-gray-11 text-[16px]">.00 /</span>
 							</h3>
 							<p class="text-[16px] font-medium text-gray-11">
-								{isCommercialAnnual() ? "billed annually" : "one-time payment"}
+								{isCommercialAnnual() ? "按年计费" : "一次性付款"}
 							</p>
 						</div>
 						<div
@@ -255,7 +249,7 @@ function CommercialLicensePurchase() {
 							class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 w-fit bg-gray-5 hover:border-gray-400"
 						>
 							<p class="text-xs text-gray-12">
-								Switch to {isCommercialAnnual() ? "lifetime" : "yearly"}:{" "}
+								切换为{isCommercialAnnual() ? "永久版" : "年付版"}：{" "}
 								<span class="font-medium">
 									{isCommercialAnnual() ? "$58" : "$29"}
 								</span>
@@ -268,9 +262,7 @@ function CommercialLicensePurchase() {
 							class="w-full rounded-full! mt-10 h-[48px]! text-lg font-medium"
 							size="lg"
 						>
-							{openCommercialCheckout.isPending
-								? "Loading..."
-								: "Purchase License"}
+							{openCommercialCheckout.isPending ? "正在加载……" : "购买许可证"}
 						</Button>
 					</div>
 
@@ -278,10 +270,10 @@ function CommercialLicensePurchase() {
 					<div class="flex flex-col gap-4 justify-center items-center p-5 rounded-t-none rounded-b-xl border border-t-0 md:border-t md:border-l-0 md:rounded-bl-none md:rounded-tr-xl md:rounded-br-xl md:w-1/2 border-gray-3">
 						<ul class="flex flex-col gap-2 list-none">
 							{[
-								"Commercial Use of Cap Recorder + Editor",
-								"Community Support",
-								"Local-only features",
-								"Perpetual license option",
+								"Cap 录制器与编辑器的商业使用权",
+								"社区支持",
+								"仅本地运行的功能",
+								"永久许可证选项",
 							].map((feature) => (
 								<li class="flex justify-start items-center">
 									<div class="flex justify-center items-center p-0 m-0 w-6 h-6">

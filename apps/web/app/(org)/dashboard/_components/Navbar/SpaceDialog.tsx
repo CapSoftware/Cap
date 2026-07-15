@@ -71,12 +71,12 @@ const SpaceDialog = ({
 					icon={<FontAwesomeIcon icon={faLayerGroup} />}
 					description={
 						edit
-							? "Manage details, sharing and viewer permissions."
-							: "Set up a space for your team to collaborate."
+							? "管理详细信息、分享方式和观看者权限。"
+							: "创建一个供团队协作的空间。"
 					}
 				>
 					<DialogTitle className="text-lg text-gray-12">
-						{edit ? "Edit Space" : "Create New Space"}
+						{edit ? "编辑空间" : "创建新空间"}
 					</DialogTitle>
 				</DialogHeader>
 				<div className="px-6 py-5 max-h-[70vh] overflow-y-auto">
@@ -91,7 +91,7 @@ const SpaceDialog = ({
 				</div>
 				<DialogFooter>
 					<Button variant="gray" size="sm" onClick={onClose}>
-						Cancel
+						取消
 					</Button>
 					<Button
 						variant="dark"
@@ -102,11 +102,11 @@ const SpaceDialog = ({
 					>
 						{isSubmitting
 							? edit
-								? "Saving..."
-								: "Creating..."
+								? "正在保存……"
+								: "正在创建……"
 							: edit
-								? "Save"
-								: "Create"}
+								? "保存"
+								: "创建"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -134,8 +134,8 @@ export interface NewSpaceFormProps {
 const formSchema = z.object({
 	name: z
 		.string()
-		.min(1, "Space name is required")
-		.max(25, "Space name must be at most 25 characters"),
+		.min(1, "请输入空间名称")
+		.max(25, "空间名称最多可包含 25 个字符"),
 	members: z.array(z.string()).optional(),
 });
 
@@ -155,36 +155,36 @@ const settingOptions: {
 	pro?: boolean;
 }[] = [
 	{
-		label: "Enable comments",
+		label: "启用评论",
 		value: "disableComments",
-		description: "Allow viewers to comment on caps in this space",
+		description: "允许观看者评论此空间中的录制内容",
 	},
 	{
-		label: "Enable summary",
+		label: "启用摘要",
 		value: "disableSummary",
-		description: "Show AI-generated summary for caps in this space",
+		description: "显示此空间中录制内容的 AI 摘要",
 		pro: true,
 	},
 	{
-		label: "Enable captions",
+		label: "启用字幕",
 		value: "disableCaptions",
-		description: "Allow viewers to use captions for caps in this space",
+		description: "允许观看者使用此空间中录制内容的字幕",
 	},
 	{
-		label: "Enable chapters",
+		label: "启用章节",
 		value: "disableChapters",
-		description: "Show AI-generated chapters for caps in this space",
+		description: "显示此空间中录制内容的 AI 章节",
 		pro: true,
 	},
 	{
-		label: "Enable reactions",
+		label: "启用回应",
 		value: "disableReactions",
-		description: "Allow viewers to react to caps in this space",
+		description: "允许观看者回应此空间中的录制内容",
 	},
 	{
-		label: "Enable transcript",
+		label: "启用文字稿",
 		value: "disableTranscript",
-		description: "Enabling this also allows summary and chapters",
+		description: "启用后也会允许显示摘要和章节",
 		pro: true,
 	},
 ];
@@ -267,12 +267,12 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 		if (file) {
 			// Validate file size (1MB = 1024 * 1024 bytes)
 			if (file.size > 1024 * 1024) {
-				toast.error("File size must be less than 1MB");
+				toast.error("文件大小必须小于 1 MB");
 				return;
 			}
 			// Validate file type
 			if (!file.type.startsWith("image/")) {
-				toast.error("File must be an image");
+				toast.error("文件必须是图片");
 				return;
 			}
 		}
@@ -321,7 +321,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 								!space.hasPassword &&
 								!passwordValue.trim()
 							) {
-								throw new Error("Space password is required");
+								throw new Error("请输入空间密码");
 							}
 							formData.append("id", space.id);
 							const passwordAction = !passwordEnabled
@@ -338,19 +338,19 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 							}
 							const result = await updateSpace(formData);
 							if (!result.success) {
-								throw new Error(result.error || "Failed to update space");
+								throw new Error(result.error || "更新空间失败");
 							}
-							toast.success("Space updated successfully");
+							toast.success("空间已更新");
 							router.refresh();
 						} else {
 							if (passwordEnabled && !passwordValue.trim()) {
-								throw new Error("Space password is required");
+								throw new Error("请输入空间密码");
 							}
 							const result = await createSpace(formData);
 							if (!result.success) {
-								throw new Error(result.error || "Failed to create space");
+								throw new Error(result.error || "创建空间失败");
 							}
-							toast.success("Space created successfully");
+							toast.success("空间已创建");
 							router.refresh();
 						}
 
@@ -366,12 +366,9 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 							error instanceof Error
 								? error.message
 								: edit
-									? "Failed to update space"
-									: "Failed to create space";
-						toast.error(
-							message ||
-								(edit ? "Failed to update space" : "Failed to create space"),
-						);
+									? "更新空间失败"
+									: "创建空间失败";
+						toast.error(message || (edit ? "更新空间失败" : "创建空间失败"));
 					} finally {
 						setIsUploading(false);
 						props.setCreateLoading?.(false);
@@ -382,8 +379,8 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 					{/* Details */}
 					<section className="space-y-3">
 						<SectionLabel
-							title="Details"
-							description="Name your space and choose who belongs in it."
+							title="详细信息"
+							description="为你的空间命名并选择空间成员。"
 						/>
 						<div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:items-start">
 							<div className="space-y-4">
@@ -393,7 +390,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 									render={({ field }) => (
 										<FormControl>
 											<Input
-												placeholder="Space name"
+												placeholder="空间名称"
 												maxLength={25}
 												{...field}
 												onChange={(e) => {
@@ -407,9 +404,9 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 
 								<div className="space-y-2">
 									<div className="space-y-1">
-										<Label htmlFor={iconInputId}>Space icon</Label>
+										<Label htmlFor={iconInputId}>空间图标</Label>
 										<CardDescription>
-											Custom logo or icon (max 1MB).
+											自定义徽标或图标（最大 1 MB）。
 										</CardDescription>
 									</div>
 									<FileInput
@@ -426,10 +423,8 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 
 							<div className="space-y-2">
 								<div className="space-y-1">
-									<Label htmlFor="members">Members</Label>
-									<CardDescription>
-										Add team members to this space.
-									</CardDescription>
+									<Label htmlFor="members">成员</Label>
+									<CardDescription>将团队成员添加到此空间。</CardDescription>
 								</div>
 								<FormField
 									control={form.control}
@@ -437,7 +432,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 									render={({ field }) => (
 										<FormControl>
 											<MemberSelect
-												placeholder="Add member..."
+												placeholder="添加成员……"
 												showEmptyIfNoMembers={false}
 												disabled={isUploading}
 												canManageMembers={true}
@@ -463,10 +458,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 
 					{/* Sharing */}
 					<section className="space-y-3">
-						<SectionLabel
-							title="Sharing"
-							description="Control how this space can be reached."
-						/>
+						<SectionLabel title="分享" description="控制他人如何访问此空间。" />
 						<div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:items-start">
 							<PublicCollectionField
 								kind="space"
@@ -488,10 +480,10 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 										</div>
 										<div className="min-w-0">
 											<p className="text-sm font-medium text-gray-12">
-												Require password
+												需要密码
 											</p>
 											<p className="text-xs text-gray-10">
-												Protect every cap in this space
+												保护此空间中的所有录制内容
 											</p>
 										</div>
 									</div>
@@ -507,15 +499,11 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 											value={passwordValue}
 											onChange={(e) => setPasswordValue(e.target.value)}
 											placeholder={
-												space?.hasPassword
-													? "Enter new password"
-													: "Set a password"
+												space?.hasPassword ? "输入新密码" : "设置密码"
 											}
 										/>
 										{space?.hasPassword && !passwordValue && (
-											<p className="text-xs text-gray-9">
-												Leave blank to keep existing password
-											</p>
+											<p className="text-xs text-gray-9">留空以保留现有密码</p>
 										)}
 									</div>
 								)}
@@ -526,8 +514,8 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 					{/* Viewer permissions */}
 					<section className="space-y-3">
 						<SectionLabel
-							title="Viewer permissions"
-							description="These apply to every cap shared in this space."
+							title="观看者权限"
+							description="这些设置适用于此空间中分享的所有录制内容。"
 						/>
 						<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
 							{settingOptions.map((option) => {

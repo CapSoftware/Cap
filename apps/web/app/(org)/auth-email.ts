@@ -33,7 +33,7 @@ export async function requestEmailCode({
 	const normalizedEmail = email.trim().toLowerCase();
 
 	if (!normalizedEmail || !emailPattern.test(normalizedEmail)) {
-		toast.error("Please enter a valid email address.");
+		toast.error("请输入有效的邮箱地址。");
 		return null;
 	}
 
@@ -65,8 +65,8 @@ export async function requestEmailCode({
 
 	toast.error(
 		response?.error === "EmailSignin"
-			? "Please wait 30 seconds before requesting a new code."
-			: "We could not send a code. Please try again.",
+			? "请等待 30 秒后再请求新验证码。"
+			: "无法发送验证码，请重试。",
 	);
 
 	return null;
@@ -77,7 +77,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
 
 	const timeoutPromise = new Promise<never>((_, reject) => {
 		timeoutId = setTimeout(() => {
-			reject(new Error("Request timed out"));
+			reject(new Error("请求超时"));
 		}, timeoutMs);
 	});
 

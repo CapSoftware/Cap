@@ -43,11 +43,10 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
 						<Logo className="w-16 sm:w-20 md:w-24 h-auto" />
 						<div className="text-center space-y-2">
 							<h2 className="text-lg sm:text-xl font-semibold text-gray-12">
-								Protected Video
+								受保护的视频
 							</h2>
 							<p className="text-xs sm:text-sm text-gray-10 max-w-xs sm:max-w-sm px-2 sm:px-0">
-								This video is password protected. Please enter the password to
-								continue watching.
+								此视频受密码保护。请输入密码以继续观看。
 							</p>
 						</div>
 					</div>
@@ -58,14 +57,14 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
 								htmlFor="password"
 								className="text-sm font-medium text-gray-12"
 							>
-								Password
+								密码
 							</label>
 							<Input
 								id="password"
 								type="password"
 								value={password}
 								onChange={(e) => setPassword(e.target.value)}
-								placeholder="Enter password"
+								placeholder="输入密码"
 								className="w-full"
 								autoFocus
 							/>
@@ -79,7 +78,7 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
 							disabled={verifyPassword.isPending || !password.trim()}
 							onClick={() => verifyPassword.mutate()}
 						>
-							{verifyPassword.isPending ? "Verifying..." : "Access Video"}
+							{verifyPassword.isPending ? "正在验证…" : "访问视频"}
 						</Button>
 					</div>
 				</div>

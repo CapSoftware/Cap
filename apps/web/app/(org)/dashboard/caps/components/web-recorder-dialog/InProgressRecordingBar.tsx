@@ -30,11 +30,11 @@ import {
 } from "@/components/ui/popover";
 
 const phaseMessages: Partial<Record<RecorderPhase, string>> = {
-	recording: "Recording",
-	paused: "Paused",
-	creating: "Finishing up",
-	converting: "Converting",
-	uploading: "Uploading",
+	recording: "正在录制",
+	paused: "已暂停",
+	creating: "即将完成",
+	converting: "正在转换",
+	uploading: "正在上传",
 };
 
 const clamp = (value: number, min: number, max: number) => {
@@ -193,7 +193,7 @@ export const InProgressRecordingBar = ({
 	const showTimer = (phase === "recording" || isPaused) && !isErrorState;
 	const statusText = showTimer
 		? formatDuration(durationMs)
-		: (phaseMessages[phase] ?? "Processing");
+		: (phaseMessages[phase] ?? "正在处理");
 
 	const handleStop = () => {
 		try {
@@ -274,7 +274,7 @@ export const InProgressRecordingBar = ({
 					>
 						<div className="flex flex-col text-left">
 							<span className="text-[0.95rem] font-semibold text-red-11">
-								Recording failed.
+								录制失败。
 							</span>
 							{errorDownload ? (
 								<a
@@ -282,12 +282,10 @@ export const InProgressRecordingBar = ({
 									download={errorDownload.fileName}
 									className="text-[0.85rem] font-medium text-blue-11 underline underline-offset-2 hover:text-blue-12 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-9"
 								>
-									Download here.
+									在此下载。
 								</a>
 							) : (
-								<span className="text-[0.8rem] text-gray-11">
-									Download unavailable.
-								</span>
+								<span className="text-[0.8rem] text-gray-11">无法下载。</span>
 							)}
 						</div>
 						{Boolean(onRestart) && (canRestart || phase === "error") && (
@@ -295,7 +293,7 @@ export const InProgressRecordingBar = ({
 								data-no-drag
 								onClick={handleRestart}
 								disabled={!(canRestart || phase === "error")}
-								aria-label="Restart recording"
+								aria-label="重新录制"
 								aria-busy={isRestarting}
 							>
 								<RotateCcw
@@ -345,7 +343,7 @@ export const InProgressRecordingBar = ({
 								data-no-drag
 								onClick={handlePauseToggle}
 								disabled={!canTogglePause}
-								aria-label={isPaused ? "Resume recording" : "Pause recording"}
+								aria-label={isPaused ? "继续录制" : "暂停录制"}
 							>
 								{isPaused ? (
 									<PlayCircle className="size-5" />
@@ -357,7 +355,7 @@ export const InProgressRecordingBar = ({
 								data-no-drag
 								onClick={handleRestart}
 								disabled={!canRestart}
-								aria-label="Restart recording"
+								aria-label="重新录制"
 								aria-busy={isRestarting}
 							>
 								<RotateCcw
@@ -460,21 +458,21 @@ const InlineChunkProgress = ({
 	useEffect(() => () => clearHoverTimeout(), [clearHoverTimeout]);
 
 	const statusSummary = [
-		{ label: "Uploading", count: uploadingCount, color: "text-blue-11" },
-		{ label: "Pending", count: queuedCount, color: "text-amber-11" },
-		{ label: "Completed", count: completedCount, color: "text-green-11" },
+		{ label: "上传中", count: uploadingCount, color: "text-blue-11" },
+		{ label: "等待中", count: queuedCount, color: "text-amber-11" },
+		{ label: "已完成", count: completedCount, color: "text-green-11" },
 		{
-			label: "Failed",
+			label: "失败",
 			count: chunkUploads.filter((chunk) => chunk.status === "error").length,
 			color: "text-red-11",
 		},
 	].filter((item) => item.count > 0);
 
 	const statusLabels: Record<ChunkUploadState["status"], string> = {
-		uploading: "Uploading",
-		queued: "Pending",
-		complete: "Completed",
-		error: "Failed",
+		uploading: "上传中",
+		queued: "等待中",
+		complete: "已完成",
+		error: "失败",
 	};
 
 	const statusAccent: Record<ChunkUploadState["status"], string> = {
@@ -507,16 +505,12 @@ const InlineChunkProgress = ({
 					type="button"
 					data-no-drag
 					className="inline-flex items-center gap-2 rounded-lg px-1.5 py-1 text-[12px] text-gray-12 transition-colors hover:bg-gray-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-9"
-					aria-label="Show upload segments"
+					aria-label="显示上传分段"
 					aria-expanded={isPopoverOpen}
 				>
-					<div
-						className="relative h-5 w-5"
-						role="img"
-						aria-label="Upload progress"
-					>
+					<div className="relative h-5 w-5" role="img" aria-label="上传进度">
 						<svg className="h-5 w-5 -rotate-90" viewBox="0 0 36 36">
-							<title>Upload progress</title>
+							<title>上传进度</title>
 							<circle
 								className="fill-none stroke-gray-4"
 								strokeWidth={4}
@@ -557,13 +551,11 @@ const InlineChunkProgress = ({
 			>
 				<div className="space-y-3">
 					<div className="text-[11px] text-gray-11">
-						Uploaded {formatBytes(uploadedBytes)} of {formatBytes(totalBytes)}
+						已上传 {formatBytes(uploadedBytes)}，共 {formatBytes(totalBytes)}
 					</div>
 					<div className="flex flex-wrap gap-2">
 						{statusSummary.length === 0 ? (
-							<span className="text-[11px] text-gray-11">
-								Preparing chunks…
-							</span>
+							<span className="text-[11px] text-gray-11">正在准备分段……</span>
 						) : (
 							statusSummary.map((item) => (
 								<span
@@ -586,7 +578,7 @@ const InlineChunkProgress = ({
 							>
 								<div className="flex items-center justify-between text-[11px]">
 									<span className="font-medium text-gray-12">
-										Part {chunk.partNumber}
+										第 {chunk.partNumber} 段
 									</span>
 									<span
 										className={clsx(
@@ -599,12 +591,12 @@ const InlineChunkProgress = ({
 								</div>
 								<div className="text-[10px] text-gray-11">
 									{chunk.status === "uploading"
-										? `${Math.round(chunk.progress * 100)}% of ${formatBytes(chunk.sizeBytes)}`
+										? `${Math.round(chunk.progress * 100)}%，共 ${formatBytes(chunk.sizeBytes)}`
 										: chunk.status === "complete"
-											? `Uploaded ${formatBytes(chunk.sizeBytes)}`
+											? `已上传 ${formatBytes(chunk.sizeBytes)}`
 											: chunk.status === "queued"
-												? `Waiting • ${formatBytes(chunk.sizeBytes)}`
-												: `Needs attention • ${formatBytes(chunk.sizeBytes)}`}
+												? `等待中 • ${formatBytes(chunk.sizeBytes)}`
+												: `需要处理 • ${formatBytes(chunk.sizeBytes)}`}
 								</div>
 							</div>
 						))}

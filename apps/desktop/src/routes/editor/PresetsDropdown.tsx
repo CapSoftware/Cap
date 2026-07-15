@@ -24,7 +24,7 @@ export function PresetsDropdown() {
 				leftIcon={<IconCapPresets />}
 				rightIcon={<IconCapChevronDown />}
 			>
-				Presets
+				预设
 			</EditorButton>
 			<KDropdownMenu.Portal>
 				<Suspense>
@@ -40,7 +40,7 @@ export function PresetsDropdown() {
 								each={presets.query.data?.presets ?? []}
 								fallback={
 									<div class="py-1 w-full text-sm text-center text-gray-11">
-										No Presets
+										暂无预设
 									</div>
 								}
 							>
@@ -66,7 +66,7 @@ export function PresetsDropdown() {
 												<span class="mr-auto">{preset.name}</span>
 												<Show when={presets.query.data?.default === i()}>
 													<span class="px-2 py-1 text-[11px] rounded-full bg-gray-2 text-gray-11">
-														Default
+														默认
 													</span>
 												</Show>
 												<IconCapSettings class="text-gray-11 group-hover:text-[currentColor] shrink-0" />
@@ -84,22 +84,20 @@ export function PresetsDropdown() {
 															applyPreset();
 														}}
 													>
-														Apply
+														应用
 													</DropdownItem>
 													<DropdownItem
 														onSelect={async () => {
 															await presets.saveToPreset(i(), project);
-															toast.success(
-																`Saved settings to "${preset.name}"`,
-															);
+															toast.success(`设置已保存到“${preset.name}”`);
 														}}
 													>
-														Save settings to preset
+														将设置保存到预设
 													</DropdownItem>
 													<DropdownItem
 														onSelect={() => presets.setDefault(i())}
 													>
-														Set as default
+														设为默认
 													</DropdownItem>
 													<DropdownItem
 														onSelect={() =>
@@ -110,7 +108,7 @@ export function PresetsDropdown() {
 															})
 														}
 													>
-														Rename
+														重命名
 													</DropdownItem>
 													<DropdownItem
 														onClick={() =>
@@ -121,7 +119,7 @@ export function PresetsDropdown() {
 															})
 														}
 													>
-														Delete
+														删除
 													</DropdownItem>
 												</MenuItemList>
 											</KDropdownMenu.Portal>
@@ -137,7 +135,7 @@ export function PresetsDropdown() {
 							<DropdownItem
 								onSelect={() => setDialog({ type: "createPreset", open: true })}
 							>
-								<span>Create new preset</span>
+								<span>创建新预设</span>
 								<IconCapCirclePlus class="ml-auto" />
 							</DropdownItem>
 						</MenuItemList>

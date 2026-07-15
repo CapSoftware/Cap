@@ -145,7 +145,7 @@ export default function TargetCard(props: TargetCardProps) {
 		if (target) return target.owner_name;
 		const recording = recordingTarget();
 		if (recording) {
-			return recording.mode === "studio" ? "Studio Mode" : "Instant Mode";
+			return recording.mode === "studio" ? "工作室模式" : "即时模式";
 		}
 		return undefined;
 	});
@@ -231,10 +231,10 @@ export default function TargetCard(props: TargetCardProps) {
 		if (!screenshot) return;
 		try {
 			await commands.copyScreenshotToClipboard(screenshot.path);
-			toast.success("Screenshot copied to clipboard");
+			toast.success("截图已复制到剪贴板");
 		} catch (error) {
 			console.error("Failed to copy screenshot:", error);
-			toast.error("Failed to copy screenshot");
+			toast.error("复制截图失败");
 		}
 	};
 
@@ -247,17 +247,17 @@ export default function TargetCard(props: TargetCardProps) {
 				defaultPath: `${screenshot.pretty_name}.png`,
 				filters: [
 					{
-						name: "Image",
+						name: "图片",
 						extensions: ["png"],
 					},
 				],
 			});
 			if (!path) return;
 			await commands.copyFileToPath(screenshot.path, path);
-			toast.success("Screenshot saved");
+			toast.success("截图已保存");
 		} catch (error) {
 			console.error("Failed to save screenshot:", error);
-			toast.error("Failed to save screenshot");
+			toast.error("保存截图失败");
 		}
 	};
 
@@ -282,11 +282,11 @@ export default function TargetCard(props: TargetCardProps) {
 					}
 				},
 			);
-			toast.success("Share link copied to clipboard", { id: toastId });
+			toast.success("分享链接已复制到剪贴板", { id: toastId });
 		} catch (error) {
 			console.error("Failed to create screenshot share link:", error);
 			const message = error instanceof Error ? error.message : String(error);
-			toast.error(message || "Failed to create share link", { id: toastId });
+			toast.error(message || "创建分享链接失败", { id: toastId });
 		} finally {
 			setIsSharingScreenshot(false);
 			setScreenshotShareStatus("idle");
@@ -315,7 +315,7 @@ export default function TargetCard(props: TargetCardProps) {
 		if (!recording) return;
 		openRecordingFolder(recording.path, recording.mode).catch((error) => {
 			console.error("Failed to open recording folder:", error);
-			toast.error("Failed to open folder");
+			toast.error("打开文件夹失败");
 		});
 	};
 
@@ -323,7 +323,7 @@ export default function TargetCard(props: TargetCardProps) {
 		e.stopPropagation();
 		const recording = recordingTarget();
 		if (!recording) return;
-		if (!(await ask("Are you sure you want to delete this recording?"))) return;
+		if (!(await ask("确定要删除这条录制吗？"))) return;
 		await remove(recording.path, { recursive: true });
 		recordingProps()?.onRefetch?.();
 	};
@@ -376,8 +376,8 @@ export default function TargetCard(props: TargetCardProps) {
 						<img
 							src={src()}
 							alt={`${
-								local.variant === "display" ? "Display" : "Window"
-							} preview for ${label()}`}
+								local.variant === "display" ? "显示器" : "窗口"
+							}预览：${label()}`}
 							class="object-cover w-full h-full"
 							loading="lazy"
 							draggable={false}
@@ -401,7 +401,7 @@ export default function TargetCard(props: TargetCardProps) {
 				<div class="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t to-transparent pointer-events-none from-black/40" />
 				<Show when={(recordingTarget()?.clip_count ?? 0) > 1}>
 					<div class="absolute left-1 top-1 rounded-full bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white">
-						{recordingTarget()?.clip_count} clips
+						{recordingTarget()?.clip_count} 个片段
 					</div>
 				</Show>
 				<Show when={recordingFailed() || recordingUploadFailed()}>
@@ -409,7 +409,7 @@ export default function TargetCard(props: TargetCardProps) {
 						<div class="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-red-9/20 text-red-11">
 							<IconPhWarningBold class="size-2.5" />
 							<span class="text-[10px] font-medium">
-								{recordingFailed() ? "Recording failed" : "Upload failed"}
+								{recordingFailed() ? "录制失败" : "上传失败"}
 							</span>
 						</div>
 					</div>
@@ -435,7 +435,7 @@ export default function TargetCard(props: TargetCardProps) {
 				</div>
 				<Show when={local.variant === "screenshot"}>
 					<div class="flex items-center justify-between px-2 pb-1.5 pt-0.5 gap-1">
-						<Tooltip content="Edit">
+						<Tooltip content="编辑">
 							<div
 								role="button"
 								tabIndex={-1}
@@ -445,7 +445,7 @@ export default function TargetCard(props: TargetCardProps) {
 								<IconLucideEdit class="size-3.5" />
 							</div>
 						</Tooltip>
-						<Tooltip content="Copy to clipboard">
+						<Tooltip content="复制到剪贴板">
 							<div
 								role="button"
 								tabIndex={-1}
@@ -455,7 +455,7 @@ export default function TargetCard(props: TargetCardProps) {
 								<IconLucideCopy class="size-3.5" />
 							</div>
 						</Tooltip>
-						<Tooltip content="Save as...">
+						<Tooltip content="另存为…">
 							<div
 								role="button"
 								tabIndex={-1}
@@ -508,7 +508,7 @@ export default function TargetCard(props: TargetCardProps) {
 						return (
 							<div class="flex items-center justify-between px-2 pb-1.5 pt-0.5 gap-1">
 								<Show when={isStudio}>
-									<Tooltip content="Edit">
+									<Tooltip content="编辑">
 										<div
 											role="button"
 											tabIndex={-1}
@@ -523,9 +523,7 @@ export default function TargetCard(props: TargetCardProps) {
 									<Show
 										when={hasProgress}
 										fallback={
-											<Tooltip
-												content={uploadFailed ? "Retry upload" : "Reupload"}
-											>
+											<Tooltip content={uploadFailed ? "重试上传" : "重新上传"}>
 												<div
 													role="button"
 													tabIndex={-1}
@@ -547,7 +545,7 @@ export default function TargetCard(props: TargetCardProps) {
 									</Show>
 								</Show>
 								<Show when={recording.sharing}>
-									<Tooltip content="Open link">
+									<Tooltip content="打开链接">
 										<div
 											role="button"
 											tabIndex={-1}
@@ -558,7 +556,7 @@ export default function TargetCard(props: TargetCardProps) {
 										</div>
 									</Tooltip>
 								</Show>
-								<Tooltip content="Open folder">
+								<Tooltip content="打开文件夹">
 									<div
 										role="button"
 										tabIndex={-1}
@@ -568,7 +566,7 @@ export default function TargetCard(props: TargetCardProps) {
 										<IconLucideFolder class="size-3.5" />
 									</div>
 								</Tooltip>
-								<Tooltip content="Delete">
+								<Tooltip content="删除">
 									<div
 										role="button"
 										tabIndex={-1}

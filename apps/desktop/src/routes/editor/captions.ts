@@ -569,7 +569,7 @@ export function syncCaptionWordsWithText(
 }
 
 export function getCaptionGenerationErrorMessage(error: unknown) {
-	let message = "Unknown error occurred";
+	let message = "发生未知错误";
 
 	if (error instanceof Error) {
 		message = error.message;
@@ -578,21 +578,21 @@ export function getCaptionGenerationErrorMessage(error: unknown) {
 	}
 
 	if (message.includes("No audio stream found")) {
-		return "No audio found in the video file";
+		return "视频文件中未找到音频";
 	}
 
 	if (message.includes("Model file not found")) {
-		return "Caption model not found. Please download it first";
+		return "未找到字幕模型，请先下载";
 	}
 
 	if (message.includes("Failed to load Whisper model")) {
-		return "Failed to load the caption model. Try downloading it again";
+		return "加载字幕模型失败，请尝试重新下载";
 	}
 
 	if (
 		message.includes("Parakeet transcription is not available on Intel macOS")
 	) {
-		return "Parakeet models are not available on Intel Macs. Use a Whisper model instead";
+		return "Intel Mac 不支持 Parakeet 模型，请改用 Whisper 模型";
 	}
 
 	return message;

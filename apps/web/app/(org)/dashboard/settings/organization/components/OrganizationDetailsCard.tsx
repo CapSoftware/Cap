@@ -11,10 +11,9 @@ export const OrganizationDetailsCard = () => {
 	return (
 		<Card className="flex flex-col flex-1 gap-6 w-full min-h-fit">
 			<CardHeader>
-				<CardTitle>Settings</CardTitle>
+				<CardTitle>设置</CardTitle>
 				<CardDescription>
-					Set the organization name, access email domain, custom domain, and
-					organization icons.
+					设置组织名称、准入邮箱域名、自定义域名和组织图标。
 				</CardDescription>
 			</CardHeader>
 			<div className="grid grid-cols-1 gap-8 md:grid-cols-2">

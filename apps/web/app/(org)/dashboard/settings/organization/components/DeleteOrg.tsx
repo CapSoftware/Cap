@@ -27,11 +27,11 @@ const DeleteOrg = () => {
 			)}
 			<Card className="flex flex-wrap gap-6 justify-between items-center w-full">
 				<CardHeader>
-					<CardTitle>Delete Organization</CardTitle>
+					<CardTitle>删除组织</CardTitle>
 					<CardDescription>
 						{canDeleteOrganization
-							? "Delete your organization and all associated data."
-							: "Deleting this organization requires the owner's permission."}
+							? "删除你的组织及所有关联数据。"
+							: "删除此组织需要所有者权限。"}
 					</CardDescription>
 				</CardHeader>
 				{canDeleteOrganization && (
@@ -45,7 +45,7 @@ const DeleteOrg = () => {
 							setToggleDeleteDialog(true);
 						}}
 					>
-						Delete Organization
+						删除组织
 					</Button>
 				)}
 			</Card>

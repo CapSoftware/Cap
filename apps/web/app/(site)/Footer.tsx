@@ -20,95 +20,95 @@ type FooterLink = {
 
 const footerLinks = {
 	product: [
-		{ label: "Blog", href: "/blog" },
-		{ label: "Docs", href: "/docs" },
-		{ label: "Pricing", href: "/pricing" },
-		{ label: "Download", href: "/download" },
+		{ label: "博客", href: "/blog" },
+		{ label: "文档", href: "/docs" },
+		{ label: "价格", href: "/pricing" },
+		{ label: "下载", href: "/download" },
 		{
-			label: "Open Source",
+			label: "开源",
 			href: "https://github.com/CapSoftware/Cap",
 			isExternal: true,
 		},
 		{
-			label: "Join the community",
+			label: "加入社区",
 			href: "https://discord.gg/y8gdQ3WRN3",
 			isExternal: true,
 		},
 		{
-			label: "OSS Friends",
+			label: "开源伙伴",
 			href: "/oss-friends",
 		},
 	] as FooterLink[],
 	help: [
-		{ label: "About", href: "/about" },
-		{ label: "Testimonials", href: "/testimonials" },
-		{ label: "FAQs", href: "/faq" },
-		{ label: "Self-hosting", href: "/self-hosting" },
-		{ label: "Support", href: "/support" },
-		{ label: "Email Support", href: "mailto:hello@cap.so" },
-		{ label: "Trust Portal", href: "https://trust.cap.so" },
+		{ label: "关于", href: "/about" },
+		{ label: "用户评价", href: "/testimonials" },
+		{ label: "常见问题", href: "/faq" },
+		{ label: "自托管", href: "/self-hosting" },
+		{ label: "支持", href: "/support" },
+		{ label: "邮件支持", href: "mailto:hello@cap.so" },
+		{ label: "信任中心", href: "https://trust.cap.so" },
 		{
-			label: "Chat Support",
+			label: "在线支持",
 			href: "https://discord.gg/y8gdQ3WRN3",
 			isExternal: true,
 		},
 		{
-			label: "System Status",
+			label: "系统状态",
 			href: "https://cap.openstatus.dev/",
 			isExternal: true,
 		},
 	] as FooterLink[],
 	tools: [
-		{ label: "WebM to MP4", href: "/tools/convert/webm-to-mp4" },
-		{ label: "MOV to MP4", href: "/tools/convert/mov-to-mp4" },
-		{ label: "AVI to MP4", href: "/tools/convert/avi-to-mp4" },
-		{ label: "MP4 to GIF", href: "/tools/convert/mp4-to-gif" },
-		{ label: "MP4 to MP3", href: "/tools/convert/mp4-to-mp3" },
-		{ label: "MP4 to WebM", href: "/tools/convert/mp4-to-webm" },
-		{ label: "Video Speed Controller", href: "/tools/video-speed-controller" },
-		{ label: "Trim Video", href: "/tools/trim" },
+		{ label: "WebM 转 MP4", href: "/tools/convert/webm-to-mp4" },
+		{ label: "MOV 转 MP4", href: "/tools/convert/mov-to-mp4" },
+		{ label: "AVI 转 MP4", href: "/tools/convert/avi-to-mp4" },
+		{ label: "MP4 转 GIF", href: "/tools/convert/mp4-to-gif" },
+		{ label: "MP4 转 MP3", href: "/tools/convert/mp4-to-mp3" },
+		{ label: "MP4 转 WebM", href: "/tools/convert/mp4-to-webm" },
+		{ label: "视频速度控制器", href: "/tools/video-speed-controller" },
+		{ label: "裁剪视频", href: "/tools/trim" },
 	] as FooterLink[],
 	useCases: [
 		{
-			label: "Remote Team Collaboration",
+			label: "远程团队协作",
 			href: "/solutions/remote-team-collaboration",
 		},
 		{
-			label: "Employee Onboarding Platform",
+			label: "员工入职平台",
 			href: "/solutions/employee-onboarding-platform",
 		},
 		{
-			label: "Daily Standup Software",
+			label: "每日站会软件",
 			href: "/solutions/daily-standup-software",
 		},
 		{
-			label: "Online Classroom Tools",
+			label: "在线课堂工具",
 			href: "/solutions/online-classroom-tools",
 		},
 		{
-			label: "Agencies",
+			label: "代理机构",
 			href: "/solutions/agencies",
 		},
 	] as FooterLink[],
 	additional: [
-		{ label: "Loom Video Importer", href: "/loom-alternative" },
-		{ label: "Migrate from Loom", href: "/migrate-from-loom" },
-		{ label: "Loom Video Downloader", href: "/tools/loom-downloader" },
-		{ label: "Screen Recorder", href: "/screen-recorder" },
-		{ label: "Free Screen Recorder", href: "/free-screen-recorder" },
-		{ label: "Screen Recorder for Mac", href: "/screen-recorder-mac" },
-		{ label: "Screen Recorder for Windows", href: "/screen-recorder-windows" },
-		{ label: "Screen Recording Software", href: "/screen-recording-software" },
+		{ label: "Loom 视频导入工具", href: "/loom-alternative" },
+		{ label: "从 Loom 迁移", href: "/migrate-from-loom" },
+		{ label: "Loom 视频下载工具", href: "/tools/loom-downloader" },
+		{ label: "屏幕录制工具", href: "/screen-recorder" },
+		{ label: "免费屏幕录制工具", href: "/free-screen-recorder" },
+		{ label: "Mac 屏幕录制工具", href: "/screen-recorder-mac" },
+		{ label: "Windows 屏幕录制工具", href: "/screen-recorder-windows" },
+		{ label: "屏幕录制软件", href: "/screen-recording-software" },
 		{
-			label: "Chrome Screen Recorder",
+			label: "Chrome 屏幕录制工具",
 			href: "/google-chrome-screen-recorder",
 		},
 		{
-			label: "Google Drive Screen Recorder",
+			label: "Google 云端硬盘屏幕录制工具",
 			href: "/google-drive-screen-recorder",
 		},
-		{ label: "Cap vs Loom", href: "/loom-alternative" },
-		{ label: "Student Discount", href: "/student-discount" },
+		{ label: "Cap 与 Loom 对比", href: "/loom-alternative" },
+		{ label: "学生优惠", href: "/student-discount" },
 	] as FooterLink[],
 };
 
@@ -202,8 +202,8 @@ const ComplianceBadges = () => (
 					href="https://trust.cap.so"
 					target="_blank"
 					rel="noopener noreferrer"
-					title={`${label} — in progress`}
-					aria-label={`${label} compliance in progress. View Cap's Trust Portal`}
+					title={`${label} — 认证进行中`}
+					aria-label={`${label} 合规认证进行中，查看 Cap 信任中心`}
 					className="transition-colors text-gray-9 hover:text-gray-12"
 				>
 					<svg
@@ -225,7 +225,7 @@ const ComplianceBadges = () => (
 				</Link>
 			))}
 		</div>
-		<p className="mt-2 text-[11px] text-gray-9">Certifications in progress</p>
+		<p className="mt-2 text-[11px] text-gray-9">认证进行中</p>
 	</div>
 );
 
@@ -315,8 +315,7 @@ export const Footer = () => {
 						<div className="xl:w-[260px] xl:shrink-0">
 							<Logo className="w-[104px] h-auto" />
 							<p className="mt-5 max-w-sm text-sm leading-6 text-gray-11">
-								The open source alternative to Loom. Lightweight, powerful, and
-								cross-platform — record and share in seconds.
+								开源的 Loom 替代方案。轻量、强大、跨平台，数秒内完成录制与分享。
 							</p>
 							<div className="flex gap-2.5 items-center mt-6">
 								{socialLinks.map((social) => (
@@ -335,15 +334,12 @@ export const Footer = () => {
 						</div>
 
 						<div className="grid flex-1 grid-cols-1 border-t border-gray-4 lg:grid-cols-5 lg:gap-x-8 lg:gap-y-10 lg:border-none">
-							<FooterColumn title="Product" links={footerLinks.product} />
-							<FooterColumn
-								title="Additional Links"
-								links={footerLinks.additional}
-							/>
+							<FooterColumn title="产品" links={footerLinks.product} />
+							<FooterColumn title="更多链接" links={footerLinks.additional} />
 							<FooterColumn title="Cap" links={footerLinks.help} />
-							<FooterColumn title="Use Cases" links={footerLinks.useCases} />
+							<FooterColumn title="使用场景" links={footerLinks.useCases} />
 							<FooterColumn
-								title="Tools"
+								title="工具"
 								titleHref="/tools"
 								links={footerLinks.tools}
 							/>
@@ -362,19 +358,19 @@ export const Footer = () => {
 								className="text-sm transition-colors text-gray-9 hover:text-gray-12"
 								href="/terms"
 							>
-								Terms of Service
+								服务条款
 							</a>
 							<a
 								className="text-sm transition-colors text-gray-9 hover:text-gray-12"
 								href="/privacy"
 							>
-								Privacy Policy
+								隐私政策
 							</a>
 							<a
 								className="text-sm transition-colors text-gray-9 hover:text-gray-12"
 								href="/dpa"
 							>
-								Data Processing Agreement
+								数据处理协议
 							</a>
 						</div>
 					</div>

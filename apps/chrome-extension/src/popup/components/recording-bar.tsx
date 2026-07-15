@@ -54,9 +54,9 @@ const InlineChunkProgress = ({ upload }: { upload?: UploadSummary }) => {
 
 	return (
 		<div className="inline-flex items-center gap-2 rounded-lg px-1.5 py-1 text-[12px] text-gray-12">
-			<div className="relative h-5 w-5" role="img" aria-label="Upload progress">
+			<div className="relative h-5 w-5" role="img" aria-label="上传进度">
 				<svg className="h-5 w-5 -rotate-90" viewBox="0 0 36 36">
-					<title>Upload progress</title>
+					<title>上传进度</title>
 					<circle
 						className="fill-none stroke-gray-4"
 						strokeWidth={4}
@@ -114,9 +114,7 @@ export const RecordingBar = ({
 	const isPaused = status.phase === "paused";
 	const canStop = !disabled;
 	const showTimer = status.phase === "recording" || isPaused;
-	const statusText = showTimer
-		? formatDuration(status.durationMs)
-		: "Uploading";
+	const statusText = showTimer ? formatDuration(status.durationMs) : "正在上传";
 	const canTogglePause = !disabled && status.phase !== "uploading";
 
 	return (
@@ -152,7 +150,7 @@ export const RecordingBar = ({
 					<ActionButton
 						onClick={onPauseResume}
 						disabled={!canTogglePause}
-						aria-label={isPaused ? "Resume recording" : "Pause recording"}
+						aria-label={isPaused ? "继续录制" : "暂停录制"}
 					>
 						{isPaused ? (
 							<PlayCircle className="size-5" />
@@ -160,7 +158,7 @@ export const RecordingBar = ({
 							<PauseCircle className="size-5" />
 						)}
 					</ActionButton>
-					<ActionButton disabled aria-label="Restart recording">
+					<ActionButton disabled aria-label="重新开始录制">
 						<RotateCcw className="size-5" />
 					</ActionButton>
 				</div>

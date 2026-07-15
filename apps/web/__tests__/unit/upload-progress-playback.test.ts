@@ -101,9 +101,7 @@ describe("shouldDeferPlaybackSource", () => {
 				},
 				false,
 			),
-		).toBe(
-			"Processing failed. Ask the owner to retry processing or re-upload the recording.",
-		);
+		).toBe("处理失败。请联系所有者重试处理或重新上传录制内容。");
 		expect(
 			getUploadFailureMessage(
 				{
@@ -112,9 +110,7 @@ describe("shouldDeferPlaybackSource", () => {
 				} as never,
 				false,
 			),
-		).toBe(
-			"Upload stalled before processing finished. Re-upload the recording to continue.",
-		);
+		).toBe("上传在处理完成前停滞。请重新上传录制内容以继续。");
 	});
 
 	it("reloads playback when upload progress clears", () => {
@@ -172,7 +168,7 @@ describe("shouldDeferPlaybackSource", () => {
 				updatedAt: new Date(Date.now() - 91_000),
 				processingProgress: 0,
 			}),
-		).toBe("Video processing did not start. Retry processing.");
+		).toBe("视频处理未开始，请重试处理。");
 
 		expect(
 			getStalledProcessingMessage({
@@ -190,6 +186,6 @@ describe("shouldDeferPlaybackSource", () => {
 				updatedAt: new Date(Date.now() - 11 * 60 * 1000),
 				processingProgress: 25,
 			}),
-		).toBe("Video processing stalled. Retry processing.");
+		).toBe("视频处理已停滞，请重试处理。");
 	});
 });

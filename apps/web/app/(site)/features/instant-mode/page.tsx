@@ -2,13 +2,13 @@ import type { Metadata } from "next";
 import { InstantModePage } from "./InstantModePage";
 
 export const metadata: Metadata = {
-	title: "Instant Mode - Quick Screen Recording & Sharing | Cap",
+	title: "即时模式 - 快速屏幕录制与分享 | Cap",
 	description:
-		"Record and share instantly with Cap's cloud-powered Instant Mode. Get automatic transcriptions, collaborative comments, shareable links, and team workspaces for fast feedback loops.",
+		"使用 Cap 云端驱动的即时模式立即录制和分享，并通过自动转写、协作评论、分享链接和团队工作区快速获得反馈。",
 	openGraph: {
-		title: "Instant Mode - Quick Screen Recording & Sharing | Cap",
+		title: "即时模式 - 快速屏幕录制与分享 | Cap",
 		description:
-			"Record and share instantly with Cap's cloud-powered Instant Mode. Get automatic transcriptions, collaborative comments, shareable links, and team workspaces for fast feedback loops.",
+			"使用 Cap 云端驱动的即时模式立即录制和分享，并通过自动转写、协作评论、分享链接和团队工作区快速获得反馈。",
 		url: "https://cap.so/features/instant-mode",
 		siteName: "Cap",
 		images: [
@@ -16,17 +16,17 @@ export const metadata: Metadata = {
 				url: "https://cap.so/og.png",
 				width: 1200,
 				height: 630,
-				alt: "Cap Instant Mode",
+				alt: "Cap 即时模式",
 			},
 		],
-		locale: "en_US",
+		locale: "zh_CN",
 		type: "website",
 	},
 	twitter: {
 		card: "summary_large_image",
-		title: "Instant Mode - Quick Screen Recording & Sharing | Cap",
+		title: "即时模式 - 快速屏幕录制与分享 | Cap",
 		description:
-			"Record and share instantly with Cap's cloud-powered Instant Mode. Get automatic transcriptions, collaborative comments, shareable links, and team workspaces for fast feedback loops.",
+			"使用 Cap 云端驱动的即时模式立即录制和分享，并通过自动转写、协作评论、分享链接和团队工作区快速获得反馈。",
 		images: ["https://cap.so/og.png"],
 	},
 };

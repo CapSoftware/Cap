@@ -53,7 +53,7 @@ export const CommercialCard = () => {
 			}
 		} catch (error) {
 			console.error("Error during commercial checkout:", error);
-			toast.error("Failed to start checkout process");
+			toast.error("无法开始结账流程");
 		} finally {
 			setCommercialLoading(false);
 		}
@@ -76,11 +76,11 @@ export const CommercialCard = () => {
 					<Tooltip
 						position="top"
 						className="max-w-[260px] items-start text-left leading-relaxed"
-						content="A commercial license to use Cap on your desktop — unlimited local recording and editing, plus 20 cloud shareable links per month. No cloud subscription required."
+						content="在桌面端使用 Cap 的商业许可证——不限次数的本地录制和编辑，每月另含 20 个云端分享链接，无需云端订阅。"
 					>
 						<button
 							type="button"
-							aria-label="What's included in the Desktop License?"
+							aria-label="桌面许可证包含哪些内容？"
 							className="transition-colors text-gray-9 hover:text-gray-11"
 						>
 							<FontAwesomeIcon icon={faCircleInfo} className="size-3.5" />
@@ -96,35 +96,35 @@ export const CommercialCard = () => {
 				<span className="text-4xl font-semibold tracking-tight tabular-nums text-gray-12">
 					$<NumberFlow value={perLicense} />
 				</span>
-				<span className="text-sm text-gray-10">/ license</span>
+				<span className="text-sm text-gray-10">/ 许可证</span>
 			</div>
 			<p className="mt-1 text-sm text-gray-10">
-				{isYearly ? "billed yearly" : "one-time payment"}
+				{isYearly ? "按年计费" : "一次性付款"}
 			</p>
 
 			<div className="mt-6 space-y-3 min-h-[120px]">
 				<BillingToggle
-					ariaLabel="Billing option for Desktop License"
+					ariaLabel="桌面许可证计费选项"
 					value={isYearly ? "yearly" : "lifetime"}
 					onChange={(value) => setIsYearly(value === "yearly")}
 					options={[
-						{ value: "yearly", label: "Annual" },
-						{ value: "lifetime", label: "Lifetime" },
+						{ value: "yearly", label: "按年" },
+						{ value: "lifetime", label: "终身" },
 					]}
 				/>
 				<Stepper
-					label="Licenses"
+					label="许可证数量"
 					value={licenses}
 					onIncrement={incrementLicenses}
 					onDecrement={decrementLicenses}
-					decrementLabel="Decrease license count"
-					incrementLabel="Increase license count"
+					decrementLabel="减少许可证数量"
+					incrementLabel="增加许可证数量"
 				/>
 				<p className="text-sm text-gray-10">
 					<span className="font-medium text-gray-12">
 						$<NumberFlow value={total} />
 					</span>{" "}
-					{isYearly ? "billed yearly" : "one-time"}
+					{isYearly ? "按年计费" : "一次性付费"}
 				</p>
 			</div>
 
@@ -134,13 +134,13 @@ export const CommercialCard = () => {
 				variant="outline"
 				size="lg"
 				className="mt-6 w-full font-medium"
-				aria-label="Purchase Commercial License"
+				aria-label="购买商业许可证"
 			>
-				{commercialLoading ? "Loading..." : copy.cta}
+				{commercialLoading ? "正在加载..." : copy.cta}
 			</Button>
 
 			<div className="pt-8 mt-8 border-t border-gray-4">
-				<p className="mb-4 text-sm font-medium text-gray-12">What's included</p>
+				<p className="mb-4 text-sm font-medium text-gray-12">包含内容</p>
 				<ul className="space-y-3">
 					{copy.features.map((feature) => (
 						<PlanFeature key={feature}>{feature}</PlanFeature>
@@ -150,7 +150,7 @@ export const CommercialCard = () => {
 					href="/docs/commercial-license"
 					className="inline-block mt-5 text-sm underline transition-colors text-gray-10 hover:text-gray-12"
 				>
-					Learn more about the commercial license
+					了解商业许可证详情
 				</a>
 			</div>
 		</article>

@@ -5,10 +5,9 @@ import type { ToolPageContent } from "@/components/tools/types";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
-	title:
-		"Loom Video Downloader — Download Loom Videos Free + Migrate to Cap | Cap",
+	title: "Loom 视频下载器 — 免费下载并迁移到 Cap | Cap",
 	description:
-		"Download any Loom video for free with Cap's online Loom video downloader. Then migrate your entire Loom library to Cap — the open source Loom alternative — with 20% off using code MIGRATE20.",
+		"使用 Cap 在线 Loom 视频下载器免费下载公开 Loom 视频，并以优惠码 MIGRATE20 享受八折，将整个 Loom 视频库迁移到开源替代方案 Cap。",
 	keywords: [
 		"loom video downloader",
 		"download loom video",
@@ -28,9 +27,9 @@ export const metadata: Metadata = {
 		"switch from loom",
 	],
 	openGraph: {
-		title: "Loom Video Downloader — Free Download + Migrate to Cap",
+		title: "Loom 视频下载器 — 免费下载并迁移到 Cap",
 		description:
-			"Download any Loom video for free. Then migrate your whole Loom library to Cap and save 20% with MIGRATE20. Built by Cap, the open source Loom alternative.",
+			"免费下载公开 Loom 视频，然后使用 MIGRATE20 以八折将整个视频库迁移到开源 Loom 替代方案 Cap。",
 		url: "https://cap.so/tools/loom-downloader",
 		siteName: "Cap",
 		type: "website",
@@ -39,15 +38,15 @@ export const metadata: Metadata = {
 				url: "/og.png",
 				width: 1200,
 				height: 630,
-				alt: "Cap — Free Loom Video Downloader",
+				alt: "Cap — 免费 Loom 视频下载器",
 			},
 		],
 	},
 	twitter: {
 		card: "summary_large_image",
-		title: "Loom Video Downloader — Free Download + Migrate to Cap",
+		title: "Loom 视频下载器 — 免费下载并迁移到 Cap",
 		description:
-			"Download any Loom video for free — then migrate your whole library to Cap with 20% off using MIGRATE20.",
+			"免费下载公开 Loom 视频，然后使用 MIGRATE20 以八折将整个视频库迁移到 Cap。",
 		images: ["/og.png"],
 	},
 	alternates: {
@@ -56,108 +55,106 @@ export const metadata: Metadata = {
 };
 
 const pageContent: ToolPageContent = {
-	title: "Loom Video Downloader",
+	title: "Loom 视频下载器",
 	description:
-		"Download any public Loom video as an MP4 — or skip the one-by-one downloads and migrate your whole Loom library to Cap with 20% off using code MIGRATE20.",
-	featuresTitle: "Download Loom videos, then move your whole library to Cap",
+		"将任意公开 Loom 视频下载为 MP4，或跳过逐个下载，使用优惠码 MIGRATE20 以八折将整个 Loom 视频库迁移到 Cap。",
+	featuresTitle: "下载 Loom 视频，再将整个视频库迁移到 Cap",
 	featuresDescription:
-		"Cap's Loom downloader is free, fast, and requires zero setup. When you're ready to leave Loom for good, Cap Pro's built-in <a href=\"/loom-alternative\">Loom video importer</a> moves your entire workspace in one click.",
+		'Cap 的 Loom 下载器免费、快速且无需设置。当你准备彻底离开 Loom 时，Cap 专业版内置的<a href="/loom-alternative">Loom 视频导入器</a>可一键迁移整个工作区。',
 	features: [
 		{
-			title: "Instant Downloads",
-			description:
-				"Paste a Loom link and get your MP4 in seconds. No waiting, no queues, no processing delays.",
+			title: "即时下载",
+			description: "粘贴 Loom 链接，数秒内获得 MP4，无需等待、排队或处理延迟。",
 		},
 		{
-			title: "No Account Required",
-			description:
-				"No signup, no login, no email. Just paste your Loom URL and download the video immediately.",
+			title: "无需账户",
+			description: "无需注册、登录或邮箱，只需粘贴 Loom 网址即可立即下载视频。",
 		},
 		{
-			title: "100% Free to Download",
+			title: "完全免费下载",
 			description:
-				"Completely free with no limits on downloads. Save as many Loom videos as you need — then switch to Cap to stop paying Loom's $18/user/month.",
+				"完全免费且不限下载次数。按需保存 Loom 视频，再迁移到 Cap，告别 Loom 每位用户每月 18 美元的费用。",
 		},
 		{
-			title: "Import Your Whole Loom Library",
+			title: "导入整个 Loom 视频库",
 			description:
-				'Cap Pro includes a built-in <a href="/loom-alternative">Loom video importer</a> that transfers every Loom video you\'ve recorded — titles, transcripts, and chapters included — without manual re-uploads.',
+				'Cap 专业版内置<a href="/loom-alternative">Loom 视频导入器</a>，无需手动重新上传即可迁移所有 Loom 录像，包括标题、文字稿和章节。',
 		},
 		{
-			title: "Half the Price of Loom",
+			title: "价格仅为 Loom 的一半",
 			description:
-				"Cap Pro starts from just $8.16/user/month vs Loom's $18/user/month. Use code <strong>MIGRATE20</strong> at checkout for an extra 20% off your first year.",
+				"Cap 专业版每位用户每月仅需 8.16 美元起，而 Loom 为 18 美元。结账时使用优惠码 <strong>MIGRATE20</strong>，首年还可再享八折。",
 		},
 		{
-			title: "Open Source & Privacy-First",
+			title: "开源且隐私优先",
 			description:
-				'Cap is the <a href="/">open source Loom alternative</a>. Bring your own S3 bucket, connect your own domain, and own 100% of your video data.',
+				'Cap 是<a href="/">开源 Loom 替代方案</a>。使用自己的 S3 存储桶和域名，完全拥有视频数据。',
 		},
 	],
 	faqs: [
 		{
-			question: "How do I download a Loom video?",
+			question: "如何下载 Loom 视频？",
 			answer:
-				'Paste the Loom video URL into the input above and click "Download Video". The MP4 file will start downloading automatically. You can find Loom URLs by clicking the share button on any Loom video.',
+				"将 Loom 视频网址粘贴到上方输入框，然后点击“下载视频”，MP4 文件会自动开始下载。点击任意 Loom 视频的分享按钮即可找到网址。",
 		},
 		{
-			question: "Is this Loom video downloader free?",
+			question: "Loom 视频下载器免费吗？",
 			answer:
-				"Yes, 100% free with no limits. There's no signup required, no premium tier, and no cap on the number of videos you can download.",
+				"完全免费且没有限制，无需注册、没有高级付费层级，也不限制可下载的视频数量。",
 		},
 		{
-			question: "What is MIGRATE20 and how do I use it?",
+			question: "MIGRATE20 是什么，如何使用？",
 			answer:
-				'<strong>MIGRATE20</strong> is a 20% discount code for new Cap Pro subscribers who are switching from Loom. Just apply it at <a href="/pricing">checkout on the pricing page</a> to take 20% off your first year of Cap Pro — including the built-in Loom video importer.',
+				'<strong>MIGRATE20</strong> 是为从 Loom 迁移的新 Cap 专业版订阅者提供的八折优惠码。在<a href="/pricing">价格页结账</a>时应用，即可在包含 Loom 视频导入器的 Cap 专业版首年享受八折。',
 		},
 		{
-			question: "Can I import all my Loom videos into Cap at once?",
+			question: "可以一次将所有 Loom 视频导入 Cap 吗？",
 			answer:
-				'Yes. Cap Pro\'s built-in <a href="/loom-alternative">Loom video importer</a> connects to your Loom workspace and transfers every video in one go — titles, transcripts, chapters, and all — without you having to download and re-upload anything manually.',
+				'可以。Cap 专业版内置的<a href="/loom-alternative">Loom 视频导入器</a>会连接 Loom 工作区，一次迁移所有视频、标题、文字稿和章节，无需手动下载后再上传。',
 		},
 		{
-			question: "Why migrate from Loom to Cap?",
+			question: "为什么要从 Loom 迁移到 Cap？",
 			answer:
-				"Cap is the open source Loom alternative built for teams that care about data ownership and price. You get unlimited cloud storage, instant shareable links, AI captions, custom domains, and your own S3 bucket — all from $8.16/user/month vs Loom's $18/user/month. Use MIGRATE20 for an additional 20% off.",
+				"Cap 是为重视数据所有权和价格的团队打造的开源 Loom 替代方案。每位用户每月 8.16 美元起，即可获得无限云存储、即时分享链接、AI 字幕、自定义域名和自有 S3 存储桶，而 Loom 每月需 18 美元。使用 MIGRATE20 还可再享八折。",
 		},
 		{
-			question: "Can I download private Loom videos?",
+			question: "可以下载私密 Loom 视频吗？",
 			answer:
-				"No, this tool only works with publicly accessible Loom videos. If a video requires a password or is set to private, you'll need to ask the video creator to make it public or share the download directly.",
+				"不可以，此工具仅适用于可公开访问的 Loom 视频。如果视频需要密码或设为私密，请联系创建者将其公开或直接分享下载文件。",
 		},
 		{
-			question: "What video format are downloads in?",
+			question: "下载的视频是什么格式？",
 			answer:
-				"All Loom videos are downloaded in MP4 format, which is compatible with virtually every device, media player, and video editor.",
+				"所有 Loom 视频均以 MP4 格式下载，几乎兼容所有设备、媒体播放器和视频编辑器。",
 		},
 		{
-			question: "Do you store my downloaded videos?",
+			question: "会存储我下载的视频吗？",
 			answer:
-				"No. The free downloader resolves public Loom videos in your browser and saves the MP4 to your device. Cap Pro's Loom importer uses Cap's server-side import pipeline when you choose to migrate videos into your Cap workspace.",
+				"不会。免费下载器会在浏览器中解析公开 Loom 视频，并将 MP4 保存到设备。只有当你选择将视频迁移到 Cap 工作区时，Cap 专业版的 Loom 导入器才会使用 Cap 服务端导入流程。",
 		},
 		{
-			question: "What is Cap?",
+			question: "什么是 Cap？",
 			answer:
-				'Cap is the <a href="/">open source alternative to Loom</a>. It\'s a privacy-focused screen recorder that lets you record, edit, and share videos instantly — with unlimited storage, custom domains, and a built-in Loom video importer. <a href="/download">Download Cap for free</a>.',
+				'Cap 是<a href="/">开源 Loom 替代方案</a>，是一款注重隐私的屏幕录制工具，可即时录制、编辑和分享视频，并提供无限存储、自定义域名和内置 Loom 视频导入器。<a href="/download">免费下载 Cap</a>。',
 		},
 	],
 	cta: {
-		title: "Ready to leave Loom for good?",
+		title: "准备彻底离开 Loom 了吗？",
 		description:
-			"Skip the one-by-one downloads. Cap Pro imports your entire Loom library in one click — and costs half what Loom charges. Use MIGRATE20 at checkout for an extra 20% off your first year.",
-		buttonText: "Migrate to Cap Pro — save 20%",
+			"无需逐个下载。Cap 专业版一键导入整个 Loom 视频库，价格仅为 Loom 的一半。结账时使用 MIGRATE20，首年还可再享八折。",
+		buttonText: "迁移到 Cap 专业版，节省 20%",
 		buttonHref:
 			"/pricing?promo=MIGRATE20&utm_source=loom-downloader&utm_campaign=migrate20",
-		secondaryButtonText: "Download Cap free",
+		secondaryButtonText: "免费下载 Cap",
 		secondaryButtonHref: "/download",
 	},
 };
 
 const breadcrumbSchema = createBreadcrumbSchema([
-	{ name: "Home", url: "https://cap.so" },
-	{ name: "Tools", url: "https://cap.so/tools" },
+	{ name: "首页", url: "https://cap.so" },
+	{ name: "工具", url: "https://cap.so/tools" },
 	{
-		name: "Loom Video Downloader",
+		name: "Loom 视频下载器",
 		url: "https://cap.so/tools/loom-downloader",
 	},
 ]);

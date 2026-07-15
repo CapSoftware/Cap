@@ -70,7 +70,7 @@ export function MemberAvatars() {
 				emptySlotKeys.map((slotKey) => (
 					<Tooltip
 						key={slotKey}
-						content="Invite to your organization"
+						content="邀请加入你的组织"
 						position="bottom"
 						delayDuration={0}
 					>

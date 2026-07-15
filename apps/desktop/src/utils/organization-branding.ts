@@ -399,7 +399,7 @@ export async function encodeFileAsBase64(file: File) {
 
 function getResponseError(body: unknown) {
 	if (isRecord(body) && typeof body.error === "string") return body.error;
-	return "Failed to update organization branding";
+	return "更新组织品牌设置失败";
 }
 
 function mergeCachedOrganization(

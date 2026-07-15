@@ -40,7 +40,7 @@ export function CreditsClient({
 
 	useEffect(() => {
 		if (searchParams.get("purchase") === "success") {
-			toast.success("Credits purchased successfully!");
+			toast.success("额度购买成功！");
 			router.replace("/dashboard/developers/credits");
 		}
 	}, [searchParams, router]);
@@ -55,23 +55,21 @@ export function CreditsClient({
 
 			if (!res.ok) {
 				const data = await res.json();
-				throw new Error(data.error ?? "Failed to start checkout");
+				throw new Error(data.error ?? "无法开始结账");
 			}
 
 			const { url } = await res.json();
 			window.location.href = url;
 		},
 		onError: (error) => {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to purchase credits",
-			);
+			toast.error(error instanceof Error ? error.message : "购买额度失败");
 		},
 	});
 
 	return (
 		<div className="flex flex-col gap-5">
 			<div className="flex items-center justify-between">
-				<h2 className="text-base font-medium text-gray-12">Credits</h2>
+				<h2 className="text-base font-medium text-gray-12">额度</h2>
 				{apps.length > 1 && (
 					<select
 						value={selectedApp}
@@ -88,16 +86,16 @@ export function CreditsClient({
 			</div>
 
 			<div className="grid gap-3 sm:grid-cols-3">
-				<StatBox label="Balance" value={`$${(balance / 100_000).toFixed(2)}`} />
-				<StatBox label="Recording Rate" value="$0.05/min" />
-				<StatBox label="Storage Rate" value="$0.001/min/mo" />
+				<StatBox label="余额" value={`$${(balance / 100_000).toFixed(2)}`} />
+				<StatBox label="录制费率" value="$0.05/分钟" />
+				<StatBox label="存储费率" value="$0.001/分钟/月" />
 			</div>
 
 			<div className="grid gap-3 sm:grid-cols-2">
 				<Card>
 					<CardHeader>
-						<CardTitle>Purchase Credits</CardTitle>
-						<CardDescription>Add credits to your account.</CardDescription>
+						<CardTitle>购买额度</CardTitle>
+						<CardDescription>为你的账户充值额度。</CardDescription>
 					</CardHeader>
 					<div className="flex flex-wrap gap-2 mt-4">
 						{presets.map((preset) => (
@@ -134,11 +132,11 @@ export function CreditsClient({
 								if (cents >= 500) {
 									purchaseMutation.mutate(cents);
 								} else {
-									toast.error("Minimum purchase is $5.00");
+									toast.error("最低购买金额为 $5.00");
 								}
 							}}
 						>
-							Purchase
+							购买
 						</Button>
 					</div>
 				</Card>
@@ -146,18 +144,16 @@ export function CreditsClient({
 				<Card>
 					<CardHeader>
 						<CardTitle className="flex items-center gap-2">
-							Auto Top-Up
+							自动充值
 							<span className="text-xs font-normal px-2 py-0.5 rounded-full bg-gray-3 text-gray-11">
-								Coming soon
+								即将推出
 							</span>
 						</CardTitle>
-						<CardDescription>
-							Automatically add $25 when balance drops below $5.
-						</CardDescription>
+						<CardDescription>余额低于 $5 时自动充值 $25。</CardDescription>
 					</CardHeader>
 					<div className="mt-4">
 						<Button variant="gray" size="sm" disabled>
-							Enable Auto Top-Up
+							启用自动充值
 						</Button>
 					</div>
 				</Card>
@@ -165,7 +161,7 @@ export function CreditsClient({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>Transaction History</CardTitle>
+					<CardTitle>交易记录</CardTitle>
 				</CardHeader>
 				<div className="mt-4">
 					<CreditTransactionTable transactions={transactions} />

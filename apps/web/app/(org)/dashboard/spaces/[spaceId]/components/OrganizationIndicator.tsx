@@ -53,16 +53,16 @@ export const OrganizationIndicator = ({
 				<DialogTrigger asChild>
 					<Button variant="gray" size="sm" className="z-10">
 						<FontAwesomeIcon className="mr-1 size-4" icon={faBuilding} />
-						{memberCount} members
+						{memberCount} 位成员
 					</Button>
 				</DialogTrigger>
 				<DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
 					<DialogHeader
 						icon={<FontAwesomeIcon icon={faBuilding} />}
-						description="View members of this organization"
+						description="查看此组织的成员"
 					>
 						<DialogTitle className="text-lg text-gray-12">
-							{organizationName} Members: {memberCount}
+							{organizationName} 成员：{memberCount}
 						</DialogTitle>
 					</DialogHeader>
 
@@ -126,11 +126,11 @@ export const OrganizationIndicator = ({
 									href="/dashboard/settings/organization"
 								>
 									<FontAwesomeIcon className="size-3" icon={faPlus} />
-									Invite members
+									邀请成员
 								</Button>
 							)}
 							<Button variant="gray" size="sm" onClick={() => setOpen(false)}>
-								Close
+								关闭
 							</Button>
 						</div>
 					</DialogFooter>
@@ -140,7 +140,7 @@ export const OrganizationIndicator = ({
 			{onAddVideos && (
 				<Button variant="dark" size="sm" onClick={onAddVideos}>
 					<FontAwesomeIcon className="size-3" icon={faPlus} />
-					Add videos
+					添加视频
 				</Button>
 			)}
 		</div>

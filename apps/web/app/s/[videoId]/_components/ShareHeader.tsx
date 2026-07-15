@@ -12,6 +12,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Clock, Copy, Globe2, Pencil, Scissors, X } from "lucide-react";
 import moment from "moment";
+import "moment/locale/zh-cn";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -32,6 +33,8 @@ import { usePublicEnv } from "@/utils/public-env";
 import { navigateWithTransition } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
 import { VideoDownloadMenu } from "./VideoDownloadMenu";
+
+moment.locale("zh-cn");
 
 export const ShareHeader = ({
 	data,
@@ -177,7 +180,7 @@ export const ShareHeader = ({
 		if (next === "" || next === displayTitle) return;
 		try {
 			await editTitle(data.id, next);
-			toast.success("Video title updated");
+			toast.success("视频标题已更新");
 			suppressTitleRevealRef.current = true;
 			queryClient.setQueryData<VideoStatusResult>(
 				["videoStatus", data.id],
@@ -188,7 +191,7 @@ export const ShareHeader = ({
 			if (error instanceof Error) {
 				toast.error(error.message);
 			} else {
-				toast.error("Failed to update title - please try again.");
+				toast.error("更新标题失败，请重试。");
 			}
 		}
 	};
@@ -286,7 +289,7 @@ export const ShareHeader = ({
 						variant="outline"
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
-						Not shared{" "}
+						未分享{" "}
 						<FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
 					</Button>
 				);
@@ -298,7 +301,7 @@ export const ShareHeader = ({
 						variant="outline"
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
-						Shared{" "}
+						已分享{" "}
 						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
 					</Button>
 				);
@@ -310,7 +313,7 @@ export const ShareHeader = ({
 					size="xs"
 					variant="outline"
 				>
-					Shared with you
+					已与你共享
 				</Button>
 			);
 		}
@@ -341,12 +344,10 @@ export const ShareHeader = ({
 
 		try {
 			await hideShareableLinkCapLogo(data.orgId);
-			toast.success("Cap logo hidden");
+			toast.success("Cap 徽标已隐藏");
 			refresh();
 		} catch (error) {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to hide Cap logo",
-			);
+			toast.error(error instanceof Error ? error.message : "隐藏 Cap 徽标失败");
 		} finally {
 			setIsHidingBranding(false);
 		}
@@ -364,11 +365,7 @@ export const ShareHeader = ({
 			await selectShareableLinkBrandingOrganization(data.orgId);
 			push("/dashboard/settings/organization");
 		} catch (error) {
-			toast.error(
-				error instanceof Error
-					? error.message
-					: "Failed to open organization settings",
-			);
+			toast.error(error instanceof Error ? error.message : "打开组织设置失败");
 			setIsOpeningBrandingSettings(false);
 		}
 	};
@@ -384,25 +381,25 @@ export const ShareHeader = ({
 							<Button
 								variant="gray"
 								size="xs"
-								aria-label="Edit shareable link branding"
+								aria-label="编辑分享链接品牌标识"
 								className="h-7 gap-1 whitespace-nowrap rounded-full px-2 text-[11px]"
 								disabled={isOpeningBrandingSettings}
 								onClick={handleEditBranding}
 							>
 								<Pencil className="size-3.5 text-gray-12" />
-								Change logo
+								更改徽标
 							</Button>
 							{branding.type === "cap" && (
 								<Button
 									variant="gray"
 									size="xs"
-									aria-label="Hide Cap logo"
+									aria-label="隐藏 Cap 徽标"
 									className="h-7 gap-1 whitespace-nowrap rounded-full px-2 text-[11px]"
 									disabled={isHidingBranding}
 									onClick={handleHideBranding}
 								>
 									<X className="size-3.5 text-gray-12" />
-									Remove
+									移除
 								</Button>
 							)}
 						</div>
@@ -412,7 +409,7 @@ export const ShareHeader = ({
 					<div className="inline-flex h-11 max-w-56 items-center justify-center">
 						<Image
 							src={branding.imageUrl}
-							alt={`${branding.name} logo`}
+							alt={`${branding.name} 徽标`}
 							width={176}
 							height={32}
 							unoptimized
@@ -438,7 +435,7 @@ export const ShareHeader = ({
 			{userIsOwnerAndNotPro && (
 				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
 					<p className="text-center text-gray-12">
-						Shareable links are limited to 5 mins on the free plan.
+						免费套餐的分享链接仅支持前 5 分钟。
 					</p>
 					<Button
 						type="button"
@@ -446,7 +443,7 @@ export const ShareHeader = ({
 						size="sm"
 						variant="blue"
 					>
-						Upgrade To Cap Pro
+						升级到 Cap Pro
 					</Button>
 				</div>
 			)}
@@ -542,7 +539,7 @@ export const ShareHeader = ({
 													onClick={() => handleCopyLink(false)}
 												>
 													<Copy className="w-3.5 h-3.5 shrink-0" />
-													Copy link
+													复制链接
 												</button>
 												<button
 													type="button"
@@ -550,7 +547,7 @@ export const ShareHeader = ({
 													onClick={() => handleCopyLink(true)}
 												>
 													<Clock className="w-3.5 h-3.5 shrink-0" />
-													Copy link at {formatTimestamp(capturedTime)}
+													复制从 {formatTimestamp(capturedTime)} 开始的链接
 												</button>
 											</div>
 										)}
@@ -570,7 +567,7 @@ export const ShareHeader = ({
 										onClick={() => setUpgradeModalOpen(true)}
 									>
 										<Globe2 className="mr-1 w-4 h-4" />
-										Connect a custom domain
+										连接自定义域名
 									</button>
 								)}
 							</div>
@@ -608,7 +605,7 @@ export const ShareHeader = ({
 												onClick={handleEditVideo}
 											>
 												<Scissors className="size-3.5 text-gray-12" />
-												Edit video
+												编辑视频
 											</Button>
 										)}
 										<Button
@@ -623,7 +620,7 @@ export const ShareHeader = ({
 												className="size-3.5 text-gray-12"
 												icon={faChartSimple}
 											/>
-											View analytics
+											查看分析
 										</Button>
 									</>
 								)}
@@ -634,7 +631,7 @@ export const ShareHeader = ({
 										push("/dashboard/caps?page=1");
 									}}
 								>
-									Go to dashboard
+									前往控制面板
 								</Button>
 							</div>
 						)}

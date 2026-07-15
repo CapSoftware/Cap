@@ -2,6 +2,7 @@ import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import moment from "moment";
+import "moment/locale/zh-cn";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -9,6 +10,8 @@ import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
 import { Tooltip } from "@/components/Tooltip";
 import type { CapCardProps } from "./CapCard";
+
+moment.locale("zh-cn");
 
 interface CapContentProps {
 	cap: CapCardProps["cap"];
@@ -48,14 +51,14 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
 		try {
 			await editTitle(cap.id, title);
-			toast.success("Video title updated");
+			toast.success("视频标题已更新");
 			setIsEditing(false);
 			router.refresh();
 		} catch (error) {
 			if (error instanceof Error) {
 				toast.error(error.message);
 			} else {
-				toast.error("Failed to update title - please try again.");
+				toast.error("更新标题失败，请重试。");
 			}
 		}
 	};
@@ -84,7 +87,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 		const isValidDate = moment(dateValue).isValid();
 
 		if (!isValidDate) {
-			toast.error("Invalid date format. Please use YYYY-MM-DD HH:mm:ss");
+			toast.error("日期格式无效，请使用 YYYY-MM-DD HH:mm:ss");
 			setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
 			setIsDateEditing(false);
 			return;
@@ -94,7 +97,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 		const currentDate = moment();
 
 		if (selectedDate.isAfter(currentDate)) {
-			toast.error("Cannot set a date in the future");
+			toast.error("不能设置未来日期");
 			setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
 			setIsDateEditing(false);
 			return;
@@ -107,14 +110,14 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
 		try {
 			await editDate(cap.id, selectedDate.toISOString());
-			toast.success("Video date updated");
+			toast.success("视频日期已更新");
 			setIsDateEditing(false);
 			router.refresh();
 		} catch (error) {
 			if (error instanceof Error) {
 				toast.error(error.message);
 			} else {
-				toast.error("Failed to update date - please try again.");
+				toast.error("更新日期失败，请重试。");
 			}
 		}
 	};
@@ -147,7 +150,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						className={baseClassName}
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
-						Not shared{" "}
+						未分享{" "}
 						<FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
 					</p>
 				);
@@ -157,13 +160,13 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						className={baseClassName}
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
-						Shared{" "}
+						已分享{" "}
 						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
 					</p>
 				);
 			}
 		} else {
-			return <p className={baseClassName}>Shared with you</p>;
+			return <p className={baseClassName}>与你分享</p>;
 		}
 	};
 
@@ -213,7 +216,9 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						/>
 					</div>
 				) : (
-					<Tooltip content={`Cap created at ${effectiveDate}`}>
+					<Tooltip
+						content={`Cap 创建于 ${effectiveDate.toLocaleString("zh-CN")}`}
+					>
 						<p
 							className="text-sm truncate text-gray-10 cursor-pointer flex items-center h-full leading-[1.5rem]"
 							onClick={handleDateClick}

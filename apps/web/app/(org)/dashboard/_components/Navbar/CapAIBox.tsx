@@ -28,7 +28,7 @@ const CapAIBox = ({
 				>
 					<div className="flex justify-between items-center px-3 pb-3 w-full">
 						<h3 className="text-sm font-medium text-gray-12">Cap AI</h3>
-						<p className="text-[11px] text-gray-10">Available now</p>
+						<p className="text-[11px] text-gray-10">现已推出</p>
 					</div>
 					<CapAIArt />
 					<div
@@ -41,7 +41,7 @@ const CapAIBox = ({
 						}}
 						aria-hidden={!hovered}
 					>
-						Read more
+						了解更多
 					</div>
 				</motion.div>
 			</DialogTrigger>

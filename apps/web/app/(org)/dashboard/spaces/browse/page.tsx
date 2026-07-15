@@ -61,7 +61,7 @@ export default function BrowseSpacesPage() {
 		const organizationRole = normalizeOrganizationRole(role);
 		if (organizationRole) return organizationRoleLabel(organizationRole);
 		const spaceRole = normalizeSpaceRole(role);
-		return spaceRole ? spaceRoleLabel(spaceRole) : "Member";
+		return spaceRole ? spaceRoleLabel(spaceRole) : "成员";
 	};
 
 	const confirmRemoveSpace = async () => {
@@ -70,17 +70,17 @@ export default function BrowseSpacesPage() {
 		try {
 			const result = await deleteSpace(pendingDeleteSpace.id);
 			if (result.success) {
-				toast.success("Space deleted successfully");
+				toast.success("空间已删除");
 				router.refresh();
 				if (params.spaceId === pendingDeleteSpace.id) {
 					router.push("/dashboard");
 				}
 			} else {
-				toast.error(result.error || "Failed to delete space");
+				toast.error(result.error || "删除空间失败");
 			}
 		} catch (error) {
-			console.error("Error deleting space:", error);
-			toast.error("Failed to delete space");
+			console.error("删除空间时出错：", error);
+			toast.error("删除空间失败");
 		} finally {
 			setRemoving(false);
 			setConfirmOpen(false);
@@ -97,7 +97,7 @@ export default function BrowseSpacesPage() {
 					variant="dark"
 				>
 					<FontAwesomeIcon className="size-3" icon={faPlus} />
-					Create Space
+					创建空间
 				</Button>
 				<div className="flex relative w-full max-w-md">
 					<div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
@@ -105,7 +105,7 @@ export default function BrowseSpacesPage() {
 					</div>
 					<Input
 						type="text"
-						placeholder="Search spaces..."
+						placeholder="搜索空间……"
 						className="flex-1 pr-3 pl-8 w-full min-w-full text-sm placeholder-gray-8"
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
@@ -116,25 +116,25 @@ export default function BrowseSpacesPage() {
 				<table className="min-w-full bg-gray-1">
 					<thead>
 						<tr className="text-sm text-left text-gray-10">
-							<th className="px-6 py-3 font-medium">Name</th>
-							<th className="px-6 py-3 font-medium">Members</th>
-							<th className="px-6 py-3 font-medium">Videos</th>
-							<th className="px-6 py-3 font-medium">Role</th>
-							<th className="px-6 py-3 font-medium">Actions</th>
+							<th className="px-6 py-3 font-medium">名称</th>
+							<th className="px-6 py-3 font-medium">成员</th>
+							<th className="px-6 py-3 font-medium">视频</th>
+							<th className="px-6 py-3 font-medium">角色</th>
+							<th className="px-6 py-3 font-medium">操作</th>
 						</tr>
 					</thead>
 					<tbody>
 						{!spacesData && (
 							<tr>
 								<td colSpan={5} className="px-6 py-6 text-center text-gray-8">
-									Loading Spaces…
+									正在加载空间……
 								</td>
 							</tr>
 						)}
 						{spacesData && filteredSpaces && filteredSpaces.length === 0 && (
 							<tr>
 								<td colSpan={5} className="px-6 py-6 text-center text-gray-8">
-									No spaces found.
+									未找到空间。
 								</td>
 							</tr>
 						)}
@@ -157,12 +157,10 @@ export default function BrowseSpacesPage() {
 										</span>
 									</td>
 									<td className="px-6 py-4 text-sm text-gray-12">
-										{space.memberCount} member
-										{space.memberCount === 1 ? "" : "s"}
+										{space.memberCount} 位成员
 									</td>
 									<td className="px-6 py-4 text-sm text-gray-12">
-										{space.videoCount} video
-										{space.videoCount === 1 ? "" : "s"}
+										{space.videoCount} 个视频
 									</td>
 									<td className="px-6 py-4 text-sm text-gray-12">
 										{getRoleLabel(space.currentUserRole)}
@@ -230,14 +228,14 @@ export default function BrowseSpacesPage() {
 			<ConfirmationDialog
 				open={confirmOpen}
 				icon={<FontAwesomeIcon icon={faLayerGroup} />}
-				title="Delete space"
+				title="删除空间"
 				description={
 					pendingDeleteSpace
-						? `Are you sure you want to delete the space "${pendingDeleteSpace?.name || "selected"}"? This action cannot be undone.`
-						: "Are you sure you want to delete this space? This action cannot be undone."
+						? `确定要删除空间“${pendingDeleteSpace?.name || "所选空间"}”吗？此操作无法撤销。`
+						: "确定要删除此空间吗？此操作无法撤销。"
 				}
-				confirmLabel={removing ? "Deleting..." : "Delete"}
-				cancelLabel="Cancel"
+				confirmLabel={removing ? "正在删除……" : "删除"}
+				cancelLabel="取消"
 				loading={removing}
 				onConfirm={confirmRemoveSpace}
 				onCancel={() => {

@@ -217,7 +217,7 @@ export const Toolbar = ({
 								type="text"
 								value={comment}
 								onChange={(e) => setComment(e.target.value)}
-								placeholder="Add a comment"
+								placeholder="添加评论"
 								className="flex-grow px-3 h-full outline-none"
 								maxLength={255}
 								onKeyDown={(e) => {
@@ -244,7 +244,7 @@ export const Toolbar = ({
 										handleCommentSubmit();
 									}}
 								>
-									Comment
+									评论
 								</MotionButton>
 								<MotionButton
 									variant="gray"
@@ -255,7 +255,7 @@ export const Toolbar = ({
 										setComment("");
 									}}
 								>
-									Cancel
+									取消
 								</MotionButton>
 							</motion.div>
 						</motion.div>
@@ -300,7 +300,7 @@ export const Toolbar = ({
 										size="sm"
 										className="mx-auto w-fit"
 									>
-										Comment
+										评论
 									</MotionButton>
 								</div>
 							)}
@@ -320,26 +320,26 @@ export const Toolbar = ({
 const REACTIONS = [
 	{
 		emoji: "😂",
-		label: "joy",
+		label: "开心",
 	},
 	{
 		emoji: "😍",
-		label: "love",
+		label: "喜爱",
 	},
 	{
 		emoji: "😮",
-		label: "wow",
+		label: "惊讶",
 	},
 	{
 		emoji: "🙌",
-		label: "yay",
+		label: "欢呼",
 	},
 	{
 		emoji: "👍",
-		label: "up",
+		label: "赞",
 	},
 	{
 		emoji: "👎",
-		label: "down",
+		label: "踩",
 	},
 ];

@@ -158,27 +158,24 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 }
 
 function PolicyDeniedView({ reason }: { reason?: string }) {
-	let title = "This video is private";
+	let title = "此视频为私密内容";
 	let description: React.ReactNode = (
 		<>
-			If you own this video, please <Link href="/login">sign in</Link> to manage
-			sharing.
+			如果你是此视频的所有者，请<Link href="/login">登录</Link>后管理分享设置。
 		</>
 	);
 
 	if (reason === "email_restriction_login_required") {
-		title = "This video requires sign-in";
+		title = "此视频需要登录后观看";
 		description = (
 			<>
-				The owner of this video has restricted access. Please{" "}
-				<Link href="/login">sign in</Link> with an authorized email address to
-				view.
+				视频所有者限制了访问权限。请使用获准的邮箱地址
+				<Link href="/login">登录</Link>后观看。
 			</>
 		);
 	} else if (reason === "email_restriction_denied") {
-		title = "Access restricted";
-		description =
-			"Your email address does not meet the requirements set by the video owner.";
+		title = "访问受限";
+		description = "你的邮箱地址不符合视频所有者设置的访问要求。";
 	}
 
 	return (
@@ -232,8 +229,8 @@ export async function generateMetadata(
 				onNone: () =>
 					awaitRecording
 						? {
-								title: "Cap: Preparing Video",
-								description: "This recording is being made available.",
+								title: "Cap：正在准备视频",
+								description: "此录制正在准备中。",
 								robots: "noindex, nofollow",
 							}
 						: notFound(),
@@ -252,8 +249,8 @@ export async function generateMetadata(
 					).toString();
 
 					return {
-						title: `${video.name} | Cap Recording`,
-						description: "Watch this video on Cap",
+						title: `${video.name}｜Cap 录制`,
+						description: "在 Cap 上观看此视频",
 						openGraph: {
 							images: [
 								{
@@ -279,8 +276,8 @@ export async function generateMetadata(
 						},
 						twitter: {
 							card: "player",
-							title: `${video.name} | Cap Recording`,
-							description: "Watch this video on Cap",
+							title: `${video.name}｜Cap 录制`,
+							description: "在 Cap 上观看此视频",
 							images: [
 								{
 									url: previewImageUrl,
@@ -314,8 +311,8 @@ export async function generateMetadata(
 		Effect.catchTags({
 			PolicyDenied: () =>
 				Effect.succeed({
-					title: "Cap: This video is restricted",
-					description: "This video has restricted access.",
+					title: "Cap：此视频访问受限",
+					description: "此视频的访问权限受限。",
 					openGraph: {
 						images: [
 							{
@@ -343,8 +340,8 @@ export async function generateMetadata(
 				}),
 			VerifyVideoPasswordError: () =>
 				Effect.succeed({
-					title: "Cap: Password Protected Video",
-					description: "This video is password protected.",
+					title: "Cap：受密码保护的视频",
+					description: "此视频受密码保护。",
 					openGraph: {
 						images: [
 							{
@@ -359,8 +356,8 @@ export async function generateMetadata(
 					},
 					twitter: {
 						card: "summary_large_image",
-						title: "Cap: Password Protected Video",
-						description: "This video is password protected.",
+						title: "Cap：受密码保护的视频",
+						description: "此视频受密码保护。",
 						images: [
 							new URL(
 								`/api/video/og?videoId=${videoId}`,

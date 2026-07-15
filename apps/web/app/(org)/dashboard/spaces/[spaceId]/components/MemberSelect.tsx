@@ -51,12 +51,12 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 		{
 			disabled = false,
 			className = "",
-			placeholder = "Add Member...",
+			placeholder = "添加成员…",
 			selected = [],
 			onSelect,
 			canManageMembers,
 			showEmptyIfNoMembers = false,
-			emptyMessage = "No members in your organization",
+			emptyMessage = "你的组织中暂无其他成员",
 			...props
 		},
 		ref,
@@ -120,7 +120,7 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 			>
 				{!showEmptyIfNoMembers && trueActiveOrgMembers?.length === 0 && (
 					<EmptyMessage
-						message="No members in your organization"
+						message={emptyMessage}
 						showUpgradeButton={true}
 						onButtonClick={() => setIsOpen(false)}
 					/>
@@ -130,7 +130,7 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 				{showEmptyIfNoMembers && trueActiveOrgMembers?.length === 0 && (
 					<div className="py-3">
 						<EmptyMessage
-							message="No members in your organization"
+							message={emptyMessage}
 							showUpgradeButton={true}
 							onButtonClick={() => setIsOpen(false)}
 						/>
@@ -143,7 +143,7 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 					trueActiveOrgMembers.length > 0 &&
 					selected.length === 0 && (
 						<EmptyMessage
-							message="No members have been added to this space"
+							message="此空间尚未添加成员"
 							showUpgradeButton={false}
 							onButtonClick={() => setIsOpen(false)}
 						/>
@@ -234,7 +234,7 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 										type="button"
 										onClick={() => handleRemove(tag)}
 										className="flex justify-center items-center rounded-full transition-colors cursor-pointer size-6 bg-gray-6 hover:bg-gray-7"
-										aria-label={`Remove ${tag.label}`}
+										aria-label={`移除 ${tag.label}`}
 									>
 										<FontAwesomeIcon
 											className="text-gray-12 size-3"
@@ -272,7 +272,7 @@ const EmptyMessage: React.FC<EmptyMessageProps> = ({
 				onClick={onButtonClick}
 			>
 				<FontAwesomeIcon className="size-3" icon={faPlus} />
-				Invite members
+				邀请成员
 			</Button>
 		)}
 	</div>

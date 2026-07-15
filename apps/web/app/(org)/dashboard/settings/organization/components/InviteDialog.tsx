@@ -32,8 +32,8 @@ type InviteEmail = {
 };
 
 const roleOptions = [
-	{ value: "member", label: "Member" },
-	{ value: "admin", label: "Admin" },
+	{ value: "member", label: "成员" },
+	{ value: "admin", label: "管理员" },
 ];
 
 export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
@@ -61,9 +61,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 
 		const invalidEmails = newEmails.filter((email) => !emailRegex.test(email));
 		if (invalidEmails.length > 0) {
-			toast.error(
-				`Invalid email${invalidEmails.length > 1 ? "s" : ""}: ${invalidEmails.join(", ")}`,
-			);
+			toast.error(`邮箱地址无效：${invalidEmails.join(", ")}`);
 			return null;
 		}
 
@@ -104,7 +102,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 	const sendInvites = useMutation({
 		mutationFn: async (emails: InviteEmail[]) => {
 			if (!activeOrganization?.organization.id) {
-				throw new Error("No active organization");
+				throw new Error("没有活动组织");
 			}
 			return await sendOrganizationInvites(
 				emails,
@@ -117,15 +115,11 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 			if (result.failedEmails.length > 0) {
 				toast.warning(
 					sendEmailNotifications
-						? `Invites sent, but delivery failed for: ${result.failedEmails.join(", ")}`
-						: `Users added, but provisioning failed for: ${result.failedEmails.join(", ")}`,
+						? `邀请已发送，但以下地址投递失败：${result.failedEmails.join(", ")}`
+						: `用户已添加，但以下用户配置失败：${result.failedEmails.join(", ")}`,
 				);
 			} else {
-				toast.success(
-					sendEmailNotifications
-						? "Invites sent successfully"
-						: "Users added successfully",
-				);
+				toast.success(sendEmailNotifications ? "邀请已发送" : "用户已添加");
 			}
 			setIsOpen(false);
 			router.refresh();
@@ -133,9 +127,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 		onError: (error) => {
 			console.error("Error sending invites:", error);
 			toast.error(
-				error instanceof Error
-					? error.message
-					: "An error occurred while sending invites",
+				error instanceof Error ? error.message : "发送邀请时发生错误",
 			);
 		},
 	});
@@ -156,10 +148,10 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 			<DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faUserGroup} className="size-3.5" />}
-					description="Invite your teammates to join the organization"
+					description="邀请团队成员加入组织"
 				>
 					<DialogTitle>
-						Invite to{" "}
+						邀请加入{" "}
 						<span className="font-medium text-gray-12">
 							{activeOrganization?.organization.name}
 						</span>
@@ -199,7 +191,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 								</span>
 								<Select
 									value={invite.role}
-									placeholder="Role"
+									placeholder="角色"
 									options={roleOptions}
 									size="sm"
 									variant="gray"
@@ -221,18 +213,16 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 									size="xs"
 									onClick={() => handleRemoveEmail(invite.email)}
 								>
-									Remove
+									移除
 								</Button>
 							</div>
 						))}
 					</div>
 					<div className="flex gap-3 justify-between items-center p-3 mt-4 rounded-lg border border-gray-4 bg-gray-1">
 						<div>
-							<p className="text-sm font-medium text-gray-12">
-								Send invite email
-							</p>
+							<p className="text-sm font-medium text-gray-12">发送邀请邮件</p>
 							<p className="mt-1 text-xs text-gray-10">
-								Turn off to add users without emailing them.
+								关闭后可直接添加用户而不发送邮件。
 							</p>
 						</div>
 						<Switch
@@ -248,7 +238,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 						variant="gray"
 						onClick={() => setIsOpen(false)}
 					>
-						Cancel
+						取消
 					</Button>
 					<Button
 						type="button"
@@ -262,7 +252,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 						data-invite-submit="true"
 						onClick={handleSendInvites}
 					>
-						{sendEmailNotifications ? "Send Invites" : "Add Users"}
+						{sendEmailNotifications ? "发送邀请" : "添加用户"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

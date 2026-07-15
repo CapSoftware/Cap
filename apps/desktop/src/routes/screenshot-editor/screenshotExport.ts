@@ -29,13 +29,13 @@ const hasNoVisibleBackground = (source: {
 export function screenshotShareStatusText(status: ScreenshotExportStatus) {
 	switch (status) {
 		case "rendering":
-			return "Rendering screenshot";
+			return "正在渲染截图";
 		case "encoding":
-			return "Preparing upload";
+			return "正在准备上传";
 		case "uploading":
-			return "Uploading screenshot";
+			return "正在上传截图";
 		default:
-			return "Create shareable link";
+			return "创建分享链接";
 	}
 }
 
@@ -410,13 +410,13 @@ export const screenshotProjectFingerprint = async (
 
 const shareLinkFromUploadResult = (result: UploadResult) => {
 	if (result === "NotAuthenticated") {
-		throw new Error("You need to sign in to create shareable links");
+		throw new Error("需要登录后才能创建分享链接");
 	}
 	if (result === "PlanCheckFailed") {
-		throw new Error("Failed to verify your subscription status");
+		throw new Error("无法验证你的订阅状态");
 	}
 	if (result === "UpgradeRequired") {
-		throw new Error("This feature requires an upgraded plan");
+		throw new Error("此功能需要升级套餐");
 	}
 
 	return result.Success;

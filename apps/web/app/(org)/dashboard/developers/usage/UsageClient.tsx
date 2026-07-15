@@ -16,13 +16,13 @@ export function UsageClient() {
 
 	return (
 		<div className="flex flex-col gap-5">
-			<h2 className="text-base font-medium text-gray-12">Usage Overview</h2>
+			<h2 className="text-base font-medium text-gray-12">用量概览</h2>
 
 			<div className="grid gap-3 sm:grid-cols-3">
-				<StatBox label="Total Videos" value={totalVideos} />
-				<StatBox label="Total Apps" value={apps.length} />
+				<StatBox label="视频总数" value={totalVideos} />
+				<StatBox label="应用总数" value={apps.length} />
 				<StatBox
-					label="Credit Balance"
+					label="额度余额"
 					value={`$${(totalBalance / 100_000).toFixed(2)}`}
 				/>
 			</div>
@@ -30,23 +30,23 @@ export function UsageClient() {
 			{apps.length > 0 && (
 				<Card>
 					<CardHeader>
-						<CardTitle>Usage by App</CardTitle>
+						<CardTitle>各应用用量</CardTitle>
 					</CardHeader>
 					<div className="overflow-x-auto rounded-lg border border-gray-3 mt-4">
 						<table className="w-full text-sm">
 							<thead>
 								<tr className="border-b border-gray-3 bg-gray-3/50">
 									<th className="px-4 py-2.5 text-left text-xs font-medium text-gray-10">
-										App
+										应用
 									</th>
 									<th className="px-4 py-2.5 text-left text-xs font-medium text-gray-10">
-										Environment
+										环境
 									</th>
 									<th className="px-4 py-2.5 text-right text-xs font-medium text-gray-10">
-										Videos
+										视频
 									</th>
 									<th className="px-4 py-2.5 text-right text-xs font-medium text-gray-10">
-										Balance
+										余额
 									</th>
 								</tr>
 							</thead>

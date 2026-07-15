@@ -151,7 +151,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 				}
 			} else {
 				setEmailStatus("error");
-				setEmailError(result.error ?? "Something went wrong.");
+				setEmailError(result.error ?? "出现问题，请重试。");
 			}
 		});
 	};
@@ -263,7 +263,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 												)}
 											>
 												{mode.label}
-												<span className="hidden sm:inline"> Mode</span>
+												<span className="hidden sm:inline">模式</span>
 											</span>
 										</button>
 									);
@@ -286,7 +286,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 									exit={{ opacity: 0, y: -6 }}
 									transition={{ duration: 0.25, ease: "easeOut" }}
 								>
-									with {activeMode?.label ?? "Instant"} Mode...
+									使用{activeMode?.label ?? "即时"}模式...
 								</motion.span>
 							</AnimatePresence>
 						</div>
@@ -320,7 +320,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						<div className="hidden md:flex flex-col gap-4 mb-5">
 							<div className="flex flex-wrap gap-4 items-center">
 								{downloadButton}
-								<span className="text-sm font-medium text-gray-500">or</span>
+								<span className="text-sm font-medium text-gray-500">或</span>
 								<ChromeExtensionButton
 									variant="white"
 									onClick={() =>
@@ -342,8 +342,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 							<div className="flex gap-2 items-center">
 								{upgradeButton}
 								<span className="max-w-[240px] text-sm leading-snug text-gray-10">
-									Cap Pro gives you unlimited cloud sharing, AI summaries &amp;
-									team features
+									Cap Pro 提供不限量云端分享、AI 摘要和团队功能
 								</span>
 							</div>
 						</div>
@@ -358,8 +357,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						{emailStatus === "sent" ? (
 							<div className="rounded-xl bg-green-50 border border-green-200 px-4 py-3">
 								<p className="text-sm font-medium text-green-800">
-									Check your inbox! We've sent the download links to{" "}
-									<strong>{email}</strong>.
+									请查看收件箱！下载链接已发送至 <strong>{email}</strong>.
 								</p>
 							</div>
 						) : (
@@ -380,7 +378,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 									disabled={isPending}
 									className="w-full rounded-full bg-black px-5 py-2.5 text-sm font-medium text-white transition-opacity disabled:opacity-60"
 								>
-									{isPending ? "Sending..." : "Email me the download link"}
+									{isPending ? "正在发送..." : "将下载链接发送到邮箱"}
 								</button>
 								{emailStatus === "error" && (
 									<p className="text-xs text-red-600">{emailError}</p>
@@ -399,8 +397,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 								}
 							/>
 							<span className="text-xs text-center text-gray-10">
-								Cap Pro gives you unlimited cloud sharing, AI summaries &amp;
-								team features
+								Cap Pro 提供不限量云端分享、AI 摘要和团队功能
 							</span>
 						</div>
 					</div>
@@ -411,7 +408,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 							className="inline-flex gap-2 items-center text-sm font-medium transition-colors group text-gray-11 hover:text-gray-12"
 						>
 							<LoomMark size={15} />
-							Coming from Loom? Bring your library with you
+							正在从 Loom 迁移？将你的内容库一起带过来
 							<FontAwesomeIcon
 								icon={faArrowRight}
 								className="size-3 text-gray-9 transition-transform group-hover:translate-x-0.5"
@@ -445,7 +442,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 
 					<div className="mt-14">
 						<p className="mb-4 text-sm italic text-gray-10 text-center md:text-left">
-							Trusted by <strong>40,000+</strong> teams, builders and creators
+							获得 <strong>40,000+</strong> 个团队、开发者和创作者信赖
 						</p>
 						<LogoMarquee />
 					</div>
@@ -472,7 +469,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						quality={75}
 						priority
 						sizes="(min-width: 1536px) 1200px, (min-width: 1280px) 1000px, 100vw"
-						alt="App"
+						alt="Cap 应用"
 						className="object-cover relative inset-0 rounded-xl opacity-70 size-full"
 					/>
 				</div>

@@ -22,11 +22,11 @@ export function AppCard({ app }: { app: DeveloperApp }) {
 				/>
 			</div>
 			<div className="flex gap-4 text-xs text-gray-10">
-				<span>{app.videoCount} videos</span>
+				<span>{app.videoCount} 个视频</span>
 				<span>
 					{app.creditAccount
-						? `$${((app.creditAccount.balanceMicroCredits ?? 0) / 100_000).toFixed(2)} credits`
-						: "$0.00 credits"}
+						? `$${((app.creditAccount.balanceMicroCredits ?? 0) / 100_000).toFixed(2)} 额度`
+						: "$0.00 额度"}
 				</span>
 			</div>
 		</Link>

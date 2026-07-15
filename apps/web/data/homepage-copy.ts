@@ -135,288 +135,283 @@ export interface HomePageCopy {
 export const homepageCopy: HomePageCopy = {
 	header: {
 		announcement: {
-			text: "Early Adopter Pricing Ends Soon — Lock In Your Discount",
+			text: "早期用户优惠即将结束——立即锁定折扣",
 			href: "/pricing",
 		},
 		variants: {
 			default: {
-				title: "The only screen recording app you need",
+				title: "一款应用，满足所有屏幕录制需求",
 				description:
-					"Cap is the only screen recording tool you need — three modes in one app that replace your recorder, editor, screenshot tool, and video host. Fully open source, and you can connect your own Google Drive or S3 bucket, so you own every recording.",
+					"Cap 将三种模式集成在一款应用中，可替代录屏、编辑、截图和视频托管工具。它完全开源，还能连接你自己的 Google 云端硬盘或 S3 存储桶，让每一份录制内容真正属于你。",
 			},
 		},
 		modes: [
 			{
 				id: "instant",
-				label: "Instant",
-				title: "Record and share in seconds",
+				label: "即时",
+				title: "数秒内完成录制与分享",
 			},
 			{
 				id: "studio",
-				label: "Studio",
-				title: "Record and edit locally",
+				label: "工作室",
+				title: "在本地录制并编辑",
 			},
 			{
 				id: "screenshot",
-				label: "Screenshot",
-				title: "Capture, annotate and copy",
+				label: "截图",
+				title: "截取、标注并复制",
 			},
 		],
 		links: [
-			{ label: "Screen recordings", href: "/screen-recorder" },
-			{ label: "Screenshots", href: "/features" },
-			{ label: "Privacy", href: "/privacy" },
-			{ label: "Open source", href: "/open-source-screen-recorder" },
+			{ label: "屏幕录制", href: "/screen-recorder" },
+			{ label: "截图", href: "/features" },
+			{ label: "隐私", href: "/privacy" },
+			{ label: "开源", href: "/open-source-screen-recorder" },
 		],
 		cta: {
-			primaryButton: "Upgrade to Cap Pro",
-			secondaryButton: "View on GitHub",
-			freeVersionText:
-				"No credit card required. Record locally, share when you choose.",
-			seeOtherOptionsText: "More download options",
+			primaryButton: "升级到 Cap Pro",
+			secondaryButton: "在 GitHub 查看",
+			freeVersionText: "无需信用卡。本地录制，由你决定何时分享。",
+			seeOtherOptionsText: "更多下载选项",
 		},
 	},
-	textReveal: "Record. Edit. Share.",
+	textReveal: "录制。编辑。分享。",
 	recordingModes: {
-		title: "Three Modes, Zero Compromise",
+		title: "三种模式，毫不妥协",
 		subtitle:
-			"Instant Mode uploads as you record, so a shareable link is ready the moment you stop. Studio Mode keeps everything local for pixel-perfect editing. Screenshot, when a single frame is enough.",
+			"即时模式会边录边上传，停止录制时分享链接已准备就绪；工作室模式将一切保留在本地，便于精细编辑；只需要一个画面时，就用截图模式。",
 		modes: [
 			{
 				name: "Instant Mode",
 				description:
-					"Hit record, stop, share link. Your video is live in seconds with auto-generated captions, a title, summary, chapters, and more. Perfect for quick feedback, bug reports, or when you just need to show something fast.",
+					"点击录制、停止，再分享链接。视频数秒内即可上线，并自动生成字幕、标题、摘要和章节等内容。非常适合快速反馈、错误报告，或需要迅速演示某项内容的场景。",
 			},
 			{
 				name: "Studio Mode",
 				description:
-					"Professional recordings with local editing, custom backgrounds, and export options. When you need pixel-perfect demos, tutorials, or presentations that represent your brand.",
+					"专业级录制，支持本地编辑、自定义背景和多种导出选项。适合制作精细的演示、教程或展现品牌形象的演示文稿。",
 			},
 		],
 	},
 	features: {
-		title: "Built For How You Actually Work",
+		title: "为真实工作方式而打造",
 		subtitle:
-			"We obsessed over the details so you don't have to. Every feature is designed to save you time and make you look good.",
+			"我们打磨每一个细节，让你无需操心。每项功能都旨在节省时间，并让成果更专业。",
 		features: [
 			{
-				title: "Your Storage, Your Rules",
+				title: "你的存储，由你掌控",
 				description:
-					"Connect your own Google Drive or S3 bucket, use Cap Cloud, or keep everything local. You're never locked into our infrastructure, perfect for teams with compliance requirements or anyone who values data sovereignty.",
+					"连接你自己的 Google 云端硬盘或 S3 存储桶、使用 Cap 云端，或将所有内容保留在本地。无需绑定我们的基础设施，适合有合规要求的团队，以及重视数据主权的用户。",
 			},
 			{
-				title: "Privacy by Default, Sharing by Choice",
+				title: "默认保护隐私，自主选择分享",
 				description:
-					"Instant sharing when you need it, local recording when you want it. Share publicly or privately, password-protect sensitive recordings, or keep them local only.",
+					"需要时即时分享，想要时本地录制。可公开或私密分享、为敏感录制添加密码，或只保存在本地。",
 			},
 			{
-				title: "Async Collaboration That Actually Works",
+				title: "真正高效的异步协作",
 				description:
-					'Comments, reactions, and transcripts keep conversations moving without another meeting. See who watched, get notified on feedback, and turn recordings into actionable next steps. Replace those "quick sync" calls for good.',
+					"评论、回应和文字稿让沟通持续推进，无需再开一场会议。查看谁已观看、及时收到反馈通知，并将录制内容转化为可执行的下一步，彻底告别所谓的‘快速同步’电话。",
 			},
 			{
-				title: "Cross-Platform For Your Entire Team",
+				title: "覆盖整个团队的跨平台体验",
 				description:
-					"Native apps for macOS and Windows that feel at home on each platform, plus a Chrome extension when browser recording is the right fit. Fast, reliable recording that works with your existing tools and workflow.",
+					"为 macOS 和 Windows 提供贴合各自平台的原生应用，也提供适合浏览器录制的 Chrome 扩展。录制快速可靠，可融入现有工具和工作流程。",
 			},
 			{
-				title: "Quality That Makes You Look Professional",
+				title: "专业水准的画质",
 				description:
-					"4K recording, 60fps capture, and intelligent compression that keeps file sizes reasonable.",
+					"支持 4K 录制、60 帧捕获和智能压缩，在保证画质的同时控制文件大小。",
 			},
 			{
-				title: "Truly Open Source",
+				title: "真正开源",
 				description:
-					"See exactly how Cap works, contribute features you need, or self-host for complete control. Join a community of builders who believe great tools should be transparent, extensible, and respect their users.",
+					"清楚了解 Cap 的工作原理、贡献你需要的功能，或通过自托管获得完全控制。加入由开发者组成的社区，共同打造透明、可扩展且尊重用户的优秀工具。",
 			},
 			{
-				title: "Speed Up Your Workflow With Cap AI",
+				title: "用 Cap AI 加速工作流程",
 				description:
-					"Auto-generated titles, summaries, clickable chapters, and transcriptions for every recording. AI features that actually save time instead of creating more work.",
+					"为每段录制自动生成标题、摘要、可点击章节和文字稿。真正节省时间，而不是增加额外工作。",
 			},
 			{
-				title: "Import Your Loom Videos",
+				title: "导入 Loom 视频",
 				description:
-					"Switching from Loom? Import your existing recordings directly into Cap with our built-in importer. Keep all your content in one place without starting from scratch.",
+					"正在从 Loom 迁移？使用内置导入工具，将现有录制直接导入 Cap，无需从头开始，即可集中管理所有内容。",
 			},
 		],
 	},
 	bento: {
-		eyebrow: "Why Cap",
-		title: "Built To Be Yours",
+		eyebrow: "为何选择 Cap",
+		title: "为真正属于你而打造",
 		subtitle:
-			"Every feature respects how you actually work — your storage, your platform, your workflow. No vendor lock-in, no compromises.",
+			"每项功能都尊重你的真实工作方式——你的存储、你的平台、你的流程。没有厂商锁定，也无需妥协。",
 		cards: [
 			{
 				key: "storage",
-				title: "Bring Your Own Storage",
+				title: "使用你自己的存储",
 				description:
-					"Plug in your own Google Drive or S3 bucket, route to Cap Cloud, or keep recordings entirely local. Your videos, your storage, your bill, with no vendor lock-in, ever.",
+					"接入你自己的 Google 云端硬盘或 S3 存储桶、使用 Cap 云端，或将录制完全保留在本地。视频、存储和费用都由你掌控，永远没有厂商锁定。",
 			},
 			{
 				key: "ai",
-				title: "Cap AI Does The Busywork",
+				title: "让 Cap AI 处理繁琐工作",
 				description:
-					"Every recording gets an AI-generated title, summary, clickable chapters, and a fully searchable transcript — so the work after the recording is already done.",
+					"每段录制都会由 AI 生成标题、摘要、可点击章节和可全文搜索的文字稿，让录制后的整理工作自动完成。",
 			},
 			{
 				key: "async",
-				title: "Async Conversations That Move",
+				title: "持续推进的异步沟通",
 				description:
-					"Threaded comments, emoji reactions, and viewer analytics turn one-way videos into two-way conversations. Replace the standing meeting for good.",
+					"串联评论、表情回应和观看分析将单向视频变成双向交流，真正替代固定会议。",
 			},
 			{
 				key: "native",
-				title: "Native, Not An Electron Tab",
+				title: "真正原生，而非 Electron 标签页",
 				description:
-					"Built on Tauri and Rust for genuinely native performance on macOS and Windows. No bloated browser, no battery hit — just a fast, lightweight recorder.",
+					"基于 Tauri 和 Rust 构建，在 macOS 和 Windows 上提供真正原生的性能。没有臃肿浏览器，也不额外消耗电量，只有快速轻量的录制体验。",
 			},
 			{
 				key: "oss",
-				title: "Open Source, End To End",
+				title: "从端到端，完全开源",
 				description:
-					"Inspect every line, contribute the feature you've been waiting for, or self-host the entire stack. Fair, transparent, and yours to fork.",
+					"审查每一行代码、贡献期待已久的功能，或自托管完整技术栈。公平、透明，并可自由派生。",
 			},
 			{
 				key: "pixel",
-				title: "Pixel-Perfect Capture",
+				title: "像素级精准捕获",
 				description:
-					"Record up to 4K at 60fps with hardware-accelerated encoding. Crisp text, smooth motion, sane file sizes — the quality your work deserves.",
+					"通过硬件加速编码，以最高 4K、60 帧录制。文字清晰、画面流畅、文件大小合理，呈现作品应有的质量。",
 			},
 		],
 		cta: {
-			label: "Explore Every Feature",
+			label: "探索所有功能",
 			href: "/features",
 		},
 	},
 	testimonials: {
-		title: "Loved By Builders, Trusted By Teams",
-		subtitle:
-			"Join thousands who've made Cap their daily driver for visual communication.",
-		cta: "Read More Testimonials",
+		title: "深受创作者喜爱，获得团队信赖",
+		subtitle: "加入数千名将 Cap 作为日常视觉沟通工具的用户。",
+		cta: "查看更多用户评价",
 	},
 	pricing: {
-		title: "Simple, Honest Pricing",
-		subtitle:
-			"Start free, upgrade when you need more. Early adopter pricing locked in forever.",
-		lovedBy: "Trusted by 40,000+ users",
+		title: "简单透明的价格",
+		subtitle: "免费开始，需要更多功能时再升级。早期用户价格永久锁定。",
+		lovedBy: "获得 40,000 多名用户信赖",
 		commercial: {
-			title: "Desktop License",
-			description:
-				"A commercial license for the Cap desktop app — unlimited local recording and editing.",
+			title: "桌面许可证",
+			description: "Cap 桌面应用商业许可证——不限次数的本地录制和编辑。",
 			features: [
-				"Commercial usage rights",
-				"Unlimited local recordings & editing",
-				"Studio Mode with full editor",
-				"20 cloud shareable links / month (up to 5 min each)",
-				"Export to any format",
-				"Community support",
+				"商业使用权",
+				"不限次数的本地录制和编辑",
+				"含完整编辑器的工作室模式",
+				"每月 20 个云端分享链接（每段最长 5 分钟）",
+				"导出为任意格式",
+				"社区支持",
 			],
-			cta: "Get Desktop License",
+			cta: "获取桌面许可证",
 			pricing: {
 				yearly: 29,
 				lifetime: 58,
 			},
 			labels: {
-				licenses: "License type",
-				yearly: "Annual",
-				lifetime: "One-time",
+				licenses: "许可证类型",
+				yearly: "按年",
+				lifetime: "一次性",
 			},
 		},
 		pro: {
-			badge: "Best value",
+			badge: "最超值",
 			title: "Cap Pro",
 			description:
-				"Everything in Desktop plus unlimited cloud features for seamless sharing and collaboration.",
+				"包含桌面许可证全部功能，并提供不限量云端功能，实现顺畅分享与协作。",
 			features: [
-				"Everything in Desktop License",
-				"Unlimited cloud storage & bandwidth",
-				"Auto-generated titles, summaries, clickable chapters, and transcriptions for every recording",
-				"Custom domain (cap.yourdomain.com)",
-				"Password protected shares",
-				"Viewer analytics & engagement",
-				"Team workspaces",
-				"Loom video importer",
-				"Custom S3 bucket & Google Drive support",
-				"Priority support & early features",
+				"桌面许可证的全部功能",
+				"不限量云存储和带宽",
+				"为每段录制自动生成标题、摘要、可点击章节和文字稿",
+				"自定义域名（cap.yourdomain.com）",
+				"密码保护分享",
+				"观看分析与互动数据",
+				"团队工作区",
+				"Loom 视频导入工具",
+				"支持自定义 S3 存储桶和 Google 云端硬盘",
+				"优先支持和抢先体验功能",
 			],
-			cta: "Get Started",
+			cta: "立即开始",
 			pricing: {
 				annual: 8.16,
 				monthly: 12,
 			},
 			labels: {
-				users: "Per user",
-				monthly: "Monthly",
-				annually: "Annual (save 32%)",
+				users: "每位用户",
+				monthly: "按月",
+				annually: "按年（节省 32%）",
 			},
 		},
 	},
 	faq: {
-		title: "Questions? We've Got Answers.",
+		title: "有问题？这里有答案。",
 		items: [
 			{
-				question: "What is the difference between Cap Pro and Desktop License?",
+				question: "Cap Pro 和桌面许可证有什么区别？",
 				answer:
-					"Cap Pro is a paid plan that includes all the features of the Desktop License plus cloud features for seamless sharing and collaboration. Desktop License grants you commercial usage rights for a single user.",
+					"Cap Pro 是付费方案，包含桌面许可证的全部功能，并增加用于顺畅分享和协作的云端功能。桌面许可证则为单个用户提供商业使用权。",
 			},
 			{
-				question: "Is there a free version?",
+				question: "是否有免费版本？",
 				answer:
-					"Yes! Cap is 100% free for personal use. You can record and share locally with Studio Mode. A paid plan is required for commercial usage.",
+					"有。Cap 个人使用完全免费，你可以通过工作室模式在本地录制和分享；商业用途需要付费方案。",
 			},
 			{
-				question: "How long can I record for on the free version?",
-				answer:
-					"You can record for 5 minutes on the free version. After that, you'll need to upgrade to a paid plan.",
+				question: "免费版本可以录制多长时间？",
+				answer: "免费版本单次可录制 5 分钟，超过后需要升级到付费方案。",
 			},
 			{
-				question: "How does Cap AI work?",
+				question: "Cap AI 如何工作？",
 				answer:
-					"Cap AI is a powerful tool that can be used to generate titles, summaries, clickable chapters, and transcriptions for your recordings. It's available for all Cap Pro users and has no usage limits.",
+					"Cap AI 可为录制生成标题、摘要、可点击章节和文字稿。所有 Cap Pro 用户均可使用，并且没有用量限制。",
 			},
 			{
-				question: "How is Cap different from Loom?",
+				question: "Cap 与 Loom 有什么不同？",
 				answer:
-					"Cap gives you the best of both worlds: the simplicity of Loom with the power of professional tools. We're open source, support custom storage, offer better pricing, and our desktop app works offline. Plus, you actually own your content. Already using Loom? Our built-in Loom video importer makes switching effortless.",
+					"Cap 兼具 Loom 的简洁和专业工具的强大能力。我们开源、支持自定义存储、价格更合理，桌面应用还能离线工作；更重要的是，内容真正属于你。已经在使用 Loom？内置导入工具可帮助你轻松迁移。",
 			},
 			{
-				question: "What happens to my recordings if I cancel?",
+				question: "取消订阅后，我的录制会怎样？",
 				answer:
-					"Your recordings are yours forever. If you cancel Pro, existing shares remain active and you can always export everything. Downgrade to our free plan to keep recording locally, or self-host to maintain all features.",
+					"录制内容永远属于你。取消 Pro 后，现有分享仍然有效，你也可以随时导出全部内容。降级到免费方案后仍可继续本地录制，或通过自托管保留所有功能。",
 			},
 			{
-				question: "Do you offer team plans?",
+				question: "是否提供团队方案？",
 				answer:
-					"Yes! Cap Pro includes team workspaces where you can organize recordings, manage permissions, and collaborate. Volume discounts available for teams over 10 users. Contact us for custom enterprise features.",
+					"提供。Cap Pro 包含团队工作区，可用于整理录制、管理权限和协作。超过 10 名用户的团队可享批量优惠；如需定制企业功能，请联系我们。",
 			},
 			{
-				question: "Which platforms do you support?",
+				question: "支持哪些平台？",
 				answer:
-					"Native desktop apps for macOS (Apple Silicon & Intel) and Windows. View your shareable links from anywhere.",
+					"提供适用于 macOS（Apple 芯片和 Intel）及 Windows 的原生桌面应用，分享链接可在任何地方查看。",
 			},
 			{
-				question: "Can I use Cap for commercial purposes?",
+				question: "可以将 Cap 用于商业用途吗？",
 				answer:
-					"Absolutely! Any paid plan (Desktop License or Cap Pro) includes full commercial usage rights. Use Cap for client work, sell courses, or embed recordings anywhere. The free version is for personal use only.",
+					"可以。任何付费方案（桌面许可证或 Cap Pro）都包含完整商业使用权，可用于客户项目、销售课程或在任意位置嵌入录制。免费版本仅供个人使用。",
 			},
 			{
-				question: "Is my data secure?",
+				question: "我的数据安全吗？",
 				answer:
-					"Security is core to Cap. As an open source project, our code is fully auditable and transparent — you can see exactly how your data is handled. End-to-end encryption for cloud storage, option to use your own infrastructure, and community-driven security reviews keep your content safe.",
+					"安全是 Cap 的核心。作为开源项目，我们的代码完全透明且可审计，你可以清楚了解数据如何被处理。云存储端到端加密、自有基础设施选项，以及社区推动的安全审查，共同保护你的内容。",
 			},
 			{
-				question: "What about GDPR/HIPAA compliance?",
+				question: "GDPR/HIPAA 合规性如何？",
 				answer:
-					"Cap Pro lets you bring your own storage, including custom S3 buckets in any region or your own Google Drive, for GDPR compliance. For HIPAA and other regulations, our self-hosted option gives you complete control. We also offer signed BAAs for enterprise customers.",
+					"为满足 GDPR 合规要求，Cap Pro 允许使用自有存储，包括任意区域的自定义 S3 存储桶或你自己的 Google 云端硬盘。对于 HIPAA 等其他法规，自托管方案可提供完全控制；我们也可为企业客户提供已签署的 BAA。",
 			},
 		],
 	},
 	readyToGetStarted: {
-		title: "Ready To Upgrade How You Communicate?",
+		title: "准备好升级沟通方式了吗？",
 		buttons: {
-			primary: "Upgrade to Cap Pro",
-			secondary: "Download For Free",
+			primary: "升级到 Cap Pro",
+			secondary: "免费下载",
 		},
 	},
 };

@@ -75,7 +75,7 @@ const OtpForm = ({
 	const handleVerify = useMutation({
 		mutationFn: async (pastedCode?: string) => {
 			const otpCode = pastedCode ?? code.join("");
-			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
+			if (otpCode.length !== 6) throw "请输入完整的 6 位验证码";
 
 			await fetch(
 				`/api/auth/callback/email?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/dashboard")}`,
@@ -86,19 +86,19 @@ const OtpForm = ({
 			if (!session?.user) {
 				setCode(["", "", "", "", "", ""]);
 				inputRefs.current[0]?.focus();
-				throw "Invalid code. Please try again.";
+				throw "验证码无效，请重试。";
 			}
 		},
 		onSuccess: () => {
 			router.refresh();
-			toast.success("Sign in successful!");
+			toast.success("登录成功");
 			onClose();
 		},
 		onError: (e) => {
 			if (typeof e === "string") {
 				toast.error(e);
 			} else {
-				toast.error("An error occurred. Please try again.");
+				toast.error("发生错误，请重试。");
 			}
 		},
 	});
@@ -113,7 +113,7 @@ const OtpForm = ({
 					const remainingSeconds = Math.ceil(
 						(waitTime - timeSinceLastRequest) / 1000,
 					);
-					throw `Please wait ${remainingSeconds} seconds before requesting a new code`;
+					throw `请等待 ${remainingSeconds} 秒后再请求新验证码`;
 				}
 			}
 
@@ -123,11 +123,11 @@ const OtpForm = ({
 			});
 
 			if (result?.error) {
-				throw "Please wait 30 seconds before requesting a new code";
+				throw "请等待 30 秒后再请求新验证码";
 			}
 		},
 		onSuccess: () => {
-			toast.success("A new code has been sent to your email!");
+			toast.success("新验证码已发送到你的邮箱");
 			setCode(["", "", "", "", "", ""]);
 			inputRefs.current[0]?.focus();
 			setLastResendTime(Date.now());
@@ -136,7 +136,7 @@ const OtpForm = ({
 			if (typeof e === "string") {
 				toast.error(e);
 			} else {
-				toast.error("An error occurred. Please try again.");
+				toast.error("发生错误，请重试。");
 			}
 		},
 	});
@@ -183,7 +183,7 @@ const OtpForm = ({
 				}}
 				disabled={code.some((digit) => !digit) || isVerifying}
 			>
-				{isVerifying ? "Verifying..." : "Verify Code"}
+				{isVerifying ? "正在验证…" : "验证验证码"}
 			</Button>
 
 			<div className="text-center">
@@ -195,9 +195,7 @@ const OtpForm = ({
 					disabled={handleResend.isPending}
 					className="text-sm underline transition-colors text-gray-10 hover:text-gray-12"
 				>
-					{handleResend.isPending
-						? "Sending..."
-						: "Didn't receive the code? Resend"}
+					{handleResend.isPending ? "正在发送…" : "没有收到验证码？重新发送"}
 				</button>
 			</div>
 		</div>

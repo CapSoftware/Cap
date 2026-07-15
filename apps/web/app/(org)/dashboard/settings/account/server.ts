@@ -19,7 +19,7 @@ export async function patchAccountSettings(
 	defaultOrgId?: Organisation.OrganisationId,
 ) {
 	const currentUser = await getCurrentUser();
-	if (!currentUser) throw new Error("Unauthorized");
+	if (!currentUser) throw new Error("无权执行此操作");
 
 	const updatePayload: Partial<{
 		name: string;
@@ -53,10 +53,7 @@ export async function patchAccountSettings(
 			)
 			.limit(1);
 
-		if (!userOrganization)
-			throw new Error(
-				"Forbidden: User does not have access to the specified organization",
-			);
+		if (!userOrganization) throw new Error("当前用户无权访问指定组织");
 
 		updatePayload.defaultOrgId = defaultOrgId;
 	}
@@ -71,7 +68,7 @@ export async function patchAccountSettings(
 
 export async function signOutAllDevices() {
 	const currentUser = await getCurrentUser();
-	if (!currentUser) throw new Error("Unauthorized");
+	if (!currentUser) throw new Error("无权执行此操作");
 
 	await db().transaction(async (tx) => {
 		await tx

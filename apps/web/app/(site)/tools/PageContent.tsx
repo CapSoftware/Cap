@@ -12,35 +12,35 @@ interface ToolCategory {
 
 const toolCategories: ToolCategory[] = [
 	{
-		title: "Loom Video Importer",
+		title: "Loom 视频导入器",
 		description:
 			"Import your existing Loom recordings directly into Cap — seamless migration",
 		href: "/loom-alternative",
 		icon: "M9 8.25H7.5a2.25 2.25 0 00-2.25 2.25v9a2.25 2.25 0 002.25 2.25h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25H15m0-3l-3-3m0 0l-3 3m3-3V15",
 	},
 	{
-		title: "Loom Video Downloader",
+		title: "Loom 视频下载器",
 		description:
 			"Download any public Loom video as an MP4 file — free and instant",
 		href: "/tools/loom-downloader",
 		icon: "M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3",
 	},
 	{
-		title: "File Conversion",
+		title: "文件转换",
 		description:
 			"Convert between different file formats directly in your browser",
 		href: "/tools/convert",
 		icon: "M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z",
 	},
 	{
-		title: "Video Speed Controller",
-		description: "Speed up or slow down your videos without losing quality",
+		title: "视频速度控制器",
+		description: "在不损失画质的情况下加速或减速视频",
 		href: "/tools/video-speed-controller",
 		icon: "M15.75 5.25a3 3 0 013 3m-3-3a3 3 0 00-3 3m3-3v1.5m0 9.75a3 3 0 01-3-3m3 3a3 3 0 003-3m-3 3v-1.5m-6-1.5h.008v.008H7.5v-.008zm1.5-9h.375c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-.375m1.5-4.5A1.125 1.125 0 0110.375 7.5h-1.5A1.125 1.125 0 017.75 8.625M10.5 12a.375.375 0 11-.75 0 .375.375 0 01.75 0z",
 	},
 	{
-		title: "Video Trimmer",
-		description: "Cut unwanted sections from videos with precision",
+		title: "视频修剪器",
+		description: "精确剪除视频中不需要的片段",
 		href: "/tools/trim",
 		icon: "M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244",
 	},

@@ -67,10 +67,10 @@ export function BreadcrumbItem({
 				spaceId: spaceId ?? null,
 			});
 			router.refresh();
-			toast.success(`"${capData.name}" moved to "${name}" folder`);
+			toast.success(`已将“${capData.name}”移动到文件夹“${name}”`);
 		} catch (error) {
 			console.error("Error moving video to folder:", error);
-			toast.error("Failed to move video to folder");
+			toast.error("移动视频到文件夹失败");
 		} finally {
 			setIsMoving(false);
 		}

@@ -39,10 +39,10 @@ function prewarmBackground(path: string | null | undefined) {
 }
 
 const BACKGROUND_SOURCES = {
-	wallpaper: "Wallpaper",
-	image: "Image",
-	color: "Color",
-	gradient: "Gradient",
+	wallpaper: "壁纸",
+	image: "图片",
+	color: "纯色",
+	gradient: "渐变",
 } satisfies Record<BackgroundSource["type"], string>;
 
 const BACKGROUND_SOURCES_LIST = [
@@ -135,11 +135,11 @@ type WallpaperName = (typeof WALLPAPER_NAMES)[number];
 
 const BACKGROUND_THEMES = {
 	macOS: "macOS",
-	dark: "Dark",
-	blue: "Blue",
-	cities: "Cities",
-	purple: "Purple",
-	orange: "Orange",
+	dark: "深色",
+	blue: "蓝色",
+	cities: "城市",
+	purple: "紫色",
+	orange: "橙色",
 };
 
 export function BackgroundSettingsPopover() {
@@ -238,7 +238,7 @@ export function BackgroundSettingsPopover() {
 					)
 				}
 				leftIcon={<IconCapImage class="size-4" />}
-				tooltipText="Background"
+				tooltipText="背景"
 				kbd={["B"]}
 			/>
 			<Popover.Portal>
@@ -247,10 +247,7 @@ export function BackgroundSettingsPopover() {
 						ref={scrollRef}
 						class="max-h-[600px] overflow-y-auto p-4 flex flex-col gap-6"
 					>
-						<Field
-							icon={<IconCapImage class="size-4" />}
-							name="Background Image"
-						>
+						<Field icon={<IconCapImage class="size-4" />} name="背景图片">
 							<KTabs
 								value={project.background.source.type}
 								onChange={(v) => {
@@ -369,7 +366,7 @@ export function BackgroundSettingsPopover() {
 															src={photo.url}
 															loading="eager"
 															class="object-cover w-full h-full"
-															alt="Wallpaper option"
+															alt="壁纸选项"
 														/>
 													</KRadioGroup.ItemControl>
 												</KRadioGroup.Item>
@@ -392,7 +389,7 @@ export function BackgroundSettingsPopover() {
 											>
 												<IconCapImage class="text-gray-11 size-6" />
 												<span class="text-gray-12">
-													Click to select or drag and drop image
+													点击选择图片，或将图片拖放到此处
 												</span>
 											</button>
 										}
@@ -402,7 +399,7 @@ export function BackgroundSettingsPopover() {
 												<img
 													src={convertFileSrc(source())}
 													class="object-cover w-full h-full"
-													alt="Selected background"
+													alt="已选择的背景"
 												/>
 												<div class="absolute top-2 right-2">
 													<button
@@ -557,7 +554,7 @@ export function BackgroundSettingsPopover() {
 							</KTabs>
 						</Field>
 
-						<Field name="Background Blur" icon={<IconCapBgBlur />}>
+						<Field name="背景模糊" icon={<IconCapBgBlur />}>
 							<Slider
 								value={[project.background.blur]}
 								onChange={(v) => setProject("background", "blur", v[0])}

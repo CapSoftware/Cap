@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { DownloadPage } from "@/components/pages/DownloadPage";
 
 export const metadata: Metadata = {
-	title: "Download — Cap",
+	title: "下载 — Cap",
 };
 
 export default function App() {

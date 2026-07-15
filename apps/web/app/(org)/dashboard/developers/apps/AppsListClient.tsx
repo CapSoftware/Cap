@@ -14,21 +14,21 @@ export function AppsListClient() {
 	return (
 		<>
 			<div className="flex justify-between items-center mb-5">
-				<h2 className="text-base font-medium text-gray-12">Your Apps</h2>
+				<h2 className="text-base font-medium text-gray-12">你的应用</h2>
 				<Button variant="dark" size="sm" onClick={() => setCreateOpen(true)}>
 					<Plus className="w-4 h-4 mr-1" />
-					Create App
+					创建应用
 				</Button>
 			</div>
 
 			{apps.length === 0 ? (
 				<div className="flex flex-col items-center justify-center py-16 rounded-xl border border-dashed border-gray-6">
-					<p className="mb-2 text-sm text-gray-11">No apps yet</p>
+					<p className="mb-2 text-sm text-gray-11">尚无应用</p>
 					<p className="mb-4 text-xs text-gray-9">
-						Create your first app to get started with the Cap Developer SDK
+						创建第一个应用，开始使用 Cap 开发者 SDK
 					</p>
 					<Button variant="dark" size="sm" onClick={() => setCreateOpen(true)}>
-						Create your first app
+						创建第一个应用
 					</Button>
 				</div>
 			) : (

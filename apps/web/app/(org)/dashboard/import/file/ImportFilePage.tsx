@@ -76,14 +76,14 @@ export const ImportFilePage = () => {
 			: null;
 	const statusLabel = uploadStatus
 		? uploadStatus.status === "parsing"
-			? "Analyzing video..."
+			? "正在分析视频……"
 			: uploadStatus.status === "creating"
-				? "Preparing upload..."
+				? "正在准备上传……"
 				: uploadStatus.status === "uploadingVideo"
-					? `Uploading... ${progressPercent ?? 0}%`
+					? `正在上传……${progressPercent ?? 0}%`
 					: uploadStatus.status === "serverProcessing"
-						? "Processing on server..."
-						: "Working..."
+						? "服务器正在处理……"
+						: "正在处理……"
 		: null;
 
 	return (
@@ -94,11 +94,11 @@ export const ImportFilePage = () => {
 					className="inline-flex gap-2 items-center text-sm text-gray-10 hover:text-gray-12 transition-colors mb-4"
 				>
 					<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
-					Back to Import
+					返回导入
 				</Link>
-				<h1 className="text-2xl font-medium text-gray-12">Upload File</h1>
+				<h1 className="text-2xl font-medium text-gray-12">上传文件</h1>
 				<p className="mt-1 text-sm text-gray-10">
-					Upload a video or image file from your device.
+					从你的设备上传视频或图片文件。
 				</p>
 			</div>
 
@@ -146,14 +146,14 @@ export const ImportFilePage = () => {
 						</span>
 						<span className="flex flex-col items-center gap-1">
 							<span className="text-sm font-medium text-gray-12">
-								Drag and drop your video or image here
+								将视频或图片拖放到此处
 							</span>
 							<span className="text-xs text-gray-10">
 								MP4, MOV, AVI, MKV, WebM, JPG, or PNG
 							</span>
 						</span>
 						<span className="inline-flex items-center justify-center mt-2 h-8 px-3 rounded-full bg-gray-12 text-sm font-medium text-gray-1">
-							Browse Files
+							浏览文件
 						</span>
 					</span>
 				)}

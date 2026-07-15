@@ -43,10 +43,10 @@ export async function setVideoPassword(
 		revalidatePath("/dashboard/shared-caps");
 		revalidatePath(`/s/${videoId}`);
 
-		return { success: true, value: "Password updated successfully" };
+		return { success: true, value: "密码更新成功" };
 	} catch (error) {
 		console.error("Error setting video password:", error);
-		return { success: false, error: "Failed to update password" };
+		return { success: false, error: "更新密码失败" };
 	}
 }
 
@@ -76,10 +76,10 @@ export async function removeVideoPassword(videoId: Video.VideoId) {
 		revalidatePath("/dashboard/shared-caps");
 		revalidatePath(`/s/${videoId}`);
 
-		return { success: true, value: "Password removed successfully" };
+		return { success: true, value: "密码已移除" };
 	} catch (error) {
 		console.error("Error removing video password:", error);
-		return { success: false, error: "Failed to remove password" };
+		return { success: false, error: "移除密码失败" };
 	}
 }
 
@@ -89,14 +89,14 @@ export async function verifyVideoPassword(
 ) {
 	try {
 		if (!videoId || typeof password !== "string")
-			return { success: false, error: "Failed to verify password" };
+			return { success: false, error: "密码验证失败" };
 
 		const [video] = await db()
 			.select()
 			.from(videos)
 			.where(eq(videos.id, videoId));
 
-		if (!video) return { success: false, error: "Failed to verify password" };
+		if (!video) return { success: false, error: "密码验证失败" };
 
 		const spacePasswords = await db()
 			.select({ password: spaces.password })
@@ -113,15 +113,15 @@ export async function verifyVideoPassword(
 			const valid = await verifyPlainPassword(passwordHash, password);
 			if (valid) {
 				await setVerifiedPasswordCookie(passwordHash);
-				return { success: true, value: "Password verified" };
+				return { success: true, value: "密码验证成功" };
 			}
 		}
 
 		// Wrong passwords and links whose password was since removed are expected
 		// outcomes — return without logging so console.error stays signal.
-		return { success: false, error: "Failed to verify password" };
+		return { success: false, error: "密码验证失败" };
 	} catch (error) {
 		console.error("Error verifying video password:", error);
-		return { success: false, error: "Failed to verify password" };
+		return { success: false, error: "密码验证失败" };
 	}
 }

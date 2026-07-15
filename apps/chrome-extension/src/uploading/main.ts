@@ -20,7 +20,7 @@ const REDIRECT_DELAY_MS = 1600;
 // Only declare failure if no fresh status shows up for this long.
 const RETRY_STATUS_TIMEOUT_MS = 45_000;
 const RETRY_SILENT_FAILURE_MESSAGE =
-	"The retry did not report any progress. It may still be running - check your Caps before retrying again.";
+	"重试没有报告任何进度。任务可能仍在运行，请先检查你的 Cap 视频再重新尝试。";
 
 type ActiveStatus = Extract<
 	RecordingStatus,
@@ -97,18 +97,18 @@ const syncTabTitle = () => {
 	if (key === lastTitleKey) return;
 	lastTitleKey = key;
 	if (mode === "completed") {
-		document.title = "Ready - Cap";
+		document.title = "已就绪 - Cap";
 		return;
 	}
 	if (mode === "error") {
-		document.title = "Upload needs attention - Cap";
+		document.title = "上传需要处理 - Cap";
 		return;
 	}
 	if (mode === "waiting") {
-		document.title = "Uploading - Cap";
+		document.title = "正在上传 - Cap";
 		return;
 	}
-	document.title = `Uploading ${percent}% - Cap`;
+	document.title = `正在上传 ${percent}% - Cap`;
 };
 
 const applyPercentDom = () => {
@@ -173,7 +173,7 @@ const renderActiveStatus = (status: ActiveStatus) => {
 	const uploadedBytes = status.upload?.uploadedBytes ?? 0;
 	metaElement.textContent =
 		totalBytes > 0
-			? `${formatBytes(uploadedBytes)} of ${formatBytes(totalBytes)}`
+			? `${formatBytes(uploadedBytes)} / ${formatBytes(totalBytes)}`
 			: "";
 	metaElement.hidden = totalBytes === 0;
 
@@ -181,18 +181,14 @@ const renderActiveStatus = (status: ActiveStatus) => {
 		setMode("uploading");
 		applyStageState(
 			"recording",
-			"Still recording",
-			"Your Cap streams to the cloud while you record.",
+			"仍在录制",
+			"你的 Cap 视频正在录制过程中传输到云端。",
 		);
 		return;
 	}
 	if (status.phase === "paused") {
 		setMode("uploading");
-		applyStageState(
-			"paused",
-			"Recording paused",
-			"What you've captured keeps uploading.",
-		);
+		applyStageState("paused", "录制已暂停", "已采集的内容会继续上传。");
 		return;
 	}
 
@@ -202,18 +198,14 @@ const renderActiveStatus = (status: ActiveStatus) => {
 		status.upload.completedChunks === status.upload.totalChunks;
 	if (allSegmentsDone || targetPercent >= 99.5) {
 		setMode("finalizing");
-		applyStageState(
-			"finalizing",
-			"Finishing up",
-			"Stitching everything together…",
-		);
+		applyStageState("finalizing", "即将完成", "正在合并所有内容…");
 		return;
 	}
 	setMode("uploading");
 	applyStageState(
 		"uploading",
-		"Uploading your Cap",
-		"We'll take you to it the moment it's ready.",
+		"正在上传你的 Cap 视频",
+		"准备好后会立即为你打开。",
 	);
 };
 
@@ -223,7 +215,7 @@ const renderCompleted = (
 	hideErrorActions();
 	targetPercent = 100;
 	setMode("completed");
-	applyStageState("completed", "Your Cap is ready", "Taking you there now…");
+	applyStageState("completed", "你的 Cap 视频已就绪", "正在为你打开…");
 	metaElement.hidden = true;
 	shareLink.href = status.shareUrl;
 	shareLink.hidden = false;
@@ -264,11 +256,11 @@ const renderError = (status: ErrorStatus) => {
 	setMode("error");
 	applyStageState(
 		`error:${status.message}`,
-		"Upload needs attention",
-		status.message || "Something went wrong while uploading.",
+		"上传需要处理",
+		status.message || "上传时出现问题。",
 	);
 	const recordingId = status.videoId ?? urlVideoId;
-	metaElement.textContent = recordingId ? `Recording ID: ${recordingId}` : "";
+	metaElement.textContent = recordingId ? `录制 ID：${recordingId}` : "";
 	metaElement.hidden = !recordingId;
 	// When the upload finished but the confirmation was lost, the video may
 	// still process server-side; the link lets the user verify.
@@ -285,7 +277,7 @@ const renderWaiting = () => {
 	hideErrorActions();
 	shareLink.hidden = true;
 	setMode("waiting");
-	applyStageState("waiting", "Connecting to your recording", "One moment…");
+	applyStageState("waiting", "正在连接录制", "请稍候…");
 };
 
 const clearRetryPending = () => {
@@ -314,7 +306,7 @@ const beginRetryPending = () => {
 
 const renderRetryFailure = (message: string) => {
 	setMode("error");
-	applyStageState(`error:${message}`, "Upload needs attention", message);
+	applyStageState(`error:${message}`, "上传需要处理", message);
 	syncTabTitle();
 };
 
@@ -396,12 +388,12 @@ const downloadRecording = async () => {
 	downloadButton.disabled = true;
 	try {
 		const entry = await findFailedRecording(videoId);
-		if (!entry) throw new Error("The recorded data is no longer available.");
+		if (!entry) throw new Error("录制数据已不可用。");
 		// The spool lives in the extension-origin IndexedDB, which this page
 		// shares with the offscreen recorder.
 		const orphan = await recoverRecordingSpoolSession(entry.sessionId);
 		if (!orphan || orphan.blob.size === 0) {
-			throw new Error("The recorded data is no longer available.");
+			throw new Error("录制数据已不可用。");
 		}
 		const url = URL.createObjectURL(orphan.blob);
 		const anchor = document.createElement("a");
@@ -437,7 +429,7 @@ const pollStatus = async () => {
 		consecutivePollFailures += 1;
 	}
 	if (consecutivePollFailures >= 10 && mode === "waiting") {
-		detailElement.textContent = "Still trying to reach the Cap extension…";
+		detailElement.textContent = "仍在尝试连接 Cap 扩展…";
 	}
 };
 

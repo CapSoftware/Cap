@@ -48,7 +48,7 @@ export function ProfileImage({
 		if (!file) return;
 		const sizeLimit = 1024 * 1024 * 1;
 		if (file.size > sizeLimit) {
-			toast.error("File size must be 1MB or less");
+			toast.error("文件大小不能超过 1 MB");
 			return;
 		}
 		if (previewUrl && isLocalPreview) {
@@ -92,7 +92,7 @@ export function ProfileImage({
 					{previewUrl ? (
 						<SignedImageUrl
 							image={previewUrl}
-							name={userName || "User"}
+							name={userName || "用户"}
 							letterClass="text-lg"
 							className="size-full"
 						/>
@@ -123,10 +123,10 @@ export function ProfileImage({
 							onClick={handleUploadClick}
 							spinner={isUploading}
 						>
-							{isUploading ? "Uploading..." : "Upload Image"}
+							{isUploading ? "正在上传…" : "上传图片"}
 						</Button>
 						{(previewUrl || isRemoving) && (
-							<Tooltip content="Remove image">
+							<Tooltip content="移除图片">
 								<Button
 									type="button"
 									variant="outline"
@@ -147,7 +147,7 @@ export function ProfileImage({
 							</Tooltip>
 						)}
 					</div>
-					<p className="text-xs text-gray-10">Recommended size: 120x120</p>
+					<p className="text-xs text-gray-10">建议尺寸：120 × 120</p>
 				</div>
 			</div>
 		</div>

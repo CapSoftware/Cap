@@ -17,7 +17,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
 	onCancel,
 	placeholder,
 	showCancelButton = false,
-	buttonLabel = "Reply",
+	buttonLabel = "回复",
 	autoFocus = false,
 	disabled,
 }) => {
@@ -55,7 +55,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
 						disabled={disabled}
 						onChange={(e) => setContent(e.target.value)}
 						onKeyDown={handleKeyDown}
-						placeholder={placeholder || "Leave a comment..."}
+						placeholder={placeholder || "发表评论…"}
 						className="w-full placeholder:text-gray-8 text-sm leading-[22px] text-gray-12 bg-transparent focus:outline-none"
 					/>
 					<div className="flex items-center mt-2 space-x-2">
@@ -69,7 +69,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
 						</Button>
 						{showCancelButton && onCancel && (
 							<Button size="xs" variant="outline" onClick={onCancel}>
-								Cancel
+								取消
 							</Button>
 						)}
 					</div>

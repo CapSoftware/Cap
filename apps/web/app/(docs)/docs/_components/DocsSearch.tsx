@@ -199,7 +199,7 @@ export function DocsSearch({ searchIndex }: DocsSearchProps) {
 					isAnimating ? "opacity-100" : "opacity-0"
 				}`}
 				onClick={close}
-				aria-label="Close search"
+				aria-label="关闭搜索"
 				tabIndex={-1}
 			/>
 
@@ -211,7 +211,7 @@ export function DocsSearch({ searchIndex }: DocsSearchProps) {
 				}`}
 				role="dialog"
 				aria-modal="true"
-				aria-label="Search documentation"
+				aria-label="搜索文档"
 			>
 				<div className="flex items-center gap-3 px-4 border-b border-gray-200">
 					<Search className="w-4.5 h-4.5 text-gray-400 shrink-0" />
@@ -220,9 +220,9 @@ export function DocsSearch({ searchIndex }: DocsSearchProps) {
 						type="text"
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
-						placeholder="Search documentation..."
+						placeholder="搜索文档..."
 						className="flex-1 h-14 text-base text-gray-900 placeholder-gray-400 outline-none bg-transparent"
-						aria-label="Search documentation"
+						aria-label="搜索文档"
 						aria-autocomplete="list"
 						aria-controls={resultsId}
 						aria-activedescendant={
@@ -245,7 +245,7 @@ export function DocsSearch({ searchIndex }: DocsSearchProps) {
 					{!query.trim() && (
 						<div className="flex flex-col items-center justify-center py-12 px-4">
 							<Search className="w-8 h-8 text-gray-300 mb-3" />
-							<p className="text-sm text-gray-400">Start typing to search...</p>
+							<p className="text-sm text-gray-400">输入关键词开始搜索...</p>
 						</div>
 					)}
 
@@ -253,7 +253,7 @@ export function DocsSearch({ searchIndex }: DocsSearchProps) {
 						<div className="flex flex-col items-center justify-center py-12 px-4">
 							<Search className="w-8 h-8 text-gray-300 mb-3" />
 							<p className="text-sm text-gray-500">
-								No results found for &ldquo;{query}&rdquo;
+								未找到与“{query}”相关的结果
 							</p>
 						</div>
 					)}
@@ -318,13 +318,13 @@ export function DocsSearch({ searchIndex }: DocsSearchProps) {
 							<kbd className="inline-flex items-center justify-center w-5 h-5 rounded bg-white border border-gray-200 text-[10px] font-medium">
 								↓
 							</kbd>
-							<span>to navigate</span>
+							<span>切换结果</span>
 						</span>
 						<span className="flex items-center gap-1.5 text-[11px] text-gray-400">
 							<kbd className="inline-flex items-center justify-center h-5 px-1.5 rounded bg-white border border-gray-200 text-[10px] font-medium">
 								↵
 							</kbd>
-							<span>to select</span>
+							<span>选择</span>
 						</span>
 					</div>
 				)}

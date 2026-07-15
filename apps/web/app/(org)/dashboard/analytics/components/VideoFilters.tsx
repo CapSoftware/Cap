@@ -22,7 +22,7 @@ export default function VideoFilters({
 		<div className="max-w-[160px] w-full border-l border-gray-4">
 			<div className="border-b border-gray-4 bg-gray-3">
 				<p className="px-4 py-2 text-xs font-medium text-gray-12 will-change-auto">
-					Videos
+					视频
 				</p>
 			</div>
 			<motion.div layout className="grid grid-cols-2 gap-2 p-4 h-fit">

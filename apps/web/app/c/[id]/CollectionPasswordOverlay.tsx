@@ -60,8 +60,7 @@ export function CollectionPasswordOverlay({
 								{collectionName}
 							</h2>
 							<p className="max-w-xs px-2 text-xs text-gray-10 sm:max-w-sm sm:px-0 sm:text-sm">
-								This collection from {organizationName} is password protected.
-								Enter the password to continue.
+								来自 {organizationName} 的此合集受密码保护，请输入密码继续。
 							</p>
 						</div>
 					</div>
@@ -72,14 +71,14 @@ export function CollectionPasswordOverlay({
 								htmlFor={passwordInputId}
 								className="text-sm font-medium text-gray-12"
 							>
-								Password
+								密码
 							</label>
 							<Input
 								id={passwordInputId}
 								type="password"
 								value={password}
 								onChange={(event) => setPassword(event.target.value)}
-								placeholder="Enter password"
+								placeholder="输入密码"
 								className="w-full"
 								autoFocus
 								onKeyDown={(event) => {
@@ -101,7 +100,7 @@ export function CollectionPasswordOverlay({
 							disabled={verifyPassword.isPending || !password.trim()}
 							onClick={() => verifyPassword.mutate()}
 						>
-							{verifyPassword.isPending ? "Verifying..." : "Access collection"}
+							{verifyPassword.isPending ? "正在验证..." : "访问合集"}
 						</Button>
 					</div>
 				</div>

@@ -28,7 +28,7 @@ export function CustomDomainPage() {
 			});
 		},
 		onError: () => {
-			toast.error("An error occurred, please try again");
+			toast.error("发生错误，请重试");
 		},
 	});
 
@@ -37,12 +37,11 @@ export function CustomDomainPage() {
 
 	return (
 		<Base
-			title="Custom Domain"
+			title="自定义域名"
 			description={
 				<div>
 					<p className="w-full text-base max-w-[340px] text-gray-10">
-						Pro users can setup a custom domain to access their shareable Cap
-						links i.e{" "}
+						Pro 用户可设置自定义域名，用于访问可分享的 Cap 链接，例如{" "}
 						<span className="font-medium text-blue-500">
 							cap.yourdomain.com
 						</span>
@@ -57,7 +56,7 @@ export function CustomDomainPage() {
 				disabled={customDomainMutation.isPending}
 				variant="blue"
 			>
-				Upgrade to Pro
+				升级到 Pro
 			</Button>
 			<div className="w-full h-px bg-gray-4" />
 			<Button
@@ -68,7 +67,7 @@ export function CustomDomainPage() {
 				className="mx-auto w-full"
 				onClick={() => handleSubmit()}
 			>
-				Skip
+				跳过
 			</Button>
 			<UpgradeModal
 				onCheckout={async () => {

@@ -32,8 +32,8 @@ export function InviteTeamPage() {
 			? CAP_PRO_ANNUAL_PRICE_PER_USER
 			: CAP_PRO_MONTHLY_PRICE_PER_USER);
 	const billingCycleText = isAnnually
-		? "per user, billed annually"
-		: "per user, billed monthly";
+		? "每位用户，按年计费"
+		: "每位用户，按月计费";
 
 	const incrementUsers = () => setUsers((n) => n + 1);
 	const decrementUsers = () => setUsers((n) => (n > 1 ? n - 1 : 1));
@@ -53,7 +53,7 @@ export function InviteTeamPage() {
 			});
 		},
 		onError: () => {
-			toast.error("An error occurred, please try again");
+			toast.error("发生错误，请重试");
 		},
 	});
 
@@ -80,12 +80,12 @@ export function InviteTeamPage() {
 				}),
 			});
 			if (!response.ok) {
-				toast.error("Unable to start checkout. Please try again.");
+				toast.error("无法开始结账，请重试。");
 				return;
 			}
 			const data = await response.json();
 			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
+				toast.success("你已订阅 Cap Pro 套餐");
 				return;
 			}
 
@@ -95,24 +95,24 @@ export function InviteTeamPage() {
 				window.location.href = data.url;
 			}
 		} catch (error) {
-			console.error("Plan checkout error:", error);
-			toast.error("Something went wrong. Please try again.");
+			console.error("套餐结账错误：", error);
+			toast.error("出现问题，请重试。");
 		}
 	};
 
 	const planCheckoutMutation = useMutation({
 		mutationFn: (e: MouseEvent<HTMLButtonElement>) => planCheckout(e),
 		onError: (error) => {
-			console.error("Plan checkout error:", error);
-			toast.error("Something went wrong. Please try again.");
+			console.error("套餐结账错误：", error);
+			toast.error("出现问题，请重试。");
 		},
 	});
 
 	return (
 		<Base
-			title="Invite your team"
+			title="邀请团队成员"
 			descriptionClassName="max-w-[360px]"
-			description="Invite members of your team to join your organization and share Caps together"
+			description="邀请团队成员加入你的组织，一起分享 Cap 录制内容"
 		>
 			<div className="text-center">
 				<span className="mr-2 text-2xl tabular-nums lg:text-3xl text-gray-12">
@@ -124,7 +124,7 @@ export function InviteTeamPage() {
 				</span>
 				{isAnnually ? (
 					<p className="text-base text-gray-10">
-						or,{" "}
+						或者，{" "}
 						<NumberFlow
 							value={CAP_PRO_MONTHLY_PRICE_PER_USER * users}
 							className="text-sm tabular-nums lg:text-base text-gray-12"
@@ -136,19 +136,19 @@ export function InviteTeamPage() {
 							suffix="/mo"
 						/>{" "}
 						{users === 1 ? (
-							"per user, "
+							"每位用户，"
 						) : (
 							<>
-								for{" "}
+								共{" "}
 								<NumberFlow value={users} className="text-base tabular-nums" />{" "}
-								users,{" "}
+								位用户，{" "}
 							</>
 						)}
-						billed monthly
+						按月计费
 					</p>
 				) : (
 					<p className="text-base text-gray-10">
-						or,{" "}
+						或者，{" "}
 						<NumberFlow
 							value={CAP_PRO_ANNUAL_PRICE_PER_USER * users}
 							className="text-sm tabular-nums lg:text-base text-gray-12"
@@ -160,15 +160,15 @@ export function InviteTeamPage() {
 							suffix="/mo"
 						/>{" "}
 						{users === 1 ? (
-							"per user, "
+							"每位用户，"
 						) : (
 							<>
-								for{" "}
+								共{" "}
 								<NumberFlow value={users} className="text-base tabular-nums" />{" "}
-								users,{" "}
+								位用户，{" "}
 							</>
 						)}
-						billed annually
+						按年计费
 					</p>
 				)}
 			</div>
@@ -176,12 +176,12 @@ export function InviteTeamPage() {
 			<div className="space-y-3">
 				<div className="flex flex-wrap gap-5 justify-center items-center p-5 w-full rounded-xl border bg-gray-3 border-gray-4 xs:gap-3 xs:p-3 xs:rounded-full xs:justify-between">
 					<div className="flex gap-2 items-center">
-						<p className="text-sm text-gray-12">Per user</p>
+						<p className="text-sm text-gray-12">用户数量</p>
 						<div className="flex items-center">
 							<Button
 								onClick={decrementUsers}
 								className="p-1 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
-								aria-label="Decrease user count"
+								aria-label="减少用户数量"
 							>
 								<FontAwesomeIcon
 									icon={faMinus}
@@ -194,7 +194,7 @@ export function InviteTeamPage() {
 							<Button
 								onClick={incrementUsers}
 								className="p-1 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
-								aria-label="Increase user count"
+								aria-label="增加用户数量"
 							>
 								<FontAwesomeIcon
 									icon={faPlus}
@@ -215,7 +215,7 @@ export function InviteTeamPage() {
 						<Switch
 							checked={isAnnually}
 							onCheckedChange={setIsAnnually}
-							aria-label="Billing Cycle"
+							aria-label="计费周期"
 							className="scale-75"
 							id={billingCycleId}
 						/>
@@ -236,7 +236,7 @@ export function InviteTeamPage() {
 					disabled={planCheckoutMutation.isPending}
 					onClick={planCheckoutMutation.mutate}
 				>
-					Get Started
+					开始使用
 				</Button>
 			</div>
 			<div className="w-full h-px bg-gray-4" />
@@ -247,7 +247,7 @@ export function InviteTeamPage() {
 				spinner={inviteTeamMutation.isPending}
 				disabled={inviteTeamMutation.isPending}
 			>
-				Skip
+				跳过
 			</Button>
 		</Base>
 	);

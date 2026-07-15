@@ -42,13 +42,13 @@ const defaultFont = localFont({
 
 export const metadata: Metadata = {
 	metadataBase: new URL("https://cap.so"),
-	title: "Cap — Beautiful screen recordings, owned by you.",
+	title: "Cap — 精美的屏幕录制，完全由你掌控。",
 	description:
-		"Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.",
+		"Cap 是 Loom 的开源替代方案，轻量、强大且支持跨平台。只需几秒即可录制和分享。",
 	openGraph: {
-		title: "Cap — Beautiful screen recordings, owned by you.",
+		title: "Cap — 精美的屏幕录制，完全由你掌控。",
 		description:
-			"Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.",
+			"Cap 是 Loom 的开源替代方案，轻量、强大且支持跨平台。只需几秒即可录制和分享。",
 		type: "website",
 		url: "https://cap.so",
 		images: ["https://cap.so/og.png"],
@@ -57,7 +57,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: PropsWithChildren) {
 	return (
-		<html className={defaultFont.className} lang="en">
+		<html className={defaultFont.className} lang="zh-CN">
 			<head>
 				<link
 					rel="apple-touch-icon"

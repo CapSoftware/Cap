@@ -80,7 +80,7 @@ const RecordingModes = () => {
 					>
 						<div className="flex gap-1.5 z-[2] items-center">
 							{mode.icon}
-							{mode.name}
+							{mode.name === "Instant Mode" ? "即时模式" : "工作室模式"}
 						</div>
 					</div>
 				))}

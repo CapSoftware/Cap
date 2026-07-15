@@ -145,7 +145,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 			// Validate file type - only allow jpg, jpeg, and png
 			const normalizedType = file.type.toLowerCase();
 			if (!ALLOWED_IMAGE_TYPES.has(normalizedType)) {
-				toast.error("Please select a PNG or JPEG image");
+				toast.error("请选择 PNG 或 JPEG 图片");
 				if (fileInputRef.current) {
 					fileInputRef.current.value = "";
 				}
@@ -155,7 +155,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 			// Validate file size
 			if (file.size > maxFileSizeBytes) {
 				const maxSizeMB = maxFileSizeBytes / (1024 * 1024);
-				toast.error(`File size must be ${maxSizeMB}MB or less`);
+				toast.error(`文件大小不能超过 ${maxSizeMB} MB`);
 				if (fileInputRef.current) {
 					fileInputRef.current.value = "";
 				}
@@ -227,7 +227,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 				{isLoading ? (
 					<div className="flex h-full items-center gap-2 rounded-xl border border-dashed border-gray-4 bg-gray-1 px-4 py-1.5">
 						<LoadingSpinner themeColors size={16} />
-						<p className="truncate text-[13px] text-gray-11">Uploading...</p>
+						<p className="truncate text-[13px] text-gray-11">正在上传...</p>
 					</div>
 				) : previewUrl ? (
 					<div className="flex h-full items-center gap-2 rounded-xl border border-dashed border-gray-4 bg-gray-1 px-4 py-1.5">
@@ -235,7 +235,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 							<div className="flex flex-1 gap-1 items-center">
 								<div className="flex gap-2 items-center">
 									<p className="text-xs font-medium text-gray-12">
-										Current icon:{" "}
+										当前图标：{" "}
 									</p>
 									<div
 										style={{
@@ -246,7 +246,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 									>
 										<SignedImageUrl
 											image={previewUrl}
-											name="File preview"
+											name="文件预览"
 											letterClass="text-lg"
 											className="size-full"
 										/>
@@ -254,7 +254,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 								</div>
 							</div>
 						</div>
-						<Tooltip content="Remove icon">
+						<Tooltip content="移除图标">
 							<Button
 								variant="outline"
 								size="xs"
@@ -296,9 +296,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 							/>
 						)}
 						<p className="truncate text-[13px] text-gray-11">
-							{isLoading
-								? "Uploading..."
-								: "Choose a file or drag & drop it here"}
+							{isLoading ? "正在上传..." : "选择文件或将其拖放到此处"}
 						</p>
 					</div>
 				)}

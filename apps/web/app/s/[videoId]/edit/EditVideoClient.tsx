@@ -995,9 +995,7 @@ export function EditVideoClient({
 			router.push(`/s/${video.id}`);
 			router.refresh();
 		} catch (error) {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to start video edit",
-			);
+			toast.error(error instanceof Error ? error.message : "无法开始视频编辑");
 			setIsSaving(false);
 		}
 	}, [
@@ -1043,9 +1041,7 @@ export function EditVideoClient({
 			router.push(`/s/${video.id}`);
 			router.refresh();
 		} catch (error) {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to restore video",
-			);
+			toast.error(error instanceof Error ? error.message : "无法恢复视频");
 			setIsRestoring(false);
 		}
 	}, [
@@ -1474,18 +1470,18 @@ export function EditVideoClient({
 							onClick={handleCancel}
 							className="inline-flex h-9 items-center rounded-full bg-gray-3 px-4 text-[14px] font-medium text-gray-12 shadow-[inset_0_1px_0_rgba(255,255,255,0.6),inset_0_-1px_0_rgba(0,0,0,0.02)] ring-1 ring-gray-5 transition hover:bg-gray-4 active:bg-gray-5"
 						>
-							Cancel
+							取消
 						</button>
 						<button
 							type="button"
-							aria-label="Restore original"
-							title="Restore original"
+							aria-label="恢复原始视频"
+							title="恢复原始视频"
 							disabled={!canRestore || isSaving || isRestoring}
 							onClick={() => setShowRestoreConfirm(true)}
 							className="inline-flex h-9 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium text-gray-11 transition hover:bg-gray-3 hover:text-gray-12 active:bg-gray-4 disabled:pointer-events-none disabled:opacity-30 sm:px-3"
 						>
 							<RotateCcw className="size-4" aria-hidden />
-							<span className="hidden sm:inline">Restore</span>
+							<span className="hidden sm:inline">恢复</span>
 						</button>
 						<VideoDownloadMenu
 							videoId={video.id}
@@ -1500,14 +1496,14 @@ export function EditVideoClient({
 					</div>
 					<div className="flex items-center gap-1">
 						<HeaderIconButton
-							label="Undo"
+							label="撤销"
 							disabled={!canUndo}
 							onClick={handleUndo}
 						>
 							<Undo2 className="size-[18px]" />
 						</HeaderIconButton>
 						<HeaderIconButton
-							label="Redo"
+							label="重做"
 							disabled={!canRedo}
 							onClick={handleRedo}
 						>
@@ -1521,7 +1517,7 @@ export function EditVideoClient({
 							onClick={handleDone}
 							className="ml-1"
 						>
-							{isSaving ? "Saving" : "Done"}
+							{isSaving ? "正在保存" : "完成"}
 						</Button>
 					</div>
 				</div>
@@ -1570,7 +1566,7 @@ export function EditVideoClient({
 				<div className="relative mt-11 flex items-center gap-2.5 sm:mt-12 sm:gap-3">
 					<button
 						type="button"
-						aria-label={isPlaying ? "Pause" : "Play"}
+						aria-label={isPlaying ? "暂停" : "播放"}
 						onClick={togglePlayPause}
 						style={{
 							boxShadow: [
@@ -1688,7 +1684,7 @@ export function EditVideoClient({
 
 											<button
 												type="button"
-												aria-label={isFirst ? "Trim start" : "Trim clip start"}
+												aria-label={isFirst ? "裁剪开头" : "裁剪片段开头"}
 												data-trim-handle
 												onPointerDown={(event) =>
 													startClipEdgeDrag(clip.id, "start", isFirst, event)
@@ -1727,7 +1723,7 @@ export function EditVideoClient({
 
 											<button
 												type="button"
-												aria-label={isLast ? "Trim end" : "Trim clip end"}
+												aria-label={isLast ? "裁剪结尾" : "裁剪片段结尾"}
 												data-trim-handle
 												onPointerDown={(event) =>
 													startClipEdgeDrag(clip.id, "end", isLast, event)
@@ -1776,8 +1772,8 @@ export function EditVideoClient({
 										<button
 											key={`merge-${splitPoint.id}`}
 											type="button"
-											aria-label="Remove cut"
-											title="Remove cut"
+											aria-label="移除切点"
+											title="移除切点"
 											data-trim-handle
 											onPointerDown={(event) => event.stopPropagation()}
 											onClick={(event) => {
@@ -1816,12 +1812,12 @@ export function EditVideoClient({
 				<div className="mt-4 flex items-center justify-between gap-3 px-1 sm:mt-5">
 					<button
 						type="button"
-						title="Split at the playhead (S)"
+						title="在播放头位置分割（S）"
 						onClick={handleSplit}
 						className="inline-flex h-9 select-none items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium text-gray-12 transition hover:bg-gray-3 active:bg-gray-4"
 					>
 						<Scissors className="size-3.5" aria-hidden />
-						<span>Split</span>
+						<span>分割</span>
 					</button>
 
 					<div className="flex items-center gap-3">
@@ -1846,8 +1842,8 @@ export function EditVideoClient({
 						<div className="hidden sm:flex items-center gap-1.5">
 							<button
 								type="button"
-								aria-label="Zoom out"
-								title="Zoom out (−)"
+								aria-label="缩小时间轴"
+								title="缩小时间轴（−）"
 								onClick={() => updateZoomAround(zoom / 1.25)}
 								disabled={zoom <= MIN_ZOOM + 0.01}
 								className="inline-flex size-7 items-center justify-center rounded-full text-gray-12 transition hover:bg-gray-3 active:bg-gray-4 disabled:pointer-events-none disabled:opacity-30"
@@ -1856,7 +1852,7 @@ export function EditVideoClient({
 							</button>
 							<input
 								type="range"
-								aria-label="Zoom level"
+								aria-label="时间轴缩放级别"
 								min={MIN_ZOOM}
 								max={MAX_ZOOM}
 								step={0.25}
@@ -1868,8 +1864,8 @@ export function EditVideoClient({
 							/>
 							<button
 								type="button"
-								aria-label="Zoom in"
-								title="Zoom in (+)"
+								aria-label="放大时间轴"
+								title="放大时间轴（+）"
 								onClick={() => updateZoomAround(zoom * 1.25)}
 								disabled={zoom >= MAX_ZOOM - 0.01}
 								className="inline-flex size-7 items-center justify-center rounded-full text-gray-12 transition hover:bg-gray-3 active:bg-gray-4 disabled:pointer-events-none disabled:opacity-30"
@@ -1884,7 +1880,7 @@ export function EditVideoClient({
 						disabled={!canDeleteSegment}
 						onClick={handleDelete}
 						icon={<Trash2 className="size-3.5" aria-hidden />}
-						label="Delete"
+						label="删除"
 					/>
 				</div>
 			</main>
@@ -1898,11 +1894,10 @@ export function EditVideoClient({
 			>
 				<DialogContent className="max-w-sm p-0">
 					<DialogHeader icon={<RotateCcw className="size-5" />}>
-						<DialogTitle>Restore original video?</DialogTitle>
+						<DialogTitle>恢复原始视频？</DialogTitle>
 					</DialogHeader>
 					<DialogDescription>
-						This discards your current edits and restores the video to its
-						original recording. This can't be undone.
+						这将放弃当前编辑并将视频恢复为原始录制内容。此操作无法撤销。
 					</DialogDescription>
 					<DialogFooter>
 						<Button
@@ -1911,7 +1906,7 @@ export function EditVideoClient({
 							disabled={isRestoring}
 							onClick={() => setShowRestoreConfirm(false)}
 						>
-							Cancel
+							取消
 						</Button>
 						<Button
 							variant="destructive"
@@ -1920,7 +1915,7 @@ export function EditVideoClient({
 							disabled={isRestoring}
 							onClick={handleRestore}
 						>
-							{isRestoring ? "Restoring" : "Restore original"}
+							{isRestoring ? "正在恢复" : "恢复原始视频"}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

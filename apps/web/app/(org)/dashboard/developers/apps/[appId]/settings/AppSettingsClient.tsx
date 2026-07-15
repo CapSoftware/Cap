@@ -39,34 +39,32 @@ export function AppSettingsClient() {
 				environment: environment as "development" | "production",
 			}),
 		onSuccess: () => {
-			toast.success("App updated");
+			toast.success("应用已更新");
 			router.refresh();
 		},
-		onError: () => toast.error("Failed to update app"),
+		onError: () => toast.error("更新应用失败"),
 	});
 
 	const deleteMutation = useMutation({
 		mutationFn: () => deleteDeveloperApp(appId),
 		onSuccess: () => {
-			toast.success("App deleted");
+			toast.success("应用已删除");
 			router.push("/dashboard/developers/apps");
 			router.refresh();
 		},
-		onError: () => toast.error("Failed to delete app"),
+		onError: () => toast.error("删除应用失败"),
 	});
 
 	if (!app) {
-		return <p className="text-sm text-gray-10">App not found</p>;
+		return <p className="text-sm text-gray-10">未找到应用</p>;
 	}
 
 	return (
 		<div className="flex flex-col gap-5 max-w-xl">
 			<Card>
 				<CardHeader>
-					<CardTitle>General</CardTitle>
-					<CardDescription>
-						Update your app name and environment.
-					</CardDescription>
+					<CardTitle>常规</CardTitle>
+					<CardDescription>更新应用名称和环境。</CardDescription>
 				</CardHeader>
 				<form
 					onSubmit={(e) => {
@@ -76,7 +74,7 @@ export function AppSettingsClient() {
 					className="flex flex-col gap-4 mt-4"
 				>
 					<div className="flex flex-col gap-2">
-						<Label htmlFor={nameInputId}>App Name</Label>
+						<Label htmlFor={nameInputId}>应用名称</Label>
 						<Input
 							id={nameInputId}
 							value={name}
@@ -84,7 +82,7 @@ export function AppSettingsClient() {
 						/>
 					</div>
 					<div className="flex flex-col gap-2">
-						<Label>Environment</Label>
+						<Label>环境</Label>
 						<div className="flex gap-2">
 							<Button
 								type="button"
@@ -92,7 +90,7 @@ export function AppSettingsClient() {
 								size="sm"
 								onClick={() => setEnvironment("development")}
 							>
-								Development
+								开发环境
 							</Button>
 							<Button
 								type="button"
@@ -100,7 +98,7 @@ export function AppSettingsClient() {
 								size="sm"
 								onClick={() => setEnvironment("production")}
 							>
-								Production
+								生产环境
 							</Button>
 						</div>
 					</div>
@@ -112,17 +110,16 @@ export function AppSettingsClient() {
 						spinner={updateMutation.isPending}
 						disabled={updateMutation.isPending}
 					>
-						Save Changes
+						保存更改
 					</Button>
 				</form>
 			</Card>
 
 			<Card className="border-red-400/20">
 				<CardHeader>
-					<CardTitle className="text-red-400">Danger Zone</CardTitle>
+					<CardTitle className="text-red-400">危险区域</CardTitle>
 					<CardDescription>
-						Deleting an app will revoke all API keys and stop all SDK
-						integrations.
+						删除应用将撤销所有 API 密钥，并停止所有 SDK 集成。
 					</CardDescription>
 				</CardHeader>
 				<div className="mt-4">
@@ -133,7 +130,7 @@ export function AppSettingsClient() {
 							onClick={() => setConfirmDelete(true)}
 						>
 							<Trash2 size={14} className="mr-1" />
-							Delete App
+							删除应用
 						</Button>
 					) : (
 						<div className="flex gap-2">
@@ -142,7 +139,7 @@ export function AppSettingsClient() {
 								size="sm"
 								onClick={() => setConfirmDelete(false)}
 							>
-								Cancel
+								取消
 							</Button>
 							<Button
 								variant="dark"
@@ -152,7 +149,7 @@ export function AppSettingsClient() {
 								disabled={deleteMutation.isPending}
 								onClick={() => deleteMutation.mutate()}
 							>
-								Confirm Delete
+								确认删除
 							</Button>
 						</div>
 					)}

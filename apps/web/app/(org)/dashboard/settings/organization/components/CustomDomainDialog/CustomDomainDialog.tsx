@@ -35,18 +35,18 @@ import VerifyStep from "./VerifyStep";
 const STEP_CONFIGS: StepConfig[] = [
 	{
 		id: "domain",
-		name: "Domain",
-		description: "Enter your custom domain",
+		name: "域名",
+		description: "输入你的自定义域名",
 	},
 	{
 		id: "verify",
-		name: "Verify",
-		description: "Verify domain ownership",
+		name: "验证",
+		description: "验证域名所有权",
 	},
 	{
 		id: "success",
-		name: "Success",
-		description: "Domain setup complete",
+		name: "完成",
+		description: "域名设置完成",
 	},
 ];
 
@@ -162,18 +162,14 @@ const CustomDomainDialog = ({
 		},
 		onSuccess: (data) => {
 			dispatch({ type: "NEXT_STEP" });
-			toast.success("Domain settings updated");
+			toast.success("域名设置已更新");
 			router.refresh();
 			if (data) {
 				setIsVerified(data.verified);
 			}
 		},
 		onError: (error) => {
-			toast.error(
-				error instanceof Error
-					? error.message
-					: "Failed to update domain settings",
-			);
+			toast.error(error instanceof Error ? error.message : "更新域名设置失败");
 		},
 	});
 
@@ -202,21 +198,19 @@ const CustomDomainDialog = ({
 
 			if (showToasts) {
 				if (data.verified) {
-					toast.success("Domain is verified!");
+					toast.success("域名已验证");
 					if (pollInterval.current) {
 						clearInterval(pollInterval.current);
 						pollInterval.current = undefined;
 					}
 				} else {
-					toast.error(
-						"Domain is not verified. Please check your DNS settings.",
-					);
+					toast.error("域名尚未验证，请检查 DNS 设置。");
 				}
 			}
 		},
 		onError: (_error, { showToasts }) => {
 			if (showToasts) {
-				toast.error("Failed to check domain verification");
+				toast.error("检查域名验证状态失败");
 			}
 		},
 	});
@@ -294,7 +288,7 @@ const CustomDomainDialog = ({
 		if (!domain.trim()) {
 			dispatch({
 				type: "SET_ERROR",
-				payload: { stepId: "domain", error: "Domain is required" },
+				payload: { stepId: "domain", error: "请输入域名" },
 			});
 			return;
 		}
@@ -329,7 +323,7 @@ const CustomDomainDialog = ({
 		if (!cleanedDomain) {
 			dispatch({
 				type: "SET_ERROR",
-				payload: { stepId: "domain", error: "Please enter a valid domain" },
+				payload: { stepId: "domain", error: "请输入有效的域名" },
 			});
 			return;
 		}
@@ -374,10 +368,10 @@ const CustomDomainDialog = ({
 				>
 					<DialogHeader
 						icon={<FontAwesomeIcon icon={faGlobe} />}
-						description="Let's get you setup with your custom domain for your caps."
+						description="为你的录制设置自定义域名。"
 					>
 						<DialogTitle className="text-lg text-gray-12">
-							Custom Domain
+							自定义域名
 						</DialogTitle>
 					</DialogHeader>
 
@@ -441,7 +435,7 @@ const CustomDomainDialog = ({
 											icon={faRefresh}
 										/>
 									)}
-									Check Status
+									检查状态
 								</Button>
 							)}
 
@@ -455,7 +449,7 @@ const CustomDomainDialog = ({
 										variant="dark"
 										className="min-w-[100px]"
 									>
-										Next
+										下一步
 									</Button>
 								) : (
 									<Button
@@ -466,7 +460,7 @@ const CustomDomainDialog = ({
 											handleClose();
 										}}
 									>
-										Upgrade To Cap Pro
+										升级到 Cap Pro
 									</Button>
 								))}
 						</DialogFooter>

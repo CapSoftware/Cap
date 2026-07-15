@@ -60,14 +60,14 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
 						}
 
 						await createOrganization(formData);
-						toast.success("Organization created successfully");
+						toast.success("组织创建成功");
 						router.push(`/dashboard/caps`);
 						props.onOrganizationCreated();
 					} catch (error) {
 						console.error("Error creating organization:", error);
 						error instanceof Error
 							? toast.error(error.message)
-							: toast.error("Failed to create organization");
+							: toast.error("创建组织失败");
 					} finally {
 						setIsUploading(false);
 						props.setCreateLoading?.(false);
@@ -81,7 +81,7 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
 						render={({ field }) => (
 							<FormControl>
 								<Input
-									placeholder="Your organization name"
+									placeholder="组织名称"
 									{...field}
 									onChange={(e) => {
 										field.onChange(e);
@@ -93,9 +93,9 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
 					/>
 
 					<div className="space-y-1">
-						<Label htmlFor="icon">Organization Icon</Label>
+						<Label htmlFor="icon">组织图标</Label>
 						<CardDescription className="w-full max-w-[400px]">
-							Upload a custom logo or icon for your organization.
+							为你的组织上传自定义徽标或图标。
 						</CardDescription>
 					</div>
 

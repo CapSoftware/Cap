@@ -52,7 +52,7 @@ export const UsageButton = memo(
 			<Tooltip
 				disable={!sidebarCollapsed}
 				position="right"
-				content="Upgrade to Pro"
+				content="升级到 Pro"
 			>
 				<ProRiveButton toggleMobileNav={toggleMobileNav} />
 			</Tooltip>
@@ -110,7 +110,7 @@ const ProRiveButton = memo(
 				/>
 				{!sidebarCollapsed ? (
 					<p className="relative left-8 text-center text-white truncate">
-						Upgrade to Pro
+						升级到 Pro
 					</p>
 				) : null}
 			</Button>

@@ -35,7 +35,7 @@ export default function VideosPicker({
 				onRemove={() => onRemoveVideo("video1")}
 				isDragging={isDragging}
 				dragPosition={dragPosition}
-				label="Video 1"
+				label="视频 1"
 			/>
 			<div className="flex justify-center items-center rounded-full size-8 bg-gray-12">
 				<FontAwesomeIcon icon={faRightLeft} className="size-2.5 text-gray-1" />
@@ -48,7 +48,7 @@ export default function VideosPicker({
 				onRemove={() => onRemoveVideo("video2")}
 				isDragging={isDragging}
 				dragPosition={dragPosition}
-				label="Video 2"
+				label="视频 2"
 			/>
 		</div>
 	);

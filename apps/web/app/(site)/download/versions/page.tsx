@@ -1,4 +1,5 @@
 import { format, parseISO } from "date-fns";
+import { zhCN } from "date-fns/locale";
 import type { Metadata } from "next";
 import Link from "next/link";
 import {
@@ -9,9 +10,8 @@ import {
 } from "@/utils/releases";
 
 export const metadata: Metadata = {
-	title: "All Versions — Cap",
-	description:
-		"Download previous versions of Cap for macOS, Windows, and Linux.",
+	title: "所有版本 — Cap",
+	description: "下载适用于 macOS、Windows 和 Linux 的 Cap 历史版本。",
 };
 
 export const revalidate = 60;
@@ -59,7 +59,7 @@ function DownloadLinks({
 	}
 
 	if (!hasDownloads(downloads)) {
-		return <span className="text-sm text-gray-9">Downloads not available</span>;
+		return <span className="text-sm text-gray-9">暂无可用下载</span>;
 	}
 
 	return (
@@ -159,19 +159,23 @@ function ReleaseRow({
 					</span>
 					{isLatest && (
 						<span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-600 text-white">
-							Latest
+							最新
 						</span>
 					)}
 				</div>
 				<div className="flex items-center gap-3 text-sm text-gray-10">
-					<span>{format(parseISO(release.publishedAt), "MMMM d, yyyy")}</span>
+					<span>
+						{format(parseISO(release.publishedAt), "yyyy年M月d日", {
+							locale: zhCN,
+						})}
+					</span>
 					<a
 						href={release.htmlUrl}
 						target="_blank"
 						rel="noopener noreferrer"
 						className="hover:text-gray-12 hover:underline"
 					>
-						Release notes
+						发行说明
 					</a>
 				</div>
 			</div>
@@ -187,7 +191,7 @@ export default async function VersionsPage() {
 	try {
 		releases = await getGitHubReleases();
 	} catch (e) {
-		error = e instanceof Error ? e.message : "Failed to fetch releases";
+		error = e instanceof Error ? e.message : "获取发行版本失败";
 	}
 
 	return (
@@ -208,13 +212,13 @@ export default async function VersionsPage() {
 						>
 							<path d="M19 12H5M12 19l-7-7 7-7" />
 						</svg>
-						Back to Download
+						返回下载页
 					</Link>
 					<h1 className="text-2xl font-semibold text-gray-12 md:text-3xl">
-						All Versions
+						所有版本
 					</h1>
 					<p className="text-gray-10">
-						Download previous versions of Cap for macOS, Windows, and Linux.
+						下载适用于 macOS、Windows 和 Linux 的 Cap 历史版本。
 					</p>
 				</div>
 
@@ -224,7 +228,7 @@ export default async function VersionsPage() {
 					</div>
 				) : releases.length === 0 ? (
 					<div className="p-4 rounded-lg border border-gray-5 bg-gray-2 text-gray-11">
-						No releases found.
+						未找到发行版本。
 					</div>
 				) : (
 					<div className="space-y-3">

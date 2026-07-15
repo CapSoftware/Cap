@@ -8,7 +8,7 @@ import { revalidatePath } from "next/cache";
 
 export async function deleteDeveloperVideo(appId: string, videoId: string) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user) throw new Error("未授权");
 
 	const [app] = await db()
 		.select()
@@ -22,7 +22,7 @@ export async function deleteDeveloperVideo(appId: string, videoId: string) {
 		)
 		.limit(1);
 
-	if (!app) throw new Error("App not found");
+	if (!app) throw new Error("未找到应用");
 
 	await db()
 		.update(developerVideos)

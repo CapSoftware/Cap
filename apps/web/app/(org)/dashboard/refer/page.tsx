@@ -4,8 +4,8 @@ import { redirect } from "next/navigation";
 import ReferClient from "./ReferClient";
 
 export const metadata = {
-	title: "Refer - Cap",
-	description: "Earn rewards by referring friends to Cap",
+	title: "推荐奖励 — Cap",
+	description: "邀请好友使用 Cap 并获得奖励",
 };
 
 async function generateEmbedToken(
@@ -32,7 +32,7 @@ async function generateEmbedToken(
 	});
 
 	if (!response.ok) {
-		throw new Error("Failed to generate embed token");
+		throw new Error("生成嵌入令牌失败");
 	}
 
 	const data = await response.json();

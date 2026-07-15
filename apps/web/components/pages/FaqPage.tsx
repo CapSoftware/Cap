@@ -13,48 +13,47 @@ interface FaqItem {
 
 const faqContent: FaqItem[] = [
 	{
-		title: "Who is Cap for?",
+		title: "Cap 适合哪些人？",
 		answer:
-			"Cap is for anyone who wants to record, edit, and share videos. It's a lightweight, powerful tool for creators, educators, marketers, developers, and remote teams who want to communicate more effectively through screen recordings.",
+			"Cap 适合任何需要录制、编辑和分享视频的人。它轻量而强大，帮助创作者、教育工作者、营销人员、开发者和远程团队通过屏幕录像更高效地沟通。",
 	},
 	{
-		title: "How much does it cost?",
+		title: "费用是多少？",
 		answer:
-			"Cap offers a free version for personal use. You can upgrade to Cap Pro for just $8.16/month (when billed annually) to unlock unlimited cloud storage, unlimited recording length, custom domain support, advanced team features, password-protected videos, analytics, and priority support. We also offer commercial licenses and self-hosted options for businesses.",
+			"Cap 提供个人免费版。按年计费时，每月仅需 8.16 美元即可升级到 Cap 专业版，解锁无限云存储、不限录制时长、自定义域名、高级团队功能、视频密码保护、分析和优先支持。企业还可选择商业许可证和自行托管方案。",
 	},
 	{
-		title: "Which platforms does Cap support?",
+		title: "Cap 支持哪些平台？",
 		answer:
-			"Cap is cross-platform and works on macOS (both Apple Silicon and Intel) and Windows. For macOS, we recommend version 13.1 or newer. For Windows, we recommend Windows 10 or newer.",
+			"Cap 支持跨平台运行，可用于 macOS（Apple 芯片和 Intel）与 Windows。建议使用 macOS 13.1 或更高版本，以及 Windows 10 或更高版本。",
 	},
 	{
-		title: "What makes Cap different from Loom?",
+		title: "Cap 与 Loom 有何不同？",
 		answer:
-			"Cap is open source, privacy-focused, and lets you own your data. You can connect your own Google Drive or custom S3 storage buckets, self-host the entire platform, and get a lightweight, faster experience. We focus strongly on design, user experience, and building with our community at the center of everything we do. Plus, our built-in Loom video importer makes switching effortless.",
+			"Cap 开源、注重隐私，并让你拥有自己的数据。你可以连接自己的 Google Drive 或自定义 S3 存储桶、自行托管整个平台，并获得更轻快的体验。我们重视设计、用户体验和社区共建，内置 Loom 视频导入器也让迁移更加轻松。",
 	},
 	{
-		title: "Can I import my Loom videos to Cap?",
+		title: "可以将 Loom 视频导入 Cap 吗？",
 		answer:
-			"Yes! Cap Pro includes a built-in Loom video importer that lets you seamlessly transfer your existing Loom recordings into Cap. Just paste your Loom video links and Cap handles the rest — keeping all your content organized in one place.",
+			"可以！Cap 专业版内置 Loom 视频导入器，可将现有 Loom 录像无缝迁移到 Cap。只需粘贴 Loom 视频链接，其余工作由 Cap 完成，并将所有内容集中整理。",
 	},
 	{
-		title: "Can I self-host Cap?",
-		answer:
-			"Yes! Cap can be self-hosted on your own infrastructure, giving you full control over your data.",
+		title: "可以自行托管 Cap 吗？",
+		answer: "可以！Cap 可部署在你自己的基础设施上，让你完全掌控数据。",
 	},
 	{
-		title: "Is there a commercial license available?",
+		title: "是否提供商业许可证？",
 		answer:
-			"Yes, we offer commercial licenses for businesses that want to use the Cap desktop app. The commercial license includes the Cap Recorder + Editor with local-only features. Our Pro plan also includes a commercial license for the desktop app.",
+			"提供。希望使用 Cap 桌面应用的企业可以购买商业许可证，其中包含带本地功能的 Cap 录制器和编辑器。专业版方案同样包含桌面应用商业许可证。",
 		link: {
-			text: "Deactivate your license",
+			text: "停用许可证",
 			href: "/deactivate-license",
 		},
 	},
 	{
-		title: "What happens after the beta period ends?",
+		title: "测试期结束后会怎样？",
 		answer:
-			"Early adopters will keep their special pricing for the lifetime of their subscription, even after we move out of beta and adjust our regular pricing. This is our way of thanking our early supporters.",
+			"即使测试期结束并调整常规价格，早期用户在整个订阅期内仍可保留专享价格，以感谢早期支持者。",
 	},
 ];
 
@@ -62,7 +61,7 @@ export const FaqPage = () => {
 	return (
 		<div className="py-32 md:py-40 wrapper wrapper-sm">
 			<div className="mb-14 text-center page-intro">
-				<h1>FAQ</h1>
+				<h1>常见问题</h1>
 			</div>
 			<div className="mb-10">
 				{faqContent.map((section) => {

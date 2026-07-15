@@ -37,7 +37,7 @@ export default function S3ConfigPage() {
 				headers: await protectedHeaders(),
 			});
 
-			if (response.status !== 200) throw new Error("Failed to fetch S3 config");
+			if (response.status !== 200) throw new Error("获取 S3 配置失败");
 
 			return response.body;
 		},
@@ -55,12 +55,12 @@ export default function S3ConfigPage() {
 				headers: await protectedHeaders(),
 			});
 
-			if (response.status !== 200) throw new Error("Failed to save S3 config");
+			if (response.status !== 200) throw new Error("保存 S3 配置失败");
 			return response;
 		},
 		onSuccess: async () => {
 			await refetch();
-			await commands.globalMessageDialog("S3 configuration saved successfully");
+			await commands.globalMessageDialog("S3 配置保存成功");
 		},
 	}));
 
@@ -70,15 +70,12 @@ export default function S3ConfigPage() {
 				headers: await protectedHeaders(),
 			});
 
-			if (response.status !== 200)
-				throw new Error("Failed to delete S3 config");
+			if (response.status !== 200) throw new Error("删除 S3 配置失败");
 			return response;
 		},
 		onSuccess: async () => {
 			await refetch();
-			await commands.globalMessageDialog(
-				"S3 configuration deleted successfully",
-			);
+			await commands.globalMessageDialog("S3 配置删除成功");
 		},
 	}));
 
@@ -97,9 +94,7 @@ export default function S3ConfigPage() {
 				clearTimeout(timeoutId);
 
 				if (response.status !== 200)
-					throw new Error(
-						`S3 connection test failed. Check your config and network connection.`,
-					);
+					throw new Error(`S3 连接测试失败。请检查配置和网络连接。`);
 
 				return response;
 			} catch (error) {
@@ -108,7 +103,7 @@ export default function S3ConfigPage() {
 				if (error instanceof Error) {
 					if (error.name === "AbortError")
 						throw new Error(
-							"Connection test timed out after 5 seconds. Please check your endpoint URL and network connection.",
+							"连接测试在 5 秒后超时。请检查端点 URL 和网络连接。",
 						);
 				}
 
@@ -116,9 +111,7 @@ export default function S3ConfigPage() {
 			}
 		},
 		onSuccess: async () => {
-			await commands.globalMessageDialog(
-				"S3 configuration test successful! Connection is working.",
-			);
+			await commands.globalMessageDialog("S3 配置测试成功，连接正常。");
 		},
 	}));
 
@@ -157,22 +150,21 @@ export default function S3ConfigPage() {
 	return (
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
-				<IntegrationConfigHeader title="S3 Config" />
+				<IntegrationConfigHeader title="S3 配置" />
 				<Section
-					title="Configuration"
+					title="配置"
 					description={
 						<>
-							It should take under 10 minutes to set up and connect your storage
-							bucket to Cap. View the{" "}
+							设置存储桶并连接到 Cap 通常不到 10 分钟。请查看{" "}
 							<a
 								href="https://cap.so/docs/s3-config"
 								target="_blank"
 								class="underline text-gray-12"
 								rel="noopener"
 							>
-								Storage Config Guide
+								存储配置指南
 							</a>{" "}
-							to get started.
+							以开始设置。
 						</>
 					}
 				>
@@ -188,15 +180,13 @@ export default function S3ConfigPage() {
 								<Show when={managedByOrganization()}>
 									{(organization) => (
 										<p class="text-xs leading-relaxed text-gray-10">
-											Managed by your organization: {organization().name}
+											由你的组织管理：{organization().name}
 										</p>
 									)}
 								</Show>
 
 								<div class="space-y-2">
-									<label class="text-[13px] text-gray-12">
-										Storage Provider
-									</label>
+									<label class="text-[13px] text-gray-12">存储服务商</label>
 									<div class="relative">
 										<select
 											value={s3Config().provider}
@@ -213,7 +203,7 @@ export default function S3ConfigPage() {
 											<option value="cloudflare">Cloudflare R2</option>
 											<option value="supabase">Supabase</option>
 											<option value="minio">MinIO</option>
-											<option value="other">Other S3-Compatible</option>
+											<option value="other">其他 S3 兼容服务</option>
 										</select>
 										<div class="flex absolute inset-y-0 right-0 items-center px-2 pointer-events-none">
 											<svg
@@ -233,24 +223,20 @@ export default function S3ConfigPage() {
 								</div>
 
 								{renderInput(
-									"Access Key ID",
+									"访问密钥 ID",
 									"accessKeyId",
 									"PL31OADSQNK",
 									"password",
 								)}
 								{renderInput(
-									"Secret Access Key",
+									"秘密访问密钥",
 									"secretAccessKey",
 									"PL31OADSQNK",
 									"password",
 								)}
-								{renderInput(
-									"Endpoint",
-									"endpoint",
-									"https://s3.amazonaws.com",
-								)}
-								{renderInput("Bucket Name", "bucketName", "my-bucket")}
-								{renderInput("Region", "region", "us-east-1")}
+								{renderInput("端点", "endpoint", "https://s3.amazonaws.com")}
+								{renderInput("存储桶名称", "bucketName", "my-bucket")}
+								{renderInput("区域", "region", "us-east-1")}
 							</div>
 						</Suspense>
 					</SectionCard>
@@ -272,14 +258,14 @@ export default function S3ConfigPage() {
 									variant="destructive"
 									onClick={() => deleteConfig.mutate()}
 								>
-									{deleteConfig.isPending ? "Removing..." : "Remove Config"}
+									{deleteConfig.isPending ? "正在移除……" : "移除配置"}
 								</Button>
 							)}
 							<Button
 								variant="gray"
 								onClick={() => testConfig.mutate(s3Config())}
 							>
-								{testConfig.isPending ? "Testing..." : "Test Connection"}
+								{testConfig.isPending ? "正在测试……" : "测试连接"}
 							</Button>
 						</div>
 						<Button
@@ -287,7 +273,7 @@ export default function S3ConfigPage() {
 							variant="primary"
 							onClick={() => saveConfig.mutate(s3Config())}
 						>
-							{saveConfig.isPending ? "Saving..." : "Save"}
+							{saveConfig.isPending ? "正在保存……" : "保存"}
 						</Button>
 					</fieldset>
 				</div>

@@ -29,10 +29,10 @@ interface Props {
 }
 
 const FolderOptions = [
-	{ value: "normal", label: "Normal", color: "#9ca3af" },
-	{ value: "blue", label: "Blue", color: "#3b82f6" },
-	{ value: "red", label: "Red", color: "#ef4444" },
-	{ value: "yellow", label: "Yellow", color: "#eab308" },
+	{ value: "normal", label: "默认", color: "#9ca3af" },
+	{ value: "blue", label: "蓝色", color: "#3b82f6" },
+	{ value: "red", label: "红色", color: "#ef4444" },
+	{ value: "yellow", label: "黄色", color: "#eab308" },
 ] as const;
 
 export const NewFolderDialog: React.FC<Props> = ({
@@ -75,10 +75,10 @@ export const NewFolderDialog: React.FC<Props> = ({
 			setSelectedColor(null);
 			onOpenChange(false);
 			router.refresh();
-			toast.success("Folder created successfully");
+			toast.success("文件夹已创建");
 		},
 		onError: () => {
-			toast.error("Failed to create folder");
+			toast.error("创建文件夹失败");
 		},
 	});
 
@@ -88,14 +88,14 @@ export const NewFolderDialog: React.FC<Props> = ({
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faFolderPlus} className="size-3.5" />}
 				>
-					<DialogTitle>New Folder</DialogTitle>
+					<DialogTitle>新建文件夹</DialogTitle>
 				</DialogHeader>
 				<div className="p-5">
 					<Input
 						value={folderName}
 						onChange={(e) => setFolderName(e.target.value)}
 						required
-						placeholder="Folder name"
+						placeholder="文件夹名称"
 					/>
 					<div className="flex flex-wrap gap-2 mt-3">
 						{FolderOptions.map((option) => {
@@ -142,7 +142,7 @@ export const NewFolderDialog: React.FC<Props> = ({
 				</div>
 				<DialogFooter>
 					<Button size="sm" variant="gray" onClick={() => onOpenChange(false)}>
-						Cancel
+						取消
 					</Button>
 					<Button
 						onClick={() => {
@@ -162,7 +162,7 @@ export const NewFolderDialog: React.FC<Props> = ({
 							createFolder.isPending
 						}
 					>
-						{createFolder.isPending ? "Creating..." : "Create"}
+						{createFolder.isPending ? "正在创建……" : "创建"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

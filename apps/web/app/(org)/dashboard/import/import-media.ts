@@ -47,7 +47,7 @@ export async function importMediaFile({
 		);
 	}
 
-	toast.error("Please choose a video or image file.");
+	toast.error("请选择视频或图片文件。");
 	return false;
 }
 
@@ -98,11 +98,11 @@ async function uploadImageAsScreenshot(
 		await sendProgressUpdate(imageData.id, uploadTotal, uploadTotal);
 
 		setUploadStatus(undefined);
-		toast.success("Image uploaded!");
+		toast.success("图片已上传！");
 		return true;
 	} catch (err) {
-		console.error("Image upload failed", err);
-		toast.error("Failed to upload image. Please try again.");
+		console.error("图片上传失败", err);
+		toast.error("上传图片失败，请重试。");
 	} finally {
 		URL.revokeObjectURL(thumbnailUrl);
 	}
@@ -258,26 +258,22 @@ async function uploadVideoForServerProcessing(
 				bucketId: videoData.bucketId,
 			});
 		} catch (triggerError) {
-			console.error("Failed to trigger processing:", triggerError);
-			toast.error("Failed to start video processing. Please try again.");
+			console.error("触发处理失败：", triggerError);
+			toast.error("启动视频处理失败，请重试。");
 			setUploadStatus(undefined);
 			return false;
 		}
 
 		setUploadStatus(undefined);
-		toast.success(
-			"Video uploaded! Processing will continue in the background.",
-		);
+		toast.success("视频已上传！处理将在后台继续。");
 		return true;
 	} catch (err) {
-		console.error("Video upload failed", err);
+		console.error("视频上传失败", err);
 
 		if (err instanceof Error && err.message === "upgrade_required") {
-			toast.error(
-				"Video duration exceeds the limit for free accounts. Please upgrade to Pro.",
-			);
+			toast.error("视频时长超过免费账户限制，请升级到 Pro。");
 		} else {
-			toast.error("Failed to upload video. Please try again.");
+			toast.error("上传视频失败，请重试。");
 		}
 	}
 

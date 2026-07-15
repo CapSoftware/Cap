@@ -36,95 +36,95 @@ type FeatureSection = {
 
 const sections: FeatureSection[] = [
 	{
-		title: "Recording & editing",
+		title: "录制与编辑",
 		rows: [
 			{
-				label: "Studio Mode with full editor",
+				label: "带完整编辑器的工作室模式",
 				free: true,
 				desktop: true,
 				pro: true,
 			},
 			{
-				label: "Unlimited local recordings & editing",
+				label: "不限本地录制和编辑",
 				free: false,
 				desktop: true,
 				pro: true,
 			},
-			{ label: "4K / 60fps export", free: true, desktop: true, pro: true },
-			{ label: "Export to any format", free: true, desktop: true, pro: true },
-			{ label: "Commercial usage", free: false, desktop: true, pro: true },
+			{ label: "4K / 60 帧导出", free: true, desktop: true, pro: true },
+			{ label: "导出为任意格式", free: true, desktop: true, pro: true },
+			{ label: "商业使用", free: false, desktop: true, pro: true },
 		],
 	},
 	{
-		title: "Cloud & sharing",
+		title: "云端与分享",
 		rows: [
 			{
-				label: "Shareable links",
-				free: "Up to 5 min",
-				desktop: "Up to 5 min",
-				pro: "Unlimited",
+				label: "分享链接",
+				free: "最长 5 分钟",
+				desktop: "最长 5 分钟",
+				pro: "无限制",
 			},
 			{
-				label: "Unlimited cloud storage & bandwidth",
+				label: "无限云存储和带宽",
 				free: false,
 				desktop: false,
 				pro: true,
 			},
 			{
-				label: "Custom domain (cap.yourdomain.com)",
+				label: "自定义域名（cap.yourdomain.com）",
 				free: false,
 				desktop: false,
 				pro: true,
 			},
 			{
-				label: "Password protected shares",
+				label: "密码保护分享",
 				free: false,
 				desktop: false,
 				pro: true,
 			},
 			{
-				label: "Custom S3 bucket & Google Drive support",
+				label: "自定义 S3 存储桶和 Google Drive 支持",
 				free: false,
 				desktop: false,
 				pro: true,
 			},
-			{ label: "Loom video importer", free: false, desktop: false, pro: true },
+			{ label: "Loom 视频导入器", free: false, desktop: false, pro: true },
 		],
 	},
 	{
-		title: "AI & collaboration",
+		title: "AI 与协作",
 		rows: [
 			{
-				label: "Auto titles, summaries & chapters",
+				label: "自动生成标题、摘要和章节",
 				free: false,
 				desktop: false,
 				pro: true,
 			},
-			{ label: "Transcriptions", free: false, desktop: false, pro: true },
+			{ label: "自动转写", free: false, desktop: false, pro: true },
 			{
-				label: "Viewer analytics & engagement",
+				label: "观看分析与互动",
 				free: false,
 				desktop: false,
 				pro: true,
 			},
-			{ label: "Team workspaces", free: true, desktop: true, pro: true },
+			{ label: "团队工作区", free: true, desktop: true, pro: true },
 		],
 	},
 	{
-		title: "Support & licensing",
+		title: "支持与许可",
 		rows: [
-			{ label: "Community support", free: true, desktop: true, pro: true },
+			{ label: "社区支持", free: true, desktop: true, pro: true },
 			{
-				label: "Priority support & early features",
+				label: "优先支持和新功能抢先体验",
 				free: false,
 				desktop: false,
 				pro: true,
 			},
 			{
-				label: "License",
-				free: "Personal use",
-				desktop: "Perpetual",
-				pro: "Subscription",
+				label: "许可证",
+				free: "个人使用",
+				desktop: "永久许可",
+				pro: "订阅",
 			},
 		],
 	},
@@ -142,11 +142,11 @@ const getButtonVariant = (key: PlanKey) => {
 const getButtonText = (key: PlanKey): string => {
 	switch (key) {
 		case "free":
-			return "Download";
+			return "下载";
 		case "desktop":
-			return "Get license";
+			return "获取许可证";
 		default:
-			return "Get started";
+			return "开始使用";
 	}
 };
 
@@ -172,18 +172,23 @@ export const ComparePlans = () => {
 		() => [
 			{
 				key: "free",
-				name: "Free",
-				short: "Free",
-				price: "Free forever",
+				name: "免费版",
+				short: "免费",
+				price: "永久免费",
 				href: "/download",
 			},
 			{
 				key: "desktop",
-				name: "Desktop License",
-				short: "Desktop",
-				price: "$29/yr",
+				name: "桌面许可证",
+				short: "桌面版",
+				price: "每年 29 美元",
 			},
-			{ key: "pro", name: "Cap Pro", short: "Pro", price: "$8.16/user/mo" },
+			{
+				key: "pro",
+				name: "Cap 专业版",
+				short: "专业版",
+				price: "每人每月 8.16 美元",
+			},
 		],
 		[],
 	);
@@ -222,7 +227,7 @@ export const ComparePlans = () => {
 			"/api/settings/billing/guest-checkout",
 			{ priceId: planId, quantity: 1 },
 			setGuestLoading,
-			"Failed to create checkout session",
+			"创建结账会话失败",
 		);
 
 	const openCommercialCheckout = () =>
@@ -230,7 +235,7 @@ export const ComparePlans = () => {
 			"/api/commercial/checkout",
 			{ type: "lifetime", quantity: 1 },
 			setCommercialLoading,
-			"Failed to start checkout process",
+			"启动结账流程失败",
 		);
 
 	const planCheckout = async (planId?: string) => {
@@ -253,7 +258,7 @@ export const ComparePlans = () => {
 			}
 
 			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
+				toast.success("你已订阅 Cap 专业版");
 				return;
 			}
 
@@ -262,7 +267,7 @@ export const ComparePlans = () => {
 			}
 		} catch (error) {
 			console.error("Plan checkout error:", error);
-			toast.error("Failed to start subscription process");
+			toast.error("启动订阅流程失败");
 		} finally {
 			setProLoading(false);
 		}
@@ -303,14 +308,14 @@ export const ComparePlans = () => {
 						icon={faCheck}
 						aria-hidden="true"
 					/>
-					<span className="sr-only">Included</span>
+					<span className="sr-only">已包含</span>
 				</>
 			) : (
 				<>
 					<span className="text-gray-8" aria-hidden="true">
 						—
 					</span>
-					<span className="sr-only">Not included</span>
+					<span className="sr-only">未包含</span>
 				</>
 			);
 		}
@@ -320,10 +325,10 @@ export const ComparePlans = () => {
 	return (
 		<div className="mx-auto w-full max-w-[960px]">
 			<h2 className="mb-3 text-3xl font-medium tracking-tight text-center md:text-4xl text-gray-12">
-				Compare plans
+				比较方案
 			</h2>
 			<p className="mx-auto mb-12 max-w-md text-center text-gray-10">
-				Everything you get with Free, Desktop License, and Cap Pro.
+				比较免费版、桌面许可证和 Cap 专业版包含的全部功能。
 			</p>
 
 			<div className="hidden p-4 rounded-2xl border shadow-sm md:block bg-gray-1 border-gray-5">

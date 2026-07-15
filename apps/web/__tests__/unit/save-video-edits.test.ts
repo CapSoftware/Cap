@@ -59,7 +59,7 @@ describe("saveVideoEdits", () => {
 				sourceDuration: 10,
 				keepRanges: [{ start: 0, end: 10 }],
 			}),
-		).rejects.toThrow("Unauthorized");
+		).rejects.toThrow("未授权");
 
 		expect(selectMock).not.toHaveBeenCalled();
 	});
@@ -86,7 +86,7 @@ describe("saveVideoEdits", () => {
 				sourceDuration: 10,
 				keepRanges: [{ start: 0, end: 10 }],
 			}),
-		).rejects.toThrow("Video is already uploading or processing");
+		).rejects.toThrow("视频已在上传或处理中");
 
 		expect(insertMock).not.toHaveBeenCalled();
 	});
@@ -113,9 +113,7 @@ describe("saveVideoEdits", () => {
 				sourceDuration: 10,
 				keepRanges: [{ start: 0, end: 10 }],
 			}),
-		).rejects.toThrow(
-			"Previous edit failed and is being cleaned up. Try again in a moment.",
-		);
+		).rejects.toThrow("上一次编辑失败，正在清理，请稍后重试。");
 
 		expect(insertMock).not.toHaveBeenCalled();
 	});
@@ -142,7 +140,7 @@ describe("saveVideoEdits", () => {
 				sourceDuration: 10,
 				keepRanges: [{ start: 0, end: 10 }],
 			}),
-		).rejects.toThrow("Previous edit is finishing up. Try again in a moment.");
+		).rejects.toThrow("上一次编辑正在完成，请稍后重试。");
 
 		expect(insertMock).not.toHaveBeenCalled();
 	});
@@ -157,7 +155,7 @@ describe("saveVideoEdits", () => {
 				sourceDuration: 10,
 				keepRanges: [{ start: 0, end: 10 }],
 			}),
-		).rejects.toThrow("Cap Pro is required to edit videos");
+		).rejects.toThrow("编辑视频需要 Cap Pro");
 
 		expect(selectMock).not.toHaveBeenCalled();
 	});

@@ -137,22 +137,22 @@ const getStartRecordingErrorMessage = (
 	if (typeof DOMException !== "undefined" && error instanceof DOMException) {
 		if (error.name === "NotAllowedError" || error.name === "AbortError") {
 			return recordingMode === "camera"
-				? "Camera access was cancelled or blocked. Allow camera access in your browser and try again."
-				: "Screen sharing was cancelled or blocked. Allow screen sharing in your browser and try again.";
+				? "摄像头访问已取消或被阻止。请在浏览器中允许摄像头访问后重试。"
+				: "屏幕分享已取消或被阻止。请在浏览器中允许屏幕分享后重试。";
 		}
 
 		if (error.name === "NotReadableError") {
 			return recordingMode === "camera"
-				? "Your browser couldn't start the selected camera. Close other apps or tabs using it, then try again."
-				: "Your browser couldn't start screen capture. Try a different screen or window, close other screen-sharing apps, or restart the browser.";
+				? "浏览器无法启动所选摄像头。请关闭正在使用摄像头的其他应用或标签页后重试。"
+				: "浏览器无法开始屏幕捕获。请尝试其他屏幕或窗口，关闭其他屏幕分享应用，或重启浏览器。";
 		}
 
 		if (error.name === "InvalidStateError") {
-			return "Your browser blocked the capture request because this tab wasn't active. Bring Cap to the foreground and click Start recording again.";
+			return "由于此标签页未处于活动状态，浏览器阻止了捕获请求。请将 Cap 切换到前台并再次点击开始录制。";
 		}
 
 		if (error.name === "NotFoundError") {
-			return "No recording source was available. Try another recording mode or reconnect the device.";
+			return "没有可用的录制源。请尝试其他录制模式或重新连接设备。";
 		}
 
 		if (
@@ -160,33 +160,33 @@ const getStartRecordingErrorMessage = (
 			error.name === "NotSupportedError" ||
 			error.name === "InvalidAccessError"
 		) {
-			return "Your browser rejected the capture settings. Try another recording mode, or turn off system audio and try again.";
+			return "浏览器拒绝了捕获设置。请尝试其他录制模式，或关闭系统音频后重试。";
 		}
 
 		if (error.name === "SecurityError") {
-			return "Your browser blocked media capture for this site. Check site permissions or managed browser policies.";
+			return "浏览器阻止了此网站的媒体捕获。请检查网站权限或浏览器管理策略。";
 		}
 	}
 
 	if (error instanceof TypeError) {
 		if (/fetch|network|load failed|failed to fetch/i.test(error.message)) {
-			return "Cap couldn't create the upload session. Check Chrome extensions, privacy settings, or network access, then try again.";
+			return "Cap 无法创建上传会话。请检查 Chrome 扩展程序、隐私设置或网络访问后重试。";
 		}
 
-		return "Your browser rejected the capture settings. Try another recording mode, or turn off system audio and try again.";
+		return "浏览器拒绝了捕获设置。请尝试其他录制模式，或关闭系统音频后重试。";
 	}
 
 	if (error instanceof Error) {
 		if (error.message === "No supported recording pipeline available") {
-			return "This browser can capture media but can't encode a recording. Try updating Chrome or use the desktop app.";
+			return "此浏览器可以捕获媒体，但无法编码录制内容。请更新 Chrome 或使用桌面应用。";
 		}
 
 		if (/multipart|upload|request to/i.test(error.message)) {
-			return "Cap couldn't create the upload session. Check Chrome extensions, privacy settings, or network access, then try again.";
+			return "Cap 无法创建上传会话。请检查 Chrome 扩展程序、隐私设置或网络访问后重试。";
 		}
 	}
 
-	return "Could not start recording. Try again, or use another browser or the desktop app if this is urgent.";
+	return "无法开始录制。请重试；如果急需录制，可改用其他浏览器或桌面应用。";
 };
 
 export const useWebRecorder = ({
@@ -278,15 +278,15 @@ export const useWebRecorder = ({
 		: supportsCameraRecording;
 	const screenCaptureWarning =
 		supportCheckCompleted && rawCanRecordCamera && !capabilities.hasDisplayMedia
-			? "Screen sharing isn't supported in this browser. We'll switch to camera-only recording. Try Chrome, Edge, or our desktop app for screen capture."
+			? "此浏览器不支持屏幕分享，将切换为仅摄像头录制。若要捕获屏幕，请尝试 Chrome、Edge 或桌面应用。"
 			: null;
 	const unsupportedReason = supportCheckCompleted
 		? !capabilities.hasMediaRecorder
-			? "This browser doesn't support in-browser recording. Try the latest Chrome, Edge, or Safari, or use the desktop app."
+			? "此浏览器不支持浏览器内录制。请尝试最新版本的 Chrome、Edge 或 Safari，或使用桌面应用。"
 			: !capabilities.hasUserMedia
-				? "Camera and microphone access are unavailable in this browser. Check permissions or switch browsers."
+				? "此浏览器无法访问摄像头和麦克风。请检查权限或更换浏览器。"
 				: requiresDisplayMedia && !capabilities.hasDisplayMedia
-					? "Screen capture isn't supported in this browser. Switch to Camera only or use Chrome, Edge, or Safari."
+					? "此浏览器不支持屏幕捕获。请切换为仅摄像头模式，或使用 Chrome、Edge 或 Safari。"
 					: null
 		: null;
 
@@ -424,19 +424,19 @@ export const useWebRecorder = ({
 
 				setRecoveredDownloads(nextDownloads);
 				for (const download of nextDownloads) {
-					toast.info("Recovered an unfinished recording", {
+					toast.info("已恢复一段未完成的录制", {
 						id: recoveredToastId(download.id),
 						duration: Infinity,
-						description: new Date(download.createdAt).toLocaleString(),
+						description: new Date(download.createdAt).toLocaleString("zh-CN"),
 						action: {
-							label: "Download",
+							label: "下载",
 							onClick: () => {
 								triggerBrowserDownload(download.url, download.fileName);
 								setTimeout(() => dismissRecoveredDownload(download.id), 500);
 							},
 						},
 						cancel: {
-							label: "Dismiss",
+							label: "忽略",
 							onClick: () => {
 								dismissRecoveredDownload(download.id);
 							},
@@ -555,7 +555,7 @@ export const useWebRecorder = ({
 
 				recordingSpoolWarningShownRef.current = true;
 				toast.warning(
-					"Local recovery switched to in-memory backup. Upload will continue, but large recordings may use more memory.",
+					"本地恢复已切换为内存备份。上传将继续，但较大的录制可能占用更多内存。",
 				);
 			});
 		},
@@ -754,9 +754,7 @@ export const useWebRecorder = ({
 					instantUploaderRef.current?.handleChunk(chunk, totalBytes);
 				} catch (error) {
 					console.error("Failed to upload recording chunk", error);
-					toast.error(
-						"Upload could not keep up with recording. Stopping to protect the recording.",
-					);
+					toast.error("上传速度无法跟上录制。为保护录制内容，正在停止录制。");
 					void stopRecordingRef.current?.();
 				}
 			});
@@ -775,19 +773,19 @@ export const useWebRecorder = ({
 
 	const startRecording = async () => {
 		if (!organisationId) {
-			toast.error("Select an organization before recording.");
+			toast.error("请先选择组织再开始录制。");
 			return;
 		}
 
 		if (recordingMode === "camera" && !selectedCameraId) {
-			toast.error("Select a camera before recording.");
+			toast.error("请先选择摄像头再开始录制。");
 			return;
 		}
 
 		if (!isBrowserSupported) {
 			const fallbackMessage =
 				unsupportedReason ??
-				"Recording isn't supported in this browser. Try another browser or use the desktop app.";
+				"此浏览器不支持录制。请尝试其他浏览器或使用桌面应用。";
 			toast.error(fallbackMessage);
 			return;
 		}
@@ -888,7 +886,7 @@ export const useWebRecorder = ({
 										audioRetryError,
 									);
 									toast.warning(
-										"System audio isn't supported in this browser. Recording without it.",
+										"此浏览器不支持系统音频，将在不录制系统音频的情况下继续。",
 									);
 									videoStream = await navigator.mediaDevices.getDisplayMedia(
 										noAudioDisplayRequest as DisplayMediaStreamOptions,
@@ -903,7 +901,7 @@ export const useWebRecorder = ({
 								displayError,
 							);
 							toast.warning(
-								"System audio isn't supported in this browser. Recording without it.",
+								"此浏览器不支持系统音频，将在不录制系统音频的情况下继续。",
 							);
 							const noAudioPreferred: ExtendedDisplayMediaStreamOptions = {
 								...noAudioDisplayRequest,
@@ -939,7 +937,7 @@ export const useWebRecorder = ({
 								fallbackError,
 							);
 							toast.warning(
-								"System audio isn't supported in this browser. Recording without it.",
+								"此浏览器不支持系统音频，将在不录制系统音频的情况下继续。",
 							);
 							videoStream = await navigator.mediaDevices.getDisplayMedia(
 								noAudioDisplayRequest as DisplayMediaStreamOptions,
@@ -980,8 +978,8 @@ export const useWebRecorder = ({
 			) {
 				toast.warning(
 					recordingMode === "tab"
-						? 'System audio wasn\'t captured. Make sure "Share tab audio" is checked in the browser picker.'
-						: "System audio wasn't captured. Your browser or OS may not support it for screen sharing. Try sharing a browser tab instead.",
+						? "未捕获系统音频。请确保在浏览器选择器中勾选“分享标签页音频”。"
+						: "未捕获系统音频。你的浏览器或操作系统可能不支持在屏幕分享时捕获音频，请尝试分享浏览器标签页。",
 				);
 			}
 
@@ -998,7 +996,7 @@ export const useWebRecorder = ({
 					});
 				} catch (micError) {
 					console.warn("Microphone permission denied", micError);
-					toast.warning("Microphone unavailable. Recording without audio.");
+					toast.warning("麦克风不可用，将在无麦克风音频的情况下录制。");
 					micStream = null;
 				}
 			}
@@ -1068,9 +1066,7 @@ export const useWebRecorder = ({
 					setLocalRecordingStrategy({ mode: "off" });
 				} else {
 					setLocalRecordingStrategy({ mode: "full" });
-					toast.warning(
-						"Durable local backup is unavailable. This recording will use in-memory recovery.",
-					);
+					toast.warning("持久化本地备份不可用，此录制将使用内存恢复。");
 				}
 			} else {
 				setLocalRecordingStrategy({ mode: "full" });
@@ -1206,7 +1202,7 @@ export const useWebRecorder = ({
 			updatePhase("paused");
 		} catch (error) {
 			console.error("Failed to pause recording", error);
-			toast.error("Could not pause recording.");
+			toast.error("无法暂停录制。");
 		}
 	}, [phase, pauseTimer, updatePhase, mediaRecorderRef]);
 
@@ -1225,7 +1221,7 @@ export const useWebRecorder = ({
 			updatePhase("recording");
 		} catch (error) {
 			console.error("Failed to resume recording", error);
-			toast.error("Could not resume recording.");
+			toast.error("无法继续录制。");
 		}
 	}, [
 		phase,
@@ -1358,9 +1354,7 @@ export const useWebRecorder = ({
 				});
 
 				if (!uploader.getProcessingStarted()) {
-					toast.warning(
-						"Recording uploaded. Processing did not start yet, but the original recording is available.",
-					);
+					toast.warning("录制内容已上传。处理尚未开始，但原始录制内容可用。");
 				}
 			} else {
 				let processedRecordingBlob: Blob | null = null;
@@ -1429,9 +1423,7 @@ export const useWebRecorder = ({
 					});
 
 					if (!fallbackUploader.getProcessingStarted()) {
-						toast.warning(
-							"Recording uploaded. Processing did not start yet, but the original recording is available.",
-						);
+						toast.warning("录制内容已上传。处理尚未开始，但原始录制内容可用。");
 					}
 				} else {
 					if (!processedRecordingBlob) {
@@ -1472,7 +1464,7 @@ export const useWebRecorder = ({
 								processingError,
 							);
 							toast.warning(
-								"Recording uploaded. Processing did not start yet, but the original recording is available.",
+								"录制内容已上传。处理尚未开始，但原始录制内容可用。",
 							);
 						}
 
@@ -1509,9 +1501,7 @@ export const useWebRecorder = ({
 								});
 							} catch (thumbnailError) {
 								console.error("Failed to upload thumbnail", thumbnailError);
-								toast.warning(
-									"Recording uploaded, but thumbnail failed to upload.",
-								);
+								toast.warning("录制内容已上传，但缩略图上传失败。");
 							}
 						}
 					} finally {
@@ -1532,8 +1522,8 @@ export const useWebRecorder = ({
 			updatePhase("completed");
 			toast.success(
 				pipeline.mode === "streaming-webm"
-					? "Recording uploaded. Processing will continue shortly."
-					: "Recording uploaded.",
+					? "录制内容已上传，稍后将继续处理。"
+					: "录制内容已上传。",
 			);
 			openShareUrl(creationResult.shareUrl);
 			router.refresh();
@@ -1548,9 +1538,7 @@ export const useWebRecorder = ({
 				replaceErrorDownload(failureBlob);
 				await disposeRecordingSpool();
 				updatePhase("error");
-				toast.error(
-					"Upload confirmation was interrupted. Open the video to verify processing before retrying.",
-				);
+				toast.error("上传确认被中断。重试前，请打开视频确认其处理状态。");
 				openShareUrl(videoCreationRef.current?.shareUrl ?? null);
 				setCompletedShareUrl(videoCreationRef.current?.shareUrl ?? null);
 				router.refresh();
@@ -1618,9 +1606,7 @@ export const useWebRecorder = ({
 			!freePlanAutoStopTriggeredRef.current
 		) {
 			freePlanAutoStopTriggeredRef.current = true;
-			toast.info(
-				"Free plan recordings are limited to 5 minutes. Recording stopped automatically.",
-			);
+			toast.info("免费套餐的录制时长上限为 5 分钟，录制已自动停止。");
 			stopRecording().catch((error) => {
 				console.error("Failed to stop recording at free plan limit", error);
 			});
@@ -1650,7 +1636,7 @@ export const useWebRecorder = ({
 			await latestStartRecording();
 		} catch (error) {
 			console.error("Failed to restart recording", error);
-			toast.error("Could not restart recording. Please try again.");
+			toast.error("无法重新录制，请重试。");
 			await cleanupRecordingState();
 			updatePhase("idle");
 		} finally {

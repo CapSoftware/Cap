@@ -24,7 +24,7 @@ type ChartPoint = {
 const formatCount = (value: number) => {
 	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
 	if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-	return value.toLocaleString();
+	return value.toLocaleString("zh-CN");
 };
 
 interface StatsChartProps {
@@ -83,7 +83,7 @@ export default function StatsBox({
 						<StatBox
 							onClick={() => toggleHandler("views")}
 							isSelected={selectedBoxes.has("views")}
-							title="Views"
+							title="观看次数"
 							value={formattedCounts.views}
 							metric="views"
 							onMouseEnter={() => viewsBoxRef.current?.startAnimation()}
@@ -93,7 +93,7 @@ export default function StatsBox({
 						<StatBox
 							onClick={() => toggleHandler("comments")}
 							isSelected={selectedBoxes.has("comments")}
-							title="Comments"
+							title="评论"
 							value={formattedCounts.comments}
 							metric="comments"
 							onMouseEnter={() => chatsBoxRef.current?.startAnimation()}
@@ -103,7 +103,7 @@ export default function StatsBox({
 						<StatBox
 							onClick={() => toggleHandler("reactions")}
 							isSelected={selectedBoxes.has("reactions")}
-							title="Reactions"
+							title="回应"
 							value={formattedCounts.reactions}
 							metric="reactions"
 							onMouseEnter={() => reactionsBoxRef.current?.startAnimation()}
@@ -114,7 +114,7 @@ export default function StatsBox({
 							<StatBox
 								onClick={() => toggleHandler("caps")}
 								isSelected={selectedBoxes.has("caps")}
-								title="Caps"
+								title="录制"
 								value={formattedCounts.caps}
 								metric="caps"
 								onMouseEnter={() => capsBoxRef.current?.startAnimation()}

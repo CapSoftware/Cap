@@ -663,7 +663,7 @@ function createScreenshotEditorContext() {
 			return editorInstance()?.path ?? "";
 		},
 		get prettyName() {
-			return editorInstance()?.prettyName ?? "Screenshot";
+			return editorInstance()?.prettyName ?? "截图";
 		},
 		project,
 		setProject,

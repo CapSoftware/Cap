@@ -104,9 +104,9 @@ const VerifyStep = ({
 			await navigator.clipboard.writeText(text);
 			setCopiedField(fieldId);
 			setTimeout(() => setCopiedField(null), 2000);
-			toast.success("Copied to clipboard");
+			toast.success("已复制到剪贴板");
 		} catch {
-			toast.error("Failed to copy to clipboard");
+			toast.error("复制到剪贴板失败");
 		}
 	};
 
@@ -133,12 +133,12 @@ const VerifyStep = ({
 		<div className="space-y-6">
 			<div className="text-center">
 				<h3 className="text-lg font-semibold text-gray-12">
-					{isVerified ? "Domain Verified" : "Verify your domain"}
+					{isVerified ? "域名已验证" : "验证你的域名"}
 				</h3>
 				<p className="text-sm text-gray-11 w-full max-w-[350px] mx-auto">
 					{isVerified
-						? "Your domain is verified!"
-						: `Add the DNS records below to verify ownership of ${domain}: wait a minute after updating to verify.`}
+						? "你的域名已通过验证。"
+						: `添加以下 DNS 记录以验证 ${domain} 的所有权。更新后请等待片刻再进行验证。`}
 				</p>
 			</div>
 
@@ -155,10 +155,10 @@ const VerifyStep = ({
 							<div className="overflow-hidden rounded-lg border border-gray-4">
 								<div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
 									<p className="font-medium text-md text-gray-12">
-										TXT Record Configuration
+										TXT 记录配置
 									</p>
 									<p className="mt-1 text-sm text-gray-10">
-										Add this TXT record to verify domain ownership:
+										添加此 TXT 记录以验证域名所有权：
 									</p>
 								</div>
 								<div className="px-4 py-3">
@@ -167,7 +167,7 @@ const VerifyStep = ({
 											<div key={index.toString()} className="space-y-4">
 												<div className="grid grid-cols-[100px,1fr] items-center">
 													<dt className="text-sm font-medium text-gray-12">
-														Type
+														类型
 													</dt>
 													<dd className="text-sm text-gray-10">
 														{record.type || "TXT"}
@@ -175,7 +175,7 @@ const VerifyStep = ({
 												</div>
 												<div className="grid grid-cols-[100px,1fr] items-center">
 													<dt className="text-sm font-medium text-gray-12">
-														Name
+														名称
 													</dt>
 													<dd className="text-sm text-gray-10">
 														<code className="px-2 py-1 text-xs rounded bg-gray-4">
@@ -185,7 +185,7 @@ const VerifyStep = ({
 												</div>
 												<div className="grid grid-cols-[100px,1fr] items-center">
 													<dt className="text-sm font-medium text-gray-12">
-														Value
+														值
 													</dt>
 													<dd className="text-sm text-gray-10">
 														<div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
@@ -201,7 +201,7 @@ const VerifyStep = ({
 																	)
 																}
 																className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-																title="Copy to clipboard"
+																title="复制到剪贴板"
 															>
 																{copiedField === `txt-record-${index}` ? (
 																	<Check className="size-3.5 text-green-500" />
@@ -223,11 +223,9 @@ const VerifyStep = ({
 						{showARecord && (
 							<div className="overflow-hidden rounded-lg border border-gray-4">
 								<div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
-									<p className="font-medium text-md text-gray-12">
-										A Record Configuration
-									</p>
+									<p className="font-medium text-md text-gray-12">A 记录配置</p>
 									<p className="mt-1 text-sm text-gray-10">
-										Add this A record to your domain:
+										将此 A 记录添加到你的域名：
 									</p>
 								</div>
 								<div className="px-4 py-3">
@@ -236,7 +234,7 @@ const VerifyStep = ({
 										{currentAValues.length > 0 && (
 											<div className="grid grid-cols-[100px,1fr] items-center">
 												<dt className="text-sm font-medium text-gray-12">
-													Current
+													当前值
 												</dt>
 												<dd className="space-y-1.5 text-sm text-gray-10">
 													{currentAValues.map((value, index) => (
@@ -260,7 +258,7 @@ const VerifyStep = ({
 															</code>
 															{recommendedAValues.includes(value) && (
 																<span className="text-xs text-green-600">
-																	(Correct)
+																	（正确）
 																</span>
 															)}
 														</div>
@@ -269,19 +267,15 @@ const VerifyStep = ({
 											</div>
 										)}
 										<div className="grid grid-cols-[100px,1fr] items-center">
-											<dt className="text-sm font-medium text-gray-12">Type</dt>
+											<dt className="text-sm font-medium text-gray-12">类型</dt>
 											<dd className="text-sm text-gray-10">A</dd>
 										</div>
 										<div className="grid grid-cols-[100px,1fr] items-center">
-											<dt className="text-sm font-medium text-gray-12">Name</dt>
-											<dd className="text-sm text-gray-10">
-												@ (or leave blank)
-											</dd>
+											<dt className="text-sm font-medium text-gray-12">名称</dt>
+											<dd className="text-sm text-gray-10">@（或留空）</dd>
 										</div>
 										<div className="grid grid-cols-[100px,1fr] items-center">
-											<dt className="text-sm font-medium text-gray-12">
-												Value
-											</dt>
+											<dt className="text-sm font-medium text-gray-12">值</dt>
 											<dd className="space-y-2 text-sm text-gray-10">
 												{recommendedAValues.map((ipAddress, index) => (
 													<div
@@ -298,7 +292,7 @@ const VerifyStep = ({
 																	handleCopy(ipAddress, `a-record-${index}`)
 																}
 																className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-																title="Copy to clipboard"
+																title="复制到剪贴板"
 															>
 																{copiedField === `a-record-${index}` ? (
 																	<Check className="size-3.5 text-green-500" />
@@ -309,7 +303,7 @@ const VerifyStep = ({
 														</div>
 														{index === 0 && recommendedAValues.length > 1 && (
 															<span className="text-xs text-gray-11">
-																(Primary)
+																（首选）
 															</span>
 														)}
 													</div>
@@ -326,10 +320,10 @@ const VerifyStep = ({
 							<div className="overflow-hidden rounded-lg border border-gray-4">
 								<div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
 									<p className="font-medium text-md text-gray-12">
-										CNAME Record Configuration
+										CNAME 记录配置
 									</p>
 									<p className="mt-1 text-sm text-gray-10">
-										Add this CNAME record to your domain:
+										将此 CNAME 记录添加到你的域名：
 									</p>
 								</div>
 								<div className="px-4 py-3">
@@ -338,7 +332,7 @@ const VerifyStep = ({
 										{currentCnames.length > 0 && (
 											<div className="grid grid-cols-[100px,1fr] items-center">
 												<dt className="text-sm font-medium text-gray-12">
-													Current
+													当前值
 												</dt>
 												<dd className="space-y-1.5 text-sm text-gray-10">
 													{currentCnames.map((value, index) => (
@@ -368,7 +362,7 @@ const VerifyStep = ({
 																(rec) => rec.value === value,
 															) && (
 																<span className="text-xs text-green-600">
-																	(Correct)
+																	（正确）
 																</span>
 															)}
 														</div>
@@ -377,11 +371,11 @@ const VerifyStep = ({
 											</div>
 										)}
 										<div className="grid grid-cols-[100px,1fr] items-center">
-											<dt className="text-sm font-medium text-gray-12">Type</dt>
+											<dt className="text-sm font-medium text-gray-12">类型</dt>
 											<dd className="text-sm text-gray-10">CNAME</dd>
 										</div>
 										<div className="grid grid-cols-[100px,1fr] items-center">
-											<dt className="text-sm font-medium text-gray-12">Name</dt>
+											<dt className="text-sm font-medium text-gray-12">名称</dt>
 											<dd className="text-sm text-gray-10">
 												<code className="px-2 py-1 text-xs rounded bg-gray-4">
 													{domain.split(".").length > 2
@@ -402,7 +396,7 @@ const VerifyStep = ({
 														className="grid grid-cols-[100px,1fr] items-center"
 													>
 														<dt className="text-sm font-medium text-gray-12">
-															{index === 0 ? "Value" : `Option ${index + 1}`}
+															{index === 0 ? "值" : `选项 ${index + 1}`}
 														</dt>
 														<dd className="flex gap-2 items-center text-sm text-gray-10">
 															<div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
@@ -415,7 +409,7 @@ const VerifyStep = ({
 																		handleCopy(cname.value, fieldId)
 																	}
 																	className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-																	title="Copy to clipboard"
+																	title="复制到剪贴板"
 																>
 																	{copiedField === fieldId ? (
 																		<Check className="size-3.5 text-green-500" />

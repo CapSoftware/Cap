@@ -17,7 +17,7 @@ export default function AppDetailLayout({
 		<div className="flex flex-col gap-5">
 			<div className="flex items-center gap-2">
 				<h2 className="text-base font-medium text-gray-12">
-					{app?.name ?? "App"}
+					{app?.name ?? "应用"}
 				</h2>
 				{app && <EnvironmentBadge environment={app.environment} />}
 			</div>

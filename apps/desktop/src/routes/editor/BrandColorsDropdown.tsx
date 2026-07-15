@@ -22,7 +22,7 @@ export function BrandColorsDropdown(props: {
 						props.class,
 					)}
 				>
-					<span class="min-w-0 flex-1 truncate text-left">Brand colours</span>
+					<span class="min-w-0 flex-1 truncate text-left">品牌颜色</span>
 					<span class="flex shrink-0 -space-x-1">
 						<For each={props.swatches.slice(0, 4)}>
 							{(swatch) => (

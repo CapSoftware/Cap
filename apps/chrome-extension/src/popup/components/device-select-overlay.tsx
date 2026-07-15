@@ -60,7 +60,7 @@ export const DeviceSelectOverlay = ({
 					ref={backRef}
 					type="button"
 					onClick={onClose}
-					aria-label="Back"
+					aria-label="返回"
 					className="flex size-7 items-center justify-center rounded-lg text-gray-11 transition-colors hover:bg-gray-3 hover:text-[--text-primary] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--blue-8)]"
 				>
 					<ArrowLeftIcon className="size-4" aria-hidden />

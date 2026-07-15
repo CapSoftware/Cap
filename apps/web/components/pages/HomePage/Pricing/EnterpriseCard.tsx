@@ -6,12 +6,12 @@ import { EnterpriseArt, type EnterpriseArtRef } from "./EnterpriseArt";
 import { PlanFeature } from "./PlanFeature";
 
 const enterpriseFeatures = [
-	"SLAs & priority support",
-	"SAML SSO & SCIM provisioning",
-	"Managed self-hosting",
-	"Volume discounts",
-	"Advanced security controls",
-	"Dedicated onboarding",
+	"SLA 和优先支持",
+	"SAML SSO 和 SCIM 配置",
+	"托管式自托管",
+	"批量折扣",
+	"高级安全控制",
+	"专属入门支持",
 ];
 
 export const EnterpriseCard = () => {
@@ -30,23 +30,21 @@ export const EnterpriseCard = () => {
 			<div className="mb-4 size-14 -ml-3">
 				<EnterpriseArt ref={artRef} />
 			</div>
-			<h3 className="text-lg font-semibold text-gray-12">Enterprise</h3>
+			<h3 className="text-lg font-semibold text-gray-12">企业版</h3>
 			<p className="mt-1.5 text-sm leading-relaxed text-gray-10 min-h-[40px]">
-				For organizations that need security, control, and dedicated support at
-				scale.
+				适合需要大规模安全保障、控制能力和专属支持的组织。
 			</p>
 
 			<div className="flex gap-1.5 items-baseline mt-6">
 				<span className="text-4xl font-semibold tracking-tight text-gray-12">
-					Custom
+					定制
 				</span>
 			</div>
-			<p className="mt-1 text-sm text-gray-10">tailored to your team</p>
+			<p className="mt-1 text-sm text-gray-10">根据团队需求定制</p>
 
 			<div className="mt-6 min-h-[120px]">
 				<div className="p-4 text-sm leading-relaxed rounded-lg border bg-gray-2 border-gray-4 text-gray-10">
-					Custom annual billing with volume discounts, onboarding, and a
-					dedicated success manager.
+					定制年度计费，包含批量折扣、入门支持和专属客户成功经理。
 				</div>
 			</div>
 
@@ -55,14 +53,14 @@ export const EnterpriseCard = () => {
 				size="lg"
 				onClick={handleBookCall}
 				className="mt-6 w-full font-medium"
-				aria-label="Talk to sales about Enterprise"
+				aria-label="咨询企业版销售"
 			>
-				Talk to sales
+				联系销售
 			</Button>
 
 			<div className="pt-8 mt-8 border-t border-gray-4">
 				<p className="mb-4 text-sm font-medium text-gray-12">
-					Everything in Cap Pro, plus:
+					包含 Cap Pro 全部功能，另有：
 				</p>
 				<ul className="space-y-3">
 					{enterpriseFeatures.map((feature) => (

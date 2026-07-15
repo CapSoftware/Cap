@@ -12,7 +12,7 @@ const SubscribeContent = () => {
 					transition={{ duration: 0.3, ease: "easeOut" }}
 					className="text-lg text-center text-gray-12"
 				>
-					This feature requires Cap Pro
+					此功能需要 Cap Pro
 				</motion.p>
 				<motion.p
 					initial={{ y: -10, filter: "blur(5px)", opacity: 0 }}
@@ -20,7 +20,7 @@ const SubscribeContent = () => {
 					transition={{ duration: 0.3, ease: "easeOut", delay: 0.3 }}
 					className="text-sm text-center text-gray-11"
 				>
-					your domain could look like this
+					你的域名可以呈现为以下形式
 				</motion.p>
 			</div>
 

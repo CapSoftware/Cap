@@ -1,7 +1,4 @@
-import {
-	NO_MICROPHONE,
-	NO_MICROPHONE_VALUE,
-} from "@cap/recorder-core/recorder-constants";
+import { NO_MICROPHONE_VALUE } from "@cap/recorder-core/recorder-constants";
 import clsx from "clsx";
 import { MicIcon, MicOffIcon } from "lucide-react";
 import type { KeyboardEvent, MouseEvent } from "react";
@@ -54,7 +51,7 @@ export const MicrophoneSelector = ({
 	const currentValue = selectedMicId ?? NO_MICROPHONE_VALUE;
 
 	const options: DeviceSelectOption[] = [
-		{ value: NO_MICROPHONE_VALUE, label: NO_MICROPHONE, icon: MicOffIcon },
+		{ value: NO_MICROPHONE_VALUE, label: "无麦克风", icon: MicOffIcon },
 	];
 	if (
 		availableMics.length === 0 ||
@@ -62,14 +59,14 @@ export const MicrophoneSelector = ({
 	) {
 		options.push({
 			value: DEFAULT_MICROPHONE_DEVICE_ID,
-			label: "Default microphone",
+			label: "默认麦克风",
 			icon: MicIcon,
 		});
 	}
 	availableMics.forEach((mic, index) => {
 		options.push({
 			value: mic.deviceId,
-			label: mic.label?.trim() || `Microphone ${index + 1}`,
+			label: mic.label?.trim() || `麦克风 ${index + 1}`,
 			icon: MicIcon,
 		});
 	});
@@ -181,16 +178,12 @@ export const MicrophoneSelector = ({
 					onClick={(event) => void handleStatusPillClick(event)}
 					onKeyDown={handleStatusPillKeyDown}
 				>
-					{shouldRequestPermission
-						? "Request permission"
-						: micEnabled
-							? "On"
-							: "Off"}
+					{shouldRequestPermission ? "请求权限" : micEnabled ? "开启" : "关闭"}
 				</button>
 			</div>
 			{open && (
 				<DeviceSelectOverlay
-					title="Select microphone"
+					title="选择麦克风"
 					options={options}
 					selectedValue={currentValue}
 					onSelect={(value) => {

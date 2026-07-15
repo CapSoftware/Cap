@@ -62,9 +62,7 @@ export const CollectionShareControl = ({
 	const onError = (error: unknown) => {
 		setPub(isPublic);
 		setDraft(PublicCollection.resolvePublicPageSettings(settings));
-		toast.error(
-			error instanceof Error ? error.message : "Something went wrong",
-		);
+		toast.error(error instanceof Error ? error.message : "出现问题");
 	};
 	const onSuccess = () => router.refresh();
 
@@ -119,12 +117,10 @@ export const CollectionShareControl = ({
 		},
 		onSuccess: (_data, file) => {
 			router.refresh();
-			toast.success(file ? "Logo updated" : "Logo removed");
+			toast.success(file ? "徽标已更新" : "徽标已移除");
 		},
 		onError: (error) =>
-			toast.error(
-				error instanceof Error ? error.message : "Failed to update logo",
-			),
+			toast.error(error instanceof Error ? error.message : "更新徽标失败"),
 	});
 
 	const isPending =
@@ -178,7 +174,7 @@ export const CollectionShareControl = ({
 	if (pub) {
 		return (
 			<div className="flex gap-2 items-center">
-				<Tooltip content="Copy public link">
+				<Tooltip content="复制公开链接">
 					<button
 						type="button"
 						onClick={copy}
@@ -205,7 +201,7 @@ export const CollectionShareControl = ({
 						onClick={() => setOpen(true)}
 					>
 						<FontAwesomeIcon icon={faSliders} className="size-3" />
-						Customize
+						自定义
 					</Button>
 				)}
 				{dialog}
@@ -223,7 +219,7 @@ export const CollectionShareControl = ({
 				onClick={() => setOpen(true)}
 			>
 				<FontAwesomeIcon icon={faGlobe} className="size-3" />
-				Share
+				分享
 			</Button>
 			{dialog}
 		</>

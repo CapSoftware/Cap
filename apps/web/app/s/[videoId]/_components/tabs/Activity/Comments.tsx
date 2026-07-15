@@ -265,8 +265,8 @@ export const Comments = Object.assign(
 							{user ? (
 								<CommentInput
 									{...props.commentInputProps}
-									placeholder="Leave a comment"
-									buttonLabel="Comment"
+									placeholder="发表评论"
+									buttonLabel="评论"
 								/>
 							) : (
 								<Button
@@ -274,7 +274,7 @@ export const Comments = Object.assign(
 									variant="primary"
 									onClick={() => props.setShowAuthOverlay(true)}
 								>
-									Sign in to leave a comment
+									登录后发表评论
 								</Button>
 							)}
 						</div>

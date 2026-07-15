@@ -67,10 +67,10 @@ function PromoCodeChip() {
 		try {
 			await navigator.clipboard.writeText(MIGRATE_PROMO_CODE);
 			setCopied(true);
-			toast.success(`Code ${MIGRATE_PROMO_CODE} copied to clipboard`);
+			toast.success(`优惠码 ${MIGRATE_PROMO_CODE} 已复制到剪贴板`);
 			setTimeout(() => setCopied(false), 2000);
 		} catch {
-			toast.error("Failed to copy code");
+			toast.error("复制优惠码失败");
 		}
 	};
 
@@ -78,12 +78,12 @@ function PromoCodeChip() {
 		<button
 			type="button"
 			onClick={handleCopy}
-			aria-label={`Copy discount code ${MIGRATE_PROMO_CODE}`}
+			aria-label={`复制优惠码 ${MIGRATE_PROMO_CODE}`}
 			className="inline-flex items-center gap-2 px-3 py-1.5 font-mono text-sm font-semibold rounded-lg border border-dashed transition-colors border-blue-300 bg-white/60 text-blue-700 hover:bg-white hover:border-blue-400"
 		>
 			<span>{MIGRATE_PROMO_CODE}</span>
 			<span className="text-[11px] uppercase tracking-wide text-blue-500">
-				{copied ? "Copied" : "Tap to copy"}
+				{copied ? "已复制" : "点击复制"}
 			</span>
 		</button>
 	);
@@ -95,18 +95,18 @@ function MigrationBanner() {
 			<div className="flex flex-col gap-1">
 				<div className="flex items-center gap-2">
 					<span className="inline-flex items-center px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase rounded-full bg-blue-600 text-white">
-						Switch
+						迁移
 					</span>
 					<p className="text-sm font-semibold text-gray-900 sm:text-base">
-						Switch from Loom to Cap — save 20%
+						从 Loom 迁移到 Cap，节省 20%
 					</p>
 				</div>
 				<p className="text-xs leading-relaxed text-gray-600 sm:text-sm">
-					Migrating from Loom? Use{" "}
+					从 Loom 迁移？结账时使用{" "}
 					<span className="font-mono font-semibold text-blue-700">
 						{MIGRATE_PROMO_CODE}
 					</span>{" "}
-					at checkout for 20% off Cap Pro.
+					即可享受 Cap 专业版八折优惠。
 				</p>
 			</div>
 			<div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
@@ -117,7 +117,7 @@ function MigrationBanner() {
 					href={MIGRATE_CHECKOUT_HREF}
 					className="whitespace-nowrap"
 				>
-					Switch to Cap
+					迁移到 Cap
 				</Button>
 			</div>
 		</div>
@@ -148,7 +148,7 @@ function MigrationSuccessState({
 					strokeWidth={1.75}
 					role="img"
 				>
-					<title>Download complete</title>
+					<title>下载完成</title>
 					<path
 						strokeLinecap="round"
 						strokeLinejoin="round"
@@ -157,19 +157,17 @@ function MigrationSuccessState({
 				</svg>
 				<div className="flex flex-col gap-1">
 					<p className="text-sm font-semibold text-green-900 sm:text-base">
-						{isReady ? "Your MP4 is ready" : "Your download has started"}
+						{isReady ? "MP4 已准备就绪" : "下载已开始"}
 					</p>
 					<p className="text-xs leading-relaxed text-green-800 sm:text-sm">
 						{isReady
 							? downloadedName
-								? `"${downloadedName}" finished saving as an MP4.`
-								: "Your MP4 finished saving."
+								? `“${downloadedName}”已保存为 MP4。`
+								: "MP4 已保存。"
 							: downloadedName
-								? `"${downloadedName}" is downloading as an MP4.`
-								: "Your browser is downloading the MP4."}{" "}
-						{openUrl
-							? "You can open it now."
-							: "Open it from your Downloads folder or chosen save location."}
+								? `正在将“${downloadedName}”下载为 MP4。`
+								: "浏览器正在下载 MP4。"}{" "}
+						{openUrl ? "现在可以打开。" : "请从下载文件夹或所选保存位置打开。"}
 					</p>
 					{openUrl && (
 						<a
@@ -178,7 +176,7 @@ function MigrationSuccessState({
 							rel="noreferrer"
 							className="inline-flex self-start mt-2 px-3 py-1.5 text-xs font-semibold rounded-lg border border-green-300 bg-white text-green-800 transition-colors hover:bg-green-100"
 						>
-							Open MP4
+							打开 MP4
 						</a>
 					)}
 				</div>
@@ -187,19 +185,18 @@ function MigrationSuccessState({
 			<div className="flex flex-col gap-5 p-5 rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50 to-white sm:p-7">
 				<div className="flex flex-col gap-2">
 					<span className="inline-flex self-start items-center px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase rounded-full bg-blue-600 text-white">
-						Next step
+						下一步
 					</span>
 					<h3 className="text-lg font-semibold text-gray-900 sm:text-xl">
-						Bring your whole Loom library to Cap
+						将整个 Loom 视频库迁移到 Cap
 					</h3>
 					<p className="text-sm leading-relaxed text-gray-700 sm:text-base">
-						Skip the one-by-one downloads. Cap Pro's built-in Loom importer
-						transfers your entire Loom workspace to Cap in a single click —
-						titles, transcripts, and all. Use{" "}
+						无需逐一下载。Cap 专业版内置 Loom 导入器，一键将整个 Loom
+						工作区迁移到 Cap，包括标题、文字稿等所有内容。结账时使用{" "}
 						<span className="font-mono font-semibold text-blue-700">
 							{MIGRATE_PROMO_CODE}
 						</span>{" "}
-						at checkout for 20% off your first year.
+						首年可享八折优惠。
 					</p>
 				</div>
 
@@ -211,7 +208,7 @@ function MigrationSuccessState({
 							href={MIGRATE_CHECKOUT_HREF}
 							className="w-full sm:w-auto"
 						>
-							Migrate with Cap Pro — save 20%
+							使用 Cap 专业版迁移，节省 20%
 						</Button>
 						<Button
 							variant="white"
@@ -219,22 +216,20 @@ function MigrationSuccessState({
 							href="/download"
 							className="w-full sm:w-auto"
 						>
-							Download Cap free
+							免费下载 Cap
 						</Button>
 					</div>
 					<div className="flex items-center gap-2">
 						<PromoCodeChip />
-						<span className="text-xs text-gray-500">
-							Applied automatically at checkout.
-						</span>
+						<span className="text-xs text-gray-500">结账时自动应用。</span>
 					</div>
 				</div>
 
 				<ul className="grid grid-cols-1 gap-2 pt-2 border-t border-blue-100 sm:grid-cols-3 sm:gap-4 sm:pt-3">
 					{[
-						"Import your entire Loom library",
-						"Keep titles, chapters & transcripts",
-						"Cancel anytime — 20% off locked in",
+						"导入整个 Loom 视频库",
+						"保留标题、章节和文字稿",
+						"随时取消，锁定八折优惠",
 					].map((line) => (
 						<li
 							key={line}
@@ -248,7 +243,7 @@ function MigrationSuccessState({
 								strokeWidth={2}
 								role="img"
 							>
-								<title>Included</title>
+								<title>已包含</title>
 								<path
 									strokeLinecap="round"
 									strokeLinejoin="round"
@@ -266,7 +261,7 @@ function MigrationSuccessState({
 				onClick={onDownloadAnother}
 				className="self-center text-sm font-medium transition-colors text-gray-500 hover:text-gray-800 hover:underline"
 			>
-				Download another Loom video
+				下载其他 Loom 视频
 			</button>
 		</div>
 	);
@@ -342,8 +337,7 @@ export function LoomDownloader() {
 
 				setStatus("error");
 				setErrorMessage(
-					getLoomBrowserConversionErrorMessage(err) ??
-						"An unexpected error occurred. Please try again.",
+					getLoomBrowserConversionErrorMessage(err) ?? "发生意外错误，请重试。",
 				);
 			} finally {
 				abortRef.current = null;
@@ -364,7 +358,7 @@ export function LoomDownloader() {
 
 			if (!result.success || !result.videoId) {
 				setStatus("error");
-				setErrorMessage(result.error || "Something went wrong.");
+				setErrorMessage(result.error || "出现问题。");
 				return;
 			}
 
@@ -375,7 +369,7 @@ export function LoomDownloader() {
 
 			if (!result.downloadUrl) {
 				setStatus("error");
-				setErrorMessage("Could not retrieve a video download URL.");
+				setErrorMessage("无法获取视频下载地址。");
 				return;
 			}
 
@@ -394,7 +388,7 @@ export function LoomDownloader() {
 				setStatus("error");
 				setErrorMessage(
 					support.message ??
-						"Streaming Loom downloads need the latest desktop Chrome or Edge.",
+						"串流下载 Loom 视频需要最新版桌面 Chrome 或 Edge。",
 				);
 				return;
 			}
@@ -415,8 +409,7 @@ export function LoomDownloader() {
 			}
 			setStatus("error");
 			setErrorMessage(
-				getLoomBrowserConversionErrorMessage(err) ??
-					"An unexpected error occurred. Please try again.",
+				getLoomBrowserConversionErrorMessage(err) ?? "发生意外错误，请重试。",
 			);
 		} finally {
 			abortRef.current = null;
@@ -447,12 +440,12 @@ export function LoomDownloader() {
 
 	const buttonLabel =
 		status === "fetching"
-			? "Fetching..."
+			? "正在获取……"
 			: status === "downloading"
-				? "Downloading..."
+				? "正在下载……"
 				: status === "converting"
-					? `Downloading... ${convertProgress}%`
-					: "Download Video";
+					? `正在下载……${convertProgress}%`
+					: "下载视频";
 
 	if (status === "success") {
 		return (
@@ -471,7 +464,7 @@ export function LoomDownloader() {
 
 			<div className="flex flex-col gap-2 sm:gap-3">
 				<label htmlFor={inputId} className="text-sm font-medium text-gray-700">
-					Loom Video URL
+					Loom 视频网址
 				</label>
 				<div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
 					<input
@@ -511,9 +504,7 @@ export function LoomDownloader() {
 							style={{ width: `${convertProgress}%` }}
 						/>
 					</div>
-					<p className="text-xs text-gray-500 text-center">
-						Preparing your MP4...
-					</p>
+					<p className="text-xs text-gray-500 text-center">正在准备 MP4……</p>
 				</div>
 			)}
 
@@ -527,7 +518,7 @@ export function LoomDownloader() {
 						strokeWidth={1.5}
 						role="img"
 					>
-						<title>Error</title>
+						<title>错误</title>
 						<path
 							strokeLinecap="round"
 							strokeLinejoin="round"
@@ -548,20 +539,20 @@ export function LoomDownloader() {
 						strokeWidth={1.5}
 						role="img"
 					>
-						<title>Privacy</title>
+						<title>隐私</title>
 						<path
 							strokeLinecap="round"
 							strokeLinejoin="round"
 							d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"
 						/>
 					</svg>
-					Paste any public Loom link. The free downloader runs in your browser.
+					粘贴任意公开 Loom 链接。免费下载器会在浏览器中运行。
 				</div>
 				<a
 					href={MIGRATE_CHECKOUT_HREF}
 					className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700 hover:underline"
 				>
-					Import Loom videos with Cap Pro
+					使用 Cap 专业版导入 Loom 视频
 					<svg
 						className="w-3 h-3"
 						fill="none"
@@ -570,7 +561,7 @@ export function LoomDownloader() {
 						strokeWidth={2}
 						role="img"
 					>
-						<title>Arrow</title>
+						<title>箭头</title>
 						<path
 							strokeLinecap="round"
 							strokeLinejoin="round"

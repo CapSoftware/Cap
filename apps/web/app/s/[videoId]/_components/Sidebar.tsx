@@ -115,7 +115,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 		const tabs = [
 			{
 				id: "activity",
-				label: "Comments",
+				label: "评论",
 				disabled:
 					videoSettings?.disableComments ?? data.orgSettings?.disableComments,
 			},
@@ -124,14 +124,14 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 				: [
 						{
 							id: "summary",
-							label: "Summary",
+							label: "摘要",
 							disabled:
 								videoSettings?.disableSummary ??
 								data.orgSettings?.disableSummary,
 						},
 						{
 							id: "transcript",
-							label: "Transcript",
+							label: "文字稿",
 							disabled:
 								videoSettings?.disableTranscript ??
 								data.orgSettings?.disableTranscript,

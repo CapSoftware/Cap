@@ -10,34 +10,34 @@ import {
 
 const homePageFAQs = [
 	{
-		question: "What is Cap?",
+		question: "什么是 Cap？",
 		answer:
-			"Cap is an open-source screen recording software that offers beautiful, lightweight recordings with instant sharing capabilities. It's the privacy-focused alternative to Loom.",
+			"Cap 是一款开源的屏幕录制软件，能够轻松创建精美录像并即时分享，是注重隐私的 Loom 替代方案。",
 	},
 	{
-		question: "How much does Cap cost?",
+		question: "Cap 的费用是多少？",
 		answer:
-			"Cap offers a generous free plan with Studio mode for personal use and 5-minute shareable links. The Pro plan starts at just $8.16/month per user, which is less than half the price of Loom.",
+			"Cap 提供慷慨的免费方案，包括个人使用的工作室模式和最长 5 分钟的分享链接。专业版每位用户每月仅需 8.16 美元起，不到 Loom 价格的一半。",
 	},
 	{
-		question: "Is Cap available for Windows and Mac?",
+		question: "Cap 支持 Windows 和 Mac 吗？",
 		answer:
-			"Yes, Cap is available for both macOS and Windows, providing consistent performance and features across both platforms.",
+			"支持。Cap 可在 macOS 和 Windows 上使用，并在两个平台提供一致的性能和功能。",
 	},
 	{
-		question: "Can I use my own storage with Cap?",
+		question: "可以在 Cap 中使用自己的存储空间吗？",
 		answer:
-			"Yes, Cap allows you to connect your own Google Drive or S3 storage and a custom domain, giving you 100% ownership and control over your content.",
+			"可以。Cap 支持连接自己的 Google Drive 或 S3 存储和自定义域名，让你完全拥有并控制自己的内容。",
 	},
 	{
-		question: "What makes Cap different from other screen recorders?",
+		question: "Cap 与其他屏幕录制工具有何不同？",
 		answer:
-			"Cap is fully open-source, privacy-focused, and offers unique features like Studio mode (free for personal use), 4K recording at 60fps, built-in thread commenting, and the ability to use your own storage and domain.",
+			"Cap 完全开源、注重隐私，并提供个人免费使用的工作室模式、4K 60 帧录制、内置对话评论以及使用自有存储和域名等特色功能。",
 	},
 	{
-		question: "Does Cap support team collaboration?",
+		question: "Cap 支持团队协作吗？",
 		answer:
-			"Yes, Cap includes built-in thread commenting on shareable links, making it easy to collaborate with teammates and collect feedback directly on your recordings.",
+			"支持。Cap 在分享链接中内置对话评论，方便与队友协作并直接收集对录像的反馈。",
 	},
 ];
 
@@ -47,7 +47,7 @@ const createHomePageSchema = () => {
 		createWebSiteSchema(),
 		createSoftwareApplicationSchema(testimonials),
 		createProductSchema(),
-		createBreadcrumbSchema([{ name: "Home", url: "https://cap.so" }]),
+		createBreadcrumbSchema([{ name: "首页", url: "https://cap.so" }]),
 		createFAQSchema(homePageFAQs),
 	];
 

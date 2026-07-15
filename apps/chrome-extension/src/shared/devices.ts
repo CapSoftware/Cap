@@ -13,7 +13,7 @@ export const toCameraDevices = (devices: MediaDeviceInfo[]): CameraDevice[] =>
 		.map((device, index) => ({
 			deviceId: device.deviceId,
 			groupId: device.groupId,
-			label: device.label?.trim() || `Camera ${index + 1}`,
+			label: device.label?.trim() || `摄像头 ${index + 1}`,
 		}));
 
 export const toMicrophoneDevices = (
@@ -27,5 +27,5 @@ export const toMicrophoneDevices = (
 		.map((device, index) => ({
 			deviceId: device.deviceId,
 			groupId: device.groupId,
-			label: device.label?.trim() || `Microphone ${index + 1}`,
+			label: device.label?.trim() || `麦克风 ${index + 1}`,
 		}));

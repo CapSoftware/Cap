@@ -39,13 +39,11 @@ export const OrganizationIcon = () => {
 			});
 		}),
 		onSuccess: () => {
-			toast.success("Organization icon updated successfully");
+			toast.success("组织图标已更新");
 			router.refresh();
 		},
 		onError: (error) => {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to upload icon",
-			);
+			toast.error(error instanceof Error ? error.message : "上传图标失败");
 		},
 	});
 
@@ -56,23 +54,21 @@ export const OrganizationIcon = () => {
 				image: Option.none(),
 			}),
 		onSuccess: () => {
-			toast.success("Organization icon removed successfully");
+			toast.success("组织图标已移除");
 			router.refresh();
 		},
 		onError: (error) => {
 			console.error("Error removing organization icon:", error);
-			toast.error(
-				error instanceof Error ? error.message : "Failed to remove icon",
-			);
+			toast.error(error instanceof Error ? error.message : "移除图标失败");
 		},
 	});
 
 	return (
 		<div className="flex-1 space-y-4">
 			<div className="space-y-1">
-				<Label htmlFor="icon">Organization Icon</Label>
+				<Label htmlFor="icon">组织图标</Label>
 				<CardDescription className="w-full">
-					Upload a custom logo or icon for your organization.
+					为组织上传自定义徽标或图标。
 				</CardDescription>
 			</div>
 			<FileInput

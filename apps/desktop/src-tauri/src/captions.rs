@@ -2070,7 +2070,7 @@ pub async fn download_whisper_model(
     let validated_path = validate_model_path(&app, &output_path)?;
     let key = model_download_key(&validated_path);
 
-    if !begin_model_download(&key, "Preparing model download".to_string()).await {
+    if !begin_model_download(&key, "正在准备下载模型".to_string()).await {
         return wait_for_model_download(&key).await;
     }
 
@@ -2088,7 +2088,7 @@ pub async fn download_whisper_model(
             Ok(_) => model_download_status(
                 ModelDownloadState::Completed,
                 100.0,
-                "Download complete".to_string(),
+                "下载完成".to_string(),
             ),
             Err(error) => model_download_status(
                 ModelDownloadState::Failed,
@@ -2182,7 +2182,7 @@ async fn download_whisper_model_to_path(
                 app,
                 download_key,
                 progress,
-                format!("Downloading model: {progress:.0}%"),
+                format!("正在下载模型：{progress:.0}%"),
             )
             .await;
         }
@@ -2425,7 +2425,7 @@ pub async fn download_parakeet_model(app: AppHandle, output_dir: String) -> Resu
     let validated_dir = validate_model_path(&app, &output_dir)?;
     let key = model_download_key(&validated_dir);
 
-    if !begin_model_download(&key, "Preparing model download".to_string()).await {
+    if !begin_model_download(&key, "正在准备下载模型".to_string()).await {
         return wait_for_model_download(&key).await;
     }
 
@@ -2438,7 +2438,7 @@ pub async fn download_parakeet_model(app: AppHandle, output_dir: String) -> Resu
             Ok(_) => model_download_status(
                 ModelDownloadState::Completed,
                 100.0,
-                "Download complete".to_string(),
+                "下载完成".to_string(),
             ),
             Err(error) => model_download_status(
                 ModelDownloadState::Failed,
@@ -2530,7 +2530,7 @@ async fn download_parakeet_model_to_dir(
                         app,
                         download_key,
                         progress,
-                        format!("Downloading {filename}: {progress:.0}%"),
+                        format!("正在下载 {filename}：{progress:.0}%"),
                     )
                     .await;
                 }

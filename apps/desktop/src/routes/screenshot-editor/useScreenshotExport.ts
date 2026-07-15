@@ -82,7 +82,7 @@ export function useScreenshotExport() {
 					}
 
 					if (Date.now() >= deadline) {
-						reject(new Error("Preview is still updating. Try again."));
+						reject(new Error("预览仍在更新，请稍后重试。"));
 						return;
 					}
 
@@ -147,10 +147,10 @@ export function useScreenshotExport() {
 		try {
 			if (destination === "share") {
 				const projectPath = editorCtx.editorInstance()?.path;
-				if (!projectPath) throw new Error("Screenshot is still loading");
+				if (!projectPath) throw new Error("截图仍在加载");
 
 				setExportStatus("encoding");
-				toastId = toast.loading("Preparing upload");
+				toastId = toast.loading("正在准备上传");
 
 				const contentHash = await screenshotProjectFingerprint({
 					...unwrap(project),
@@ -161,14 +161,14 @@ export function useScreenshotExport() {
 					contentHash,
 				);
 				if (copiedLink) {
-					toast.success("Share link copied to clipboard", { id: toastId });
+					toast.success("分享链接已复制到剪贴板", { id: toastId });
 					setDialog({ ...dialog(), open: false });
 					return;
 				}
 
 				shareContext = { projectPath, contentHash };
 				setExportStatus("rendering");
-				toast.loading("Rendering screenshot", { id: toastId });
+				toast.loading("正在渲染截图", { id: toastId });
 			} else {
 				setExportStatus("rendering");
 			}
@@ -177,7 +177,7 @@ export function useScreenshotExport() {
 			setExportStatus("encoding");
 
 			if (destination === "share" && toastId) {
-				toast.loading("Preparing upload", { id: toastId });
+				toast.loading("正在准备上传", { id: toastId });
 			}
 
 			const needsAlpha =
@@ -201,12 +201,12 @@ export function useScreenshotExport() {
 				const buffer = await blob.arrayBuffer();
 				const uint8Array = new Uint8Array(buffer);
 				const savePath = await save({
-					filters: [{ name: "PNG Image", extensions: ["png"] }],
+					filters: [{ name: "PNG 图片", extensions: ["png"] }],
 					defaultPath: `${editorCtx.prettyName}.png`,
 				});
 				if (savePath) {
 					await writeFile(savePath, uint8Array);
-					toast.success("Screenshot saved!");
+					toast.success("截图已保存！");
 					setDialog({ ...dialog(), open: false });
 				}
 			} else if (destination === "clipboard") {
@@ -225,27 +225,24 @@ export function useScreenshotExport() {
 					const uint8Array = new Uint8Array(buffer);
 					await commands.copyImageToClipboard(Array.from(uint8Array));
 				}
-				toast.success("Screenshot copied to clipboard!");
+				toast.success("截图已复制到剪贴板！");
 				setDialog({ ...dialog(), open: false });
 			} else {
 				setExportStatus("uploading");
-				if (toastId) toast.loading("Uploading screenshot", { id: toastId });
-				if (!shareContext) throw new Error("Screenshot is still loading");
+				if (toastId) toast.loading("正在上传截图", { id: toastId });
+				if (!shareContext) throw new Error("截图仍在加载");
 				await uploadScreenshotShareBlob(
 					blob,
 					shareContext.projectPath,
 					shareContext.contentHash,
 				);
-				toast.success("Share link copied to clipboard", { id: toastId });
+				toast.success("分享链接已复制到剪贴板", { id: toastId });
 				setDialog({ ...dialog(), open: false });
 			}
 		} catch (err) {
 			console.error(err);
 			const message = err instanceof Error ? err.message : String(err);
-			toast.error(
-				message || "Failed to export",
-				toastId ? { id: toastId } : {},
-			);
+			toast.error(message || "导出失败", toastId ? { id: toastId } : {});
 		} finally {
 			setExportStatus("idle");
 			setIsExporting(false);

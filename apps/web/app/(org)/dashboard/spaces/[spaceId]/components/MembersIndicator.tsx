@@ -56,8 +56,8 @@ export const MembersIndicator = ({
 	const [isLoading, setIsLoading] = useState(false);
 	const [memberRoles, setMemberRoles] = useState<Record<string, SpaceRole>>({});
 	const roleOptions = [
-		{ value: "member", label: "Member" },
-		{ value: "admin", label: "Admin" },
+		{ value: "member", label: "成员" },
+		{ value: "admin", label: "管理员" },
 	];
 
 	const formSchema = z.object({
@@ -100,7 +100,7 @@ export const MembersIndicator = ({
 			);
 
 		if (noChange) {
-			toast.info("No changes were applied");
+			toast.info("没有需要保存的更改");
 			return;
 		}
 
@@ -115,11 +115,11 @@ export const MembersIndicator = ({
 				})),
 				role: "member",
 			});
-			toast.success("Members updated!");
+			toast.success("成员已更新");
 			router.refresh();
 		} catch (error) {
 			console.error("Failed to update members:", error);
-			toast.error("Failed to update members");
+			toast.error("更新成员失败");
 		} finally {
 			setIsLoading(false);
 			setOpen(false);
@@ -145,20 +145,18 @@ export const MembersIndicator = ({
 				<DialogTrigger asChild>
 					<Button variant="gray" size="sm" className="z-10">
 						<FontAwesomeIcon className="mr-1 size-4" icon={faUserGroup} />
-						{memberCount} members
+						{memberCount} 位成员
 					</Button>
 				</DialogTrigger>
 				<DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
 					<DialogHeader
 						icon={<FontAwesomeIcon icon={faUserGroup} />}
 						description={
-							canManageMembers
-								? "View and manage members of this space"
-								: "View members of this space"
+							canManageMembers ? "查看和管理此空间的成员" : "查看此空间的成员"
 						}
 					>
 						<DialogTitle className="text-lg text-gray-12">
-							Space Members: {memberCount}
+							空间成员：{memberCount}
 						</DialogTitle>
 					</DialogHeader>
 
@@ -176,7 +174,7 @@ export const MembersIndicator = ({
 													<FormControl>
 														<div className="space-y-3">
 															<MemberSelect
-																placeholder="Add member..."
+																placeholder="添加成员…"
 																disabled={false}
 																canManageMembers={true}
 																showEmptyIfNoMembers={false}
@@ -217,7 +215,7 @@ export const MembersIndicator = ({
 																				value={
 																					memberRoles[member.value] ?? "member"
 																				}
-																				placeholder="Role"
+																				placeholder="角色"
 																				options={roleOptions}
 																				size="sm"
 																				variant="gray"
@@ -272,7 +270,7 @@ export const MembersIndicator = ({
 
 					<DialogFooter>
 						<Button variant="gray" size="sm" onClick={() => setOpen(false)}>
-							Close
+							关闭
 						</Button>
 						{canManageMembers && (
 							<Button
@@ -288,7 +286,7 @@ export const MembersIndicator = ({
 								variant="dark"
 								size="sm"
 							>
-								Save
+								保存
 							</Button>
 						)}
 					</DialogFooter>
@@ -298,7 +296,7 @@ export const MembersIndicator = ({
 			{onAddVideos && (
 				<Button variant="dark" size="sm" onClick={onAddVideos}>
 					<FontAwesomeIcon className="size-3" icon={faPlus} />
-					Add videos
+					添加视频
 				</Button>
 			)}
 		</div>

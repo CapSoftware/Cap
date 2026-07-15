@@ -1,7 +1,4 @@
-import {
-	NO_CAMERA,
-	NO_CAMERA_VALUE,
-} from "@cap/recorder-core/recorder-constants";
+import { NO_CAMERA_VALUE } from "@cap/recorder-core/recorder-constants";
 import clsx from "clsx";
 import { CameraIcon, CameraOffIcon } from "lucide-react";
 import type { KeyboardEvent, MouseEvent } from "react";
@@ -54,7 +51,7 @@ export const CameraSelector = ({
 	const currentValue = selectedCameraId ?? NO_CAMERA_VALUE;
 
 	const options: DeviceSelectOption[] = [
-		{ value: NO_CAMERA_VALUE, label: NO_CAMERA, icon: CameraOffIcon },
+		{ value: NO_CAMERA_VALUE, label: "无摄像头", icon: CameraOffIcon },
 	];
 	if (
 		selectedCameraId === DEFAULT_CAMERA_DEVICE_ID &&
@@ -64,14 +61,14 @@ export const CameraSelector = ({
 	) {
 		options.push({
 			value: DEFAULT_CAMERA_DEVICE_ID,
-			label: "System default camera",
+			label: "系统默认摄像头",
 			icon: CameraIcon,
 		});
 	}
 	availableCameras.forEach((camera, index) => {
 		options.push({
 			value: camera.deviceId,
-			label: camera.label?.trim() || `Camera ${index + 1}`,
+			label: camera.label?.trim() || `摄像头 ${index + 1}`,
 			icon: CameraIcon,
 		});
 	});
@@ -170,15 +167,15 @@ export const CameraSelector = ({
 					onKeyDown={handleStatusPillKeyDown}
 				>
 					{shouldRequestPermission
-						? "Request permission"
+						? "请求权限"
 						: cameraEnabled
-							? "On"
-							: "Off"}
+							? "开启"
+							: "关闭"}
 				</button>
 			</div>
 			{open && (
 				<DeviceSelectOverlay
-					title="Select camera"
+					title="选择摄像头"
 					options={options}
 					selectedValue={currentValue}
 					onSelect={(value) => {

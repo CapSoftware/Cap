@@ -59,7 +59,7 @@ export const FoldersDropdown = ({
 					};
 					const items: FolderDropdownItem[] = [
 						{
-							label: "Rename",
+							label: "重命名",
 							icon: faPencil,
 							onClick: () => {
 								setIsRenaming(true);
@@ -70,21 +70,21 @@ export const FoldersDropdown = ({
 							},
 						},
 						{
-							label: isPublic ? "Make private" : "Make public",
+							label: isPublic ? "设为私密" : "设为公开",
 							icon: faGlobe,
 							onClick: onPublicToggle,
 						},
 						...(isPublic
 							? [
 									{
-										label: "Copy public link",
+										label: "复制公开链接",
 										icon: faCopy,
 										onClick: onCopyPublicLink,
 									},
 								]
 							: []),
 						{
-							label: "Delete",
+							label: "删除",
 							icon: faTrash,
 							onClick: () => setConfirmDeleteFolderOpen(true),
 						},

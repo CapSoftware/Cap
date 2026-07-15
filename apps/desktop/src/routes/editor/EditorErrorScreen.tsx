@@ -56,9 +56,7 @@ export function EditorErrorScreen(props: {
 							<IconAlertTriangle class="size-8 text-red-9" />
 						</div>
 						<h2 class="text-xl font-semibold text-gray-12">
-							{needsRecovery()
-								? "Recording Needs Recovery"
-								: "Unable to Open Recording"}
+							{needsRecovery() ? "录制项目需要恢复" : "无法打开录制项目"}
 						</h2>
 						<p class="text-sm text-gray-11">{props.error}</p>
 					</div>
@@ -66,9 +64,7 @@ export function EditorErrorScreen(props: {
 					<Show when={needsRecovery()}>
 						<div class="bg-gray-2 border border-gray-4 rounded-xl p-4 space-y-4">
 							<div class="space-y-2">
-								<h3 class="font-medium text-gray-12 text-sm">
-									Automatic Recovery
-								</h3>
+								<h3 class="font-medium text-gray-12 text-sm">自动恢复</h3>
 								<p class="text-xs text-gray-11">
 									Cap can attempt to recover your recording automatically. This
 									will reconstruct the recording from available segment data.
@@ -86,7 +82,7 @@ export function EditorErrorScreen(props: {
 									fallback={
 										<>
 											<IconRefreshCw class="size-4 mr-2" />
-											Recover Recording
+											恢复录制项目
 										</>
 									}
 								>
@@ -110,12 +106,9 @@ export function EditorErrorScreen(props: {
 
 					<div class="bg-gray-2 border border-gray-4 rounded-xl p-4 space-y-4">
 						<div class="space-y-2">
-							<h3 class="font-medium text-gray-12 text-sm">
-								Manual Investigation
-							</h3>
+							<h3 class="font-medium text-gray-12 text-sm">手动排查</h3>
 							<p class="text-xs text-gray-11">
-								You can open the recording folder to inspect the raw files
-								directly.
+								你可以打开录制文件夹检查原始文件 directly.
 							</p>
 
 							<div class="bg-gray-3 rounded-lg p-3 space-y-2">
@@ -132,8 +125,8 @@ export function EditorErrorScreen(props: {
 									}
 								>
 									<p class="text-xs text-gray-10 italic">
-										Tip: Right-click and select "Show Enclosing Folder" to see
-										the .cap bundle contents.
+										提示：右键单击并选择“显示所在文件夹”即可查看 the .cap bundle
+										contents.
 									</p>
 								</Show>
 							</div>
@@ -141,7 +134,7 @@ export function EditorErrorScreen(props: {
 
 						<Button onClick={handleOpenFolder} variant="outline" class="w-full">
 							<IconFolder class="size-4 mr-2" />
-							Open Folder
+							打开文件夹
 						</Button>
 					</div>
 
@@ -151,7 +144,7 @@ export function EditorErrorScreen(props: {
 							onClick={() => window.close()}
 							class="text-sm text-gray-10 hover:text-gray-11 transition-colors"
 						>
-							Close Window
+							关闭窗口
 						</button>
 					</div>
 				</div>

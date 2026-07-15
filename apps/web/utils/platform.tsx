@@ -23,15 +23,15 @@ export const getDownloadButtonText = (
 	isIntel: boolean = false,
 ): string => {
 	if (loading) {
-		return "Download Cap";
+		return "下载 Cap";
 	} else if (platform === "windows") {
-		return "Download for free";
+		return "免费下载";
 	} else if (platform === "macos") {
-		return isIntel ? "Download for free" : "Download for free";
+		return isIntel ? "免费下载" : "免费下载";
 	} else if (platform === "linux") {
-		return "Download for free";
+		return "免费下载";
 	} else {
-		return "Download Cap";
+		return "下载 Cap";
 	}
 };
 
@@ -75,13 +75,13 @@ export const getPlatformIcon = (platform: string | null): React.ReactNode => {
 
 export const getVersionText = (platform: string | null): React.ReactNode => {
 	if (platform === "macos") {
-		return "macOS 13.1+ recommended";
+		return "建议使用 macOS 13.1 或更高版本";
 	} else if (platform === "windows") {
-		return "Windows 10+ recommended";
+		return "建议使用 Windows 10 或更高版本";
 	} else if (platform === "linux") {
-		return "Linux x86_64 .deb recommended";
+		return "建议使用 Linux x86_64 .deb 软件包";
 	} else {
-		return "macOS 13.1+ recommended";
+		return "建议使用 macOS 13.1 或更高版本";
 	}
 };
 
@@ -107,7 +107,7 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 						window.location.href = "/download/apple-silicon";
 					}}
 					className="inline-flex size-6 items-center justify-center focus:outline-none"
-					aria-label="Download for free"
+					aria-label="免费下载"
 				>
 					<svg
 						aria-hidden="true"
@@ -134,7 +134,7 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 						})
 					}
 					className="inline-flex size-6 items-center justify-center focus:outline-none"
-					aria-label="Download for Windows"
+					aria-label="下载 Windows 版"
 				>
 					<svg
 						aria-hidden="true"
@@ -148,7 +148,7 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 					>
 						<path d="M112 144v51.64a8 8 0 0 1-8 8 8.5 8.5 0 0 1-1.43-.13l-64-11.64A8 8 0 0 1 32 184v-40a8 8 0 0 1 8-8h64a8 8 0 0 1 8 8m-2.87-89.78a8 8 0 0 0-6.56-1.73l-64 11.64A8 8 0 0 0 32 72v40a8 8 0 0 0 8 8h64a8 8 0 0 0 8-8V60.36a8 8 0 0 0-2.87-6.14M216 136h-80a8 8 0 0 0-8 8v57.45a8 8 0 0 0 6.57 7.88l80 14.54a7.6 7.6 0 0 0 1.43.13 8 8 0 0 0 8-8v-72a8 8 0 0 0-8-8m5.13-102.14a8 8 0 0 0-6.56-1.73l-80 14.55a8 8 0 0 0-6.57 7.87V112a8 8 0 0 0 8 8h80a8 8 0 0 0 8-8V40a8 8 0 0 0-2.87-6.14" />
 					</svg>
-					<span className="sr-only">Download for Windows</span>
+					<span className="sr-only">下载 Windows 版</span>
 				</a>
 			</div>
 			<div>
@@ -163,7 +163,7 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 						})
 					}
 					className="inline-flex size-6 items-center justify-center focus:outline-none"
-					aria-label="Download for Linux"
+					aria-label="下载 Linux 版"
 				>
 					<Image
 						src="/logos/os/linux.svg"
@@ -172,7 +172,7 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 						alt=""
 						className="block size-[24px] object-contain opacity-90"
 					/>
-					<span className="sr-only">Download for Linux</span>
+					<span className="sr-only">下载 Linux 版</span>
 				</a>
 			</div>
 		</div>

@@ -330,7 +330,7 @@ export function MaskTrack(props: {
 						fallback={<div class="w-full rounded-xl bg-transparent" />}
 					>
 						<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
-							<div>Click to add a mask</div>
+							<div>点击添加遮罩</div>
 							<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
 								(Combine sensitive blur or highlight masks)
 							</div>
@@ -346,7 +346,7 @@ export function MaskTrack(props: {
 					});
 
 					const contentLabel = () =>
-						segment.maskType === "sensitive" ? "Sensitive" : "Highlight";
+						segment.maskType === "sensitive" ? "敏感区域" : "高亮";
 
 					const segmentWidth = () => segment.end - segment.start;
 
@@ -479,7 +479,7 @@ export function MaskTrack(props: {
 								{(() => {
 									return (
 										<div class="flex flex-col gap-0.5 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
-											<span class="opacity-70">Mask</span>
+											<span class="opacity-70">遮罩</span>
 											<div class="flex gap-1 items-center text-md">
 												<span>{contentLabel()}</span>
 											</div>

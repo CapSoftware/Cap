@@ -9,14 +9,14 @@ import { revalidatePath } from "next/cache";
 
 export async function addDeveloperDomain(appId: string, domain: string) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user) throw new Error("未授权");
 
 	const trimmed = domain.trim().toLowerCase();
-	if (!trimmed) throw new Error("Domain is required");
+	if (!trimmed) throw new Error("请输入域名");
 
 	const urlPattern = /^https?:\/\/[a-z0-9.-]+(:[0-9]+)?$/;
 	if (!urlPattern.test(trimmed)) {
-		throw new Error("Domain must be a valid origin (e.g. https://myapp.com)");
+		throw new Error("域名必须是有效的来源地址（例如 https://myapp.com）");
 	}
 
 	const [app] = await db()
@@ -31,7 +31,7 @@ export async function addDeveloperDomain(appId: string, domain: string) {
 		)
 		.limit(1);
 
-	if (!app) throw new Error("App not found");
+	if (!app) throw new Error("未找到应用");
 
 	await db().insert(developerAppDomains).values({
 		id: nanoId(),

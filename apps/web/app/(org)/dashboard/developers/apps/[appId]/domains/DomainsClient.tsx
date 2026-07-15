@@ -30,18 +30,16 @@ export function DomainsClient() {
 		mutationFn: () => addDeveloperDomain(appId, newDomain),
 		onSuccess: () => {
 			setNewDomain("");
-			toast.success("Domain added");
+			toast.success("域名已添加");
 			router.refresh();
 		},
 		onError: (error) => {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to add domain",
-			);
+			toast.error(error instanceof Error ? error.message : "添加域名失败");
 		},
 	});
 
 	if (!app) {
-		return <p className="text-sm text-gray-10">App not found</p>;
+		return <p className="text-sm text-gray-10">未找到应用</p>;
 	}
 
 	return (
@@ -52,16 +50,14 @@ export function DomainsClient() {
 						size={14}
 						className="mt-0.5 shrink-0 text-yellow-400"
 					/>
-					Development apps allow all localhost origins automatically.
+					开发环境应用会自动允许所有 localhost 来源。
 				</div>
 			)}
 
 			<Card>
 				<CardHeader>
-					<CardTitle>Allowed Domains</CardTitle>
-					<CardDescription>
-						Restrict which domains can use your public API key.
-					</CardDescription>
+					<CardTitle>允许的域名</CardTitle>
+					<CardDescription>限制可使用你的 API 公钥的域名。</CardDescription>
 				</CardHeader>
 				<form
 					onSubmit={(e) => {
@@ -72,7 +68,7 @@ export function DomainsClient() {
 				>
 					<div className="flex flex-col flex-1 gap-1.5">
 						<Label htmlFor={domainInputId} className="text-xs">
-							Add Domain
+							添加域名
 						</Label>
 						<Input
 							id={domainInputId}
@@ -89,7 +85,7 @@ export function DomainsClient() {
 						spinner={addMutation.isPending}
 					>
 						<Plus size={14} className="mr-1" />
-						Add
+						添加
 					</Button>
 				</form>
 
@@ -108,7 +104,7 @@ export function DomainsClient() {
 
 				{app.domains.length === 0 && (
 					<p className="mt-4 pt-4 border-t border-gray-3 text-sm text-center text-gray-10 py-4">
-						No domains configured
+						尚未配置域名
 					</p>
 				)}
 			</Card>

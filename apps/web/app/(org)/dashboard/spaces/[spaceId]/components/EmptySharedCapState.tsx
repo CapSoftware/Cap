@@ -48,14 +48,12 @@ export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
 			</div>
 			<div className="text-center pb-[30px]">
 				<p className="mb-3 text-xl font-semibold text-gray-12">
-					{type === "space"
-						? "Start sharing videos to this Space"
-						: "No shared Caps yet!"}
+					{type === "space" ? "开始在此空间共享视频" : "暂无共享录制"}
 				</p>
 				<p className="mb-6 max-w-md text-md text-gray-10">
 					{type === "space"
-						? "Add videos directly here in this Space, or add videos from the My Caps page."
-						: `There are no Caps shared with ${organizationName} yet. Ask your team members to share their Caps with this ${type}.`}
+						? "你可以直接在此空间添加视频，也可以从“我的录制”页面添加。"
+						: `目前还没有与${organizationName}共享的录制。你可以邀请团队成员将录制共享给此组织。`}
 				</p>
 				{showAddButton && (
 					<Button
@@ -65,7 +63,7 @@ export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
 						className="flex gap-2 items-center mx-auto"
 					>
 						<FontAwesomeIcon icon={faPlus} className="size-3.5" />
-						Add videos to {type === "space" ? "Space" : "Organization"}
+						添加视频到{type === "space" ? "空间" : "组织"}
 					</Button>
 				)}
 			</div>

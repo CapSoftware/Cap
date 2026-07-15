@@ -51,29 +51,20 @@ export default function FolderVideosSection({
 					return { success: successCount };
 				} else {
 					return yield* Effect.fail(
-						new Error(
-							`Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`,
-						),
+						new Error(`删除 ${errorCount} 个录制内容失败`),
 					);
 				}
 			}).pipe(Effect.fork);
 
 			toast.promise(Effect.runPromise(fiber.await.pipe(Effect.flatten)), {
-				loading: `Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
+				loading: `正在删除 ${ids.length} 个录制内容……`,
 				success: (data) => {
 					if (data.error) {
-						return `Successfully deleted ${data.success} cap${
-							data.success === 1 ? "" : "s"
-						}, but failed to delete ${data.error} cap${
-							data.error === 1 ? "" : "s"
-						}`;
+						return `已删除 ${data.success} 个录制内容，另有 ${data.error} 个删除失败`;
 					}
-					return `Successfully deleted ${data.success} cap${
-						data.success === 1 ? "" : "s"
-					}`;
+					return `已删除 ${data.success} 个录制内容`;
 				},
-				error: (error) =>
-					error.message || "An error occurred while deleting caps",
+				error: (error) => error.message || "删除录制内容时发生错误",
 			});
 
 			return yield* fiber.await.pipe(Effect.flatten);
@@ -87,11 +78,11 @@ export default function FolderVideosSection({
 	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
 		mutationFn: (id: Video.VideoId) => rpc.VideoDelete(id),
 		onSuccess: () => {
-			toast.success("Cap deleted successfully");
+			toast.success("录制内容已删除");
 			router.refresh();
 		},
 		onError: () => {
-			toast.error("Failed to delete cap");
+			toast.error("删除录制内容失败");
 		},
 	});
 
@@ -126,15 +117,12 @@ export default function FolderVideosSection({
 	return (
 		<>
 			<div className="flex justify-between items-center mb-6 w-full">
-				<h1 className="text-2xl font-medium text-gray-12">
-					Videos and screenshots
-				</h1>
+				<h1 className="text-2xl font-medium text-gray-12">视频和截图</h1>
 			</div>
 			<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
 				{visibleVideos.length === 0 && !isUploading ? (
 					<p className="col-span-full text-gray-9">
-						No videos or screenshots in this folder yet. Drag and drop into the
-						folder or upload.
+						此文件夹中还没有视频或截图。请拖放到此文件夹或上传媒体。
 					</p>
 				) : (
 					<>

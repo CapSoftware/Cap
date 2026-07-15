@@ -78,7 +78,7 @@ export const DownloadPage = () => {
 								{!loading && getPlatformIcon(platform)}
 								{getDownloadButtonText(platform, loading, isIntel)}
 							</Button>
-							<span className="text-sm font-medium text-gray-500">or</span>
+							<span className="text-sm font-medium text-gray-500">或</span>
 							<ChromeExtensionButton
 								variant="white"
 								size="lg"

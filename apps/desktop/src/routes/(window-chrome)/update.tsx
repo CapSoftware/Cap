@@ -23,7 +23,7 @@ export default function () {
 			return update;
 		} catch (e) {
 			console.error("Failed to check for updates:", e);
-			setUpdateError("Unable to check for updates.");
+			setUpdateError("无法检查更新。");
 			return;
 		}
 	});
@@ -34,20 +34,19 @@ export default function () {
 				<div class="flex flex-col gap-4 items-center text-center max-w-md">
 					<p class="text-(--text-primary)">{updateError()}</p>
 					<p class="text-(--text-tertiary)">
-						Please download the latest version manually from cap.so/download.
-						Your data will not be lost.
+						请前往 cap.so/download 手动下载最新版本。你的数据不会丢失。
 					</p>
 					<p class="text-(--text-tertiary) text-xs">
-						If this issue persists, please contact support.
+						如果问题仍然存在，请联系支持团队。
 					</p>
-					<Button onClick={() => navigate("/")}>Go Back</Button>
+					<Button onClick={() => navigate("/")}>返回</Button>
 				</div>
 			</Show>
 			<Show
 				when={!updateError() && update()}
 				fallback={
 					!updateError() && (
-						<span class="text-(--text-tertiary)">No update available</span>
+						<span class="text-(--text-tertiary)">暂无可用更新</span>
 					)
 				}
 				keyed
@@ -81,7 +80,7 @@ export default function () {
 						})
 						.catch((e) => {
 							console.error("Failed to download/install update:", e);
-							setUpdateError("Failed to download or install the update.");
+							setUpdateError("下载或安装更新失败。");
 						});
 
 					return (
@@ -94,9 +93,9 @@ export default function () {
 								<Match when={updateStatus()?.type === "done"}>
 									<div class="flex flex-col gap-4 items-center">
 										<p class="text-(--text-tertiary)">
-											Update has been installed. Restart Cap to finish updating.
+											更新已安装。请重启 Cap 以完成更新。
 										</p>
-										<Button onClick={() => relaunch()}>Restart Now</Button>
+										<Button onClick={() => relaunch()}>立即重启</Button>
 									</div>
 								</Match>
 								<Match
@@ -112,9 +111,7 @@ export default function () {
 								>
 									{(status) => (
 										<>
-											<h1 class="text-(--text-primary) mb-4">
-												Installing Update
-											</h1>
+											<h1 class="text-(--text-primary) mb-4">正在安装更新</h1>
 
 											<div class="w-full bg-gray-3 rounded-full h-2.5">
 												<div

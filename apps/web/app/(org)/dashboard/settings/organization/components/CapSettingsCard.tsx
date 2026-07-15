@@ -5,7 +5,6 @@ import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	AI_GENERATION_LANGUAGES,
 	type AiGenerationLanguage,
-	getAiGenerationLanguageName,
 	isAiGenerationLanguage,
 } from "@cap/web-domain";
 import { useDebounce } from "@uidotdev/usehooks";
@@ -43,42 +42,42 @@ const options: Array<{
 	pro?: boolean;
 }> = [
 	{
-		label: "Enable comments",
+		label: "启用评论",
 		value: "disableComments",
-		description: "Allow viewers to comment on caps",
+		description: "允许观众评论录制",
 	},
 	{
-		label: "Enable summary",
+		label: "启用摘要",
 		value: "disableSummary",
-		description: "Show AI-generated summary (requires transcript)",
+		description: "显示 AI 生成的摘要（需要文字稿）",
 		pro: true,
 	},
 	{
-		label: "Enable captions",
+		label: "启用字幕",
 		value: "disableCaptions",
-		description: "Allow viewers to use captions for caps",
+		description: "允许观众查看录制字幕",
 	},
 	{
-		label: "Enable chapters",
+		label: "启用章节",
 		value: "disableChapters",
-		description: "Show AI-generated chapters (requires transcript)",
+		description: "显示 AI 生成的章节（需要文字稿）",
 		pro: true,
 	},
 	{
-		label: "Enable reactions",
+		label: "启用回应",
 		value: "disableReactions",
-		description: "Allow viewers to react to caps",
+		description: "允许观众对录制作出回应",
 	},
 	{
-		label: "Enable transcript",
+		label: "启用文字稿",
 		value: "disableTranscript",
-		description: "Enabling this also allows chapters and summary",
+		description: "启用后也可使用章节和摘要",
 		pro: true,
 	},
 	{
-		label: "Show Cap logo",
+		label: "显示 Cap 徽标",
 		value: "hideShareableLinkCapLogo",
-		description: "Show Cap branding at the top of shareable links",
+		description: "在分享链接顶部显示 Cap 品牌标识",
 		pro: true,
 	},
 ];
@@ -87,6 +86,15 @@ const languageOptions = Object.entries(AI_GENERATION_LANGUAGES) as [
 	AiGenerationLanguage,
 	string,
 ][];
+
+const languageDisplayNames = new Intl.DisplayNames(["zh-CN"], {
+	type: "language",
+});
+
+const getLanguageLabel = (language: AiGenerationLanguage, fallback: string) =>
+	language === AI_GENERATION_LANGUAGE_AUTO
+		? "自动检测"
+		: (languageDisplayNames.of(language) ?? fallback);
 
 const mergeSettings = (
 	settings?: OrganizationSettings | null,
@@ -162,14 +170,14 @@ const CapSettingsCard = () => {
 								debouncedUpdateSettings.aiGenerationLanguage ??
 								AI_GENERATION_LANGUAGE_AUTO;
 							toast.success(
-								`AI language set to ${getAiGenerationLanguageName(language)}`,
+								`AI 生成语言已设为${getLanguageLabel(language, AI_GENERATION_LANGUAGES[language])}`,
 							);
 							return;
 						}
 
 						if (changedKey === "defaultPlaybackSpeed") {
 							toast.success(
-								`Default playback speed set to ${
+								`默认播放速度已设为 ${
 									debouncedUpdateSettings.defaultPlaybackSpeed ??
 									DEFAULT_PLAYBACK_SPEED
 								}×`,
@@ -181,23 +189,20 @@ const CapSettingsCard = () => {
 						if (changedKey === "hideShareableLinkCapLogo") {
 							toast.success(
 								debouncedUpdateSettings[changedKey]
-									? "Cap logo hidden"
-									: "Cap logo shown",
+									? "已隐藏 Cap 徽标"
+									: "已显示 Cap 徽标",
 							);
 						} else {
 							const isDisabled = Boolean(debouncedUpdateSettings[changedKey]);
-							const action = isDisabled ? "disabled" : "enabled";
-							const label = option?.label.split(" ")[1] || changedKey;
-							toast.success(
-								`${label.charAt(0).toUpperCase()}${label.slice(1)} ${action}`,
-							);
+							const action = isDisabled ? "已关闭" : "已开启";
+							toast.success(`${option?.label ?? "设置"}${action}`);
 						}
 					});
 
 					lastSavedSettings.current = debouncedUpdateSettings;
 				} catch (error) {
 					console.error("Error updating organization settings:", error);
-					toast.error("Failed to update settings");
+					toast.error("更新设置失败");
 					setSettings(mergeSettings(organizationSettings));
 				}
 			};
@@ -250,10 +255,9 @@ const CapSettingsCard = () => {
 	return (
 		<Card className="flex relative flex-col flex-1 gap-6 w-full min-h-fit">
 			<CardHeader>
-				<CardTitle>Cap Settings</CardTitle>
+				<CardTitle>Cap 设置</CardTitle>
 				<CardDescription>
-					Enable or disable specific settings for your organization. These
-					settings will be applied as defaults for new caps.
+					为组织启用或关闭特定设置。这些设置将作为新录制的默认值。
 				</CardDescription>
 			</CardHeader>
 
@@ -296,11 +300,10 @@ const CapSettingsCard = () => {
 				<div className="flex flex-col flex-1 gap-1">
 					<div className="flex gap-1.5 items-center">
 						<Gauge className="w-3.5 h-3.5 text-gray-9" />
-						<p className="text-sm text-gray-12">Default playback speed</p>
+						<p className="text-sm text-gray-12">默认播放速度</p>
 					</div>
 					<p className="text-xs text-gray-10">
-						The speed caps start playing at on shareable links. Viewers can
-						still change it.
+						分享链接中的录制将以此速度开始播放，观众仍可自行调整。
 					</p>
 				</div>
 				<div className="flex flex-wrap gap-1 items-center p-1 rounded-lg border bg-gray-1 border-gray-3">
@@ -326,14 +329,13 @@ const CapSettingsCard = () => {
 			<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3 sm:flex-row sm:justify-between sm:items-center">
 				<div className="flex flex-col flex-1 gap-1">
 					<div className="flex gap-1.5 items-center">
-						<p className="text-sm text-gray-12">AI generation language</p>
+						<p className="text-sm text-gray-12">AI 生成语言</p>
 						<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-white bg-blue-11">
 							Pro
 						</p>
 					</div>
 					<p className="text-xs text-gray-10">
-						Set the language used for transcripts, titles, summaries, and
-						chapters.
+						设置文字稿、标题、摘要和章节使用的语言。
 					</p>
 				</div>
 				<div className="relative w-full sm:w-auto" ref={languageMenuRef}>
@@ -345,7 +347,10 @@ const CapSettingsCard = () => {
 					>
 						<span className="flex items-center gap-1.5 text-gray-12">
 							<Globe className="w-3 h-3 text-gray-9" />
-							{getAiGenerationLanguageName(selectedLanguage)}
+							{getLanguageLabel(
+								selectedLanguage,
+								AI_GENERATION_LANGUAGES[selectedLanguage],
+							)}
 						</span>
 						<ChevronDown className="w-3 h-3 text-gray-9" />
 					</button>
@@ -365,7 +370,7 @@ const CapSettingsCard = () => {
 										}`}
 										type="button"
 									>
-										{name}
+										{getLanguageLabel(code, name)}
 									</button>
 								</div>
 							))}

@@ -10,7 +10,7 @@ export const SettingsButton = ({ onClick }: SettingsButtonProps) => (
 		type="button"
 		variant="outline"
 		size="icon"
-		aria-label="Open recorder settings"
+		aria-label="打开录制设置"
 		className="group !p-0"
 		onClick={onClick}
 	>

@@ -83,11 +83,11 @@ export function SeatManagementCard() {
 
 	const updateMutation = useMutation({
 		mutationFn: () => {
-			if (!organizationId) throw new Error("No organization");
+			if (!organizationId) throw new Error("未找到组织");
 			return updateSeatQuantity(organizationId, desiredQuantity);
 		},
 		onSuccess: (result) => {
-			toast.success(`Seat quantity updated to ${result.newQuantity}`);
+			toast.success(`席位数已更新为 ${result.newQuantity}`);
 			queryClient.setQueriesData<SubscriptionDetails | null>(
 				{ queryKey: ["subscription-details", organizationId] },
 				(old) => (old ? { ...old, currentQuantity: result.newQuantity } : old),
@@ -95,9 +95,7 @@ export function SeatManagementCard() {
 			router.refresh();
 		},
 		onError: (error) => {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to update seats",
-			);
+			toast.error(error instanceof Error ? error.message : "更新席位失败");
 		},
 	});
 
@@ -108,29 +106,27 @@ export function SeatManagementCard() {
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle>Pro Seats</CardTitle>
-				<CardDescription>
-					Manage how many Pro seats are available for your team.
-				</CardDescription>
+				<CardTitle>Pro 席位</CardTitle>
+				<CardDescription>管理团队可用的 Pro 席位数量。</CardDescription>
 			</CardHeader>
 			<div className="flex flex-col gap-5 mt-4">
 				<div className="flex flex-col gap-1 text-sm text-gray-11">
 					<span>
-						<span className="font-medium text-gray-12">{proSeatsUsed}</span> of{" "}
-						<span className="font-medium text-gray-12">{proSeatsTotal}</span>{" "}
-						Pro seats assigned to members
+						已分配{" "}
+						<span className="font-medium text-gray-12">{proSeatsUsed}</span> /{" "}
+						<span className="font-medium text-gray-12">{proSeatsTotal}</span> 个
+						Pro 席位
 					</span>
 					{activeOrganization?.ownerIsPro && (
 						<span className="text-xs text-gray-10">
-							The organization owner is always on Cap Pro and doesn't use a
-							seat.
+							组织所有者始终拥有 Cap Pro，且不占用席位。
 						</span>
 					)}
 				</div>
 
 				<div className="flex flex-wrap items-center gap-4">
 					<div className="flex items-center gap-1">
-						<span className="mr-2 text-sm text-gray-12">Seats:</span>
+						<span className="mr-2 text-sm text-gray-12">席位：</span>
 						<button
 							type="button"
 							onClick={() =>
@@ -160,16 +156,14 @@ export function SeatManagementCard() {
 					{hasChanges && (
 						<div className="flex items-center gap-3">
 							{debounceInFlight || previewLoading ? (
-								<span className="text-sm text-gray-10">Calculating...</span>
+								<span className="text-sm text-gray-10">正在计算…</span>
 							) : previewError ? (
-								<span className="text-sm text-red-500">
-									Unable to calculate preview
-								</span>
+								<span className="text-sm text-red-500">无法计算预览</span>
 							) : preview ? (
 								<span className="text-sm text-gray-11">
 									{preview.proratedAmount === 0
-										? "No prorated adjustment"
-										: `${preview.proratedAmount > 0 ? "Due now" : "Prorated credit"}: $${Math.abs(preview.proratedAmount / 100).toFixed(2)} ${preview.currency.toUpperCase()}`}
+										? "无需按比例调整"
+										: `${preview.proratedAmount > 0 ? "当前应付" : "按比例退款"}：$${Math.abs(preview.proratedAmount / 100).toFixed(2)} ${preview.currency.toUpperCase()}`}
 								</span>
 							) : null}
 							<Button
@@ -185,7 +179,7 @@ export function SeatManagementCard() {
 								}
 								spinner={updateMutation.isPending}
 							>
-								{updateMutation.isPending ? "Updating..." : "Confirm"}
+								{updateMutation.isPending ? "正在更新…" : "确认"}
 							</Button>
 							<Button
 								type="button"
@@ -200,7 +194,7 @@ export function SeatManagementCard() {
 								}}
 								disabled={updateMutation.isPending}
 							>
-								Cancel
+								取消
 							</Button>
 						</div>
 					)}

@@ -87,12 +87,12 @@ export const cycleBlurMode = (
 };
 
 export const blurModeLabel = (mode: BackgroundBlurMode | boolean): string => {
-	if (typeof mode === "boolean") return mode ? "Blur" : "";
+	if (typeof mode === "boolean") return mode ? "虚化" : "";
 	switch (mode) {
 		case "light":
-			return "Light";
+			return "轻度";
 		case "heavy":
-			return "Heavy";
+			return "重度";
 		default:
 			return "";
 	}

@@ -17,11 +17,11 @@ import { runPromise } from "@/lib/server";
 
 export async function createOrganization(formData: FormData) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user) throw new Error("未授权");
 
 	// Extract the name from the FormData
 	const name = formData.get("name") as string;
-	if (!name) throw new Error("Organization name is required");
+	if (!name) throw new Error("请输入组织名称");
 
 	// Check if organization with the same name already exists
 	const existingOrg = await db()
@@ -31,7 +31,7 @@ export async function createOrganization(formData: FormData) {
 		.limit(1);
 
 	if (existingOrg.length > 0) {
-		throw new Error("Organization with this name already exists");
+		throw new Error("已存在同名组织");
 	}
 
 	const organizationId = Organisation.OrganisationId.make(nanoId());
@@ -53,12 +53,12 @@ export async function createOrganization(formData: FormData) {
 	if (iconFile) {
 		// Validate file type
 		if (!iconFile.type.startsWith("image/")) {
-			throw new Error("File must be an image");
+			throw new Error("文件必须是图片");
 		}
 
 		// Validate file size (limit to 2MB)
 		if (iconFile.size > 2 * 1024 * 1024) {
-			throw new Error("File size must be less than 2MB");
+			throw new Error("文件大小必须小于 2 MB");
 		}
 
 		// Create a unique file key
@@ -81,7 +81,7 @@ export async function createOrganization(formData: FormData) {
 			orgValues.iconUrl = fileKey;
 		} catch (error) {
 			console.error("Error uploading organization icon:", error);
-			throw new Error(error instanceof Error ? error.message : "Upload failed");
+			throw new Error(error instanceof Error ? error.message : "上传失败");
 		}
 	}
 

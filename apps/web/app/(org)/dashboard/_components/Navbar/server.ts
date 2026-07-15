@@ -17,7 +17,7 @@ export async function updateActiveOrganization(
 	organizationId: Organisation.OrganisationId,
 ) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user) throw new Error("未授权");
 
 	const [organization] = await db()
 		.select({ organization: organizations })
@@ -31,7 +31,7 @@ export async function updateActiveOrganization(
 		)
 		.where(eq(organizations.id, organizationId));
 
-	if (!organization) throw new Error("Organization not found");
+	if (!organization) throw new Error("未找到组织");
 
 	await db()
 		.update(users)
@@ -46,12 +46,12 @@ export async function createSpace(formData: FormData) {
 		const result = await createSpaceAction(formData);
 
 		if (!result.success) {
-			throw new Error(result.error || "Failed to create space");
+			throw new Error(result.error || "创建空间失败");
 		}
 
 		return result;
 	} catch (error) {
-		console.error("Error creating space:", error);
+		console.error("创建空间时出错：", error);
 		throw error;
 	}
 }
@@ -60,11 +60,11 @@ export async function updateSpace(formData: FormData) {
 	try {
 		const result = await updateSpaceAction(formData);
 		if (!result.success) {
-			throw new Error(result.error || "Failed to update space");
+			throw new Error(result.error || "更新空间失败");
 		}
 		return result;
 	} catch (error) {
-		console.error("Error updating space:", error);
+		console.error("更新空间时出错：", error);
 		throw error;
 	}
 }

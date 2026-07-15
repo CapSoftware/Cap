@@ -79,15 +79,13 @@ export function LoginForm() {
 		const handleErrors = () => {
 			if (error === "OAuthAccountNotLinked" && !errorDesc) {
 				setOauthError(true);
-				return toast.error(
-					"This email is already associated with a different sign-in method",
-				);
+				return toast.error("此邮箱已关联其他登录方式");
 			} else if (
 				error === "profile_not_allowed_outside_organization" &&
 				!errorDesc
 			) {
 				return toast.error(
-					"Your email domain is not authorized for SSO access. Please use your work email or contact your administrator.",
+					"你的邮箱域名未获 SSO 访问授权。请使用工作邮箱或联系管理员。",
 				);
 			} else if (error && errorDesc) {
 				return toast.error(errorDesc);
@@ -173,14 +171,14 @@ export function LoginForm() {
 			if (!loginFormMounted.current) return;
 			setOrganizationId(mobileOrganizationId);
 			setShowOrgInput(true);
-			toast.error("Organization not found or SSO not configured");
+			toast.error("找不到组织，或组织尚未配置 SSO");
 		});
 	}, [handleGoogleSignIn, handleWorkosSignIn, searchParams]);
 
 	const handleOrganizationLookup = async (e: React.FormEvent) => {
 		e.preventDefault();
 		if (!organizationId) {
-			toast.error("Please enter an organization ID");
+			toast.error("请输入组织 ID");
 			return;
 		}
 
@@ -188,7 +186,7 @@ export function LoginForm() {
 			await handleWorkosSignIn(organizationId);
 		} catch (error) {
 			console.error("Lookup Error:", error);
-			toast.error("Organization not found or SSO not configured");
+			toast.error("找不到组织，或组织尚未配置 SSO");
 		}
 	};
 
@@ -215,7 +213,7 @@ export function LoginForm() {
 			>
 				<FontAwesomeIcon className="w-2" icon={faArrowLeft} />
 				<motion.p layout="position" className="text-xs text-inherit">
-					Back
+					返回
 				</motion.p>
 			</motion.div>
 			<MotionLink layout="position" className="flex mx-auto size-fit" href="/">
@@ -230,14 +228,14 @@ export function LoginForm() {
 					layout="position"
 					className="text-2xl font-semibold text-gray-12"
 				>
-					Sign in to Cap
+					登录 Cap
 				</motion.h1>
 				<motion.p
 					key="subtitle"
 					layout="position"
 					className="text-[16px] text-gray-10"
 				>
-					Beautiful screen recordings, owned by you.
+					精美的屏幕录制，完全由你掌控。
 				</motion.p>
 			</motion.div>
 			<motion.div layout="position" className="flex flex-col space-y-3">
@@ -310,7 +308,7 @@ export function LoginForm() {
 												getEmailCodeCooldownSeconds(lastEmailSentTime);
 											if (remainingSeconds > 0) {
 												toast.error(
-													`Please wait ${remainingSeconds} seconds before requesting a new code.`,
+													`请等待 ${remainingSeconds} 秒后再请求新验证码。`,
 												);
 												return;
 											}
@@ -338,7 +336,7 @@ export function LoginForm() {
 											} catch {
 												setEmailSent(false);
 												toast.error(
-													"Sign in is taking longer than expected. Check your connection or browser extensions, then try again.",
+													"登录耗时超出预期。请检查网络连接或浏览器扩展后重试。",
 												);
 											} finally {
 												setLoading(false);
@@ -363,22 +361,21 @@ export function LoginForm() {
 							layout="position"
 							className="pt-3 text-xs text-center text-gray-9"
 						>
-							By typing your email and clicking continue, you acknowledge that
-							you have both read and agree to Cap's{" "}
+							输入邮箱并点击继续，即表示你已阅读并同意 Cap 的{" "}
 							<Link
 								href="/terms"
 								target="_blank"
 								className="text-xs font-semibold text-gray-12 hover:text-blue-300"
 							>
-								Terms of Service
+								服务条款
 							</Link>{" "}
-							and{" "}
+							和{" "}
 							<Link
 								href="/privacy"
 								target="_blank"
 								className="text-xs font-semibold text-gray-12 hover:text-blue-300"
 							>
-								Privacy Policy
+								隐私政策
 							</Link>
 							.
 						</motion.p>
@@ -410,17 +407,17 @@ const LoginWithSSO = ({
 		>
 			<MotionInput
 				id={organizationIdInputId}
-				placeholder="Enter your Organization ID..."
+				placeholder="输入组织 ID…"
 				value={organizationId}
 				onChange={(e) => setOrganizationId(e.target.value)}
 				className="w-full max-w-full"
 			/>
 			{organizationName && (
-				<p className="text-sm text-gray-1">Signing in to: {organizationName}</p>
+				<p className="text-sm text-gray-1">正在登录：{organizationName}</p>
 			)}
 			<div>
 				<Button type="submit" variant="dark" className="w-full max-w-full">
-					Continue with SSO
+					使用 SSO 继续
 				</Button>
 			</div>
 		</motion.form>
@@ -475,7 +472,7 @@ const NormalLogin = ({
 						)
 					}
 				>
-					{loading ? "Sending code..." : "Login with email"}
+					{loading ? "正在发送验证码…" : "使用邮箱登录"}
 				</MotionButton>
 				{/* {NODE_ENV === "development" && (
                   <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
@@ -492,12 +489,12 @@ const NormalLogin = ({
 				layout="position"
 				className="mt-3 mb-2 text-xs text-center text-gray-9"
 			>
-				Don't have an account?{" "}
+				还没有账号？{" "}
 				<Link
 					href="/signup"
 					className="text-xs font-semibold text-blue-9 hover:text-blue-8"
 				>
-					Sign up here
+					在此注册
 				</Link>
 			</motion.p>
 
@@ -505,7 +502,7 @@ const NormalLogin = ({
 				<>
 					<div className="flex gap-4 items-center mt-4 mb-4">
 						<span className="flex-1 h-px bg-gray-5" />
-						<p className="text-sm text-center text-gray-10">OR</p>
+						<p className="text-sm text-center text-gray-10">或</p>
 						<span className="flex-1 h-px bg-gray-5" />
 					</div>
 					<motion.div
@@ -521,7 +518,7 @@ const NormalLogin = ({
 								disabled={loading || emailSent}
 							>
 								<Image src="/google.svg" alt="Google" width={16} height={16} />
-								Login with Google
+								使用 Google 登录
 							</MotionButton>
 						)}
 
@@ -532,8 +529,7 @@ const NormalLogin = ({
 									icon={faExclamationCircle}
 								/>
 								<p className="text-xs leading-5 text-gray-50">
-									It looks like you've previously used this email to sign up via
-									email login. Please enter your email.
+									你之前似乎使用此邮箱通过邮箱方式注册过。请输入邮箱继续登录。
 								</p>
 							</div>
 						)}
@@ -547,7 +543,7 @@ const NormalLogin = ({
 								disabled={loading || emailSent}
 							>
 								<LucideArrowUpRight size={20} />
-								Login with SAML SSO
+								使用 SAML SSO 登录
 							</MotionButton>
 						)}
 					</motion.div>

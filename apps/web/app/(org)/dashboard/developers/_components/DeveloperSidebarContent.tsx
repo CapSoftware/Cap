@@ -18,20 +18,20 @@ import { useDashboardContext } from "../../Contexts";
 import { EnvironmentBadge } from "./EnvironmentBadge";
 
 const mainNav = [
-	{ name: "Apps", href: "/dashboard/developers/apps", icon: Box },
-	{ name: "Usage", href: "/dashboard/developers/usage", icon: BarChart3 },
+	{ name: "应用", href: "/dashboard/developers/apps", icon: Box },
+	{ name: "用量", href: "/dashboard/developers/usage", icon: BarChart3 },
 	{
-		name: "Credits",
+		name: "额度",
 		href: "/dashboard/developers/credits",
 		icon: CreditCard,
 	},
 ];
 
 const appNav = [
-	{ name: "Settings", href: "settings", icon: Settings },
-	{ name: "API Keys", href: "api-keys", icon: Key },
-	{ name: "Domains", href: "domains", icon: Globe },
-	{ name: "Videos", href: "videos", icon: Video },
+	{ name: "设置", href: "settings", icon: Settings },
+	{ name: "API 密钥", href: "api-keys", icon: Key },
+	{ name: "域名", href: "domains", icon: Globe },
+	{ name: "视频", href: "videos", icon: Video },
 ];
 
 export function DeveloperSidebarContent() {

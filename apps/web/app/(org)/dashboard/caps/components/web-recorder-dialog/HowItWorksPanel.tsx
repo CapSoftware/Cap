@@ -11,23 +11,22 @@ import {
 
 const HOW_IT_WORKS_ITEMS = [
 	{
-		title: "Uploads while you record",
+		title: "边录制边上传",
 		description:
-			"On compatible browsers, your capture uploads in the background while you record. Otherwise, it records first and uploads right after you stop.",
+			"在兼容的浏览器中，录制内容会在录制时于后台上传；否则会先完成录制，并在停止后立即上传。",
 		Icon: CloudUploadIcon,
 		accent: "bg-blue-3 text-blue-11 dark:bg-blue-4 dark:text-blue-10",
 	},
 	{
-		title: "Instant shareable link",
-		description:
-			"Stopping the recording finalizes the upload immediately so you can copy your link right away.",
+		title: "即时生成分享链接",
+		description: "停止录制后会立即完成上传，你可以马上复制分享链接。",
 		Icon: LinkIcon,
 		accent: "bg-green-3 text-green-11 dark:bg-green-4 dark:text-green-10",
 	},
 	{
-		title: "Keep your webcam visible",
+		title: "保持摄像头画面可见",
 		description:
-			"On compatible browsers, selecting a camera opens a picture‑in‑picture window that's captured when you record fullscreen. We recommend fullscreen to keep it on top. If PiP capture isn't supported, your camera is limited to the Cap recorder page.",
+			"在兼容的浏览器中，选择摄像头会打开画中画窗口，并可在全屏录制时一并录入。建议使用全屏模式让窗口保持置顶。如果不支持录制画中画，摄像头画面将仅显示在 Cap 录制页面中。",
 		Icon: PictureInPictureIcon,
 		accent: "bg-purple-3 text-purple-11 dark:bg-purple-4 dark:text-purple-10",
 	},
@@ -62,11 +61,9 @@ export const HowItWorksPanel = ({ open, onClose }: HowItWorksPanelProps) => {
 							className="flex items-center gap-1.5 text-sm font-medium text-gray-11 transition-colors hover:text-gray-12"
 						>
 							<ArrowLeftIcon className="size-4" />
-							Back
+							返回
 						</button>
-						<h2 className="text-base font-semibold text-gray-12">
-							How it works
-						</h2>
+						<h2 className="text-base font-semibold text-gray-12">工作原理</h2>
 						<span className="h-9 w-9" aria-hidden />
 					</div>
 					<div className="flex-1 min-h-0 overflow-y-auto pr-1 pb-1">

@@ -19,7 +19,7 @@ export const RecorderHeader = ({
 	onClose,
 	onUpgradeClick,
 }: RecorderHeaderProps) => {
-	const planLabel = isPro ? "Pro" : "Free";
+	const planLabel = isPro ? "Pro" : "免费版";
 	const planClassName = clsx(
 		"ml-2 inline-flex items-center rounded-full px-2 text-[0.7rem] font-medium transition-colors",
 		isPro
@@ -34,14 +34,14 @@ export const RecorderHeader = ({
 					type="button"
 					onClick={onClose}
 					disabled={isBusy}
-					title="Close Cap"
+					title="关闭 Cap"
 					className={clsx(
 						"flex size-4 items-center justify-center rounded-full bg-[#FF5F57] border border-[#E0443E]/60 p-0",
 						isBusy
 							? "opacity-50 cursor-not-allowed"
 							: "cursor-pointer transition-transform hover:scale-110",
 					)}
-					aria-label="Close Cap and hide all recorder UI"
+					aria-label="关闭 Cap 并隐藏所有录制界面"
 				>
 					<X
 						size={10}
@@ -61,9 +61,9 @@ export const RecorderHeader = ({
 							xmlns="http://www.w3.org/2000/svg"
 							fill="none"
 							viewBox="0 0 103 40"
-							aria-label="Cap Logo"
+							aria-label="Cap 标志"
 						>
-							<title>Cap Logo</title>
+							<title>Cap 标志</title>
 							<rect
 								width="39.5"
 								height="39.5"

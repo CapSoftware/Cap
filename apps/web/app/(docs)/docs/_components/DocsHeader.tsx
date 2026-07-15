@@ -49,7 +49,7 @@ export function DocsHeader() {
 					type="button"
 					onClick={handleMobileMenuClick}
 					className="lg:hidden flex items-center justify-center w-8 h-8 rounded-md text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
-					aria-label="Open menu"
+					aria-label="打开菜单"
 				>
 					<Menu className="w-5 h-5" />
 				</button>
@@ -61,7 +61,7 @@ export function DocsHeader() {
 					href="/docs"
 					className="text-sm font-semibold text-gray-900 hover:text-gray-700 transition-colors"
 				>
-					Docs
+					文档
 				</Link>
 			</div>
 
@@ -71,7 +71,7 @@ export function DocsHeader() {
 				className="hidden sm:flex items-center gap-2 h-8 px-3 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-500 hover:border-gray-300 hover:bg-gray-100 transition-colors cursor-pointer min-w-[240px]"
 			>
 				<Search className="w-3.5 h-3.5 text-gray-400" />
-				<span className="flex-1 text-left">Search docs...</span>
+				<span className="flex-1 text-left">搜索文档...</span>
 				<kbd className="hidden md:inline-flex items-center gap-0.5 rounded bg-white border border-gray-200 px-1.5 py-0.5 text-[11px] font-medium text-gray-400">
 					{isMac ? "\u2318" : "Ctrl"}K
 				</kbd>
@@ -82,7 +82,7 @@ export function DocsHeader() {
 					type="button"
 					onClick={handleSearchClick}
 					className="sm:hidden flex items-center justify-center w-8 h-8 rounded-md text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
-					aria-label="Search"
+					aria-label="搜索"
 				>
 					<Search className="w-4 h-4" />
 				</button>

@@ -49,7 +49,7 @@ const MAX_SEARCH_QUERY_LENGTH = 80;
 const VIDEO_SEARCH_DEBOUNCE_MS = 180;
 const MIN_VIDEO_QUERY_LENGTH = 2;
 
-const videoDateFormatter = new Intl.DateTimeFormat("en", {
+const videoDateFormatter = new Intl.DateTimeFormat("zh-CN", {
 	month: "short",
 	day: "numeric",
 	year: "numeric",
@@ -94,8 +94,8 @@ const formatDuration = (duration: number | null) => {
 
 const formatVideoSubtitle = (video: DashboardVideoSearchResult) => {
 	const parts = [
-		video.isScreenshot ? "Screenshot" : "Video",
-		video.ownerName ? `by ${video.ownerName}` : null,
+		video.isScreenshot ? "截图" : "视频",
+		video.ownerName ? `创建者：${video.ownerName}` : null,
 		videoDateFormatter.format(new Date(video.createdAt)),
 		formatDuration(video.duration),
 	].filter((part): part is string => Boolean(part));
@@ -106,13 +106,11 @@ const formatVideoSubtitle = (video: DashboardVideoSearchResult) => {
 const createSpaceItem = (space: Spaces): SearchItem => ({
 	id: `space-${space.id}`,
 	title: space.name,
-	subtitle: `${space.videoCount} ${
-		space.videoCount === 1 ? "video" : "videos"
-	} · ${space.memberCount} ${space.memberCount === 1 ? "member" : "members"}`,
+	subtitle: `${space.videoCount} 个视频 · ${space.memberCount} 位成员`,
 	href: `/dashboard/spaces/${space.id}`,
 	value: `${space.name} ${space.description ?? ""} ${space.privacy} space`,
 	icon: space.primary ? Building2 : Layers3,
-	badge: space.primary ? "Org" : space.privacy,
+	badge: space.primary ? "组织" : space.privacy === "Public" ? "公开" : "私密",
 });
 
 export function DashboardSearch({
@@ -150,42 +148,42 @@ export function DashboardSearch({
 		() => [
 			{
 				id: "my-caps",
-				title: "My Caps",
-				subtitle: "Open your video library",
+				title: "我的录制",
+				subtitle: "打开你的视频库",
 				href: "/dashboard/caps",
-				value: "my caps videos recordings library",
+				value: "我的录制 视频 录像 视频库",
 				icon: FileVideo,
 			},
 			{
 				id: "record-cap",
-				title: "Record a Cap",
-				subtitle: "Start a new browser recording",
+				title: "录制 Cap",
+				subtitle: "开始新的浏览器录制",
 				href: "/dashboard/caps/record",
-				value: "record cap screen video browser recorder",
+				value: "录制 cap 屏幕 视频 浏览器 录像",
 				icon: Radio,
 			},
 			{
 				id: "import-video",
-				title: "Import Media",
-				subtitle: "Bring an existing video or image into Cap",
+				title: "导入媒体",
+				subtitle: "将已有视频或图片导入 Cap",
 				href: "/dashboard/import",
-				value: "import upload loom video image media file",
+				value: "导入 上传 loom 视频 图片 媒体 文件",
 				icon: Upload,
 			},
 			{
 				id: "analytics",
-				title: "Analytics",
-				subtitle: "Review views and engagement",
+				title: "数据分析",
+				subtitle: "查看播放量和互动数据",
 				href: "/dashboard/analytics",
-				value: "analytics stats views engagement",
+				value: "数据分析 统计 播放 互动",
 				icon: BarChart3,
 			},
 			{
 				id: "browse-spaces",
-				title: "Browse Spaces",
-				subtitle: "Find shared organization spaces",
+				title: "浏览空间",
+				subtitle: "查找组织共享空间",
 				href: "/dashboard/spaces/browse",
-				value: "browse spaces shared organization",
+				value: "浏览 空间 共享 组织",
 				icon: FolderSearch,
 			},
 		],
@@ -196,53 +194,52 @@ export function DashboardSearch({
 		() => [
 			{
 				id: "account-settings",
-				title: "Account Settings",
-				subtitle: "Profile, avatar, and personal details",
+				title: "账户设置",
+				subtitle: "个人资料、头像和个人信息",
 				href: "/dashboard/settings/account",
-				value: "account settings profile avatar name personal",
+				value: "账户 设置 个人资料 头像 姓名",
 				icon: UserRound,
 			},
 			{
 				id: "notification-settings",
-				title: "Notification Settings",
-				subtitle: "Comments, views, replies, and reactions",
+				title: "通知设置",
+				subtitle: "评论、播放、回复和回应",
 				href: "/dashboard/settings/notifications",
-				value: "notification settings comments views replies reactions",
+				value: "通知 设置 评论 播放 回复 回应",
 				icon: Bell,
 			},
 			...(canViewSettings
 				? [
 						{
 							id: "organization-settings",
-							title: "Organization Settings",
-							subtitle: "General organization configuration",
+							title: "组织设置",
+							subtitle: "组织常规配置",
 							href: "/dashboard/settings/organization",
-							value: "organization settings general workspace",
+							value: "组织 设置 常规 工作区",
 							icon: Settings,
 						},
 						{
 							id: "organization-members",
-							title: "Organization Members",
-							subtitle: "Invite and manage teammates",
+							title: "组织成员",
+							subtitle: "邀请和管理团队成员",
 							href: "/dashboard/settings/organization/members",
-							value: "organization members invites teammates seats",
+							value: "组织 成员 邀请 团队 席位",
 							icon: UsersRound,
 						},
 						{
 							id: "organization-billing",
-							title: "Billing",
-							subtitle: "Subscription, seats, and invoices",
+							title: "账单",
+							subtitle: "订阅、席位和发票",
 							href: "/dashboard/settings/organization/billing",
-							value: "billing subscription seats invoices organization",
+							value: "账单 订阅 席位 发票 组织",
 							icon: CreditCard,
 						},
 						{
 							id: "organization-preferences",
-							title: "Cap Settings",
-							subtitle: "Default summaries, captions, and viewer options",
+							title: "Cap 设置",
+							subtitle: "默认摘要、字幕和观看者选项",
 							href: "/dashboard/settings/organization/preferences",
-							value:
-								"cap settings preferences summaries captions chapters comments reactions transcript",
+							value: "cap 设置 偏好 摘要 字幕 章节 评论 回应 文字稿",
 							icon: Sparkles,
 						},
 					]
@@ -360,11 +357,11 @@ export function DashboardSearch({
 				type="button"
 				onClick={() => setOpen(true)}
 				className="flex group gap-2.5 items-center px-3.5 w-full max-w-[720px] h-10 rounded-xl border transition-colors duration-200 bg-gray-3 border-gray-4 hover:bg-gray-4 hover:border-gray-5 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-6"
-				aria-label="Search dashboard"
+				aria-label="搜索工作台"
 			>
 				<Search className="flex-shrink-0 size-4 transition-colors text-gray-10 group-hover:text-gray-11" />
 				<span className="flex-1 text-[13px] text-left truncate text-gray-10">
-					Search caps, spaces, settings…
+					搜索录制内容、空间和设置……
 				</span>
 				<kbd className="hidden items-center px-1.5 h-5 text-[11px] font-medium rounded-md border select-none sm:inline-flex text-gray-10 border-gray-4 bg-gray-1">
 					{shortcutKey}
@@ -375,23 +372,23 @@ export function DashboardSearch({
 					aria-describedby={undefined}
 					className="overflow-hidden p-0 w-[calc(100vw-2rem)] !max-w-2xl shadow-2xl outline-none"
 				>
-					<DialogTitle className="sr-only">Search the dashboard</DialogTitle>
+					<DialogTitle className="sr-only">搜索工作台</DialogTitle>
 					<Command shouldFilter={false}>
 						<CommandInput
 							ref={inputRef}
 							value={query}
 							onValueChange={updateQuery}
-							placeholder="Search caps, spaces, settings…"
+							placeholder="搜索录制内容、空间和设置……"
 							className="h-[52px] text-[15px] pr-12 outline-none"
 						/>
 						<CommandList className="overflow-y-auto px-2 pt-1 pb-2 h-[min(60vh,440px)] max-h-[min(60vh,440px)]">
 							{canSearchVideos && (
 								<>
-									<SectionHeader>Videos and screenshots</SectionHeader>
+									<SectionHeader>视频和截图</SectionHeader>
 									{videoLoading ? (
 										<div className="flex gap-3 items-center px-2.5 py-2 text-[13px] text-gray-10">
 											<Loader2 className="flex-shrink-0 animate-spin size-4" />
-											Searching videos…
+											正在搜索视频……
 										</div>
 									) : hasVideoResults ? (
 										videoResults.map((video) => (
@@ -406,7 +403,7 @@ export function DashboardSearch({
 										))
 									) : (
 										<p className="px-3 py-6 text-[13px] text-center text-gray-10">
-											No videos or screenshots match{" "}
+											没有匹配的视频或截图：{" "}
 											<span className="font-medium text-gray-12">
 												“{query.trim()}”
 											</span>
@@ -417,7 +414,7 @@ export function DashboardSearch({
 							{actionResults.length > 0 && (
 								<>
 									<SectionHeader>
-										{normalizedQuery ? "Navigation" : "Jump to"}
+										{normalizedQuery ? "导航" : "快速前往"}
 									</SectionHeader>
 									{actionResults.map((item) => (
 										<ResultRow
@@ -433,7 +430,7 @@ export function DashboardSearch({
 							)}
 							{spaceResults.length > 0 && (
 								<>
-									<SectionHeader>Spaces</SectionHeader>
+									<SectionHeader>空间</SectionHeader>
 									{spaceResults.map((item) => (
 										<ResultRow
 											key={item.id}
@@ -449,7 +446,7 @@ export function DashboardSearch({
 							)}
 							{settingsResults.length > 0 && (
 								<>
-									<SectionHeader>Settings</SectionHeader>
+									<SectionHeader>设置</SectionHeader>
 									{settingsResults.map((item) => (
 										<ResultRow
 											key={item.id}
@@ -464,14 +461,14 @@ export function DashboardSearch({
 							)}
 							{normalizedQuery && !canSearchVideos && !hasLocalResults && (
 								<p className="px-3 py-6 text-[13px] text-center text-gray-10">
-									Keep typing to search videos…
+									继续输入以搜索视频……
 								</p>
 							)}
 						</CommandList>
 						<div className="hidden gap-4 justify-end items-center px-3 h-10 border-t sm:flex border-gray-4 bg-gray-2">
-							<FooterHint keys={["↑", "↓"]} label="Navigate" />
-							<FooterHint keys={["↵"]} label="Open" />
-							<FooterHint keys={["esc"]} label="Close" />
+							<FooterHint keys={["↑", "↓"]} label="导航" />
+							<FooterHint keys={["↵"]} label="打开" />
+							<FooterHint keys={["esc"]} label="关闭" />
 						</div>
 					</Command>
 				</DialogContent>

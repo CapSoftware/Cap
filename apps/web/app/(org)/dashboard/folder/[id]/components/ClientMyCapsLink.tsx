@@ -41,13 +41,13 @@ export function ClientMyCapsLink({
 				});
 				router.refresh();
 				if (activeSpace) {
-					toast.success(`Moved "${capData.name}" to "${activeSpace.name}"`);
+					toast.success(`已将“${capData.name}”移动到“${activeSpace.name}”`);
 				} else {
-					toast.success(`Moved "${capData.name}" to My Caps`);
+					toast.success(`已将“${capData.name}”移动到“我的录制”`);
 				}
 			} catch (error) {
 				console.error("Error moving video:", error);
-				toast.error("Failed to move video");
+				toast.error("移动视频失败");
 			} finally {
 				setIsMovingVideo(false);
 			}
@@ -75,7 +75,7 @@ export function ClientMyCapsLink({
 					await processDrop(capData);
 				} catch (error) {
 					console.error("Error processing drop:", error);
-					toast.error("Failed to move video");
+					toast.error("移动视频失败");
 				}
 			} else {
 				await processDrop(e);
@@ -132,7 +132,7 @@ export function ClientMyCapsLink({
 					className="relative flex-shrink-0 size-5"
 				/>
 			)}
-			{activeSpace ? activeSpace.name : "My Caps"}
+			{activeSpace ? activeSpace.name : "我的录制"}
 		</Link>
 	);
 }

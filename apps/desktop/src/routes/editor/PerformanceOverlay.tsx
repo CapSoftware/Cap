@@ -173,19 +173,17 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		const s = stats();
 		const statsText = [
 			`FPS: ${formatFps(s.fps)}`,
-			`Frame: ${formatMs(s.avgFrameMs)}ms avg`,
-			`Range: ${formatMs(s.minFrameMs)} - ${formatMs(s.maxFrameMs)}ms`,
-			`Jitter: ±${formatMs(s.jitter)}ms`,
-			s.droppedFrames > 0
-				? `Dropped: ${s.droppedFrames}/${s.totalFrames}`
-				: null,
+			`帧时间：平均 ${formatMs(s.avgFrameMs)}ms`,
+			`范围：${formatMs(s.minFrameMs)} - ${formatMs(s.maxFrameMs)}ms`,
+			`抖动：±${formatMs(s.jitter)}ms`,
+			s.droppedFrames > 0 ? `丢帧：${s.droppedFrames}/${s.totalFrames}` : null,
 			`Playing: ${editorState.playing ? "Yes" : "No"}`,
 		]
 			.filter(Boolean)
 			.join("\n");
 
 		await writeText(statsText);
-		toast.success("Performance stats copied to clipboard");
+		toast.success("性能统计信息已复制到剪贴板");
 	};
 
 	const fpsColor = createMemo(() => {
@@ -224,7 +222,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 						border: "1px solid rgba(255, 255, 255, 0.15)",
 					}}
 					onClick={copyStatsToClipboard}
-					title="Click to copy stats"
+					title="点击复制统计信息"
 				>
 					<div class="flex flex-col gap-0.5">
 						<div class="flex items-center gap-2">
@@ -236,14 +234,14 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 							</Show>
 						</div>
 						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
-							<span>Frame: </span>
+							<span>帧：</span>
 							<span style={{ color: "#93c5fd" }}>
 								{formatMs(stats().avgFrameMs)}ms
 							</span>
-							<span style={{ color: "rgba(255, 255, 255, 0.4)" }}> avg</span>
+							<span style={{ color: "rgba(255, 255, 255, 0.4)" }}> 平均</span>
 						</div>
 						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
-							<span>Range: </span>
+							<span>范围：</span>
 							<span style={{ color: "#86efac" }}>
 								{formatMs(stats().minFrameMs)}
 							</span>
@@ -253,7 +251,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 							</span>
 						</div>
 						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
-							<span>Jitter: </span>
+							<span>抖动：</span>
 							<span style={{ color: jitterColor() }}>
 								±{formatMs(stats().jitter)}ms
 							</span>

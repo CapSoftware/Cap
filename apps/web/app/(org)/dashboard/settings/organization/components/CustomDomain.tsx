@@ -38,12 +38,12 @@ export function CustomDomain() {
 			),
 		onSuccess: () => {
 			setIsVerified(false);
-			toast.success("Custom domain removed");
+			toast.success("自定义域名已移除");
 			router.refresh();
 			setConfirmOpen(false);
 		},
 		onError: () => {
-			toast.error("Failed to remove domain");
+			toast.error("移除域名失败");
 			setConfirmOpen(false);
 		},
 	});
@@ -72,12 +72,12 @@ export function CustomDomain() {
 			)}
 			<ConfirmationDialog
 				open={confirmOpen}
-				title="Remove custom domain"
+				title="移除自定义域名"
 				icon={<FontAwesomeIcon icon={faGlobe} />}
-				description={`Are you sure you want to remove this custom domain: ${orgCustomDomain}?`}
+				description={`确定要移除此自定义域名吗：${orgCustomDomain}？`}
 				onConfirm={handleRemoveDomain}
-				confirmLabel={removeDomainMutation.isPending ? "Removing..." : "Remove"}
-				cancelLabel="Cancel"
+				confirmLabel={removeDomainMutation.isPending ? "正在移除…" : "移除"}
+				cancelLabel="取消"
 				loading={removeDomainMutation.isPending}
 				onCancel={() => setConfirmOpen(false)}
 			/>
@@ -93,22 +93,20 @@ export function CustomDomain() {
 						)}
 					>
 						<div className="flex flex-col gap-1">
-							<h1 className="text-sm font-medium text-gray-12">
-								Custom Domain
-							</h1>
+							<h1 className="text-sm font-medium text-gray-12">自定义域名</h1>
 							<p className="w-full text-sm text-gray-10">
-								Setup a custom domain for your organization's shared caps.
+								为组织的共享录制设置自定义域名。
 							</p>
 						</div>
 					</div>
 					<div className="flex flex-1 gap-2 justify-between items-center w-full">
 						<div className="flex gap-2 justify-between items-center px-3 flex-1 h-[44px] rounded-xl border bg-gray-2 border-gray-3">
 							<p className="text-[13px] text-gray-8">
-								{orgCustomDomain || "No custom domain has been setup"}
+								{orgCustomDomain || "尚未设置自定义域名"}
 							</p>
 							<div className="flex items-center">
 								{orgCustomDomain && isVerified ? (
-									<Tooltip content="Verified">
+									<Tooltip content="已验证">
 										<div className="flex gap-2 items-center p-2 h-full text-xs rounded-full w-fit text-gray-10">
 											<FontAwesomeIcon
 												className="text-green-500 size-5"
@@ -119,7 +117,7 @@ export function CustomDomain() {
 								) : (
 									orgCustomDomain &&
 									!isVerified && (
-										<Tooltip content="Setup not complete">
+										<Tooltip content="设置尚未完成">
 											<div className="flex gap-2 items-center p-2 h-full text-xs rounded-full w-fit text-gray-10">
 												<FontAwesomeIcon
 													className="text-red-500 size-5"
@@ -131,7 +129,7 @@ export function CustomDomain() {
 								)}
 
 								{orgCustomDomain && (
-									<Tooltip content="Remove custom domain">
+									<Tooltip content="移除自定义域名">
 										<div
 											onClick={(e) => {
 												e.preventDefault();
@@ -160,7 +158,7 @@ export function CustomDomain() {
 									setShowCustomDomainDialog(true);
 								}}
 							>
-								Setup
+								设置
 							</Button>
 						)}
 					</div>

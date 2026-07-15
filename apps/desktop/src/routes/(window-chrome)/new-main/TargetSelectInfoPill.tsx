@@ -35,7 +35,11 @@ export default function TargetSelectInfoPill<T>(props: {
 				props.onClick(e);
 			}}
 		>
-			{!props.permissionGranted ? "Allow" : props.value !== null ? "On" : "Off"}
+			{!props.permissionGranted
+				? "授权"
+				: props.value !== null
+					? "开启"
+					: "关闭"}
 		</Dynamic>
 	);
 }

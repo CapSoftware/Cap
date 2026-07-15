@@ -110,7 +110,7 @@ const FolderPage = async (props: {
 					<AddVideosButton
 						folderId={params.folderId}
 						spaceId={params.spaceId}
-						folderName={breadcrumb[breadcrumb.length - 1]?.name ?? "Folder"}
+						folderName={breadcrumb[breadcrumb.length - 1]?.name ?? "文件夹"}
 					/>
 					<CollectionShareControl
 						kind="folder"
@@ -144,9 +144,7 @@ const FolderPage = async (props: {
 				</div>
 				{childFolders.length > 0 && (
 					<>
-						<h1 className="mb-6 text-xl font-medium text-gray-12">
-							Subfolders
-						</h1>
+						<h1 className="mb-6 text-xl font-medium text-gray-12">子文件夹</h1>
 						<div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
 							{childFolders.map((folder) => (
 								<FolderCard

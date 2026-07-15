@@ -41,13 +41,13 @@ export async function verifyCollectionPassword(
 ) {
 	try {
 		if (!collectionId || typeof password !== "string") {
-			return { success: false, error: "Failed to verify password" };
+			return { success: false, error: "密码验证失败" };
 		}
 
 		if (await isRateLimited()) {
 			return {
 				success: false,
-				error: "Too many attempts. Please try again later.",
+				error: "尝试次数过多，请稍后再试。",
 			};
 		}
 
@@ -59,15 +59,15 @@ export async function verifyCollectionPassword(
 			? await verifyPlainPassword(passwordHash, password)
 			: false;
 		if (!passwordHash || !valid) {
-			return { success: false, error: "Failed to verify password" };
+			return { success: false, error: "密码验证失败" };
 		}
 
 		await setVerifiedPasswordCookie(passwordHash);
 		revalidatePath(`/c/${encodeURIComponent(collectionId)}`);
 
-		return { success: true, value: "Password verified" };
+		return { success: true, value: "密码验证成功" };
 	} catch (error) {
 		console.error("Error verifying collection password:", error);
-		return { success: false, error: "Failed to verify password" };
+		return { success: false, error: "密码验证失败" };
 	}
 }

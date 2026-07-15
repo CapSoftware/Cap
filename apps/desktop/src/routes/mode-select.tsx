@@ -49,12 +49,8 @@ const ModeSelectWindow = () => {
 
 			<div class="flex flex-col items-center w-full px-6 py-5">
 				<div class="mb-5 text-center">
-					<h2 class="text-xl font-semibold text-gray-12 mb-1">
-						Choose Recording Mode
-					</h2>
-					<p class="text-sm text-gray-11">
-						Select how you want to capture your screen
-					</p>
+					<h2 class="text-xl font-semibold text-gray-12 mb-1">选择录制模式</h2>
+					<p class="text-sm text-gray-11">选择屏幕采集方式</p>
 				</div>
 
 				<div data-tauri-drag-region="false" class="w-full max-w-lg">

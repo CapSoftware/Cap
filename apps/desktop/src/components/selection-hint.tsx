@@ -38,7 +38,7 @@ export default function SelectionHint(props: SelectionHintProps) {
 						</div>
 					</div>
 					<p class="text-base font-medium max-w-xs">
-						{props.message ?? "Click and drag to select an area"}
+						{props.message ?? "单击并拖动以选择区域"}
 					</p>
 				</div>
 			</div>

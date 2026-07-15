@@ -96,13 +96,13 @@ export function Header() {
 	const shareTooltip = () => {
 		switch (exportStatus()) {
 			case "rendering":
-				return "Rendering screenshot";
+				return "正在渲染截图";
 			case "encoding":
-				return "Preparing upload";
+				return "正在准备上传";
 			case "uploading":
-				return "Uploading screenshot";
+				return "正在上传截图";
 			default:
-				return "Create shareable link";
+				return "创建分享链接";
 		}
 	};
 
@@ -119,7 +119,7 @@ export function Header() {
 			<div class="flex items-center gap-2 absolute left-1/2 -translate-x-1/2">
 				<AspectRatioSelect />
 				<EditorButton
-					tooltipText="Crop Image"
+					tooltipText="裁剪图片"
 					onClick={cropDialogHandler}
 					disabled={isCropDisabled()}
 					leftIcon={<IconCapCrop class="size-4" />}
@@ -146,13 +146,13 @@ export function Header() {
 					onClick={() => {
 						exportImage("clipboard");
 					}}
-					tooltipText="Copy to Clipboard"
+					tooltipText="复制到剪贴板"
 					disabled={isExporting()}
 					leftIcon={<IconLucideCopy class="w-4" />}
 				/>
 
 				<EditorButton
-					tooltipText="Save"
+					tooltipText="保存"
 					onClick={() => exportImage("file")}
 					disabled={isExporting()}
 					leftIcon={<IconLucideSave class="size-4" />}
@@ -168,7 +168,7 @@ export function Header() {
 				<DropdownMenu gutter={8} placement="bottom-end">
 					<EditorButton<typeof DropdownMenu.Trigger>
 						as={DropdownMenu.Trigger}
-						tooltipText="More Actions"
+						tooltipText="更多操作"
 						leftIcon={<IconLucideMoreHorizontal class="size-4" />}
 						disabled={isExporting()}
 					/>
@@ -188,22 +188,18 @@ export function Header() {
 										}}
 									>
 										<IconLucideFolder class="size-4 text-gray-11" />
-										<span>Open Folder</span>
+										<span>打开文件夹</span>
 									</DropdownItem>
 									<DropdownItem
 										onSelect={async () => {
-											if (
-												await ask(
-													"Are you sure you want to delete this screenshot?",
-												)
-											) {
+											if (await ask("确定要删除这张截图吗？")) {
 												await remove(path());
 												await getCurrentWindow().close();
 											}
 										}}
 									>
 										<IconCapTrash class="size-4 text-gray-11" />
-										<span>Delete</span>
+										<span>删除</span>
 									</DropdownItem>
 								</MenuItemList>
 							</PopperContent>

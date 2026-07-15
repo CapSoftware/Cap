@@ -256,9 +256,7 @@ export const ShareVideo = forwardRef<
 				router.refresh();
 			} catch (error) {
 				setConfirmStoppedError(
-					error instanceof Error
-						? error.message
-						: "Recording could not be finalized",
+					error instanceof Error ? error.message : "无法完成录制",
 				);
 			} finally {
 				setIsConfirmingStopped(false);
@@ -460,18 +458,18 @@ export const ShareVideo = forwardRef<
 										<CheckCircle2 className="size-3" />
 									)}
 									{isConfirmingStopped
-										? "Marking as completed..."
-										: "Mark video as completed"}
+										? "正在标记为已完成…"
+										: "将视频标记为已完成"}
 								</button>
 								<TooltipPrimitive.Provider delayDuration={150}>
 									<Tooltip
 										position="top"
 										className="max-w-[260px] items-start text-left leading-relaxed"
-										content="We didn't receive confirmation that this recording finished uploading. Mark it as completed to publish what's been uploaded. Next time, keep the desktop app open after you stop recording until the video loads here, so all files finish uploading."
+										content="我们没有收到此录制已完成上传的确认。将其标记为已完成即可发布当前已上传的内容。下次停止录制后，请保持桌面应用开启，直到视频在此处加载完成，以确保所有文件都已上传。"
 									>
 										<button
 											type="button"
-											aria-label="Why this recording needs to be marked as completed"
+											aria-label="为什么需要将此录制标记为已完成"
 											className="inline-flex size-7 items-center justify-center rounded-md border border-white/15 bg-black/65 text-white/80 shadow-sm backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white"
 										>
 											<Info className="size-3.5" />

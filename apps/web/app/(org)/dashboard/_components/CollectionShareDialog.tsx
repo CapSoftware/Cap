@@ -79,6 +79,7 @@ export const CollectionShareDialog = ({
 }: CollectionShareDialogProps) => {
 	const { url, copied, copy } = useCopyCollectionLink(collectionId);
 	const displayUrl = url.replace(/^https?:\/\//, "");
+	const kindLabel = kind === "folder" ? "文件夹" : "空间";
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -87,11 +88,11 @@ export const CollectionShareDialog = ({
 					icon={<FontAwesomeIcon icon={faGlobe} className="size-3.5" />}
 					description={
 						isPublic
-							? `Anyone with the link can browse the public caps in this ${kind}.`
-							: `Publish this ${kind} as a clean, browsable page you can share with anyone.`
+							? `任何获得链接的人都可以浏览此${kindLabel}中的公开录制内容。`
+							: `将此${kindLabel}发布为清晰易用的页面，与任何人分享。`
 					}
 				>
-					<DialogTitle>Share this {kind}</DialogTitle>
+					<DialogTitle>分享此{kindLabel}</DialogTitle>
 				</DialogHeader>
 
 				<div className="overflow-y-auto flex-1 p-5 space-y-4 min-h-0">
@@ -116,7 +117,7 @@ export const CollectionShareDialog = ({
 							<div className="min-w-0">
 								<div className="flex gap-1.5 items-center">
 									<p className="text-sm font-medium text-gray-12">
-										Anyone with the link
+										任何获得链接的人
 									</p>
 									{!isPro && (
 										<span className="rounded-full bg-blue-11 px-1.5 py-0.5 text-[10px] font-medium leading-none text-white">
@@ -126,8 +127,8 @@ export const CollectionShareDialog = ({
 								</div>
 								<p className="text-xs text-gray-10">
 									{isPublic
-										? "Public — anyone with the link can view"
-										: "Private — only members can view"}
+										? "公开 — 任何获得链接的人都可查看"
+										: "私密 — 仅成员可查看"}
 								</p>
 							</div>
 						</div>
@@ -151,7 +152,7 @@ export const CollectionShareDialog = ({
 								<button
 									type="button"
 									onClick={copy}
-									aria-label="Copy public link"
+									aria-label="复制公开链接"
 									className="flex absolute right-1.5 top-1/2 justify-center items-center rounded-lg transition-colors -translate-y-1/2 size-8 text-gray-11 hover:bg-gray-3 hover:text-gray-12"
 								>
 									<FontAwesomeIcon
@@ -161,30 +162,30 @@ export const CollectionShareDialog = ({
 								</button>
 							</div>
 
-							<FieldGroup title="Page header">
+							<FieldGroup title="页面页眉">
 								<TextField
-									label="Title"
+									label="标题"
 									value={settings.title}
-									placeholder="Defaults to the collection name"
+									placeholder="默认使用合集名称"
 									maxLength={PUBLIC_PAGE_TITLE_MAX_LENGTH}
 									disabled={isPending}
 									onCommit={(value) => onUpdateSettings({ title: value })}
 								/>
 								<TextField
-									label="Subtitle"
+									label="副标题"
 									value={settings.subtitle}
-									placeholder="Add a short description"
+									placeholder="添加简短描述"
 									maxLength={PUBLIC_PAGE_SUBTITLE_MAX_LENGTH}
 									disabled={isPending}
 									onCommit={(value) => onUpdateSettings({ subtitle: value })}
 								/>
 								<div className="space-y-1.5">
-									<span className="text-sm text-gray-12">Logo</span>
+									<span className="text-sm text-gray-12">徽标</span>
 									<Select
 										size="default"
 										className="w-full"
 										value={settings.logoMode}
-										placeholder="Logo"
+										placeholder="徽标"
 										options={PUBLIC_LOGO_OPTIONS}
 										onValueChange={(value) =>
 											onUpdateSettings({
@@ -203,7 +204,7 @@ export const CollectionShareDialog = ({
 								</div>
 
 								<div className="divide-y divide-gray-4">
-									<SettingRow label="Show title">
+									<SettingRow label="显示标题">
 										<Switch
 											checked={!settings.hideTitle}
 											disabled={isPending}
@@ -212,7 +213,7 @@ export const CollectionShareDialog = ({
 											}
 										/>
 									</SettingRow>
-									<SettingRow label="Show copy link button">
+									<SettingRow label="显示复制链接按钮">
 										<Switch
 											checked={!settings.hideCopyLink}
 											disabled={isPending}
@@ -224,20 +225,17 @@ export const CollectionShareDialog = ({
 								</div>
 							</FieldGroup>
 
-							<FieldGroup
-								title="Call to action"
-								description="Add a button to the page header."
-							>
+							<FieldGroup title="行动按钮" description="在页面页眉中添加按钮。">
 								<TextField
-									label="Button label"
+									label="按钮文字"
 									value={settings.ctaLabel}
-									placeholder="e.g. Visit our website"
+									placeholder="例如：访问我们的网站"
 									maxLength={PUBLIC_PAGE_CTA_LABEL_MAX_LENGTH}
 									disabled={isPending}
 									onCommit={(value) => onUpdateSettings({ ctaLabel: value })}
 								/>
 								<TextField
-									label="Button link"
+									label="按钮链接"
 									value={settings.ctaUrl}
 									placeholder="https://example.com"
 									maxLength={PUBLIC_PAGE_CTA_URL_MAX_LENGTH}
@@ -246,13 +244,13 @@ export const CollectionShareDialog = ({
 								/>
 							</FieldGroup>
 
-							<FieldGroup title="Layout">
+							<FieldGroup title="布局">
 								<div className="divide-y divide-gray-4">
-									<SettingRow label="Style" description="How caps are arranged">
+									<SettingRow label="样式" description="录制内容的排列方式">
 										<Select
 											size="sm"
 											value={settings.layout}
-											placeholder="Layout"
+											placeholder="布局"
 											options={PUBLIC_LAYOUT_OPTIONS}
 											onValueChange={(value) =>
 												onUpdateSettings({
@@ -264,13 +262,13 @@ export const CollectionShareDialog = ({
 
 									{settings.layout === "grid" && (
 										<SettingRow
-											label="Columns"
-											description="Caps shown per row"
+											label="列数"
+											description="每行显示的录制内容数量"
 										>
 											<Select
 												size="sm"
 												value={String(settings.gridColumns)}
-												placeholder="Columns"
+												placeholder="列数"
 												options={gridColumnSelectOptions}
 												onValueChange={(value) =>
 													onUpdateSettings({
@@ -300,7 +298,7 @@ export const CollectionShareDialog = ({
 								icon={faArrowUpRightFromSquare}
 								className="size-3"
 							/>
-							Open page
+							打开页面
 						</a>
 					) : (
 						<span className="hidden text-xs truncate text-gray-9 sm:block">
@@ -313,7 +311,7 @@ export const CollectionShareDialog = ({
 						size="sm"
 						onClick={() => onOpenChange(false)}
 					>
-						Done
+						完成
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -359,7 +357,7 @@ function LogoUploader({
 					{!isUploading && (
 						<FontAwesomeIcon icon={faUpload} className="size-3" />
 					)}
-					{hasLogo ? "Replace logo" : "Upload logo"}
+					{hasLogo ? "替换徽标" : "上传徽标"}
 				</Button>
 				{hasLogo && (
 					<Button
@@ -369,11 +367,13 @@ function LogoUploader({
 						disabled={isUploading}
 						onClick={onRemove}
 					>
-						Remove
+						移除
 					</Button>
 				)}
 			</div>
-			<p className="text-xs text-gray-10">PNG, JPEG, SVG or WebP, up to 1MB.</p>
+			<p className="text-xs text-gray-10">
+				支持 PNG、JPEG、SVG 或 WebP，最大 1 MB。
+			</p>
 		</div>
 	);
 }

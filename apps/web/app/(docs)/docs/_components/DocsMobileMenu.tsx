@@ -48,18 +48,16 @@ export function DocsMobileMenu() {
 				type="button"
 				className="absolute inset-0 bg-black/40 cursor-default"
 				onClick={() => setIsOpen(false)}
-				aria-label="Close menu"
+				aria-label="关闭菜单"
 			/>
 			<div className="absolute top-0 left-0 bottom-0 w-[280px] bg-white shadow-xl overflow-y-auto">
 				<div className="flex items-center justify-between h-14 px-4 border-b border-gray-200">
-					<span className="text-sm font-semibold text-gray-900">
-						Documentation
-					</span>
+					<span className="text-sm font-semibold text-gray-900">文档</span>
 					<button
 						type="button"
 						onClick={() => setIsOpen(false)}
 						className="flex items-center justify-center w-8 h-8 rounded-md text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
-						aria-label="Close menu"
+						aria-label="关闭菜单"
 					>
 						<X className="w-5 h-5" />
 					</button>

@@ -242,7 +242,7 @@ const waitForRemoteStream = (peer: RTCPeerConnection) =>
 		const timeout = window.setTimeout(() => {
 			if (settled) return;
 			settled = true;
-			reject(new Error("Camera preview timed out."));
+			reject(new Error("摄像头预览连接超时。"));
 		}, 10000);
 
 		const finish = (stream: MediaStream) => {
@@ -265,7 +265,7 @@ const waitForRemoteStream = (peer: RTCPeerConnection) =>
 			}
 			settled = true;
 			window.clearTimeout(timeout);
-			reject(new Error("Camera preview connection failed."));
+			reject(new Error("摄像头预览连接失败。"));
 		});
 	});
 
@@ -300,7 +300,7 @@ const connectCameraPreview = async (
 	}
 	if (!response.answer) {
 		peer.close();
-		throw new Error("Camera preview did not return an answer.");
+		throw new Error("摄像头预览未返回响应。");
 	}
 
 	await peer.setRemoteDescription(response.answer);
@@ -493,18 +493,18 @@ function RecorderPanelOverlay({
 			<button
 				type="button"
 				className="cap-extension-panel-backdrop"
-				aria-label="Dismiss Cap recorder"
+				aria-label="关闭 Cap 录制器"
 				onClick={closePanel}
 			/>
 			<div
 				className="cap-extension-panel"
 				role="dialog"
-				aria-label="Cap recorder"
+				aria-label="Cap 录制器"
 				style={{ width: `${PANEL_WIDTH}px`, height: `${height}px` }}
 			>
 				<iframe
 					src={PANEL_SRC}
-					title="Cap recorder"
+					title="Cap 录制器"
 					allow="camera; microphone; autoplay"
 					className="cap-extension-panel-iframe"
 				/>
@@ -1506,7 +1506,7 @@ function OverlayApp() {
 							data-controls
 							className="cap-extension-camera-controls"
 							role="toolbar"
-							aria-label="Camera preview controls"
+							aria-label="摄像头预览控制"
 							onPointerDown={(event) => event.stopPropagation()}
 							onClick={(event) => event.stopPropagation()}
 							onKeyDown={(event) => {
@@ -1519,8 +1519,8 @@ function OverlayApp() {
 							<button
 								type="button"
 								className="cap-extension-camera-control"
-								aria-label="Close camera preview"
-								title="Close"
+								aria-label="关闭摄像头预览"
+								title="关闭"
 								onClick={handleClose}
 							>
 								<X size={22} aria-hidden />
@@ -1531,8 +1531,8 @@ function OverlayApp() {
 									"cap-extension-camera-control",
 									webcam.size > 230 && "is-active",
 								)}
-								aria-label="Resize camera preview"
-								title="Resize"
+								aria-label="调整摄像头预览大小"
+								title="调整大小"
 								onClick={updateSize}
 							>
 								<Maximize2 size={22} aria-hidden />
@@ -1543,8 +1543,8 @@ function OverlayApp() {
 									"cap-extension-camera-control",
 									webcam.shape !== "round" && "is-active",
 								)}
-								aria-label="Change camera preview shape"
-								title="Shape"
+								aria-label="更改摄像头预览形状"
+								title="形状"
 								onClick={updateShape}
 							>
 								{webcam.shape === "round" ? (
@@ -1563,8 +1563,8 @@ function OverlayApp() {
 									"cap-extension-camera-control",
 									webcam.mirror && "is-active",
 								)}
-								aria-label="Mirror camera preview"
-								title="Mirror"
+								aria-label="镜像摄像头预览"
+								title="镜像"
 								onClick={updateMirror}
 							>
 								<FlipHorizontal size={22} aria-hidden />
@@ -1575,11 +1575,11 @@ function OverlayApp() {
 									"cap-extension-camera-control",
 									isInPictureInPicture && "is-active",
 								)}
-								aria-label="Toggle Picture in Picture"
+								aria-label="切换画中画"
 								title={
 									parentPipSupported || pipSupported
-										? "Picture in Picture"
-										: "Picture in Picture is blocked on this page"
+										? "画中画"
+										: "此页面阻止使用画中画"
 								}
 								disabled={!parentPipSupported && !pipSupported}
 								onClick={handleTogglePictureInPicture}
@@ -1617,7 +1617,7 @@ function OverlayApp() {
 						<iframe
 							ref={iframeRef}
 							src={PREVIEW_SRC}
-							title="Cap camera preview"
+							title="Cap 摄像头预览"
 							allow="camera; microphone; autoplay; picture-in-picture"
 							className="cap-extension-camera-iframe"
 							onLoad={handlePreviewLoad}
@@ -1633,10 +1633,10 @@ function OverlayApp() {
 						{isInPictureInPicture ? (
 							<div className="cap-extension-camera-pip-active">
 								<div>
-									<span>Picture in Picture active</span>
+									<span>画中画已启用</span>
 									<button
 										type="button"
-										aria-label="Exit Picture in Picture"
+										aria-label="退出画中画"
 										onClick={handleTogglePictureInPicture}
 									>
 										<X size={12} aria-hidden />
@@ -1670,7 +1670,7 @@ function OverlayApp() {
 					type="button"
 					className="cap-extension-drag-surface"
 					tabIndex={-1}
-					aria-label="Move camera preview"
+					aria-label="移动摄像头预览"
 					onPointerMove={(event) => moveDrag(event.clientX, event.clientY)}
 					onPointerUp={endDrag}
 					onPointerCancel={endDrag}

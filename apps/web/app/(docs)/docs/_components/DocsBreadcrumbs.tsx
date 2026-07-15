@@ -12,7 +12,7 @@ export function DocsBreadcrumbs({ currentSlug }: DocsBreadcrumbsProps) {
 	return (
 		<nav
 			className="flex items-center gap-1 text-sm mb-6"
-			aria-label="Breadcrumb"
+			aria-label="面包屑导航"
 		>
 			{breadcrumbs.map((crumb, index) => {
 				const isLast = index === breadcrumbs.length - 1;

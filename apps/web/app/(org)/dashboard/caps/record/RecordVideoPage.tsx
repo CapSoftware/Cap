@@ -49,7 +49,7 @@ export const RecordVideoPage = () => {
 					<div className="mx-auto w-full max-w-[560px] min-w-0">
 						<div className="flex flex-col items-center">
 							<p className="max-w-md text-gray-10 text-md">
-								Choose how you'd like to record your Cap
+								选择录制 Cap 的方式
 							</p>
 						</div>
 						<div className="flex flex-wrap gap-3 justify-center items-center mt-4">
@@ -59,9 +59,9 @@ export const RecordVideoPage = () => {
 								variant="primary"
 							>
 								<FontAwesomeIcon className="size-3.5" icon={faDownload} />
-								Open Cap Desktop
+								打开 Cap 桌面应用
 							</Button>
-							<p className="text-sm text-gray-10">or</p>
+							<p className="text-sm text-gray-10">或</p>
 							<WebRecorderDialog />
 							<ChromeRecorderButton
 								size="sm"
@@ -81,38 +81,38 @@ const FaqAccordion = () => {
 	const items = [
 		{
 			id: "what-is-cap",
-			q: "What is a Cap?",
-			a: "A Cap is a quick video recording of your screen, camera, or both that you can share instantly with a link.",
+			q: "什么是 Cap？",
+			a: "Cap 是对屏幕、摄像头或两者的快速视频录制，可通过链接立即分享。",
 		},
 		{
 			id: "how-it-works",
-			q: "How does it work?",
-			a: "On compatible browsers, your capture uploads in the background while you record. Otherwise it records first and uploads immediately after you stop, so your link is ready right away.",
+			q: "它如何工作？",
+			a: "在兼容的浏览器中，录制内容会在录制时于后台上传；否则会先完成录制，并在停止后立即上传，让分享链接马上可用。",
 		},
 		{
 			id: "browsers",
-			q: "Which browsers are recommended?",
-			a: "We recommend Google Chrome or other Chromium‑based browsers for the most reliable recording and upload behavior. Most modern browsers are supported, but capabilities can vary.",
+			q: "推荐使用哪些浏览器？",
+			a: "建议使用 Google Chrome 或其他基于 Chromium 的浏览器，以获得最可靠的录制和上传体验。大多数现代浏览器均受支持，但具体功能可能有所不同。",
 		},
 		{
 			id: "pip",
-			q: "How do I keep my webcam visible?",
-			a: "On compatible browsers, selecting a camera opens a picture‑in‑picture window that’s captured when you record fullscreen. We recommend recording fullscreen to keep it on top. If PiP capture isn’t supported, your camera stays within the Cap recorder tab.",
+			q: "如何让摄像头画面保持可见？",
+			a: "在兼容的浏览器中，选择摄像头会打开画中画窗口，并可在全屏录制时一并录入。建议使用全屏录制使其保持置顶。如果不支持捕获画中画，摄像头画面会保留在 Cap 录制器标签页中。",
 		},
 		{
 			id: "what-can-i-record",
-			q: "What can I record?",
-			a: "You can record your entire screen, a specific window, a browser tab, or just your camera.",
+			q: "可以录制哪些内容？",
+			a: "你可以录制整个屏幕、指定窗口、浏览器标签页，或仅录制摄像头。",
 		},
 		{
 			id: "system-audio",
-			q: "Can I record system audio?",
-			a: "Browsers limit system‑wide audio capture. We recommend using Cap Desktop for best results.",
+			q: "可以录制系统音频吗？",
+			a: "浏览器会限制全系统音频捕获。建议使用 Cap 桌面应用以获得最佳效果。",
 		},
 		{
 			id: "install",
-			q: "Do I need to install the app?",
-			a: `No. You can record in your browser. For longer recordings, system audio, and advanced editing, use Cap Desktop. The Free plan supports up to ${freeMinutes} minutes per recording in the browser.`,
+			q: "需要安装应用吗？",
+			a: `不需要，你可以直接在浏览器中录制。如需更长时间的录制、系统音频和高级编辑，请使用 Cap 桌面应用。免费套餐在浏览器中的单次录制最长为 ${freeMinutes} 分钟。`,
 		},
 	];
 

@@ -78,7 +78,7 @@ export function VerifyOTPForm({
 	const handleVerify = useMutation({
 		mutationFn: async (pastedCode?: string) => {
 			const otpCode = pastedCode ?? code.join("");
-			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
+			if (otpCode.length !== 6) throw "请输入完整的 6 位验证码";
 			const nextPath = getNextPath();
 
 			await fetch(
@@ -90,7 +90,7 @@ export function VerifyOTPForm({
 			if (!session?.user) {
 				setCode(["", "", "", "", "", ""]);
 				inputRefs.current[0]?.focus();
-				throw "Invalid code. Please try again.";
+				throw "验证码无效，请重试。";
 			}
 		},
 		onSuccess: async () => {
@@ -102,7 +102,7 @@ export function VerifyOTPForm({
 			if (typeof e === "string") {
 				toast.error(e);
 			} else {
-				toast.error("An error occurred. Please try again.");
+				toast.error("发生错误，请重试。");
 			}
 		},
 	});
@@ -118,7 +118,7 @@ export function VerifyOTPForm({
 						(waitTime - timeSinceLastRequest) / 1000,
 					);
 
-					throw `Please wait ${remainingSeconds} seconds before requesting a new code`;
+					throw `请等待 ${remainingSeconds} 秒后再请求新验证码`;
 				}
 			}
 
@@ -129,11 +129,11 @@ export function VerifyOTPForm({
 
 			if (result?.error) {
 				// NextAuth returns generic "EmailSignin" error for all email errors
-				throw "Please wait 30 seconds before requesting a new code";
+				throw "请等待 30 秒后再请求新验证码";
 			}
 		},
 		onSuccess: () => {
-			toast.success("A new code has been sent to your email!");
+			toast.success("新验证码已发送到你的邮箱！");
 			setCode(["", "", "", "", "", ""]);
 			inputRefs.current[0]?.focus();
 			setLastResendTime(Date.now());
@@ -142,7 +142,7 @@ export function VerifyOTPForm({
 			if (typeof e === "string") {
 				toast.error(e);
 			} else {
-				toast.error("An error occurred. Please try again.");
+				toast.error("发生错误，请重试。");
 			}
 		},
 	});
@@ -160,7 +160,7 @@ export function VerifyOTPForm({
 				className="absolute top-5 left-5 z-20 flex gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent border border-gray-4 rounded-full hover:bg-gray-1 transition-colors duration-300"
 			>
 				<FontAwesomeIcon className="w-2" icon={faArrowLeft} />
-				<p className="text-xs">Back</p>
+				<p className="text-xs">返回</p>
 			</Link>
 
 			<Link className="flex mx-auto size-fit" href="/">
@@ -168,11 +168,9 @@ export function VerifyOTPForm({
 			</Link>
 
 			<div className="flex flex-col justify-center items-center my-7 text-center">
-				<h1 className="text-xl font-semibold text-gray-12">
-					Enter verification code
-				</h1>
+				<h1 className="text-xl font-semibold text-gray-12">输入验证码</h1>
 				<p className="text-sm text-gray-10">
-					We sent a 6-digit code to {normalizedEmail}
+					我们已向 {normalizedEmail} 发送 6 位验证码
 				</p>
 			</div>
 
@@ -212,7 +210,7 @@ export function VerifyOTPForm({
 				onClick={() => handleVerify.mutate(code.join(""))}
 				disabled={code.some((digit) => !digit) || isVerifying}
 			>
-				{isVerifying ? "Verifying..." : "Verify Code"}
+				{isVerifying ? "正在验证…" : "验证"}
 			</Button>
 
 			<div className="mt-4 text-center">
@@ -222,29 +220,26 @@ export function VerifyOTPForm({
 					disabled={handleResend.isPending}
 					className="text-sm underline transition-colors text-gray-10 hover:text-gray-12"
 				>
-					{handleResend.isPending
-						? "Sending..."
-						: "Didn't receive the code? Resend"}
+					{handleResend.isPending ? "正在发送…" : "没有收到验证码？重新发送"}
 				</button>
 			</div>
 
 			<p className="mt-6 text-xs text-center text-gray-9">
-				By entering your email, you acknowledge that you have both read and
-				agree to Cap's{" "}
+				输入邮箱即表示你已阅读并同意 Cap 的{" "}
 				<Link
 					href="/terms"
 					target="_blank"
 					className="text-xs font-semibold text-gray-12 hover:text-blue-300"
 				>
-					Terms of Service
+					服务条款
 				</Link>{" "}
-				and{" "}
+				和{" "}
 				<Link
 					href="/privacy"
 					target="_blank"
 					className="text-xs font-semibold text-gray-12 hover:text-blue-300"
 				>
-					Privacy Policy
+					隐私政策
 				</Link>
 				.
 			</p>

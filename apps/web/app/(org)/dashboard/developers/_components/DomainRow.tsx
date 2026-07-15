@@ -19,11 +19,11 @@ export function DomainRow({
 	const removeMutation = useMutation({
 		mutationFn: () => removeDeveloperDomain(appId, domainId),
 		onSuccess: () => {
-			toast.success("Domain removed");
+			toast.success("域名已移除");
 			router.refresh();
 		},
 		onError: () => {
-			toast.error("Failed to remove domain");
+			toast.error("移除域名失败");
 		},
 	});
 
@@ -32,6 +32,7 @@ export function DomainRow({
 			<code className="text-sm text-gray-11 font-mono">{domain}</code>
 			<button
 				type="button"
+				aria-label="移除域名"
 				onClick={() => removeMutation.mutate()}
 				disabled={removeMutation.isPending}
 				className="p-1 rounded-md hover:bg-gray-4 text-gray-10 hover:text-red-400 transition-colors"

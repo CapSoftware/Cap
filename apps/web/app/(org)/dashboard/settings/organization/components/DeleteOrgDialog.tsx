@@ -35,13 +35,13 @@ const DeleteOrgDialog = ({ open, onOpenChange }: DeleteOrgDialogProps) => {
 			});
 		}),
 		onSuccess: () => {
-			toast.success("Organization deleted successfully");
+			toast.success("组织已删除");
 			onOpenChange(false);
 			void signOut({ callbackUrl: "/" });
 		},
 		onError: (error) => {
 			console.error(error);
-			toast.error("Failed to delete organization");
+			toast.error("删除组织失败");
 		},
 	});
 
@@ -50,28 +50,28 @@ const DeleteOrgDialog = ({ open, onOpenChange }: DeleteOrgDialogProps) => {
 			<DialogContent>
 				<DialogHeader
 					icon={<FontAwesomeIcon className="size-3.5" icon={faTrashCan} />}
-					description="Removing your organization will delete its memberships, invites, spaces, shared videos, analytics, and Cap-hosted media. Custom storage files are not deleted."
+					description="移除组织会删除其成员关系、邀请、空间、共享视频、分析数据和由 Cap 托管的媒体。自定义存储中的文件不会被删除。"
 				>
-					<DialogTitle>Delete Organization</DialogTitle>
+					<DialogTitle>删除组织</DialogTitle>
 				</DialogHeader>
 				<div className="p-5 space-y-3">
 					<div className="text-sm text-gray-11">
-						Type{" "}
+						请输入{" "}
 						<span className="font-medium text-gray-12">
 							{organizationNameToConfirm}
 						</span>{" "}
-						to confirm.
+						以确认。
 					</div>
 					<Input
 						id={inputId}
 						value={organizationName}
 						onChange={(e) => setOrganizationName(e.target.value)}
-						placeholder="Organization name"
+						placeholder="组织名称"
 					/>
 				</div>
 				<DialogFooter>
 					<Button size="sm" variant="gray" onClick={() => onOpenChange(false)}>
-						Cancel
+						取消
 					</Button>
 					<Button
 						size="sm"
@@ -83,7 +83,7 @@ const DeleteOrgDialog = ({ open, onOpenChange }: DeleteOrgDialogProps) => {
 							softDeleteOrg.isPending
 						}
 					>
-						{softDeleteOrg.isPending ? "Deleting..." : "Delete"}
+						{softDeleteOrg.isPending ? "正在删除…" : "删除"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

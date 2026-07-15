@@ -1,6 +1,6 @@
-export const NO_MICROPHONE = "No Microphone";
+export const NO_MICROPHONE = "无麦克风";
 export const NO_MICROPHONE_VALUE = "__no_microphone__";
-export const NO_CAMERA = "No Camera";
+export const NO_CAMERA = "无摄像头";
 export const NO_CAMERA_VALUE = "__no_camera__";
 
 // Single source for the capture resolution defaults; consumers that need the
