@@ -96,11 +96,10 @@ function getCpuCapacity(): number {
 }
 
 function getCpuPressure(cpuCapacity: number, loadAvg1m: number): number {
-	const cpuLimit = getContainerCpuLimit();
 	const usageMicros = getContainerCpuUsageMicros();
 	const now = performance.now();
 
-	if (usageMicros > 0 && cpuLimit > 0) {
+	if (usageMicros > 0) {
 		if (
 			previousContainerCpuUsageMicros > 0 &&
 			now - previousContainerCpuSampleAt >= CPU_SAMPLE_MIN_INTERVAL_MS
