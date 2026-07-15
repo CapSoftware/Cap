@@ -5,6 +5,7 @@ import {
 	parseAuthResponse,
 	revokeAuth,
 } from "../shared/api";
+import { msg } from "../shared/i18n";
 import {
 	isRecordingStatusBroadcast,
 	isServiceWorkerRequest,
@@ -219,7 +220,7 @@ const createOffscreenDocument = () =>
 			{
 				url: OFFSCREEN_URL,
 				reasons: ["USER_MEDIA", "DISPLAY_MEDIA", "BLOBS", "AUDIO_PLAYBACK"],
-				justification: "Record and upload Cap videos from an extension page.",
+				justification: msg("offscreenJustification"),
 			},
 			() => {
 				const error = chrome.runtime.lastError;
