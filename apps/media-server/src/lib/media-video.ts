@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type BunFile, file, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
@@ -847,25 +847,39 @@ export async function materializeStreamingInput(
 	dirPath: string,
 	abortSignal?: AbortSignal,
 ): Promise<string> {
+	let inputPath: string;
+
 	if (isHlsUrl(videoUrl)) {
-		return await materializeHlsPlaylist(
+		inputPath = await materializeHlsPlaylist(
 			videoUrl,
 			dirPath,
 			undefined,
 			abortSignal,
 		);
-	}
-
-	if (isMpdUrl(videoUrl)) {
+	} else if (isMpdUrl(videoUrl)) {
 		try {
-			return await materializeMpdAsHlsPlaylist(videoUrl, dirPath, abortSignal);
+			inputPath = await materializeMpdAsHlsPlaylist(
+				videoUrl,
+				dirPath,
+				abortSignal,
+			);
 		} catch (err) {
 			if (!shouldFallbackToGenericMpd(err)) throw err;
-			return await materializeMpdManifest(videoUrl, dirPath, abortSignal);
+			inputPath = await materializeMpdManifest(videoUrl, dirPath, abortSignal);
+		}
+	} else {
+		return videoUrl;
+	}
+
+	for (const entry of await readdir(dirPath)) {
+		if (!entry.endsWith(".m3u8") && !entry.endsWith(".mpd")) continue;
+		const content = await file(join(dirPath, entry)).text();
+		if (/\b(?:file|data):/i.test(content)) {
+			throw new Error("Unsupported manifest resource protocol");
 		}
 	}
 
-	return videoUrl;
+	return inputPath;
 }
 
 async function drainStream(
