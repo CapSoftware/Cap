@@ -247,5 +247,7 @@ pub fn on_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         _ => return,
     };
 
-    let _ = app.opener().open_url(url, None::<&str>);
+    if let Err(e) = app.opener().open_url(url, None::<&str>) {
+        tracing::warn!("Failed to open URL {url}: {e}");
+    }
 }

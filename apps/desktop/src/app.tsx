@@ -8,7 +8,6 @@ import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 
-import { createEventListener } from "@solid-primitives/event-listener";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
 import WindowChromeLayout from "./routes/(window-chrome)";
 import SettingsLayout from "./routes/(window-chrome)/settings";
