@@ -2496,20 +2496,26 @@ pub fn set_window_always_on_top(
     window: tauri::WebviewWindow,
     always_on_top: bool,
     _macos_level: Option<i32>,
-) {
+) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
-    let _ = window.set_always_on_top(always_on_top);
+    window
+        .set_always_on_top(always_on_top)
+        .map_err(|e| e.to_string())?;
 
     #[cfg(target_os = "macos")]
-    let _ = window.with_nswindow_on_main(move |_, nswindow| {
-        nswindow.setLevel(if always_on_top {
-            _macos_level
-                .map(|lvl| lvl as isize)
-                .unwrap_or(objc2_app_kit::NSFloatingWindowLevel)
-        } else {
-            objc2_app_kit::NSNormalWindowLevel
-        });
-    });
+    window
+        .with_nswindow_on_main(move |_, nswindow| {
+            nswindow.setLevel(if always_on_top {
+                _macos_level
+                    .map(|lvl| lvl as isize)
+                    .unwrap_or(objc2_app_kit::NSFloatingWindowLevel)
+            } else {
+                objc2_app_kit::NSNormalWindowLevel
+            });
+        })
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2520,7 +2526,7 @@ pub fn set_window_opacity(_window: tauri::WebviewWindow, _opacity: f64) -> Resul
     {
         _window
             .with_nswindow_on_main(move |_, nswindow| {
-                nswindow.setAlphaValue(_opacity);
+                nswindow.setAlphaValue(_opacity.clamp(0.0, 1.0));
             })
             .map_err(|e| e.to_string())
     }

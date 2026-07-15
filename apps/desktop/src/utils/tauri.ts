@@ -299,8 +299,8 @@ async getDisplayFrameForCropping(fps: number) : Promise<number[]> {
 async getClipThumbnail(recordingSegment: number, time: number) : Promise<string> {
     return await TAURI_INVOKE("get_clip_thumbnail", { recordingSegment, time });
 },
-async setWindowAlwaysOnTop(alwaysOnTop: boolean, macosLevel: number | null) : Promise<void> {
-    await TAURI_INVOKE("set_window_always_on_top", { alwaysOnTop, macosLevel });
+async setWindowAlwaysOnTop(alwaysOnTop: boolean, macosLevel: number | null) : Promise<null> {
+    return await TAURI_INVOKE("set_window_always_on_top", { alwaysOnTop, macosLevel });
 },
 async setWindowOpacity(opacity: number) : Promise<null> {
     return await TAURI_INVOKE("set_window_opacity", { opacity });
@@ -770,7 +770,7 @@ previousRecordingsPaths?: string[];
  * Cleared automatically when the app version changes (one retry per
  * update, since a new ort/wgpu/driver stack may have fixed the crash).
  */
-cameraBlurDisabledByCrash?: string | null; updateChannel?: UpdateChannel }
+cameraBlurDisabledByCrash?: string | null; updateChannel?: UpdateChannel; mainWindowAlwaysOnTop?: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
 export type GifQuality = { 
 /**

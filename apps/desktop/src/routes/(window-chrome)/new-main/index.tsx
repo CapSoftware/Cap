@@ -1,4 +1,5 @@
 import { Button } from "@cap/ui-solid";
+import { makePersisted } from "@solid-primitives/storage";
 import { useNavigate } from "@solidjs/router";
 import {
 	createMutation,
@@ -2793,6 +2794,34 @@ function Page() {
 							</button>
 						</Tooltip>
 						<ChangelogButton />
+						<Tooltip content={<span>Always on Top</span>}>
+							<button
+								type="button"
+								onClick={() => {
+									const current =
+										generalSettings.data?.mainWindowAlwaysOnTop ?? true;
+									// NSStatusWindowLevel + 1
+									void commands.setWindowAlwaysOnTop(!current, 26);
+									void generalSettingsStore.set({
+										mainWindowAlwaysOnTop: !current,
+									});
+								}}
+								class="flex justify-center items-center size-5 focus:outline-hidden"
+								aria-label="Always on Top"
+								aria-checked={
+									generalSettings.data?.mainWindowAlwaysOnTop ?? true
+								}
+							>
+								<Show
+									when={generalSettings.data?.mainWindowAlwaysOnTop ?? true}
+									fallback={
+										<IconLucidePinOff class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
+									}
+								>
+									<IconLucidePin class="transition-colors text-blue-11 size-4 hover:text-gray-12" />
+								</Show>
+							</button>
+						</Tooltip>
 						{import.meta.env.DEV && (
 							<button
 								type="button"

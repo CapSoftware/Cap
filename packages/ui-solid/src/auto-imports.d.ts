@@ -108,6 +108,8 @@ declare global {
   const IconLucidePause: typeof import('~icons/lucide/pause.jsx')['default']
   const IconLucidePencil: typeof import('~icons/lucide/pencil.jsx')['default']
   const IconLucidePersonStanding: typeof import('~icons/lucide/person-standing.jsx')['default']
+  const IconLucidePin: typeof import('~icons/lucide/pin.jsx')['default']
+  const IconLucidePinOff: typeof import('~icons/lucide/pin-off.jsx')['default']
   const IconLucidePlay: typeof import('~icons/lucide/play.jsx')['default']
   const IconLucidePlus: typeof import('~icons/lucide/plus.jsx')['default']
   const IconLucideRatio: typeof import('~icons/lucide/ratio.jsx')['default']
