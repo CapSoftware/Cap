@@ -18,7 +18,11 @@ export default function (
 		minimizable?: boolean;
 	},
 ) {
-	const [local, otherProps] = splitProps(props, ["class"]);
+	const [local, otherProps] = splitProps(props, [
+		"class",
+		"maximizable",
+		"minimizable",
+	]);
 	const currentWindow = getCurrentWindow();
 	const [focused, setFocus] = createSignal(true);
 

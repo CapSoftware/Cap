@@ -1,9 +1,8 @@
 import { Button } from "@cap/ui-solid";
-import { makePersisted } from "@solid-primitives/storage";
 import { useNavigate } from "@solidjs/router";
 import {
-	createMutation,
 	queryOptions,
+	useMutation,
 	useQuery,
 	useQueryClient,
 } from "@tanstack/solid-query";
@@ -2175,7 +2174,7 @@ function Page() {
 		closeAllMenuPanels();
 	});
 
-	const setMicInput = createMutation(() => ({
+	const setMicInput = useMutation(() => ({
 		mutationFn: async (name: string | null) => {
 			const previous = rawOptions.micName ?? null;
 			if (previous !== name) setOptions("micName", name);
@@ -2480,7 +2479,7 @@ function Page() {
 	const license = createLicenseQuery();
 
 	const signIn = createSignInMutation();
-	const stopRecording = createMutation(() => ({
+	const stopRecording = useMutation(() => ({
 		mutationFn: async () => {
 			try {
 				await commands.stopRecording();
@@ -2797,18 +2796,25 @@ function Page() {
 						<Tooltip content={<span>Always on Top</span>}>
 							<button
 								type="button"
-								onClick={() => {
+								onClick={async () => {
 									const current =
 										generalSettings.data?.mainWindowAlwaysOnTop ?? true;
-									// NSStatusWindowLevel + 1
-									void commands.setWindowAlwaysOnTop(!current, 26);
-									void generalSettingsStore.set({
-										mainWindowAlwaysOnTop: !current,
-									});
+									try {
+										await commands.setWindowAlwaysOnTop(
+											!current,
+											26 /* NSStatusWindowLevel + 1 */,
+										);
+										await generalSettingsStore.set({
+											mainWindowAlwaysOnTop: !current,
+										});
+									} catch (e) {
+										console.warn("Failed to toggle Always on Top", e);
+										toast.error("Failed to toggle Always on Top");
+									}
 								}}
 								class="flex justify-center items-center size-5 focus:outline-hidden"
 								aria-label="Always on Top"
-								aria-checked={
+								aria-pressed={
 									generalSettings.data?.mainWindowAlwaysOnTop ?? true
 								}
 							>
