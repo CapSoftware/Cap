@@ -1,10 +1,10 @@
 import { loadSettings } from "./storage";
 
 export const PAGE_NAV_LINKS = [
-	{ id: "welcome", label: "Welcome", href: "welcome.html" },
-	{ id: "how-it-works", label: "How it works", href: "how-it-works.html" },
-	{ id: "camera", label: "Camera access", href: "camera-permission.html" },
-	{ id: "options", label: "Options", href: "options.html" },
+	{ id: "welcome", label: "欢迎", href: "welcome.html" },
+	{ id: "how-it-works", label: "使用说明", href: "how-it-works.html" },
+	{ id: "camera", label: "摄像头权限", href: "camera-permission.html" },
+	{ id: "options", label: "设置", href: "options.html" },
 ] as const;
 
 export type PageNavId = (typeof PAGE_NAV_LINKS)[number]["id"];
@@ -21,7 +21,7 @@ export const mountPageNav = (active: PageNavId) => {
 
 	const nav = document.createElement("nav");
 	nav.className = "page-nav";
-	nav.setAttribute("aria-label", "Cap extension pages");
+	nav.setAttribute("aria-label", "Cap 扩展页面");
 
 	const inner = document.createElement("div");
 	inner.className = "page-nav-inner";
@@ -51,7 +51,7 @@ export const mountPageNav = (active: PageNavId) => {
 	dashboard.href = DEFAULT_DASHBOARD_URL;
 	dashboard.target = "_blank";
 	dashboard.rel = "noopener";
-	dashboard.textContent = "Dashboard";
+	dashboard.textContent = "工作台";
 	links.append(dashboard);
 	// The user may point the extension at a self-hosted instance, so resolve
 	// the real base URL once settings load and leave the default until then.

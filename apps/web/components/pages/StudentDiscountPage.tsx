@@ -106,7 +106,7 @@ export const StudentDiscountPage = () => {
 								<motion.button
 									onClick={copyToClipboard}
 									className="flex items-center justify-center w-10 h-10 text-gray-10 hover:text-gray-12 bg-gray-4 hover:bg-gray-5 rounded-lg transition-all duration-200"
-									title="Copy code"
+									title="复制代码"
 									whileHover={{ scale: 1.05 }}
 									whileTap={{ scale: 0.95 }}
 								>
@@ -196,7 +196,7 @@ export const StudentDiscountPage = () => {
 				</motion.div>
 				<img
 					src="/illustrations/mask-big-recorder.webp"
-					alt="Student Background"
+					alt="学生背景"
 					className="absolute top-0 left-0 z-0 -mt-40 w-full h-auto pointer-events-none opacity-30"
 				/>
 			</div>

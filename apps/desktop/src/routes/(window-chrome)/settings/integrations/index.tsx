@@ -84,15 +84,15 @@ export default function AppsTab() {
 		{
 			name: "Google Drive",
 			description:
-				"Connect Google Drive for new shareable link uploads. Cap stores new videos in a private Cap folder in your Drive and continues serving them through Cap after normal access checks.",
+				"连接 Google Drive 以存储新的分享链接上传。Cap 会将新视频保存在云端硬盘的私有 Cap 文件夹中，并在通过常规访问检查后继续通过 Cap 提供访问。",
 			icon: GoogleDriveIcon,
 			url: "/settings/integrations/google-drive-config",
 			pro: true,
 		},
 		{
-			name: "S3 Config",
+			name: "S3 配置",
 			description:
-				"Connect your own S3 bucket for complete control over your data storage. All new shareable link uploads will be automatically uploaded to your configured S3 bucket, ensuring you maintain complete ownership and control over your content. Perfect for organizations requiring data sovereignty and custom storage policies.",
+				"连接自己的 S3 存储桶，完全掌控数据存储。所有新的分享链接上传都会自动保存到配置的 S3 存储桶，确保你对内容拥有完整所有权和控制权。适合要求数据主权和自定义存储策略的组织。",
 			icon: IconLucideDatabase,
 			url: "/settings/integrations/s3-config",
 			pro: true,
@@ -116,8 +116,8 @@ export default function AppsTab() {
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
 				<Section
-					title="Integrations"
-					description="Configure integrations to extend Cap's functionality and connect with third-party services."
+					title="集成"
+					description="配置集成以扩展 Cap 的功能，并连接第三方服务。"
 				>
 					<div class="space-y-3">
 						<For each={apps}>
@@ -135,10 +135,10 @@ export default function AppsTab() {
 											onClick={() => handleAppClick(app)}
 										>
 											{managedByOrganization()
-												? "Managed by your organization"
+												? "由你的组织管理"
 												: app.pro && !isPro()
-													? "Upgrade to Pro"
-													: "Configure"}
+													? "升级到 Pro"
+													: "配置"}
 										</Button>
 									</div>
 									<p class="text-xs leading-snug text-gray-10">

@@ -637,7 +637,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 						<ElementBox
 							size={props.size}
 							rect={rect()}
-							label="Screen"
+							label="屏幕"
 							selected={selection()?.type === "display"}
 							draggable={displayDraggable()}
 							resizable={displayDraggable()}
@@ -645,8 +645,8 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 								displayDraggable()
 									? null
 									: {
-											message: "Screen is locked while a zoom is active",
-											actionLabel: "Edit zoom",
+											message: "启用缩放时屏幕画面会被锁定",
+											actionLabel: "编辑缩放",
 											onAction: selectActiveZoom,
 										}
 							}
@@ -664,7 +664,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 						<ElementBox
 							size={props.size}
 							rect={rect()}
-							label="Camera"
+							label="摄像头"
 							selected={selection()?.type === "camera"}
 							draggable
 							resizable={cameraResizable()}
@@ -672,8 +672,8 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 								cameraResizable()
 									? null
 									: {
-											message: "Camera size follows the zoom — drag to move",
-											actionLabel: "Edit zoom",
+											message: "摄像头大小会跟随缩放，拖动即可移动",
+											actionLabel: "编辑缩放",
 											onAction: selectActiveZoom,
 										}
 							}

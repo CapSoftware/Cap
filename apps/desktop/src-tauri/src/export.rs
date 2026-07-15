@@ -1250,9 +1250,9 @@ async fn show_export_save_dialog(
     info!(file_name, file_type, "Save file dialog requested");
 
     let (name, extension) = match file_type.as_str() {
-        "mp4" => ("MP4 Video", "mp4"),
-        "gif" => ("GIF Image", "gif"),
-        "mov" => ("MOV Video", "mov"),
+        "mp4" => ("MP4 视频", "mp4"),
+        "gif" => ("GIF 图片", "gif"),
+        "mov" => ("MOV 视频", "mov"),
         _ => {
             warn!(file_type, "Invalid export save file dialog type");
             return Err("Invalid file type".to_string());
@@ -1264,7 +1264,7 @@ async fn show_export_save_dialog(
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
-        .set_title("Save File")
+        .set_title("保存文件")
         .set_file_name(file_name)
         .add_filter(name, &[extension])
         .save_file(move |path| {

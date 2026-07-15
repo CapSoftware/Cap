@@ -59,8 +59,7 @@ const fetchStorageIntegrations = async (
 		headers: await protectedHeaders(),
 	});
 
-	if (response.status !== 200)
-		throw new Error("Failed to fetch storage integrations");
+	if (response.status !== 200) throw new Error("获取存储集成失败");
 
 	return response.body;
 };
@@ -71,7 +70,7 @@ const fetchS3Config = async (orgId: string | null) => {
 		headers: await protectedHeaders(),
 	});
 
-	if (response.status !== 200) throw new Error("Failed to fetch S3 config");
+	if (response.status !== 200) throw new Error("获取 S3 配置失败");
 
 	return response.body;
 };
@@ -136,7 +135,7 @@ export default function GoogleDriveConfigPage() {
 		if (!quota || !usage) return null;
 
 		const limit = formatBytes(quota.limit);
-		return limit ? `${usage} of ${limit} used` : `${usage} used`;
+		return limit ? `已使用 ${usage}，共 ${limit}` : `已使用 ${usage}`;
 	};
 
 	const quotaUsagePercent = () => {
@@ -158,7 +157,7 @@ export default function GoogleDriveConfigPage() {
 		const timestamp = formatTimestamp(quota.fetchedAt);
 		if (!timestamp) return null;
 
-		return `${quota.stale ? "Cached" : "Updated"} ${timestamp}`;
+		return `${quota.stale ? "缓存于" : "更新于"} ${timestamp}`;
 	};
 
 	const waitForGoogleDriveConnection = async () => {
@@ -174,7 +173,7 @@ export default function GoogleDriveConfigPage() {
 				}
 			}
 			await commands.globalMessageDialog(
-				"Finish connecting Google Drive in your browser, then return here and refresh.",
+				"请在浏览器中完成 Google Drive 连接，然后返回此处刷新。",
 			);
 		} finally {
 			setIsWaitingForConnection(false);
@@ -194,7 +193,7 @@ export default function GoogleDriveConfigPage() {
 			}
 
 			if (response.status !== 200)
-				throw new Error("Failed to start Google Drive connection");
+				throw new Error("启动 Google Drive 连接失败");
 
 			await commands.openExternalLink(response.body.url);
 			return response.body;
@@ -214,16 +213,15 @@ export default function GoogleDriveConfigPage() {
 				headers: await protectedHeaders(),
 			});
 
-			if (response.status !== 200)
-				throw new Error("Google Drive connection test failed");
+			if (response.status !== 200) throw new Error("Google Drive 连接测试失败");
 
 			return response.body;
 		},
 		onSuccess: async (body) => {
 			await commands.globalMessageDialog(
 				body.email
-					? `Google Drive connection is working for ${body.email}`
-					: "Google Drive connection is working",
+					? `${body.email} 的 Google Drive 连接正常`
+					: "Google Drive 连接正常",
 			);
 		},
 	}));
@@ -235,8 +233,7 @@ export default function GoogleDriveConfigPage() {
 				headers: await protectedHeaders(),
 			});
 
-			if (response.status !== 200)
-				throw new Error("Failed to update active storage provider");
+			if (response.status !== 200) throw new Error("更新当前存储服务商失败");
 
 			return response.body;
 		},
@@ -252,13 +249,13 @@ export default function GoogleDriveConfigPage() {
 			});
 
 			if (response.status !== 200)
-				throw new Error("Failed to disconnect Google Drive");
+				throw new Error("断开 Google Drive 连接失败");
 
 			return response.body;
 		},
 		onSuccess: async () => {
 			await refetch();
-			await commands.globalMessageDialog("Google Drive disconnected");
+			await commands.globalMessageDialog("已断开 Google Drive 连接");
 		},
 	}));
 
@@ -278,8 +275,8 @@ export default function GoogleDriveConfigPage() {
 			<SettingsPageContent>
 				<IntegrationConfigHeader title="Google Drive" />
 				<Section
-					title="Connection"
-					description="Google Drive stores new uploads in a private Cap folder in your Drive. Existing Cap-hosted and S3 videos keep using their current storage."
+					title="连接"
+					description="Google Drive 会将新上传内容保存在云端硬盘的私有 Cap 文件夹中。现有的 Cap 托管视频和 S3 视频仍使用当前存储位置。"
 				>
 					<SectionCard padded class="custom-scroll">
 						<Suspense
@@ -293,7 +290,7 @@ export default function GoogleDriveConfigPage() {
 								<Show when={managedByOrganization()}>
 									{(organization) => (
 										<p class="text-xs leading-relaxed text-gray-10">
-											Managed by your organization: {organization().name}
+											由你的组织管理：{organization().name}
 										</p>
 									)}
 								</Show>
@@ -309,9 +306,9 @@ export default function GoogleDriveConfigPage() {
 											<p class="text-xs leading-snug text-gray-10">
 												{isConnected()
 													? isActive()
-														? "Active for new uploads"
-														: "Connected but not active"
-													: "Not connected"}
+														? "用于新的上传"
+														: "已连接但未启用"
+													: "未连接"}
 											</p>
 										</div>
 										<Button
@@ -319,7 +316,7 @@ export default function GoogleDriveConfigPage() {
 											disabled={busy()}
 											onClick={() => refetch()}
 										>
-											{isRefreshing() ? "Refreshing..." : "Refresh"}
+											{isRefreshing() ? "正在刷新……" : "刷新"}
 										</Button>
 									</div>
 
@@ -332,10 +329,10 @@ export default function GoogleDriveConfigPage() {
 												onClick={() => connect.mutate()}
 											>
 												{isWaitingForConnection()
-													? "Waiting..."
+													? "正在等待……"
 													: connect.isPending
-														? "Opening..."
-														: "Connect Google Drive"}
+														? "正在打开……"
+														: "连接 Google Drive"}
 											</Button>
 										}
 									>
@@ -343,7 +340,7 @@ export default function GoogleDriveConfigPage() {
 											<div class="pt-3 space-y-2 border-t border-gray-3">
 												<div class="flex justify-between items-start gap-4">
 													<div class="flex flex-col gap-0.5 min-w-0">
-														<p class="text-[13px] text-gray-12">Storage</p>
+														<p class="text-[13px] text-gray-12">存储空间</p>
 														<Show when={quotaUsageLabel()}>
 															{(label) => (
 																<p class="text-xs leading-snug text-gray-10">
@@ -374,7 +371,7 @@ export default function GoogleDriveConfigPage() {
 													<Show when={formatBytes(storageQuota()?.remaining)}>
 														{(remaining) => (
 															<>
-																<p class="text-gray-10">Remaining</p>
+																<p class="text-gray-10">剩余</p>
 																<p class="text-right text-gray-11">
 																	{remaining()}
 																</p>
@@ -386,7 +383,7 @@ export default function GoogleDriveConfigPage() {
 													>
 														{(usageInDrive) => (
 															<>
-																<p class="text-gray-10">Drive files</p>
+																<p class="text-gray-10">云端硬盘文件</p>
 																<p class="text-right text-gray-11">
 																	{usageInDrive()}
 																</p>
@@ -400,7 +397,7 @@ export default function GoogleDriveConfigPage() {
 													>
 														{(usageInDriveTrash) => (
 															<>
-																<p class="text-gray-10">Trash</p>
+																<p class="text-gray-10">回收站</p>
 																<p class="text-right text-gray-11">
 																	{usageInDriveTrash()}
 																</p>
@@ -416,7 +413,7 @@ export default function GoogleDriveConfigPage() {
 												disabled={busy() || isActive()}
 												onClick={() => setActive.mutate("googleDrive")}
 											>
-												{isActive() ? "Active" : "Use Google Drive"}
+												{isActive() ? "已启用" : "使用 Google Drive"}
 											</Button>
 											<Show when={hasS3Config()}>
 												<Button
@@ -424,7 +421,7 @@ export default function GoogleDriveConfigPage() {
 													disabled={busy() || !isActive()}
 													onClick={() => setActive.mutate("s3")}
 												>
-													Use S3
+													使用 S3
 												</Button>
 											</Show>
 											<Button
@@ -432,14 +429,14 @@ export default function GoogleDriveConfigPage() {
 												disabled={busy()}
 												onClick={() => testConnection.mutate()}
 											>
-												{testConnection.isPending ? "Testing..." : "Test"}
+												{testConnection.isPending ? "正在测试……" : "测试"}
 											</Button>
 											<Button
 												variant="destructive"
 												disabled={busy()}
 												onClick={() => disconnect.mutate()}
 											>
-												Disconnect
+												断开连接
 											</Button>
 										</div>
 									</Show>

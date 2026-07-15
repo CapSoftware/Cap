@@ -11,7 +11,7 @@ import { hashKey } from "@/lib/developer-key-hash";
 
 export async function regenerateDeveloperKeys(appId: string) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user) throw new Error("未授权");
 
 	const [app] = await db()
 		.select()
@@ -25,7 +25,7 @@ export async function regenerateDeveloperKeys(appId: string) {
 		)
 		.limit(1);
 
-	if (!app) throw new Error("App not found");
+	if (!app) throw new Error("未找到应用");
 
 	const publicKeyRaw = `cpk_${nanoIdLong()}`;
 	const secretKeyRaw = `csk_${nanoIdLong()}`;

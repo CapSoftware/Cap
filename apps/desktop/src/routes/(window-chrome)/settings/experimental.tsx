@@ -62,15 +62,15 @@ function Inner(props: {
 					when={props.osType !== "windows"}
 					fallback={
 						<p class="text-xs leading-relaxed text-gray-10 px-1">
-							No experimental features are currently available on this platform.
+							当前平台暂无可用的实验性功能。
 						</p>
 					}
 				>
-					<Section title="Preview">
+					<Section title="预览">
 						<SectionRows>
 							<ToggleSettingItem
-								label="Native camera preview"
-								description="Render the camera preview using a native GPU surface instead of through the webview. Experimental and off by default."
+								label="原生摄像头预览"
+								description="使用原生 GPU 表面渲染摄像头预览，而非通过 WebView。此功能为实验性功能，默认关闭。"
 								value={!!settings.enableNativeCameraPreview}
 								onChange={(value) =>
 									handleChange("enableNativeCameraPreview", value)
@@ -80,11 +80,11 @@ function Inner(props: {
 					</Section>
 				</Show>
 
-				<Section title="Reliability">
+				<Section title="可靠性">
 					<SectionRows>
 						<ToggleSettingItem
-							label="Out-of-process muxer"
-							description="Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary."
+							label="进程外封装器"
+							description="在独立子进程中运行分片 MP4 封装器，避免封装器崩溃导致录制中断。需要内置的 cap-muxer 二进制文件。"
 							value={!!settings.outOfProcessMuxer}
 							onChange={(value) => handleChange("outOfProcessMuxer", value)}
 						/>

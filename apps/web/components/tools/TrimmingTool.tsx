@@ -109,7 +109,7 @@ export const TrimmingTool = () => {
 			setFileState((prev) => ({
 				...prev,
 				isLoading: false,
-				error: "Please select a valid video file.",
+				error: "请选择有效的视频文件。",
 			}));
 			trackEvent("trimming_tool_invalid_file_type", {
 				fileType: selectedFile.type,
@@ -121,7 +121,7 @@ export const TrimmingTool = () => {
 			setFileState((prev) => ({
 				...prev,
 				isLoading: false,
-				error: "File size exceeds 500MB limit.",
+				error: "文件大小超过 500MB 限制。",
 			}));
 			trackEvent("trimming_tool_file_too_large", {
 				fileSize: selectedFile.size,
@@ -153,7 +153,7 @@ export const TrimmingTool = () => {
 			setFileState((prev) => ({
 				...prev,
 				isLoading: false,
-				error: "Could not load video file. Please try a different file.",
+				error: "无法加载视频文件，请尝试其他文件。",
 			}));
 		}
 	};
@@ -184,7 +184,7 @@ export const TrimmingTool = () => {
 			console.error("No file found in drop event");
 			setFileState((prev) => ({
 				...prev,
-				error: "No file was received. Please try again.",
+				error: "未收到文件，请重试。",
 			}));
 		}
 	};
@@ -236,21 +236,20 @@ export const TrimmingTool = () => {
 		const video = videoPreviewRef.current;
 		console.error("Video error:", video?.error);
 
-		let errorMsg =
-			"Failed to load video. Please try a different file or format.";
+		let errorMsg = "视频加载失败，请尝试其他文件或格式。";
 		if (video?.error) {
 			switch (video.error.code) {
 				case MediaError.MEDIA_ERR_ABORTED:
-					errorMsg = "Video loading aborted.";
+					errorMsg = "视频加载已中止。";
 					break;
 				case MediaError.MEDIA_ERR_NETWORK:
-					errorMsg = "Network error while loading video.";
+					errorMsg = "加载视频时发生网络错误。";
 					break;
 				case MediaError.MEDIA_ERR_DECODE:
-					errorMsg = "Video format not supported or corrupted.";
+					errorMsg = "视频格式不受支持或文件已损坏。";
 					break;
 				case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-					errorMsg = "Video format not supported by your browser.";
+					errorMsg = "浏览器不支持此视频格式。";
 					break;
 			}
 		}
@@ -295,13 +294,13 @@ export const TrimmingTool = () => {
 		} catch (err: any) {
 			console.error("Detailed processing error:", err);
 
-			let errorMessage = "Trimming failed: ";
+			let errorMessage = "修剪失败：";
 			if (err.message) {
 				errorMessage += err.message;
 			} else if (typeof err === "string") {
 				errorMessage += err;
 			} else {
-				errorMessage += "Unknown error occurred during processing";
+				errorMessage += "处理过程中发生未知错误";
 			}
 
 			setFileState((prev) => ({
@@ -382,9 +381,7 @@ export const TrimmingTool = () => {
 				}
 
 				if (!selectedMimeType) {
-					throw new Error(
-						"None of the media formats are supported by this browser",
-					);
+					throw new Error("此浏览器不支持任何可用的媒体格式");
 				}
 
 				setVideoState((prev) => ({
@@ -726,9 +723,7 @@ export const TrimmingTool = () => {
 
 	return (
 		<div className="w-full">
-			<h2 className="text-2xl font-semibold text-center mb-6">
-				Trim Video Online
-			</h2>
+			<h2 className="text-2xl font-semibold text-center mb-6">在线修剪视频</h2>
 
 			<div
 				className={
@@ -765,7 +760,7 @@ export const TrimmingTool = () => {
 					style={{ minHeight: "200px" }}
 					role="button"
 					tabIndex={0}
-					aria-label="Drop video here or click to select"
+					aria-label="将视频拖放到此处或点击选择"
 				>
 					<input
 						type="file"
@@ -790,13 +785,13 @@ export const TrimmingTool = () => {
 							/>
 						</svg>
 						<p className="text-lg font-medium text-gray-700">
-							Drag and drop your video file here
+							将视频文件拖放到此处
 						</p>
 						<p className="text-sm text-gray-500 mt-1">
-							or click to browse (max 500MB)
+							或点击浏览（最大 500MB）
 						</p>
 						<p className="text-xs text-blue-600 mt-2">
-							Supported formats: {SUPPORTED_VIDEO_FORMATS.join(", ")}
+							支持的格式：{SUPPORTED_VIDEO_FORMATS.join(", ")}
 						</p>
 					</div>
 				</div>
@@ -805,7 +800,7 @@ export const TrimmingTool = () => {
 			{fileState.isLoading && (
 				<div className="mb-6 text-center p-4">
 					<div className="animate-spin inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full mb-2"></div>
-					<p className="text-gray-600">Loading video...</p>
+					<p className="text-gray-600">正在加载视频……</p>
 				</div>
 			)}
 
@@ -824,10 +819,10 @@ export const TrimmingTool = () => {
 						<div className="mb-4">
 							<div className="flex items-center justify-between mb-2">
 								<div className="text-sm font-medium text-gray-700">
-									Current: {formatTime(videoState.currentTime)}
+									当前位置：{formatTime(videoState.currentTime)}
 								</div>
 								<div className="text-sm font-medium text-gray-700">
-									Duration:{" "}
+									时长：{" "}
 									{videoState.info
 										? formatTime(videoState.info.duration)
 										: "--:--"}
@@ -837,7 +832,7 @@ export const TrimmingTool = () => {
 							<div className="flex items-center space-x-4 mb-4">
 								<div className="flex-1">
 									<label className="block text-sm font-medium text-gray-700 mb-1">
-										Start Time: {formatTime(trimState.startTime)}
+										开始时间：{formatTime(trimState.startTime)}
 									</label>
 									<div className="flex items-center space-x-2">
 										<input
@@ -852,7 +847,7 @@ export const TrimmingTool = () => {
 										<button
 											onClick={seekToStartTime}
 											className="p-1 bg-gray-200 rounded hover:bg-gray-300"
-											title="Seek to start time"
+											title="跳转到开始时间"
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
@@ -872,16 +867,16 @@ export const TrimmingTool = () => {
 										<button
 											onClick={setCurrentPositionAsStart}
 											className="p-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
-											title="Set current position as start"
+											title="将当前位置设为开始时间"
 										>
-											Set
+											设置
 										</button>
 									</div>
 								</div>
 
 								<div className="flex-1">
 									<label className="block text-sm font-medium text-gray-700 mb-1">
-										End Time: {formatTime(trimState.endTime)}
+										结束时间：{formatTime(trimState.endTime)}
 									</label>
 									<div className="flex items-center space-x-2">
 										<input
@@ -896,7 +891,7 @@ export const TrimmingTool = () => {
 										<button
 											onClick={seekToEndTime}
 											className="p-1 bg-gray-200 rounded hover:bg-gray-300"
-											title="Seek to end time"
+											title="跳转到结束时间"
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
@@ -916,19 +911,19 @@ export const TrimmingTool = () => {
 										<button
 											onClick={setCurrentPositionAsEnd}
 											className="p-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
-											title="Set current position as end"
+											title="将当前位置设为结束时间"
 										>
-											Set
+											设置
 										</button>
 									</div>
 								</div>
 							</div>
 
 							<div className="text-sm text-gray-600">
-								<span className="font-medium">Selected segment:</span>{" "}
-								{formatTime(trimState.startTime)} to{" "}
-								{formatTime(trimState.endTime)} (
-								{formatTime(trimState.endTime - trimState.startTime)} duration)
+								<span className="font-medium">所选片段：</span>{" "}
+								{formatTime(trimState.startTime)} 至{" "}
+								{formatTime(trimState.endTime)} ( 时长{" "}
+								{formatTime(trimState.endTime - trimState.startTime)})
 							</div>
 						</div>
 
@@ -943,8 +938,8 @@ export const TrimmingTool = () => {
 								className="w-full"
 							>
 								{processingState.isProcessing
-									? `Processing... ${processingState.progress}%`
-									: "Trim Video"}
+									? `正在处理……${processingState.progress}%`
+									: "修剪视频"}
 							</Button>
 							<Button
 								variant="white"
@@ -957,7 +952,7 @@ export const TrimmingTool = () => {
 								}}
 								className="w-full"
 							>
-								Choose Different Video
+								选择其他视频
 							</Button>
 						</div>
 					</div>
@@ -966,7 +961,7 @@ export const TrimmingTool = () => {
 			{processingState.isProcessing && (
 				<div className="mb-6">
 					<p className="text-center text-gray-700 mb-2">
-						Trimming video... {processingState.progress}%
+						正在修剪视频……{processingState.progress}%
 					</p>
 					<div className="w-full bg-gray-200 rounded-full h-2">
 						<div
@@ -979,9 +974,7 @@ export const TrimmingTool = () => {
 
 			{processingState.outputUrl && (
 				<div className="mb-6 p-5 bg-green-50 border border-green-200 rounded-lg">
-					<p className="text-green-700 font-medium mb-3">
-						Video trimmed successfully!
-					</p>
+					<p className="text-green-700 font-medium mb-3">视频修剪成功！</p>
 					<video
 						ref={outputVideoRef}
 						src={processingState.outputUrl}
@@ -996,27 +989,23 @@ export const TrimmingTool = () => {
 							onClick={handleDownload}
 							className="w-full"
 						>
-							Download Trimmed Video
+							下载修剪后的视频
 						</Button>
 						<Button variant="white" onClick={resetTrimmer} className="w-full">
-							Trim Again
+							再次修剪
 						</Button>
 					</div>
 				</div>
 			)}
 
 			<div className="mt-8 pt-6 border-t border-gray-200 text-sm text-gray-500 text-center">
-				<p>
-					This tool works entirely in your browser. Your videos are never
-					uploaded to any server.
-				</p>
+				<p>此工具完全在浏览器中运行，视频不会上传到任何服务器。</p>
 				{videoState.isSafari && (
 					<div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
 						<p>
-							<strong>Safari Compatibility Notice:</strong> Safari has limited
-							support for some video processing features. For best results,
-							consider using Chrome or Firefox. Audio capture in particular may
-							not work correctly in Safari.
+							<strong>Safari 兼容性提示：</strong> Safari
+							对部分视频处理功能支持有限。为获得最佳效果，建议使用 Chrome 或
+							Firefox，尤其是 Safari 中的音频捕捉可能无法正常工作。
 						</p>
 					</div>
 				)}

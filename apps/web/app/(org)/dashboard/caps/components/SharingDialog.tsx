@@ -92,6 +92,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	const [initialPasswordEnabled, setInitialPasswordEnabled] =
 		useState(hasPassword);
 	const tabs = ["Share", "Embed"] as const;
+	const tabLabels = { Share: "分享", Embed: "嵌入" } as const;
 	const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>("Share");
 
 	const updateSharing = useMutation({
@@ -107,18 +108,18 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			const result = await shareCap({ capId, spaceIds, public: isPublic });
 
 			if (!result.success) {
-				throw new Error(result.error || "Failed to update sharing settings");
+				throw new Error(result.error || "更新分享设置失败");
 			}
 
 			if (passwordEnabled && passwordValue.trim()) {
 				const pwResult = await setVideoPassword(capId, passwordValue);
 				if (!pwResult.success) {
-					throw new Error(pwResult.error || "Failed to set password");
+					throw new Error(pwResult.error || "设置密码失败");
 				}
 			} else if (!passwordEnabled && initialPasswordEnabled) {
 				const pwResult = await removeVideoPassword(capId);
 				if (!pwResult.success) {
-					throw new Error(pwResult.error || "Failed to remove password");
+					throw new Error(pwResult.error || "移除密码失败");
 				}
 			}
 		},
@@ -148,27 +149,21 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 				removedSpaceIds.length === 0 &&
 				!passwordChanged
 			) {
-				toast.success(
-					publicToggle ? "Video is now public" : "Video is now private",
-				);
+				toast.success(publicToggle ? "视频现已公开" : "视频现已设为私密");
 			} else if (
 				passwordChanged &&
 				!publicChanged &&
 				addedSpaceIds.length === 0 &&
 				removedSpaceIds.length === 0
 			) {
-				toast.success(
-					passwordEnabled
-						? "Password protection enabled"
-						: "Password protection removed",
-				);
+				toast.success(passwordEnabled ? "密码保护已启用" : "密码保护已移除");
 			} else if (
 				addedSpaceIds.length === 1 &&
 				removedSpaceIds.length === 0 &&
 				!publicChanged &&
 				!passwordChanged
 			) {
-				toast.success(`Shared to ${getSpaceName(addedSpaceIds[0] as string)}`);
+				toast.success(`已分享到 ${getSpaceName(addedSpaceIds[0] as string)}`);
 			} else if (
 				removedSpaceIds.length === 1 &&
 				addedSpaceIds.length === 0 &&
@@ -176,7 +171,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 				!passwordChanged
 			) {
 				toast.success(
-					`Unshared from ${getSpaceName(removedSpaceIds[0] as string)}`,
+					`已取消分享到 ${getSpaceName(removedSpaceIds[0] as string)}`,
 				);
 			} else if (
 				addedSpaceIds.length > 0 &&
@@ -184,35 +179,35 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 				!publicChanged &&
 				!passwordChanged
 			) {
-				toast.success(`Shared to ${addedSpaceIds.length} spaces`);
+				toast.success(`已分享到 ${addedSpaceIds.length} 个空间`);
 			} else if (
 				removedSpaceIds.length > 0 &&
 				addedSpaceIds.length === 0 &&
 				!publicChanged &&
 				!passwordChanged
 			) {
-				toast.success(`Unshared from ${removedSpaceIds.length} spaces`);
+				toast.success(`已取消分享到 ${removedSpaceIds.length} 个空间`);
 			} else if (
 				addedSpaceIds.length > 0 ||
 				removedSpaceIds.length > 0 ||
 				publicChanged ||
 				passwordChanged
 			) {
-				toast.success("Sharing settings updated");
+				toast.success("分享设置已更新");
 			} else {
-				toast.info("No changes to sharing settings");
+				toast.info("分享设置没有变化");
 			}
 			onSharingUpdated(newSelectedSpaces);
 			onClose();
 		},
 		onError: () => {
-			toast.error("Failed to update sharing settings");
+			toast.error("更新分享设置失败");
 		},
 	});
 
 	const getSpaceName = (id: string) => {
 		const space = spacesData?.find((space) => space.id === id);
-		return space?.name || `Space ${id}`;
+		return space?.name || `空间 ${id}`;
 	};
 
 	const handlePasswordToggle = (checked: boolean) => {
@@ -269,9 +264,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	const handleCopyEmbedCode = async () => {
 		try {
 			await navigator.clipboard.writeText(embedCode);
-			toast.success("Embed code copied to clipboard");
+			toast.success("嵌入代码已复制到剪贴板");
 		} catch (_error) {
-			toast.error("Failed to copy embed code");
+			toast.error("复制嵌入代码失败");
 		}
 	};
 
@@ -303,9 +298,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	);
 	const inheritedPasswordLabel =
 		selectedInheritedPasswordSources.length === 1
-			? `Required by ${selectedInheritedPasswordSources[0]?.name}`
+			? `由 ${selectedInheritedPasswordSources[0]?.name} 强制设置`
 			: selectedInheritedPasswordSources.length > 1
-				? `Required by ${selectedInheritedPasswordSources.length} spaces`
+				? `由 ${selectedInheritedPasswordSources.length} 个空间强制设置`
 				: null;
 
 	const filteredSpaces = searchTerm
@@ -321,12 +316,12 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 					icon={<FontAwesomeIcon icon={faShareNodes} className="size-3.5" />}
 					description={
 						activeTab === "Share"
-							? "Select how you would like to share the cap"
-							: "Copy the embed code to share your cap"
+							? "选择你想要的录制内容分享方式"
+							: "复制嵌入代码以分享录制内容"
 					}
 				>
 					<DialogTitle className="truncate w-full max-w-[320px]">
-						{activeTab === "Share" ? `Share ${capName}` : `Embed ${capName}`}
+						{activeTab === "Share" ? `分享 ${capName}` : `嵌入 ${capName}`}
 					</DialogTitle>
 				</DialogHeader>
 
@@ -351,7 +346,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 									"text-sm",
 								)}
 							>
-								{tab}
+								{tabLabels[tab]}
 							</p>
 						</button>
 					))}
@@ -369,15 +364,15 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 									<div>
 										<p className="text-sm font-medium text-gray-12">
 											{allowedEmailDomain?.trim()
-												? "Restricted link access"
-												: "Anyone with the link"}
+												? "受限链接访问"
+												: "任何获得链接的人"}
 										</p>
 										<p className="text-xs text-gray-10">
 											{!publicToggle
-												? "Only people with access can view"
+												? "仅有权限的人员可查看"
 												: allowedEmailDomain?.trim()
-													? `Only users with matching ${allowedEmailDomain.trim().includes(",") ? "emails" : "email"} can view`
-													: "Anyone on the internet with the link can view"}
+													? `仅电子邮箱符合 ${allowedEmailDomain.trim()} 的用户可查看`
+													: "互联网上任何获得链接的人都可查看"}
 										</p>
 									</div>
 								</div>
@@ -395,7 +390,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 										</div>
 										<div>
 											<p className="text-sm font-medium text-gray-12">
-												Password required
+												需要密码
 											</p>
 											<p className="text-xs text-gray-10">
 												{inheritedPasswordLabel}
@@ -421,18 +416,18 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 											<p className="text-sm font-medium text-gray-12">
 												{passwordEnabled
 													? initialPasswordEnabled
-														? "Password protected"
-														: "Password protection"
+														? "已启用密码保护"
+														: "密码保护"
 													: inheritedPasswordLabel
-														? "Add another password"
-														: "Add password"}
+														? "添加另一个密码"
+														: "添加密码"}
 											</p>
 											<p className="text-xs text-gray-10">
 												{passwordEnabled
 													? inheritedPasswordLabel
-														? "Viewers can use this password or a space password"
-														: "Viewers must enter a password to view"
-													: "Restrict access with a password"}
+														? "观看者可使用此密码或空间密码"
+														: "观看者必须输入密码才能查看"
+													: "使用密码限制访问"}
 											</p>
 										</div>
 									</div>
@@ -446,16 +441,14 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 										<Input
 											type="password"
 											placeholder={
-												initialPasswordEnabled
-													? "Enter new password"
-													: "Set a password"
+												initialPasswordEnabled ? "输入新密码" : "设置密码"
 											}
 											value={passwordValue}
 											onChange={(e) => setPasswordValue(e.target.value)}
 										/>
 										{initialPasswordEnabled && !passwordValue && (
 											<p className="mt-1.5 text-xs text-gray-9">
-												Leave blank to keep existing password
+												留空以保留现有密码
 											</p>
 										)}
 									</div>
@@ -465,7 +458,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 							<div className="relative mb-3">
 								<Input
 									type="text"
-									placeholder="Search and add to spaces..."
+									placeholder="搜索并添加到空间……"
 									value={searchTerm}
 									className="pr-8"
 									onChange={(e) => setSearchTerm(e.target.value)}
@@ -492,8 +485,8 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 									<div className="flex col-span-5 gap-2 justify-center items-center text-sm">
 										<p className="text-gray-12">
 											{allShareableItems && allShareableItems.length > 0
-												? "No spaces match your search"
-												: "No spaces available"}
+												? "没有与搜索匹配的空间"
+												: "暂无可用空间"}
 										</p>
 									</div>
 								)}
@@ -512,7 +505,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 								onClick={handleCopyEmbedCode}
 							>
 								<FontAwesomeIcon icon={faCopy} className="size-3.5 mr-1" />
-								Copy embed code
+								复制嵌入代码
 							</Button>
 						</div>
 					)}
@@ -522,7 +515,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 					{activeTab === "Share" ? (
 						<>
 							<Button size="sm" variant="gray" onClick={onClose}>
-								Cancel
+								取消
 							</Button>
 							<Button
 								spinner={updateSharing.isPending}
@@ -535,7 +528,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 										!initialPasswordEnabled &&
 										!passwordValue.trim()
 									) {
-										toast.error("Please enter a password");
+										toast.error("请输入密码");
 										return;
 									}
 									updateSharing.mutate({
@@ -547,12 +540,12 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 									});
 								}}
 							>
-								{updateSharing.isPending ? "Saving..." : "Save"}
+								{updateSharing.isPending ? "正在保存……" : "保存"}
 							</Button>
 						</>
 					) : (
 						<Button size="sm" variant="gray" onClick={onClose}>
-							Close
+							关闭
 						</Button>
 					)}
 				</DialogFooter>
@@ -584,9 +577,7 @@ const SpaceCard = ({
 	return (
 		<Tooltip
 			content={
-				isSharedViaOrganization
-					? `${space.name} (shared via organization)`
-					: space.name
+				isSharedViaOrganization ? `${space.name}（通过组织分享）` : space.name
 			}
 		>
 			<button

@@ -23,7 +23,7 @@ export function SignInButton(
 				}
 			}}
 		>
-			{signIn.isPending ? "Cancel Sign In" : (props.children ?? "Sign In")}
+			{signIn.isPending ? "取消登录" : (props.children ?? "登录")}
 		</Button>
 	);
 }

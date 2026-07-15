@@ -80,7 +80,7 @@ const loadRecoveredRecordings = async (): Promise<FailedRecording[]> => {
 				fps: null,
 				totalBytes: spool.totalBytes,
 				createdAt: spool.updatedAt,
-				message: "The recording was interrupted before its upload finished.",
+				message: "录制在上传完成前意外中断。",
 			});
 		}
 	}
@@ -147,7 +147,7 @@ function RecoveredRecordingsSection() {
 			);
 			if (!spool || spool.blob.size === 0) {
 				refresh();
-				throw new Error("The recorded data is no longer available.");
+				throw new Error("录制数据已不可用。");
 			}
 			const url = URL.createObjectURL(spool.blob);
 			const anchor = document.createElement("a");
@@ -188,7 +188,7 @@ function RecoveredRecordingsSection() {
 			}
 			return {
 				kind: "success",
-				message: "Upload finished.",
+				message: "上传完成。",
 				shareUrl:
 					response.status?.phase === "completed"
 						? response.status.shareUrl
@@ -201,10 +201,9 @@ function RecoveredRecordingsSection() {
 
 	return (
 		<section className="card card-3">
-			<h2>Recovered recordings</h2>
+			<h2>可恢复的录制</h2>
 			<p className="recovery-lede">
-				These recordings never finished uploading. Their captured data is still
-				on this device, so you can download it or retry the upload.
+				这些录制未完成上传，但采集的数据仍保存在此设备上。你可以下载文件或重试上传。
 			</p>
 			<ul className="recovery-list">
 				{entries.map((entry) => (
@@ -218,7 +217,7 @@ function RecoveredRecordingsSection() {
 								{entry.durationMs > 0
 									? ` · ${formatRecordedDuration(entry.durationMs)}`
 									: ""}
-								{entry.videoId ? "" : " · interrupted before upload"}
+								{entry.videoId ? "" : " · 上传前已中断"}
 							</span>
 						</div>
 						<div className="recovery-actions">
@@ -230,8 +229,8 @@ function RecoveredRecordingsSection() {
 									onClick={() => retry(entry)}
 								>
 									{retryingSession === entry.sessionId
-										? "Uploading…"
-										: "Retry upload"}
+										? "正在上传…"
+										: "重试上传"}
 								</button>
 							)}
 							<button
@@ -240,7 +239,7 @@ function RecoveredRecordingsSection() {
 								disabled={busySession !== null}
 								onClick={() => void download(entry)}
 							>
-								Download
+								下载
 							</button>
 							<button
 								type="button"
@@ -248,7 +247,7 @@ function RecoveredRecordingsSection() {
 								disabled={busySession !== null}
 								onClick={() => void remove(entry)}
 							>
-								Delete
+								删除
 							</button>
 						</div>
 					</li>
@@ -270,7 +269,7 @@ function RecoveredRecordingsSection() {
 							target="_blank"
 							rel="noreferrer"
 						>
-							Open video
+							打开视频
 						</a>
 					)}
 				</p>
@@ -407,16 +406,14 @@ function App() {
 						</g>
 					</g>
 				</svg>
-				<h1>Recorder options</h1>
-				<p className="lede">
-					Tune where Cap uploads and how your camera shows up by default.
-				</p>
+				<h1>录制器设置</h1>
+				<p className="lede">设置 Cap 的上传地址和摄像头默认显示方式。</p>
 
 				<div className="sheet">
 					<section className="card card-1">
-						<h2>Connection</h2>
+						<h2>连接</h2>
 						<label className="field">
-							<span>Cap URL</span>
+							<span>Cap 地址</span>
 							<input
 								type="url"
 								value={settings.apiBaseUrl}
@@ -431,10 +428,10 @@ function App() {
 					</section>
 
 					<section className="card card-2">
-						<h2>Recording defaults</h2>
+						<h2>录制默认设置</h2>
 						<div className="field-grid">
 							<label className="field">
-								<span>Camera size</span>
+								<span>摄像头大小</span>
 								<input
 									type="number"
 									min="120"
@@ -452,7 +449,7 @@ function App() {
 								/>
 							</label>
 							<label className="field">
-								<span>Position</span>
+								<span>位置</span>
 								<select
 									value={settings.webcam.position}
 									onChange={(event) =>
@@ -466,14 +463,14 @@ function App() {
 										})
 									}
 								>
-									<option value="bottom-right">Bottom right</option>
-									<option value="bottom-left">Bottom left</option>
-									<option value="top-right">Top right</option>
-									<option value="top-left">Top left</option>
+									<option value="bottom-right">右下</option>
+									<option value="bottom-left">左下</option>
+									<option value="top-right">右上</option>
+									<option value="top-left">左上</option>
 								</select>
 							</label>
 							<label className="field">
-								<span>Shape</span>
+								<span>形状</span>
 								<select
 									value={settings.webcam.shape}
 									onChange={(event) =>
@@ -487,13 +484,13 @@ function App() {
 										})
 									}
 								>
-									<option value="round">Round</option>
-									<option value="square">Square</option>
-									<option value="full">Full</option>
+									<option value="round">圆形</option>
+									<option value="square">方形</option>
+									<option value="full">完整画面</option>
 								</select>
 							</label>
 							<label className="field">
-								<span>Countdown</span>
+								<span>倒计时</span>
 								<select
 									value={String(settings.countdown.seconds)}
 									disabled={!settings.countdown.enabled}
@@ -507,15 +504,15 @@ function App() {
 										})
 									}
 								>
-									<option value="3">3 seconds</option>
-									<option value="5">5 seconds</option>
-									<option value="10">10 seconds</option>
+									<option value="3">3 秒</option>
+									<option value="5">5 秒</option>
+									<option value="10">10 秒</option>
 								</select>
 							</label>
 						</div>
 						<div className="checks">
 							<DoodleCheckbox
-								label="Show camera preview by default"
+								label="默认显示摄像头预览"
 								checked={settings.webcam.enabled}
 								onChange={(checked) =>
 									setSettings({
@@ -528,7 +525,7 @@ function App() {
 								}
 							/>
 							<DoodleCheckbox
-								label="Enable microphone by default"
+								label="默认启用麦克风"
 								checked={settings.microphone.enabled}
 								onChange={(checked) =>
 									setSettings({
@@ -541,7 +538,7 @@ function App() {
 								}
 							/>
 							<DoodleCheckbox
-								label="Enable system audio by default"
+								label="默认启用系统音频"
 								checked={settings.systemAudio.enabled}
 								onChange={(checked) =>
 									setSettings({
@@ -554,7 +551,7 @@ function App() {
 								}
 							/>
 							<DoodleCheckbox
-								label="Play recording sounds"
+								label="播放录制提示音"
 								checked={settings.sounds.enabled}
 								onChange={(checked) =>
 									setSettings({
@@ -567,7 +564,7 @@ function App() {
 								}
 							/>
 							<DoodleCheckbox
-								label="Show countdown before recording"
+								label="录制前显示倒计时"
 								checked={settings.countdown.enabled}
 								onChange={(checked) =>
 									setSettings({
@@ -580,7 +577,7 @@ function App() {
 								}
 							/>
 							<DoodleCheckbox
-								label="Warn about microphone issues"
+								label="麦克风异常时提醒"
 								checked={settings.microphoneWarning.enabled}
 								onChange={(checked) =>
 									setSettings({
@@ -593,7 +590,7 @@ function App() {
 								}
 							/>
 							<DoodleCheckbox
-								label="Mirror webcam"
+								label="镜像摄像头"
 								checked={settings.webcam.mirror}
 								onChange={(checked) =>
 									setSettings({
@@ -612,7 +609,7 @@ function App() {
 
 					<div className="actions">
 						<button type="button" className="cta" onClick={() => void save()}>
-							Save changes
+							保存更改
 						</button>
 						<button
 							type="button"
@@ -620,7 +617,7 @@ function App() {
 							disabled={!auth}
 							onClick={() => void signOut()}
 						>
-							Sign out
+							退出登录
 						</button>
 						{saved && (
 							<p className="paper-pill success">
@@ -635,16 +632,14 @@ function App() {
 										d="M 4 13 L 9.5 18 L 20 6"
 									/>
 								</svg>
-								Saved
+								已保存
 							</p>
 						)}
 					</div>
 					{error && <p className="paper-pill error">{error}</p>}
 				</div>
 			</main>
-			<p className="footnote">
-				Changes apply the next time you open the recorder.
-			</p>
+			<p className="footnote">更改将在下次打开录制器时生效。</p>
 		</>
 	);
 }

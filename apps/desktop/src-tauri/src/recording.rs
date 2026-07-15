@@ -1425,15 +1425,27 @@ pub fn format_project_name<'a>(
 
     // Get recording mode information
     let (recording_mode, mode) = match recording_mode {
-        RecordingMode::Studio => ("Studio", "studio"),
-        RecordingMode::Instant => ("Instant", "instant"),
-        RecordingMode::Screenshot => ("Screenshot", "screenshot"),
+        RecordingMode::Studio => ("工作室", "studio"),
+        RecordingMode::Instant => ("即时", "instant"),
+        RecordingMode::Screenshot => ("截图", "screenshot"),
+    };
+    let target_kind = match target_kind {
+        "Display" => "显示器",
+        "Window" => "窗口",
+        "Area" => "区域",
+        "Camera" => "摄像头",
+        _ => target_kind,
+    };
+    let localized_target_name = match truncated_target_name.as_ref() {
+        "Camera" => "摄像头",
+        "Unknown" => "未知",
+        _ => truncated_target_name.as_ref(),
     };
 
     let result = AC
         .try_replace_all(
             haystack,
-            &[recording_mode, mode, target_kind, &truncated_target_name],
+            &[recording_mode, mode, target_kind, localized_target_name],
         )
         .expect("AhoCorasick replace should never fail with default configuration");
 
@@ -1456,7 +1468,7 @@ pub fn format_project_name<'a>(
                     .get(1)
                     .map(|m| m.as_str())
                     .map(moment_format_to_chrono)
-                    .unwrap_or(Cow::Borrowed("%I:%M %p")),
+                    .unwrap_or(Cow::Borrowed("%H:%M")),
             )
             .to_string()
     });
@@ -1530,7 +1542,7 @@ pub async fn start_recording(
         let operation_lock = app.state::<CameraWindowOperationLock>();
         let _operation_guard = operation_lock.lock().await;
         if let Err(err) = (ShowCapWindow::Camera { centered: true }).show(&app).await {
-            let error = format!("Failed to show centered camera window: {err}");
+            let error = format!("无法显示居中的摄像头窗口：{err}");
             state_mtx.write().await.clear_pending_recording();
             notify_recording_start_failed(&app, &error);
             return Err(error);
@@ -1560,7 +1572,7 @@ pub async fn start_recording(
     let recordings_base_dir = GeneralSettingsStore::recordings_dir(&app);
 
     pending_try!(ensure_dir(&recordings_base_dir), |e| format!(
-        "Failed to create recordings directory: {e}"
+        "无法创建录制目录：{e}"
     ));
 
     match cap_utils::disk_space::free_bytes_for_path(&recordings_base_dir) {
@@ -1568,7 +1580,7 @@ pub async fn start_recording(
             if bytes <= cap_utils::disk_space::LOW_DISK_STOP_BYTES {
                 let gb = bytes as f64 / 1_073_741_824.0;
                 let error = format!(
-                    "Not enough disk space to start recording ({:.2} GB free). Free up at least {} MB and try again.",
+                    "磁盘空间不足，无法开始录制（剩余 {:.2} GB）。请至少释放 {} MB 空间后重试。",
                     gb,
                     (cap_utils::disk_space::LOW_DISK_STOP_BYTES / (1024 * 1024))
                 );
@@ -1600,7 +1612,7 @@ pub async fn start_recording(
     ));
 
     pending_try!(ensure_dir(&project_file_path), |e| format!(
-        "Failed to create recording directory: {e}"
+        "无法创建录制项目目录：{e}"
     ));
     pending_try!(
         state_mtx
@@ -1623,7 +1635,7 @@ pub async fn start_recording(
     let (video_upload_info, instant_mode_max_resolution) = match inputs.mode {
         RecordingMode::Instant => {
             let Some(auth) = AuthStore::get(&app).ok().flatten() else {
-                let error = "Please sign in to use instant recording".to_string();
+                let error = "请先登录再使用即时录制".to_string();
                 state_mtx.write().await.clear_pending_recording();
                 notify_recording_start_failed(&app, &error);
                 return Err(error);
@@ -1660,7 +1672,7 @@ pub async fn start_recording(
                     // invoked us may already be gone — surface it as a start failure too.
                     notify_recording_start_failed(
                         &app,
-                        "Your session has expired. Please sign in again to use instant recording.",
+                        "登录会话已过期，请重新登录后使用即时录制。",
                     );
                     return Ok(RecordingAction::InvalidAuthentication);
                 }
@@ -1668,12 +1680,12 @@ pub async fn start_recording(
                     state_mtx.write().await.clear_pending_recording();
                     notify_recording_start_failed(
                         &app,
-                        "Instant recording requires an upgraded plan.",
+                        "即时录制需要升级套餐后才能使用。",
                     );
                     return Ok(RecordingAction::UpgradeRequired);
                 }
                 Err(err) => {
-                    let error = format!("Could not create the shareable link: {err}");
+                    let error = format!("无法创建分享链接：{err}");
                     state_mtx.write().await.clear_pending_recording();
                     notify_recording_start_failed(&app, &error);
                     return Err(error);
@@ -1694,7 +1706,7 @@ pub async fn start_recording(
         }
         RecordingMode::Studio => (None, cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION),
         RecordingMode::Screenshot => {
-            let error = "Use take_screenshot for screenshots".to_string();
+            let error = "截图请使用截图功能".to_string();
             state_mtx.write().await.clear_pending_recording();
             notify_recording_start_failed(&app, &error);
             return Err(error);
@@ -1720,7 +1732,7 @@ pub async fn start_recording(
             }
             RecordingMode::Screenshot => {
                 state_mtx.write().await.clear_pending_recording();
-                return Err("Use take_screenshot for screenshots".to_string());
+                return Err("截图请使用截图功能".to_string());
             }
         },
         sharing: None,
@@ -1728,7 +1740,7 @@ pub async fn start_recording(
     };
 
     pending_try!(meta.save_for_project(), |e| format!(
-        "Failed to save recording meta: {e}"
+        "无法保存录制项目信息：{e}"
     ));
 
     match &inputs.capture_target {

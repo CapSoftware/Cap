@@ -31,29 +31,28 @@ const NOTIFICATION_TYPES: {
 }[] = [
 	{
 		key: "pauseComments",
-		title: "Comments",
-		description:
-			"Email and in-app alert when someone comments on one of your Caps.",
+		title: "评论",
+		description: "有人评论你的录制时，通过邮件和应用内通知提醒你。",
 	},
 	{
 		key: "pauseReplies",
-		title: "Replies",
-		description: "In-app alert when someone replies to a comment you left.",
+		title: "回复",
+		description: "有人回复你的评论时，通过应用内通知提醒你。",
 	},
 	{
 		key: "pauseViews",
-		title: "Views",
-		description: "Alert when a signed-in viewer watches one of your Caps.",
+		title: "观看",
+		description: "已登录的观众观看你的录制时提醒你。",
 	},
 	{
 		key: "pauseAnonViews",
-		title: "Anonymous views",
-		description: "Alert when an anonymous viewer watches one of your Caps.",
+		title: "匿名观看",
+		description: "匿名观众观看你的录制时提醒你。",
 	},
 	{
 		key: "pauseReactions",
-		title: "Reactions",
-		description: "In-app alert when someone reacts to one of your Caps.",
+		title: "回应",
+		description: "有人对你的录制作出回应时，通过应用内通知提醒你。",
 	},
 ];
 
@@ -71,7 +70,7 @@ export const NotificationsSettings = () => {
 		mutationFn: (next: NotificationPreferences) =>
 			updatePreferences({ notifications: next }),
 		onSuccess: () => router.refresh(),
-		onError: () => toast.error("Failed to update notification preferences"),
+		onError: () => toast.error("更新通知偏好失败"),
 	});
 
 	const toggle = (key: keyof NotificationPreferences) => {
@@ -95,7 +94,7 @@ export const NotificationsSettings = () => {
 					<Switch
 						checked={!preferences[key]}
 						onCheckedChange={() => toggle(key)}
-						aria-label={`${title} notifications`}
+						aria-label={`${title}通知`}
 					/>
 				</div>
 			))}

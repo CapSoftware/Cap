@@ -2883,7 +2883,7 @@ function MediaPlayerPlaybackSpeedDial(
 												transition={{ duration: 0.13, ease: "easeOut" }}
 												whileTap={{ scale: 0.96 }}
 												onClick={() => setPinned(true)}
-												aria-label="Change playback speed"
+												aria-label="更改播放速度"
 												className="flex gap-1 sm:gap-2 items-center px-1 sm:px-2"
 											>
 												<GaugeIcon className="size-3 sm:size-4 text-white/80" />
@@ -3397,7 +3397,7 @@ function MediaPlayerDownload(props: MediaPlayerDownloadProps) {
 			<PlayerButton
 				type="button"
 				aria-controls={context.mediaId}
-				aria-label="Download"
+				aria-label="下载"
 				data-disabled={isDisabled ? "" : undefined}
 				data-slot="media-player-download"
 				disabled={isDisabled}
@@ -3548,7 +3548,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 					<PlayerButton
 						type="button"
 						aria-controls={context.mediaId}
-						aria-label="Settings"
+						aria-label="设置"
 						data-disabled={isDisabled ? "" : undefined}
 						data-slot="media-player-settings"
 						disabled={isDisabled}
@@ -3568,10 +3568,10 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 				container={context.portalContainer}
 				className="w-56 data-[side=top]:mb-3.5"
 			>
-				<DropdownMenuLabel className="sr-only">Settings</DropdownMenuLabel>
+				<DropdownMenuLabel className="sr-only">设置</DropdownMenuLabel>
 				<DropdownMenuSub>
 					<DropdownMenuSubTrigger>
-						<span className="flex-1">Speed</span>
+						<span className="flex-1">速度</span>
 						<Badge variant="outline" className="rounded">
 							{mediaPlaybackRate}x
 						</Badge>
@@ -3603,7 +3603,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 				{context.isVideo && mediaRenditionList.length > 0 && (
 					<DropdownMenuSub>
 						<DropdownMenuSubTrigger>
-							<span className="flex-1">Quality</span>
+							<span className="flex-1">画质</span>
 							<Badge variant="outline" className="rounded">
 								{selectedRenditionLabel}
 							</Badge>

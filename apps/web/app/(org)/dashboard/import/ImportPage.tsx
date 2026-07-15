@@ -8,9 +8,9 @@ export const ImportPage = () => {
 	return (
 		<div className="flex flex-col w-full h-full">
 			<div className="mb-8">
-				<h1 className="text-2xl font-medium text-gray-12">Import</h1>
+				<h1 className="text-2xl font-medium text-gray-12">导入</h1>
 				<p className="mt-1 text-sm text-gray-10">
-					Import media from external sources or upload from your device.
+					从外部来源导入媒体，或从你的设备上传。
 				</p>
 			</div>
 
@@ -26,10 +26,10 @@ export const ImportPage = () => {
 					</div>
 					<div className="flex flex-col gap-1 p-4">
 						<p className="text-sm font-medium text-left text-gray-12">
-							Upload File
+							上传文件
 						</p>
 						<p className="text-xs text-left text-gray-10">
-							Upload a video or image file from your device
+							从你的设备上传视频或图片文件
 						</p>
 					</div>
 				</Link>
@@ -59,7 +59,7 @@ export const ImportPage = () => {
 					<div className="flex flex-col gap-1 p-4">
 						<p className="text-sm font-medium text-left text-gray-12">Loom</p>
 						<p className="text-xs text-left text-gray-10">
-							Import a Loom share link or bulk import from CSV
+							导入 Loom 分享链接，或通过 CSV 批量导入
 						</p>
 					</div>
 				</Link>

@@ -3,11 +3,11 @@
 import type { DeveloperTransaction } from "../developer-data";
 
 const typeLabels: Record<string, string> = {
-	topup: "Top Up",
-	video_create: "Recording",
-	storage_daily: "Storage",
-	refund: "Refund",
-	adjustment: "Adjustment",
+	topup: "充值",
+	video_create: "录制",
+	storage_daily: "存储",
+	refund: "退款",
+	adjustment: "调整",
 };
 
 export function CreditTransactionTable({
@@ -17,9 +17,7 @@ export function CreditTransactionTable({
 }) {
 	if (transactions.length === 0) {
 		return (
-			<p className="py-8 text-sm text-center text-gray-10">
-				No transactions yet
-			</p>
+			<p className="py-8 text-sm text-center text-gray-10">暂无交易记录</p>
 		);
 	}
 
@@ -29,16 +27,16 @@ export function CreditTransactionTable({
 				<thead>
 					<tr className="border-b border-gray-3 bg-gray-3/50">
 						<th className="px-4 py-2.5 text-left text-xs font-medium text-gray-10">
-							Type
+							类型
 						</th>
 						<th className="px-4 py-2.5 text-right text-xs font-medium text-gray-10">
-							Amount
+							金额
 						</th>
 						<th className="px-4 py-2.5 text-right text-xs font-medium text-gray-10">
-							Balance
+							余额
 						</th>
 						<th className="px-4 py-2.5 text-right text-xs font-medium text-gray-10">
-							Date
+							日期
 						</th>
 					</tr>
 				</thead>
@@ -60,7 +58,7 @@ export function CreditTransactionTable({
 								${(tx.balanceAfterMicroCredits / 100_000).toFixed(2)}
 							</td>
 							<td className="px-4 py-2.5 text-right text-gray-10">
-								{new Date(tx.createdAt).toLocaleDateString()}
+								{new Date(tx.createdAt).toLocaleDateString("zh-CN")}
 							</td>
 						</tr>
 					))}

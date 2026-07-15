@@ -65,21 +65,21 @@ async function loadProfileImageObjectUrl(signal: AbortSignal) {
 		headers: await protectedHeaders(),
 		signal,
 	});
-	if (!response.ok) throw new Error("Failed to load profile image");
+	if (!response.ok) throw new Error("加载头像失败");
 
 	const contentType = response.headers.get("content-type");
 	if (contentType && !contentType.toLowerCase().startsWith("image/")) {
-		throw new Error("Invalid profile image response");
+		throw new Error("头像响应格式无效");
 	}
 
 	const contentLength = Number(response.headers.get("content-length"));
 	if (contentLength > MAX_PROFILE_IMAGE_BYTES) {
-		throw new Error("Profile image is too large");
+		throw new Error("头像文件过大");
 	}
 
 	const blob = await response.blob();
 	if (blob.size > MAX_PROFILE_IMAGE_BYTES) {
-		throw new Error("Profile image is too large");
+		throw new Error("头像文件过大");
 	}
 
 	return URL.createObjectURL(blob);
@@ -179,8 +179,7 @@ export default function Settings(props: RouteSectionProps) {
 				return null;
 			}
 
-			if (response.status !== 200)
-				throw new Error("Failed to load account profile");
+			if (response.status !== 200) throw new Error("加载账户资料失败");
 
 			await userProfileStore.set({
 				userId: currentAuth.user_id,
@@ -194,12 +193,12 @@ export default function Settings(props: RouteSectionProps) {
 	const settingsItems = [
 		{
 			href: "general",
-			name: "General",
+			name: "通用",
 			icon: IconCapSettings,
 		},
 		{
 			href: "hotkeys",
-			name: "Shortcuts",
+			name: "快捷键",
 			icon: IconCapHotkeys,
 		},
 		{
@@ -209,53 +208,53 @@ export default function Settings(props: RouteSectionProps) {
 		},
 		{
 			href: "recordings",
-			name: "Recordings",
+			name: "录制",
 			icon: IconLucideSquarePlay,
 		},
 		{
 			href: "screenshots",
-			name: "Screenshots",
+			name: "截图",
 			icon: IconLucideImage,
 		},
 		{
 			href: "automations",
-			name: "Automations",
+			name: "自动化",
 			icon: IconLucideZap,
 		},
 		{
 			href: "transcription",
-			name: "Transcription",
+			name: "转录",
 			icon: IconCapCaptions,
 		},
 		{
 			href: "integrations",
-			name: "Integrations",
+			name: "集成",
 			icon: IconLucideUnplug,
 		},
 		{
 			href: "license",
-			name: "License",
+			name: "许可证",
 			icon: IconLucideGift,
 		},
 		{
 			href: "experimental",
-			name: "Experimental",
+			name: "实验性功能",
 			icon: IconCapSettings,
 		},
 		{
 			href: "feedback",
-			name: "Feedback",
+			name: "反馈",
 			icon: IconLucideMessageSquarePlus,
 		},
 		{
 			href: "changelog",
-			name: "Changelog",
+			name: "更新日志",
 			icon: IconLucideBell,
 		},
 	];
 	const accountName = createMemo(() => {
-		if (!auth()) return "Click to sign in";
-		if (!userProfile.isSuccess) return "Signed in";
+		if (!auth()) return "点击登录";
+		if (!userProfile.isSuccess) return "已登录";
 
 		const name = userProfile.data?.name?.trim();
 		if (name) return name;
@@ -263,7 +262,7 @@ export default function Settings(props: RouteSectionProps) {
 		const email = userProfile.data?.email?.trim();
 		if (email) return email;
 
-		return "Signed in";
+		return "已登录";
 	});
 	const accountRemoteImageUrl = createMemo(() => {
 		if (!userProfile.isSuccess) return null;
@@ -413,19 +412,16 @@ export default function Settings(props: RouteSectionProps) {
 			const update = await commands.updatesCheck();
 
 			if (!update) {
-				await dialog.message(
-					"You're already using the latest version of Cap.",
-					{
-						title: "No Update Available",
-						kind: "info",
-					},
-				);
+				await dialog.message("你已经在使用最新版 Cap。", {
+					title: "暂无可用更新",
+					kind: "info",
+				});
 				return;
 			}
 
 			const shouldUpdate = await dialog.confirm(
-				`Version ${update.version} of Cap is available, would you like to install it?`,
-				{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" },
+				`Cap ${update.version} 版本现已可用，是否安装？`,
+				{ title: "更新 Cap", okLabel: "更新", cancelLabel: "忽略" },
 			);
 
 			if (shouldUpdate) navigate("/update");
@@ -433,8 +429,8 @@ export default function Settings(props: RouteSectionProps) {
 			console.error("Failed to check for updates:", e);
 			const openDownload = await dialog
 				.confirm(
-					"Couldn't check for updates automatically. You can download the latest version of Cap from cap.so/download \u2014 your data won't be lost.",
-					{ title: "Update Cap", okLabel: "Download", cancelLabel: "Later" },
+					"无法自动检查更新。你可以前往 cap.so/download 下载最新版 Cap，你的数据不会丢失。",
+					{ title: "更新 Cap", okLabel: "下载", cancelLabel: "稍后" },
 				)
 				.catch(() => false);
 			if (openDownload) await shell.open("https://cap.so/download");
@@ -483,7 +479,7 @@ export default function Settings(props: RouteSectionProps) {
 							{accountName()}
 						</p>
 						<p class="h-[13px] truncate text-[11px] leading-[13px] text-gray-10">
-							Account
+							账户
 						</p>
 					</div>
 				</button>
@@ -516,7 +512,7 @@ export default function Settings(props: RouteSectionProps) {
 											shell.open("https://cap.so/download/versions")
 										}
 									>
-										View previous versions
+										查看历史版本
 									</button>
 									<button
 										type="button"
@@ -524,9 +520,7 @@ export default function Settings(props: RouteSectionProps) {
 										disabled={isCheckingForUpdates()}
 										onClick={checkForUpdates}
 									>
-										{isCheckingForUpdates()
-											? "Checking..."
-											: "Check for updates"}
+										{isCheckingForUpdates() ? "正在检查……" : "检查更新"}
 									</button>
 								</div>
 							</div>
@@ -540,10 +534,10 @@ export default function Settings(props: RouteSectionProps) {
 					>
 						{auth() ? (
 							<Button onClick={handleAuth} variant="gray" class="w-full">
-								Sign Out
+								退出登录
 							</Button>
 						) : (
-							<SignInButton>Sign In</SignInButton>
+							<SignInButton>登录</SignInButton>
 						)}
 					</Show>
 				</div>

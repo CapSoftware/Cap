@@ -29,7 +29,7 @@ const countryCodeToIcon = (countryCode: string | undefined | null) => {
 };
 
 const formatNumber = (value?: number | null) =>
-	value == null ? "—" : value.toLocaleString();
+	value == null ? "—" : value.toLocaleString("zh-CN");
 const formatPercentage = (value?: number | null) =>
 	value == null ? "—" : `${Math.round(value * 100)}%`;
 const skeletonBar = (width = 48) => (
@@ -163,12 +163,12 @@ const TableCard = ({
         <p className="text-lg font-medium text-gray-12">{title}</p>
         <Select
           variant="light"
-          placeholder="Views"
+					placeholder="观看次数"
           icon={<FontAwesomeIcon icon={faFilter} className="text-gray-11" />}
           options={[
-            { value: "views", label: "Views" },
-            { value: "comments", label: "Comments" },
-            { value: "reactions", label: "Reactions" },
+						{ value: "views", label: "观看次数" },
+						{ value: "comments", label: "评论" },
+						{ value: "reactions", label: "回应" },
           ]}
           value="views"
           onValueChange={() => {}}

@@ -35,10 +35,8 @@ export default function BillingAndMembersPage() {
 				) : (
 					<Card>
 						<CardHeader>
-							<CardTitle>Billing</CardTitle>
-							<CardDescription>
-								Billing is managed by the organization owner.
-							</CardDescription>
+							<CardTitle>账单</CardTitle>
+							<CardDescription>账单由组织所有者管理。</CardDescription>
 						</CardHeader>
 					</Card>
 				))}

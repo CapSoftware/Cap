@@ -128,7 +128,7 @@ export function CountdownOverlay() {
 			onPointerDown={(event) => event.stopPropagation()}
 		>
 			<output className="cap-extension-countdown-sr">
-				{`Recording starts in ${value}`}
+				{`将在 ${value} 秒后开始录制`}
 			</output>
 			<div className="cap-extension-countdown-stage">
 				<svg
@@ -154,7 +154,7 @@ export function CountdownOverlay() {
 					{value}
 				</span>
 			</div>
-			<span className="cap-extension-countdown-hint">Press Esc to cancel</span>
+			<span className="cap-extension-countdown-hint">按 Esc 取消</span>
 		</div>
 	);
 }

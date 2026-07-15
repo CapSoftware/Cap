@@ -82,23 +82,23 @@ const FolderCard = ({
 		mutationFn: (id: Folder.FolderId) => rpc.FolderDelete(id),
 		onSuccess: () => {
 			router.refresh();
-			toast.success("Folder deleted successfully");
+			toast.success("文件夹已删除");
 			setConfirmDeleteFolderOpen(false);
 		},
 		onError: () => {
-			toast.error("Failed to delete folder");
+			toast.error("删除文件夹失败");
 		},
 	});
 
 	const updateFolder = useEffectMutation({
 		mutationFn: (data: Folder.FolderUpdate) => rpc.FolderUpdate(data),
 		onSuccess: () => {
-			toast.success("Folder updated successfully");
+			toast.success("文件夹已更新");
 			router.refresh();
 		},
 		onError: () => {
 			setPublicEnabled(isPublic);
-			toast.error("Failed to update folder");
+			toast.error("更新文件夹失败");
 		},
 		onSettled: () => setIsRenaming(false),
 	});
@@ -129,10 +129,10 @@ const FolderCard = ({
 						folderId: id,
 						spaceId: spaceId ?? activeOrganization?.organization.id,
 					});
-					toast.success(`"${data.name}" moved to "${name}" folder`);
+					toast.success(`已将“${data.name}”移动到文件夹“${name}”`);
 				} catch (error) {
-					console.error("Error moving video to folder:", error);
-					toast.error("Failed to move video to folder");
+					console.error("移动视频到文件夹时出错：", error);
+					toast.error("移动视频到文件夹失败");
 				} finally {
 					setIsMovingVideo(false);
 					dragStateRef.current.isDragging = false;
@@ -279,10 +279,10 @@ const FolderCard = ({
 
 			setIsMovingVideo(true);
 			await moveVideoToFolder({ videoId: capData.id, folderId: id, spaceId });
-			toast.success(`"${capData.name}" moved to "${name}" folder`);
+			toast.success(`已将“${capData.name}”移动到文件夹“${name}”`);
 		} catch (error) {
-			console.error("Error moving video to folder:", error);
-			toast.error("Failed to move video to folder");
+			console.error("移动视频到文件夹时出错：", error);
+			toast.error("移动视频到文件夹失败");
 		} finally {
 			setIsMovingVideo(false);
 		}
@@ -379,13 +379,11 @@ const FolderCard = ({
 						</Link>
 					)}
 					<div className="flex gap-2 items-center">
-						<p className="text-sm truncate text-gray-10 w-fit">{`${videoCount} ${
-							videoCount === 1 ? "video" : "videos"
-						}`}</p>
+						<p className="text-sm truncate text-gray-10 w-fit">{`${videoCount} 个视频`}</p>
 						{publicEnabled && (
 							<span className="inline-flex gap-1 items-center text-[11px] font-medium text-blue-9">
 								<FontAwesomeIcon icon={faGlobe} className="size-2.5" />
-								Public
+								公开
 							</span>
 						)}
 					</div>
@@ -397,9 +395,9 @@ const FolderCard = ({
 				icon={<FontAwesomeIcon icon={faTrash} />}
 				onConfirm={() => deleteFolder.mutate(id)}
 				onCancel={() => setConfirmDeleteFolderOpen(false)}
-				confirmLabel={deleteFolder.isPending ? "Deleting..." : "Delete"}
-				title="Delete Folder"
-				description={`Are you sure you want to delete the folder "${name}"? This action cannot be undone.`}
+				confirmLabel={deleteFolder.isPending ? "正在删除……" : "删除"}
+				title="删除文件夹"
+				description={`确定要删除文件夹“${name}”吗？此操作无法撤销。`}
 			/>
 			<FoldersDropdown
 				id={id}

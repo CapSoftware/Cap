@@ -46,7 +46,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
 						className="absolute top-5 left-5 cursor-pointer z-20 flex gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent border border-gray-4 rounded-full hover:bg-gray-1 transition-colors duration-300"
 					>
 						<FontAwesomeIcon className="w-2" icon={faArrowLeft} />
-						<p className="text-xs">Back</p>
+						<p className="text-xs">返回</p>
 					</div>
 				)}
 				<div className="space-y-6">
@@ -54,12 +54,10 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
 
 					<div className="text-center">
 						<h1 className="text-xl font-semibold">
-							{step === 1 ? "Sign in to comment" : "Email sent"}
+							{step === 1 ? "登录后发表评论" : "邮件已发送"}
 						</h1>
 						<p className="text-base text-gray-9">
-							{step === 1
-								? "Join the conversation."
-								: "We sent a 6-digit code to your email."}
+							{step === 1 ? "加入讨论。" : "我们已向你的邮箱发送 6 位验证码。"}
 						</p>
 					</div>
 
@@ -88,22 +86,21 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
 							/>
 						)}
 						<p className="mt-6 text-xs text-center text-gray-9">
-							By entering your email, you acknowledge that you have both read
-							and agree to Cap's{" "}
+							输入邮箱即表示你已阅读并同意 Cap 的{" "}
 							<Link
 								href="/terms"
 								target="_blank"
 								className="text-xs font-semibold text-gray-12 hover:text-blue-300"
 							>
-								Terms of Service
+								服务条款
 							</Link>{" "}
-							and{" "}
+							和{" "}
 							<Link
 								href="/privacy"
 								target="_blank"
 								className="text-xs font-semibold text-gray-12 hover:text-blue-300"
 							>
-								Privacy Policy
+								隐私政策
 							</Link>
 							.
 						</p>
@@ -183,15 +180,15 @@ const StepOne = ({
 								email_domain: normalizedEmail.split("@").at(1),
 								video_id: videoId,
 							});
-							toast.success("Email sent - check your inbox!");
+							toast.success("邮件已发送，请查看收件箱");
 						} else {
-							toast.error("Error sending email - try again?");
+							toast.error("发送邮件失败，请重试");
 						}
 					})
 					.catch(() => {
 						setEmailSent(false);
 						setLoading(false);
-						toast.error("Error sending email - try again?");
+						toast.error("发送邮件失败，请重试");
 					});
 			}}
 			className="flex flex-col gap-3"
@@ -220,15 +217,15 @@ const StepOne = ({
 			>
 				{emailSent
 					? NODE_ENV === "development"
-						? "Email sent to your terminal"
-						: "Email sent to your inbox"
-					: "Continue with Email"}
+						? "邮件已发送到终端"
+						: "邮件已发送到收件箱"
+					: "使用邮箱继续"}
 			</Button>
 			{publicEnv.googleAuthAvailable && (
 				<>
 					<div className="flex gap-4 items-center">
 						<span className="flex-1 h-px bg-gray-5" />
-						<p className="text-sm text-center text-gray-10">OR</p>
+						<p className="text-sm text-center text-gray-10">或</p>
 						<span className="flex-1 h-px bg-gray-5" />
 					</div>
 					<Button
@@ -239,7 +236,7 @@ const StepOne = ({
 						disabled={loading}
 					>
 						<Image src="/google.svg" alt="Google" width={16} height={16} />
-						Login with Google
+						使用 Google 登录
 					</Button>
 				</>
 			)}

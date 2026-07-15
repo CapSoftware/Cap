@@ -15,7 +15,7 @@ type ChromeExtensionButtonProps = {
 export function ChromeExtensionButton({
 	className,
 	href = CAP_CHROME_EXTENSION_URL,
-	label = "Add to Chrome",
+	label = "添加到 Chrome",
 	onClick,
 	size = "lg",
 	target,

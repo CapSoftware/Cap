@@ -92,15 +92,15 @@ export function SceneTrack(props: {
 	const getSceneLabel = (mode: string | undefined) => {
 		switch (mode) {
 			case "cameraOnly":
-				return "Camera Only";
+				return "仅摄像头";
 			case "hideCamera":
-				return "Hide Camera";
+				return "隐藏摄像头";
 			case "splitScreen":
-				return "Split Screen";
+				return "分屏";
 			case "floating":
-				return "Floating";
+				return "悬浮";
 			default:
-				return "Default";
+				return "默认";
 		}
 	};
 
@@ -219,7 +219,7 @@ export function SceneTrack(props: {
 				each={project.timeline?.sceneSegments}
 				fallback={
 					<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
-						<div>Click to add scene segment</div>
+						<div>点击添加场景片段</div>
 						<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
 							(Make the camera full screen, or hide it)
 						</div>
@@ -548,7 +548,7 @@ export function SceneTrack(props: {
 									return (
 										<Show when={ctx.width() > 80}>
 											<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
-												<span class="opacity-70">Scene</span>
+												<span class="opacity-70">场景</span>
 												<div class="flex gap-1 items-center text-md">
 													{getSceneIcon(segment.mode)}
 													{ctx.width() > 120 && (

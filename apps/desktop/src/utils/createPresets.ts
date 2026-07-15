@@ -12,7 +12,7 @@ export function createPresets() {
 	const query = presetsStore.createQuery();
 
 	async function updatePresets(fn: (prev: PresetsStore) => void) {
-		if (query.isLoading) throw new Error("Presets not loaded");
+		if (query.isLoading) throw new Error("预设尚未加载");
 
 		let p = query.data;
 		if (!p) {

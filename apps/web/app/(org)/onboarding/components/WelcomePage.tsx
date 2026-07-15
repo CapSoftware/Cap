@@ -26,7 +26,7 @@ export function WelcomePage() {
 			});
 		},
 		onError: () => {
-			toast.error("An error occurred, please try again");
+			toast.error("发生错误，请重试");
 		},
 	});
 
@@ -36,11 +36,7 @@ export function WelcomePage() {
 	};
 
 	return (
-		<Base
-			title="Welcome to Cap"
-			description="Let's get you started"
-			hideBackButton
-		>
+		<Base title="欢迎使用 Cap" description="让我们开始设置" hideBackButton>
 			<form className="space-y-7" onSubmit={handleSubmit}>
 				<div className="space-y-3">
 					<Input
@@ -48,7 +44,7 @@ export function WelcomePage() {
 						disabled={welcomeMutation.isPending}
 						onChange={(e) => setFirstName(e.target.value)}
 						type="text"
-						placeholder="First name"
+						placeholder="名字"
 						name="firstName"
 						required
 					/>
@@ -57,7 +53,7 @@ export function WelcomePage() {
 						disabled={welcomeMutation.isPending}
 						onChange={(e) => setLastName(e.target.value)}
 						type="text"
-						placeholder="Last name (optional)"
+						placeholder="姓氏（可选）"
 						name="lastName"
 					/>
 				</div>
@@ -69,7 +65,7 @@ export function WelcomePage() {
 					variant="dark"
 					className="mx-auto w-full"
 				>
-					Continue
+					继续
 				</Button>
 			</form>
 		</Base>

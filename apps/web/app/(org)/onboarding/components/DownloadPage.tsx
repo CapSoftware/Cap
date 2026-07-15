@@ -12,13 +12,13 @@ import {
 
 const recordingModes = [
 	{
-		name: "Instant Mode",
+		name: "即时模式",
 		icon: <Zap fill="yellow" className="mb-4 size-8" strokeWidth={1.5} />,
 		description:
-			"Hit record, stop, share link. Your video is live in seconds with automatically generated captions, a title, summary, chapters, and more. Perfect for quick feedback, bug reports, or when you just need to show something fast.",
+			"点击录制、停止，再分享链接。视频可在数秒内上线，并自动生成字幕、标题、摘要、章节等内容。适合快速反馈、提交错误报告，或随时清晰演示操作。",
 	},
 	{
-		name: "Studio Mode",
+		name: "工作室模式",
 		icon: (
 			<Clapperboard
 				fill="var(--blue-9)"
@@ -27,7 +27,7 @@ const recordingModes = [
 			/>
 		),
 		description:
-			"Professional recordings with local editing, custom backgrounds, and export options. When you need pixel-perfect demos, tutorials, or presentations that represent your brand.",
+			"提供本地编辑、自定义背景和多种导出选项的专业录制模式。适合制作精致演示、教程或体现品牌形象的演示文稿。",
 	},
 ];
 
@@ -42,9 +42,9 @@ export function DownloadPage() {
 				<div className="flex flex-col gap-6 justify-center items-center">
 					<LogoBadge className="mx-auto w-auto h-12" />
 					<div className="space-y-1 text-center">
-						<h1 className="text-3xl font-medium text-gray-12">Download Cap</h1>
+						<h1 className="text-3xl font-medium text-gray-12">下载 Cap</h1>
 						<p className="text-lg text-center text-gray-11 text-pretty">
-							Start recording beautiful screen recordings today
+							立即开始制作精美的屏幕录像
 						</p>
 					</div>
 				</div>
@@ -81,7 +81,7 @@ export function DownloadPage() {
 					variant="dark"
 					size="lg"
 				>
-					Continue
+					继续
 				</Button>
 			</div>
 		</div>

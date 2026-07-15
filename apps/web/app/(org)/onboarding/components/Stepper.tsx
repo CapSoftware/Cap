@@ -19,38 +19,37 @@ export default function Stepper({
 }) {
 	const currentPath = usePathname();
 	const currentStep = useMemo(() => {
-		if (currentPath === "/onboarding/welcome") return "Welcome";
-		if (currentPath === "/onboarding/organization-setup")
-			return "Organization Setup";
-		if (currentPath === "/onboarding/custom-domain") return "Custom Domain";
-		if (currentPath === "/onboarding/invite-team") return "Invite your team";
-		if (currentPath === "/onboarding/download") return "Download";
+		if (currentPath === "/onboarding/welcome") return "欢迎";
+		if (currentPath === "/onboarding/organization-setup") return "设置组织";
+		if (currentPath === "/onboarding/custom-domain") return "自定义域名";
+		if (currentPath === "/onboarding/invite-team") return "邀请团队成员";
+		if (currentPath === "/onboarding/download") return "下载";
 	}, [currentPath]);
 
 	const steps = [
 		{
 			id: "1",
-			name: "Welcome",
+			name: "欢迎",
 			completed: completedSteps.welcome || false,
 		},
 		{
 			id: "2",
-			name: "Organization Setup",
+			name: "设置组织",
 			completed: completedSteps.organizationSetup || false,
 		},
 		{
 			id: "3",
-			name: "Custom Domain",
+			name: "自定义域名",
 			completed: completedSteps.customDomain || false,
 		},
 		{
 			id: "4",
-			name: "Invite your team",
+			name: "邀请团队成员",
 			completed: completedSteps.inviteTeam || false,
 		},
 		{
 			id: "5",
-			name: "Download",
+			name: "下载",
 			completed: completedSteps.download || false,
 		},
 	];
@@ -141,7 +140,7 @@ const MobileStepper = ({
 			</div>
 			<div>
 				<p className="text-[13px] text-gray-10">
-					Step <span className="text-gray-11">{activeStep.id}/5</span>
+					步骤 <span className="text-gray-11">{activeStep.id}/5</span>
 				</p>
 			</div>
 		</div>

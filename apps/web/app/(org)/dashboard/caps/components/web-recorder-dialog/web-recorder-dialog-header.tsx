@@ -34,7 +34,7 @@ export const WebRecorderDialogHeader = ({
 							? "opacity-50 cursor-not-allowed"
 							: "cursor-pointer hover:opacity-80 transition-opacity",
 					)}
-					aria-label="Close dialog"
+					aria-label="关闭对话框"
 				/>
 				<div className="size-3 rounded-full bg-gray-8 opacity-50"></div>
 				<div className="size-3 rounded-full bg-gray-8 opacity-50"></div>
@@ -46,9 +46,9 @@ export const WebRecorderDialogHeader = ({
 						xmlns="http://www.w3.org/2000/svg"
 						fill="none"
 						viewBox="0 0 103 40"
-						aria-label="Cap Logo"
+						aria-label="Cap 徽标"
 					>
-						<title>Cap Logo</title>
+						<title>Cap 徽标</title>
 						<rect
 							width="39.5"
 							height="39.5"

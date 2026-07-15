@@ -43,10 +43,10 @@ export async function generateMetadata(
 	const description =
 		collection.publicPage.subtitle.trim() ||
 		collection.description?.trim() ||
-		`View public videos in ${title} on Cap.`;
+		`在 Cap 上查看“${title}”中的公开视频。`;
 
 	return {
-		title: `${title} | Cap Collection`,
+		title: `${title} | Cap 合集`,
 		description,
 		robots: "noindex, nofollow",
 	};
@@ -114,14 +114,14 @@ export default async function PublicCollectionPage(
 		return (
 			<CollectionAccessView
 				branding={branding}
-				title="This collection requires sign-in"
+				title="此合集需要登录"
 				description={
 					<>
-						The owner has restricted access. Please{" "}
+						所有者限制了访问权限。请使用获授权的邮箱地址{" "}
 						<Link href="/login" className="text-gray-12 underline">
-							sign in
+							登录
 						</Link>{" "}
-						with an authorized email address to view.
+						后查看。
 					</>
 				}
 			/>
@@ -132,8 +132,8 @@ export default async function PublicCollectionPage(
 		return (
 			<CollectionAccessView
 				branding={branding}
-				title="Access restricted"
-				description="Your email address does not meet the requirements set by this collection owner."
+				title="访问受限"
+				description="你的邮箱地址不符合此合集所有者设置的访问要求。"
 			/>
 		);
 	}
@@ -160,7 +160,7 @@ export default async function PublicCollectionPage(
 							className="inline-flex gap-1.5 items-center text-[13px] transition-colors text-gray-10 hover:text-gray-12"
 						>
 							<FontAwesomeIcon icon={faArrowLeft} className="size-3" />
-							Back to dashboard
+							返回控制台
 						</Link>
 					</div>
 				</div>
@@ -170,7 +170,7 @@ export default async function PublicCollectionPage(
 					<div className="flex justify-between items-center px-4 mx-auto max-w-7xl h-16 sm:px-6 lg:px-8">
 						{branding ? (
 							branding.type === "cap" ? (
-								<Link href="/?ref=collection" aria-label="Cap home">
+								<Link href="/?ref=collection" aria-label="Cap 首页">
 									<BrandingMark branding={branding} />
 								</Link>
 							) : (
@@ -194,8 +194,8 @@ export default async function PublicCollectionPage(
 				{isPasswordRequired ? (
 					<CollectionStateCard
 						icon={faLock}
-						title="Password required"
-						description="Enter the collection password to view its public videos."
+						title="需要密码"
+						description="输入合集密码以查看其中的公开视频。"
 					/>
 				) : (
 					<CollectionContent data={data} />
@@ -227,12 +227,8 @@ function CollectionHero({
 	const ctaUrl = sanitizeCtaUrl(publicPage.ctaUrl);
 
 	const metaParts = [collection.organizationName];
-	if (videoCount > 0)
-		metaParts.push(`${videoCount} ${videoCount === 1 ? "video" : "videos"}`);
-	if (folderCount > 0)
-		metaParts.push(
-			`${folderCount} ${folderCount === 1 ? "folder" : "folders"}`,
-		);
+	if (videoCount > 0) metaParts.push(`${videoCount} 个视频`);
+	if (folderCount > 0) metaParts.push(`${folderCount} 个文件夹`);
 
 	return (
 		<section className="pb-8 mb-10 border-b border-gray-4">
@@ -286,7 +282,7 @@ function CollectionContent({
 		<div className="space-y-10">
 			{data.folders.length > 0 && (
 				<section>
-					<SectionHeading title="Folders" count={data.folders.length} />
+					<SectionHeading title="文件夹" count={data.folders.length} />
 					<div className={containerClass}>
 						{data.folders.map((folder) => (
 							<PublicFolderCard
@@ -301,7 +297,7 @@ function CollectionContent({
 
 			{data.videos.length > 0 && (
 				<section>
-					<SectionHeading title="Videos" count={data.totalCount} />
+					<SectionHeading title="视频" count={data.totalCount} />
 					<div className={containerClass}>
 						{data.videos.map((video) => (
 							<PublicCapCard
@@ -318,8 +314,8 @@ function CollectionContent({
 			{!hasContent && (
 				<CollectionStateCard
 					icon={faVideo}
-					title="No public videos yet"
-					description="This collection does not have any public videos available."
+					title="暂无公开视频"
+					description="此合集目前没有可用的公开视频。"
 				/>
 			)}
 
@@ -376,9 +372,7 @@ function PublicFolderCard({
 	folder: PublicCollectionFolder;
 	layout: "grid" | "list";
 }) {
-	const meta = `${folder.videoCount} ${
-		folder.videoCount === 1 ? "video" : "videos"
-	}`;
+	const meta = `${folder.videoCount} 个视频`;
 
 	if (layout === "list") {
 		return (
@@ -429,7 +423,7 @@ function CollectionFooter({ showPoweredBy }: { showPoweredBy: boolean }) {
 					rel="noreferrer"
 					className="inline-flex gap-1.5 items-center text-xs transition-colors text-gray-9 hover:text-gray-11"
 				>
-					Powered by
+					由以下服务提供支持：
 					<Logo className="w-auto h-3.5" />
 				</a>
 			</div>

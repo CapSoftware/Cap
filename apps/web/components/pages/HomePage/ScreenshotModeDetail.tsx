@@ -97,33 +97,33 @@ const AUTO_STEP_DELAYS = [1000, 1500, 1500, 1500, 1500, 3000];
 const screenshotFeatures = [
 	{
 		icon: <Palette className="size-5" />,
-		title: "Beautiful Backgrounds",
-		description: "Gradients, wallpapers & solid colors",
+		title: "精美背景",
+		description: "渐变、壁纸和纯色",
 	},
 	{
 		icon: <Maximize2 className="size-5" />,
-		title: "Adjustable Padding",
-		description: "Clean spacing around your capture",
+		title: "可调内边距",
+		description: "为截图留出整洁间距",
 	},
 	{
 		icon: <Square className="size-5" />,
-		title: "Rounded Corners",
-		description: "Squircle or rounded styles",
+		title: "圆角",
+		description: "方圆形或圆角样式",
 	},
 	{
 		icon: <Layers className="size-5" />,
-		title: "Shadow & Borders",
-		description: "Professional depth effects",
+		title: "阴影和边框",
+		description: "专业的层次效果",
 	},
 	{
 		icon: <MoveUpRight className="size-5" />,
-		title: "Annotation Tools",
-		description: "Arrows, shapes, text & masks",
+		title: "标注工具",
+		description: "箭头、形状、文字和遮罩",
 	},
 	{
 		icon: <Copy className="size-5" />,
-		title: "Instant Copy & Save",
-		description: "One click to clipboard or file",
+		title: "即时复制和保存",
+		description: "一键复制到剪贴板或保存为文件",
 	},
 ];
 
@@ -507,12 +507,12 @@ const MockScreenshotEditor = () => {
 							{copied ? (
 								<>
 									<Check className="size-2 md:size-2.5 text-green-500" />
-									<span className="text-green-600">Copied!</span>
+									<span className="text-green-600">已复制！</span>
 								</>
 							) : (
 								<>
 									<Copy className="size-2 md:size-2.5" />
-									Copy
+									复制
 								</>
 							)}
 						</motion.button>
@@ -523,7 +523,7 @@ const MockScreenshotEditor = () => {
 							onClick={handleInteraction}
 						>
 							<Save className="size-2 md:size-2.5" />
-							Save
+							保存
 						</motion.button>
 					</div>
 				</div>
@@ -593,14 +593,14 @@ const MockScreenshotEditor = () => {
 									>
 										<div className="w-1 h-1 rounded-full bg-violet-400" />
 										{autoStep === 0 || autoStep === 1
-											? "Background"
+											? "背景"
 											: autoStep === 2
-												? "Padding"
+												? "内边距"
 												: autoStep === 3
-													? "Corners"
+													? "圆角"
 													: autoStep === 4
-														? "Shadow"
-														: "Annotation"}
+														? "阴影"
+														: "标注"}
 									</motion.div>
 								)}
 							</AnimatePresence>
@@ -623,7 +623,7 @@ const MockScreenshotEditor = () => {
 						<div className="flex-1 p-2.5 lg:p-3 space-y-3 lg:space-y-3.5 overflow-y-auto">
 							<div>
 								<span className="text-[9px] font-medium block mb-2 text-gray-11">
-									Background
+									背景
 								</span>
 								<div className="flex gap-1.5 flex-wrap">
 									{GRADIENT_COLORS.map(([from, to], i) => (
@@ -655,7 +655,7 @@ const MockScreenshotEditor = () => {
 							</div>
 
 							<InteractiveSlider
-								label="Padding"
+								label="内边距"
 								value={padding}
 								min={0}
 								max={40}
@@ -665,7 +665,7 @@ const MockScreenshotEditor = () => {
 							/>
 
 							<InteractiveSlider
-								label="Rounded Corners"
+								label="圆角"
 								value={rounded}
 								min={0}
 								max={40}
@@ -675,7 +675,7 @@ const MockScreenshotEditor = () => {
 							/>
 
 							<InteractiveSlider
-								label="Shadow"
+								label="阴影"
 								value={shadow}
 								min={0}
 								max={100}
@@ -768,7 +768,7 @@ const MockScreenshotEditor = () => {
 										<Check className="size-3 text-green-600" />
 									</div>
 									<span className="text-sm text-gray-10 font-medium">
-										Screenshot captured
+										已截取屏幕截图
 									</span>
 								</motion.div>
 							)}
@@ -816,7 +816,7 @@ const ScreenshotModeDetail = () => {
 						<Aperture className="size-5 text-violet-500" strokeWidth={2} />
 					</motion.div>
 					<span className="text-sm font-medium text-violet-600 uppercase tracking-wider">
-						Screenshot Mode
+						截图模式
 					</span>
 				</motion.div>
 				<motion.h2
@@ -826,7 +826,7 @@ const ScreenshotModeDetail = () => {
 					viewport={{ once: true }}
 					transition={{ duration: 0.5, delay: 0.1 }}
 				>
-					Capture, beautify, share
+					截取、美化、分享
 				</motion.h2>
 				<motion.p
 					className="text-base md:text-lg text-gray-10 max-w-[600px] mx-auto"
@@ -835,9 +835,7 @@ const ScreenshotModeDetail = () => {
 					viewport={{ once: true }}
 					transition={{ duration: 0.5, delay: 0.2 }}
 				>
-					Take a screenshot with a hotkey, then instantly enhance it with
-					backgrounds, padding, annotations, and more — ready to share in
-					seconds.
+					使用快捷键截图，然后立即添加背景、内边距、标注等效果，数秒内即可分享。
 				</motion.p>
 			</motion.div>
 
@@ -905,7 +903,7 @@ const ScreenshotModeDetail = () => {
 				className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 mt-5 md:mt-6"
 			>
 				<Button href="/features" variant="white" size="lg">
-					Learn more
+					了解更多
 				</Button>
 				<UpgradeToPro />
 			</motion.div>

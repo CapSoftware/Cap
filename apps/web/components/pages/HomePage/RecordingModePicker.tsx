@@ -16,23 +16,21 @@ interface ModeOption {
 const modes: ModeOption[] = [
 	{
 		id: "instant",
-		title: "Instant",
-		description:
-			"Share instantly with a link. Your recording uploads as you record, so you can share it immediately when you're done.",
+		title: "即时",
+		description: "通过链接即时分享。录制内容会边录边上传，完成后可以立即分享。",
 		icon: InstantIcon,
 	},
 	{
 		id: "studio",
-		title: "Studio",
+		title: "工作室",
 		description:
-			"Record locally in the highest quality for editing later. Perfect for creating polished content with effects and transitions.",
+			"以最高画质在本地录制，稍后再编辑。非常适合制作带有效果和转场的精致内容。",
 		icon: StudioIcon,
 	},
 	{
 		id: "screenshot",
-		title: "Screenshot",
-		description:
-			"Capture and annotate screenshots instantly. Great for quick captures, bug reports, and visual communication.",
+		title: "截图",
+		description: "即时截取并标注屏幕。适合快速截图、错误报告和视觉沟通。",
 		icon: ScreenshotIcon,
 	},
 ];
@@ -97,14 +95,13 @@ const RecordingModePicker = () => {
 				className="text-center mb-8 md:mb-14"
 			>
 				<span className="inline-block text-xs font-semibold text-gray-9 uppercase tracking-[0.2em] mb-3">
-					3 Modes
+					3 种模式
 				</span>
 				<h2 className="text-3xl md:text-4xl font-medium text-gray-12 mb-3">
-					One app, every workflow
+					一款应用，覆盖每种工作流程
 				</h2>
 				<p className="text-base md:text-lg text-gray-10 max-w-[600px] mx-auto">
-					Whether you need speed, studio quality, or a quick screenshot — Cap
-					has a mode for it.
+					无论你需要速度、工作室级画质，还是快速截图，Cap 都有合适的模式。
 				</p>
 			</motion.div>
 

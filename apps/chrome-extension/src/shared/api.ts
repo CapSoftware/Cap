@@ -59,7 +59,7 @@ const checkAuthStartRoute = async (
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(
-			`Could not reach Cap extension auth at ${url.origin}. Start the local web server with pnpm dev:extension and make sure the extension Options Cap URL is ${settings.apiBaseUrl}. Redirect URI: ${redirectUri}. ${message}`,
+			`无法访问 ${url.origin} 上的 Cap 扩展登录服务。请使用 pnpm dev:extension 启动本地 Web 服务，并确认扩展设置中的 Cap URL 为 ${settings.apiBaseUrl}。重定向 URI：${redirectUri}。${message}`,
 		);
 	}
 };
@@ -71,7 +71,7 @@ export class ApiRequestError extends Error {
 	readonly status: number;
 
 	constructor(status: number, message: string) {
-		super(message || `Request failed with status ${status}`);
+		super(message || `请求失败，状态码：${status}`);
 		this.name = "ApiRequestError";
 		this.status = status;
 	}
@@ -125,7 +125,7 @@ export const parseAuthResponse = (responseUrl: string, state: string) => {
 	const hash = new URL(responseUrl).hash.slice(1);
 	const params = new URLSearchParams(hash);
 	if (params.get("state") !== state) {
-		throw new Error("Auth state did not match");
+		throw new Error("登录状态校验失败");
 	}
 
 	// The consent page's Cancel link redirects back with an error in the
@@ -133,16 +133,14 @@ export const parseAuthResponse = (responseUrl: string, state: string) => {
 	const error = params.get("error");
 	if (error) {
 		throw new Error(
-			error === "access_denied"
-				? "Sign-in was canceled."
-				: `Sign-in failed: ${error}`,
+			error === "access_denied" ? "登录已取消。" : `登录失败：${error}`,
 		);
 	}
 
 	const authApiKey = params.get("authApiKey");
 	const userId = params.get("userId");
 	if (!authApiKey || !userId) {
-		throw new Error("Auth response did not include a token");
+		throw new Error("登录响应中缺少令牌");
 	}
 
 	return { authApiKey, userId };

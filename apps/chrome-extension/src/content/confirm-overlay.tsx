@@ -14,14 +14,12 @@ const COPY: Record<
 	{ title: string; message: string }
 > = {
 	"no-mic": {
-		title: "Record without a microphone?",
-		message:
-			"No microphone is selected, so this recording won't capture your voice.",
+		title: "不使用麦克风录制？",
+		message: "尚未选择麦克风，本次录制将无法采集你的声音。",
 	},
 	"no-sound": {
-		title: "No sound from your microphone",
-		message:
-			"We're not detecting any audio from the selected microphone. It may be muted or unplugged.",
+		title: "麦克风没有声音",
+		message: "未检测到所选麦克风的声音，它可能已静音或未连接。",
 	},
 };
 
@@ -98,7 +96,7 @@ export function ConfirmOverlay() {
 			<button
 				type="button"
 				className="cap-extension-confirm-backdrop"
-				aria-label="Cancel"
+				aria-label="取消"
 				onClick={() => respond(request, false)}
 			/>
 			<div
@@ -132,7 +130,7 @@ export function ConfirmOverlay() {
 						className="cap-extension-confirm-button is-secondary"
 						onClick={() => respond(request, false)}
 					>
-						Cancel
+						取消
 					</button>
 					<button
 						ref={confirmButtonRef}
@@ -140,7 +138,7 @@ export function ConfirmOverlay() {
 						className="cap-extension-confirm-button is-primary"
 						onClick={() => respond(request, true)}
 					>
-						Start anyway
+						仍然开始
 					</button>
 				</div>
 			</div>

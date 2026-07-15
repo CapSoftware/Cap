@@ -59,7 +59,7 @@ export const DesktopNav = () => {
 						>
 							<ArrowLeft size={sidebarCollapsed ? 18 : 16} />
 							{!sidebarCollapsed && (
-								<span className="text-sm font-medium">Dashboard</span>
+								<span className="text-sm font-medium">工作台</span>
 							)}
 						</Link>
 					) : (
@@ -79,7 +79,7 @@ export const DesktopNav = () => {
 					<Tooltip
 						kbd={[cmdSymbol, "Shift", "S"]}
 						position="right"
-						content="Toggle collapse"
+						content="展开或折叠侧边栏"
 					>
 						<Button
 							variant="white"

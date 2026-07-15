@@ -31,7 +31,7 @@ const ProRiveArt = ({ onReady }: { onReady: (rive: Rive | null) => void }) => {
 };
 
 const UpgradeToPro = ({
-	text = "Upgrade To Cap Pro",
+	text = "升级到 Cap 专业版",
 	onClick,
 }: {
 	text?: string;

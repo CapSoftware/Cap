@@ -68,16 +68,16 @@ export function getUploadFailureMessage(
 ): string {
 	if (uploadProgress?.status === "error") {
 		if (canRetryFailedProcessing(uploadProgress, canRetryProcessing)) {
-			return uploadProgress.errorMessage || "Processing failed.";
+			return uploadProgress.errorMessage || "处理失败。";
 		}
 
 		return (
 			uploadProgress.errorMessage ||
-			"Processing failed. Ask the owner to retry processing or re-upload the recording."
+			"处理失败。请联系所有者重试处理或重新上传录制内容。"
 		);
 	}
 
-	return "Upload stalled before processing finished. Re-upload the recording to continue.";
+	return "上传在处理完成前停滞。请重新上传录制内容以继续。";
 }
 
 const SECOND = 1000;
@@ -102,20 +102,20 @@ export function getStalledProcessingMessage(input: {
 
 	if (input.phase === "processing") {
 		if (input.processingProgress === 0 && ageMs > STALE_PROCESSING_START_MS) {
-			return "Video processing did not start. Retry processing.";
+			return "视频处理未开始，请重试处理。";
 		}
 
 		if (ageMs > STALE_PROCESSING_PROGRESS_MS) {
-			return "Video processing stalled. Retry processing.";
+			return "视频处理已停滞，请重试处理。";
 		}
 	}
 
 	if (input.phase === "generating_thumbnail" && ageMs > STALE_THUMBNAIL_MS) {
-		return "Video finishing stalled. Retry processing.";
+		return "视频收尾处理已停滞，请重试处理。";
 	}
 
 	if (input.phase === "complete" && ageMs > STALE_THUMBNAIL_MS) {
-		return "Video finishing stalled. Retry processing.";
+		return "视频收尾处理已停滞，请重试处理。";
 	}
 
 	return null;
@@ -239,11 +239,11 @@ const ProgressCircle = ({
 	const getStatusText = () => {
 		switch (status) {
 			case "processing":
-				return "Processing";
+				return "正在处理";
 			case "generating_thumbnail":
-				return "Finishing up";
+				return "即将完成";
 			default:
-				return "Uploading";
+				return "正在上传";
 		}
 	};
 
@@ -255,7 +255,7 @@ const ProgressCircle = ({
 			)}
 		>
 			<svg className="transform -rotate-90 size-full" viewBox="0 0 100 100">
-				<title>Progress Circle</title>
+				<title>进度环</title>
 				<circle
 					cx="50"
 					cy="50"

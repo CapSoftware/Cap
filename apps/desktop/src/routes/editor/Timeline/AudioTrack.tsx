@@ -159,9 +159,7 @@ function FadeControl(props: {
 				</Show>
 				<div
 					role="slider"
-					aria-label={
-						props.edge === "in" ? "Fade in duration" : "Fade out duration"
-					}
+					aria-label={props.edge === "in" ? "淡入时长" : "淡出时长"}
 					aria-valuenow={Math.round(props.fadeSeconds * 1000)}
 					tabindex={-1}
 					class="timeline-fade-cursor absolute inset-y-0 z-40 w-5 -translate-x-1/2 pointer-events-auto"
@@ -186,9 +184,7 @@ function FadeControl(props: {
 			>
 				<div
 					role="slider"
-					aria-label={
-						props.edge === "in" ? "Fade in corner" : "Fade out corner"
-					}
+					aria-label={props.edge === "in" ? "淡入曲线" : "淡出曲线"}
 					aria-valuenow={Math.round(props.fadeSeconds * 1000)}
 					tabindex={-1}
 					class="timeline-fade-cursor relative p-2 -m-2"
@@ -421,7 +417,7 @@ export function AudioTrack(props: {
 						>
 							<IconLucidePlus class="size-3.5" />
 						</span>
-						<span class="font-medium">Add audio</span>
+						<span class="font-medium">添加音频</span>
 					</button>
 				}
 			>
@@ -530,7 +526,7 @@ export function AudioTrack(props: {
 								<div class="flex z-10 gap-1.5 items-center w-full min-w-0 text-xs text-white/95 drop-shadow-sm">
 									<IconLucideMusic class="size-3 shrink-0 opacity-90" />
 									<span class="max-w-full font-medium truncate">
-										{segment.name || "Audio"}
+										{segment.name || "音频"}
 									</span>
 								</div>
 							</SegmentContent>

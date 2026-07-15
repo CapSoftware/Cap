@@ -28,7 +28,7 @@ export default function AddVideosButton({
 		<>
 			<Button variant="dark" size="sm" onClick={() => setOpen(true)}>
 				<FontAwesomeIcon className="size-3" icon={faPlus} />
-				Add videos
+				添加视频
 			</Button>
 			<AddVideosDialogBase
 				open={open}

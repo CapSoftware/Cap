@@ -19,47 +19,47 @@ pub enum NotificationType {
 impl NotificationType {
     fn details(&self) -> (&'static str, &'static str, bool) {
         match self {
-            NotificationType::VideoSaved => ("Video Saved", "Video saved successfully", false),
+            NotificationType::VideoSaved => ("视频已保存", "视频保存成功", false),
             NotificationType::VideoCopiedToClipboard => {
-                ("Video Copied", "Video copied to clipboard", false)
+                ("视频已复制", "视频已复制到剪贴板", false)
             }
             NotificationType::ShareableLinkCopied => {
-                ("Link Copied", "Link copied to clipboard", false)
+                ("链接已复制", "链接已复制到剪贴板", false)
             }
             NotificationType::UploadFailed => (
-                "Upload Failed",
-                "Unable to upload media. Please try again",
+                "上传失败",
+                "无法上传媒体，请重试",
                 true,
             ),
             NotificationType::VideoSaveFailed => (
-                "Save Failed",
-                "Unable to save video. Please try again",
+                "保存失败",
+                "无法保存视频，请重试",
                 true,
             ),
             NotificationType::VideoCopyFailed => (
-                "Copy Failed",
-                "Unable to copy video to clipboard. Please try again",
+                "复制失败",
+                "无法将视频复制到剪贴板，请重试",
                 true,
             ),
             NotificationType::ShareableLinkFailed => (
-                "Share Failed",
-                "Unable to create shareable link. Please try again",
+                "分享失败",
+                "无法创建分享链接，请重试",
                 true,
             ),
             NotificationType::ScreenshotSaved => {
-                ("Screenshot Saved", "Screenshot saved successfully", false)
+                ("截图已保存", "截图保存成功", false)
             }
             NotificationType::ScreenshotCopiedToClipboard => {
-                ("Screenshot Copied", "Screenshot copied to clipboard", false)
+                ("截图已复制", "截图已复制到剪贴板", false)
             }
             NotificationType::ScreenshotSaveFailed => (
-                "Save Failed",
-                "Unable to save screenshot. Please try again",
+                "保存失败",
+                "无法保存截图，请重试",
                 true,
             ),
             NotificationType::ScreenshotCopyFailed => (
-                "Copy Failed",
-                "Unable to copy screenshot to clipboard. Please try again",
+                "复制失败",
+                "无法将截图复制到剪贴板，请重试",
                 true,
             ),
         }
@@ -69,7 +69,7 @@ impl NotificationType {
     pub fn message(&self) -> &'static str {
         match self {
             NotificationType::UploadFailed => {
-                "Failed to upload your video after multiple attempts. Please try again later."
+                "多次尝试后仍无法上传视频，请稍后重试。"
             }
             _ => "",
         }
@@ -78,7 +78,7 @@ impl NotificationType {
     #[allow(unused)]
     pub fn title(&self) -> &'static str {
         match self {
-            NotificationType::UploadFailed => "Upload Failed",
+            NotificationType::UploadFailed => "上传失败",
             _ => "",
         }
     }

@@ -61,7 +61,7 @@ const TestimonialCard: React.FC<TestimonialCardProps> = ({ item }) => {
 					<Image
 						src={image}
 						key={image}
-						alt={`${name}'s profile picture`}
+						alt={`${name} 的头像`}
 						fill
 						className="object-cover"
 					/>

@@ -23,10 +23,10 @@ import OtherStats from "./OtherStats";
 import StatsChart from "./StatsChart";
 
 const RANGE_OPTIONS: { value: AnalyticsRange; label: string }[] = [
-	{ value: "24h", label: "Last 24 hours" },
-	{ value: "7d", label: "Last 7 days" },
-	{ value: "30d", label: "Last 30 days" },
-	{ value: "lifetime", label: "Lifetime" },
+	{ value: "24h", label: "过去 24 小时" },
+	{ value: "7d", label: "过去 7 天" },
+	{ value: "30d", label: "过去 30 天" },
+	{ value: "lifetime", label: "全部时间" },
 ];
 
 const ProRiveArt = memo(() => {
@@ -61,7 +61,7 @@ export function AnalyticsDashboard() {
 	const showOverlay = buildEnv.NEXT_PUBLIC_IS_CAP === "true" && !user?.isPro;
 	const pricePerUser = isAnnual ? 8.16 : 12;
 	const totalPrice = pricePerUser * proQuantity;
-	const billingText = isAnnual ? "billed annually" : "billed monthly";
+	const billingText = isAnnual ? "按年计费" : "按月计费";
 
 	const proCheckoutMutation = useMutation({
 		mutationFn: async () => {
@@ -88,7 +88,7 @@ export function AnalyticsDashboard() {
 			}
 
 			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
+				toast.success("你已订阅 Cap Pro 套餐");
 				return;
 			}
 
@@ -125,7 +125,7 @@ export function AnalyticsDashboard() {
 					catch: (cause: unknown) => cause as Error,
 				});
 				if (!response.ok) {
-					return yield* Effect.fail(new Error("Failed to load analytics"));
+					return yield* Effect.fail(new Error("加载分析数据失败"));
 				}
 				return yield* Effect.tryPromise({
 					try: () => response.json() as Promise<{ data: OrgAnalyticsResponse }>,
@@ -142,7 +142,7 @@ export function AnalyticsDashboard() {
 	if (!orgId) {
 		return (
 			<div className="rounded-xl border border-gray-5 bg-gray-2 p-6 text-gray-11">
-				Select or join an organization to view analytics.
+				请选择或加入一个组织以查看数据分析。
 			</div>
 		);
 	}
@@ -231,11 +231,11 @@ export function AnalyticsDashboard() {
 								<div className="flex relative flex-col flex-1 justify-center items-center py-6 w-full bg-gray-2 bg-opacity-75 backdrop-blur-md">
 									<div className="flex flex-col items-center">
 										<h1 className="text-3xl font-medium text-gray-12">
-											Upgrade to unlock Cap Analytics
+											升级以解锁 Cap 数据分析
 										</h1>
 									</div>
 									<p className="mt-1 text-lg text-center text-gray-11">
-										You can cancel anytime. Early adopter pricing locked in.
+										可随时取消，并锁定早期用户优惠价格。
 									</p>
 
 									<div className="flex flex-col items-center mt-3 mb-4 w-full">
@@ -250,15 +250,15 @@ export function AnalyticsDashboard() {
 											/>
 											<span className="mb-2 ml-2 text-gray-11">
 												{proQuantity === 1 ? (
-													`per user, ${billingText}`
+													`每位用户，${billingText}`
 												) : (
 													<>
-														for{" "}
+														共{" "}
 														<NumberFlow
 															value={proQuantity}
 															className="tabular-nums text-gray-12"
 														/>{" "}
-														users, {billingText}
+														位用户，{billingText}
 													</>
 												)}
 											</span>
@@ -266,7 +266,7 @@ export function AnalyticsDashboard() {
 
 										<div className="flex flex-col gap-6 justify-evenly items-center mt-8 w-full max-w-md sm:gap-10 sm:flex-row">
 											<div className="flex gap-3 items-center">
-												<span className="text-gray-12">Annual billing</span>
+												<span className="text-gray-12">按年计费</span>
 												<Switch
 													checked={isAnnual}
 													onCheckedChange={() => setIsAnnual(!isAnnual)}
@@ -274,7 +274,7 @@ export function AnalyticsDashboard() {
 											</div>
 
 											<div className="flex items-center">
-												<span className="mr-3 text-gray-12">Users:</span>
+												<span className="mr-3 text-gray-12">用户数：</span>
 												<div className="flex items-center">
 													<button
 														type="button"
@@ -313,8 +313,8 @@ export function AnalyticsDashboard() {
 										disabled={proCheckoutMutation.isPending}
 									>
 										{proCheckoutMutation.isPending
-											? "Loading..."
-											: "Upgrade to Cap Pro"}
+											? "正在加载…"
+											: "升级到 Cap Pro"}
 									</Button>
 								</div>
 							</div>

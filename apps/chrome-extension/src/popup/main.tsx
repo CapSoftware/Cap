@@ -473,7 +473,7 @@ function App() {
 	const start = () =>
 		run(async () => {
 			if (cameraRequired) {
-				throw new Error("Select a camera before recording.");
+				throw new Error("请先选择摄像头再开始录制。");
 			}
 			const response = await sendServiceWorkerMessage({
 				target: "service-worker",
@@ -616,7 +616,7 @@ function App() {
 					<div className="flex flex-1 items-center justify-center">
 						<output
 							className="block size-6 animate-spin rounded-full border-2 border-gray-5 border-t-gray-10"
-							aria-label="Loading"
+							aria-label="正在加载"
 						/>
 					</div>
 				) : auth ? (
@@ -700,8 +700,7 @@ function App() {
 						)}
 						{status.phase === "error" && (
 							<div className="cap-fade-up rounded-md border border-red-6 bg-red-3/70 px-3 py-2 text-xs leading-snug text-red-12">
-								<span className="font-medium">Recording failed.</span>{" "}
-								{status.message}
+								<span className="font-medium">录制失败。</span> {status.message}
 							</div>
 						)}
 						<div className="cap-fade-up cap-fade-up-6 flex justify-center">
@@ -714,8 +713,7 @@ function App() {
 									onClick={() => void openOptions()}
 									className="flex w-full items-center justify-center gap-1 text-xs font-medium text-[var(--red-11)] transition-colors hover:text-[var(--red-12)]"
 								>
-									Recover {failedRecordingsCount}{" "}
-									{failedRecordingsCount === 1 ? "recording" : "recordings"}
+									恢复 {failedRecordingsCount} 个录制
 								</button>
 							</div>
 						)}

@@ -34,36 +34,36 @@ const options: {
 	pro?: boolean;
 }[] = [
 	{
-		label: "Enable comments",
+		label: "启用评论",
 		value: "disableComments",
-		description: "Allow viewers to comment on this cap",
+		description: "允许观看者评论此录制内容",
 	},
 	{
-		label: "Enable summary",
+		label: "启用摘要",
 		value: "disableSummary",
-		description: "Show AI-generated summary (requires transcript)",
+		description: "显示 AI 生成的摘要（需要文字稿）",
 		pro: true,
 	},
 	{
-		label: "Enable captions",
+		label: "启用字幕",
 		value: "disableCaptions",
-		description: "Allow viewers to use captions for this cap",
+		description: "允许观看者使用此录制内容的字幕",
 	},
 	{
-		label: "Enable chapters",
+		label: "启用章节",
 		value: "disableChapters",
-		description: "Show AI-generated chapters (requires transcript)",
+		description: "显示 AI 生成的章节（需要文字稿）",
 		pro: true,
 	},
 	{
-		label: "Enable reactions",
+		label: "启用回应",
 		value: "disableReactions",
-		description: "Allow viewers to react to this cap",
+		description: "允许观看者回应此录制内容",
 	},
 	{
-		label: "Enable transcript",
+		label: "启用文字稿",
 		value: "disableTranscript",
-		description: "Enabling this also allows summary and chapters",
+		description: "启用后也会允许显示摘要和章节",
 		pro: true,
 	},
 ];
@@ -108,11 +108,11 @@ export const SettingsDialog = ({
 				Object.entries(settings).filter(([, v]) => v !== undefined),
 			) as Partial<OrganizationSettings>;
 			await updateVideoSettings(capId, payload);
-			toast.success("Settings updated successfully");
+			toast.success("设置已更新");
 			onClose();
 		} catch (error) {
-			console.error("Error updating video settings:", error);
-			toast.error("Failed to update settings");
+			console.error("更新视频设置时出错：", error);
+			toast.error("更新设置失败");
 		} finally {
 			setSaveLoading(false);
 		}
@@ -158,8 +158,8 @@ export const SettingsDialog = ({
 	const getInheritedLabel = (key: ViewerSettingKey) => {
 		const sources = inheritedSpaceSettings?.[key];
 		if (!sources || sources.length === 0) return null;
-		if (sources.length === 1) return `Required by ${sources[0]?.name}`;
-		return `Required by ${sources.length} spaces`;
+		if (sources.length === 1) return `由 ${sources[0]?.name} 强制设置`;
+		return `由 ${sources.length} 个空间强制设置`;
 	};
 
 	const handleSpeedChange = (speed: number) =>
@@ -174,10 +174,10 @@ export const SettingsDialog = ({
 		<Dialog open={isOpen} onOpenChange={onClose}>
 			<DialogContent className="max-w-md min-w-fit">
 				<DialogHeader
-					description="Manage the settings for this cap"
+					description="管理此录制内容的设置"
 					icon={<FontAwesomeIcon icon={faGear} className="size-3.5" />}
 				>
-					<DialogTitle>Settings</DialogTitle>
+					<DialogTitle>设置</DialogTitle>
 				</DialogHeader>
 				<div className="grid grid-cols-2 gap-3 p-5">
 					{options.map((option) => {
@@ -206,7 +206,7 @@ export const SettingsDialog = ({
 										{effectiveValue && (
 											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-11 bg-gray-5">
 												{inheritedLabel ??
-													`Org ${orgValue ? "disabled" : "enabled"}`}
+													`组织默认${orgValue ? "已禁用" : "已启用"}`}
 											</p>
 										)}
 									</div>
@@ -230,16 +230,15 @@ export const SettingsDialog = ({
 					<div className="flex flex-col gap-3 p-4 rounded-xl border border-gray-3 bg-gray-1">
 						<div className="flex flex-col gap-1">
 							<div className="flex gap-1.5 items-center flex-wrap">
-								<p className="text-sm text-gray-12">Default playback speed</p>
+								<p className="text-sm text-gray-12">默认播放速度</p>
 								{isInheritingSpeed && (
 									<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-11 bg-gray-5">
-										Org default {orgSpeed ?? DEFAULT_PLAYBACK_SPEED}×
+										组织默认 {orgSpeed ?? DEFAULT_PLAYBACK_SPEED}×
 									</p>
 								)}
 							</div>
 							<p className="text-xs text-gray-10">
-								The speed this cap starts playing at. Viewers can still change
-								it.
+								此录制内容开始播放时的速度。观看者仍可自行调整。
 							</p>
 						</div>
 						<div className="flex flex-wrap gap-1 items-center p-1 w-fit rounded-lg border bg-gray-2 border-gray-3">
@@ -269,7 +268,7 @@ export const SettingsDialog = ({
 						onClick={onClose}
 						disabled={saveLoading}
 					>
-						Cancel
+						取消
 					</Button>
 					<Button
 						variant="dark"
@@ -278,7 +277,7 @@ export const SettingsDialog = ({
 						spinner={saveLoading}
 						disabled={saveLoading}
 					>
-						{saveLoading ? "Saving..." : "Save"}
+						{saveLoading ? "正在保存……" : "保存"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

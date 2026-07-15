@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { AppsListClient } from "./AppsListClient";
 
 export const metadata: Metadata = {
-	title: "Developer Apps — Cap",
+	title: "开发者应用 — Cap",
 };
 
 export default async function AppsPage() {

@@ -19,12 +19,10 @@ const EmptyState = ({
 		)}
 		<div className="space-y-1">
 			<h3 className="text-base font-medium text-gray-12">
-				{commentsDisabled ? "Disabled" : "No comments yet"}
+				{commentsDisabled ? "已关闭" : "暂无评论"}
 			</h3>
 			<p className="text-sm text-gray-10">
-				{commentsDisabled
-					? "Comments are disabled for this video"
-					: "Be the first to share your thoughts!"}
+				{commentsDisabled ? "此视频已关闭评论" : "来发表第一条评论吧！"}
 			</p>
 		</div>
 	</div>

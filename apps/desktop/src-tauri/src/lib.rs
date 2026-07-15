@@ -494,23 +494,23 @@ fn build_macos_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry
     let quit_label = config
         .product_name
         .as_ref()
-        .map(|name| format!("Quit {name}"))
-        .unwrap_or_else(|| "Quit Cap".to_string());
+        .map(|name| format!("退出 {name}"))
+        .unwrap_or_else(|| "退出 Cap".to_string());
 
     let window_menu = Submenu::with_id_and_items(
         app_handle,
         WINDOW_SUBMENU_ID,
-        "Window",
+        "窗口",
         true,
         &[
-            &PredefinedMenuItem::minimize(app_handle, None)?,
-            &PredefinedMenuItem::maximize(app_handle, None)?,
+            &PredefinedMenuItem::minimize(app_handle, Some("最小化"))?,
+            &PredefinedMenuItem::maximize(app_handle, Some("缩放"))?,
             &PredefinedMenuItem::separator(app_handle)?,
-            &PredefinedMenuItem::close_window(app_handle, None)?,
+            &PredefinedMenuItem::close_window(app_handle, Some("关闭窗口"))?,
         ],
     )?;
 
-    let help_menu = Submenu::with_id_and_items(app_handle, HELP_SUBMENU_ID, "Help", true, &[])?;
+    let help_menu = Submenu::with_id_and_items(app_handle, HELP_SUBMENU_ID, "帮助", true, &[])?;
 
     Menu::with_items(
         app_handle,
@@ -520,12 +520,12 @@ fn build_macos_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry
                 pkg_info.name.clone(),
                 true,
                 &[
-                    &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
+                    &PredefinedMenuItem::about(app_handle, Some("关于 Cap"), Some(about_metadata))?,
                     &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::services(app_handle, None)?,
+                    &PredefinedMenuItem::services(app_handle, Some("服务"))?,
                     &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::hide(app_handle, None)?,
-                    &PredefinedMenuItem::hide_others(app_handle, None)?,
+                    &PredefinedMenuItem::hide(app_handle, Some("隐藏 Cap"))?,
+                    &PredefinedMenuItem::hide_others(app_handle, Some("隐藏其他"))?,
                     &PredefinedMenuItem::separator(app_handle)?,
                     &MenuItem::with_id(
                         app_handle,
@@ -538,29 +538,29 @@ fn build_macos_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry
             )?,
             &Submenu::with_items(
                 app_handle,
-                "File",
+                "文件",
                 true,
-                &[&PredefinedMenuItem::close_window(app_handle, None)?],
+                &[&PredefinedMenuItem::close_window(app_handle, Some("关闭窗口"))?],
             )?,
             &Submenu::with_items(
                 app_handle,
-                "Edit",
+                "编辑",
                 true,
                 &[
-                    &PredefinedMenuItem::undo(app_handle, None)?,
-                    &PredefinedMenuItem::redo(app_handle, None)?,
+                    &PredefinedMenuItem::undo(app_handle, Some("撤销"))?,
+                    &PredefinedMenuItem::redo(app_handle, Some("重做"))?,
                     &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::cut(app_handle, None)?,
-                    &PredefinedMenuItem::copy(app_handle, None)?,
-                    &PredefinedMenuItem::paste(app_handle, None)?,
-                    &PredefinedMenuItem::select_all(app_handle, None)?,
+                    &PredefinedMenuItem::cut(app_handle, Some("剪切"))?,
+                    &PredefinedMenuItem::copy(app_handle, Some("复制"))?,
+                    &PredefinedMenuItem::paste(app_handle, Some("粘贴"))?,
+                    &PredefinedMenuItem::select_all(app_handle, Some("全选"))?,
                 ],
             )?,
             &Submenu::with_items(
                 app_handle,
-                "View",
+                "显示",
                 true,
-                &[&PredefinedMenuItem::fullscreen(app_handle, None)?],
+                &[&PredefinedMenuItem::fullscreen(app_handle, Some("进入全屏"))?],
             )?,
             &window_menu,
             &help_menu,
@@ -753,22 +753,22 @@ struct CameraPreviewErrorPayload {
 
 fn camera_preview_error_message(err: &str) -> String {
     if err.contains("DeviceNotFound") {
-        return "This camera is no longer available. Check that it is connected and allowed by system permissions.".to_string();
+        return "此摄像头已不可用。请检查设备是否已连接，并确认系统权限已允许使用。".to_string();
     }
 
     if err.contains("CameraTimeout") {
-        return "No frames were received from this camera. It may be closed, disconnected, covered, or in use by another app.".to_string();
+        return "未从此摄像头接收到画面。设备可能已关闭、断开、被遮挡，或正被其他应用占用。".to_string();
     }
 
     if err.contains("StartCapturing") {
-        return "The system could not start this camera. It may be unavailable or in use by another app.".to_string();
+        return "系统无法启动此摄像头。设备可能不可用或正被其他应用占用。".to_string();
     }
 
     if err.contains("InvalidFormat") {
-        return "This camera did not report a usable capture format.".to_string();
+        return "此摄像头未提供可用的采集格式。".to_string();
     }
 
-    "The selected camera could not be started. Choose another camera or reconnect this one."
+    "无法启动所选摄像头。请选择其他摄像头，或重新连接此设备。"
         .to_string()
 }
 
@@ -776,7 +776,7 @@ fn emit_camera_preview_error(app_handle: &AppHandle, message: String) {
     let _ = app_handle.emit(
         CAMERA_PREVIEW_ERROR_EVENT,
         CameraPreviewErrorPayload {
-            title: "Camera unavailable".to_string(),
+            title: "摄像头不可用".to_string(),
             message,
         },
     );
@@ -846,7 +846,7 @@ impl App {
         target: ScreenCaptureTarget,
     ) -> Result<(), String> {
         if !matches!(self.recording_state, RecordingState::None) {
-            return Err("Recording already in progress".to_string());
+            return Err("已有录制正在进行".to_string());
         }
 
         self.recording_state = RecordingState::Pending { mode, target };
@@ -1012,12 +1012,12 @@ impl App {
 
         let (title, body) = match kind {
             RecordingInputKind::Microphone => (
-                "Microphone disconnected",
-                "Recording continues. Silence will be used until the microphone reconnects.",
+                "麦克风已断开",
+                "录制将继续。在麦克风重新连接前，将使用静音音轨。",
             ),
             RecordingInputKind::Camera => (
-                "Camera disconnected",
-                "Recording continues without camera. Camera overlay will resume when the device reconnects.",
+                "摄像头已断开",
+                "录制将在没有摄像头的情况下继续。设备重新连接后会恢复摄像头叠加层。",
             ),
         };
 
@@ -1046,8 +1046,8 @@ impl App {
                 Ok(()) => {
                     info!("Camera reconnected and reinitialized successfully");
                     let _ = NewNotification {
-                        title: "Camera reconnected".to_string(),
-                        body: "Camera overlay has been restored.".to_string(),
+                        title: "摄像头已重新连接".to_string(),
+                        body: "摄像头叠加层已恢复。".to_string(),
                         is_error: false,
                     }
                     .emit(&self.handle);
@@ -1409,7 +1409,7 @@ async fn set_camera_input(
                 }
                 emit_camera_preview_error(&app_handle, message.clone());
                 let _ = NewNotification {
-                    title: "Camera unavailable".to_string(),
+                    title: "摄像头不可用".to_string(),
                     body: message,
                     is_error: true,
                 }
@@ -3735,13 +3735,13 @@ async fn save_file_dialog_inner(
         .to_string();
 
     let (name, extension) = match file_type.as_str() {
-        "recording" | "mp4" => ("MP4 Video", "mp4"),
-        "gif" => ("GIF Image", "gif"),
-        "mov" => ("MOV Video", "mov"),
-        "screenshot" | "png" => ("PNG Image", "png"),
+        "recording" | "mp4" => ("MP4 视频", "mp4"),
+        "gif" => ("GIF 图片", "gif"),
+        "mov" => ("MOV 视频", "mov"),
+        "screenshot" | "png" => ("PNG 图片", "png"),
         _ => {
             warn!(file_type, "Invalid save file dialog type");
-            return Err("Invalid file type".to_string());
+            return Err("无效的文件类型".to_string());
         }
     };
 
@@ -3756,7 +3756,7 @@ async fn save_file_dialog_inner(
 
     app.dialog()
         .file()
-        .set_title("Save File")
+        .set_title("保存文件")
         .set_file_name(file_name)
         .add_filter(name, &[extension])
         .save_file(move |path| {
@@ -4460,7 +4460,7 @@ async fn pick_recordings_folder(app: AppHandle) -> Result<Option<String>, String
 
     app.dialog()
         .file()
-        .set_title("Choose Recordings Folder")
+        .set_title("选择录制文件夹")
         .pick_folder(move |path| {
             let _ = tx.send(
                 path.as_ref()
@@ -6648,7 +6648,7 @@ impl<T: tauri_specta::Event> EventExt for T {}
 fn show_import_error_dialog(app: &AppHandle, message: String) {
     app.dialog()
         .message(message)
-        .title("Import Error")
+        .title("导入错误")
         .kind(tauri_plugin_dialog::MessageDialogKind::Error)
         .show(|_| {});
 }
@@ -6669,7 +6669,7 @@ fn open_importable_from_path(path: &Path, app: AppHandle) -> Result<(), String> 
                         error!("Failed to show imported video editor: {err}");
                         show_import_error_dialog(
                             &app,
-                            format!("Failed to open imported video: {err}"),
+                            format!("打开导入的视频失败：{err}"),
                         );
                         return;
                     }
@@ -6678,7 +6678,7 @@ fn open_importable_from_path(path: &Path, app: AppHandle) -> Result<(), String> 
                 }
                 Err(err) => {
                     error!("Failed to import dropped video: {err}");
-                    show_import_error_dialog(&app, format!("Failed to import video: {err}"));
+                    show_import_error_dialog(&app, format!("导入视频失败：{err}"));
                 }
             }
         });
@@ -6694,7 +6694,7 @@ fn open_importable_from_path(path: &Path, app: AppHandle) -> Result<(), String> 
                         error!("Failed to show imported image editor: {err}");
                         show_import_error_dialog(
                             &app,
-                            format!("Failed to open imported image: {err}"),
+                            format!("打开导入的图片失败：{err}"),
                         );
                         return;
                     }
@@ -6703,7 +6703,7 @@ fn open_importable_from_path(path: &Path, app: AppHandle) -> Result<(), String> 
                 }
                 Err(err) => {
                     error!("Failed to import dropped image: {err}");
-                    show_import_error_dialog(&app, format!("Failed to import image: {err}"));
+                    show_import_error_dialog(&app, format!("导入图片失败：{err}"));
                 }
             }
         });
@@ -6720,9 +6720,9 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
         RecordingMetaInner::Studio(meta) => {
             let status = meta.status();
             if let StudioRecordingStatus::Failed { .. } = status {
-                return Err("Unable to open failed recording".to_string());
+                return Err("无法打开失败的录制".to_string());
             } else if let StudioRecordingStatus::InProgress = status {
-                return Err("Recording in progress".to_string());
+                return Err("正在录制".to_string());
             }
 
             let project_path = path.to_path_buf();

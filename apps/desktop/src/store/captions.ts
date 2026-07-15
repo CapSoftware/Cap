@@ -57,8 +57,8 @@ export type CaptionStylePreset = {
 export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
 	{
 		id: "classic",
-		label: "Classic",
-		description: "Clean text on a solid rounded background.",
+		label: "经典",
+		description: "纯色圆角背景上的简洁文字。",
 		style: {
 			font: "System Sans-Serif",
 			fontWeight: 700,
@@ -78,8 +78,8 @@ export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
 	},
 	{
 		id: "karaoke",
-		label: "Karaoke",
-		description: "Words light up in sync with speech.",
+		label: "卡拉 OK",
+		description: "文字会随语音同步高亮。",
 		style: {
 			font: "System Sans-Serif",
 			fontWeight: 700,
@@ -99,8 +99,8 @@ export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
 	},
 	{
 		id: "highlight",
-		label: "Highlight",
-		description: "Bold caps with a pill behind the active word.",
+		label: "高亮",
+		description: "粗体大写文字，当前词后方显示胶囊背景。",
 		style: {
 			font: "System Sans-Serif",
 			fontWeight: 700,
@@ -120,8 +120,8 @@ export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
 	},
 	{
 		id: "pop",
-		label: "Pop",
-		description: "Playful caps that pop in with a vibrant accent.",
+		label: "弹出",
+		description: "活泼的大写文字，配合醒目的弹出效果。",
 		style: {
 			font: "System Sans-Serif",
 			fontWeight: 700,
@@ -141,8 +141,8 @@ export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
 	},
 	{
 		id: "minimal",
-		label: "Minimal",
-		description: "Subtle outlined text with no background.",
+		label: "极简",
+		description: "无背景的轻柔描边文字。",
 		style: {
 			font: "System Sans-Serif",
 			fontWeight: 600,
@@ -263,7 +263,7 @@ function createCaptionsStore() {
 					id,
 					start: time,
 					end: time + 2,
-					text: "New caption",
+					text: "新字幕",
 				},
 			]);
 		},

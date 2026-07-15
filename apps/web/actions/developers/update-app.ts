@@ -13,7 +13,7 @@ export async function updateDeveloperApp(data: {
 	logoUrl?: string | null;
 }) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user) throw new Error("未授权");
 
 	const [app] = await db()
 		.select()
@@ -27,12 +27,12 @@ export async function updateDeveloperApp(data: {
 		)
 		.limit(1);
 
-	if (!app) throw new Error("App not found");
+	if (!app) throw new Error("未找到应用");
 
 	const updates: Partial<typeof developerApps.$inferInsert> = {};
 	if (data.name !== undefined) {
 		const trimmed = data.name.trim();
-		if (!trimmed) throw new Error("App name cannot be empty");
+		if (!trimmed) throw new Error("应用名称不能为空");
 		updates.name = trimmed;
 	}
 	if (data.environment !== undefined) updates.environment = data.environment;

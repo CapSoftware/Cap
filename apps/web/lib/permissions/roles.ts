@@ -227,11 +227,18 @@ export function canRemoveSpaceMember({
 }
 
 export function organizationRoleLabel(role: OrganizationRole) {
-	return role[0]?.toUpperCase() + role.slice(1);
+	return {
+		owner: "所有者",
+		admin: "管理员",
+		member: "成员",
+	}[role];
 }
 
 export function spaceRoleLabel(role: SpaceRole) {
-	return role[0]?.toUpperCase() + role.slice(1);
+	return {
+		admin: "管理员",
+		member: "成员",
+	}[role];
 }
 
 export function compareOrganizationRoles(

@@ -20,7 +20,7 @@ export default async function SignupPage() {
 					icon={faArrowLeft}
 				/>
 				<Link className="text-gray-12" href="/">
-					Home
+					首页
 				</Link>
 			</div>
 			<SignupForm />

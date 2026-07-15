@@ -347,7 +347,7 @@ test("clicking X in the panel closes the panel and the camera preview", async ()
 		const panelFrame = frameWithUrl(targetPage, "popup.html");
 		if (!panelFrame) throw new Error("panel frame missing");
 		await panelFrame
-			.locator('button[aria-label="Close Cap and hide all recorder UI"]')
+			.locator('button[aria-label="关闭 Cap 并隐藏所有录制界面"]')
 			.click();
 
 		// The panel and the camera preview should both tear down.
@@ -419,7 +419,7 @@ test("a failed recording start reopens the panel with the error", async () => {
 			.toBe(true);
 		const panelFrame = frameWithUrl(targetPage, "popup.html");
 		if (!panelFrame) throw new Error("panel frame missing");
-		await expect(panelFrame.getByText("Recording failed.")).toBeVisible({
+		await expect(panelFrame.getByText("录制失败。")).toBeVisible({
 			timeout: 10_000,
 		});
 		await targetPage.screenshot({

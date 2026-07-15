@@ -43,11 +43,11 @@ export const RecordingButton = ({
 				className="flex flex-grow justify-center items-center"
 			>
 				{isRecording ? (
-					"Stop Recording"
+					"停止录制"
 				) : (
 					<>
 						<InstantIcon className="size-[0.8rem] mr-1.5" />
-						Start recording
+						开始录制
 					</>
 				)}
 			</Button>

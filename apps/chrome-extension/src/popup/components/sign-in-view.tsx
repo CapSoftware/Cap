@@ -51,19 +51,19 @@ export const SignInView = ({
 				</g>
 			</svg>
 			<h1 className="cap-fade-up cap-fade-up-2">
-				{authPending ? "Finish signing in" : "Sign in to record"}
+				{authPending ? "完成登录" : "登录后开始录制"}
 			</h1>
 			<p className="cap-signin-lede cap-fade-up cap-fade-up-3">
 				{authPending
-					? "Complete sign-in in the Cap window. This panel updates automatically."
-					: "Record your tab, screen or camera. Your video uploads while you record."}
+					? "请在 Cap 窗口中完成登录，此面板会自动更新。"
+					: "录制标签页、屏幕或摄像头，视频会在录制过程中同步上传。"}
 			</p>
 			{authPending ? (
 				<p className="cap-signin-wait cap-fade-up cap-fade-up-4">
 					<svg viewBox="0 0 24 24" aria-hidden="true">
 						<circle pathLength={1} cx="12" cy="12" r="9" />
 					</svg>
-					Waiting for the Cap sign-in window…
+					正在等待 Cap 登录窗口…
 				</p>
 			) : null}
 			<button
@@ -76,7 +76,7 @@ export const SignInView = ({
 				disabled={busy}
 				onClick={onSignIn}
 			>
-				{authPending ? "Open the sign-in window again" : "Sign in to Cap"}
+				{authPending ? "重新打开登录窗口" : "登录 Cap"}
 			</button>
 			<p
 				className={
@@ -86,8 +86,8 @@ export const SignInView = ({
 				}
 			>
 				{authPending
-					? "The window closes by itself once it connects."
-					: "Your share link is ready the moment you stop."}
+					? "连接成功后窗口会自动关闭。"
+					: "停止录制时，分享链接即可使用。"}
 			</p>
 		</div>
 	);

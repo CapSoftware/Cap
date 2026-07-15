@@ -8,274 +8,231 @@ const studioModeConfig: FeaturePageConfig = {
 	slug: "studio-mode",
 	content: {
 		hero: {
-			title: "Studio Mode",
-			subtitle: "Professional screen recording for creators",
+			title: "工作室模式",
+			subtitle: "为创作者打造的专业屏幕录制",
 			description:
-				"Local recording with studio-quality output and precision editing tools. Perfect for content creators, educators, and professionals who need the highest quality recordings.",
-			primaryCta: "Download Cap Free",
-			secondaryCta: "Watch Demo",
-			features: [
-				"4K 60fps recording",
-				"Local processing",
-				"Professional editing tools",
-			],
+				"在本地录制，以工作室级画质输出，并提供精确编辑工具。非常适合需要最高品质录像的内容创作者、教育工作者和专业人士。",
+			primaryCta: "免费下载 Cap",
+			secondaryCta: "观看演示",
+			features: ["4K 60 帧录制", "本地处理", "专业编辑工具"],
 		},
 		features: {
-			title: "Studio-Quality Features for Professional Content",
-			description:
-				"Everything you need to create polished, professional recordings that engage your audience",
+			title: "为专业内容提供工作室级功能",
+			description: "创作精致、专业且吸引观众的录像所需的一切功能",
 			items: [
 				{
-					title: "Ultra-High Quality Recording",
+					title: "超高画质录制",
 					description:
-						"Record at up to 4K resolution and 60fps for crystal-clear videos that showcase every detail of your work.",
+						"最高支持 4K 分辨率和 60 帧录制，以清晰视频展现作品的每个细节。",
 					icon: "video",
 				},
 				{
-					title: "Local Processing & Privacy",
+					title: "本地处理与隐私",
 					description:
-						"All recording and editing happens locally on your device. Your content never leaves your computer until you choose to share it.",
+						"所有录制和编辑都在设备本地完成；在你主动分享之前，内容不会离开电脑。",
 					icon: "shield",
 				},
 				{
-					title: "Precision Timeline Editor",
+					title: "精确时间轴编辑器",
 					description:
-						"Frame-perfect editing with a professional timeline interface. Cut, trim, and arrange your recordings with precision.",
+						"通过专业时间轴界面精确到帧地编辑、剪切、修剪和排列录像。",
 					icon: "edit",
 				},
 				{
-					title: "Multiple Camera Angles",
+					title: "多摄像头角度",
 					description:
-						"Record screen and webcam separately, then composite them in real-time or adjust layouts after recording in the editor.",
+						"分别录制屏幕和摄像头，可实时合成，也可在录制后通过编辑器调整布局。",
 					icon: "camera",
 				},
 				{
-					title: "Custom Backgrounds & Branding",
-					description:
-						"Add custom backgrounds and brand colors to create consistent, professional-looking content.",
+					title: "自定义背景与品牌",
+					description: "添加自定义背景和品牌颜色，创作风格一致的专业内容。",
 					icon: "palette",
 				},
 				{
-					title: "Advanced Audio Controls",
+					title: "高级音频控制",
 					description:
-						"Control the audio levels of your microphone and system audio separately with individual level controls and noise reduction.",
+						"分别控制麦克风和系统音频的音量，并使用独立音量控制和降噪功能。",
 					icon: "microphone",
 				},
 				{
-					title: "Smart Auto-Zoom",
+					title: "智能自动缩放",
 					description:
-						"Automatically zoom in on important content areas during recording, or add zoom effects after recording in the editor.",
+						"录制时自动放大重要内容区域，或在录制后通过编辑器添加缩放效果。",
 					icon: "zoom",
 				},
 				{
-					title: "Export in Multiple Formats",
+					title: "导出多种格式",
 					description:
-						"Create shareable links, export to MP4, or export to GIF. Choose the format that best matches your sharing needs.",
+						"创建分享链接，或导出为 MP4、GIF，选择最适合分享需求的格式。",
 					icon: "download",
 				},
 			],
 		},
 		useCases: {
-			title: "Perfect for Professional Content Creation",
-			description:
-				"Studio Mode empowers creators across industries to produce high-quality content",
+			title: "适合专业内容创作",
+			description: "工作室模式帮助各行各业的创作者制作高质量内容",
 			cases: [
 				{
-					title: "Software Tutorials & Demos",
+					title: "软件教程与演示",
 					description:
-						"Create comprehensive software tutorials with high-quality screen capture, clear audio, and professional presentation.",
-					benefits: [
-						"4K screen capture",
-						"Multi-track audio",
-						"Zoom effects",
-						"Custom branding",
-					],
+						"通过高质量屏幕捕捉、清晰音频和专业展示制作完整的软件教程。",
+					benefits: ["4K 屏幕捕捉", "多轨音频", "缩放效果", "自定义品牌"],
 				},
 				{
-					title: "Educational Content",
+					title: "教育内容",
 					description:
-						"Develop engaging educational videos with multiple camera angles, custom backgrounds, and precise editing capabilities.",
-					benefits: [
-						"Picture-in-picture",
-						"Background replacement",
-						"Timeline editing",
-						"Chapter markers",
-					],
+						"通过多摄像头角度、自定义背景和精确编辑制作生动的教学视频。",
+					benefits: ["画中画", "背景替换", "时间轴编辑", "章节标记"],
 				},
 				{
-					title: "Product Demonstrations",
-					description:
-						"Showcase products with professional-quality recordings that highlight features and build trust with potential customers.",
-					benefits: [
-						"Professional polish",
-						"Brand consistency",
-						"High-quality output",
-						"Custom layouts",
-					],
+					title: "产品演示",
+					description: "通过专业品质录像突出产品功能，赢得潜在客户的信任。",
+					benefits: ["专业润色", "品牌一致性", "高质量输出", "自定义布局"],
 				},
 				{
-					title: "Training & Onboarding",
-					description:
-						"Create comprehensive training materials that can be reused, updated, and distributed across your organization.",
-					benefits: [
-						"Reusable content",
-						"Professional quality",
-						"Easy updates",
-						"Consistent branding",
-					],
+					title: "培训与入职",
+					description: "创建可在组织内复用、更新和分发的完整培训材料。",
+					benefits: ["内容可复用", "专业品质", "轻松更新", "品牌一致"],
 				},
 				{
-					title: "Content Creation",
+					title: "内容创作",
 					description:
-						"Develop YouTube videos, online courses, and social media content with studio-quality production values.",
-					benefits: [
-						"Creator-focused tools",
-						"High-quality output",
-						"Professional editing",
-						"Multiple formats",
-					],
+						"以工作室级制作水准创作 YouTube 视频、在线课程和社交媒体内容。",
+					benefits: ["创作者专属工具", "高质量输出", "专业编辑", "多种格式"],
 				},
 				{
-					title: "Documentation & Knowledge Sharing",
-					description:
-						"Build comprehensive video documentation that teams can reference and update as processes evolve.",
-					benefits: [
-						"Knowledge preservation",
-						"Easy sharing",
-						"Professional presentation",
-						"Searchable content",
-					],
+					title: "文档与知识分享",
+					description: "构建完整的视频文档，便于团队随流程演变查阅和更新。",
+					benefits: ["知识沉淀", "轻松分享", "专业展示", "可搜索内容"],
 				},
 			],
 		},
 		comparison: {
-			title: "Studio Mode vs Instant Mode",
-			description: "Choose the right recording mode for your needs",
+			title: "工作室模式与即时模式",
+			description: "根据需求选择合适的录制模式",
 			modes: [
 				{
-					name: "Studio Mode",
-					description: "For professional content creation",
+					name: "工作室模式",
+					description: "适合专业内容创作",
 					features: [
-						"Local recording & processing",
-						"4K 60fps quality",
-						"Professional timeline editor",
-						"Custom backgrounds & branding",
-						"MP4, GIF, and link exports",
-						"Advanced audio controls",
-						"Unlimited recording length",
-						"Complete privacy control",
+						"本地录制与处理",
+						"4K 60 帧画质",
+						"专业时间轴编辑器",
+						"自定义背景与品牌",
+						"导出 MP4、GIF 和链接",
+						"高级音频控制",
+						"不限录制时长",
+						"完整隐私控制",
 					],
-					bestFor: "Tutorials, courses, product demos, professional content",
+					bestFor: "教程、课程、产品演示和专业内容",
 					isPrimary: true,
 				},
 				{
-					name: "Instant Mode",
-					description: "For quick sharing & collaboration",
+					name: "即时模式",
+					description: "适合快速分享与协作",
 					features: [
-						"Instant shareable links",
-						"Cloud processing",
-						"Quick turnaround",
-						"Automatic transcriptions",
-						"Comment & feedback tools",
-						"Team collaboration",
-						"5-minute free recordings",
-						"Browser-based viewing",
+						"即时分享链接",
+						"云端处理",
+						"快速完成",
+						"自动转写",
+						"评论和反馈工具",
+						"团队协作",
+						"免费录制 5 分钟",
+						"浏览器观看",
 					],
-					bestFor: "Quick updates, feedback, team communication",
+					bestFor: "快速更新、反馈和团队沟通",
 					isPrimary: false,
 				},
 			],
 		},
 		workflow: {
-			title: "Professional Workflow, Simplified",
-			description:
-				"From recording to final export, Studio Mode streamlines the entire content creation process",
+			title: "简化专业工作流",
+			description: "从录制到最终导出，工作室模式简化整个内容创作过程",
 			steps: [
 				{
-					title: "Set Up Your Recording",
+					title: "设置录制",
 					description:
-						"Choose your recording area, camera position, and audio sources. Configure quality settings and branding elements.",
+						"选择录制区域、摄像头位置和音频源，配置画质设置和品牌元素。",
 					icon: "settings",
 				},
 				{
-					title: "Record with Confidence",
+					title: "安心录制",
 					description:
-						"Everything records locally at the highest quality. No internet required, no file size limits, complete privacy.",
+						"所有内容均以最高画质在本地录制，无需联网、不限文件大小，并完全保护隐私。",
 					icon: "record",
 				},
 				{
-					title: "Edit with Precision",
+					title: "精确编辑",
 					description:
-						"Use the professional timeline editor to cut, trim, and enhance your recording. Add zoom effects and adjust layouts.",
+						"使用专业时间轴编辑器剪切、修剪和增强录像，添加缩放效果并调整布局。",
 					icon: "edit",
 				},
 				{
-					title: "Export & Share",
+					title: "导出与分享",
 					description:
-						"Export in your preferred format and quality. Upload to your platform of choice or share locally with your team.",
+						"按偏好的格式和画质导出，上传到所选平台或在本地与团队分享。",
 					icon: "share",
 				},
 			],
 		},
 		faq: {
-			title: "Frequently Asked Questions",
+			title: "常见问题",
 			items: [
 				{
-					question:
-						"What's the difference between Studio Mode and Instant Mode?",
+					question: "工作室模式和即时模式有什么区别？",
 					answer:
-						"Studio Mode records locally at the highest quality with professional editing tools, perfect for content creation. Instant Mode records to the cloud for immediate sharing, ideal for quick updates and collaboration.",
+						"工作室模式以最高画质在本地录制并提供专业编辑工具，适合内容创作；即时模式录制到云端以便立即分享，适合快速更新和协作。",
 				},
 				{
-					question: "What quality can I record at in Studio Mode?",
+					question: "工作室模式支持什么录制画质？",
 					answer:
-						"Studio Mode supports recording up to 4K resolution at 60fps, giving you the highest quality possible for professional content creation.",
+						"工作室模式最高支持 4K 分辨率、60 帧录制，为专业内容创作提供尽可能高的画质。",
 				},
 				{
-					question: "Is there a recording length limit in Studio Mode?",
-					answer:
-						"No, Studio Mode has no recording length limits. Record for as long as you need - only limited by your device's storage space.",
+					question: "工作室模式有录制时长限制吗？",
+					answer: "没有。工作室模式不限制录制时长，只受设备可用存储空间限制。",
 				},
 				{
-					question: "Does Studio Mode require an internet connection?",
+					question: "工作室模式需要联网吗？",
 					answer:
-						"No, Studio Mode works completely offline. All recording and editing happens locally on your device, so you can work anywhere without an internet connection.",
+						"不需要。工作室模式可完全离线使用，所有录制和编辑都在设备本地完成，随时随地均可工作。",
 				},
 				{
-					question: "Can I use my own branding in Studio Mode?",
+					question: "工作室模式支持自有品牌吗？",
 					answer:
-						"Yes, Studio Mode includes comprehensive branding options. Add your logo, custom backgrounds, brand colors, and create consistent professional-looking content.",
+						"支持。工作室模式提供完整品牌选项，可添加徽标、自定义背景和品牌颜色，制作风格一致的专业内容。",
 				},
 				{
-					question: "What file formats can I export to?",
+					question: "可以导出哪些文件格式？",
 					answer:
-						"Studio Mode supports creating shareable links, exporting to MP4, or exporting to GIF with quality settings to match your needs.",
+						"工作室模式支持创建分享链接，或按需求设置画质并导出为 MP4、GIF。",
 				},
 				{
-					question: "Is Studio Mode available on both Mac and Windows?",
+					question: "工作室模式同时支持 Mac 和 Windows 吗？",
 					answer:
-						"Yes, Studio Mode is available as part of the Cap desktop application for both macOS (Intel and Apple Silicon) and Windows.",
+						"支持。工作室模式包含在 Cap 桌面应用中，适用于 macOS（Intel 和 Apple 芯片）以及 Windows。",
 				},
 				{
-					question: "How does pricing work for Studio Mode?",
+					question: "工作室模式如何收费？",
 					answer:
-						"Studio Mode is completely free for personal usage. For commercial usage, you need the Desktop License, which is included with Cap Pro or can be purchased separately.",
+						"个人使用工作室模式完全免费。商业使用需要桌面许可证；该许可证已包含在 Cap 专业版中，也可单独购买。",
 				},
 			],
 		},
 		video: {
-			title: "See Studio Mode in Action",
+			title: "观看工作室模式演示",
 			iframe: {
 				src: "https://cap.so/embed/qk8gt56e1q1r735",
-				title: "Studio Mode Demo - Cap Screen Recording",
+				title: "工作室模式演示 - Cap 屏幕录制",
 			},
 		},
 		cta: {
-			title: "Start Creating Professional Content Today",
+			title: "今天就开始创作专业内容",
 			description:
-				"Download Cap and experience the power of Studio Mode for yourself. Create stunning, professional-quality recordings that engage your audience.",
-			primaryButton: "Download Cap Free",
-			secondaryButton: "Upgrade to Cap Pro",
+				"下载 Cap，亲自体验工作室模式的强大功能，创作令人惊艳、吸引观众的专业品质录像。",
+			primaryButton: "免费下载 Cap",
+			secondaryButton: "升级到 Cap 专业版",
 		},
 	},
 	customSections: {

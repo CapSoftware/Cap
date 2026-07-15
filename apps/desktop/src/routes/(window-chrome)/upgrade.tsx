@@ -14,14 +14,14 @@ import { authStore } from "../../store";
 import { Dialog, DialogContent, Input } from "../editor/ui";
 
 const proFeatures = [
-	"Commercial License Included",
-	"Unlimited cloud storage & Shareable links",
-	"Connect custom S3 storage bucket",
-	"Advanced teams features",
-	"Unlimited views",
-	"Password protected videos",
-	"Advanced analytics",
-	"Priority support",
+	"包含商业许可证",
+	"无限云存储与分享链接",
+	"连接自定义 S3 存储桶",
+	"高级团队功能",
+	"无限观看次数",
+	"密码保护视频",
+	"高级分析",
+	"优先支持",
 ];
 
 import { RuntimeLoader } from "@rive-app/canvas";
@@ -254,9 +254,9 @@ export default function Page() {
 			{upgradeComplete() && (
 				<div class="flex justify-center items-center h-full bg-opacity-75">
 					<div class="relative z-10 p-6 text-center bg-white rounded-lg shadow-lg">
-						<h2 class="mb-4 text-2xl font-bold">Upgrade complete</h2>
+						<h2 class="mb-4 text-2xl font-bold">升级完成</h2>
 						<p class="mb-4 text-sm text-gray-10">
-							You can now close this window - thank you for upgrading!
+							现在可以关闭此窗口。感谢你的升级！
 						</p>
 						<Button
 							onClick={() => {
@@ -267,7 +267,7 @@ export default function Page() {
 							variant="primary"
 							size="lg"
 						>
-							Close window
+							关闭窗口
 						</Button>
 					</div>
 				</div>
@@ -277,16 +277,16 @@ export default function Page() {
 					<div class="p-8 mx-auto w-full max-w-[700px] rounded-xl border shadow-xs bg-gray-2 border-gray-3">
 						<div class="space-y-6">
 							<div class="flex flex-col items-center mb-6 text-center">
-								<h3 class="text-2xl font-medium">Commercial License</h3>
+								<h3 class="text-2xl font-medium">商业许可证</h3>
 								<p class="text-sm text-gray-11">
-									Your license details for Cap commercial use
+									用于 Cap 商业用途的许可证详情
 								</p>
 							</div>
 
 							<div class="space-y-6">
 								<div>
 									<label class="block mb-2 text-sm text-gray-12">
-										License Key
+										许可证密钥
 									</label>
 									<p class="overflow-x-auto p-3 font-mono text-xs whitespace-pre-wrap break-all rounded-lg border border-gray-4 text-gray-9 bg-gray-3">
 										{license.data.licenseKey}
@@ -296,7 +296,7 @@ export default function Page() {
 								<Show when={license.data.expiryDate}>
 									{(expiryDate) => (
 										<div class="space-y-1">
-											<label class="text-sm text-gray-12">Expires</label>
+											<label class="text-sm text-gray-12">到期时间</label>
 											<p class="text-gray-10">
 												{new Date(expiryDate()).toLocaleDateString(undefined, {
 													year: "numeric",
@@ -316,9 +316,7 @@ export default function Page() {
 											resetLicense.mutate();
 										}}
 									>
-										{resetLicense.isPending
-											? "Deactivating..."
-											: "Deactivate License"}
+										{resetLicense.isPending ? "正在停用……" : "停用许可证"}
 									</Button>
 								</div>
 							</div>
@@ -328,7 +326,7 @@ export default function Page() {
 					<>
 						<div class="text-center">
 							<h1 class="text-4xl md:text-4xl mb-6 tracking-[-.05em] font-medium text-(--text-primary)">
-								Early Adopter Pricing
+								早期用户优惠价
 							</h1>
 						</div>
 						<div class="flex gap-4 w-full">
@@ -358,10 +356,10 @@ export default function Page() {
 										<Commercial class="w-[250px]" />
 										<div class="space-y-1 text-center">
 											<h3 class="text-2xl font-medium tracking-tight leading-5">
-												Commercial License
+												商业许可证
 											</h3>
 											<p class="mt-2 text-sm text-(--text-tertiary)">
-												For commercial use
+												适用于商业用途
 											</p>
 										</div>
 										<div class="flex flex-col justify-center items-center">
@@ -371,12 +369,12 @@ export default function Page() {
 											</h3>
 											{isCommercialAnnual() && (
 												<p class="text-[16px] font-medium text-gray-11">
-													billed annually
+													按年计费
 												</p>
 											)}
 											{!isCommercialAnnual() && (
 												<p class="text-[16px] font-medium text-gray-11">
-													one-time payment
+													一次性付款
 												</p>
 											)}
 										</div>
@@ -385,8 +383,7 @@ export default function Page() {
 											class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 bg-gray-5 hover:border-gray-400"
 										>
 											<p class="text-xs text-gray-12">
-												Switch to {isCommercialAnnual() ? "lifetime" : "yearly"}
-												:{" "}
+												切换为{isCommercialAnnual() ? "永久版" : "年付版"}：{" "}
 												<span class="font-medium">
 													{isCommercialAnnual() ? "$58" : "$29"}
 												</span>
@@ -394,10 +391,10 @@ export default function Page() {
 										</div>
 										<ul class="flex flex-col gap-2 justify-center list-none">
 											{[
-												"Commercial Use of Cap Recorder + Editor",
-												"Community Support",
-												"Local-only features",
-												"Perpetual license option",
+												"Cap 录制器与编辑器的商业使用权",
+												"社区支持",
+												"仅本地运行的功能",
+												"永久许可证选项",
 											].map((feature) => (
 												<li class="flex justify-start items-center">
 													<div class="flex justify-center items-center p-0 m-0 w-6 h-6">
@@ -424,14 +421,14 @@ export default function Page() {
 										size="lg"
 									>
 										{openCommercialCheckout.isPending
-											? "Loading..."
-											: "Purchase License"}
+											? "正在加载……"
+											: "购买许可证"}
 									</Button>
 									<p
 										onClick={() => setOpenLicenseDialog(true)}
 										class="mb-2 text-sm transition-colors text-gray-11 hover:text-gray-12"
 									>
-										Already have a license key?
+										已有许可证密钥？
 									</p>
 								</div>
 							</div>
@@ -466,7 +463,7 @@ export default function Page() {
 												Cap Pro
 											</h3>
 											<p class="text-[0.875rem] text-gray-9">
-												For professional use and teams.
+												适用于专业用途和团队。
 											</p>
 										</div>
 										<div class="flex flex-col justify-center items-center">
@@ -476,12 +473,12 @@ export default function Page() {
 											</h3>
 											{isProAnnual() && (
 												<p class="text-[16px] font-medium text-gray-9">
-													per user, billed annually
+													按用户、按年计费
 												</p>
 											)}
 											{!isProAnnual() && (
 												<p class="text-[16px] font-medium text-gray-9">
-													per user, billed monthly
+													按用户、按月计费
 												</p>
 											)}
 										</div>
@@ -490,11 +487,11 @@ export default function Page() {
 											class="px-3 py-2 text-center bg-blue-500 rounded-full border border-transparent transition-all duration-200 hover:border-blue-400"
 										>
 											<p class="text-xs text-solid-white">
-												Switch to {isProAnnual() ? "monthly" : "yearly"}:{" "}
+												切换为{isProAnnual() ? "月付" : "年付"}：{" "}
 												<span class="font-medium">
 													{isProAnnual()
-														? "$12 per user, billed monthly"
-														: "$8.16 per user, billed annually"}
+														? "$12/用户，按月计费"
+														: "$8.16/用户，按年计费"}
 												</span>
 											</p>
 										</div>
@@ -514,7 +511,7 @@ export default function Page() {
 										class="rounded-full! text-lg! w-full mx-auto"
 										onClick={openCheckoutInExternalBrowser}
 									>
-										{loading() ? "Loading..." : "Upgrade to Cap Pro"}
+										{loading() ? "正在加载……" : "升级到 Cap Pro"}
 									</Button>
 								</div>
 							</div>
@@ -569,7 +566,7 @@ const ActivateLicenseDialog = ({ open, onOpenChange }: Props) => {
 	return (
 		<Dialog.Root open={open()} onOpenChange={onOpenChange}>
 			<DialogContent
-				title="Activate License"
+				title="激活许可证"
 				confirm={
 					<Dialog.ConfirmButton
 						disabled={activateLicenseKey.isPending}
@@ -579,13 +576,13 @@ const ActivateLicenseDialog = ({ open, onOpenChange }: Props) => {
 							})
 						}
 					>
-						Activate
+						激活
 					</Dialog.ConfirmButton>
 				}
 			>
 				<Input
 					class="mt-2"
-					placeholder="Enter license key..."
+					placeholder="输入许可证密钥……"
 					value={licenseKey()}
 					onInput={(e) => setLicenseKey(e.currentTarget.value)}
 				/>

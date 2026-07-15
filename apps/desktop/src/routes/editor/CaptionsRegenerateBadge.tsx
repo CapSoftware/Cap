@@ -31,9 +31,7 @@ export function CaptionsRegenerateBadge(props: { class?: string }) {
 				language,
 			);
 			if (result.segments.length < 1) {
-				toast.error(
-					"No captions were generated. The audio might be too quiet or unclear.",
-				);
+				toast.error("未生成字幕，音频可能过轻或不够清晰。");
 				return;
 			}
 
@@ -49,10 +47,10 @@ export function CaptionsRegenerateBadge(props: { class?: string }) {
 			);
 
 			setEditorState("captions", "isStale", false);
-			toast.success("Captions regenerated!");
+			toast.success("字幕已重新生成！");
 		} catch (error) {
 			console.error("Error regenerating captions:", error);
-			toast.error("Failed to regenerate captions");
+			toast.error("重新生成字幕失败");
 		} finally {
 			setEditorState("captions", "isGenerating", false);
 		}
@@ -99,9 +97,7 @@ export function CaptionsRegenerateBadge(props: { class?: string }) {
 					>
 						<IconCapCaptions class="size-3.5" />
 					</Show>
-					{editorState.captions.isGenerating
-						? "Regenerating..."
-						: "Regenerate captions"}
+					{editorState.captions.isGenerating ? "正在重新生成…" : "重新生成字幕"}
 				</button>
 				<Show when={!editorState.captions.isGenerating}>
 					<div class="w-px h-4 bg-gray-6" />

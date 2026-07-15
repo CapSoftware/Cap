@@ -42,11 +42,11 @@ export const ProCard = () => {
 			if (data.url) {
 				window.location.href = data.url;
 			} else {
-				toast.error("Failed to create checkout session");
+				toast.error("创建结账会话失败");
 			}
 		},
 		onError: () => {
-			toast.error("An error occurred. Please try again.");
+			toast.error("出现错误，请重试。");
 		},
 	});
 
@@ -69,7 +69,7 @@ export const ProCard = () => {
 			}
 
 			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
+				toast.success("你已订阅 Cap Pro 方案");
 			}
 
 			if (data.url) {
@@ -87,7 +87,7 @@ export const ProCard = () => {
 			className="flex relative flex-col p-8 rounded-2xl ring-2 shadow-xl bg-gray-1 ring-blue-500 shadow-blue-500/10"
 		>
 			<span className="absolute -top-3 left-1/2 px-3 py-1 text-xs font-semibold text-white whitespace-nowrap bg-blue-500 rounded-full -translate-x-1/2">
-				Most popular
+				最受欢迎
 			</span>
 
 			<div className="mb-4 size-14 -ml-3">
@@ -97,44 +97,43 @@ export const ProCard = () => {
 			</div>
 			<h3 className="text-lg font-semibold text-gray-12">{copy.title}</h3>
 			<p className="mt-1.5 text-sm leading-relaxed text-gray-10 min-h-[40px]">
-				Everything in Desktop, plus unlimited cloud sharing, AI, and team
-				collaboration.
+				包含桌面许可证全部功能，另有不限量云端分享、AI 和团队协作。
 			</p>
 
 			<div className="flex gap-1.5 items-baseline mt-6">
 				<span className="text-4xl font-semibold tracking-tight tabular-nums text-gray-12">
 					$<NumberFlow value={perUser} />
 				</span>
-				<span className="text-sm text-gray-10">/ user / month</span>
+				<span className="text-sm text-gray-10">/ 用户 / 月</span>
 			</div>
 			<p className="mt-1 text-sm text-gray-10">
-				billed {isAnnually ? "annually" : "monthly"}
+				{isAnnually ? "按年计费" : "按月计费"}
 			</p>
 
 			<div className="mt-6 space-y-3 min-h-[120px]">
 				<BillingToggle
-					ariaLabel="Billing cycle for Cap Pro"
+					ariaLabel="Cap Pro 计费周期"
 					value={isAnnually ? "annual" : "monthly"}
 					onChange={(value) => setIsAnnually(value === "annual")}
 					options={[
-						{ value: "monthly", label: "Monthly" },
-						{ value: "annual", label: "Annual", badge: "Save 32%" },
+						{ value: "monthly", label: "按月" },
+						{ value: "annual", label: "按年", badge: "节省 32%" },
 					]}
 				/>
 				<Stepper
-					label="Users"
+					label="用户数"
 					value={users}
 					onIncrement={incrementUsers}
 					onDecrement={decrementUsers}
-					decrementLabel="Decrease user count"
-					incrementLabel="Increase user count"
+					decrementLabel="减少用户数量"
+					incrementLabel="增加用户数量"
 				/>
 				<p className="text-sm text-gray-10">
-					Total:{" "}
+					合计：{" "}
 					<span className="font-medium text-gray-12">
 						$<NumberFlow value={isAnnually ? yearlyTotal : monthlyTotal} />
 					</span>{" "}
-					{isAnnually ? "/ year" : "/ month"}
+					{isAnnually ? "/ 年" : "/ 月"}
 				</p>
 			</div>
 
@@ -144,14 +143,14 @@ export const ProCard = () => {
 				onClick={() => planCheckout.mutate()}
 				disabled={isLoading}
 				className="mt-6 w-full font-medium"
-				aria-label="Purchase Cap Pro License"
+				aria-label="购买 Cap Pro 许可证"
 			>
-				{isLoading ? "Loading..." : copy.cta}
+				{isLoading ? "正在加载..." : copy.cta}
 			</Button>
 
 			<div className="pt-8 mt-8 border-t border-gray-4">
 				<p className="mb-4 text-sm font-medium text-gray-12">
-					Everything in Desktop License, plus:
+					包含桌面许可证全部功能，另有：
 				</p>
 				<ul className="space-y-3">
 					{copy.features.slice(1).map((feature) => (

@@ -1,8 +1,8 @@
 {
 	"manifest_version": 3,
-	"name": "Cap - Screen Recorder & Screen Capture",
+	"name": "Cap - 屏幕录制与截图",
 	"short_name": "Cap",
-	"description": "Free, open source screen recorder. Capture your screen, tab, camera & mic in Chrome and share a video link the moment you stop.",
+	"description": "免费开源的屏幕录制工具。在 Chrome 中录制屏幕、标签页、摄像头和麦克风，停止录制后即可分享视频链接。",
 	"version": "1.0.2",
 	"homepage_url": "https://cap.so",
 	"minimum_chrome_version": "116",
@@ -13,7 +13,7 @@
 		"128": "icons/icon-128.png"
 	},
 	"action": {
-		"default_title": "Record your screen with Cap",
+		"default_title": "使用 Cap 录制屏幕",
 		"default_icon": {
 			"16": "icons/icon-16.png",
 			"32": "icons/icon-32.png",

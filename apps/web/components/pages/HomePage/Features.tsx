@@ -142,7 +142,7 @@ const Features = () => {
 					size="lg"
 					className="inline-flex"
 				>
-					View all features
+					查看所有功能
 				</Button>
 			</div>
 		</div>

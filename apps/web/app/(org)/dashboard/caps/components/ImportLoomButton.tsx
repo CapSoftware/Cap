@@ -53,19 +53,17 @@ export const ImportLoomButton = ({
 			});
 
 			if (!result.success) {
-				toast.error(result.error || "Failed to import video.");
+				toast.error(result.error || "导入视频失败。");
 				setIsImporting(false);
 				return;
 			}
 
-			toast.success(
-				"Loom video import started! It will appear in your caps shortly.",
-			);
+			toast.success("Loom 视频已开始导入，稍后会显示在你的录制内容中。");
 			setDialogOpen(false);
 			setLoomUrl("");
 			router.refresh();
 		} catch {
-			toast.error("An unexpected error occurred. Please try again.");
+			toast.error("发生意外错误，请重试。");
 		} finally {
 			setIsImporting(false);
 		}
@@ -88,8 +86,7 @@ export const ImportLoomButton = ({
 				className="flex gap-2 items-center"
 				size={size}
 			>
-				<FontAwesomeIcon className="size-3.5" icon={faFileImport} />
-				Import from Loom
+				<FontAwesomeIcon className="size-3.5" icon={faFileImport} />从 Loom 导入
 			</Button>
 
 			<Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -97,12 +94,11 @@ export const ImportLoomButton = ({
 					<DialogHeader
 						icon={<FontAwesomeIcon icon={faFileImport} className="size-3.5" />}
 					>
-						<DialogTitle>Import from Loom</DialogTitle>
+						<DialogTitle>从 Loom 导入</DialogTitle>
 					</DialogHeader>
 					<div className="p-5">
 						<p className="mb-3 text-sm text-gray-11">
-							Paste a Loom video URL to import it to Cap. The video will be
-							downloaded and processed in the background.
+							粘贴 Loom 视频网址，将其导入 Cap。视频将在后台下载并处理。
 						</p>
 						<Input
 							value={loomUrl}
@@ -124,7 +120,7 @@ export const ImportLoomButton = ({
 								setLoomUrl("");
 							}}
 						>
-							Cancel
+							取消
 						</Button>
 						<Button
 							onClick={handleImport}
@@ -133,7 +129,7 @@ export const ImportLoomButton = ({
 							variant="dark"
 							disabled={!isValidLoomUrl || isImporting}
 						>
-							{isImporting ? "Importing..." : "Import"}
+							{isImporting ? "正在导入……" : "导入"}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

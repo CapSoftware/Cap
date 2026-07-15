@@ -27,7 +27,7 @@ export const UploadPlaceholderCard = () => {
 				{uploadStatus.status === "uploadingVideo" ? (
 					<img
 						src={uploadStatus.thumbnailUrl}
-						alt="Uploading thumbnail"
+						alt="正在上传缩略图"
 						className="object-cover w-full h-full"
 					/>
 				) : (
@@ -92,15 +92,15 @@ export const UploadPlaceholderCard = () => {
 function getFriendlyStatus(status: UploadStatus["status"]) {
 	switch (status) {
 		case "parsing":
-			return "Parsing";
+			return "正在解析";
 		case "creating":
-			return "Creating";
+			return "正在创建";
 		case "converting":
-			return "Converting";
+			return "正在转换";
 		case "uploadingThumbnail":
 		case "uploadingVideo":
-			return "Uploading";
+			return "正在上传";
 		default:
-			return "Processing...";
+			return "正在处理……";
 	}
 }

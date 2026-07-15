@@ -212,7 +212,7 @@ export function AnnotationLayer(props: {
 			fillColor: "transparent",
 			opacity: 1,
 			rotation: 0,
-			text: tool === "text" ? "Text" : null,
+			text: tool === "text" ? "文本" : null,
 			maskType: tool === "mask" ? "pixelate" : null,
 			maskLevel: tool === "mask" ? 7 : null,
 		};

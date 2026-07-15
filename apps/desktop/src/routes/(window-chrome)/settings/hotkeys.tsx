@@ -23,19 +23,19 @@ import {
 import { Section, SectionCard, SettingsPageContent } from "./Setting";
 
 const ACTION_TEXT = {
-	startStudioRecording: "Start studio recording",
-	startInstantRecording: "Start instant recording",
-	restartRecording: "Restart recording",
-	stopRecording: "Stop recording",
-	togglePauseRecording: "Pause/resume recording",
-	cycleRecordingMode: "Cycle recording mode",
-	openRecordingPicker: "Open recording picker",
-	openRecordingPickerDisplay: "Record display",
-	openRecordingPickerWindow: "Record window",
-	openRecordingPickerArea: "Record area",
-	screenshotDisplay: "Screenshot current display",
-	screenshotWindow: "Screenshot current window",
-	screenshotArea: "Screenshot area picker",
+	startStudioRecording: "开始工作室录制",
+	startInstantRecording: "开始即时录制",
+	restartRecording: "重新开始录制",
+	stopRecording: "停止录制",
+	togglePauseRecording: "暂停/继续录制",
+	cycleRecordingMode: "切换录制模式",
+	openRecordingPicker: "打开录制选择器",
+	openRecordingPickerDisplay: "录制显示器",
+	openRecordingPickerWindow: "录制窗口",
+	openRecordingPickerArea: "录制区域",
+	screenshotDisplay: "截取当前显示器",
+	screenshotWindow: "截取当前窗口",
+	screenshotArea: "选择截图区域",
 } satisfies { [K in HotkeyAction]?: string };
 
 export default function () {
@@ -101,8 +101,8 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
 				<Section
-					title="Shortcuts"
-					description="Configure system-wide keyboard shortcuts to control Cap."
+					title="快捷键"
+					description="配置用于控制 Cap 的全局键盘快捷键。"
 				>
 					<SectionCard class="flex flex-col gap-3 p-4">
 						<Index each={actions()}>
@@ -129,7 +129,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 															when={hotkeys[item()]}
 															fallback={
 																<p class="text-[13px] text-gray-11">
-																	Set hotkeys...
+																	设置快捷键……
 																</p>
 															}
 														>
@@ -192,7 +192,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 																	class="flex items-center text-[11px] uppercase transition-colors hover:bg-gray-6 hover:border-gray-7
                         py-3 px-2.5 h-5 bg-gray-4 border border-gray-5 rounded-lg text-gray-11 hover:text-gray-12"
 																>
-																	None
+																	无
 																</p>
 															}
 														>

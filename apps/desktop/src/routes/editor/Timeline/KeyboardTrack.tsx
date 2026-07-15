@@ -139,9 +139,9 @@ export function KeyboardTrack(props: {
 				each={keyboardSegments()}
 				fallback={
 					<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl pointer-events-none">
-						<div>No keyboard events</div>
+						<div>暂无按键事件</div>
 						<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
-							Record keyboard presses or generate from recording
+							录制按键操作，或根据录制内容生成
 						</div>
 					</div>
 				}

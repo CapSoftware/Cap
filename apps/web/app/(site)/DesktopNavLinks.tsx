@@ -30,18 +30,18 @@ interface NavItem {
 
 const Links: NavItem[] = [
 	{
-		label: "Product",
+		label: "产品",
 		width: 600,
 		dropdown: [
 			{
-				label: "Instant Mode",
-				sub: "Quick recordings with instant shareable links",
+				label: "即时模式",
+				sub: "快速录制并立即生成分享链接",
 				href: "/features/instant-mode",
 				icon: <Zap fill="yellow" className="size-4" strokeWidth={1.5} />,
 			},
 			{
-				label: "Studio Mode",
-				sub: "Professional recordings with advanced editing",
+				label: "工作室模式",
+				sub: "专业录制与高级编辑",
 				href: "/features/studio-mode",
 				icon: (
 					<Clapperboard
@@ -52,71 +52,71 @@ const Links: NavItem[] = [
 				),
 			},
 			{
-				label: "Download App",
-				sub: "Downloads for macOS & Windows",
+				label: "下载应用",
+				sub: "下载 macOS 和 Windows 版本",
 				href: "/download",
 			},
 			{
-				label: "Open Source",
-				sub: "Cap is open source and available on GitHub",
+				label: "开源",
+				sub: "Cap 已开源，可在 GitHub 获取",
 				href: "https://github.com/CapSoftware/Cap",
 			},
 			{
-				label: "Self-host Cap",
-				sub: "Self-host Cap on your own infrastructure",
+				label: "自托管 Cap",
+				sub: "在你自己的基础设施上托管 Cap",
 				href: "/self-hosting",
 			},
 			{
-				label: "Join the community",
-				sub: "Join the Cap community on Discord",
+				label: "加入社区",
+				sub: "在 Discord 加入 Cap 社区",
 				href: "https://cap.link/discord",
 			},
 		],
 	},
 	{
-		label: "Download",
+		label: "下载",
 		href: "/download",
 	},
 	{
-		label: "Testimonials",
+		label: "用户评价",
 		href: "/testimonials",
 	},
 	{
-		label: "Help",
+		label: "帮助",
 		width: 480,
 		dropdown: [
 			{
-				label: "Support",
-				sub: "Get help via Discord, email, and more",
+				label: "支持",
+				sub: "通过 Discord、邮件等方式获取帮助",
 				href: "/support",
 			},
 			{
-				label: "Documentation",
-				sub: "Documentation for using Cap",
+				label: "文档",
+				sub: "Cap 使用文档",
 				href: "/docs",
 			},
 			{
-				label: "FAQs",
-				sub: "Frequently asked questions about Cap",
+				label: "常见问题",
+				sub: "关于 Cap 的常见问题",
 				href: "/faq",
 			},
 			{
-				label: "Chat support",
-				sub: "Support via chat",
+				label: "在线支持",
+				sub: "通过聊天获取支持",
 				href: "https://discord.gg/y8gdQ3WRN3",
 			},
 		],
 	},
 	{
-		label: "About",
+		label: "关于",
 		href: "/about",
 	},
 	{
-		label: "Blog",
+		label: "博客",
 		href: "/blog",
 	},
 	{
-		label: "Pricing",
+		label: "价格",
 		href: "/pricing",
 	},
 ];
@@ -159,7 +159,7 @@ export function DesktopNavLinks() {
 	};
 
 	return (
-		<nav aria-label="Main">
+		<nav aria-label="主导航">
 			<ul className="flex items-center px-0 space-x-0 list-none">
 				{Links.map((link) => {
 					const isOpen = openDropdown === link.label;

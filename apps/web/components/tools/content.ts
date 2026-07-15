@@ -2,307 +2,270 @@ import type { ToolPageContent } from "@/components/tools/types";
 
 export const webmToMp4Content: ToolPageContent = {
 	slug: "webm-to-mp4",
-	title: "WEBM to MP4 Converter",
-	description:
-		"Convert WEBM to MP4 online for free. No watermark, no registration required.",
+	title: "WEBM 转 MP4 转换器",
+	description: "免费在线将 WEBM 转换为 MP4，无水印、无需注册。",
 	publishedAt: "2023-11-19",
-	category: "Tool",
+	category: "工具",
 	author: "Cap",
-	tags: ["webm to mp4", "video converter", "free", "online"],
+	tags: ["webm 转 mp4", "视频转换器", "免费", "在线"],
 
 	cta: {
-		title: "Need advanced screen recording with effects?",
-		description:
-			"Cap is a free open-source screen recorder with editing, GIFs, and annotations.",
-		buttonText: "Download Cap Free",
+		title: "需要带特效的高级屏幕录制？",
+		description: "Cap 是免费的开源屏幕录制工具，支持编辑、GIF 和标注。",
+		buttonText: "免费下载 Cap",
 	},
 
-	featuresTitle: "Why Use Our WEBM to MP4 Converter?",
+	featuresTitle: "为什么使用 WEBM 转 MP4 转换器？",
 	featuresDescription:
-		"Our browser-based conversion happens 100% on your device, which means it's private, fast, and doesn't require an internet connection once loaded.",
+		"转换完全在设备上的浏览器中完成，因此私密、快速，页面加载后无需联网。",
 	features: [
 		{
-			title: "Privacy-First",
-			description:
-				"Your videos never leave your computer. All processing happens entirely in your browser.",
+			title: "隐私优先",
+			description: "视频不会离开电脑，所有处理均在浏览器中完成。",
 		},
 		{
-			title: "No Quality Loss",
-			description:
-				"Maintain the original video quality during conversion, with no compression artifacts.",
+			title: "画质无损",
+			description: "转换过程保持原始视频画质，不产生压缩瑕疵。",
 		},
 		{
-			title: "Unlimited Conversions",
-			description:
-				"Convert as many videos as you want, with no daily limit or restrictions.",
+			title: "不限转换次数",
+			description: "转换任意数量的视频，没有每日限额或其他限制。",
 		},
 		{
-			title: "No Watermarks",
-			description:
-				"Unlike other online converters, we don't add any watermarks to your videos.",
+			title: "无水印",
+			description: "与其他在线转换器不同，我们不会为视频添加水印。",
 		},
 		{
-			title: "Works Without Internet",
-			description:
-				"Once the page is loaded, you can convert videos offline - perfect for traveling.",
+			title: "支持离线使用",
+			description: "页面加载后即可离线转换视频，非常适合旅途中使用。",
 		},
 	],
 
 	faqs: [
 		{
-			question: "How does the online converter work?",
+			question: "在线转换器如何工作？",
 			answer:
-				"Our converter uses WebAssembly and modern browser APIs to transcode your video directly in your browser. Your file is never uploaded to any server.",
+				"转换器使用 WebAssembly 和现代浏览器 API，直接在浏览器中转码视频，文件不会上传到任何服务器。",
 		},
 		{
-			question: "What is the maximum file size?",
-			answer:
-				"Our converter can handle files up to 500MB, which is suitable for most screen recordings and videos.",
+			question: "最大支持多大的文件？",
+			answer: "转换器支持最大 500MB 的文件，足以处理大多数屏幕录像和视频。",
 		},
 		{
-			question: "How long does conversion take?",
-			answer:
-				"Conversion speed depends on your device's performance and the video's size. Most conversions complete within a few minutes.",
+			question: "转换需要多长时间？",
+			answer: "转换速度取决于设备性能和视频大小，大多数转换会在几分钟内完成。",
 		},
 		{
-			question: "Will the video quality be reduced?",
+			question: "视频画质会降低吗？",
 			answer:
-				"No, our converter maintains the original quality of your video. However, the file size might change due to the different compression methods used by MP4.",
+				"不会。转换器会保持原始画质，但由于 MP4 使用不同的压缩方式，文件大小可能发生变化。",
 		},
 		{
-			question: "Do you support other formats?",
+			question: "支持其他格式吗？",
 			answer:
-				"Yes! We also support converting between MP4, WEBM, MOV, and other formats. Check out our <a href='/tools/convert'>other conversion tools</a>.",
+				"支持！还可在 MP4、WEBM、MOV 等格式之间转换。请查看<a href='/tools/convert'>其他转换工具</a>。",
 		},
 	],
 };
 
 export const mp4ToWebmContent: ToolPageContent = {
 	slug: "mp4-to-webm",
-	title: "MP4 to WEBM Converter",
-	description:
-		"Convert MP4 to WEBM online for free. No watermark, no registration required.",
+	title: "MP4 转 WEBM 转换器",
+	description: "免费在线将 MP4 转换为 WEBM，无水印、无需注册。",
 	publishedAt: "2023-11-19",
-	category: "Tool",
+	category: "工具",
 	author: "Cap",
-	tags: ["mp4 to webm", "video converter", "free", "online"],
+	tags: ["mp4 转 webm", "视频转换器", "免费", "在线"],
 
 	cta: {
-		title: "Need advanced screen recording with effects?",
-		description:
-			"Cap is a free open-source screen recorder with editing, GIFs, and annotations.",
-		buttonText: "Download Cap Free",
+		title: "需要带特效的高级屏幕录制？",
+		description: "Cap 是免费的开源屏幕录制工具，支持编辑、GIF 和标注。",
+		buttonText: "免费下载 Cap",
 	},
 
-	featuresTitle: "Why Use Our MP4 to WEBM Converter?",
+	featuresTitle: "为什么使用 MP4 转 WEBM 转换器？",
 	featuresDescription:
-		"Our browser-based conversion happens 100% on your device, which means it's private, fast, and doesn't require an internet connection once loaded.",
+		"转换完全在设备上的浏览器中完成，因此私密、快速，页面加载后无需联网。",
 	features: [
 		{
-			title: "Privacy-First",
-			description:
-				"Your videos never leave your computer. All processing happens entirely in your browser.",
+			title: "隐私优先",
+			description: "视频不会离开电脑，所有处理均在浏览器中完成。",
 		},
 		{
-			title: "No Quality Loss",
-			description:
-				"Maintain the original video quality during conversion, with no compression artifacts.",
+			title: "画质无损",
+			description: "转换过程保持原始视频画质，不产生压缩瑕疵。",
 		},
 		{
-			title: "Unlimited Conversions",
-			description:
-				"Convert as many videos as you want, with no daily limit or restrictions.",
+			title: "不限转换次数",
+			description: "转换任意数量的视频，没有每日限额或其他限制。",
 		},
 		{
-			title: "No Watermarks",
-			description:
-				"Unlike other online converters, we don't add any watermarks to your videos.",
+			title: "无水印",
+			description: "与其他在线转换器不同，我们不会为视频添加水印。",
 		},
 		{
-			title: "Works Without Internet",
-			description:
-				"Once the page is loaded, you can convert videos offline - perfect for traveling.",
+			title: "支持离线使用",
+			description: "页面加载后即可离线转换视频，非常适合旅途中使用。",
 		},
 	],
 
 	faqs: [
 		{
-			question: "How does the online converter work?",
+			question: "在线转换器如何工作？",
 			answer:
-				"Our converter uses WebAssembly and modern browser APIs to transcode your video directly in your browser. Your file is never uploaded to any server.",
+				"转换器使用 WebAssembly 和现代浏览器 API，直接在浏览器中转码视频，文件不会上传到任何服务器。",
 		},
 		{
-			question: "What is the maximum file size?",
-			answer:
-				"Our converter can handle files up to 500MB, which is suitable for most screen recordings and videos.",
+			question: "最大支持多大的文件？",
+			answer: "转换器支持最大 500MB 的文件，足以处理大多数屏幕录像和视频。",
 		},
 		{
-			question: "How long does conversion take?",
-			answer:
-				"Conversion speed depends on your device's performance and the video's size. Most conversions complete within a few minutes.",
+			question: "转换需要多长时间？",
+			answer: "转换速度取决于设备性能和视频大小，大多数转换会在几分钟内完成。",
 		},
 		{
-			question: "Will the video quality be reduced?",
+			question: "视频画质会降低吗？",
 			answer:
-				"No, our converter maintains the original quality of your video. However, the file size might change due to the different compression methods used by WEBM.",
+				"不会。转换器会保持原始画质，但由于 WEBM 使用不同的压缩方式，文件大小可能发生变化。",
 		},
 		{
-			question: "Do you support other formats?",
+			question: "支持其他格式吗？",
 			answer:
-				"Yes! We also support converting between MP4, WEBM, MOV, and other formats. Check out our <a href='/tools/convert'>other conversion tools</a>.",
+				"支持！还可在 MP4、WEBM、MOV 等格式之间转换。请查看<a href='/tools/convert'>其他转换工具</a>。",
 		},
 	],
 };
 
 export const videoSpeedControllerContent: ToolPageContent = {
 	slug: "video-speed-controller",
-	title: "Video Speed Controller",
-	description:
-		"Speed up or slow down videos online for free. No watermark, no quality loss.",
+	title: "视频速度控制器",
+	description: "免费在线加速或减速视频，无水印、无画质损失。",
 	publishedAt: "2023-11-20",
-	category: "Tool",
+	category: "工具",
 	author: "Cap",
-	tags: [
-		"video speed control",
-		"speed up video",
-		"slow motion",
-		"free",
-		"online",
-	],
+	tags: ["视频速度控制", "视频加速", "慢动作", "免费", "在线"],
 
 	cta: {
-		title: "Need advanced screen recording with effects?",
-		description:
-			"Cap is a free open-source screen recorder with editing, GIFs, and annotations.",
-		buttonText: "Download Cap Free",
+		title: "需要带特效的高级屏幕录制？",
+		description: "Cap 是免费的开源屏幕录制工具，支持编辑、GIF 和标注。",
+		buttonText: "免费下载 Cap",
 	},
 
-	featuresTitle: "Why Use Our Video Speed Controller?",
+	featuresTitle: "为什么使用视频速度控制器？",
 	featuresDescription:
-		"Our browser-based video speed controller works 100% on your device, making it private, fast, and functional without an internet connection once loaded.",
+		"视频速度控制完全在设备上的浏览器中运行，因此私密、快速，页面加载后可离线使用。",
 	features: [
 		{
-			title: "Privacy-First",
-			description:
-				"Your videos never leave your computer. All processing happens entirely in your browser.",
+			title: "隐私优先",
+			description: "视频不会离开电脑，所有处理均在浏览器中完成。",
 		},
 		{
-			title: "Multiple Speed Options",
-			description:
-				"Choose from 0.25x (very slow) to 3x (ultra fast) to get exactly the speed you need.",
+			title: "多种速度选项",
+			description: "可在 0.25 倍（极慢）到 3 倍（极快）之间选择所需速度。",
 		},
 		{
-			title: "Audio Preservation",
-			description:
-				"We maintain audio synchronization and pitch, even at different speeds.",
+			title: "保留音频",
+			description: "即使改变速度，也会保持音频同步和音调。",
 		},
 		{
-			title: "No Watermarks",
-			description:
-				"Unlike other online tools, we don't add any watermarks to your videos.",
+			title: "无水印",
+			description: "与其他在线工具不同，我们不会为视频添加水印。",
 		},
 		{
-			title: "Works Without Internet",
-			description:
-				"Once the page is loaded, you can process videos offline - perfect for traveling.",
+			title: "支持离线使用",
+			description: "页面加载后即可离线处理视频，非常适合旅途中使用。",
 		},
 	],
 
 	faqs: [
 		{
-			question: "How does the video speed controller work?",
+			question: "视频速度控制器如何工作？",
 			answer:
-				"Our tool uses advanced browser APIs like MediaRecorder and Canvas to adjust your video's playback speed and create a new file with the adjusted timing.",
+				"工具使用 MediaRecorder 和 Canvas 等高级浏览器 API 调整视频播放速度，并创建时间轴已调整的新文件。",
 		},
 		{
-			question: "What is the maximum file size?",
-			answer:
-				"Our tool can handle files up to 500MB, which is suitable for most videos and screen recordings.",
+			question: "最大支持多大的文件？",
+			answer: "工具支持最大 500MB 的文件，足以处理大多数视频和屏幕录像。",
 		},
 		{
-			question: "Will slowing down a video make it choppy?",
+			question: "视频减速后会卡顿吗？",
 			answer:
-				"For best results when slowing down, choose videos with higher frame rates (60fps is ideal). While some choppiness may occur with extreme slowdowns, our tool maintains as much smoothness as possible.",
+				"为获得更好的减速效果，请选择高帧率视频（推荐 60 帧）。极端减速可能出现轻微卡顿，但工具会尽可能保持流畅。",
 		},
 		{
-			question: "Will the video quality be reduced?",
-			answer:
-				"No, our tool maintains the original quality of your video. However, the file size will change proportionally to the speed change.",
+			question: "视频画质会降低吗？",
+			answer: "不会。工具会保持原始画质，但文件大小会随速度变化而相应改变。",
 		},
 		{
-			question: "Which video formats are supported?",
-			answer:
-				"We support all major video formats including MP4, WEBM, MOV, AVI and MKV.",
+			question: "支持哪些视频格式？",
+			answer: "支持 MP4、WEBM、MOV、AVI 和 MKV 等主流视频格式。",
 		},
 	],
 };
 
 export const trimVideoContent: ToolPageContent = {
 	slug: "trim-video-online",
-	title: "Trim Video Online",
+	title: "在线修剪视频",
 	description:
-		"Cut unwanted sections from MP4, WebM, MOV and more. Instantly in your browser with zero quality loss.",
+		"从 MP4、WebM、MOV 等视频中删除不需要的片段，直接在浏览器中即时完成且画质无损。",
 	publishedAt: "2023-11-21",
-	category: "Tools",
+	category: "工具",
 	author: "Cap",
-	tags: ["Video Trimming", "Online Tools", "Browser", "Free"],
+	tags: ["视频修剪", "在线工具", "浏览器", "免费"],
 
 	cta: {
-		title: "The open source Loom alternative",
+		title: "开源 Loom 替代方案",
 		description:
-			"Cap is lightweight, powerful, and cross-platform. Record and share securely in seconds with custom S3 bucket support..",
-		buttonText: "Download Cap Free",
+			"Cap 轻量、强大且支持跨平台，可在数秒内安全录制和分享，并支持自定义 S3 存储桶。",
+		buttonText: "免费下载 Cap",
 	},
 
-	featuresTitle: "Why Use Cap's Online Video Trimmer?",
+	featuresTitle: "为什么使用 Cap 在线视频修剪器？",
 	featuresDescription:
-		"Our local-first trimmer does one thing stupid-fast: cut video. No sign-ups, no waiting.",
+		"本地优先的修剪器专注于极速剪切视频，无需注册、无需等待。",
 	features: [
 		{
-			title: "Instant & Private",
-			description:
-				"All processing happens on-device. Nothing ever touches our servers.",
+			title: "即时且私密",
+			description: "所有处理都在设备上完成，内容不会经过我们的服务器。",
 		},
 		{
-			title: "Lossless Export",
-			description:
-				"We snip at keyframes, so quality stays identical to the original.",
+			title: "无损导出",
+			description: "在关键帧处剪切，因此画质与原视频完全一致。",
 		},
 		{
-			title: "Any Format",
+			title: "多种格式",
 			description:
-				"MP4, WebM, MOV, MKV, GIF. If your browser plays it, we can trim it.",
+				"支持 MP4、WebM、MOV、MKV、GIF；浏览器能播放的格式即可修剪。",
 		},
 		{
-			title: "No Watermarks",
-			description: "Free means free. Your clip stays clean.",
+			title: "无水印",
+			description: "免费就是免费，剪辑后的视频保持干净。",
 		},
 		{
-			title: "Works Offline",
-			description:
-				"Once the page loads you can trim even without internet. Perfect on planes.",
+			title: "支持离线使用",
+			description: "页面加载后无需联网也能修剪，非常适合在飞机上使用。",
 		},
 	],
 
 	faqs: [
 		{
-			question: "What's the maximum file size?",
+			question: "最大支持多大的文件？",
 			answer:
-				"Browser memory is the only limit. Works fine up to ~500MB in Chrome.",
+				"唯一限制是浏览器内存，在 Chrome 中通常可顺利处理约 500MB 的文件。",
 		},
 		{
-			question: "Can I trim Zoom or Loom recordings?",
-			answer: "Absolutely. Export the MP4/WebM first, then drag it in here.",
+			question: "可以修剪 Zoom 或 Loom 录像吗？",
+			answer: "可以。先导出 MP4 或 WebM，再将文件拖到这里即可。",
 		},
 		{
-			question: "How does the online trimmer work?",
+			question: "在线修剪器如何工作？",
 			answer:
-				"Our trimmer uses the MediaRecorder API to capture the portion of video you selected, then saves it as a new file. This all happens locally in your browser.",
+				"修剪器使用 MediaRecorder API 捕捉所选视频片段并保存为新文件，全部操作都在浏览器本地完成。",
 		},
 		{
-			question: "Which browsers work best?",
+			question: "哪些浏览器效果最好？",
 			answer:
-				"Chrome, Edge, and Firefox provide the best performance and compatibility. Safari has some limitations with video processing in the browser.",
+				"Chrome、Edge 和 Firefox 的性能与兼容性最佳；Safari 在浏览器视频处理方面存在一些限制。",
 		},
 	],
 };

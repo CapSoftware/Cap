@@ -36,7 +36,7 @@ export const CapCardAnalytics = Object.assign(
 			<Shell>
 				<div className="flex flex-wrap gap-4 items-center">
 					<Tooltip
-						content="View analytics"
+						content="查看数据分析"
 						className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
 						delayDuration={100}
 					>
@@ -50,7 +50,7 @@ export const CapCardAnalytics = Object.assign(
 						</Link>
 					</Tooltip>
 					<Tooltip
-						content="View analytics"
+						content="查看数据分析"
 						className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
 						delayDuration={100}
 					>
@@ -64,7 +64,7 @@ export const CapCardAnalytics = Object.assign(
 						</Link>
 					</Tooltip>
 					<Tooltip
-						content="View analytics"
+						content="查看数据分析"
 						className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
 						delayDuration={100}
 					>
@@ -85,7 +85,7 @@ export const CapCardAnalytics = Object.assign(
 						rel="noopener noreferrer"
 						className="text-xs text-blue-600 hover:underline"
 					>
-						View analytics
+						查看数据分析
 					</Link>
 				)}
 			</Shell>

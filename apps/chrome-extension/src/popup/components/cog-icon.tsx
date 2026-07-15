@@ -22,7 +22,7 @@ const CogIcon = ({ className, size = 28, ...props }: CogIconProps) => (
 		)}
 		{...props}
 	>
-		<title>Settings</title>
+		<title>设置</title>
 		<path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z" />
 		<path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />
 		<path d="M12 2v2" />

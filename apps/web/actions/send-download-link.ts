@@ -29,7 +29,7 @@ function sanitizeEmail(raw: string): string | null {
 export async function sendDownloadLink(email: string) {
 	const sanitized = sanitizeEmail(email);
 	if (!sanitized) {
-		return { success: false, error: "Please enter a valid email address." };
+		return { success: false, error: "请输入有效的电子邮箱地址。" };
 	}
 
 	const headersList = await headers();
@@ -45,20 +45,20 @@ export async function sendDownloadLink(email: string) {
 	if (rateLimited) {
 		return {
 			success: false,
-			error: "You've sent too many requests. Please try again later.",
+			error: "请求次数过多，请稍后再试。",
 		};
 	}
 
 	try {
 		await sendEmail({
 			email: sanitized,
-			subject: "Your Cap download links",
+			subject: "你的 Cap 下载链接",
 			react: DownloadLink({ email: sanitized }),
 			marketing: true,
 		});
 
 		return { success: true };
 	} catch {
-		return { success: false, error: "Something went wrong. Please try again." };
+		return { success: false, error: "出现问题，请重试。" };
 	}
 }

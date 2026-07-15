@@ -72,23 +72,23 @@ export const Settings = () => {
 			);
 		},
 		onSuccess: () => {
-			toast.success("Name updated successfully");
+			toast.success("姓名已更新");
 			router.refresh();
 		},
 		onError: () => {
-			toast.error("Failed to update name");
+			toast.error("更新姓名失败");
 		},
 	});
 
 	const signOutAllDevicesMutation = useMutation({
 		mutationFn: signOutAllDevices,
 		onSuccess: () => {
-			toast.success("Signed out of all devices");
+			toast.success("已从所有设备退出登录");
 			setSignOutAllDevicesOpen(false);
 			signOut({ callbackUrl: "/login" });
 		},
 		onError: () => {
-			toast.error("Failed to sign out of all devices");
+			toast.error("从所有设备退出登录失败");
 		},
 	});
 
@@ -121,17 +121,13 @@ export const Settings = () => {
 		}),
 		onSuccess: () => {
 			setProfileImageOverride(undefined);
-			toast.success("Profile image updated successfully");
+			toast.success("头像已更新");
 			router.refresh();
 		},
 		onError: (error) => {
 			console.error("Error uploading profile image:", error);
 			setProfileImageOverride(undefined);
-			toast.error(
-				error instanceof Error
-					? error.message
-					: "Failed to upload profile image",
-			);
+			toast.error(error instanceof Error ? error.message : "上传头像失败");
 		},
 	});
 
@@ -139,17 +135,13 @@ export const Settings = () => {
 		mutationFn: () => rpc.UserUpdate({ id: user.id, image: Option.none() }),
 		onSuccess: () => {
 			setProfileImageOverride(null);
-			toast.success("Profile image removed");
+			toast.success("头像已移除");
 			router.refresh();
 		},
 		onError: (error) => {
 			console.error("Error removing profile image:", error);
 			setProfileImageOverride(initialProfileImage);
-			toast.error(
-				error instanceof Error
-					? error.message
-					: "Failed to remove profile image",
-			);
+			toast.error(error instanceof Error ? error.message : "移除头像失败");
 		},
 	});
 
@@ -183,9 +175,9 @@ export const Settings = () => {
 				<div className="grid gap-6 w-full md:grid-cols-2">
 					<Card className="space-y-4">
 						<div className="space-y-1">
-							<CardTitle>Profile image</CardTitle>
+							<CardTitle>头像</CardTitle>
 							<CardDescription>
-								This image appears in your profile, comments, and shared caps.
+								此图片会显示在你的个人资料、评论和共享录制中。
 							</CardDescription>
 						</div>
 						<ProfileImage
@@ -200,17 +192,16 @@ export const Settings = () => {
 					</Card>
 					<Card className="space-y-4">
 						<div className="space-y-1">
-							<CardTitle>Your name</CardTitle>
+							<CardTitle>你的姓名</CardTitle>
 							<CardDescription>
-								Changing your name below will update how your name appears when
-								sharing a Cap, and in your profile.
+								修改姓名后，共享录制和个人资料中显示的姓名也会更新。
 							</CardDescription>
 						</div>
 						<div className="flex flex-col flex-wrap gap-3 w-full">
 							<div className="flex-1">
 								<Input
 									type="text"
-									placeholder="First name"
+									placeholder="名字"
 									onChange={(e) => setFirstName(e.target.value)}
 									defaultValue={firstName as string}
 									id={firstNameId}
@@ -220,7 +211,7 @@ export const Settings = () => {
 							<div className="flex-1 space-y-2">
 								<Input
 									type="text"
-									placeholder="Last name"
+									placeholder="姓氏"
 									onChange={(e) => setLastName(e.target.value)}
 									defaultValue={lastName as string}
 									id={lastNameId}
@@ -231,9 +222,9 @@ export const Settings = () => {
 					</Card>
 					<Card className="flex flex-col gap-4">
 						<div className="space-y-1">
-							<CardTitle>Contact email address</CardTitle>
+							<CardTitle>联系邮箱</CardTitle>
 							<CardDescription>
-								This is the email address you used to sign up to Cap with.
+								这是你注册 Cap 时使用的邮箱地址。
 							</CardDescription>
 						</div>
 						<Input
@@ -246,14 +237,12 @@ export const Settings = () => {
 					</Card>
 					<Card className="flex flex-col gap-4">
 						<div className="space-y-1">
-							<CardTitle>Default organization</CardTitle>
-							<CardDescription>
-								This is the default organization
-							</CardDescription>
+							<CardTitle>默认组织</CardTitle>
+							<CardDescription>登录后将默认进入此组织。</CardDescription>
 						</div>
 
 						<Select
-							placeholder="Default organization"
+							placeholder="默认组织"
 							value={
 								defaultOrgId ??
 								user?.defaultOrgId ??
@@ -285,15 +274,14 @@ export const Settings = () => {
 					variant="dark"
 					spinner={updateNamePending}
 				>
-					{updateNamePending ? "Saving..." : "Save"}
+					{updateNamePending ? "正在保存…" : "保存"}
 				</Button>
 			</form>
 			<Card className="flex flex-col gap-4 mt-6 md:flex-row md:items-center md:justify-between">
 				<div className="space-y-1">
-					<CardTitle>Sign out of all devices</CardTitle>
+					<CardTitle>从所有设备退出登录</CardTitle>
 					<CardDescription>
-						Invalidate every Cap web session and desktop app authentication
-						token connected to your account.
+						使与你的账户关联的所有 Cap 网页会话和桌面应用认证令牌失效。
 					</CardDescription>
 				</div>
 				<Button
@@ -303,7 +291,7 @@ export const Settings = () => {
 					icon={<LogOut className="size-4" />}
 					onClick={() => setSignOutAllDevicesOpen(true)}
 				>
-					Sign out all devices
+					从所有设备退出登录
 				</Button>
 			</Card>
 			<Dialog
@@ -313,17 +301,15 @@ export const Settings = () => {
 				<DialogContent>
 					<DialogHeader
 						icon={<LogOut className="size-4" />}
-						description="This will immediately invalidate existing Cap web sessions, desktop session tokens, and desktop API keys for your account."
+						description="这将立即使你账户现有的 Cap 网页会话、桌面会话令牌和桌面 API 密钥失效。"
 					>
-						<DialogTitle>Sign out of all devices?</DialogTitle>
+						<DialogTitle>从所有设备退出登录？</DialogTitle>
 					</DialogHeader>
 					<div className="p-5 space-y-3 text-sm text-gray-11">
+						<p>重置完成后，你将从当前浏览器退出登录。</p>
 						<p>
-							You will be signed out of this browser after the reset completes.
-						</p>
-						<p>
-							The Cap desktop app may need you to click Sign out, then sign in
-							again before uploads and settings sync work.
+							Cap
+							桌面应用可能需要你先点击“退出登录”，然后重新登录，上传和设置同步才能恢复。
 						</p>
 					</div>
 					<DialogFooter>
@@ -333,7 +319,7 @@ export const Settings = () => {
 							variant="gray"
 							onClick={() => setSignOutAllDevicesOpen(false)}
 						>
-							Cancel
+							取消
 						</Button>
 						<Button
 							type="button"
@@ -345,8 +331,8 @@ export const Settings = () => {
 							disabled={signOutAllDevicesMutation.isPending}
 						>
 							{signOutAllDevicesMutation.isPending
-								? "Signing out..."
-								: "Sign out all devices"}
+								? "正在退出…"
+								: "从所有设备退出登录"}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

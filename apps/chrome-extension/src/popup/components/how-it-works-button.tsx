@@ -12,7 +12,7 @@ export const HowItWorksButton = ({ onClick }: HowItWorksButtonProps) => {
 			className="flex items-center justify-center gap-1 text-xs font-medium transition-colors hover:text-blue-12"
 		>
 			<CircleHelpIcon className="size-3.5" aria-hidden />
-			How it works (tips)
+			使用说明（技巧）
 		</button>
 	);
 };

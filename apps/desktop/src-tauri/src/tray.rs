@@ -320,18 +320,18 @@ fn create_previous_submenu(
     cache: &PreviousItemsCache,
 ) -> tauri::Result<Submenu<tauri::Wry>> {
     if cache.items.is_empty() {
-        let submenu = Submenu::with_id(app, "previous", "Previous", false)?;
+        let submenu = Submenu::with_id(app, "previous", "最近使用", false)?;
         submenu.append(&MenuItem::with_id(
             app,
             "previous_empty",
-            "No recent items",
+            "暂无最近项目",
             false,
             None::<&str>,
         )?)?;
         return Ok(submenu);
     }
 
-    let submenu = Submenu::with_id(app, "previous", "Previous", true)?;
+    let submenu = Submenu::with_id(app, "previous", "最近使用", true)?;
 
     for item in &cache.items {
         let id = TrayItem::PreviousItem(item.path.to_string_lossy().to_string());
@@ -384,15 +384,15 @@ pub(crate) fn refresh_tray_menu_for_app(app: &AppHandle) {
 fn create_mode_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
     let current_mode = get_current_mode(app);
 
-    let submenu = Submenu::with_id(app, "select_mode", "Select Mode", true)?;
+    let submenu = Submenu::with_id(app, "select_mode", "选择模式", true)?;
 
     let modes = [
-        (TrayItem::ModeStudio, RecordingMode::Studio, "Studio"),
-        (TrayItem::ModeInstant, RecordingMode::Instant, "Instant"),
+        (TrayItem::ModeStudio, RecordingMode::Studio, "工作室"),
+        (TrayItem::ModeInstant, RecordingMode::Instant, "即时"),
         (
             TrayItem::ModeScreenshot,
             RecordingMode::Screenshot,
-            "Screenshot",
+            "截图",
         ),
     ];
 
@@ -419,7 +419,7 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
                 &MenuItem::with_id(
                     app,
                     TrayItem::RequestPermissions,
-                    "Request Permissions",
+                    "请求权限",
                     true,
                     None::<&str>,
                 )?,
@@ -431,7 +431,7 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
                     false,
                     None::<&str>,
                 )?,
-                &MenuItem::with_id(app, TrayItem::Quit, "Quit Cap", true, None::<&str>)?,
+                &MenuItem::with_id(app, TrayItem::Quit, "退出 Cap", true, None::<&str>)?,
             ],
         );
     }
@@ -446,7 +446,7 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
     menu.append(&MenuItem::with_id(
         app,
         TrayItem::OpenCap,
-        "Open Main Window",
+        "打开主窗口",
         true,
         None::<&str>,
     )?)?;
@@ -455,21 +455,21 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::RecordDisplay,
-            "Screenshot Display",
+            "截取显示器",
             true,
             None::<&str>,
         )?)?;
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::RecordWindow,
-            "Screenshot Window",
+            "截取窗口",
             true,
             None::<&str>,
         )?)?;
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::RecordArea,
-            "Screenshot Area",
+            "截取区域",
             true,
             None::<&str>,
         )?)?;
@@ -477,28 +477,28 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::RecordDisplay,
-            "Record Display",
+            "录制显示器",
             true,
             None::<&str>,
         )?)?;
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::RecordWindow,
-            "Record Window",
+            "录制窗口",
             true,
             None::<&str>,
         )?)?;
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::RecordArea,
-            "Record Area",
+            "录制区域",
             true,
             None::<&str>,
         )?)?;
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::TakeScreenshot,
-            "Take a Screenshot",
+            "截取截图",
             true,
             None::<&str>,
         )?)?;
@@ -507,7 +507,7 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
     menu.append(&MenuItem::with_id(
         app,
         TrayItem::ImportVideo,
-        "Import Media...",
+        "导入媒体……",
         true,
         None::<&str>,
     )?)?;
@@ -520,21 +520,21 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
     menu.append(&MenuItem::with_id(
         app,
         TrayItem::ViewAllRecordings,
-        "View all recordings",
+        "查看所有录制",
         true,
         None::<&str>,
     )?)?;
     menu.append(&MenuItem::with_id(
         app,
         TrayItem::ViewAllScreenshots,
-        "View all screenshots",
+        "查看所有截图",
         true,
         None::<&str>,
     )?)?;
     menu.append(&MenuItem::with_id(
         app,
         TrayItem::OpenSettings,
-        "Settings",
+        "设置",
         true,
         None::<&str>,
     )?)?;
@@ -543,7 +543,7 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
     menu.append(&MenuItem::with_id(
         app,
         TrayItem::UploadLogs,
-        "Upload Logs",
+        "上传日志",
         true,
         None::<&str>,
     )?)?;
@@ -557,7 +557,7 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
     menu.append(&MenuItem::with_id(
         app,
         TrayItem::Quit,
-        "Quit Cap",
+        "退出 Cap",
         true,
         None::<&str>,
     )?)?;
@@ -843,18 +843,18 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                             .dialog()
                             .file()
                             .add_filter(
-                                "Media Files",
+                                "媒体文件",
                                 &[
                                     "mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv", "png",
                                     "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff",
                                 ],
                             )
                             .add_filter(
-                                "Video Files",
+                                "视频文件",
                                 &["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"],
                             )
                             .add_filter(
-                                "Image Files",
+                                "图片文件",
                                 &["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"],
                             )
                             .blocking_pick_file();
@@ -877,8 +877,8 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                                     Err(e) => {
                                         tracing::error!("Failed to import video: {e}");
                                         app.dialog()
-                                            .message(format!("Failed to import video: {e}"))
-                                            .title("Import Error")
+                                            .message(format!("导入视频失败：{e}"))
+                                            .title("导入错误")
                                             .kind(tauri_plugin_dialog::MessageDialogKind::Error)
                                             .blocking_show();
                                     }
@@ -893,8 +893,8 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                                     Err(e) => {
                                         tracing::error!("Failed to import image: {e}");
                                         app.dialog()
-                                            .message(format!("Failed to import image: {e}"))
-                                            .title("Import Error")
+                                            .message(format!("导入图片失败：{e}"))
+                                            .title("导入错误")
                                             .kind(tauri_plugin_dialog::MessageDialogKind::Error)
                                             .blocking_show();
                                     }
@@ -902,8 +902,8 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                             } else {
                                 tracing::error!("Unsupported media import path: {:?}", path);
                                 app.dialog()
-                                    .message("Unsupported media file.")
-                                    .title("Import Error")
+                                    .message("不支持的媒体文件。")
+                                    .title("导入错误")
                                     .kind(tauri_plugin_dialog::MessageDialogKind::Error)
                                     .blocking_show();
                             }
@@ -935,12 +935,12 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                             Ok(_) => {
                                 tracing::info!("Successfully uploaded logs");
                                 app.dialog()
-                                    .message("Logs uploaded successfully")
+                                    .message("日志上传成功")
                                     .show(|_| {});
                             }
                             Err(e) => {
                                 tracing::error!("Failed to upload logs: {e:#}");
-                                app.dialog().message("Failed to upload logs").show(|_| {});
+                                app.dialog().message("日志上传失败").show(|_| {});
                             }
                         }
                     });

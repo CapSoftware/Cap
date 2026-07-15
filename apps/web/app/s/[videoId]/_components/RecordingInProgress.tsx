@@ -28,12 +28,11 @@ export function RecordingInProgressOverlay({
 					<span className="relative inline-flex rounded-full size-3 bg-red-500" />
 				</span>
 				<span className="text-white font-semibold text-base sm:text-lg">
-					Recording in progress
+					正在录制
 				</span>
 			</div>
 			<p className="text-white/50 text-xs sm:text-sm text-center max-w-xs leading-relaxed">
-				This video is still being recorded and will be available once the
-				recording has stopped.
+				此视频仍在录制中，录制停止后即可观看。
 			</p>
 			<button
 				type="button"
@@ -41,9 +40,7 @@ export function RecordingInProgressOverlay({
 				disabled={isConfirmingStopped}
 				className="mt-1 text-white/30 text-xs hover:text-white/60 transition-colors underline underline-offset-2"
 			>
-				{isConfirmingStopped
-					? "Finishing recording..."
-					: "I have stopped recording"}
+				{isConfirmingStopped ? "正在结束录制…" : "我已停止录制"}
 			</button>
 			{confirmStoppedError && (
 				<p className="text-xs text-red-200/80 text-center max-w-xs">
@@ -56,7 +53,7 @@ export function RecordingInProgressOverlay({
 
 export function PreparingVideoOverlay({
 	className,
-	label = "Preparing video...",
+	label = "正在准备视频…",
 }: {
 	className?: string;
 	label?: string;

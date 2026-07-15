@@ -151,11 +151,11 @@ function BrandSettingsDialog(props: {
 
 	const selectLogoFile = (file: File) => {
 		if (!isSupportedLogoContentType(file.type)) {
-			toast.error("Unsupported logo file type");
+			toast.error("不支持的徽标文件类型");
 			return;
 		}
 		if (file.size > ORGANIZATION_LOGO_MAX_BYTES) {
-			toast.error("Logo file must be less than 1MB");
+			toast.error("徽标文件必须小于 1 MB");
 			return;
 		}
 
@@ -197,14 +197,12 @@ function BrandSettingsDialog(props: {
 				},
 			);
 
-			toast.success("Organization branding updated");
+			toast.success("组织品牌设置已更新");
 			props.onSaved(updatedOrganization);
 			props.onOpenChange(false);
 		} catch (error) {
 			toast.error(
-				error instanceof Error
-					? error.message
-					: "Failed to update organization branding",
+				error instanceof Error ? error.message : "更新组织品牌设置失败",
 			);
 		} finally {
 			setSaving(false);
@@ -214,7 +212,7 @@ function BrandSettingsDialog(props: {
 	return (
 		<Dialog.Root open={props.open} onOpenChange={props.onOpenChange} size="sm">
 			<DialogContent
-				title={props.organization?.name ?? "Organization"}
+				title={props.organization?.name ?? "组织"}
 				class="gap-5 text-gray-12"
 				confirm={
 					<>
@@ -223,13 +221,13 @@ function BrandSettingsDialog(props: {
 							disabled={saving()}
 							onClick={() => props.onOpenChange(false)}
 						>
-							Cancel
+							取消
 						</Button>
 						<Dialog.ConfirmButton
 							disabled={saving() || !props.organization}
 							onClick={() => void save()}
 						>
-							{saving() ? "Saving..." : "Save"}
+							{saving() ? "正在保存…" : "保存"}
 						</Dialog.ConfirmButton>
 					</>
 				}
@@ -257,12 +255,12 @@ function BrandSettingsDialog(props: {
 							onClick={() => fileInput.click()}
 						>
 							<IconLucideUpload class="size-4" />
-							Upload
+							上传
 						</Button>
 						<Show when={displayedLogoUrl() || logoFile()}>
 							<Button variant="gray" class="gap-1.5" onClick={removeLogo}>
 								<IconLucideTrash2 class="size-4" />
-								Remove
+								移除
 							</Button>
 						</Show>
 					</div>
@@ -302,7 +300,7 @@ function BrandSettingsDialog(props: {
 														)
 													}
 												>
-													Set
+													设置
 												</Button>
 											}
 										>
@@ -355,27 +353,27 @@ export function OrganizationDropdown() {
 	const triggerLabel = createMemo(() => {
 		const availability = organizationSelection.availability();
 		if (availability === "available") {
-			return selectedOrganization()?.name ?? "Organization";
+			return selectedOrganization()?.name ?? "组织";
 		}
-		if (availability === "loading") return "Loading...";
-		if (availability === "unavailable") return "Organization";
-		return "Sign in";
+		if (availability === "loading") return "正在加载…";
+		if (availability === "unavailable") return "组织";
+		return "登录";
 	});
 	const fallbackTitle = createMemo(() => {
 		const availability = organizationSelection.availability();
-		if (availability === "loading") return "Loading organizations";
-		if (availability === "unavailable") return "Unable to load organizations";
-		return "Organization branding requires sign in";
+		if (availability === "loading") return "正在加载组织";
+		if (availability === "unavailable") return "无法加载组织";
+		return "登录后才能使用组织品牌设置";
 	});
 	const fallbackDescription = createMemo(() => {
 		const availability = organizationSelection.availability();
 		if (availability === "loading") {
-			return "Fetching organization branding from Cap web.";
+			return "正在从 Cap Web 获取组织品牌设置。";
 		}
 		if (availability === "unavailable") {
-			return "Organization branding uses live Cap web data. Connect to Cap web to select an organization and use its colours.";
+			return "组织品牌设置使用 Cap Web 的实时数据。连接 Cap Web 后即可选择组织并使用其品牌颜色。";
 		}
-		return "Sign in to select an organization, edit brand colours, and use those colours in Studio.";
+		return "登录后可选择组织、编辑品牌颜色，并在工作室模式中使用这些颜色。";
 	});
 
 	const selectOrganization = (organization: DesktopOrganization) => {
@@ -429,7 +427,7 @@ export function OrganizationDropdown() {
 												}
 											>
 												<SignInButton class="w-full justify-center">
-													Sign In
+													登录
 												</SignInButton>
 											</Show>
 											<Show
@@ -444,7 +442,7 @@ export function OrganizationDropdown() {
 													disabled={organizationSelection.refreshing()}
 												>
 													<IconLucideRefreshCw class="size-4" />
-													Retry
+													重试
 												</Button>
 											</Show>
 										</div>
@@ -459,7 +457,7 @@ export function OrganizationDropdown() {
 										each={organizationSelection.organizations()}
 										fallback={
 											<div class="py-1 text-center text-sm text-gray-11">
-												No organizations
+												暂无组织
 											</div>
 										}
 									>
@@ -494,7 +492,7 @@ export function OrganizationDropdown() {
 											}
 										>
 											<IconLucidePalette class="size-4" />
-											Brand settings
+											品牌设置
 										</DropdownItem>
 									</MenuItemList>
 								</Show>

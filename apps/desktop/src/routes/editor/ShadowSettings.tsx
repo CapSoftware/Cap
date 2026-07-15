@@ -41,7 +41,7 @@ const ShadowSettings = (props: Props) => {
 				onClick={handleToggle}
 				class="flex gap-1 items-center w-full font-medium text-left transition duration-200 text-gray-12 hover:text-gray-10"
 			>
-				<span class="text-sm">Advanced shadow settings</span>
+				<span class="text-sm">高级阴影设置</span>
 				<IconCapChevronDown
 					class={cx(
 						"size-5",
@@ -52,7 +52,7 @@ const ShadowSettings = (props: Props) => {
 			<KCollapsible open={isOpen()}>
 				<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
 					<div class="mt-4 space-y-6 font-medium">
-						<Field name="Size">
+						<Field name="大小">
 							<Slider
 								value={props.size.value}
 								onChange={props.size.onChange}
@@ -61,7 +61,7 @@ const ShadowSettings = (props: Props) => {
 								step={0.1}
 							/>
 						</Field>
-						<Field name="Opacity">
+						<Field name="不透明度">
 							<Slider
 								value={props.opacity.value}
 								onChange={props.opacity.onChange}
@@ -70,7 +70,7 @@ const ShadowSettings = (props: Props) => {
 								step={0.1}
 							/>
 						</Field>
-						<Field name="Blur">
+						<Field name="模糊">
 							<Slider
 								value={props.blur.value}
 								onChange={props.blur.onChange}

@@ -14,23 +14,23 @@ export const Settings = () => {
 	const [settings, setSettings] = useState<SettingOption[]>([
 		{
 			id: "allow_comments",
-			label: "Allow Comments",
-			description: "Define what viewers can see and do.",
+			label: "允许评论",
+			description: "设置观众可以查看和执行的操作。",
 			enabled: true,
 		},
 		{
 			id: "allow_anonymous_comments",
-			label: "Allow Anonymous Comments",
+			label: "允许匿名评论",
 			enabled: false,
 		},
 		{
 			id: "enable_transcript",
-			label: "Enable Transcript",
+			label: "启用文字稿",
 			enabled: true,
 		},
 		{
 			id: "enable_download",
-			label: "Enable Download",
+			label: "启用下载",
 			enabled: true,
 		},
 	]);
@@ -46,7 +46,7 @@ export const Settings = () => {
 	return (
 		<div className="flex flex-col h-full">
 			<div className="p-4 border-b border-gray-200">
-				<h3 className="text-sm font-medium">Settings</h3>
+				<h3 className="text-sm font-medium">设置</h3>
 			</div>
 			<div className="overflow-y-auto flex-1">
 				<div className="p-4 space-y-6">

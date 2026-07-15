@@ -231,7 +231,7 @@ export const SharedCaps = ({
 									onClick={() => setIsSpaceSettingsOpen(true)}
 								>
 									<FontAwesomeIcon className="size-3" icon={faGear} />
-									Space settings
+									空间设置
 								</Button>
 							)}
 							{collectionShareControl}
@@ -270,7 +270,7 @@ export const SharedCaps = ({
 							className="flex gap-2 items-center w-fit"
 						>
 							<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-							New folder
+							新建文件夹
 						</Button>
 					)}
 				</div>
@@ -322,8 +322,8 @@ export const SharedCaps = ({
 							/>
 							<p className="text-white">
 								{isDraggingCap.isOwner
-									? " Drag to a space to share or folder to move"
-									: "Only the video owner can drag and move the video"}
+									? "拖到空间可共享，拖到文件夹可移动"
+									: "只有视频所有者可以拖动和移动视频"}
 							</p>
 						</div>
 					</div>
@@ -346,7 +346,7 @@ export const SharedCaps = ({
 								onClick={() => setIsSpaceSettingsOpen(true)}
 							>
 								<FontAwesomeIcon className="size-3" icon={faGear} />
-								Space settings
+								空间设置
 							</Button>
 						)}
 						{collectionShareControl}
@@ -404,13 +404,13 @@ export const SharedCaps = ({
 						className="flex gap-2 items-center w-fit"
 					>
 						<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-						New folder
+						新建文件夹
 					</Button>
 				)}
 			</div>
 			{folders && folders.length > 0 && (
 				<>
-					<h1 className="mb-6 text-2xl font-medium text-gray-12">Folders</h1>
+					<h1 className="mb-6 text-2xl font-medium text-gray-12">文件夹</h1>
 					<div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
 						{folders.map((folder) => (
 							<Folder key={folder.id} {...folder} />
@@ -421,9 +421,7 @@ export const SharedCaps = ({
 
 			{data.length > 0 && (
 				<>
-					<h1 className="mb-4 text-2xl font-medium text-gray-12">
-						Videos and screenshots
-					</h1>
+					<h1 className="mb-4 text-2xl font-medium text-gray-12">视频和截图</h1>
 					<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
 						{data.map((cap) => {
 							const isOwner = cap.ownerId === currentUserId;

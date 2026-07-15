@@ -54,7 +54,7 @@ export const SelectedCapsBar = ({
 							value={selectedCaps.length}
 							className="tabular-nums text-md text-gray-12"
 						/>
-						cap{selectedCaps.length !== 1 ? "s" : ""} selected
+						个录制内容已选择
 					</div>
 					<div className="flex gap-2 ml-4">
 						<Button
@@ -63,7 +63,7 @@ export const SelectedCapsBar = ({
 							className="text-sm"
 							size="sm"
 						>
-							Cancel
+							取消
 						</Button>
 						<Button
 							variant="destructive"
@@ -77,14 +77,10 @@ export const SelectedCapsBar = ({
 						<ConfirmationDialog
 							open={confirmOpen}
 							icon={<FontAwesomeIcon icon={faFilm} />}
-							title="Delete selected Caps"
-							description={`Are you sure you want to delete ${
-								selectedCaps.length
-							} cap${
-								selectedCaps.length === 1 ? "" : "s"
-							}? This action cannot be undone.`}
-							confirmLabel={isDeleting ? "Deleting..." : "Delete"}
-							cancelLabel="Cancel"
+							title="删除所选录制内容"
+							description={`确定要删除所选的 ${selectedCaps.length} 个录制内容吗？此操作无法撤销。`}
+							confirmLabel={isDeleting ? "正在删除……" : "删除"}
+							cancelLabel="取消"
 							confirmVariant="dark"
 							loading={isDeleting}
 							onConfirm={handleConfirmDelete}

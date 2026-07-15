@@ -47,9 +47,7 @@ export function CreateAppDialog({
 			router.refresh();
 		},
 		onError: (error) => {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to create app",
-			);
+			toast.error(error instanceof Error ? error.message : "创建应用失败");
 		},
 	});
 
@@ -67,41 +65,41 @@ export function CreateAppDialog({
 				{step === "create" && (
 					<>
 						<DialogHeader>
-							<DialogTitle>Create Developer App</DialogTitle>
+							<DialogTitle>创建开发者应用</DialogTitle>
 						</DialogHeader>
 						<div className="flex flex-col gap-4 p-5">
 							<div className="flex flex-col gap-2">
-								<Label htmlFor={appNameId}>App Name</Label>
+								<Label htmlFor={appNameId}>应用名称</Label>
 								<Input
 									id={appNameId}
 									value={name}
 									onChange={(e) => setName(e.target.value)}
-									placeholder="My App"
+									placeholder="我的应用"
 								/>
 							</div>
 							<div className="flex flex-col gap-2">
-								<Label>Environment</Label>
+								<Label>环境</Label>
 								<div className="flex gap-2">
 									<Button
 										variant={environment === "development" ? "dark" : "gray"}
 										size="sm"
 										onClick={() => setEnvironment("development")}
 									>
-										Development
+										开发环境
 									</Button>
 									<Button
 										variant={environment === "production" ? "dark" : "gray"}
 										size="sm"
 										onClick={() => setEnvironment("production")}
 									>
-										Production
+										生产环境
 									</Button>
 								</div>
 							</div>
 						</div>
 						<DialogFooter>
 							<Button variant="gray" size="sm" onClick={handleClose}>
-								Cancel
+								取消
 							</Button>
 							<Button
 								variant="dark"
@@ -110,7 +108,7 @@ export function CreateAppDialog({
 								spinner={createMutation.isPending}
 								onClick={() => createMutation.mutate()}
 							>
-								Create
+								创建
 							</Button>
 						</DialogFooter>
 					</>
@@ -118,22 +116,22 @@ export function CreateAppDialog({
 				{step === "keys" && keys && (
 					<>
 						<DialogHeader>
-							<DialogTitle>API Keys Created</DialogTitle>
+							<DialogTitle>API 密钥已创建</DialogTitle>
 						</DialogHeader>
 						<div className="flex flex-col gap-4 p-5">
 							<p className="text-sm text-gray-10">
-								Save your secret key now. You won't be able to see it again.
+								请立即保存私密密钥，之后将无法再次查看。
 							</p>
-							<ApiKeyDisplay label="Public Key" value={keys.publicKey} />
+							<ApiKeyDisplay label="公钥" value={keys.publicKey} />
 							<ApiKeyDisplay
-								label="Secret Key"
+								label="私密密钥"
 								value={keys.secretKey}
 								sensitive
 							/>
 						</div>
 						<DialogFooter>
 							<Button variant="dark" size="sm" onClick={handleClose}>
-								Done
+								完成
 							</Button>
 						</DialogFooter>
 					</>

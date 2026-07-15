@@ -29,10 +29,10 @@ interface Props {
 }
 
 const FolderOptions = [
-	{ value: "normal", label: "Normal", color: "#9ca3af" },
-	{ value: "blue", label: "Blue", color: "#3b82f6" },
-	{ value: "red", label: "Red", color: "#ef4444" },
-	{ value: "yellow", label: "Yellow", color: "#eab308" },
+	{ value: "normal", label: "默认", color: "#9ca3af" },
+	{ value: "blue", label: "蓝色", color: "#3b82f6" },
+	{ value: "red", label: "红色", color: "#ef4444" },
+	{ value: "yellow", label: "黄色", color: "#eab308" },
 ] as const;
 
 export const SubfolderDialog: React.FC<Props> = ({
@@ -77,10 +77,10 @@ export const SubfolderDialog: React.FC<Props> = ({
 			setSelectedColor(null);
 			onOpenChange(false);
 			router.refresh();
-			toast.success("Subfolder created successfully");
+			toast.success("子文件夹已创建");
 		},
 		onError: () => {
-			toast.error("Failed to create subfolder");
+			toast.error("创建子文件夹失败");
 		},
 	});
 
@@ -90,14 +90,14 @@ export const SubfolderDialog: React.FC<Props> = ({
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faFolderPlus} className="size-3.5" />}
 				>
-					<DialogTitle>New Subfolder</DialogTitle>
+					<DialogTitle>新建子文件夹</DialogTitle>
 				</DialogHeader>
 				<div className="p-5">
 					<Input
 						value={folderName}
 						onChange={(e) => setFolderName(e.target.value)}
 						required
-						placeholder="Subfolder name"
+						placeholder="子文件夹名称"
 					/>
 					<div className="flex flex-wrap gap-2 mt-3">
 						{FolderOptions.map((option) => {
@@ -144,7 +144,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 				</div>
 				<DialogFooter>
 					<Button size="sm" variant="gray" onClick={() => onOpenChange(false)}>
-						Cancel
+						取消
 					</Button>
 					<Button
 						onClick={() => {
@@ -164,7 +164,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 							createSubfolder.isPending
 						}
 					>
-						{createSubfolder.isPending ? "Creating..." : "Create"}
+						{createSubfolder.isPending ? "正在创建……" : "创建"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

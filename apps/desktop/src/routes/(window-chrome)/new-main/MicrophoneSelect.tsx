@@ -21,7 +21,7 @@ import InfoPill from "./InfoPill";
 import TargetSelectInfoPill from "./TargetSelectInfoPill";
 import useRequestPermission from "./useRequestPermission";
 
-const NO_MICROPHONE = "No Microphone";
+const NO_MICROPHONE = "不使用麦克风";
 
 export default function MicrophoneSelect(props: {
 	disabled?: boolean;
@@ -107,8 +107,8 @@ export default function MicrophoneSelect(props: {
 							}}
 							onPointerDown={(e) => e.stopPropagation()}
 							class={DEVICE_SHORTCUT_BUTTON_CLASS}
-							title="Microphone settings"
-							aria-label="Microphone settings"
+							title="麦克风设置"
+							aria-label="麦克风设置"
 						>
 							<IconLucideSettings class="size-3.5" />
 						</button>

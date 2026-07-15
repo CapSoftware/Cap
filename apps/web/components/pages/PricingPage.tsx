@@ -122,8 +122,8 @@ export const PricingPage = () => {
 				<div className="mb-32 wrapper" id={testimonialsId}>
 					<Testimonials
 						amount={24}
-						title="Teams & creators love Cap"
-						subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
+						title="团队与创作者喜爱 Cap"
+						subtitle="不妨听听用户如何评价他们使用 Cap 的体验。"
 					/>
 				</div>
 			</div>

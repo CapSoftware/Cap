@@ -55,11 +55,11 @@ function getProgressStatusText(
 ) {
 	switch (status) {
 		case "processing":
-			return "Processing";
+			return "正在处理";
 		case "generating_thumbnail":
-			return "Finishing up";
+			return "即将完成";
 		default:
-			return "Uploading";
+			return "正在上传";
 	}
 }
 
@@ -510,12 +510,12 @@ export function HLSVideoPlayer({
 			});
 			toast.success(
 				result.status === "started"
-					? "Video processing restarted."
-					: "Video is still processing.",
+					? "已重新开始处理视频。"
+					: "视频仍在处理中。",
 			);
 		} catch (error) {
 			console.error("Failed to retry video processing", error);
-			toast.error("Could not retry video processing.");
+			toast.error("无法重试视频处理。");
 		} finally {
 			setIsRetryingProcessing(false);
 		}
@@ -569,7 +569,7 @@ export function HLSVideoPlayer({
 							disabled={isRetryingProcessing}
 							className="px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-full transition-colors disabled:opacity-60 disabled:cursor-not-allowed hover:bg-blue-600"
 						>
-							{isRetryingProcessing ? "Retrying..." : "Retry Processing"}
+							{isRetryingProcessing ? "正在重试..." : "重试处理"}
 						</button>
 					)}
 				</div>
@@ -616,7 +616,7 @@ export function HLSVideoPlayer({
 									` ${Math.round(uploadProgress.progress)}%`}
 							</span>
 							<svg className="w-4 h-4 transform -rotate-90" viewBox="0 0 20 20">
-								<title>Progress</title>
+								<title>进度</title>
 								<circle
 									cx="10"
 									cy="10"
@@ -695,7 +695,7 @@ export function HLSVideoPlayer({
 				{captionsSrc && (
 					<track
 						key={captionsSrc}
-						label="English"
+						label="英语"
 						kind="captions"
 						srcLang="en"
 						src={captionsSrc}

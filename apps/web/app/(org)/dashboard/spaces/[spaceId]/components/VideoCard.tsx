@@ -9,6 +9,7 @@ import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, Minus, Plus } from "lucide-react";
 import moment from "moment";
+import "moment/locale/zh-cn";
 import type React from "react";
 import { memo, useState } from "react";
 import { useTheme } from "@/app/(org)/dashboard/Contexts";
@@ -18,6 +19,8 @@ import {
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import type { VideoData } from "./AddVideosDialogBase";
+
+moment.locale("zh-cn");
 
 interface VideoCardProps {
 	video: VideoData;
@@ -135,7 +138,7 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 					<VideoThumbnail
 						imageClass="w-full h-full transition-all duration-200 group-hover:scale-105"
 						videoId={video.id}
-						alt={`${video.name} Thumbnail`}
+						alt={`${video.name} 缩略图`}
 						objectFit="cover"
 						containerClass="!h-full !rounded-lg !border-b-0"
 						imageStatus={imageStatus}
@@ -144,11 +147,11 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 					/>
 					{video.isScreenshot === true && (
 						<span
-							title="Screenshot"
+							title="截图"
 							className="absolute bottom-2 left-2 z-30 flex size-6 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm"
 						>
 							<FontAwesomeIcon icon={faImage} className="size-3" />
-							<span className="sr-only">Screenshot</span>
+							<span className="sr-only">截图</span>
 						</span>
 					)}
 				</div>
@@ -186,7 +189,7 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 									icon={faHome}
 									className="size-3 text-gray-10"
 								/>
-								<p className="font-medium truncate text-gray-11">Root</p>
+								<p className="font-medium truncate text-gray-11">根目录</p>
 							</>
 						) : (
 							<>
@@ -194,7 +197,7 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 									icon={faRecordVinyl}
 									className="size-3 text-gray-10"
 								/>
-								<p className="font-medium truncate text-gray-11">Caps</p>
+								<p className="font-medium truncate text-gray-11">我的录制</p>
 							</>
 						)}
 					</div>

@@ -56,7 +56,7 @@ const CommentComponent: React.FC<{
 			: [];
 
 	const handleDelete = () => {
-		if (window.confirm("Are you sure you want to delete this comment?")) {
+		if (window.confirm("确定要删除这条评论吗？")) {
 			onDelete(comment.id, comment.parentCommentId);
 		}
 	};
@@ -104,7 +104,7 @@ const CommentComponent: React.FC<{
 				>
 					<div className="flex gap-3 justify-between items-center">
 						<p className="text-sm font-medium truncate text-gray-12">
-							{comment.authorName || "Anonymous"}
+							{comment.authorName || "匿名用户"}
 						</p>
 						<div className="flex gap-2 items-center text-nowrap min-w-fit">
 							<Tooltip content={formatTimestamp(commentDate)}>
@@ -132,7 +132,7 @@ const CommentComponent: React.FC<{
 					</p>
 					<div className="flex items-center pt-2 mt-2.5 space-x-3 border-t border-gray-3">
 						{user && !isReplying && canReply && (
-							<Tooltip content="Reply">
+							<Tooltip content="回复">
 								<Button
 									onClick={() => onReply(comment.id)}
 									size="icon"
@@ -145,7 +145,7 @@ const CommentComponent: React.FC<{
 							</Tooltip>
 						)}
 						{isOwnComment && (
-							<Tooltip content="Delete comment">
+							<Tooltip content="删除评论">
 								<Button
 									onClick={handleDelete}
 									size="icon"
@@ -166,7 +166,7 @@ const CommentComponent: React.FC<{
 					<CommentInput
 						onSubmit={handleReply}
 						onCancel={onCancelReply}
-						placeholder="Write a reply..."
+						placeholder="撰写回复…"
 						showCancelButton={true}
 						autoFocus={true}
 					/>

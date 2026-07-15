@@ -65,7 +65,7 @@ async function assertUsersBelongToOrganization(
 	const invalidUserIds = uniqueUserIds.filter((id) => !allowedUserIds.has(id));
 
 	if (invalidUserIds.length > 0) {
-		throw new Error("All space members must belong to the organization");
+		throw new Error("空间中的所有成员都必须属于此组织");
 	}
 }
 
@@ -75,13 +75,13 @@ export async function addSpaceMember(
 	const validation = addSpaceMemberSchema.safeParse(data);
 
 	if (!validation.success) {
-		throw new Error("Invalid input");
+		throw new Error("输入无效");
 	}
 
 	const currentUser = await getCurrentUser();
 
 	if (!currentUser) {
-		throw new Error("Unauthorized");
+		throw new Error("无权执行此操作");
 	}
 
 	const { spaceId, userId, role } = validation.data;
@@ -113,12 +113,12 @@ export async function addSpaceMembers(
 ) {
 	const validation = addSpaceMembersSchema.safeParse(data);
 	if (!validation.success) {
-		throw new Error("Invalid input");
+		throw new Error("输入无效");
 	}
 
 	const currentUser = await getCurrentUser();
 	if (!currentUser) {
-		throw new Error("Unauthorized");
+		throw new Error("无权执行此操作");
 	}
 
 	const { spaceId, userIds, role } = validation.data;
@@ -170,13 +170,13 @@ export async function removeSpaceMember(
 	const validation = removeSpaceMemberSchema.safeParse(data);
 
 	if (!validation.success) {
-		throw new Error("Invalid input");
+		throw new Error("输入无效");
 	}
 
 	const currentUser = await getCurrentUser();
 
 	if (!currentUser) {
-		throw new Error("Unauthorized");
+		throw new Error("无权执行此操作");
 	}
 
 	const { memberId } = validation.data;
@@ -188,13 +188,13 @@ export async function removeSpaceMember(
 		.limit(1);
 
 	if (member.length === 0) {
-		throw new Error("Member not found");
+		throw new Error("未找到成员");
 	}
 
 	const spaceId = member[0]?.spaceId;
 
 	if (!spaceId) {
-		throw new Error("Space ID not found");
+		throw new Error("未找到空间 ID");
 	}
 
 	const access = await requireSpaceManager(currentUser.id, spaceId);
@@ -205,7 +205,7 @@ export async function removeSpaceMember(
 			createdById: access.createdById,
 		})
 	) {
-		throw new Error("You do not have permission to remove this space member");
+		throw new Error("你没有权限移除此空间成员");
 	}
 
 	await db().delete(spaceMembers).where(eq(spaceMembers.id, memberId));
@@ -229,11 +229,11 @@ export async function setSpaceMembers(
 ) {
 	const validation = setSpaceMembersSchema.safeParse(data);
 	if (!validation.success) {
-		throw new Error("Invalid input");
+		throw new Error("输入无效");
 	}
 	const currentUser = await getCurrentUser();
 	if (!currentUser) {
-		throw new Error("Unauthorized");
+		throw new Error("无权执行此操作");
 	}
 	const { spaceId, userIds, role, members } = validation.data;
 
@@ -295,12 +295,12 @@ export async function batchRemoveSpaceMembers(
 ) {
 	const validation = batchRemoveSpaceMembersSchema.safeParse(data);
 	if (!validation.success) {
-		throw new Error("Invalid input");
+		throw new Error("输入无效");
 	}
 
 	const currentUser = await getCurrentUser();
 	if (!currentUser) {
-		throw new Error("Unauthorized");
+		throw new Error("无权执行此操作");
 	}
 
 	const { memberIds } = validation.data;
@@ -323,7 +323,7 @@ export async function batchRemoveSpaceMembers(
 	}
 
 	if (members.some((member) => member.spaceId !== spaceId)) {
-		throw new Error("Cannot remove members from multiple spaces at once");
+		throw new Error("无法同时从多个空间移除成员");
 	}
 
 	const access = await requireSpaceManager(currentUser.id, spaceId);
@@ -337,7 +337,7 @@ export async function batchRemoveSpaceMembers(
 	);
 
 	if (protectedMember) {
-		throw new Error("You do not have permission to remove one or more members");
+		throw new Error("你没有权限移除一个或多个成员");
 	}
 
 	await db().delete(spaceMembers).where(inArray(spaceMembers.id, memberIds));

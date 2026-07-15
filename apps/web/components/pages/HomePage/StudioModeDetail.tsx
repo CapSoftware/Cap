@@ -64,33 +64,33 @@ const PREVIEW_CURSOR_DURATION = 8;
 const studioFeatures = [
 	{
 		icon: <Palette className="size-5" />,
-		title: "Custom Backgrounds",
-		description: "Gradients, wallpapers & colors",
+		title: "自定义背景",
+		description: "渐变、壁纸和颜色",
 	},
 	{
 		icon: <Maximize2 className="size-5" />,
-		title: "Adjustable Padding",
-		description: "Scale from 0% to 40%",
+		title: "可调内边距",
+		description: "可在 0% 到 40% 间调整",
 	},
 	{
 		icon: <Square className="size-5" />,
-		title: "Rounded Corners",
-		description: "Squircle or rounded styles",
+		title: "圆角",
+		description: "方圆形或圆角样式",
 	},
 	{
 		icon: <Wind className="size-5" />,
-		title: "Motion Blur",
-		description: "Natural movement effects",
+		title: "运动模糊",
+		description: "自然的运动效果",
 	},
 	{
 		icon: <Layers className="size-5" />,
-		title: "Shadow & Borders",
-		description: "Customizable depth effects",
+		title: "阴影和边框",
+		description: "可自定义的层次效果",
 	},
 	{
 		icon: <MousePointerClick className="size-5" />,
-		title: "Cursor Effects",
-		description: "Sizing, smoothing & click effects",
+		title: "光标效果",
+		description: "大小、平滑和点击效果",
 	},
 ];
 
@@ -233,13 +233,13 @@ const CursorSvg = ({ size = 18 }: { size?: number }) => {
 			fill="none"
 			xmlns="http://www.w3.org/2000/svg"
 			role="img"
-			aria-label="Cursor"
+			aria-label="光标"
 			style={{
 				filter:
 					"drop-shadow(0 2px 6px rgba(0,0,0,0.25)) drop-shadow(0 1px 2px rgba(0,0,0,0.15))",
 			}}
 		>
-			<title>Cursor</title>
+			<title>光标</title>
 			<path
 				fillRule="evenodd"
 				clipRule="evenodd"
@@ -383,7 +383,7 @@ const MockEditor = () => {
 						/>
 					</div>
 					<span className="text-[9px] md:text-[10px] text-gray-10 ml-1 md:ml-2">
-						My Recording.cap
+						我的录制.cap
 					</span>
 				</div>
 				<div className="flex items-center gap-1.5 md:gap-2">
@@ -396,10 +396,10 @@ const MockEditor = () => {
 						{shareCopied ? (
 							<>
 								<Check className="size-2 md:size-2.5 text-green-500" />
-								<span className="text-green-600">Copied!</span>
+								<span className="text-green-600">已复制！</span>
 							</>
 						) : (
-							"Share"
+							"分享"
 						)}
 					</motion.button>
 					<motion.button
@@ -417,7 +417,7 @@ const MockEditor = () => {
 									exit={{ opacity: 0, y: -8 }}
 									transition={{ duration: 0.15 }}
 								>
-									Export
+									导出
 								</motion.span>
 							)}
 							{exportState === "exporting" && (
@@ -447,7 +447,7 @@ const MockEditor = () => {
 									transition={{ duration: 0.15 }}
 								>
 									<Check className="size-2.5 text-green-300" />
-									Done!
+									完成！
 								</motion.span>
 							)}
 						</AnimatePresence>
@@ -567,14 +567,14 @@ const MockEditor = () => {
 								>
 									<div className="w-1 h-1 rounded-full bg-blue-400" />
 									{autoStep === 0 || autoStep === 5
-										? "Background"
+										? "背景"
 										: autoStep === 1
-											? "Padding"
+											? "内边距"
 											: autoStep === 2
-												? "Corners"
+												? "圆角"
 												: autoStep === 3
-													? "Shadow"
-													: "Cursor Size"}
+													? "阴影"
+													: "光标大小"}
 								</motion.div>
 							)}
 						</AnimatePresence>
@@ -603,7 +603,7 @@ const MockEditor = () => {
 					<div className="flex-1 p-2.5 lg:p-3 space-y-3 lg:space-y-3.5 overflow-y-auto">
 						<div>
 							<span className="text-[9px] font-medium block mb-2 text-gray-11">
-								Background
+								背景
 							</span>
 							<div className="flex gap-1.5 flex-wrap">
 								{GRADIENT_COLORS.map(([from, to], i) => (
@@ -635,7 +635,7 @@ const MockEditor = () => {
 						</div>
 
 						<InteractiveSlider
-							label="Padding"
+							label="内边距"
 							value={padding}
 							min={0}
 							max={40}
@@ -645,7 +645,7 @@ const MockEditor = () => {
 						/>
 
 						<InteractiveSlider
-							label="Rounded Corners"
+							label="圆角"
 							value={rounded}
 							min={0}
 							max={40}
@@ -655,7 +655,7 @@ const MockEditor = () => {
 						/>
 
 						<InteractiveSlider
-							label="Shadow"
+							label="阴影"
 							value={shadow}
 							min={0}
 							max={100}
@@ -666,7 +666,7 @@ const MockEditor = () => {
 
 						<div className="pt-2 border-t border-gray-4">
 							<InteractiveSlider
-								label="Cursor Size"
+								label="光标大小"
 								value={cursorSize}
 								min={30}
 								max={300}
@@ -699,16 +699,14 @@ const StudioModeDetail = () => {
 						strokeWidth={1.5}
 					/>
 					<span className="text-sm font-medium text-blue-11 uppercase tracking-wider">
-						Studio Mode
+						工作室模式
 					</span>
 				</div>
 				<h2 className="text-3xl md:text-4xl font-medium text-gray-12 mb-3">
-					Record in full quality, edit before you share
+					以完整画质录制，分享前精细编辑
 				</h2>
 				<p className="text-base md:text-lg text-gray-10 max-w-[600px] mx-auto">
-					Studio mode records at the highest quality directly to your device —
-					no compression, no upload. Then customize backgrounds, padding,
-					corners, and more before sharing.
+					工作室模式会以最高画质直接录制到设备，不压缩、不上传。分享前还可自定义背景、内边距、圆角等效果。
 				</p>
 			</motion.div>
 
@@ -765,7 +763,7 @@ const StudioModeDetail = () => {
 				className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 mt-6 md:mt-10"
 			>
 				<Button href="/features/studio-mode" variant="white" size="lg">
-					Learn more
+					了解更多
 				</Button>
 				<UpgradeToPro />
 			</motion.div>

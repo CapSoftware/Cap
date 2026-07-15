@@ -41,8 +41,8 @@ export async function generateMetadata(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
-					title: `${video.name} | Cap Recording`,
-					description: "Watch this video on Cap",
+					title: `${video.name} | Cap 录制`,
+					description: "在 Cap 上观看此视频",
 					openGraph: {
 						images: [
 							{
@@ -68,8 +68,8 @@ export async function generateMetadata(
 					},
 					twitter: {
 						card: "player",
-						title: `${video.name} | Cap Recording`,
-						description: "Watch this video on Cap",
+						title: `${video.name} | Cap 录制`,
+						description: "在 Cap 上观看此视频",
 						images: [
 							new URL(
 								`/api/video/og?videoId=${videoId}`,
@@ -96,14 +96,14 @@ export async function generateMetadata(
 		Effect.catchTags({
 			PolicyDenied: () =>
 				Effect.succeed({
-					title: "Cap: This video is private",
-					description: "This video is private and cannot be shared.",
+					title: "Cap：此视频为私密视频",
+					description: "此视频为私密视频，无法分享。",
 					robots: "noindex, nofollow",
 				}),
 			VerifyVideoPasswordError: () =>
 				Effect.succeed({
-					title: "Cap: Password Protected Video",
-					description: "This video is password protected.",
+					title: "Cap：受密码保护的视频",
+					description: "此视频受密码保护。",
 					robots: "noindex, nofollow",
 				}),
 		}),
@@ -115,10 +115,10 @@ export async function generateMetadata(
 const renderEmbedPolicyDenied = () =>
 	Effect.succeed(
 		<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
-			<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
+			<h1 className="mb-4 text-2xl font-bold">此视频为私密视频</h1>
 			<p className="text-gray-400">
-				If you own this video, please <Link href="/login">sign in</Link> to
-				manage sharing.
+				如果你是此视频的所有者，请 <Link href="/login">登录</Link>
+				以管理分享设置。
 			</p>
 		</div>,
 	);
@@ -284,7 +284,7 @@ async function EmbedContent({
 	if (video.isScreenshot === true) {
 		return (
 			<div className="flex justify-center items-center min-h-screen text-white bg-black">
-				<p>Screenshots cannot be embedded</p>
+				<p>无法嵌入截图</p>
 			</div>
 		);
 	}

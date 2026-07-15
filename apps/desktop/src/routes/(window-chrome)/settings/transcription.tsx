@@ -98,16 +98,15 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
 				<Section
-					title="Transcription"
-					description="Add names, spellings, domains, and capitalization preferences that caption generation should keep in mind."
+					title="转录"
+					description="添加人名、拼写、域名和大小写偏好，生成字幕时会优先采用这些写法。"
 				>
 					<SectionCard padded class="space-y-3">
 						<div class="flex items-center justify-between gap-3">
 							<div class="flex flex-col gap-0.5 min-w-0">
-								<p class="text-[13px] text-gray-12">Remembered terms</p>
+								<p class="text-[13px] text-gray-12">记忆词条</p>
 								<p class="text-xs leading-snug text-gray-10">
-									Add one term at a time to reduce typos and formatting
-									mistakes.
+									每次添加一个词条，减少拼写和格式错误。
 								</p>
 							</div>
 							<div class="flex items-center gap-2">
@@ -120,14 +119,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 											persist([]);
 										}}
 									>
-										Clear
+										清空
 									</Button>
 								</Show>
 								<span class="text-xs text-gray-11 min-w-15 text-right">
 									{saveState() === "saving"
-										? "Saving..."
+										? "正在保存……"
 										: saveState() === "saved"
-											? "Saved"
+											? "已保存"
 											: ""}
 								</span>
 							</div>
@@ -143,7 +142,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 									event.preventDefault();
 									addHint();
 								}}
-								placeholder="Add a term"
+								placeholder="添加词条"
 								spellcheck={false}
 								autocapitalize="off"
 								autocomplete="off"
@@ -156,23 +155,21 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								class="shrink-0"
 							>
 								<IconLucidePlus class="size-4" />
-								Add
+								添加
 							</Button>
 						</div>
 
 						<p class="text-xs leading-relaxed text-gray-10">
-							These hints are applied when you generate captions in the editor.
+							在编辑器中生成字幕时会应用这些提示词。
 						</p>
 					</SectionCard>
 				</Section>
 
 				<Show when={hints().length > 0}>
 					<Section
-						title="Active hints"
+						title="已启用的提示词"
 						right={
-							<span class="text-xs text-gray-10">
-								{hints().length} {hints().length === 1 ? "item" : "items"}
-							</span>
+							<span class="text-xs text-gray-10">{hints().length} 项</span>
 						}
 					>
 						<SectionCard padded>

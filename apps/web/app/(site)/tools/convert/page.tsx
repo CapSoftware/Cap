@@ -3,7 +3,7 @@ import Link from "next/link";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
-	title: "File Conversion Tools | Free Online Converters",
+	title: "文件转换工具 | 免费在线转换器",
 	description:
 		"Free online file conversion tools. Convert between various file formats directly in your browser with no uploads needed.",
 	alternates: {
@@ -20,43 +20,43 @@ interface ConversionTool {
 
 const conversionTools: ConversionTool[] = [
 	{
-		title: "WebM to MP4",
-		description: "Convert WebM videos to MP4 format directly in your browser",
+		title: "WebM 转 MP4",
+		description: "直接在浏览器中将 WebM 视频转换为 MP4 格式",
 		href: "/tools/convert/webm-to-mp4",
 		icon: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z",
 	},
 	{
-		title: "MP4 to MP3",
-		description: "Extract audio from MP4 videos and save as MP3 files",
+		title: "MP4 转 MP3",
+		description: "从 MP4 视频提取音频并保存为 MP3 文件",
 		href: "/tools/convert/mp4-to-mp3",
 		icon: "M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3",
 	},
 	{
-		title: "MP4 to GIF",
-		description: "Convert MP4 videos to animated GIF images",
+		title: "MP4 转 GIF",
+		description: "将 MP4 视频转换为 GIF 动图",
 		href: "/tools/convert/mp4-to-gif",
 		icon: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z",
 	},
 	{
-		title: "MOV to MP4",
-		description: "Convert MOV videos to more compatible MP4 format",
+		title: "MOV 转 MP4",
+		description: "将 MOV 视频转换为兼容性更好的 MP4 格式",
 		href: "/tools/convert/mov-to-mp4",
 		icon: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z",
 	},
 	{
-		title: "AVI to MP4",
-		description: "Convert AVI videos to modern MP4 format",
+		title: "AVI 转 MP4",
+		description: "将 AVI 视频转换为现代 MP4 格式",
 		href: "/tools/convert/avi-to-mp4",
 		icon: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z",
 	},
 	{
-		title: "MKV to MP4",
-		description: "Convert MKV videos to widely supported MP4 format",
+		title: "MKV 转 MP4",
+		description: "将 MKV 视频转换为广泛支持的 MP4 格式",
 		href: "/tools/convert/mkv-to-mp4",
 		icon: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z",
 	},
 	{
-		title: "MP4 to WebM",
+		title: "MP4 转 WebM",
 		description:
 			"Convert MP4 videos to WebM format for better web compatibility",
 		href: "/tools/convert/mp4-to-webm",

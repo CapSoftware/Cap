@@ -47,270 +47,253 @@ interface Feature {
 const features: Feature[] = [
 	{
 		icon: faVideo,
-		title: "Instant & Studio Modes",
-		description:
-			"Choose between quick shareable recordings or professional local editing with Studio Mode",
+		title: "即时模式和工作室模式",
+		description: "可选择快速创建分享录像，或使用工作室模式进行专业本地编辑",
 		category: "recording",
 		size: "medium",
 	},
 	{
 		icon: faRocket,
-		title: "4K 60fps Recording",
-		description:
-			"Crystal-clear recordings at up to 4K resolution and 60 frames per second",
+		title: "4K 60 帧录制",
+		description: "最高以 4K 分辨率和每秒 60 帧录制清晰画面",
 		category: "recording",
 	},
 	{
 		icon: faCamera,
-		title: "Composite Recording",
-		description:
-			"Camera and screen recorded separately and rendered as one video in real-time",
+		title: "合成录制",
+		description: "分别录制摄像头和屏幕，并实时渲染为一个视频",
 		category: "recording",
 	},
 	{
 		icon: faDesktop,
-		title: "Multiple Layouts",
-		description:
-			"Choose from various recording layouts to best showcase your content",
+		title: "多种布局",
+		description: "从多种录制布局中选择最适合展示内容的方式",
 		category: "recording",
 	},
 	{
 		icon: faPalette,
-		title: "Custom Branding",
-		description:
-			"Add your logo, colors, and custom backgrounds to match your brand",
+		title: "自定义品牌",
+		description: "添加徽标、品牌颜色和自定义背景",
 		category: "recording",
 	},
 	{
 		icon: faBolt,
-		title: "Blazing Fast Native App",
-		description:
-			"Lightning-fast performance with native macOS and Windows applications",
+		title: "极速原生应用",
+		description: "通过原生 macOS 和 Windows 应用获得闪电般的性能",
 		category: "platform",
 	},
 	{
 		icon: faKeyboard,
-		title: "Keyboard Shortcuts",
-		description:
-			"Efficient workflow with customizable keyboard shortcuts for all actions",
+		title: "键盘快捷键",
+		description: "为各项操作自定义键盘快捷键，提高工作效率",
 		category: "recording",
 	},
 	{
 		icon: faExpand,
-		title: "Smart Auto-Zoom",
-		description: "Automatically zoom in on important content during recordings",
+		title: "智能自动缩放",
+		description: "录制过程中自动放大重要内容",
 		category: "recording",
 	},
 	{
 		icon: faCog,
-		title: "Advanced Cursor Settings",
-		description:
-			"Customize cursor size, style, animations, and motion blur effects",
+		title: "高级光标设置",
+		description: "自定义光标大小、样式、动画和运动模糊效果",
 		category: "recording",
 	},
 	{
 		icon: faPalette,
-		title: "Background Customization",
-		description:
-			"Choose from colors, gradients, images, or blur effects for your background",
+		title: "自定义背景",
+		description: "可选择纯色、渐变、图片或模糊效果作为背景",
 		category: "editing",
 	},
 
 	{
 		icon: faWandMagicSparkles,
-		title: "AI-Generated Titles",
-		description: "Automatically generate engaging titles for your recordings",
+		title: "AI 生成标题",
+		description: "自动为录像生成吸引人的标题",
 		category: "ai",
 		isPro: true,
 	},
 	{
 		icon: faMagic,
-		title: "Smart Summaries",
-		description: "Get AI-powered summaries of your recording content instantly",
+		title: "智能摘要",
+		description: "即时获得由 AI 生成的录像内容摘要",
 		category: "ai",
 		isPro: true,
 		size: "medium",
 	},
 	{
 		icon: faCheckCircle,
-		title: "Clickable Chapters",
-		description:
-			"Auto-generated chapter markers for easy navigation through long recordings",
+		title: "可点击章节",
+		description: "自动生成章节标记，轻松浏览长录像",
 		category: "ai",
 		isPro: true,
 	},
 	{
 		icon: faComments,
-		title: "Automatic Transcriptions",
-		description: "Accurate transcriptions generated for every recording",
+		title: "自动转写",
+		description: "为每段录像生成准确的文字稿",
 		category: "ai",
 		isPro: true,
 		size: "medium",
 	},
 	{
 		icon: faEdit,
-		title: "Auto-Edit",
-		description:
-			"AI-powered automatic editing to remove silences and improve pacing",
+		title: "自动编辑",
+		description: "利用 AI 自动移除静音片段并改善节奏",
 		category: "ai",
 		isComingSoon: true,
 	},
 	{
 		icon: faVolumeUp,
-		title: "Noise Reduction",
-		description: "Advanced AI noise reduction for crystal-clear audio",
+		title: "降噪",
+		description: "高级 AI 降噪，让声音清晰纯净",
 		category: "ai",
 		isComingSoon: true,
 	},
 
 	{
 		icon: faCloud,
-		title: "Unlimited Cloud Storage",
-		description:
-			"Store all your recordings in the cloud with no storage limits",
+		title: "无限云存储",
+		description: "将所有录像存储在云端，不受容量限制",
 		category: "sharing",
 		isPro: true,
 		size: "medium",
 	},
 	{
 		icon: faShareNodes,
-		title: "Instant Shareable Links",
-		description:
-			"Share recordings instantly with a simple link - no downloads required",
+		title: "即时分享链接",
+		description: "通过简单链接即时分享录像，无需下载",
 		category: "sharing",
 	},
 	{
 		icon: faLock,
-		title: "Password Protection",
-		description: "Secure your sensitive recordings with password protection",
+		title: "密码保护",
+		description: "使用密码保护敏感录像",
 		category: "sharing",
 		isPro: true,
 	},
 	{
 		icon: faChartLine,
-		title: "Viewer Analytics",
-		description: "Track views, engagement, and watch time for your recordings",
+		title: "观看分析",
+		description: "跟踪录像的观看次数、互动情况和观看时长",
 		category: "sharing",
 		isPro: true,
 	},
 	{
 		icon: faUsers,
-		title: "Team Workspaces",
-		description: "Collaborate with your team in organized workspaces",
+		title: "团队工作区",
+		description: "在井然有序的工作区中与团队协作",
 		category: "sharing",
 		isPro: true,
 	},
 	{
 		icon: faComments,
-		title: "Thread Comments",
-		description: "Contextual discussions with timestamp-linked comments",
+		title: "对话评论",
+		description: "通过关联时间戳的评论展开上下文讨论",
 		category: "sharing",
 	},
 	{
 		icon: faGlobe,
-		title: "Custom Domain",
-		description: "Share recordings from your own domain (cap.yourdomain.com)",
+		title: "自定义域名",
+		description: "使用自己的域名分享录像（cap.yourdomain.com）",
 		category: "sharing",
 		isPro: true,
 	},
 	{
 		icon: faCode,
-		title: "Embed Support",
-		description: "Embed recordings anywhere with customizable players",
+		title: "嵌入支持",
+		description: "使用可自定义播放器将录像嵌入任意位置",
 		category: "sharing",
 	},
 
 	{
 		icon: faServer,
-		title: "Bring Your Own Storage",
-		description:
-			"Connect your own Google Drive or S3 bucket for complete data ownership",
+		title: "使用自有存储",
+		description: "连接自己的 Google Drive 或 S3 存储桶，完全拥有数据",
 		category: "privacy",
 		isPro: true,
 	},
 	{
 		icon: faShieldAlt,
-		title: "Local Recording",
-		description:
-			"Record and store everything locally with Cap Studio Mode - your data never leaves your device",
+		title: "本地录制",
+		description: "使用 Cap 工作室模式在本地录制和存储，数据不会离开设备",
 		category: "privacy",
 		size: "medium",
 	},
 	{
 		icon: faCode,
-		title: "100% Open Source",
-		description:
-			"Fully transparent, auditable code you can trust and contribute to",
+		title: "100% 开源",
+		description: "代码完全透明且可审计，你可以放心使用并参与贡献",
 		category: "privacy",
 		size: "medium",
 	},
 	{
 		icon: faServer,
-		title: "Self-Hosting",
-		description: "Deploy Cap on your own infrastructure for ultimate control",
+		title: "自行托管",
+		description: "在自己的基础设施上部署 Cap，获得完全控制权",
 		category: "privacy",
 	},
 
 	{
 		icon: faDownload,
-		title: "Loom Video Importer",
+		title: "Loom 视频导入器",
 		description:
-			"Switching from Loom? Import your existing Loom recordings directly into Cap and keep all your content in one place",
+			"从 Loom 迁移？可将现有 Loom 录像直接导入 Cap，集中管理所有内容",
 		category: "platform",
 		size: "medium",
 	},
 	{
 		icon: faMobileAlt,
-		title: "Cross-Platform",
-		description: "Native apps for macOS (Apple Silicon & Intel) and Windows",
+		title: "跨平台",
+		description: "提供适用于 macOS（Apple 芯片和 Intel）及 Windows 的原生应用",
 		category: "platform",
 		size: "medium",
 	},
 
 	{
 		icon: faClock,
-		title: "Timeline Editor",
-		description: "Professional timeline editing with frame-perfect precision",
+		title: "时间轴编辑器",
+		description: "专业时间轴编辑，精确到每一帧",
 		category: "editing",
 		size: "medium",
 	},
 	{
 		icon: faEdit,
-		title: "Split & Trim",
-		description: "Cut, split, and trim your recordings with ease",
+		title: "分割与修剪",
+		description: "轻松剪切、分割和修剪录像",
 		category: "editing",
 	},
 	{
 		icon: faDownload,
-		title: "Export Any Format",
-		description: "Export to MP4, WebM, MOV, GIF and more formats",
+		title: "导出多种格式",
+		description: "导出为 MP4、WebM、MOV、GIF 等格式",
 		category: "editing",
 	},
 	{
 		icon: faClock,
-		title: "Speed Control",
-		description: "Adjust playback speed from 0.25x to 3x",
+		title: "速度控制",
+		description: "在 0.25 倍到 3 倍之间调整播放速度",
 		category: "editing",
 	},
 	{
 		icon: faInfinity,
-		title: "No Watermarks",
-		description: "Your recordings are yours - no Cap watermarks ever",
+		title: "无水印",
+		description: "录像完全属于你，绝不会添加 Cap 水印",
 		category: "editing",
 	},
 
 	{
 		icon: faChartLine,
-		title: "Performance Insights",
-		description: "Detailed analytics on recording performance and system usage",
+		title: "性能洞察",
+		description: "详细分析录制性能和系统资源使用情况",
 		category: "platform",
 		isComingSoon: true,
 	},
 	{
 		icon: faServer,
-		title: "Webhooks & API",
-		description:
-			"Integrate Cap into your workflow with webhooks and API access",
+		title: "Webhook 和 API",
+		description: "通过 Webhook 和 API 访问将 Cap 集成到工作流",
 		category: "platform",
 		isPro: true,
 		isComingSoon: true,
@@ -318,8 +301,8 @@ const features: Feature[] = [
 	},
 	{
 		icon: faWandMagicSparkles,
-		title: "AI Video Search",
-		description: "Search through your recordings using natural language",
+		title: "AI 视频搜索",
+		description: "使用自然语言搜索录像内容",
 		category: "ai",
 		isPro: true,
 		isComingSoon: true,
@@ -350,15 +333,13 @@ export const FeaturesPage = () => {
 			<div className="relative z-10 px-5 pt-32 pb-20 w-full">
 				<div className="mx-auto text-center wrapper wrapper-sm">
 					<h1 className="text-[2rem] font-medium leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 mb-4">
-						The screen recorder for
+						专为以下用户打造的屏幕录制工具
 						<br />
-						<span className="text-gray-11">teams and creators</span>
+						<span className="text-gray-11">团队与创作者</span>
 					</h1>
 					<p className="mx-auto mb-8 max-w-3xl text-md sm:text-xl text-gray-10">
-						Whether you're a solo creator or a global agency, Cap scales with
-						you. Record in 4K, collaborate seamlessly, maintain brand
-						consistency, and ship content faster. All while keeping full control
-						of your data.
+						无论你是独立创作者还是全球团队，Cap 都能随需求扩展。以 4K
+						录制、顺畅协作、保持品牌一致并更快发布内容，同时始终掌控自己的数据。
 					</p>
 
 					<div className="flex flex-col justify-center items-center space-y-2 sm:flex-row sm:space-y-0 sm:space-x-2">
@@ -368,7 +349,7 @@ export const FeaturesPage = () => {
 							size="lg"
 							className="flex justify-center items-center w-full font-medium text-md sm:w-auto"
 						>
-							Download Cap Free
+							免费下载 Cap
 						</Button>
 						<Button
 							href="/pricing"
@@ -376,7 +357,7 @@ export const FeaturesPage = () => {
 							size="lg"
 							className="flex justify-center items-center w-full font-medium text-md sm:w-auto"
 						>
-							Upgrade to Cap Pro
+							升级到 Cap 专业版
 						</Button>
 					</div>
 				</div>
@@ -424,7 +405,7 @@ export const FeaturesPage = () => {
 									)}
 									{feature.isComingSoon && (
 										<span className="px-2 py-1 ml-2 text-xs font-medium rounded-full bg-gray-3 text-gray-10">
-											SOON
+											即将推出
 										</span>
 									)}
 								</h3>
@@ -448,10 +429,9 @@ export const FeaturesPage = () => {
 
 			<div className="py-32 bg-gray-2 md:py-40">
 				<div className="text-center wrapper">
-					<h2 className="mb-4 text-3xl font-medium">Ready to get started?</h2>
+					<h2 className="mb-4 text-3xl font-medium">准备开始了吗？</h2>
 					<p className="mx-auto mb-8 max-w-2xl text-lg text-gray-10">
-						Join thousands of users who are already creating better recordings
-						with Cap.
+						加入数千名用户，使用 Cap 创作更出色的录像。
 					</p>
 					<div className="flex flex-col gap-4 justify-center sm:flex-row">
 						<Button
@@ -460,7 +440,7 @@ export const FeaturesPage = () => {
 							size="lg"
 							className="font-medium"
 						>
-							Download Cap Free
+							免费下载 Cap
 						</Button>
 						<Button
 							href="/pricing"
@@ -468,7 +448,7 @@ export const FeaturesPage = () => {
 							size="lg"
 							className="font-medium"
 						>
-							Compare Plans
+							比较方案
 						</Button>
 					</div>
 				</div>

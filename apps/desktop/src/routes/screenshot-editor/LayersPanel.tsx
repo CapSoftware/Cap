@@ -19,11 +19,11 @@ const ANNOTATION_TYPE_ICONS = {
 };
 
 const ANNOTATION_TYPE_LABELS = {
-	arrow: "Arrow",
-	rectangle: "Rectangle",
-	circle: "Circle",
-	mask: "Mask",
-	text: "Text",
+	arrow: "箭头",
+	rectangle: "矩形",
+	circle: "圆形",
+	mask: "遮罩",
+	text: "文本",
 };
 
 export function LayersPanel() {
@@ -201,7 +201,7 @@ export function LayersPanel() {
 			<div class="flex items-center justify-between px-3 h-10 border-b border-gray-3">
 				<div class="flex items-center gap-2 text-sm font-medium text-gray-12">
 					<IconLucideLayers class="size-4" />
-					<span>Layers</span>
+					<span>图层</span>
 				</div>
 				<button
 					type="button"
@@ -218,10 +218,8 @@ export function LayersPanel() {
 					fallback={
 						<div class="flex flex-col items-center justify-center h-full px-4 text-center">
 							<IconLucideLayers class="size-8 text-gray-7 mb-2" />
-							<p class="text-xs text-gray-10">No layers yet</p>
-							<p class="text-[10px] text-gray-8 mt-1">
-								Use the tools above to add annotations
-							</p>
+							<p class="text-xs text-gray-10">暂无图层</p>
+							<p class="text-[10px] text-gray-8 mt-1">使用上方工具添加标注</p>
 						</div>
 					}
 				>
@@ -316,7 +314,7 @@ export function LayersPanel() {
 			</div>
 
 			<div class="px-3 py-2 border-t border-gray-3 text-[10px] text-gray-9">
-				Drag to reorder • Top = front
+				拖动可调整顺序 · 顶层位于最前方
 			</div>
 		</div>
 	);

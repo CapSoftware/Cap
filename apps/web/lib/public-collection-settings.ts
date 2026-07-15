@@ -37,26 +37,26 @@ export const GRID_COLUMN_CLASS: Record<
 };
 
 export const PUBLIC_LAYOUT_OPTIONS = [
-	{ value: "grid" as const, label: "Grid" },
-	{ value: "list" as const, label: "List" },
+	{ value: "grid" as const, label: "网格" },
+	{ value: "list" as const, label: "列表" },
 ];
 
 export const PUBLIC_LOGO_OPTIONS: {
 	value: PublicCollection.PublicCollectionLogoMode;
 	label: string;
 }[] = [
-	{ value: "cap", label: "Cap logo" },
-	{ value: "organization", label: "Organization logo" },
-	{ value: "custom", label: "Custom logo" },
-	{ value: "none", label: "No logo" },
+	{ value: "cap", label: "Cap 徽标" },
+	{ value: "organization", label: "组织徽标" },
+	{ value: "custom", label: "自定义徽标" },
+	{ value: "none", label: "不显示徽标" },
 ];
 
 export const PUBLIC_GRID_COLUMN_OPTIONS: {
 	value: PublicCollection.PublicCollectionGridColumns;
 	label: string;
 }[] = [
-	{ value: 2, label: "2 per row" },
-	{ value: 3, label: "3 per row" },
-	{ value: 4, label: "4 per row" },
-	{ value: 5, label: "5 per row" },
+	{ value: 2, label: "每行 2 个" },
+	{ value: 3, label: "每行 3 个" },
+	{ value: 4, label: "每行 4 个" },
+	{ value: 5, label: "每行 5 个" },
 ];

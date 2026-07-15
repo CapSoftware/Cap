@@ -74,7 +74,7 @@ const UpgradeModalImpl = ({
 
 	const pricePerUser = isAnnual ? 8.16 : 12;
 	const totalPrice = pricePerUser * proQuantity;
-	const billingText = isAnnual ? "billed annually" : "billed monthly";
+	const billingText = isAnnual ? "按年计费" : "按月计费";
 
 	useRive({
 		src: "/rive/main.riv",
@@ -90,53 +90,53 @@ const UpgradeModalImpl = ({
 	const proFeatures = [
 		{
 			icon: <Globe className={iconStyling} />,
-			title: "Custom domain",
-			description: "Connect your own domain to Cap",
+			title: "自定义域名",
+			description: "将你自己的域名连接到 Cap",
 		},
 		{
 			icon: <Share2 className={iconStyling} />,
-			title: "Unlimited sharing",
-			description: "Cloud storage & shareable links",
+			title: "无限分享",
+			description: "云存储和可分享链接",
 		},
 		{
 			icon: <Sparkles className={iconStyling} />,
 			title: "Cap AI",
-			description: "Automatic video chapters, summaries & more",
+			description: "自动生成视频章节、摘要等内容",
 		},
 		{
 			icon: <Lock className={iconStyling} />,
-			title: "Password protected videos",
-			description: "Enhanced security for your content",
+			title: "密码保护视频",
+			description: "为你的内容提供更强的安全保护",
 		},
 		{
 			icon: <Database className={iconStyling} />,
-			title: "Custom storage",
-			description: "Connect your own Google Drive or S3 bucket",
+			title: "自定义存储",
+			description: "连接你自己的 Google 云端硬盘或 S3 存储桶",
 		},
 		{
 			icon: <Shield className={iconStyling} />,
-			title: "Commercial license",
-			description: "Commercial license for desktop app automatically included",
+			title: "商业许可证",
+			description: "自动包含桌面应用商业许可证",
 		},
 		{
 			icon: <Video className={iconStyling} />,
-			title: "Upload videos",
-			description: "Upload custom videos directly to Cap",
+			title: "上传视频",
+			description: "直接将自定义视频上传到 Cap",
 		},
 		{
 			icon: <Infinity className={iconStyling} />,
-			title: "Unlimited views",
-			description: "No limits on video views",
+			title: "无限观看",
+			description: "视频观看次数不受限制",
 		},
 		{
 			icon: <BarChart3 className={iconStyling} />,
-			title: "Analytics",
-			description: "Video viewing insights",
+			title: "数据分析",
+			description: "洞察视频观看情况",
 		},
 		{
 			icon: <Headphones className={iconStyling} />,
-			title: "Priority support",
-			description: "Get help when you need it",
+			title: "优先支持",
+			description: "在需要时获得及时帮助",
 		},
 	];
 
@@ -165,12 +165,12 @@ const UpgradeModalImpl = ({
 			}
 
 			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
+				toast.success("你已订阅 Cap Pro 方案");
 				onOpenChange(false);
 			}
 
 			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
+				toast.success("你已订阅 Cap Pro 方案");
 				onOpenChange(false);
 			}
 
@@ -218,11 +218,11 @@ const UpgradeModalImpl = ({
 								<div className="flex relative flex-col flex-1 justify-center items-center py-6 w-full">
 									<div className="flex flex-col items-center">
 										<h1 className="text-3xl font-medium text-gray-12">
-											Upgrade to Cap Pro
+											升级到 Cap Pro
 										</h1>
 									</div>
 									<p className="mt-1 text-lg text-center text-gray-11">
-										You can cancel anytime. Early adopter pricing locked in.
+										可随时取消，并锁定早期用户价格。
 									</p>
 
 									<div className="flex flex-col items-center mt-3 mb-4 w-full">
@@ -237,15 +237,15 @@ const UpgradeModalImpl = ({
 											/>
 											<span className="mb-2 ml-2 text-gray-11">
 												{proQuantity === 1 ? (
-													`per user, ${billingText}`
+													`每位用户，${billingText}`
 												) : (
 													<>
-														for{" "}
+														共{" "}
 														<NumberFlow
 															value={proQuantity}
 															className="tabular-nums text-gray-12"
 														/>{" "}
-														users, {billingText}
+														位用户，{billingText}
 													</>
 												)}
 											</span>
@@ -253,7 +253,7 @@ const UpgradeModalImpl = ({
 
 										<div className="flex flex-col gap-6 justify-evenly items-center mt-8 w-full max-w-md sm:gap-10 sm:flex-row">
 											<div className="flex gap-3 items-center">
-												<span className="text-gray-12">Annual billing</span>
+												<span className="text-gray-12">按年计费</span>
 												<Switch
 													checked={isAnnual}
 													onCheckedChange={() => setIsAnnual(!isAnnual)}
@@ -261,7 +261,7 @@ const UpgradeModalImpl = ({
 											</div>
 
 											<div className="flex items-center">
-												<span className="mr-3 text-gray-12">Users:</span>
+												<span className="mr-3 text-gray-12">用户数：</span>
 												<div className="flex items-center">
 													<button
 														type="button"
@@ -300,8 +300,8 @@ const UpgradeModalImpl = ({
 										disabled={proCheckoutMutation.isPending}
 									>
 										{proCheckoutMutation.isPending
-											? "Loading..."
-											: "Upgrade to Cap Pro"}
+											? "正在加载..."
+											: "升级到 Cap Pro"}
 									</Button>
 									{dismissible && (
 										<button
@@ -309,7 +309,7 @@ const UpgradeModalImpl = ({
 											className="mt-2 w-full max-w-sm h-14 text-base rounded-xl hover:underline text-gray-11 hover:text-gray-12"
 											onClick={() => onOpenChange(false)}
 										>
-											Skip
+											跳过
 										</button>
 									)}
 								</div>

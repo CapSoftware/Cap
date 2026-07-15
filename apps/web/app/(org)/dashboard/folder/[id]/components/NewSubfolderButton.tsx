@@ -25,7 +25,7 @@ export const NewSubfolderButton = ({
 				className="flex gap-2 items-center"
 			>
 				<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-				New Subfolder
+				新建子文件夹
 			</Button>
 			<SubfolderDialog
 				open={openDialog}

@@ -198,7 +198,7 @@ export const Dialog = {
 	CloseButton() {
 		return (
 			<KDialog.CloseButton as={Button} variant="gray">
-				Cancel
+				取消
 			</KDialog.CloseButton>
 		);
 	},
@@ -393,7 +393,7 @@ export function EditorButton<T extends ValidComponent = "button">(
 			{local.tooltipText || local.comingSoon ? (
 				<Tooltip
 					kbd={local.kbd}
-					content={local.comingSoon ? "Coming Soon" : local.tooltipText}
+					content={local.comingSoon ? "即将推出" : local.tooltipText}
 				>
 					<Polymorphic
 						as="button"
@@ -449,7 +449,7 @@ export function ComingSoonTooltip(
 			</KTooltip.Trigger>
 			<KTooltip.Portal>
 				<KTooltip.Content class="p-2 font-medium bg-gray-12 text-gray-1 data-expanded:animate-in data-expanded:slide-in-from-bottom-1 data-expanded:fade-in data-closed:animate-out data-closed:slide-out-to-bottom-1 data-closed:fade-out rounded-lg text-xs z-1000">
-					Coming Soon
+					即将推出
 				</KTooltip.Content>
 			</KTooltip.Portal>
 		</KTooltip>

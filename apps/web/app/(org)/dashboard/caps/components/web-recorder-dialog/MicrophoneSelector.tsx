@@ -79,10 +79,8 @@ export const MicrophoneSelector = ({
 					await Promise.resolve(onRefreshDevices());
 				}
 			} catch (error) {
-				console.error("Microphone permission request failed", error);
-				toast.error(
-					"Unable to access your microphone. Check browser permissions.",
-				);
+				console.error("请求麦克风权限失败", error);
+				toast.error("无法访问麦克风，请检查浏览器权限。");
 			}
 
 			return;
@@ -165,10 +163,10 @@ export const MicrophoneSelector = ({
 						onKeyDown={handleStatusPillKeyDown}
 					>
 						{shouldRequestPermission
-							? "Request permission"
+							? "请求权限"
 							: micEnabled
-								? "On"
-								: "Off"}
+								? "开启"
+								: "关闭"}
 					</button>
 				</div>
 				<SelectContent className="z-[502]">
@@ -182,7 +180,7 @@ export const MicrophoneSelector = ({
 						<SelectItem key={mic.deviceId} value={mic.deviceId}>
 							<span className="flex items-center gap-2 truncate">
 								<MicIcon className="size-4 text-gray-11" />
-								{mic.label?.trim() || `Microphone ${index + 1}`}
+								{mic.label?.trim() || `麦克风 ${index + 1}`}
 							</span>
 						</SelectItem>
 					))}

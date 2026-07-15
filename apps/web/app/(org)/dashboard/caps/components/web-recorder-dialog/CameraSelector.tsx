@@ -72,8 +72,8 @@ export const CameraSelector = ({
 					await Promise.resolve(onRefreshDevices());
 				}
 			} catch (error) {
-				console.error("Camera permission request failed", error);
-				toast.error("Unable to access your camera. Check browser permissions.");
+				console.error("请求摄像头权限失败", error);
+				toast.error("无法访问摄像头，请检查浏览器权限。");
 			}
 
 			return;
@@ -148,10 +148,10 @@ export const CameraSelector = ({
 						onKeyDown={handleStatusPillKeyDown}
 					>
 						{shouldRequestPermission
-							? "Request permission"
+							? "请求权限"
 							: cameraEnabled
-								? "On"
-								: "Off"}
+								? "开启"
+								: "关闭"}
 					</button>
 				</div>
 				<SelectContent className="z-[502]">
@@ -165,7 +165,7 @@ export const CameraSelector = ({
 						<SelectItem key={camera.deviceId} value={camera.deviceId}>
 							<span className="flex items-center gap-2 truncate">
 								<CameraIcon className="size-4 text-gray-11" />
-								{camera.label?.trim() || `Camera ${index + 1}`}
+								{camera.label?.trim() || `摄像头 ${index + 1}`}
 							</span>
 						</SelectItem>
 					))}

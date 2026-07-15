@@ -88,7 +88,7 @@ export function createExportToFileTask(
 	const promise = commands
 		.exportVideoToFile(projectPath, progress, settings, fileName, fileType)
 		.then((savePath) => {
-			if (cancelled) throw new Error("Export cancelled");
+			if (cancelled) throw new Error("导出已取消");
 			if (!copying) {
 				copying = true;
 				onCopying?.();

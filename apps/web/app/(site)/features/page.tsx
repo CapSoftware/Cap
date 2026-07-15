@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { FeaturesPage } from "./FeaturesPage";
 
 export const metadata: Metadata = {
-	title: "Features - Cap",
+	title: "功能 - Cap",
 	description:
-		"Discover all the powerful features Cap offers for screen recording, sharing, and collaboration. From AI-powered tools to advanced editing capabilities.",
+		"探索 Cap 为屏幕录制、分享和协作提供的全部强大功能，包括 AI 工具和高级编辑能力。",
 };
 
 export default function Page() {

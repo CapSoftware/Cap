@@ -54,9 +54,7 @@ export const PublicCollectionField = ({
 					</div>
 					<div className="min-w-0">
 						<div className="flex gap-1.5 items-center">
-							<p className="text-sm font-medium text-gray-12">
-								Public collection link
-							</p>
+							<p className="text-sm font-medium text-gray-12">公开合集链接</p>
 							{!isPro && (
 								<span className="rounded-full bg-blue-11 px-1.5 py-0.5 text-[10px] font-medium leading-none text-white">
 									Pro
@@ -64,7 +62,8 @@ export const PublicCollectionField = ({
 							)}
 						</div>
 						<p className="text-xs text-gray-10">
-							Anyone with the link can browse public caps in this {kind}.
+							任何获得链接的人都可以浏览此
+							{kind === "folder" ? "文件夹" : "空间"}中的公开录制内容。
 						</p>
 					</div>
 				</div>
@@ -93,7 +92,7 @@ export const PublicCollectionField = ({
 							icon={copied ? faCheck : faCopy}
 							className={copied ? "size-3 text-blue-11" : "size-3"}
 						/>
-						{copied ? "Copied" : "Copy public link"}
+						{copied ? "已复制" : "复制公开链接"}
 					</Button>
 				</div>
 			)}

@@ -146,7 +146,7 @@ export const VideoDroppable = React.forwardRef<
 						type="button"
 						onClick={onRemove}
 						className="flex justify-center items-center rounded-full transition-colors cursor-pointer size-6 bg-gray-5 text-gray-11 hover:bg-gray-6 hover:text-gray-12"
-						aria-label="Remove video"
+						aria-label="移除视频"
 					>
 						<FontAwesomeIcon icon={faXmark} className="size-3" />
 					</button>

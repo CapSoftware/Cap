@@ -191,7 +191,7 @@ export default function CaptureArea() {
 							classList={{ "flex-row-reverse": ostype() === "windows" }}
 						>
 							<button
-								title="Close"
+								title="关闭"
 								class="group flex items-center justify-center size-12 text-gray-11 shadow-xl shadow-black/30 bg-gray-1 border border-gray-5 hover:bg-gray-4 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
 								type="button"
 								onClick={close}
@@ -201,7 +201,7 @@ export default function CaptureArea() {
 							<div class="flex items-center h-full gap-2">
 								<div class="flex items-center justify-between gap-1 px-[3px] size-full shadow-xl shadow-black/30 bg-gray-1 border border-gray-5 rounded-full">
 									<button
-										title="Reset"
+										title="重置"
 										type="button"
 										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
 										onClick={reset}
@@ -210,7 +210,7 @@ export default function CaptureArea() {
 									</button>
 									<div class="inline-block my-3 w-px self-stretch bg-gray-3" />
 									<button
-										title="Fill"
+										title="填满"
 										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
 										type="button"
 										onClick={() => cropperRef?.fill()}
@@ -219,7 +219,7 @@ export default function CaptureArea() {
 									</button>
 									<div class="inline-block my-3 w-px self-stretch bg-gray-3" />
 									<button
-										title="Aspect Ratio"
+										title="宽高比"
 										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
 										type="button"
 										onClick={showCropOptionsMenu}
@@ -262,7 +262,7 @@ export default function CaptureArea() {
 											}}
 										>
 											<IconLucideCheck class="size-5 *:pointer-events-none" />
-											<span class="font-medium text-sm">Confirm</span>
+											<span class="font-medium text-sm">确认</span>
 										</div>
 									</button>
 								</div>

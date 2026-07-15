@@ -34,7 +34,7 @@ export const MembersDialog = ({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="sm:max-w-md">
 				<DialogHeader>
-					<DialogTitle>{organizationName} Members</DialogTitle>
+					<DialogTitle>{organizationName} 成员</DialogTitle>
 				</DialogHeader>
 				<div className="max-h-[60vh] overflow-auto py-4">
 					<div className="flex flex-col gap-2">
@@ -45,13 +45,13 @@ export const MembersDialog = ({
 							>
 								<SignedImageUrl
 									image={member.user?.memberImage}
-									name={member.user?.name || "User"}
+									name={member.user?.name || "用户"}
 									className="mr-3 size-8"
 									letterClass="text-md"
 								/>
 								<div className="flex flex-col">
 									<span className="text-sm font-medium text-gray-12">
-										{member.user?.name || "User"}
+										{member.user?.name || "用户"}
 									</span>
 									<span className="text-xs text-gray-11">
 										{member.user?.email || ""}

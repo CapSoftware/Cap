@@ -188,7 +188,7 @@ export const CapCard = ({
 
 					window.URL.revokeObjectURL(blobUrl);
 				} else {
-					throw new Error("Failed to get download URL");
+					throw new Error("获取下载网址失败");
 				}
 			}),
 	});
@@ -198,7 +198,7 @@ export const CapCard = ({
 			await onDelete?.();
 		},
 		onError: (error) => {
-			console.error("Error deleting cap:", error);
+			console.error("删除录制内容时出错：", error);
 		},
 		onSuccess: () => {
 			router.refresh();
@@ -325,13 +325,13 @@ export const CapCard = ({
 		if (downloadMutation.isPending) return;
 
 		toast.promise(downloadMutation.mutateAsync(), {
-			loading: "Preparing download...",
-			success: "Download started successfully",
+			loading: "正在准备下载……",
+			success: "下载已开始",
 			error: (error) => {
 				if (error instanceof Error) {
 					return error.message;
 				}
-				return "Failed to download video - please try again.";
+				return "下载视频失败，请重试。";
 			},
 		});
 	};
@@ -422,7 +422,7 @@ export const CapCard = ({
 				{anyCapSelected && !sharedCapCard && (
 					<button
 						type="button"
-						aria-label={`Select ${cap.name}`}
+						aria-label={`选择 ${cap.name}`}
 						className="absolute inset-0 z-10"
 						onClick={handleSelectClick}
 					/>
@@ -440,11 +440,11 @@ export const CapCard = ({
 					)}
 				>
 					<CapCardButton
-						tooltipContent="Copy link"
+						tooltipContent="复制链接"
 						onClick={(e) => {
 							e.stopPropagation();
 							copyLinkHandler();
-							toast.success("Link copied to clipboard");
+							toast.success("链接已复制到剪贴板");
 						}}
 						className="delay-0"
 						icon={
@@ -474,7 +474,7 @@ export const CapCard = ({
 					/>
 					{isOwner && (
 						<CapCardButton
-							tooltipContent="Share"
+							tooltipContent="分享"
 							onClick={(e) => {
 								e.stopPropagation();
 								setIsSharingDialogOpen(true);
@@ -488,7 +488,7 @@ export const CapCard = ({
 						<DropdownMenuTrigger asChild suppressHydrationWarning>
 							<div>
 								<CapCardButton
-									tooltipContent="More options"
+									tooltipContent="更多选项"
 									className="delay-75"
 									icon={<FontAwesomeIcon icon={faEllipsis} />}
 								/>
@@ -509,7 +509,7 @@ export const CapCard = ({
 										className="flex gap-2 items-center rounded-lg"
 									>
 										<FontAwesomeIcon className="size-3" icon={faGear} />
-										<p className="text-sm text-gray-12">Settings</p>
+										<p className="text-sm text-gray-12">设置</p>
 									</DropdownMenuItem>
 									<DropdownMenuItem
 										onClick={(e) => {
@@ -519,7 +519,7 @@ export const CapCard = ({
 										className="flex gap-2 items-center rounded-lg"
 									>
 										<FontAwesomeIcon className="size-3" icon={faChartSimple} />
-										<p className="text-sm text-gray-12">View analytics</p>
+										<p className="text-sm text-gray-12">查看数据分析</p>
 									</DropdownMenuItem>
 								</>
 							)}
@@ -531,27 +531,27 @@ export const CapCard = ({
 								className="flex gap-2 items-center rounded-lg"
 							>
 								<FontAwesomeIcon icon={faDownload} />
-								<p className="text-sm text-gray-12">Download</p>
+								<p className="text-sm text-gray-12">下载</p>
 							</DropdownMenuItem>
 							<DropdownMenuItem
 								onClick={(e) => {
 									e.stopPropagation();
 									copyLinkHandler();
-									toast.success("Link copied to clipboard");
+									toast.success("链接已复制到剪贴板");
 								}}
 								className="flex gap-2 items-center rounded-lg"
 							>
 								<FontAwesomeIcon className="size-3" icon={faLink} />
-								<p className="text-sm text-gray-12">Copy link</p>
+								<p className="text-sm text-gray-12">复制链接</p>
 							</DropdownMenuItem>
 							{isOwner && (
 								<>
 									<DropdownMenuItem
 										onClick={() => {
 											toast.promise(duplicateMutation.mutateAsync(), {
-												loading: "Duplicating cap...",
-												success: "Cap duplicated successfully",
-												error: "Failed to duplicate cap",
+												loading: "正在复制录制内容……",
+												success: "录制内容已复制",
+												error: "复制录制内容失败",
 											});
 										}}
 										disabled={
@@ -560,7 +560,7 @@ export const CapCard = ({
 										className="flex gap-2 items-center rounded-lg"
 									>
 										<FontAwesomeIcon className="size-3" icon={faCopy} />
-										<p className="text-sm text-gray-12">Duplicate</p>
+										<p className="text-sm text-gray-12">创建副本</p>
 									</DropdownMenuItem>
 									{canEditVideo && (
 										<DropdownMenuItem
@@ -571,7 +571,7 @@ export const CapCard = ({
 											className="flex gap-2 items-center rounded-lg"
 										>
 											<FontAwesomeIcon className="size-3" icon={faScissors} />
-											<p className="text-sm text-gray-12">Edit video</p>
+											<p className="text-sm text-gray-12">编辑视频</p>
 										</DropdownMenuItem>
 									)}
 									<DropdownMenuItem
@@ -586,7 +586,7 @@ export const CapCard = ({
 											icon={effectivePasswordProtected ? faLock : faUnlock}
 										/>
 										<p className="text-sm text-gray-12">
-											{passwordProtected ? "Edit password" : "Add password"}
+											{passwordProtected ? "编辑密码" : "添加密码"}
 										</p>
 									</DropdownMenuItem>
 									<DropdownMenuItem
@@ -597,7 +597,7 @@ export const CapCard = ({
 										className="flex gap-2 items-center rounded-lg"
 									>
 										<FontAwesomeIcon className="size-3" icon={faTrash} />
-										<p className="text-sm text-gray-12">Delete Cap</p>
+										<p className="text-sm text-gray-12">删除录制内容</p>
 									</DropdownMenuItem>
 								</>
 							)}
@@ -607,10 +607,10 @@ export const CapCard = ({
 					<ConfirmationDialog
 						open={confirmOpen}
 						icon={<FontAwesomeIcon icon={faVideo} />}
-						title="Delete Cap"
-						description={`Are you sure you want to delete the cap "${cap.name}"? This action cannot be undone.`}
-						confirmLabel={deleteMutation.isPending ? "Deleting..." : "Delete"}
-						cancelLabel="Cancel"
+						title="删除录制内容"
+						description={`确定要删除录制内容“${cap.name}”吗？此操作无法撤销。`}
+						confirmLabel={deleteMutation.isPending ? "正在删除……" : "删除"}
+						cancelLabel="取消"
 						loading={deleteMutation.isPending}
 						onConfirm={() => deleteMutation.mutate()}
 						onCancel={() => setConfirmOpen(false)}
@@ -620,7 +620,7 @@ export const CapCard = ({
 				{!sharedCapCard && onSelectToggle && (
 					<button
 						type="button"
-						aria-label={isSelected ? "Deselect cap" : "Select cap"}
+						aria-label={isSelected ? "取消选择录制内容" : "选择录制内容"}
 						className={clsx(
 							"absolute top-2 left-2 z-[49] duration-200",
 							isSelected || anyCapSelected || isDropdownOpen
@@ -769,7 +769,7 @@ export const CapCard = ({
 							)}
 							containerClass="absolute inset-0"
 							videoId={cap.id}
-							alt={`${cap.name} Thumbnail`}
+							alt={`${cap.name} 的缩略图`}
 							imageStatus={imageStatus}
 							setImageStatus={setImageStatus}
 							showPreview={cap.isScreenshot !== true}
@@ -782,11 +782,11 @@ export const CapCard = ({
 						/>
 						{cap.isScreenshot === true && !hasVisibleUploadProgress && (
 							<span
-								title="Screenshot"
+								title="截图"
 								className="absolute bottom-3 left-3 z-30 flex size-6 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm"
 							>
 								<FontAwesomeIcon icon={faImage} className="size-3" />
-								<span className="sr-only">Screenshot</span>
+								<span className="sr-only">截图</span>
 							</span>
 						)}
 						{effectivePasswordProtected && (
@@ -794,8 +794,8 @@ export const CapCard = ({
 								className="absolute right-2 top-2 z-10 flex size-7 items-center justify-center rounded-full bg-black/70 text-white"
 								title={
 									cap.hasInheritedPassword
-										? "Password required by space"
-										: "Password protected"
+										? "空间要求输入密码"
+										: "已启用密码保护"
 								}
 							>
 								<FontAwesomeIcon icon={faLock} className="size-3" />

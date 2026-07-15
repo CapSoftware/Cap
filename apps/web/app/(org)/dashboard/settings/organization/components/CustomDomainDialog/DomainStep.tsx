@@ -30,9 +30,9 @@ const DomainStep = ({
 	return (
 		<div className="space-y-6">
 			<div className="text-center">
-				<h3 className="text-lg font-semibold text-gray-12">Your domain</h3>
+				<h3 className="text-lg font-semibold text-gray-12">你的域名</h3>
 				<p className="text-sm text-gray-11">
-					Enter the custom domain you'd like to use e.g.{" "}
+					输入你想使用的自定义域名，例如{" "}
 					<span className="font-medium text-gray-12">caps.yourdomain.com</span>
 				</p>
 			</div>

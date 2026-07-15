@@ -107,7 +107,7 @@ function AddVideosDialogBase<T>({
 		queryFn: async () => {
 			const result = await getVideos();
 			if (!result.success || !result.data) {
-				throw new Error(result.error ?? "Failed to fetch videos");
+				throw new Error(result.error ?? "获取视频失败");
 			}
 			return result.data;
 		},
@@ -121,7 +121,7 @@ function AddVideosDialogBase<T>({
 		queryFn: async () => {
 			const result = await getEntityVideoIds();
 			if (!result.success || !result.data) {
-				throw new Error(result.error ?? "Failed to fetch video ids");
+				throw new Error(result.error ?? "获取视频 ID 失败");
 			}
 			return result.data;
 		},
@@ -162,18 +162,16 @@ function AddVideosDialogBase<T>({
 			]);
 
 			if ((addResult?.success ?? true) && (removeResult?.success ?? true)) {
-				toast.success("Videos updated successfully");
+				toast.success("视频已更新");
 				setSelectedVideos([]);
 				onVideosAdded?.();
 				onClose();
 			} else {
-				toast.error(
-					addResult.error || removeResult.error || "Failed to update videos",
-				);
+				toast.error(addResult.error || removeResult.error || "更新视频失败");
 			}
 		},
 		onError: (error) => {
-			toast.error("Failed to update videos");
+			toast.error("更新视频失败");
 			console.error("Error updating videos:", error);
 		},
 	});
@@ -232,12 +230,10 @@ function AddVideosDialogBase<T>({
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faVideo} />}
 					description={
-						"Find and add videos you have previously recorded to share with people in " +
-						entityName +
-						"."
+						"查找并添加你之前录制的视频，与" + entityName + "中的成员共享。"
 					}
 				>
-					<DialogTitle className="text-lg text-gray-12">Add Videos</DialogTitle>
+					<DialogTitle className="text-lg text-gray-12">添加视频</DialogTitle>
 				</DialogHeader>
 				{/* Tabs for filtering */}
 				<div className="flex w-full h-12 border-b bg-gray-1 border-gray-4">
@@ -262,11 +258,7 @@ function AddVideosDialogBase<T>({
 									"text-sm",
 								)}
 							>
-								{tab === "all"
-									? "All"
-									: tab === "added"
-										? "Added"
-										: "Not Added"}
+								{tab === "all" ? "全部" : tab === "added" ? "已添加" : "未添加"}
 							</p>
 						</button>
 					))}
@@ -279,7 +271,7 @@ function AddVideosDialogBase<T>({
 								<Search className="size-4 text-gray-9" />
 							</div>
 							<Input
-								placeholder="Search your videos"
+								placeholder="搜索你的视频"
 								value={searchTerm}
 								onChange={(e) => setSearchTerm(e.target.value)}
 								className="flex-1 pr-3 pl-8 w-full min-w-full text-sm placeholder-gray-8"
@@ -297,24 +289,24 @@ function AddVideosDialogBase<T>({
 								<h3 className="text-lg font-medium text-gray-12">
 									{searchTerm
 										? videoTab === "added"
-											? "No added videos found"
+											? "未找到已添加的视频"
 											: videoTab === "notAdded"
-												? "No not added videos found"
-												: "No videos found"
+												? "未找到可添加的视频"
+												: "未找到视频"
 										: videoTab === "added"
-											? "No added videos"
+											? "暂无已添加的视频"
 											: videoTab === "notAdded"
-												? "No videos to add"
-												: "No videos"}
+												? "暂无可添加的视频"
+												: "暂无视频"}
 								</h3>
 								<p className="max-w-sm text-sm text-gray-11">
 									{searchTerm
-										? "Try adjusting your search terms."
+										? "请尝试调整搜索关键词。"
 										: videoTab === "added"
-											? `You haven't added any videos to ${entityName} yet.`
+											? `你还没有向${entityName}添加任何视频。`
 											: videoTab === "notAdded"
-												? `Record or upload videos to add them to this ${entityName}.`
-												: `Record or upload videos to see them here.`}
+												? `录制或上传视频后，即可将其添加到${entityName}。`
+												: "录制或上传视频后，即可在此处查看。"}
 								</p>
 							</div>
 						) : (
@@ -334,10 +326,7 @@ function AddVideosDialogBase<T>({
 				<div className="flex flex-shrink-0 justify-between items-center px-4 py-4 rounded-b-xl border-t sm:px-8 sm:py-6 border-gray-4 bg-gray-3">
 					<div className="text-xs sm:text-sm text-gray-11">
 						{selectedVideos.length > 0 && (
-							<span>
-								{selectedVideos.length} video
-								{selectedVideos.length === 1 ? "" : "s"} selected
-							</span>
+							<span>已选择 {selectedVideos.length} 个视频</span>
 						)}
 					</div>
 					<div className="flex gap-2 sm:gap-3">
@@ -347,7 +336,7 @@ function AddVideosDialogBase<T>({
 							onClick={onClose}
 							className="px-3 py-2 text-sm sm:px-4"
 						>
-							Cancel
+							取消
 						</Button>
 
 						<Button
@@ -358,7 +347,7 @@ function AddVideosDialogBase<T>({
 							onClick={handleUpdateVideos}
 							className="px-3 py-2 text-sm sm:px-4"
 						>
-							{updateVideosMutation.isPending ? "Updating..." : "Update videos"}
+							{updateVideosMutation.isPending ? "正在更新…" : "更新视频"}
 						</Button>
 					</div>
 				</div>

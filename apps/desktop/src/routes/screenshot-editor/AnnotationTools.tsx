@@ -18,7 +18,7 @@ export function AnnotationTools() {
 
 	return (
 		<div class="flex items-center gap-1">
-			<Tooltip content="Layers" kbd={["L"]}>
+			<Tooltip content="图层" kbd={["L"]}>
 				<button
 					type="button"
 					onClick={() => setLayersPanelOpen(!layersPanelOpen())}
@@ -36,34 +36,34 @@ export function AnnotationTools() {
 			<ToolButton
 				tool="select"
 				icon={IconLucideMousePointer2}
-				label="Select"
+				label="选择"
 				shortcut="V"
 			/>
 			<ToolButton
 				tool="arrow"
 				icon={IconLucideArrowUpRight}
-				label="Arrow"
+				label="箭头"
 				shortcut="A"
 			/>
 			<ToolButton
 				tool="rectangle"
 				icon={IconLucideSquare}
-				label="Rectangle"
+				label="矩形"
 				shortcut="R"
 			/>
 			<ToolButton
 				tool="mask"
 				icon={IconLucideEyeOff}
-				label="Mask"
+				label="遮罩"
 				shortcut="M"
 			/>
 			<ToolButton
 				tool="circle"
 				icon={IconLucideCircle}
-				label="Circle"
+				label="圆形"
 				shortcut="C"
 			/>
-			<ToolButton tool="text" icon={IconLucideType} label="Text" shortcut="T" />
+			<ToolButton tool="text" icon={IconLucideType} label="文本" shortcut="T" />
 		</div>
 	);
 }

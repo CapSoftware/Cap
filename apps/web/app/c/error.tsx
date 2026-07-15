@@ -16,12 +16,12 @@ export default function CollectionError({
 
 	return (
 		<div className="wrapper flex flex-col items-center justify-center h-screen text-center">
-			<h1 className="text-5xl md:text-6xl font-medium">Something went wrong</h1>
+			<h1 className="text-5xl md:text-6xl font-medium">出现问题</h1>
 			<p className="text-xl md:text-2xl mt-2 mb-6 text-gray-400">
-				This collection could not be loaded right now.
+				暂时无法加载此合集。
 			</p>
 			<Button type="button" variant="gray" size="sm" onClick={reset}>
-				Try again
+				重试
 			</Button>
 		</div>
 	);

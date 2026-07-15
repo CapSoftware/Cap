@@ -20,7 +20,7 @@ export function ApiKeyDisplay({
 	const handleCopy = async () => {
 		await navigator.clipboard.writeText(value);
 		setCopied(true);
-		toast.success("Copied to clipboard");
+		toast.success("已复制到剪贴板");
 		setTimeout(() => setCopied(false), 2000);
 	};
 
@@ -38,6 +38,7 @@ export function ApiKeyDisplay({
 				{sensitive && (
 					<button
 						type="button"
+						aria-label={visible ? "隐藏密钥" : "显示密钥"}
 						onClick={() => setVisible(!visible)}
 						className="p-1.5 rounded-md hover:bg-gray-3 text-gray-10 transition-colors"
 					>
@@ -46,6 +47,7 @@ export function ApiKeyDisplay({
 				)}
 				<button
 					type="button"
+					aria-label="复制密钥"
 					onClick={handleCopy}
 					className="p-1.5 rounded-md hover:bg-gray-3 text-gray-10 transition-colors"
 				>

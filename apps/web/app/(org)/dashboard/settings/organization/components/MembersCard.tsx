@@ -20,6 +20,7 @@ import { faUser } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
+import { zhCN } from "date-fns/locale";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -82,17 +83,17 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 	} | null>(null);
 	const [deletingInviteId, setDeletingInviteId] = useState<string | null>(null);
 	const roleOptions = [
-		{ value: "admin", label: "Admin" },
-		{ value: "member", label: "Member" },
+		{ value: "admin", label: "管理员" },
+		{ value: "member", label: "成员" },
 	];
 	const showMemberManagerToast = () => {
-		toast.error("Only admins and owners can manage organization members");
+		toast.error("只有管理员和所有者可以管理组织成员");
 	};
 
 	const deleteInviteMutation = useMutation({
 		mutationFn: (inviteId: string) => {
 			if (!activeOrganization?.organization.id) {
-				throw new Error("Organization not found");
+				throw new Error("未找到组织");
 			}
 			setDeletingInviteId(inviteId);
 			return removeOrganizationInvite(
@@ -101,12 +102,12 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 			);
 		},
 		onSuccess: () => {
-			toast.success("Invite deleted successfully");
+			toast.success("邀请已删除");
 			setDeletingInviteId(null);
 			router.refresh();
 		},
 		onError: () => {
-			toast.error("An error occurred while deleting invite");
+			toast.error("删除邀请时发生错误");
 			setDeletingInviteId(null);
 		},
 	});
@@ -114,7 +115,7 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 	const removeMemberMutation = useMutation({
 		mutationFn: (memberId: string) => {
 			if (!activeOrganization?.organization.id) {
-				throw new Error("Organization not found");
+				throw new Error("未找到组织");
 			}
 			return removeOrganizationMember(
 				memberId,
@@ -122,16 +123,14 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 			);
 		},
 		onSuccess: () => {
-			toast.success("Member removed successfully");
+			toast.success("成员已移除");
 			setConfirmOpen(false);
 			setPendingMember(null);
 			router.refresh();
 		},
 		onError: (error) => {
 			toast.error(
-				error instanceof Error
-					? error.message
-					: "An error occurred while removing member",
+				error instanceof Error ? error.message : "移除成员时发生错误",
 			);
 		},
 	});
@@ -145,7 +144,7 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 			role: AssignableOrganizationRole;
 		}) => {
 			if (!activeOrganization?.organization.id) {
-				throw new Error("Organization not found");
+				throw new Error("未找到组织");
 			}
 			return updateOrganizationMemberRole(
 				memberId,
@@ -154,13 +153,11 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 			);
 		},
 		onSuccess: () => {
-			toast.success("Role updated");
+			toast.success("角色已更新");
 			router.refresh();
 		},
 		onError: (error) => {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to update role",
-			);
+			toast.error(error instanceof Error ? error.message : "更新角色失败");
 		},
 	});
 
@@ -173,7 +170,7 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 			enable: boolean;
 		}) => {
 			if (!activeOrganization?.organization.id) {
-				throw new Error("Organization not found");
+				throw new Error("未找到组织");
 			}
 			return toggleProSeat(
 				memberId,
@@ -182,13 +179,11 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 			);
 		},
 		onSuccess: (_data, { enable }) => {
-			toast.success(enable ? "Pro seat assigned" : "Pro seat removed");
+			toast.success(enable ? "已分配 Pro 席位" : "已移除 Pro 席位");
 			router.refresh();
 		},
 		onError: (error) => {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to update Pro seat",
-			);
+			toast.error(error instanceof Error ? error.message : "更新 Pro 席位失败");
 		},
 	});
 
@@ -213,14 +208,14 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 			<ConfirmationDialog
 				open={confirmOpen}
 				icon={<FontAwesomeIcon icon={faUser} />}
-				title="Remove member"
+				title="移除成员"
 				description={
 					pendingMember
-						? `Are you sure you want to remove ${pendingMember.name} from your organization? This action cannot be undone.`
+						? `确定要从组织中移除 ${pendingMember.name} 吗？此操作无法撤销。`
 						: ""
 				}
-				confirmLabel={removeMemberMutation.isPending ? "Removing..." : "Remove"}
-				cancelLabel="Cancel"
+				confirmLabel={removeMemberMutation.isPending ? "正在移除…" : "移除"}
+				cancelLabel="取消"
 				loading={removeMemberMutation.isPending}
 				onConfirm={() => {
 					if (pendingMember) {
@@ -235,8 +230,8 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 			<Card>
 				<div className="flex flex-wrap gap-6 justify-between items-center w-full">
 					<CardHeader>
-						<CardTitle>Members</CardTitle>
-						<CardDescription>Manage your organization members.</CardDescription>
+						<CardTitle>成员</CardTitle>
+						<CardDescription>管理组织成员。</CardDescription>
 					</CardHeader>
 					<Button
 						type="button"
@@ -252,19 +247,19 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 						}}
 						disabled={!canManageMembers}
 					>
-						+ Invite users
+						+ 邀请用户
 					</Button>
 				</div>
 				<Table className="mt-5">
 					<TableHeader>
 						<TableRow>
-							<TableHead>Member</TableHead>
-							<TableHead>Email</TableHead>
-							<TableHead>Role</TableHead>
+							<TableHead>成员</TableHead>
+							<TableHead>邮箱</TableHead>
+							<TableHead>角色</TableHead>
 							{buildEnv.NEXT_PUBLIC_IS_CAP && <TableHead>Pro</TableHead>}
-							<TableHead>Joined</TableHead>
-							<TableHead>Status</TableHead>
-							<TableHead>Actions</TableHead>
+							<TableHead>加入时间</TableHead>
+							<TableHead>状态</TableHead>
+							<TableHead>操作</TableHead>
 						</TableRow>
 					</TableHeader>
 					<TableBody>
@@ -301,11 +296,11 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 									<TableCell>{member.user.email}</TableCell>
 									<TableCell>
 										{memberIsOwner || memberRole === "owner" ? (
-											"Owner"
+											"所有者"
 										) : (
 											<Select
 												value={assignableRole ?? "member"}
-												placeholder="Role"
+												placeholder="角色"
 												options={roleOptions}
 												size="sm"
 												variant="gray"
@@ -347,12 +342,14 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 										</TableCell>
 									)}
 									<TableCell>
-										{format(member.createdAt, "MMM d, yyyy")}
+										{format(member.createdAt, "yyyy年M月d日", {
+											locale: zhCN,
+										})}
 									</TableCell>
 									<TableCell>
 										{pendingInviteEmails.has(member.user.email.toLowerCase())
-											? "Pending"
-											: "Active"}
+											? "待处理"
+											: "有效"}
 									</TableCell>
 									<TableCell>
 										{!memberIsOwner ? (
@@ -366,8 +363,8 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 														handleRemoveMember({
 															id: member.id,
 															user: {
-																name: member.user.name ?? "(No Name)",
-																email: member.user.email ?? "(No Email)",
+																name: member.user.name ?? "（无姓名）",
+																email: member.user.email ?? "（无邮箱）",
 															},
 														});
 													} else {
@@ -376,7 +373,7 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 												}}
 												disabled={!canRemoveMember}
 											>
-												Remove
+												移除
 											</Button>
 										) : (
 											"-"
@@ -392,7 +389,7 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 							)
 							.map((invite) => (
 								<TableRow key={invite.id}>
-									<TableCell className="text-gray-10">Pending</TableCell>
+									<TableCell className="text-gray-10">待处理</TableCell>
 									<TableCell>{invite.invitedEmail}</TableCell>
 									<TableCell>
 										{organizationRoleLabel(
@@ -402,7 +399,7 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 									</TableCell>
 									{buildEnv.NEXT_PUBLIC_IS_CAP && <TableCell>-</TableCell>}
 									<TableCell>-</TableCell>
-									<TableCell>Invited</TableCell>
+									<TableCell>已邀请</TableCell>
 									<TableCell>
 										<Button
 											type="button"
@@ -420,8 +417,8 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 											}
 										>
 											{deletingInviteId === invite.id
-												? "Deleting..."
-												: "Delete Invite"}
+												? "正在删除…"
+												: "删除邀请"}
 										</Button>
 									</TableCell>
 								</TableRow>

@@ -34,12 +34,12 @@ export function PendingRecordingShare() {
 		<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center bg-gray-2">
 			<LogoSpinner className="mb-6 w-10 h-auto animate-spin" />
 			<h1 className="mb-2 text-2xl font-semibold text-gray-12">
-				Preparing your recording
+				正在准备你的录制
 			</h1>
 			<p className="max-w-md text-gray-10">
 				{hasTimedOut
-					? "This recording is taking longer than expected. Reload this page in a moment."
-					: "Your recording is being made available. This page will update automatically."}
+					? "此录制的准备时间超出预期，请稍后重新加载页面。"
+					: "你的录制正在准备中，此页面会自动更新。"}
 			</p>
 		</div>
 	);

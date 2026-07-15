@@ -132,41 +132,27 @@ export const Caps = ({
 				return { success: successCount };
 			} else {
 				return yield* Effect.fail(
-					new Error(
-						`Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`,
-					),
+					new Error(`删除 ${errorCount} 个录制内容失败`),
 				);
 			}
 		}),
 		onMutate: (ids: Video.VideoId[]) => {
-			toast.loading(
-				`Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
-			);
+			toast.loading(`正在删除 ${ids.length} 个录制内容……`);
 		},
 		onSuccess: (data: { success: number; error?: number }) => {
 			setSelectedCaps([]);
 			router.refresh();
 			if (data.error) {
 				toast.success(
-					`Successfully deleted ${data.success} cap${
-						data.success === 1 ? "" : "s"
-					}, but failed to delete ${data.error} cap${
-						data.error === 1 ? "" : "s"
-					}`,
+					`已删除 ${data.success} 个录制内容，另有 ${data.error} 个删除失败`,
 				);
 			} else {
-				toast.success(
-					`Successfully deleted ${data.success} cap${
-						data.success === 1 ? "" : "s"
-					}`,
-				);
+				toast.success(`已删除 ${data.success} 个录制内容`);
 			}
 		},
 		onError: (error: unknown) => {
 			const message =
-				error instanceof Error
-					? error.message
-					: "An error occurred while deleting caps";
+				error instanceof Error ? error.message : "删除录制内容时发生错误";
 			toast.error(message);
 		},
 	});
@@ -176,10 +162,10 @@ export const Caps = ({
 			yield* rpc.VideoDelete(id);
 		}),
 		onSuccess: () => {
-			toast.success("Cap deleted successfully");
+			toast.success("录制内容已删除");
 			router.refresh();
 		},
-		onError: (_error: unknown) => toast.error("Failed to delete cap"),
+		onError: (_error: unknown) => toast.error("删除录制内容失败"),
 	});
 
 	useEffect(() => {
@@ -262,7 +248,7 @@ export const Caps = ({
 					className="flex gap-2 items-center w-fit"
 				>
 					<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-					New Folder
+					新建文件夹
 				</Button>
 				<UploadCapButton size="sm" />
 				<WebRecorderDialog />
@@ -273,7 +259,7 @@ export const Caps = ({
 			{folders.length > 0 && (
 				<>
 					<div className="flex gap-3 items-center mb-6 w-full">
-						<h1 className="text-2xl font-medium text-gray-12">Folders</h1>
+						<h1 className="text-2xl font-medium text-gray-12">文件夹</h1>
 					</div>
 					<div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
 						{folders.map((folder) => (
@@ -285,9 +271,7 @@ export const Caps = ({
 			{visibleVideos.length > 0 && (
 				<>
 					<div className="flex justify-between items-center mb-6 w-full">
-						<h1 className="text-2xl font-medium text-gray-12">
-							Videos and screenshots
-						</h1>
+						<h1 className="text-2xl font-medium text-gray-12">视频和截图</h1>
 					</div>
 
 					<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
@@ -338,9 +322,7 @@ export const Caps = ({
 								className="size-3.5 text-white opacity-50"
 								icon={faInfoCircle}
 							/>
-							<p className="text-white">
-								Drag to a space to share or folder to move
-							</p>
+							<p className="text-white">拖到空间以分享，或拖到文件夹以移动</p>
 						</div>
 					</div>
 				</div>

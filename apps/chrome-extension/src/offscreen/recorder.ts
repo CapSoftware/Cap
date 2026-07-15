@@ -89,7 +89,7 @@ const ORPHAN_SPOOL_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 // truncated backup cannot be retried — while the upload continues untouched.
 const MEMORY_BACKUP_MAX_BYTES = 256 * 1024 * 1024;
 const UNCERTAIN_COMPLETION_MESSAGE =
-	"Upload confirmation was interrupted. Open the video to verify it processed before retrying.";
+	"上传确认过程已中断。请先打开视频确认处理状态，再决定是否重试。";
 
 type ChunkingMode = "manual" | "timeslice";
 type RecordingSound = "start-recording" | "stop-recording";
@@ -465,7 +465,7 @@ const getDisplayStream = async (
 
 const getMainStream = async (request: StartRecordingRequest) => {
 	if (request.mode === "tab") {
-		if (!request.tabStreamId) throw new Error("Tab stream id is missing");
+		if (!request.tabStreamId) throw new Error("缺少标签页媒体流 ID");
 		return navigator.mediaDevices.getUserMedia(
 			tabCaptureConstraints(
 				request.tabStreamId,
@@ -729,7 +729,7 @@ const sweepOrphanedRecordingSpools = async () => {
 					fps: manifest?.fps ?? null,
 					totalBytes: orphan.totalBytes,
 					createdAt: orphan.updatedAt,
-					message: "The recording was interrupted before its upload finished.",
+					message: "录制在上传完成前意外中断。",
 				});
 			}
 		}
@@ -821,7 +821,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 		// Thrown before this attempt owns anything, so the cleanup below must
 		// never run for it: a duplicate start would otherwise tear down — and
 		// delete server-side — the live recording it was rejected to protect.
-		throw new Error("Recording is already active");
+		throw new Error("已有录制正在进行");
 	}
 	startInProgress = true;
 	startCancelRequested = false;
@@ -855,7 +855,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 		const { width, height, fps } = getStreamSize(mainStream);
 		const videoTracks = mainStream.getVideoTracks();
 		if (videoTracks.length === 0) {
-			throw new Error("No video track was captured");
+			throw new Error("未采集到视频轨道");
 		}
 		const recordingStream = new MediaStream(videoTracks);
 		const streams = microphoneStream
@@ -868,7 +868,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 		});
 		const hasAudio = recordingStream.getAudioTracks().length > 0;
 		const pipeline = selectRecordingPipeline(hasAudio);
-		if (!pipeline) throw new Error("No supported recorder format is available");
+		if (!pipeline) throw new Error("没有可用的受支持录制格式");
 
 		const { videoCodec, audioCodec } = describeRecordingCodecs(
 			pipeline.mimeType,
@@ -1034,7 +1034,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 		recording.statusTimer = window.setInterval(updateStatusDuration, 1000);
 		recording.stopPromise = new Promise<void>((resolve, reject) => {
 			recorder.onstop = () => resolve();
-			recorder.onerror = () => reject(new Error("MediaRecorder failed"));
+			recorder.onerror = () => reject(new Error("媒体录制器运行失败"));
 		});
 		// A mid-recording recorder failure must stop the session right away;
 		// without this the rejection sits unhandled while the timer keeps
@@ -1044,7 +1044,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 			if (activeRecording !== recording || recording.finalizePromise) return;
 			status = {
 				phase: "error",
-				message: "Recording failed: the recorder stopped unexpectedly",
+				message: "录制失败：录制器意外停止",
 				videoId: creation.id,
 			};
 			broadcastStatus();
@@ -1264,7 +1264,7 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 		// to its recorded-bytes counter instead of the local blob's size.
 		const finalBlob = await recoverRecordingBlob(recording);
 		if ((!finalBlob || finalBlob.size === 0) && recording.recordedBytes === 0) {
-			throw new Error("No recording data was captured");
+			throw new Error("未采集到录制数据");
 		}
 		await recording.uploader.finalize({
 			finalBlob: finalBlob && finalBlob.size > 0 ? finalBlob : null,
@@ -1443,7 +1443,7 @@ const resumeRecording = () => {
 // the whole blob is re-sent.
 const retryFailedUpload = async (videoId: string): Promise<RecordingStatus> => {
 	if (activeRecording || startInProgress || retryInProgress) {
-		throw new Error("A recording is already in progress");
+		throw new Error("已有录制正在进行");
 	}
 	retryInProgress = true;
 	try {
@@ -1460,18 +1460,18 @@ const runFailedUploadRetry = async (
 		(entry) => entry.videoId === videoId,
 	);
 	if (!failed?.videoId) {
-		throw new Error("This recording is no longer available to retry.");
+		throw new Error("此录制已无法重试。");
 	}
 
 	const orphan = await recoverRecordingSpoolSession(failed.sessionId);
 	if (!orphan || orphan.blob.size === 0) {
 		await removeFailedRecording(failed.sessionId).catch(() => undefined);
-		throw new Error("The recorded data is no longer available.");
+		throw new Error("录制数据已不可用。");
 	}
 
 	const [settings, auth] = await Promise.all([loadSettings(), loadAuth()]);
 	if (!auth) {
-		throw new Error("Sign in to Cap to retry this upload.");
+		throw new Error("请登录 Cap 后重试上传。");
 	}
 
 	const typedVideoId = failed.videoId as VideoId;

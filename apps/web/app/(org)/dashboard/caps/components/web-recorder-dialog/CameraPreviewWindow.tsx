@@ -216,7 +216,7 @@ export const CameraPreviewWindow = forwardRef<
 					videoRef.current.srcObject = stream;
 				}
 			} catch (err) {
-				console.error("Failed to start camera", err);
+				console.error("启动摄像头失败", err);
 			}
 		};
 
@@ -504,7 +504,7 @@ export const CameraPreviewWindow = forwardRef<
 							data-controls
 							className="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10 pointer-events-auto"
 							role="toolbar"
-							aria-label="Camera preview controls"
+							aria-label="摄像头预览控件"
 							onMouseDown={(e) => e.stopPropagation()}
 							onClick={(e) => e.stopPropagation()}
 							onKeyDown={(e) => {
@@ -636,7 +636,7 @@ export const CameraPreviewWindow = forwardRef<
 					{isPictureInPictureSupported && isInPictureInPicture && (
 						<div className="absolute inset-0 flex items-center justify-center z-10">
 							<div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/60 px-3 py-2 text-xs font-medium text-white/90 shadow-sm backdrop-blur-md whitespace-nowrap transition-all duration-300 ease-out">
-								<span>Picture in Picture active</span>
+								<span>画中画已启用</span>
 								<button
 									type="button"
 									onClick={(e) => {
@@ -644,7 +644,7 @@ export const CameraPreviewWindow = forwardRef<
 										handleTogglePictureInPicture();
 									}}
 									className="flex items-center justify-center size-4 rounded-full hover:bg-white/20 transition-colors"
-									aria-label="Exit Picture in Picture"
+									aria-label="退出画中画"
 								>
 									<X className="size-3" />
 								</button>

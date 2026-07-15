@@ -59,13 +59,13 @@ export function PaddingPopover() {
 					setActivePopover(activePopover() === "padding" ? null : "padding")
 				}
 				leftIcon={<IconCapPadding class="size-4" />}
-				tooltipText="Padding"
+				tooltipText="留白"
 				kbd={["P"]}
 			/>
 			<Popover.Portal>
 				<Popover.Content class="z-50 w-[200px] overflow-hidden rounded-xl border border-gray-3 bg-gray-1 shadow-xl animate-in fade-in zoom-in-95 p-4">
 					<div class="flex flex-col gap-2">
-						<span class="text-xs font-medium text-gray-11">Padding</span>
+						<span class="text-xs font-medium text-gray-11">留白</span>
 						<Slider
 							value={[project.background.padding]}
 							onChange={handlePaddingChange}

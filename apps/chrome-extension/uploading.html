@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>Uploading - Cap</title>
+		<title>正在上传 - Cap</title>
 	</head>
 	<body>
 		<main id="stage" class="stage" data-mode="waiting">
@@ -101,8 +101,8 @@
 					</g>
 				</g>
 			</svg>
-			<h1 id="upload-title" aria-live="polite">Connecting to your recording</h1>
-			<p id="upload-detail">One moment…</p>
+			<h1 id="upload-title" aria-live="polite">正在连接录制</h1>
+			<p id="upload-detail">请稍候…</p>
 			<div class="squiggle-row">
 				<svg class="squiggle" viewBox="0 0 360 26" aria-hidden="true">
 					<path
@@ -121,24 +121,23 @@
 			</div>
 			<p id="upload-meta" class="upload-meta" hidden></p>
 			<a id="share-link" class="share-link" target="_self" hidden
-				>Open your Cap</a
+				>打开你的 Cap 视频</a
 			>
 			<div id="error-actions" class="error-actions" hidden>
 				<button id="retry-upload" class="action-button" type="button">
-					Try again
+					重试
 				</button>
 				<button
 					id="download-recording"
 					class="action-button is-secondary"
 					type="button"
 				>
-					Download recording
+					下载录制文件
 				</button>
 			</div>
 		</main>
 		<p class="footnote">
-			Keep this tab in the background. We'll take you to your Cap the moment
-			it's ready.
+			请将此标签页保留在后台。视频准备好后，我们会立即为你打开。
 		</p>
 		<script type="module" src="/src/uploading/main.ts"></script>
 	</body>

@@ -82,7 +82,7 @@ const waitForRemoteStream = (peer: RTCPeerConnection) =>
 		const timeout = window.setTimeout(() => {
 			if (settled) return;
 			settled = true;
-			reject(new Error("Camera preview timed out."));
+			reject(new Error("摄像头预览连接超时。"));
 		}, 10000);
 
 		const finish = (stream: MediaStream) => {
@@ -105,7 +105,7 @@ const waitForRemoteStream = (peer: RTCPeerConnection) =>
 			}
 			settled = true;
 			window.clearTimeout(timeout);
-			reject(new Error("Camera preview connection failed."));
+			reject(new Error("摄像头预览连接失败。"));
 		});
 	});
 
@@ -133,7 +133,7 @@ const connectCameraPreview = async (
 	}
 	if (!response.answer) {
 		peer.close();
-		throw new Error("Camera preview did not return an answer.");
+		throw new Error("摄像头预览未返回响应。");
 	}
 
 	await peer.setRemoteDescription(response.answer);
@@ -199,23 +199,22 @@ const getCameraErrorDetails = (
 	error: unknown,
 ): { reason: CameraPreviewErrorReason; message: string } => {
 	if (!(error instanceof Error)) {
-		return { reason: "unknown", message: "Camera unavailable" };
+		return { reason: "unknown", message: "摄像头不可用" };
 	}
 	const lowerMessage = error.message.toLowerCase();
 	if (error.name === "NotAllowedError" || lowerMessage.includes("permission")) {
 		return {
 			reason: "permission",
-			message:
-				"Camera permission was dismissed. Select a camera again and choose Allow.",
+			message: "摄像头权限请求已取消。请重新选择摄像头并点击“允许”。",
 		};
 	}
 	if (error.name === "NotFoundError") {
-		return { reason: "not-found", message: "Selected camera was not found." };
+		return { reason: "not-found", message: "未找到所选摄像头。" };
 	}
 	if (error.name === "NotReadableError") {
-		return { reason: "in-use", message: "Selected camera is already in use." };
+		return { reason: "in-use", message: "所选摄像头正在被其他应用使用。" };
 	}
-	return { reason: "unknown", message: error.message || "Camera unavailable" };
+	return { reason: "unknown", message: error.message || "摄像头不可用" };
 };
 
 type AutoPictureInPictureVideo = HTMLVideoElement & {
@@ -622,8 +621,8 @@ function App() {
 					type="button"
 					className="camera-preview-pip-button"
 					data-pip-control
-					aria-label="Open Picture in Picture"
-					title="Picture in Picture"
+					aria-label="打开画中画"
+					title="画中画"
 					onClick={togglePictureInPicture}
 				>
 					<PictureInPicture size={20} aria-hidden />

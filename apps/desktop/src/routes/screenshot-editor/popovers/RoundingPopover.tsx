@@ -16,8 +16,8 @@ import {
 
 export type CornerRoundingType = "rounded" | "squircle";
 const CORNER_STYLE_OPTIONS = [
-	{ name: "Squircle", value: "squircle" },
-	{ name: "Rounded", value: "rounded" },
+	{ name: "平滑圆角", value: "squircle" },
+	{ name: "标准圆角", value: "rounded" },
 ] satisfies Array<{ name: string; value: CornerRoundingType }>;
 
 export function RoundingPopover() {
@@ -42,13 +42,13 @@ export function RoundingPopover() {
 					setActivePopover(activePopover() === "rounding" ? null : "rounding")
 				}
 				leftIcon={<IconCapCorners class="size-4" />}
-				tooltipText="Corner Rounding"
+				tooltipText="圆角"
 			/>
 			<Popover.Portal>
 				<Popover.Content class="z-50 w-[240px] overflow-hidden rounded-xl border border-gray-3 bg-gray-1 shadow-xl animate-in fade-in zoom-in-95 p-4">
 					<div class="flex flex-col gap-4">
 						<div class="flex flex-col gap-2">
-							<span class="text-xs font-medium text-gray-11">Rounding</span>
+							<span class="text-xs font-medium text-gray-11">圆角</span>
 							<Slider
 								value={[project.background.rounding]}
 								onChange={handleRoundingChange}
@@ -59,7 +59,7 @@ export function RoundingPopover() {
 							/>
 						</div>
 						<CornerStyleSelect
-							label="Corner Style"
+							label="圆角样式"
 							value={project.background.roundingType || "squircle"}
 							onChange={(v) => setProject("background", "roundingType", v)}
 						/>

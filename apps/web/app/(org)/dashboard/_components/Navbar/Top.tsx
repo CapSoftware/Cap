@@ -58,25 +58,25 @@ const Top = () => {
 	const params = useParams();
 
 	const titles: Record<string, string> = {
-		"/dashboard/caps": "Caps",
-		"/dashboard/folder": "Caps",
-		"/dashboard/shared-caps": "Shared Caps",
-		"/dashboard/caps/record": "Record a Cap",
-		"/dashboard/settings/organization": "Organization Settings",
-		"/dashboard/settings/organization/preferences": "Organization Settings",
-		"/dashboard/settings/organization/billing": "Organization Settings",
-		"/dashboard/settings/organization/members": "Organization Settings",
-		"/dashboard/settings/account": "Account Settings",
-		"/dashboard/settings/notifications": "Notification Settings",
-		"/dashboard/spaces": "Spaces",
-		"/dashboard/spaces/browse": "Browse Spaces",
-		"/dashboard/analytics": "Analytics",
-		[`/dashboard/folder/${params.id}`]: "Caps",
-		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
-		"/dashboard/developers": "Developers",
-		"/dashboard/developers/apps": "Developer Apps",
-		"/dashboard/developers/usage": "Developer Usage",
-		"/dashboard/developers/credits": "Developer Credits",
+		"/dashboard/caps": "我的录制",
+		"/dashboard/folder": "我的录制",
+		"/dashboard/shared-caps": "共享录制",
+		"/dashboard/caps/record": "录制 Cap",
+		"/dashboard/settings/organization": "组织设置",
+		"/dashboard/settings/organization/preferences": "组织设置",
+		"/dashboard/settings/organization/billing": "组织设置",
+		"/dashboard/settings/organization/members": "组织设置",
+		"/dashboard/settings/account": "账户设置",
+		"/dashboard/settings/notifications": "通知设置",
+		"/dashboard/spaces": "空间",
+		"/dashboard/spaces/browse": "浏览空间",
+		"/dashboard/analytics": "数据分析",
+		[`/dashboard/folder/${params.id}`]: "我的录制",
+		[`/dashboard/analytics/s/${params.id}`]: "数据分析：Cap 视频标题",
+		"/dashboard/developers": "开发者",
+		"/dashboard/developers/apps": "开发者应用",
+		"/dashboard/developers/usage": "开发者用量",
+		"/dashboard/developers/credits": "开发者额度",
 	};
 
 	const title = activeSpace ? activeSpace.name : titles[pathname] || "";
@@ -109,7 +109,7 @@ const Top = () => {
 			)}
 		>
 			<div className="flex flex-col gap-0.5 min-w-0 shrink">
-				{activeSpace && <span className="text-xs text-gray-11">Space</span>}
+				{activeSpace && <span className="text-xs text-gray-11">空间</span>}
 				<div className="flex gap-1.5 items-center">
 					{activeSpace && (
 						<SignedImageUrl
@@ -140,9 +140,7 @@ const Top = () => {
 							}
 							setToggleNotifications(!toggleNotifications);
 						}}
-						aria-label={`Notifications${
-							anyNewNotifications ? " (new notifications available)" : ""
-						}`}
+						aria-label={`通知${anyNewNotifications ? "（有新通知）" : ""}`}
 						aria-expanded={toggleNotifications}
 						className="relative justify-center data-[state=open]:hover:bg-gray-5 items-center bg-gray-3
                 rounded-full transition-colors cursor-pointer lg:flex
@@ -181,13 +179,12 @@ const User = () => {
 	const { user } = useDashboardContext();
 	const { theme, setThemeHandler } = useTheme();
 	const nextTheme = theme === "light" ? "dark" : "light";
-	const themeLabel =
-		theme === "light" ? "Toggle Dark Mode" : "Toggle Light Mode";
+	const themeLabel = theme === "light" ? "切换到深色模式" : "切换到浅色模式";
 
 	const menuItems = useMemo(
 		() => [
 			{
-				name: "Homepage",
+				name: "首页",
 				icon: <HomeIcon />,
 				href: "/home",
 				onClick: () => setMenuOpen(false),
@@ -195,7 +192,7 @@ const User = () => {
 				showCondition: true,
 			},
 			{
-				name: "Upgrade to Pro",
+				name: "升级到 Pro",
 				icon: <ArrowUpIcon />,
 				onClick: () => {
 					setMenuOpen(false);
@@ -205,7 +202,7 @@ const User = () => {
 				showCondition: buildEnv.NEXT_PUBLIC_IS_CAP && !user.isPro,
 			},
 			{
-				name: "Earn 40% Referral",
+				name: "推荐赚取 40% 佣金",
 				icon: <ReferIcon />,
 				href: "/dashboard/refer",
 				onClick: () => setMenuOpen(false),
@@ -213,14 +210,14 @@ const User = () => {
 				showCondition: buildEnv.NEXT_PUBLIC_IS_CAP,
 			},
 			{
-				name: "Chat Support",
+				name: "在线支持",
 				icon: <MessageCircleMoreIcon />,
 				onClick: () => window.open("https://cap.link/discord", "_blank"),
 				iconClassName: "text-gray-11 group-hover:text-gray-12",
 				showCondition: true,
 			},
 			{
-				name: "Download App",
+				name: "下载应用",
 				icon: <DownloadIcon />,
 				onClick: () => window.open("https://cap.so/download", "_blank"),
 				iconClassName: "text-gray-11 group-hover:text-gray-12",
@@ -243,7 +240,7 @@ const User = () => {
 				showCondition: true,
 			},
 			{
-				name: "Settings",
+				name: "设置",
 				icon: <SettingsGearIcon />,
 				href: "/dashboard/settings/account",
 				onClick: () => setMenuOpen(false),
@@ -251,7 +248,7 @@ const User = () => {
 				showCondition: true,
 			},
 			{
-				name: "Sign Out",
+				name: "退出登录",
 				icon: <LogoutIcon />,
 				onClick: () => {
 					setMenuOpen(false);
@@ -279,12 +276,12 @@ const User = () => {
 						<div className="flex items-center">
 							<SignedImageUrl
 								image={user.imageUrl}
-								name={user.name ?? "User"}
+								name={user.name ?? "用户"}
 								letterClass="text-xs lg:text-md"
 								className="flex-shrink-0 size-[24px] text-gray-12"
 							/>
 							<span className="ml-2 text-sm truncate lg:ml-2 lg:text-md text-gray-12">
-								{user.name ?? "User"}
+								{user.name ?? "用户"}
 							</span>
 						</div>
 						<MoreVertical

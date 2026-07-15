@@ -16,9 +16,9 @@ export async function createDeveloperApp(data: {
 	environment: "development" | "production";
 }) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user) throw new Error("未授权");
 
-	if (!data.name.trim()) throw new Error("App name is required");
+	if (!data.name.trim()) throw new Error("请输入应用名称");
 
 	const appId = nanoId();
 	const publicKeyRaw = `cpk_${nanoIdLong()}`;

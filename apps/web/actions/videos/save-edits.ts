@@ -91,7 +91,7 @@ async function markEditProcessing({
 			mode: "singlepart",
 			phase: "processing",
 			processingProgress: 0,
-			processingMessage: "Starting video edit...",
+			processingMessage: "正在开始编辑视频...",
 			processingError: null,
 			rawFileKey: sourceKey,
 			updatedAt: new Date(),
@@ -103,7 +103,7 @@ async function markEditProcessing({
 				mode: "singlepart",
 				phase: "processing",
 				processingProgress: 0,
-				processingMessage: "Starting video edit...",
+				processingMessage: "正在开始编辑视频...",
 				processingError: null,
 				rawFileKey: sourceKey,
 				updatedAt: new Date(),
@@ -113,19 +113,19 @@ async function markEditProcessing({
 
 async function loadEditableVideo(videoId: Video.VideoId) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
-	if (!userIsPro(user)) throw new Error("Cap Pro is required to edit videos");
+	if (!user) throw new Error("未授权");
+	if (!userIsPro(user)) throw new Error("编辑视频需要 Cap Pro");
 
 	const [video] = await db()
 		.select()
 		.from(videos)
 		.where(eq(videos.id, videoId));
 
-	if (!video) throw new Error("Video not found");
-	if (video.ownerId !== user.id) throw new Error("Forbidden");
-	if (video.isScreenshot) throw new Error("Screenshots cannot be edited");
+	if (!video) throw new Error("未找到视频");
+	if (video.ownerId !== user.id) throw new Error("无权执行此操作");
+	if (video.isScreenshot) throw new Error("无法编辑截图");
 	if (!isMp4BackedVideo(video.source)) {
-		throw new Error("Only processed MP4 videos can be edited");
+		throw new Error("只能编辑已处理的 MP4 视频");
 	}
 
 	const [activeUpload] = await db()
@@ -136,10 +136,10 @@ async function loadEditableVideo(videoId: Video.VideoId) {
 	if (activeUpload && ACTIVE_UPLOAD_PHASES.has(activeUpload.phase)) {
 		const message =
 			activeUpload.phase === "complete"
-				? "Previous edit is finishing up. Try again in a moment."
+				? "上一次编辑正在完成，请稍后重试。"
 				: activeUpload.phase === "error"
-					? "Previous edit failed and is being cleaned up. Try again in a moment."
-					: "Video is already uploading or processing";
+					? "上一次编辑失败，正在清理，请稍后重试。"
+					: "视频已在上传或处理中";
 		throw new Error(message);
 	}
 
@@ -169,7 +169,7 @@ export async function saveVideoEdits(
 	);
 
 	if (getEditSpecOutputDuration(currentOutputSpec) <= 0) {
-		throw new Error("Edit must keep at least one playable range");
+		throw new Error("编辑后必须至少保留一个可播放片段");
 	}
 
 	const normalizedEditSpec = existingEdit
@@ -203,9 +203,7 @@ export async function saveVideoEdits(
 		]);
 	} catch (error) {
 		await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
-		throw error instanceof Error
-			? error
-			: new Error("Video edit could not start");
+		throw error instanceof Error ? error : new Error("无法开始视频编辑");
 	}
 
 	revalidatePath(`/s/${videoId}`);
@@ -232,7 +230,7 @@ export async function restoreVideoToOriginal(videoId: Video.VideoId) {
 	const restoredSpec = createIdentityEditSpec(previousSpec.sourceDuration);
 
 	if (getEditSpecOutputDuration(restoredSpec) <= 0) {
-		throw new Error("Original video is no longer available");
+		throw new Error("原始视频已不可用");
 	}
 
 	if (areEditSpecsEquivalent(previousSpec, restoredSpec)) {
@@ -243,7 +241,7 @@ export async function restoreVideoToOriginal(videoId: Video.VideoId) {
 	const sourceKey = existingEdit.sourceKey;
 	const bucket = await getVideoBucket(video);
 	if (!(await objectExists(bucket, sourceKey))) {
-		throw new Error("Original video is no longer available");
+		throw new Error("原始视频已不可用");
 	}
 
 	const aiGenerationEnabled = await isAiGenerationEnabled(user);
@@ -264,9 +262,7 @@ export async function restoreVideoToOriginal(videoId: Video.VideoId) {
 		]);
 	} catch (error) {
 		await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
-		throw error instanceof Error
-			? error
-			: new Error("Video restore could not start");
+		throw error instanceof Error ? error : new Error("无法开始恢复视频");
 	}
 
 	revalidatePath(`/s/${videoId}`);

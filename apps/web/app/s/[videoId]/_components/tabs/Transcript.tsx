@@ -37,6 +37,13 @@ interface TranscriptEntry {
 	startTime: number;
 }
 
+const languageDisplayNames = new Intl.DisplayNames(["zh-CN"], {
+	type: "language",
+});
+
+const getLanguageLabel = (code: LanguageCode, fallback: string) =>
+	languageDisplayNames.of(code) ?? fallback;
+
 const parseVTT = (vttContent: string): TranscriptEntry[] => {
 	const lines = vttContent.split("\n");
 	const entries: TranscriptEntry[] = [];
@@ -196,7 +203,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 			if (!response.ok) {
 				const errorText = await response.text();
-				throw new Error(`Failed to retry transcription: ${errorText}`);
+				throw new Error(`重试转写失败：${errorText}`);
 			}
 
 			return response.json();
@@ -434,7 +441,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 							/>
 						</svg>
 					</div>
-					<p>Transcription in progress...</p>
+					<p>正在生成文字稿…</p>
 				</div>
 			</div>
 		);
@@ -475,11 +482,9 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 			<div className="flex justify-center items-center h-full text-gray-1">
 				<div className="text-center">
 					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
-					<p className="text-sm font-medium text-gray-12">
-						No audio track detected
-					</p>
+					<p className="text-sm font-medium text-gray-12">未检测到音轨</p>
 					<p className="mt-1 text-xs text-gray-9">
-						This video doesn't contain audio for transcription
+						此视频不包含可用于转写的音频
 					</p>
 					{canEdit && (
 						<>
@@ -495,12 +500,12 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 								className="mt-4"
 							>
 								{retryTranscriptionMutation.isPending
-									? "Retrying..."
-									: "Retry transcription"}
+									? "正在重试…"
+									: "重试转写"}
 							</Button>
 							{retryTranscriptionMutation.isError && (
 								<p className="mt-2 text-xs text-red-500">
-									Failed to retry. Please try again.
+									重试失败，请再试一次。
 								</p>
 							)}
 						</>
@@ -515,12 +520,8 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 			<div className="flex justify-center items-center h-full text-gray-1">
 				<div className="text-center">
 					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
-					<p className="text-sm font-medium text-gray-12">
-						Transcription disabled
-					</p>
-					<p className="mt-1 text-xs text-gray-9">
-						Transcription has been disabled for this video
-					</p>
+					<p className="text-sm font-medium text-gray-12">文字稿已关闭</p>
+					<p className="mt-1 text-xs text-gray-9">此视频已关闭文字稿功能</p>
 				</div>
 			</div>
 		);
@@ -541,8 +542,8 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
 					<p className="mb-4 text-sm font-medium text-gray-12">
 						{data.transcriptionStatus === "ERROR"
-							? "Transcript not available"
-							: "No transcript available"}
+							? "文字稿不可用"
+							: "暂无文字稿"}
 					</p>
 					{canEdit && (
 						<>
@@ -556,12 +557,12 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 								spinner={retryTranscriptionMutation.isPending}
 							>
 								{retryTranscriptionMutation.isPending
-									? "Retrying..."
-									: "Retry Transcription"}
+									? "正在重试…"
+									: "重试转写"}
 							</Button>
 							{retryTranscriptionMutation.isError && (
 								<p className="mt-2 text-xs text-red-500">
-									Failed to retry. Please try again.
+									重试失败，请再试一次。
 								</p>
 							)}
 						</>
@@ -602,7 +603,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 									<path d="M20 6 9 17l-5-5" />
 								</svg>
 							)}
-							{copyPressed ? "Copied" : "Copy Transcript"}
+							{copyPressed ? "已复制" : "复制文字稿"}
 						</Button>
 						<Button
 							onClick={downloadTranscriptFile}
@@ -629,7 +630,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 									<path d="M20 6 9 17l-5-5" />
 								</svg>
 							)}
-							{downloadPressed ? "Downloaded" : "Download"}
+							{downloadPressed ? "已下载" : "下载"}
 						</Button>
 					</div>
 					<div className="relative" ref={languageMenuRef}>
@@ -642,10 +643,13 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 							<Globe className="w-3 h-3 text-gray-9" />
 							<span className="text-gray-12">
 								{isTranslating
-									? "Translating..."
+									? "正在翻译…"
 									: selectedLanguage === "original"
-										? "Original"
-										: SUPPORTED_LANGUAGES[selectedLanguage]}
+										? "原文"
+										: getLanguageLabel(
+												selectedLanguage,
+												SUPPORTED_LANGUAGES[selectedLanguage],
+											)}
 							</span>
 							<ChevronDown className="w-3 h-3 text-gray-9" />
 						</button>
@@ -660,7 +664,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 									}`}
 									type="button"
 								>
-									Original
+									原文
 								</button>
 								<div className="my-1 border-t border-gray-3" />
 								{(
@@ -679,9 +683,9 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 										}`}
 										type="button"
 									>
-										{name}
+										{getLanguageLabel(code, name)}
 										{captionContext.translatedVttContent.has(code) && (
-											<span className="ml-1.5 text-gray-9">(cached)</span>
+											<span className="ml-1.5 text-gray-9">（已缓存）</span>
 										)}
 									</button>
 								))}
@@ -718,9 +722,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 									}}
 								/>
 							</svg>
-							<p className="mt-2 text-sm text-gray-11">
-								Translating transcript...
-							</p>
+							<p className="mt-2 text-sm text-gray-11">正在翻译文字稿…</p>
 						</div>
 					</div>
 				)}
@@ -748,7 +750,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 										}}
 										type="button"
 										className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-gray-3 rounded-md transition-all duration-200"
-										title="Edit transcript"
+										title="编辑文字稿"
 									>
 										<Edit3 className="w-3.5 h-3.5 text-gray-9" />
 									</button>
@@ -764,7 +766,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 											className="w-full text-sm leading-relaxed bg-transparent resize-none text-gray-12 placeholder:text-gray-8 focus:outline-none"
 											rows={Math.max(2, Math.ceil(editText.length / 60))}
 											onClick={(e) => e.stopPropagation()}
-											placeholder="Edit transcript text..."
+											placeholder="编辑文字稿文本…"
 										/>
 									</div>
 									<div className="flex gap-2 justify-end">
@@ -779,7 +781,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 											className="min-w-[70px]"
 										>
 											<X className="mr-1 w-3 h-3" />
-											Cancel
+											取消
 										</Button>
 										<Button
 											onClick={(e) => {
@@ -793,7 +795,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 											spinner={isSaving}
 										>
 											<Check className="mr-1 w-3 h-3" />
-											Save
+											保存
 										</Button>
 									</div>
 								</div>

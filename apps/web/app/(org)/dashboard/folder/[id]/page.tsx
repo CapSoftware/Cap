@@ -97,9 +97,7 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 				{/* Display Child Folders */}
 				{childFolders.length > 0 && (
 					<>
-						<h1 className="mb-6 text-xl font-medium text-gray-12">
-							Subfolders
-						</h1>
+						<h1 className="mb-6 text-xl font-medium text-gray-12">子文件夹</h1>
 						<div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
 							{childFolders.map((folder) => (
 								<FolderCard

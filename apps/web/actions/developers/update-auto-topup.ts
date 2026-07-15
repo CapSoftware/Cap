@@ -13,7 +13,7 @@ export async function updateDeveloperAutoTopUp(data: {
 	amountCents?: number;
 }) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user) throw new Error("未授权");
 
 	const [app] = await db()
 		.select()
@@ -27,19 +27,19 @@ export async function updateDeveloperAutoTopUp(data: {
 		)
 		.limit(1);
 
-	if (!app) throw new Error("App not found");
+	if (!app) throw new Error("未找到应用");
 
 	if (
 		data.thresholdMicroCredits !== undefined &&
 		data.thresholdMicroCredits < 0
 	) {
-		throw new Error("Threshold must be non-negative");
+		throw new Error("阈值不能为负数");
 	}
 	if (data.amountCents !== undefined && data.amountCents <= 0) {
-		throw new Error("Top-up amount must be positive");
+		throw new Error("充值金额必须大于零");
 	}
 	if (data.amountCents !== undefined && data.amountCents > 100_000) {
-		throw new Error("Top-up amount must be between $0.01 and $1,000.00");
+		throw new Error("充值金额必须在 $0.01 到 $1,000.00 之间");
 	}
 
 	const updates: Partial<typeof developerCreditAccounts.$inferInsert> = {

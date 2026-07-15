@@ -10,8 +10,8 @@ interface SystemAudioToggleProps {
 }
 
 const SYSTEM_AUDIO_HINTS: Partial<Record<RecordingMode, string>> = {
-	fullscreen: 'Make sure to check "Share system audio" in the browser picker.',
-	window: "System audio may not be available when sharing a window.",
+	fullscreen: "请确保在浏览器选择器中勾选“分享系统音频”。",
+	window: "共享窗口时可能无法使用系统音频。",
 };
 
 export const SystemAudioToggle = ({
@@ -35,7 +35,7 @@ export const SystemAudioToggle = ({
 				)}
 			>
 				<Icon className="size-4 text-gray-11 shrink-0" />
-				<span className="flex-1 text-left truncate">System Audio</span>
+				<span className="flex-1 text-left truncate">系统音频</span>
 				<span
 					className={clsx(
 						"px-[0.375rem] h-[1.25rem] min-w-[2.5rem] rounded-full text-[0.75rem] leading-[1.25rem] flex items-center justify-center font-normal transition-colors duration-200",
@@ -44,7 +44,7 @@ export const SystemAudioToggle = ({
 							: "bg-[var(--red-3)] text-[var(--red-11)]",
 					)}
 				>
-					{enabled ? "On" : "Off"}
+					{enabled ? "开启" : "关闭"}
 				</span>
 			</button>
 			{hint && (

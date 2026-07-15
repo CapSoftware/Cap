@@ -31,7 +31,7 @@ function ShareButton() {
 
 			if (!navigator.onLine) {
 				await commands.globalMessageDialog(
-					"You appear to be offline. Please check your internet connection and try again.",
+					"当前似乎处于离线状态，请检查网络连接后重试。",
 				);
 				return;
 			}
@@ -41,7 +41,7 @@ function ShareButton() {
 			// Check authentication first
 			const existingAuth = await authStore.get();
 			if (!existingAuth) {
-				throw new Error("You need to sign in to share recordings");
+				throw new Error("需要登录后才能分享录制");
 			}
 
 			const metadata = await commands.getVideoMetadata(projectPath);
@@ -54,9 +54,7 @@ function ShareButton() {
 			if (!canShare.allowed) {
 				if (canShare.reason === "upgrade_required") {
 					await commands.showWindow("Upgrade");
-					throw new Error(
-						"Upgrade required to share recordings longer than 5 minutes",
-					);
+					throw new Error("分享超过 5 分钟的录制需要升级套餐");
 				}
 			}
 
@@ -120,11 +118,11 @@ function ShareButton() {
 					);
 
 			if (result === "NotAuthenticated") {
-				throw new Error("You need to sign in to share recordings");
+				throw new Error("需要登录后才能分享录制");
 			} else if (result === "PlanCheckFailed")
-				throw new Error("Failed to verify your subscription status");
+				throw new Error("无法验证你的订阅状态");
 			else if (result === "UpgradeRequired")
-				throw new Error("This feature requires an upgraded plan");
+				throw new Error("此功能需要升级套餐");
 
 			setUploadState({ type: "link-copied" });
 
@@ -133,7 +131,7 @@ function ShareButton() {
 		onError: (error) => {
 			console.error(error);
 			commands.globalMessageDialog(
-				error instanceof Error ? error.message : "Failed to upload recording",
+				error instanceof Error ? error.message : "上传录制失败",
 			);
 		},
 		onSettled() {
@@ -199,9 +197,7 @@ function ShareButton() {
 					return (
 						<div class="flex gap-3 items-center">
 							<Tooltip
-								content={
-									upload.isPending ? "Reuploading video" : "Reupload video"
-								}
+								content={upload.isPending ? "正在重新上传视频" : "重新上传视频"}
 							>
 								<Button
 									disabled={upload.isPending}
@@ -222,7 +218,7 @@ function ShareButton() {
 									)}
 								</Button>
 							</Tooltip>
-							<Tooltip content="Open link">
+							<Tooltip content="打开链接">
 								<div class="rounded-xl px-3 py-2 flex flex-row items-center gap-1.5 bg-gray-3 hover:bg-gray-4 transition-colors duration-100">
 									<a
 										href={
@@ -243,7 +239,7 @@ function ShareButton() {
 											customDomain.data?.domain_verified
 										}
 									>
-										<Tooltip content="Select link">
+										<Tooltip content="选择链接">
 											<KSelect
 												value={linkToDisplay()}
 												onChange={(value) => value && setLinkToDisplay(value)}
@@ -284,7 +280,7 @@ function ShareButton() {
 										</Tooltip>
 									</Show>
 									{/** Copy button */}
-									<Tooltip content="Copy link">
+									<Tooltip content="复制链接">
 										<div
 											class="flex justify-center items-center transition-colors duration-200 rounded-lg size-[22px] text-gray-12 bg-gray-6 hover:bg-gray-7"
 											onClick={copyLink}
@@ -304,7 +300,7 @@ function ShareButton() {
 			</Show>
 			<Dialog.Root open={!upload.isIdle}>
 				<DialogContent
-					title={"Reupload Recording"}
+					title={"重新上传录制"}
 					confirm={null}
 					close={null}
 					class="text-gray-12 dark:text-gray-12"
@@ -334,12 +330,12 @@ function ShareButton() {
 
 						<p class="relative z-10 mt-3 text-xs text-white">
 							{uploadState.type === "idle" || uploadState.type === "starting"
-								? "Preparing to render..."
+								? "正在准备渲染…"
 								: uploadState.type === "rendering"
 									? `Rendering video (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`
 									: uploadState.type === "uploading"
 										? `Uploading - ${Math.floor(uploadState.progress)}%`
-										: "Link copied to clipboard!"}
+										: "链接已复制到剪贴板！"}
 						</p>
 					</div>
 				</DialogContent>

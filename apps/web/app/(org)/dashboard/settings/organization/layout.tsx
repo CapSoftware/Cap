@@ -30,10 +30,8 @@ export default async function OrganizationSettingsLayout({
 			<div className="flex flex-col gap-6">
 				<Card>
 					<CardHeader>
-						<CardTitle>Organization settings are restricted</CardTitle>
-						<CardDescription>
-							Ask an admin or owner to make the change.
-						</CardDescription>
+						<CardTitle>组织设置访问受限</CardTitle>
+						<CardDescription>请联系管理员或所有者进行更改。</CardDescription>
 					</CardHeader>
 				</Card>
 			</div>

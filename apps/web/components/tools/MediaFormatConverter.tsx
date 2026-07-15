@@ -33,57 +33,57 @@ export const CONVERSION_CONFIGS: Record<
 		acceptType: "video/webm",
 		outputType: "video/mp4",
 		title: (source, target) =>
-			`${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
+			`${source.toUpperCase()} 转 ${target.toUpperCase()} 转换器`,
 		description: (source, target) =>
-			`Convert ${source.toUpperCase()} videos to ${target.toUpperCase()} format directly in your browser`,
+			`直接在浏览器中将 ${source.toUpperCase()} 视频转换为 ${target.toUpperCase()} 格式`,
 	},
 	"mp4-to-webm": {
 		acceptType: "video/mp4",
 		outputType: "video/webm",
 		title: (source, target) =>
-			`${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
+			`${source.toUpperCase()} 转 ${target.toUpperCase()} 转换器`,
 		description: (source, target) =>
-			`Convert ${source.toUpperCase()} videos to ${target.toUpperCase()} format directly in your browser`,
+			`直接在浏览器中将 ${source.toUpperCase()} 视频转换为 ${target.toUpperCase()} 格式`,
 	},
 	"mov-to-mp4": {
 		acceptType: "video/quicktime",
 		outputType: "video/mp4",
 		title: (source, target) =>
-			`${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
+			`${source.toUpperCase()} 转 ${target.toUpperCase()} 转换器`,
 		description: (source, target) =>
-			`Convert ${source.toUpperCase()} videos to ${target.toUpperCase()} format directly in your browser`,
+			`直接在浏览器中将 ${source.toUpperCase()} 视频转换为 ${target.toUpperCase()} 格式`,
 	},
 	"avi-to-mp4": {
 		acceptType: "video/x-msvideo",
 		outputType: "video/mp4",
 		title: (source, target) =>
-			`${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
+			`${source.toUpperCase()} 转 ${target.toUpperCase()} 转换器`,
 		description: (source, target) =>
-			`Convert ${source.toUpperCase()} videos to ${target.toUpperCase()} format directly in your browser`,
+			`直接在浏览器中将 ${source.toUpperCase()} 视频转换为 ${target.toUpperCase()} 格式`,
 	},
 	"mkv-to-mp4": {
 		acceptType: "video/x-matroska",
 		outputType: "video/mp4",
 		title: (source, target) =>
-			`${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
+			`${source.toUpperCase()} 转 ${target.toUpperCase()} 转换器`,
 		description: (source, target) =>
-			`Convert ${source.toUpperCase()} videos to ${target.toUpperCase()} format directly in your browser`,
+			`直接在浏览器中将 ${source.toUpperCase()} 视频转换为 ${target.toUpperCase()} 格式`,
 	},
 	"mp4-to-mp3": {
 		acceptType: "video/mp4",
 		outputType: "audio/mp3",
 		title: (source, target) =>
-			`${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
+			`${source.toUpperCase()} 转 ${target.toUpperCase()} 转换器`,
 		description: (source, target) =>
-			`Extract audio from ${source.toUpperCase()} videos and save as ${target.toUpperCase()} files`,
+			`从 ${source.toUpperCase()} 视频提取音频并保存为 ${target.toUpperCase()} 文件`,
 	},
 	"mp4-to-gif": {
 		acceptType: "video/mp4",
 		outputType: "image/gif",
 		title: (source, target) =>
-			`${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
+			`${source.toUpperCase()} 转 ${target.toUpperCase()} 转换器`,
 		description: (source, target) =>
-			`Convert ${source.toUpperCase()} videos to animated ${target.toUpperCase()} images`,
+			`将 ${source.toUpperCase()} 视频转换为 ${target.toUpperCase()} 动图`,
 	},
 };
 
@@ -233,9 +233,7 @@ export const MediaFormatConverter = ({
 			} catch (error) {
 				console.error("Failed to load Remotion modules:", error);
 				setMediaEngineLoaded(false);
-				setError(
-					"Failed to load media conversion engine. Please try again later.",
-				);
+				setError("媒体转换引擎加载失败，请稍后重试。");
 			}
 		};
 
@@ -287,7 +285,7 @@ export const MediaFormatConverter = ({
 		}
 
 		if (selectedFile.size > 500 * 1024 * 1024) {
-			setError("File size exceeds 500MB limit.");
+			setError("文件大小超过 500MB 限制。");
 			trackEvent(`${conversionPath}_file_too_large`, {
 				fileSize: selectedFile.size,
 			});
@@ -355,15 +353,15 @@ export const MediaFormatConverter = ({
 			console.error("Detailed conversion error:", err);
 
 			if (MediaParser.hasBeenAborted?.(err)) {
-				setError("Conversion was cancelled");
+				setError("转换已取消");
 			} else {
-				let errorMessage = "Conversion failed: ";
+				let errorMessage = "转换失败：";
 				if (err.message) {
 					errorMessage += err.message;
 				} else if (typeof err === "string") {
 					errorMessage += err;
 				} else {
-					errorMessage += "Unknown error occurred during conversion";
+					errorMessage += "转换过程中发生未知错误";
 				}
 
 				setError(errorMessage);
@@ -450,9 +448,7 @@ export const MediaFormatConverter = ({
 				.createElement("canvas")
 				.getContext("2d");
 			if (!isCanvasSupported) {
-				throw new Error(
-					"Your browser doesn't support canvas operations required for GIF conversion",
-				);
+				throw new Error("浏览器不支持 GIF 转换所需的画布操作");
 			}
 
 			const metadata = await parser.parseMedia({
@@ -496,7 +492,7 @@ export const MediaFormatConverter = ({
 			const ctx = canvas.getContext("2d");
 
 			if (!ctx) {
-				throw new Error("Failed to get canvas context");
+				throw new Error("无法获取画布上下文");
 			}
 
 			const gifEncoder = new GIF({
@@ -563,16 +559,16 @@ export const MediaFormatConverter = ({
 			console.error("Error converting video to GIF:", error);
 
 			if (MediaParser.hasBeenAborted?.(error)) {
-				setError("Conversion was cancelled");
+				setError("转换已取消");
 			} else {
-				let errorMessage = "GIF conversion failed: ";
+				let errorMessage = "GIF 转换失败：";
 
 				if (error instanceof Error) {
 					errorMessage += error.message;
 				} else if (typeof error === "string") {
 					errorMessage += error;
 				} else {
-					errorMessage += "Unknown error occurred during conversion";
+					errorMessage += "转换过程中发生未知错误";
 				}
 
 				setError(errorMessage);
@@ -613,9 +609,7 @@ export const MediaFormatConverter = ({
 				typeof ArrayBuffer.prototype.resize === "function";
 
 			if (!canUseWebCodecs) {
-				throw new Error(
-					"Your browser doesn't support WebCodecs. Try using Chrome or Edge.",
-				);
+				throw new Error("浏览器不支持 WebCodecs，请尝试使用 Chrome 或 Edge。");
 			}
 
 			const metadata = await parser.parseMedia({
@@ -664,16 +658,16 @@ export const MediaFormatConverter = ({
 			console.error("Error converting video format:", error);
 
 			if (MediaParser.hasBeenAborted?.(error)) {
-				setError("Conversion was cancelled");
+				setError("转换已取消");
 			} else {
-				let errorMessage = "Conversion failed: ";
+				let errorMessage = "转换失败：";
 
 				if (error instanceof Error) {
 					errorMessage += error.message;
 				} else if (typeof error === "string") {
 					errorMessage += error;
 				} else {
-					errorMessage += "Unknown error occurred during conversion";
+					errorMessage += "转换过程中发生未知错误";
 				}
 
 				setError(errorMessage);
@@ -788,12 +782,12 @@ export const MediaFormatConverter = ({
 	if (!config) {
 		return (
 			<div className="p-6 bg-red-50 border border-red-200 rounded-lg text-red-600">
-				<p>Unsupported conversion: {conversionPath}</p>
+				<p>不支持的转换：{conversionPath}</p>
 				<Link
 					href="/tools/convert"
 					className="mt-4 inline-flex items-center text-blue-600 hover:text-blue-800"
 				>
-					← Back to Conversion Tools
+					← 返回转换工具
 				</Link>
 			</div>
 		);
@@ -809,7 +803,7 @@ export const MediaFormatConverter = ({
 				<div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-2">
 					<div className="w-full sm:w-auto flex flex-col sm:flex-row items-center">
 						<span className="w-full sm:w-auto text-center sm:text-left mb-2 sm:mb-0 sm:mr-2 text-gray-700 font-medium">
-							From:
+							源格式：
 						</span>
 						<div className="flex flex-wrap justify-center gap-2 w-full">
 							{validSourceFormats.map((format) => (
@@ -829,7 +823,7 @@ export const MediaFormatConverter = ({
 											? "bg-blue-600 text-white"
 											: "bg-gray-200 text-gray-800 hover:bg-gray-300"
 									}`}
-									aria-label={`Convert from ${format.toUpperCase()} format`}
+									aria-label={`从 ${format.toUpperCase()} 格式转换`}
 								>
 									{format.toUpperCase()}
 								</Link>
@@ -844,7 +838,7 @@ export const MediaFormatConverter = ({
 
 					<div className="w-full sm:w-auto flex flex-col sm:flex-row items-center">
 						<span className="w-full sm:w-auto text-center sm:text-left mb-2 sm:mb-0 sm:mr-2 text-gray-700 font-medium">
-							To:
+							目标格式：
 						</span>
 						<div className="flex flex-wrap justify-center gap-2 w-full">
 							{validTargetFormats.map((format) => (
@@ -860,7 +854,7 @@ export const MediaFormatConverter = ({
 											? "bg-blue-600 text-white"
 											: "bg-gray-200 text-gray-800 hover:bg-gray-300"
 									}`}
-									aria-label={`Convert to ${format.toUpperCase()} format`}
+									aria-label={`转换为 ${format.toUpperCase()} 格式`}
 								>
 									{format.toUpperCase()}
 								</Link>
@@ -872,11 +866,11 @@ export const MediaFormatConverter = ({
 
 			{currentTargetFormat === "gif" && (
 				<div className="mb-6 border border-gray-200 rounded-lg p-4">
-					<h3 className="text-lg font-medium mb-3">GIF Settings</h3>
+					<h3 className="text-lg font-medium mb-3">GIF 设置</h3>
 					<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 						<div>
 							<label className="block text-sm font-medium text-gray-700 mb-1">
-								Quality (Lower is better)
+								质量（数值越低越好）
 							</label>
 							<div className="flex items-center">
 								<input
@@ -892,12 +886,12 @@ export const MediaFormatConverter = ({
 								</span>
 							</div>
 							<p className="text-xs text-gray-500 mt-1">
-								Lower values produce higher quality GIFs but larger file sizes
+								数值越低，GIF 质量越高，但文件也越大
 							</p>
 						</div>
 						<div>
 							<label className="block text-sm font-medium text-gray-700 mb-1">
-								Frames Per Second
+								每秒帧数
 							</label>
 							<div className="flex items-center">
 								<input
@@ -911,12 +905,12 @@ export const MediaFormatConverter = ({
 								<span className="ml-2 text-sm w-8 text-gray-600">{gifFps}</span>
 							</div>
 							<p className="text-xs text-gray-500 mt-1">
-								Higher values create smoother animations but larger files
+								数值越高，动画越流畅，但文件也越大
 							</p>
 						</div>
 						<div>
 							<label className="block text-sm font-medium text-gray-700 mb-1">
-								Max Width (px)
+								最大宽度（像素）
 							</label>
 							<div className="flex items-center">
 								<input
@@ -933,7 +927,7 @@ export const MediaFormatConverter = ({
 								</span>
 							</div>
 							<p className="text-xs text-gray-500 mt-1">
-								Larger sizes give higher resolution but increase file size
+								尺寸越大，分辨率越高，但文件也会增大
 							</p>
 						</div>
 						<div>
@@ -944,10 +938,10 @@ export const MediaFormatConverter = ({
 									onChange={(e) => setGifDithering(e.target.checked)}
 									className="rounded mr-2"
 								/>
-								Enable Dithering
+								启用抖动
 							</label>
 							<p className="text-xs text-gray-500 mt-1">
-								Dithering can improve color appearance but may introduce noise
+								抖动可改善色彩表现，但可能引入噪点
 							</p>
 						</div>
 					</div>
@@ -991,10 +985,10 @@ export const MediaFormatConverter = ({
 								/>
 							</svg>
 							<p className="text-lg font-medium text-gray-700">
-								Drag and drop your {currentSourceFormat.toUpperCase()} file here
+								将 {currentSourceFormat.toUpperCase()} 文件拖放到此处
 							</p>
 							<p className="text-sm text-gray-500 mt-1">
-								or click to browse (max 500MB)
+								或点击浏览（最大 500MB）
 							</p>
 						</>
 					) : (
@@ -1030,7 +1024,7 @@ export const MediaFormatConverter = ({
 			{isConverting && (
 				<div className="mb-6">
 					<p className="text-center text-gray-700 mb-2">
-						Converting... {progress}%
+						正在转换……{progress}%
 					</p>
 					<div className="w-full bg-gray-200 rounded-full h-2">
 						<div
@@ -1043,9 +1037,7 @@ export const MediaFormatConverter = ({
 
 			{outputUrl && (
 				<div className="mb-6 p-5 bg-green-50 border border-green-200 rounded-lg">
-					<p className="text-green-700 font-medium mb-3">
-						Conversion complete!
-					</p>
+					<p className="text-green-700 font-medium mb-3">转换完成！</p>
 					{config.outputType.startsWith("video/") && (
 						<video
 							src={outputUrl}
@@ -1064,7 +1056,7 @@ export const MediaFormatConverter = ({
 					{config.outputType.startsWith("image/") && (
 						<img
 							src={outputUrl}
-							alt="Converted GIF"
+							alt="已转换的 GIF"
 							className="max-w-full rounded-lg mb-4 mx-auto"
 							style={{ maxHeight: "300px" }}
 						/>
@@ -1075,7 +1067,7 @@ export const MediaFormatConverter = ({
 							onClick={handleDownload}
 							className="w-full"
 						>
-							Download {currentTargetFormat.toUpperCase()}
+							下载 {currentTargetFormat.toUpperCase()}
 						</Button>
 					</div>
 				</div>
@@ -1089,7 +1081,7 @@ export const MediaFormatConverter = ({
 						disabled={!mediaEngineLoaded || isConverting}
 						className="w-full"
 					>
-						Convert to {currentTargetFormat.toUpperCase()}
+						转换为 {currentTargetFormat.toUpperCase()}
 					</Button>
 				)}
 
@@ -1100,22 +1092,19 @@ export const MediaFormatConverter = ({
 						disabled={isConverting}
 						className="w-full"
 					>
-						{outputUrl ? "Convert Another File" : "Reset"}
+						{outputUrl ? "转换其他文件" : "重置"}
 					</Button>
 				)}
 			</div>
 
 			<div className="mt-8 pt-6 border-t border-gray-200 text-sm text-gray-500 text-center">
-				<p>
-					This converter works entirely in your browser. Your files are never
-					uploaded to any server.
-				</p>
+				<p>此转换器完全在浏览器中运行，文件不会上传到任何服务器。</p>
 				{isSafari && (
 					<div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
 						<p>
-							<strong>Safari Compatibility Notice:</strong> Safari has limited
-							support for some media conversion features. For best results,
-							consider using Chrome or Firefox.
+							<strong>Safari 兼容性提示：</strong> Safari
+							对部分媒体转换功能支持有限。为获得最佳效果，建议使用 Chrome 或
+							Firefox。
 						</p>
 					</div>
 				)}
@@ -1124,19 +1113,18 @@ export const MediaFormatConverter = ({
 					currentTargetFormat === "mp4" && (
 						<div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
 							<p>
-								<strong>Firefox Compatibility Notice:</strong> Firefox doesn't
-								fully support converting WebM to MP4. The file will be encoded
-								using WebM container format. For best results, try using Chrome.
+								<strong>Firefox 兼容性提示：</strong> Firefox 不完全支持将 WebM
+								转换为 MP4，文件会使用 WebM 容器格式编码。为获得最佳效果，请使用
+								Chrome。
 							</p>
 						</div>
 					)}
 				{currentTargetFormat === "gif" && (
 					<div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-md text-blue-700">
 						<p>
-							<strong>GIF Conversion:</strong> Converting to GIF format may take
-							some time and result in larger file sizes. For high-quality
-							results with smaller files, consider using the WebM or MP4 format
-							instead.
+							<strong>GIF 转换：</strong>转换为 GIF
+							可能需要一些时间，并产生较大的文件。若要兼顾高质量和较小文件，建议改用
+							WebM 或 MP4 格式。
 						</p>
 					</div>
 				)}

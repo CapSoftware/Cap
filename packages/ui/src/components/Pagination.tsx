@@ -5,7 +5,7 @@ import { type ButtonProps, buttonVariants } from "./Button";
 
 const Pagination = ({ className, ...props }: React.ComponentProps<"nav">) => (
 	<nav
-		aria-label="pagination"
+		aria-label="分页导航"
 		className={classNames("flex justify-center mx-auto w-full", className)}
 		{...props}
 	/>
@@ -62,13 +62,13 @@ const PaginationPrevious = ({
 	...props
 }: React.ComponentProps<typeof PaginationLink>) => (
 	<PaginationLink
-		aria-label="Go to previous page"
+		aria-label="转到上一页"
 		size="md"
 		className={classNames("gap-1 pl-2.5", className)}
 		{...props}
 	>
 		<ChevronLeft className="size-4" />
-		<p className="text-sm text-gray-12">Previous</p>
+		<p className="text-sm text-gray-12">上一页</p>
 	</PaginationLink>
 );
 PaginationPrevious.displayName = "PaginationPrevious";
@@ -78,12 +78,12 @@ const PaginationNext = ({
 	...props
 }: React.ComponentProps<typeof PaginationLink>) => (
 	<PaginationLink
-		aria-label="Go to next page"
+		aria-label="转到下一页"
 		size="md"
 		className={classNames("gap-1 pr-2.5", className)}
 		{...props}
 	>
-		<p className="text-sm text-gray-12">Next</p>
+		<p className="text-sm text-gray-12">下一页</p>
 		<ChevronRight className="size-4" />
 	</PaginationLink>
 );
@@ -102,7 +102,7 @@ const PaginationEllipsis = ({
 		{...props}
 	>
 		<MoreHorizontal className="w-4 h-4" />
-		<span className="sr-only">More pages</span>
+		<span className="sr-only">更多页面</span>
 	</span>
 );
 PaginationEllipsis.displayName = "PaginationEllipsis";

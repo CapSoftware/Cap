@@ -18,7 +18,7 @@ export function EnvironmentBadge({
 					: "bg-yellow-400/15 text-yellow-11",
 			)}
 		>
-			{isProduction ? "prod" : "dev"}
+			{isProduction ? "生产" : "开发"}
 		</span>
 	);
 }

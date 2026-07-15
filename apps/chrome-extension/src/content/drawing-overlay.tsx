@@ -10,19 +10,19 @@ import {
 // A bright, presentation-friendly palette: the warm/cool brights read well on
 // light pages and white covers dark slides. Red is the default ink.
 const DRAW_COLORS = [
-	{ name: "Red", value: "#ef4444" },
-	{ name: "Yellow", value: "#facc15" },
-	{ name: "Green", value: "#22c55e" },
-	{ name: "Blue", value: "#3b82f6" },
-	{ name: "White", value: "#ffffff" },
+	{ name: "红色", value: "#ef4444" },
+	{ name: "黄色", value: "#facc15" },
+	{ name: "绿色", value: "#22c55e" },
+	{ name: "蓝色", value: "#3b82f6" },
+	{ name: "白色", value: "#ffffff" },
 ] as const;
 
 // Stroke width in CSS pixels paired with the diameter of the dot shown in the
 // toolbar, so the picker previews roughly what the brush draws.
 const BRUSH_SIZES = [
-	{ name: "Small", value: 4, dot: 6 },
-	{ name: "Medium", value: 9, dot: 10 },
-	{ name: "Large", value: 16, dot: 15 },
+	{ name: "细", value: 4, dot: 6 },
+	{ name: "中", value: 9, dot: 10 },
+	{ name: "粗", value: 16, dot: 15 },
 ] as const;
 
 const DEFAULT_COLOR = DRAW_COLORS[0].value;
@@ -259,7 +259,7 @@ export function DrawingOverlay({ active, onClose }: DrawingOverlayProps) {
 			<div
 				className="cap-extension-draw-toolbar"
 				role="toolbar"
-				aria-label="Drawing tools"
+				aria-label="绘图工具"
 			>
 				<div className="cap-extension-draw-group">
 					{DRAW_COLORS.map((swatch) => (
@@ -290,7 +290,7 @@ export function DrawingOverlay({ active, onClose }: DrawingOverlayProps) {
 							)}
 							aria-label={brush.name}
 							aria-pressed={size === brush.value}
-							title={`${brush.name} brush`}
+							title={`${brush.name}画笔`}
 							onClick={() => setSize(brush.value)}
 						>
 							<span
@@ -308,12 +308,12 @@ export function DrawingOverlay({ active, onClose }: DrawingOverlayProps) {
 						"cap-extension-draw-icon-button",
 						autoFade && "is-active",
 					)}
-					aria-label="Auto-fade ink"
+					aria-label="墨迹自动淡出"
 					aria-pressed={autoFade}
 					title={
 						autoFade
-							? "Ink fades after a few seconds (click to keep it)"
-							: "Ink stays on screen (click to make it fade)"
+							? "墨迹会在几秒后淡出（点击可保留）"
+							: "墨迹会保留在屏幕上（点击可自动淡出）"
 					}
 					onClick={toggleAutoFade}
 				>
@@ -322,8 +322,8 @@ export function DrawingOverlay({ active, onClose }: DrawingOverlayProps) {
 				<button
 					type="button"
 					className="cap-extension-draw-icon-button"
-					aria-label="Clear drawing"
-					title="Clear drawing"
+					aria-label="清除绘图"
+					title="清除绘图"
 					onClick={clear}
 				>
 					<Trash2 size={17} aria-hidden />
@@ -332,8 +332,8 @@ export function DrawingOverlay({ active, onClose }: DrawingOverlayProps) {
 				<button
 					type="button"
 					className="cap-extension-draw-icon-button"
-					aria-label="Exit drawing"
-					title="Exit drawing"
+					aria-label="退出绘图"
+					title="退出绘图"
 					onClick={onClose}
 				>
 					<X size={18} aria-hidden />

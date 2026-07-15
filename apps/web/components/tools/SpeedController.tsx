@@ -56,7 +56,7 @@ export const SpeedController = () => {
 			);
 
 		if (!isVideoFile) {
-			setError("Please select a valid video file.");
+			setError("请选择有效的视频文件。");
 			trackEvent("speed_controller_invalid_file_type", {
 				fileType: selectedFile.type,
 			});
@@ -64,7 +64,7 @@ export const SpeedController = () => {
 		}
 
 		if (selectedFile.size > 500 * 1024 * 1024) {
-			setError("File size exceeds 500MB limit.");
+			setError("文件大小超过 500MB 限制。");
 			trackEvent("speed_controller_file_too_large", {
 				fileSize: selectedFile.size,
 			});
@@ -134,13 +134,13 @@ export const SpeedController = () => {
 		} catch (err: any) {
 			console.error("Detailed processing error:", err);
 
-			let errorMessage = "Processing failed: ";
+			let errorMessage = "处理失败：";
 			if (err.message) {
 				errorMessage += err.message;
 			} else if (typeof err === "string") {
 				errorMessage += err;
 			} else {
-				errorMessage += "Unknown error occurred during processing";
+				errorMessage += "处理过程中发生未知错误";
 			}
 
 			setError(errorMessage);
@@ -171,7 +171,7 @@ export const SpeedController = () => {
 					const ctx = canvas.getContext("2d", { alpha: false });
 
 					if (!ctx) {
-						throw new Error("Failed to create canvas context");
+						throw new Error("无法创建画布上下文");
 					}
 
 					let inputFormat = "video/webm";
@@ -215,9 +215,7 @@ export const SpeedController = () => {
 					}
 
 					if (!selectedMimeType) {
-						throw new Error(
-							"None of the media formats are supported by this browser",
-						);
+						throw new Error("此浏览器不支持任何可用的媒体格式");
 					}
 
 					setSelectedMimeType(selectedMimeType);
@@ -383,7 +381,7 @@ export const SpeedController = () => {
 			};
 
 			video.onerror = () => {
-				reject(new Error("Error loading video"));
+				reject(new Error("加载视频时出错"));
 			};
 		});
 	};
@@ -489,12 +487,12 @@ export const SpeedController = () => {
 	return (
 		<div className="w-full">
 			<h2 className="text-2xl font-semibold text-center mb-6">
-				{selectedSpeed < 1 ? "Slow Down" : "Speed Up"} Your Video
+				{selectedSpeed < 1 ? "减速" : "加速"}视频
 			</h2>
 
 			<div className="mb-6">
 				<label className="block text-sm font-medium text-gray-700 mb-2">
-					Select Speed
+					选择速度
 				</label>
 				<div className="flex flex-wrap gap-2 justify-center">
 					{SPEED_OPTIONS.map((option) => (
@@ -550,10 +548,10 @@ export const SpeedController = () => {
 								/>
 							</svg>
 							<p className="text-lg font-medium text-gray-700">
-								Drag and drop your video file here
+								将视频文件拖放到此处
 							</p>
 							<p className="text-sm text-gray-500 mt-1">
-								or click to browse (max 500MB)
+								或点击浏览（最大 500MB）
 							</p>
 						</>
 					) : (
@@ -577,10 +575,10 @@ export const SpeedController = () => {
 							</p>
 							{videoInfo && (
 								<div className="mt-3 text-sm text-gray-600">
-									<p>Duration: {formatDuration(videoInfo.duration)}</p>
-									<p>Resolution: {videoInfo.dimensions}</p>
+									<p>时长：{formatDuration(videoInfo.duration)}</p>
+									<p>分辨率：{videoInfo.dimensions}</p>
 									<p className="mt-2 font-medium">
-										Estimated output duration: {getEstimatedOutputDuration()}
+										预计输出时长：{getEstimatedOutputDuration()}
 									</p>
 								</div>
 							)}
@@ -598,7 +596,7 @@ export const SpeedController = () => {
 			{isProcessing && (
 				<div className="mb-6">
 					<p className="text-center text-gray-700 mb-2">
-						Processing... {progress}%
+						正在处理……{progress}%
 					</p>
 					<div className="w-full bg-gray-200 rounded-full h-2">
 						<div
@@ -612,7 +610,7 @@ export const SpeedController = () => {
 			{outputUrl && (
 				<div className="mb-6 p-5 bg-green-50 border border-green-200 rounded-lg">
 					<p className="text-green-700 font-medium mb-3">
-						Video {selectedSpeed < 1 ? "slowed down" : "sped up"} successfully!
+						视频{selectedSpeed < 1 ? "减速" : "加速"}成功！
 					</p>
 					<video
 						ref={videoPreviewRef}
@@ -627,7 +625,7 @@ export const SpeedController = () => {
 							onClick={handleDownload}
 							className="w-full"
 						>
-							Download {selectedSpeed}x Video
+							下载 {selectedSpeed} 倍速视频
 						</Button>
 					</div>
 				</div>
@@ -641,8 +639,7 @@ export const SpeedController = () => {
 						disabled={isProcessing}
 						className="w-full"
 					>
-						{selectedSpeed < 1 ? "Slow Down" : "Speed Up"} Video (
-						{selectedSpeed}x)
+						{selectedSpeed < 1 ? "减速" : "加速"}视频（{selectedSpeed} 倍）
 					</Button>
 				)}
 
@@ -653,26 +650,22 @@ export const SpeedController = () => {
 						disabled={isProcessing}
 						className="w-full"
 					>
-						{outputUrl ? "Process Another Video" : "Reset"}
+						{outputUrl ? "处理其他视频" : "重置"}
 					</Button>
 				)}
 			</div>
 
 			<div className="mt-8 pt-6 border-t border-gray-200 text-sm text-gray-500 text-center">
-				<p>
-					This tool works entirely in your browser. Your videos are never
-					uploaded to any server.
-				</p>
+				<p>此工具完全在浏览器中运行，视频不会上传到任何服务器。</p>
 				<p className="mt-1">
-					Powered by modern browser APIs like MediaRecorder and Canvas for
-					efficient video processing.
+					由 MediaRecorder 和 Canvas 等现代浏览器 API 提供支持，可高效处理视频。
 				</p>
 				{isSafari && (
 					<div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
 						<p>
-							<strong>Safari Compatibility Notice:</strong> Safari has limited
-							support for some video processing features. For best results,
-							consider using Chrome or Firefox.
+							<strong>Safari 兼容性提示：</strong> Safari
+							对部分视频处理功能支持有限。为获得最佳效果，建议使用 Chrome 或
+							Firefox。
 						</p>
 					</div>
 				)}

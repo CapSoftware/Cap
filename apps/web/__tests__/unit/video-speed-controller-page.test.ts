@@ -30,7 +30,7 @@ describe("Video Speed Controller page metadata", () => {
 	});
 
 	it("contains OG locale field", () => {
-		expect(pageSource).toContain('locale: "en_US"');
+		expect(pageSource).toContain('locale: "zh_CN"');
 	});
 });
 

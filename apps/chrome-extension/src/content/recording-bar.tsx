@@ -456,7 +456,7 @@ export function RecordingBarOverlay({
 						isDragging && "is-dragging",
 					)}
 					role="toolbar"
-					aria-label="Cap recording controls"
+					aria-label="Cap 录制控制"
 					style={{
 						left: `${position?.x ?? EDGE_PADDING}px`,
 						top: position ? `${position.y}px` : "50%",
@@ -473,7 +473,7 @@ export function RecordingBarOverlay({
 						/>
 						<div className="cap-extension-control-bar-text">
 							<span className="cap-extension-control-bar-title">
-								Ready to record
+								可以开始录制
 							</span>
 							<span className="cap-extension-control-bar-subtitle">
 								<span
@@ -493,7 +493,7 @@ export function RecordingBarOverlay({
 							onClick={startRecording}
 						>
 							<Play size={14} fill="currentColor" strokeWidth={0} aria-hidden />
-							Start recording
+							开始录制
 						</button>
 						<button
 							type="button"
@@ -501,9 +501,9 @@ export function RecordingBarOverlay({
 								"cap-extension-control-bar-icon-button",
 								drawing && "is-active",
 							)}
-							aria-label="Draw on the page"
+							aria-label="在页面上绘图"
 							aria-pressed={drawing}
-							title="Draw on the page"
+							title="在页面上绘图"
 							onClick={toggleDrawing}
 						>
 							<Pencil size={18} aria-hidden />
@@ -511,8 +511,8 @@ export function RecordingBarOverlay({
 						<button
 							type="button"
 							className="cap-extension-control-bar-icon-button is-quiet"
-							aria-label="Hide recording bar"
-							title="Hide bar"
+							aria-label="隐藏录制栏"
+							title="隐藏录制栏"
 							onClick={dismissReadyBar}
 						>
 							<X size={20} aria-hidden />
@@ -542,7 +542,7 @@ export function RecordingBarOverlay({
 			<div
 				className="cap-extension-recording-rail"
 				role="toolbar"
-				aria-label="Cap recording controls"
+				aria-label="Cap 录制控制"
 			>
 				<div
 					className={classNames(
@@ -568,8 +568,8 @@ export function RecordingBarOverlay({
 				<button
 					type="button"
 					className="cap-extension-control-bar-icon-button"
-					aria-label={isPaused ? "Resume recording" : "Pause recording"}
-					title={isPaused ? "Resume" : "Pause"}
+					aria-label={isPaused ? "继续录制" : "暂停录制"}
+					title={isPaused ? "继续" : "暂停"}
 					disabled={busy || isCreating}
 					onClick={() =>
 						sendControl(isPaused ? "resume-recording" : "pause-recording")
@@ -587,9 +587,9 @@ export function RecordingBarOverlay({
 						"cap-extension-control-bar-icon-button",
 						drawing && "is-active",
 					)}
-					aria-label="Draw on the page"
+					aria-label="在页面上绘图"
 					aria-pressed={drawing}
-					title="Draw on the page"
+					title="在页面上绘图"
 					onClick={toggleDrawing}
 				>
 					<Pencil size={19} aria-hidden />
@@ -601,7 +601,7 @@ export function RecordingBarOverlay({
 					onClick={() => sendControl("stop-recording")}
 				>
 					<Square size={13} fill="currentColor" strokeWidth={0} aria-hidden />
-					Stop
+					停止
 				</button>
 			</div>
 			<DrawingOverlay active={drawing} onClose={stopDrawing} />

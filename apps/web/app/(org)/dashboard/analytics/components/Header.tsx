@@ -34,14 +34,14 @@ interface HeaderProps {
 }
 
 const DATE_RANGE_OPTIONS = [
-	{ value: "today", label: "Today" },
-	{ value: "yesterday", label: "Yesterday" },
-	{ value: "24h", label: "Last 24 hours" },
-	{ value: "7d", label: "Last 7 days" },
-	{ value: "30d", label: "Last 30 days" },
-	{ value: "wtd", label: "Week to date" },
-	{ value: "mtd", label: "Month to date" },
-	{ value: "lifetime", label: "Lifetime" },
+	{ value: "today", label: "今天" },
+	{ value: "yesterday", label: "昨天" },
+	{ value: "24h", label: "过去 24 小时" },
+	{ value: "7d", label: "过去 7 天" },
+	{ value: "30d", label: "过去 30 天" },
+	{ value: "wtd", label: "本周至今" },
+	{ value: "mtd", label: "本月至今" },
+	{ value: "lifetime", label: "全部时间" },
 ] as const;
 
 const mapToBackendRange = (value: string): AnalyticsRange => {
@@ -229,9 +229,9 @@ export default function Header({
 		? selectedSpace.name
 		: isMyCapsSelected
 			? user?.name
-				? `${user.name}'s Caps`
-				: "My Caps"
-			: selectedOrg?.organization.name || "Select organization";
+				? `${user.name}的录制`
+				: "我的录制"
+			: selectedOrg?.organization.name || "选择组织";
 
 	const displayIcon = selectedSpace
 		? selectedSpace.iconUrl
@@ -242,8 +242,8 @@ export default function Header({
 	const displayIconName = selectedSpace
 		? selectedSpace.name
 		: isMyCapsSelected
-			? user?.name || selectedOrg?.organization.name || "My Caps"
-			: selectedOrg?.organization.name || "Select organization";
+			? user?.name || selectedOrg?.organization.name || "我的录制"
+			: selectedOrg?.organization.name || "选择组织";
 
 	if (!activeOrganization) {
 		return null;
@@ -323,13 +323,13 @@ export default function Header({
 										className="size-5 flex-shrink-0"
 									/>
 									<SelectPrimitive.ItemText>
-										{user?.name ? `${user.name}'s Caps` : "My Caps"}
+										{user?.name ? `${user.name}的录制` : "我的录制"}
 									</SelectPrimitive.ItemText>
 								</SelectPrimitive.Item>
 								{filteredSpaces && filteredSpaces.length > 0 && (
 									<>
 										<div className="px-3 py-2 text-xs font-semibold text-gray-9 uppercase tracking-wider">
-											Spaces
+											空间
 										</div>
 										{filteredSpaces.map((space) => {
 											return (

@@ -40,7 +40,7 @@ import {
 } from "./web-recorder-constants";
 import { WebRecorderDialogHeader } from "./web-recorder-dialog-header";
 
-const recoveredRecordingTimeFormatter = new Intl.DateTimeFormat(undefined, {
+const recoveredRecordingTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
 	dateStyle: "medium",
 	timeStyle: "short",
 });
@@ -208,13 +208,13 @@ export const WebRecorderDialog = () => {
 	const handleOpenChange = (next: boolean) => {
 		if (next && supportCheckCompleted && !isBrowserSupported) {
 			toast.error(
-				"This browser isn't compatible with Cap's web recorder. We recommend Google Chrome or other Chromium-based browsers.",
+				"此浏览器与 Cap 网页录制器不兼容。建议使用 Google Chrome 或其他基于 Chromium 的浏览器。",
 			);
 			return;
 		}
 
 		if (!next && isBusy) {
-			toast.info("Keep this dialog open while your upload finishes.");
+			toast.info("请保持此对话框打开，直到上传完成。");
 			return;
 		}
 
@@ -230,7 +230,7 @@ export const WebRecorderDialog = () => {
 
 	const handleStopClick = () => {
 		stopRecording().catch((err: unknown) => {
-			console.error("Stop recording error", err);
+			console.error("停止录制时出错", err);
 		});
 	};
 
@@ -273,7 +273,7 @@ export const WebRecorderDialog = () => {
 				<DialogTrigger asChild>
 					<Button variant="blue" size="sm" className="flex items-center gap-2">
 						<MonitorIcon className="size-3.5" />
-						Record in Browser
+						在浏览器中录制
 					</Button>
 				</DialogTrigger>
 				<DialogContent
@@ -283,7 +283,7 @@ export const WebRecorderDialog = () => {
 					onFocusOutside={handleFocusOutside}
 					onInteractOutside={handleInteractOutside}
 				>
-					<DialogTitle className="sr-only">Instant Mode Recorder</DialogTitle>
+					<DialogTitle className="sr-only">即时模式录制器</DialogTitle>
 					<AnimatePresence mode="wait">
 						{open && (
 							<motion.div
@@ -372,9 +372,9 @@ export const WebRecorderDialog = () => {
 								)}
 								{phase === "completed" && completedShareUrl && (
 									<div className="rounded-md border border-green-6 bg-green-3/70 px-3 py-3 text-xs text-green-12">
-										<div className="font-medium">Share link ready</div>
+										<div className="font-medium">分享链接已就绪</div>
 										<div className="mt-1 leading-snug">
-											If it did not open automatically, open it here.
+											如果没有自动打开，请在此打开。
 										</div>
 										<Button
 											variant="blue"
@@ -382,14 +382,14 @@ export const WebRecorderDialog = () => {
 											className="mt-3 w-full"
 											onClick={openCompletedShareUrl}
 										>
-											Open Share Link
+											打开分享链接
 										</Button>
 									</div>
 								)}
 								{phase === "idle" && recoveredDownloads.length > 0 && (
 									<div className="rounded-md border border-blue-6 bg-blue-3/60 px-3 py-2">
 										<div className="text-xs font-medium text-blue-12">
-											Recovered recordings
+											已恢复的录制
 										</div>
 										<div className="mt-2 flex flex-col gap-2">
 											{recoveredDownloads.map((download) => (
@@ -419,7 +419,7 @@ export const WebRecorderDialog = () => {
 																)
 															}
 														>
-															Download
+															下载
 														</a>
 														<button
 															type="button"
@@ -428,7 +428,7 @@ export const WebRecorderDialog = () => {
 																dismissRecoveredDownload(download.id)
 															}
 														>
-															Dismiss
+															忽略
 														</button>
 													</div>
 												</div>

@@ -271,7 +271,7 @@ function normalizeSegment(segment: TauriTextSegment): SegmentWithDefaults {
 		start: segment.start,
 		end: segment.end,
 		enabled: segment.enabled ?? true,
-		content: segment.content ?? "Text",
+		content: segment.content ?? "文本",
 		center: segment.center ?? { x: 0.5, y: 0.5 },
 		size: segment.size ?? { x: 0.35, y: 0.2 },
 		fontFamily: segment.fontFamily ?? "sans-serif",
@@ -759,7 +759,7 @@ function TextSegmentOverlay(props: {
 						class="absolute px-1.5 py-0.5 text-[11px] font-medium text-white bg-blue-9 rounded pointer-events-none select-none"
 						style={labelStyle()}
 					>
-						Text
+						文本
 					</div>
 				</Show>
 				<Show when={editing()}>

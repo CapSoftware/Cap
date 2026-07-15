@@ -3,6 +3,7 @@
 import { Button, Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
+import { zhCN } from "date-fns/locale";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
@@ -39,7 +40,7 @@ export function BillingSummaryCard() {
 			const url = await manageBilling();
 			router.push(url);
 		} catch {
-			toast.error("An error occurred while managing billing");
+			toast.error("管理账单时发生错误");
 		} finally {
 			setBillingLoading(false);
 		}
@@ -60,9 +61,7 @@ export function BillingSummaryCard() {
 	if (isError) {
 		return (
 			<Card>
-				<p className="text-sm text-gray-10">
-					Unable to load billing details. Please try again later.
-				</p>
+				<p className="text-sm text-gray-10">无法加载账单详情，请稍后重试。</p>
 			</Card>
 		);
 	}
@@ -71,9 +70,9 @@ export function BillingSummaryCard() {
 		return (
 			<Card className="flex flex-wrap gap-6 justify-between items-center w-full">
 				<CardHeader>
-					<CardTitle>Upgrade to Cap Pro</CardTitle>
+					<CardTitle>升级到 Cap Pro</CardTitle>
 					<CardDescription>
-						Get unlimited sharing, custom domains, Cap AI, and more.
+						获得无限分享、自定义域名、Cap AI 等更多功能。
 					</CardDescription>
 				</CardHeader>
 				<Button
@@ -82,20 +81,20 @@ export function BillingSummaryCard() {
 					variant="primary"
 					onClick={() => setUpgradeModalOpen(true)}
 				>
-					Upgrade to Pro
+					升级到 Pro
 				</Button>
 			</Card>
 		);
 	}
 
-	const statusLabel =
-		subscription.status === "trialing" ? "Trialing" : "Active";
+	const statusLabel = subscription.status === "trialing" ? "试用中" : "有效";
 	const intervalLabel =
-		subscription.billingInterval === "year" ? "annually" : "monthly";
+		subscription.billingInterval === "year" ? "按年计费" : "按月计费";
 	const totalAmount = subscription.pricePerSeat * subscription.currentQuantity;
 	const nextBillingDate = format(
 		new Date(subscription.currentPeriodEnd * 1000),
-		"MMM d, yyyy",
+		"yyyy年M月d日",
+		{ locale: zhCN },
 	);
 
 	return (
@@ -112,12 +111,11 @@ export function BillingSummaryCard() {
 					</div>
 					<div className="flex flex-col gap-1 text-sm text-gray-11">
 						<p>
-							${subscription.pricePerSeat.toFixed(2)}/seat/mo (
-							{subscription.currentQuantity}{" "}
-							{subscription.currentQuantity === 1 ? "seat" : "seats"} = $
-							{totalAmount.toFixed(2)}/mo, billed {intervalLabel})
+							每席位每月 ${subscription.pricePerSeat.toFixed(2)}（共{" "}
+							{subscription.currentQuantity} 个席位，每月合计 $
+							{totalAmount.toFixed(2)}，{intervalLabel}）
 						</p>
-						<p>Next billing date: {nextBillingDate}</p>
+						<p>下次账单日期：{nextBillingDate}</p>
 					</div>
 				</div>
 				<Button
@@ -128,7 +126,7 @@ export function BillingSummaryCard() {
 					onClick={handleManageBilling}
 					disabled={billingLoading}
 				>
-					{billingLoading ? "Loading..." : "Manage Billing"}
+					{billingLoading ? "正在加载…" : "管理账单"}
 				</Button>
 			</div>
 		</Card>

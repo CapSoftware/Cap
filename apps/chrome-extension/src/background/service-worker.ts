@@ -146,9 +146,7 @@ const createTab = (url: string) =>
 	new Promise<chrome.tabs.Tab>((resolve, reject) => {
 		chrome.tabs.create({ url, active: true }, (tab) => {
 			if (chrome.runtime.lastError) {
-				reject(
-					new Error(chrome.runtime.lastError.message ?? "Failed to open tab"),
-				);
+				reject(new Error(chrome.runtime.lastError.message ?? "打开标签页失败"));
 				return;
 			}
 			resolve(tab);
@@ -160,9 +158,7 @@ const updateTab = (tabId: number, url: string) =>
 		chrome.tabs.update(tabId, { url, active: true }, (tab) => {
 			if (chrome.runtime.lastError || !tab) {
 				reject(
-					new Error(
-						chrome.runtime.lastError?.message ?? "Failed to update tab",
-					),
+					new Error(chrome.runtime.lastError?.message ?? "更新标签页失败"),
 				);
 				return;
 			}
@@ -219,7 +215,7 @@ const createOffscreenDocument = () =>
 			{
 				url: OFFSCREEN_URL,
 				reasons: ["USER_MEDIA", "DISPLAY_MEDIA", "BLOBS", "AUDIO_PLAYBACK"],
-				justification: "Record and upload Cap videos from an extension page.",
+				justification: "从扩展页面录制并上传 Cap 视频。",
 			},
 			() => {
 				const error = chrome.runtime.lastError;
@@ -228,7 +224,7 @@ const createOffscreenDocument = () =>
 					return;
 				}
 
-				const message = error.message ?? "Failed to create offscreen document";
+				const message = error.message ?? "创建后台录制文档失败";
 				if (message.toLowerCase().includes("single offscreen document")) {
 					resolve();
 					return;
@@ -267,7 +263,7 @@ const sendOffscreenRuntimeMessage = (message: OffscreenRequest) =>
 	new Promise<OffscreenResponse>((resolve, reject) => {
 		chrome.runtime.sendMessage(message, (response) => {
 			if (chrome.runtime.lastError) {
-				reject(new Error(chrome.runtime.lastError.message ?? "Message failed"));
+				reject(new Error(chrome.runtime.lastError.message ?? "消息发送失败"));
 				return;
 			}
 			resolve(response as OffscreenResponse);
@@ -312,11 +308,7 @@ const getTabStreamId = (tabId: number) =>
 	new Promise<string>((resolve, reject) => {
 		chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (streamId) => {
 			if (chrome.runtime.lastError) {
-				reject(
-					new Error(
-						chrome.runtime.lastError.message ?? "Failed to capture tab",
-					),
-				);
+				reject(new Error(chrome.runtime.lastError.message ?? "录制标签页失败"));
 				return;
 			}
 			resolve(streamId);
@@ -596,9 +588,7 @@ const updateActionForStatus = (nextStatus: RecordingStatus) => {
 		// The recorder renders inside the page, so the action never opens a popup.
 		setActionPopup(""),
 		setActionBadgeText(isCapturing ? "REC" : ""),
-		setActionTitle(
-			isCapturing ? "Stop Cap recording" : "Record your screen with Cap",
-		),
+		setActionTitle(isCapturing ? "停止 Cap 录制" : "使用 Cap 录制屏幕"),
 	]).then(() => undefined);
 };
 
@@ -849,7 +839,7 @@ const waitForWebcamPreviewReady = (tabId: number) => {
 		previewReadyWaiters,
 		tabId,
 		START_PREVIEW_READY_TIMEOUT_MS,
-		"Camera preview did not become ready before recording started.",
+		"开始录制前摄像头预览未准备就绪。",
 	);
 };
 
@@ -1133,7 +1123,7 @@ const loadSignedInState = async () => {
 const requireSignedInState = async () => {
 	const state = await loadSignedInState();
 	if (!state.auth || !state.bootstrap) {
-		throw new Error("Sign in to Cap first");
+		throw new Error("请先登录 Cap");
 	}
 	return state as {
 		settings: ExtensionSettings;
@@ -1230,7 +1220,7 @@ const startRecording = async (mode: RecordingMode) => {
 		await saveSettings(recordingSettings);
 	}
 	if (mode === "camera" && !recordingSettings.webcam.deviceId) {
-		throw new Error("Select a camera before recording.");
+		throw new Error("请先选择摄像头再开始录制。");
 	}
 	if (isWebcamPreviewEnabled(recordingSettings)) {
 		await saveWebcamPreviewDismissed(false);
@@ -1249,7 +1239,7 @@ const startRecording = async (mode: RecordingMode) => {
 			return {
 				ok: false,
 				canceled: true,
-				error: "Recording canceled",
+				error: "录制已取消",
 			} satisfies OffscreenResponse;
 		}
 	}
@@ -1396,10 +1386,7 @@ const launchWebAuthFlow = (url: string) =>
 			(responseUrl) => {
 				if (chrome.runtime.lastError || !responseUrl) {
 					reject(
-						new Error(
-							chrome.runtime.lastError?.message ??
-								"The sign-in window was closed",
-						),
+						new Error(chrome.runtime.lastError?.message ?? "登录窗口已关闭"),
 					);
 					return;
 				}
@@ -1492,7 +1479,7 @@ const handlePreviewError = async (
 	settleTabWaiters(
 		previewReadyWaiters,
 		tabId,
-		new Error("Camera preview did not become ready."),
+		new Error("摄像头预览未准备就绪。"),
 	);
 
 	const fallbackTabId =
@@ -1552,7 +1539,7 @@ const handleRequest = async (
 				const status = error instanceof ApiRequestError ? error.status : null;
 				if (status === null || status >= 500) {
 					throw new Error(
-						"Could not reach Cap to revoke this sign-in. Check your connection and try again.",
+						"无法连接 Cap 以撤销本次登录，请检查网络连接后重试。",
 					);
 				}
 			}
@@ -1741,7 +1728,7 @@ const handleRequest = async (
 		// excluded so a web-accessible page embedded by a hostile site cannot
 		// authorise itself.
 		if (!isWebPageSender(sender)) {
-			return { ok: false, error: "Unauthorized" };
+			return { ok: false, error: "未授权" };
 		}
 		await registerOverlayToken(message.token);
 		return { ok: true };
@@ -1757,7 +1744,7 @@ const handleRequest = async (
 			message.sessionId,
 		);
 		if (!allowed) {
-			return { ok: false, error: "Camera preview is not authorized." };
+			return { ok: false, error: "摄像头预览未获授权。" };
 		}
 		const response = await sendOffscreen({
 			target: "offscreen",
@@ -1789,7 +1776,7 @@ const handleRequest = async (
 			tabId === undefined ||
 			!(await isCameraPreviewEventAllowed(sender, message.token))
 		) {
-			return { ok: false, error: "Unauthorized" };
+			return { ok: false, error: "未授权" };
 		}
 		chrome.tabs.sendMessage(
 			tabId,
@@ -1840,7 +1827,7 @@ const handleRequest = async (
 		return { ok: true };
 	}
 
-	return { ok: false, error: "Unknown request" };
+	return { ok: false, error: "未知请求" };
 };
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

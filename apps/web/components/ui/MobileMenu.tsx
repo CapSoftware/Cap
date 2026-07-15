@@ -20,18 +20,18 @@ interface NavLink {
 }
 
 const primaryLinks: NavLink[] = [
-	{ href: "/pricing", text: "Pricing" },
-	{ href: "/download", text: "Download" },
-	{ href: "/blog", text: "Blog" },
-	{ href: "/about", text: "About" },
-	{ href: "/testimonials", text: "Testimonials" },
-	{ href: "/faq", text: "FAQs" },
+	{ href: "/pricing", text: "价格" },
+	{ href: "/download", text: "下载" },
+	{ href: "/blog", text: "博客" },
+	{ href: "/about", text: "关于" },
+	{ href: "/testimonials", text: "用户评价" },
+	{ href: "/faq", text: "常见问题" },
 ];
 
 const secondaryLinks: NavLink[] = [
 	{
 		href: "https://github.com/CapSoftware/Cap",
-		text: "Open Source",
+		text: "开源",
 		external: true,
 		icon: (
 			<svg
@@ -47,7 +47,7 @@ const secondaryLinks: NavLink[] = [
 	},
 	{
 		href: "https://discord.gg/y8gdQ3WRN3",
-		text: "Join the community",
+		text: "加入社区",
 		external: true,
 		icon: (
 			<svg
@@ -159,7 +159,7 @@ const MobileMenu = ({ stars }: MobileMenuProps) => {
 			<button
 				ref={triggerRef}
 				type="button"
-				aria-label="Open menu"
+				aria-label="打开菜单"
 				aria-haspopup="dialog"
 				aria-expanded={open}
 				aria-controls={menuId}
@@ -175,12 +175,12 @@ const MobileMenu = ({ stars }: MobileMenuProps) => {
 							id={menuId}
 							role="dialog"
 							aria-modal="true"
-							aria-label="Site navigation"
+							aria-label="网站导航"
 							className="fixed inset-0 z-[100] lg:hidden"
 						>
 							<button
 								type="button"
-								aria-label="Close menu"
+								aria-label="关闭菜单"
 								tabIndex={-1}
 								onClick={() => setOpen(false)}
 								className={classNames(
@@ -198,7 +198,7 @@ const MobileMenu = ({ stars }: MobileMenuProps) => {
 								<div className="flex shrink-0 justify-between items-center px-5 h-[72px] pt-[env(safe-area-inset-top)]">
 									<Link
 										href="/home"
-										aria-label="Cap home"
+										aria-label="Cap 首页"
 										onClick={() => setOpen(false)}
 									>
 										<Logo
@@ -209,7 +209,7 @@ const MobileMenu = ({ stars }: MobileMenuProps) => {
 									<button
 										ref={closeRef}
 										type="button"
-										aria-label="Close menu"
+										aria-label="关闭菜单"
 										onClick={() => setOpen(false)}
 										className="inline-flex justify-center items-center rounded-full border transition-colors size-10 border-gray-4 text-gray-12 hover:bg-gray-3 active:scale-95"
 									>
@@ -218,7 +218,7 @@ const MobileMenu = ({ stars }: MobileMenuProps) => {
 								</div>
 
 								<div className="overflow-y-auto flex-1 px-5 pt-2 pb-6 overscroll-contain">
-									<nav aria-label="Primary">
+									<nav aria-label="主导航">
 										<ul className="space-y-1 list-none">
 											{primaryLinks.map((link, index) => (
 												<li
@@ -269,8 +269,8 @@ const MobileMenu = ({ stars }: MobileMenuProps) => {
 												>
 													{link.icon}
 													<span className="text-base font-medium">
-														{link.text === "Open Source" && stars
-															? `${stars} Stars on GitHub`
+														{link.text === "开源" && stars
+															? `GitHub 上有 ${stars} 个 Star`
 															: link.text}
 													</span>
 												</Link>
@@ -287,7 +287,7 @@ const MobileMenu = ({ stars }: MobileMenuProps) => {
 										className="w-full font-medium"
 										onClick={() => setOpen(false)}
 									>
-										Sign up
+										注册
 									</Button>
 									<Button
 										variant="gray"
@@ -296,7 +296,7 @@ const MobileMenu = ({ stars }: MobileMenuProps) => {
 										className="w-full font-medium"
 										onClick={() => setOpen(false)}
 									>
-										Login
+										登录
 									</Button>
 								</div>
 							</div>

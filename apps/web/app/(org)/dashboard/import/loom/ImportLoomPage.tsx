@@ -81,9 +81,9 @@ const MAX_LOOM_CSV_IMPORT_ROWS = 500;
 const LOOM_CSV_BATCH_SIZE = 10;
 const LOOM_CSV_BATCH_DELAY_MS = 1500;
 const LOOM_CSV_LIMIT_MESSAGE =
-	"CSV imports are limited to 500 videos at a time. Contact support to raise this limit.";
+	"每次最多可通过 CSV 导入 500 个视频。如需提高限制，请联系支持团队。";
 const LOOM_CSV_PERMISSION_MESSAGE =
-	"Only organization admins and owners can import Loom videos from a CSV.";
+	"只有组织管理员和所有者可以通过 CSV 导入 Loom 视频。";
 
 function delay(ms: number) {
 	return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -109,9 +109,7 @@ function buildCsvImportResult(
 		importedCount,
 		failedCount,
 		results,
-		error:
-			error ??
-			(importedCount > 0 ? undefined : "No Loom videos were imported."),
+		error: error ?? (importedCount > 0 ? undefined : "未导入任何 Loom 视频。"),
 	};
 }
 
@@ -154,7 +152,7 @@ function parseCsvRecords(text: string) {
 		field += char;
 	}
 
-	if (inQuotes) throw new Error("CSV has an unclosed quoted field.");
+	if (inQuotes) throw new Error("CSV 中存在未闭合的引号字段。");
 
 	if (field.length > 0 || row.length > 0) {
 		row.push(field.trim());
@@ -172,7 +170,7 @@ function parseCsv(text: string, fileName: string): CsvData {
 		.filter((row) => row.some((cell) => cell.trim().length > 0));
 
 	if (headers.length === 0) {
-		throw new Error("No CSV headers found.");
+		throw new Error("未找到 CSV 表头。");
 	}
 
 	return { fileName, headers, rows };
@@ -351,17 +349,15 @@ export const ImportLoomPage = () => {
 			});
 
 			if (!importResult.success) {
-				toast.error(importResult.error || "Failed to import video.");
+				toast.error(importResult.error || "导入视频失败。");
 				setIsImporting(false);
 				return;
 			}
 
-			toast.success(
-				"Loom video import started! It will appear in your caps shortly.",
-			);
+			toast.success("Loom 视频已开始导入，稍后会显示在你的录制内容中。");
 			router.push("/dashboard/caps");
 		} catch {
-			toast.error("An unexpected error occurred. Please try again.");
+			toast.error("发生意外错误，请重试。");
 		} finally {
 			setIsImporting(false);
 		}
@@ -393,7 +389,7 @@ export const ImportLoomPage = () => {
 		}
 
 		if (!file.name.toLowerCase().endsWith(".csv") && file.type !== "text/csv") {
-			toast.error("Please upload a CSV file.");
+			toast.error("请上传 CSV 文件。");
 			return;
 		}
 
@@ -432,9 +428,7 @@ export const ImportLoomPage = () => {
 			setResult(null);
 			setCsvImportProgress(0);
 		} catch (error) {
-			toast.error(
-				error instanceof Error ? error.message : "Could not parse CSV.",
-			);
+			toast.error(error instanceof Error ? error.message : "无法解析 CSV。");
 		}
 	};
 
@@ -494,21 +488,15 @@ export const ImportLoomPage = () => {
 			setResult(finalResult);
 
 			if (finalResult.importedCount > 0) {
-				toast.success(
-					`${finalResult.importedCount} ${pluralize(
-						finalResult.importedCount,
-						"Loom import",
-						"Loom imports",
-					)} started.`,
-				);
+				toast.success(`已开始导入 ${finalResult.importedCount} 个 Loom 视频。`);
 				router.refresh();
 			} else {
-				toast.error(finalResult.error || "No Loom videos were imported.");
+				toast.error(finalResult.error || "未导入任何 Loom 视频。");
 			}
 
 			setConfirmOpen(false);
 		} catch {
-			toast.error("An unexpected error occurred. Please try again.");
+			toast.error("发生意外错误，请重试。");
 		} finally {
 			setIsCsvImporting(false);
 		}
@@ -522,20 +510,18 @@ export const ImportLoomPage = () => {
 					className="inline-flex gap-2 items-center mb-4 text-sm transition-colors text-gray-10 hover:text-gray-12"
 				>
 					<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
-					Back to Import
+					返回导入
 				</Link>
 				<div className="flex gap-4 items-start">
 					<div className="flex flex-shrink-0 justify-center items-center rounded-full size-12 bg-gray-3">
 						<LoomMark size={20} />
 					</div>
 					<div>
-						<h1 className="text-2xl font-medium text-gray-12">
-							Import from Loom
-						</h1>
+						<h1 className="text-2xl font-medium text-gray-12">从 Loom 导入</h1>
 						<p className="mt-1 max-w-xl text-sm text-gray-10">
 							{canUseCsvImport
-								? "Bring a single Loom video into Cap, or bulk import recordings for organization members and new users from a CSV."
-								: "Paste a Loom share link to bring it into Cap."}
+								? "将单个 Loom 视频导入 Cap，或通过 CSV 为组织成员和新用户批量导入录制内容。"
+								: "粘贴 Loom 分享链接，将其导入 Cap。"}
 						</p>
 					</div>
 				</div>
@@ -545,19 +531,19 @@ export const ImportLoomPage = () => {
 				{canUseCsvImport && (
 					<div
 						role="tablist"
-						aria-label="Loom import mode"
+						aria-label="Loom 导入模式"
 						className="flex gap-1 p-1 rounded-full border w-fit border-gray-3 bg-gray-2"
 					>
 						<ModeTab
 							active={activeMode === "single"}
 							icon={faLink}
-							label="Single Video"
+							label="单个视频"
 							onClick={() => setMode("single")}
 						/>
 						<ModeTab
 							active={activeMode === "csv"}
 							icon={faFileCsv}
-							label="Bulk Import"
+							label="批量导入"
 							onClick={() => setMode("csv")}
 						/>
 					</div>
@@ -566,10 +552,9 @@ export const ImportLoomPage = () => {
 				{activeMode === "single" ? (
 					<div className="flex overflow-hidden flex-col rounded-xl border bg-gray-1 border-gray-3">
 						<div className="flex flex-col gap-1 px-6 py-5 border-b border-gray-3">
-							<p className="text-sm font-medium text-gray-12">Loom video URL</p>
+							<p className="text-sm font-medium text-gray-12">Loom 视频网址</p>
 							<p className="text-xs text-gray-10">
-								Paste any Loom share link. The video downloads and processes in
-								the background.
+								粘贴任意 Loom 分享链接。视频将在后台下载并处理。
 							</p>
 						</div>
 
@@ -592,7 +577,7 @@ export const ImportLoomPage = () => {
 									variant="gray"
 									onClick={() => router.push("/dashboard/import")}
 								>
-									Cancel
+									取消
 								</Button>
 								<Button
 									type="button"
@@ -602,7 +587,7 @@ export const ImportLoomPage = () => {
 									variant="dark"
 									disabled={!isValidLoomUrl || isImporting}
 								>
-									{isImporting ? "Importing..." : "Import Loom"}
+									{isImporting ? "正在导入……" : "导入 Loom"}
 								</Button>
 							</div>
 						</div>
@@ -618,23 +603,22 @@ export const ImportLoomPage = () => {
 										</div>
 										<div className="flex flex-col gap-1.5">
 											<p className="text-sm font-medium text-gray-12">
-												First time? Start with our template
+												首次使用？从模板开始
 											</p>
 											<p className="text-xs text-gray-10">
-												Two columns required:{" "}
+												必须包含两列：{" "}
 												<code className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-12 text-[11px] font-mono">
 													loom_video_url
 												</code>{" "}
-												and{" "}
+												和{" "}
 												<code className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-12 text-[11px] font-mono">
 													user_email
 												</code>
-												. Add{" "}
+												。添加{" "}
 												<code className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-12 text-[11px] font-mono">
 													space_name
 												</code>{" "}
-												to place videos in spaces. Emails that are not members
-												yet will be added without an email invite.
+												可将视频放入指定空间。尚不是成员的邮箱将直接添加，不发送邮件邀请。
 											</p>
 										</div>
 									</div>
@@ -646,12 +630,12 @@ export const ImportLoomPage = () => {
 										className="flex-shrink-0"
 									>
 										<FontAwesomeIcon className="size-3.5" icon={faDownload} />
-										Download Template
+										下载模板
 									</Button>
 								</div>
 
 								<section
-									aria-label="CSV upload"
+									aria-label="上传 CSV"
 									onDragOver={(event) => {
 										event.preventDefault();
 										setIsDragOver(true);
@@ -671,10 +655,10 @@ export const ImportLoomPage = () => {
 										</div>
 										<div className="flex flex-col gap-1 items-center text-center">
 											<p className="text-sm font-medium text-gray-12">
-												Drag and drop your CSV here
+												将 CSV 拖放到此处
 											</p>
 											<p className="text-xs text-gray-10">
-												Or browse your computer to upload a file.
+												或浏览电脑并上传文件。
 											</p>
 										</div>
 										<Button
@@ -684,7 +668,7 @@ export const ImportLoomPage = () => {
 											size="sm"
 											className="mt-2"
 										>
-											Browse CSV
+											浏览 CSV
 										</Button>
 									</div>
 								</section>
@@ -711,8 +695,7 @@ export const ImportLoomPage = () => {
 												{csvData.fileName}
 											</p>
 											<p className="text-xs text-gray-10">
-												{csvData.rows.length}{" "}
-												{pluralize(csvData.rows.length, "row", "rows")} detected
+												检测到 {csvData.rows.length} 行
 											</p>
 										</div>
 									</div>
@@ -727,18 +710,18 @@ export const ImportLoomPage = () => {
 											setCsvImportProgress(0);
 										}}
 									>
-										Replace CSV
+										替换 CSV
 									</Button>
 								</div>
 
 								<div className="flex flex-col gap-6 p-6">
 									<div>
 										<p className="mb-3 text-xs font-medium tracking-wide uppercase text-gray-10">
-											Map columns
+											映射列
 										</p>
 										<div className="grid grid-cols-1 gap-4 md:grid-cols-3">
 											<MappingField
-												label="Loom video URL"
+												label="Loom 视频网址"
 												value={mapping.loomUrl}
 												options={columnOptions}
 												onValueChange={(value) =>
@@ -749,7 +732,7 @@ export const ImportLoomPage = () => {
 												}
 											/>
 											<MappingField
-												label="User email"
+												label="用户邮箱"
 												value={mapping.userEmail}
 												options={columnOptions}
 												onValueChange={(value) =>
@@ -760,7 +743,7 @@ export const ImportLoomPage = () => {
 												}
 											/>
 											<MappingField
-												label="Space name"
+												label="空间名称"
 												value={mapping.spaceName}
 												options={columnOptions}
 												optional
@@ -774,7 +757,7 @@ export const ImportLoomPage = () => {
 										</div>
 										{selectedColumnsConflict && (
 											<p className="mt-3 text-sm text-red-10">
-												Choose different columns for each mapped field.
+												请为每个映射字段选择不同的列。
 											</p>
 										)}
 									</div>
@@ -782,17 +765,13 @@ export const ImportLoomPage = () => {
 									<div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
 										<StatBox
 											tone="positive"
-											label="Ready to import"
+											label="可导入"
 											value={readyRows.length}
 										/>
-										<StatBox
-											tone="warn"
-											label="Needs fix"
-											value={invalidRows}
-										/>
+										<StatBox tone="warn" label="需要修正" value={invalidRows} />
 										<StatBox
 											tone="neutral"
-											label="Total mapped"
+											label="映射总数"
 											value={mappedRows.length}
 										/>
 									</div>
@@ -805,15 +784,15 @@ export const ImportLoomPage = () => {
 											/>
 											<div className="text-sm">
 												<p className="font-medium">
-													CSV imports are limited to {MAX_LOOM_CSV_IMPORT_ROWS}{" "}
-													videos at a time.
+													每次最多可通过 CSV 导入 {MAX_LOOM_CSV_IMPORT_ROWS}{" "}
+													个视频。
 												</p>
 												<p className="mt-1 text-red-10">
-													Split this file into smaller batches or{" "}
+													请将文件拆分为更小的批次，或{" "}
 													<a className="underline" href="mailto:hello@cap.so">
-														contact support
+														联系支持团队
 													</a>{" "}
-													to raise the limit.
+													以提高限制。
 												</p>
 											</div>
 										</div>
@@ -824,11 +803,11 @@ export const ImportLoomPage = () => {
 											<Table>
 												<TableHeader>
 													<TableRow>
-														<TableHead className="w-16">Row</TableHead>
-														<TableHead>Loom URL</TableHead>
-														<TableHead>User email</TableHead>
-														<TableHead>Space</TableHead>
-														<TableHead className="w-32">Status</TableHead>
+														<TableHead className="w-16">行</TableHead>
+														<TableHead>Loom 网址</TableHead>
+														<TableHead>用户邮箱</TableHead>
+														<TableHead>空间</TableHead>
+														<TableHead className="w-32">状态</TableHead>
 													</TableRow>
 												</TableHeader>
 												<TableBody>
@@ -857,8 +836,8 @@ export const ImportLoomPage = () => {
 											</Table>
 											{mappedRows.length > previewRows.length && (
 												<div className="px-4 py-2 text-xs border-t bg-gray-2 text-gray-10 border-gray-3">
-													Showing {previewRows.length} of {mappedRows.length}{" "}
-													mapped rows.
+													正在显示 {mappedRows.length} 个映射行中的{" "}
+													{previewRows.length} 个。
 												</div>
 											)}
 										</div>
@@ -876,7 +855,7 @@ export const ImportLoomPage = () => {
 												setCsvImportProgress(0);
 											}}
 										>
-											Clear
+											清除
 										</Button>
 										<Button
 											type="button"
@@ -885,7 +864,7 @@ export const ImportLoomPage = () => {
 											disabled={!canImport}
 											onClick={() => setConfirmOpen(true)}
 										>
-											Review Import
+											检查导入内容
 										</Button>
 									</div>
 								</div>
@@ -896,25 +875,21 @@ export const ImportLoomPage = () => {
 							<div className="flex overflow-hidden flex-col rounded-xl border bg-gray-1 border-gray-3">
 								<div className="flex flex-col gap-3 justify-between px-6 py-5 border-b sm:flex-row sm:items-center border-gray-3">
 									<div>
-										<p className="text-sm font-medium text-gray-12">
-											Import results
-										</p>
+										<p className="text-sm font-medium text-gray-12">导入结果</p>
 										<p className="mt-1 text-xs text-gray-10">
-											{result.importedCount}{" "}
-											{pluralize(result.importedCount, "started", "started")},{" "}
-											{result.failedCount}{" "}
-											{pluralize(result.failedCount, "failed", "failed")}
+											已开始 {result.importedCount} 个，失败{" "}
+											{result.failedCount} 个
 										</p>
 									</div>
 									<div className="flex gap-2 items-center">
 										<StatusPill
 											ready
-											label={`${result.importedCount} started`}
+											label={`${result.importedCount} 个已开始`}
 										/>
 										{result.failedCount > 0 && (
 											<StatusPill
 												ready={false}
-												label={`${result.failedCount} failed`}
+												label={`${result.failedCount} 个失败`}
 											/>
 										)}
 									</div>
@@ -923,10 +898,10 @@ export const ImportLoomPage = () => {
 									<Table>
 										<TableHeader>
 											<TableRow>
-												<TableHead className="w-16">Row</TableHead>
-												<TableHead>User email</TableHead>
-												<TableHead>Space</TableHead>
-												<TableHead>Status</TableHead>
+												<TableHead className="w-16">行</TableHead>
+												<TableHead>用户邮箱</TableHead>
+												<TableHead>空间</TableHead>
+												<TableHead>状态</TableHead>
 											</TableRow>
 										</TableHeader>
 										<TableBody>
@@ -944,7 +919,7 @@ export const ImportLoomPage = () => {
 																: "text-red-10"
 														}
 													>
-														{row.error || (row.success ? "Started" : "Failed")}
+														{row.error || (row.success ? "已开始" : "失败")}
 													</TableCell>
 												</TableRow>
 											))}
@@ -962,22 +937,19 @@ export const ImportLoomPage = () => {
 					<DialogHeader
 						icon={<FontAwesomeIcon icon={faFileCsv} className="size-3.5" />}
 					>
-						<DialogTitle>Start CSV import</DialogTitle>
+						<DialogTitle>开始 CSV 导入</DialogTitle>
 					</DialogHeader>
 					<div className="p-5 text-sm text-gray-11">
-						{readyRows.length} {pluralize(readyRows.length, "video", "videos")}{" "}
-						will be imported for existing members or newly added users in
-						batches of {LOOM_CSV_BATCH_SIZE}.
+						将为现有成员或新增用户导入 {readyRows.length} 个视频，每批{" "}
+						{LOOM_CSV_BATCH_SIZE} 个。
 						{readyRows.some((row) => row.spaceName) && (
 							<span className="block mt-2">
-								Rows with a space name will be added to that space. Missing
-								spaces will be created.
+								包含空间名称的行将添加到相应空间；缺少的空间会自动创建。
 							</span>
 						)}
 						{invalidRows > 0 && (
 							<span className="block mt-2">
-								{invalidRows} {pluralize(invalidRows, "row", "rows")} will be
-								skipped because the Loom URL, email, or space name is invalid.
+								将跳过 {invalidRows} 行，因为 Loom 网址、邮箱或空间名称无效。
 							</span>
 						)}
 					</div>
@@ -988,7 +960,7 @@ export const ImportLoomPage = () => {
 							variant="gray"
 							onClick={() => setConfirmOpen(false)}
 						>
-							Cancel
+							取消
 						</Button>
 						<Button
 							type="button"
@@ -999,8 +971,8 @@ export const ImportLoomPage = () => {
 							disabled={!canImport}
 						>
 							{isCsvImporting
-								? `Importing ${csvImportProgress}/${readyRows.length}`
-								: "Start Import"}
+								? `正在导入 ${csvImportProgress}/${readyRows.length}`
+								: "开始导入"}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -1063,7 +1035,7 @@ const MappingField = ({
 	onValueChange: (value: string | undefined) => void;
 }) => {
 	const fieldOptions = optional
-		? [{ value: OPTIONAL_COLUMN_VALUE, label: "Do not import" }, ...options]
+		? [{ value: OPTIONAL_COLUMN_VALUE, label: "不导入" }, ...options]
 		: options;
 
 	return (
@@ -1077,7 +1049,7 @@ const MappingField = ({
 					)
 				}
 				options={fieldOptions}
-				placeholder="Choose column"
+				placeholder="选择列"
 			/>
 		</div>
 	);
@@ -1094,7 +1066,7 @@ const StatusPill = ({ ready, label }: { ready: boolean; label?: string }) => (
 			icon={ready ? faCircleCheck : faTriangleExclamation}
 			className="size-3"
 		/>
-		{label ?? (ready ? "Ready" : "Needs fix")}
+		{label ?? (ready ? "可导入" : "需要修正")}
 	</span>
 );
 

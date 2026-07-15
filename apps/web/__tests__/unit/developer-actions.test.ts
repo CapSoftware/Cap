@@ -156,21 +156,21 @@ describe("createDeveloperApp", () => {
 		mockGetCurrentUser.mockResolvedValue(null);
 		await expect(
 			createDeveloperApp({ name: "Test", environment: "development" }),
-		).rejects.toThrow("Unauthorized");
+		).rejects.toThrow("未授权");
 	});
 
 	it("throws App name is required when empty name", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		await expect(
 			createDeveloperApp({ name: "", environment: "development" }),
-		).rejects.toThrow("App name is required");
+		).rejects.toThrow("请输入应用名称");
 	});
 
 	it("throws App name is required when whitespace-only name", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		await expect(
 			createDeveloperApp({ name: "   ", environment: "development" }),
-		).rejects.toThrow("App name is required");
+		).rejects.toThrow("请输入应用名称");
 	});
 
 	it("creates app with trimmed name", async () => {
@@ -258,15 +258,13 @@ describe("deleteDeveloperApp", () => {
 
 	it("throws Unauthorized when no user", async () => {
 		mockGetCurrentUser.mockResolvedValue(null);
-		await expect(deleteDeveloperApp("app-456")).rejects.toThrow("Unauthorized");
+		await expect(deleteDeveloperApp("app-456")).rejects.toThrow("未授权");
 	});
 
 	it("throws App not found when app does not exist", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValue([]);
-		await expect(deleteDeveloperApp("app-456")).rejects.toThrow(
-			"App not found",
-		);
+		await expect(deleteDeveloperApp("app-456")).rejects.toThrow("未找到应用");
 	});
 
 	it("soft deletes by setting deletedAt", async () => {
@@ -302,7 +300,7 @@ describe("updateDeveloperApp", () => {
 		mockGetCurrentUser.mockResolvedValue(null);
 		await expect(
 			updateDeveloperApp({ appId: "app-456", name: "New" }),
-		).rejects.toThrow("Unauthorized");
+		).rejects.toThrow("未授权");
 	});
 
 	it("throws App not found when app does not exist", async () => {
@@ -310,7 +308,7 @@ describe("updateDeveloperApp", () => {
 		mockDb.limit.mockResolvedValue([]);
 		await expect(
 			updateDeveloperApp({ appId: "app-456", name: "New" }),
-		).rejects.toThrow("App not found");
+		).rejects.toThrow("未找到应用");
 	});
 
 	it("updates name when provided", async () => {
@@ -379,27 +377,27 @@ describe("addDeveloperDomain", () => {
 		mockGetCurrentUser.mockResolvedValue(null);
 		await expect(
 			addDeveloperDomain("app-456", "https://example.com"),
-		).rejects.toThrow("Unauthorized");
+		).rejects.toThrow("未授权");
 	});
 
 	it("throws Domain is required when empty", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		await expect(addDeveloperDomain("app-456", "")).rejects.toThrow(
-			"Domain is required",
+			"请输入域名",
 		);
 	});
 
 	it("throws Domain is required when whitespace only", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		await expect(addDeveloperDomain("app-456", "   ")).rejects.toThrow(
-			"Domain is required",
+			"请输入域名",
 		);
 	});
 
 	it("validates domain format with regex", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		await expect(addDeveloperDomain("app-456", "not-a-url")).rejects.toThrow(
-			"Domain must be a valid origin (e.g. https://myapp.com)",
+			"域名必须是有效的来源地址（例如 https://myapp.com）",
 		);
 	});
 
@@ -420,7 +418,7 @@ describe("addDeveloperDomain", () => {
 	it("rejects invalid domains without protocol", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		await expect(addDeveloperDomain("app-456", "example.com")).rejects.toThrow(
-			"Domain must be a valid origin (e.g. https://myapp.com)",
+			"域名必须是有效的来源地址（例如 https://myapp.com）",
 		);
 	});
 
@@ -428,7 +426,7 @@ describe("addDeveloperDomain", () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		await expect(
 			addDeveloperDomain("app-456", "just-hostname"),
-		).rejects.toThrow("Domain must be a valid origin (e.g. https://myapp.com)");
+		).rejects.toThrow("域名必须是有效的来源地址（例如 https://myapp.com）");
 	});
 
 	it("normalizes to lowercase", async () => {
@@ -463,7 +461,7 @@ describe("removeDeveloperDomain", () => {
 		mockGetCurrentUser.mockResolvedValue(null);
 		await expect(
 			removeDeveloperDomain("app-456", "domain-789"),
-		).rejects.toThrow("Unauthorized");
+		).rejects.toThrow("未授权");
 	});
 
 	it("throws App not found when app does not exist", async () => {
@@ -471,7 +469,7 @@ describe("removeDeveloperDomain", () => {
 		mockDb.limit.mockResolvedValue([]);
 		await expect(
 			removeDeveloperDomain("app-456", "domain-789"),
-		).rejects.toThrow("App not found");
+		).rejects.toThrow("未找到应用");
 	});
 
 	it("deletes domain record", async () => {
@@ -502,16 +500,14 @@ describe("regenerateDeveloperKeys", () => {
 
 	it("throws Unauthorized when no user", async () => {
 		mockGetCurrentUser.mockResolvedValue(null);
-		await expect(regenerateDeveloperKeys("app-456")).rejects.toThrow(
-			"Unauthorized",
-		);
+		await expect(regenerateDeveloperKeys("app-456")).rejects.toThrow("未授权");
 	});
 
 	it("throws App not found when app does not exist", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValue([]);
 		await expect(regenerateDeveloperKeys("app-456")).rejects.toThrow(
-			"App not found",
+			"未找到应用",
 		);
 	});
 
@@ -655,7 +651,7 @@ describe("updateDeveloperAutoTopUp", () => {
 		mockGetCurrentUser.mockResolvedValue(null);
 		await expect(
 			updateDeveloperAutoTopUp({ appId: "app-456", enabled: true }),
-		).rejects.toThrow("Unauthorized");
+		).rejects.toThrow("未授权");
 	});
 
 	it("throws App not found when app does not exist", async () => {
@@ -663,7 +659,7 @@ describe("updateDeveloperAutoTopUp", () => {
 		mockDb.limit.mockResolvedValue([]);
 		await expect(
 			updateDeveloperAutoTopUp({ appId: "app-456", enabled: true }),
-		).rejects.toThrow("App not found");
+		).rejects.toThrow("未找到应用");
 	});
 
 	it("throws Threshold must be non-negative for negative threshold", async () => {
@@ -675,7 +671,7 @@ describe("updateDeveloperAutoTopUp", () => {
 				enabled: true,
 				thresholdMicroCredits: -100,
 			}),
-		).rejects.toThrow("Threshold must be non-negative");
+		).rejects.toThrow("阈值不能为负数");
 	});
 
 	it("throws Top-up amount must be positive for zero amount", async () => {
@@ -687,7 +683,7 @@ describe("updateDeveloperAutoTopUp", () => {
 				enabled: true,
 				amountCents: 0,
 			}),
-		).rejects.toThrow("Top-up amount must be positive");
+		).rejects.toThrow("充值金额必须大于零");
 	});
 
 	it("throws Top-up amount must be positive for negative amount", async () => {
@@ -699,7 +695,7 @@ describe("updateDeveloperAutoTopUp", () => {
 				enabled: true,
 				amountCents: -50,
 			}),
-		).rejects.toThrow("Top-up amount must be positive");
+		).rejects.toThrow("充值金额必须大于零");
 	});
 
 	it("updates enabled flag", async () => {
@@ -755,7 +751,7 @@ describe("deleteDeveloperVideo", () => {
 	it("throws Unauthorized when no user", async () => {
 		mockGetCurrentUser.mockResolvedValue(null);
 		await expect(deleteDeveloperVideo("app-456", "video-001")).rejects.toThrow(
-			"Unauthorized",
+			"未授权",
 		);
 	});
 
@@ -763,7 +759,7 @@ describe("deleteDeveloperVideo", () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValue([]);
 		await expect(deleteDeveloperVideo("app-456", "video-001")).rejects.toThrow(
-			"App not found",
+			"未找到应用",
 		);
 	});
 

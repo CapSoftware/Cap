@@ -5,7 +5,7 @@ import { getOrganizationStorageSettings } from "@/actions/organization/storage";
 import { OrganizationStorageIntegrations } from "./storage-integrations";
 
 export const metadata: Metadata = {
-	title: "Organization Integrations — Cap",
+	title: "组织集成 — Cap",
 };
 
 export default async function OrganizationIntegrationsPage() {

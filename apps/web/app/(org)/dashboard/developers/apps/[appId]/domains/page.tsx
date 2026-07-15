@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { DomainsClient } from "./DomainsClient";
 
 export const metadata: Metadata = {
-	title: "Allowed Domains — Cap",
+	title: "允许的域名 — Cap",
 };
 
 export default async function DomainsPage() {

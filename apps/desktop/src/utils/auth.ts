@@ -85,7 +85,7 @@ async function createLocalServerSession(signal: AbortSignal) {
 			await localCallback.dispose();
 
 			if (!result) return null;
-			if (signal.aborted) throw new Error("Sign in aborted");
+			if (signal.aborted) throw new Error("登录已取消");
 
 			return result;
 		},
@@ -114,7 +114,7 @@ async function createHybridDesktopSession(signal: AbortSignal) {
 			await localCallback.dispose();
 
 			if (!result.data) return null;
-			if (signal.aborted) throw new Error("Sign in aborted");
+			if (signal.aborted) throw new Error("登录已取消");
 
 			return result.data;
 		},

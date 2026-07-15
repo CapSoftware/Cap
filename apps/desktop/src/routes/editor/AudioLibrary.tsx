@@ -158,7 +158,7 @@ export function AudioLibraryPanel(props: {
 			commit(await commands.addAudioLibraryTrack(id));
 		} catch (error) {
 			console.error("Failed to add audio track", error);
-			toast.error("Failed to add audio track");
+			toast.error("添加音轨失败");
 		} finally {
 			setBusyId(null);
 		}
@@ -170,13 +170,13 @@ export function AudioLibraryPanel(props: {
 		try {
 			const selected = await open({
 				multiple: false,
-				filters: [{ name: "Audio", extensions: [...AUDIO_IMPORT_EXTENSIONS] }],
+				filters: [{ name: "音频", extensions: [...AUDIO_IMPORT_EXTENSIONS] }],
 			});
 			if (typeof selected !== "string") return;
 			commit(await commands.importAudioTrackFile(selected));
 		} catch (error) {
 			console.error("Failed to import audio file", error);
-			toast.error("Failed to import audio file");
+			toast.error("导入音频文件失败");
 		} finally {
 			setUploading(false);
 		}
@@ -189,17 +189,17 @@ export function AudioLibraryPanel(props: {
 					onClick={() => props.onClose()}
 					leftIcon={<IconLucideCheck />}
 				>
-					Done
+					完成
 				</EditorButton>
 				<span class="text-sm text-gray-10">
-					{isReplace() ? "Change audio" : "Add audio"}
+					{isReplace() ? "更换音频" : "添加音频"}
 				</span>
 			</div>
 
 			<p class="text-xs text-gray-10">
 				{isReplace()
-					? "Pick a different track for this segment"
-					: "Add audio, music or other sounds to your video"}
+					? "为此片段选择其他音轨"
+					: "为视频添加音频、音乐或其他声音"}
 			</p>
 
 			<Show when={categories().length > 0}>
@@ -220,9 +220,7 @@ export function AudioLibraryPanel(props: {
 							</button>
 						)}
 					</For>
-					<span class="text-[11px] text-gray-9">
-						More categories coming soon
-					</span>
+					<span class="text-[11px] text-gray-9">更多分类即将推出</span>
 				</div>
 			</Show>
 
@@ -262,9 +260,7 @@ export function AudioLibraryPanel(props: {
 										<button
 											type="button"
 											class="absolute inset-0 w-full h-full"
-											aria-label={
-												isPreviewing() ? "Pause preview" : "Play preview"
-											}
+											aria-label={isPreviewing() ? "暂停试听" : "播放试听"}
 											onClick={() => togglePreview(track.id)}
 										>
 											<Show when={!isPreviewing()}>
@@ -301,7 +297,7 @@ export function AudioLibraryPanel(props: {
 
 										<button
 											type="button"
-											aria-label={isReplace() ? "Use track" : "Add to timeline"}
+											aria-label={isReplace() ? "使用此音轨" : "添加到时间线"}
 											class={cx(
 												"flex absolute top-1 right-1 justify-center items-center rounded-full border backdrop-blur-sm transition-all size-5",
 												"opacity-0 group-hover/tile:opacity-100",
@@ -358,7 +354,7 @@ export function AudioLibraryPanel(props: {
 					</Show>
 				</span>
 				<span class="text-[13px] font-medium text-gray-12">
-					{uploading() ? "Importing…" : "Upload your own"}
+					{uploading() ? "正在导入…" : "导入本地音频"}
 				</span>
 				<span class="text-[11px] text-gray-9">
 					MP3, WAV, M4A, OGG, FLAC, AAC

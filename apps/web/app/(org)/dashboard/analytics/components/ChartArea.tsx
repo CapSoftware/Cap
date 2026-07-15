@@ -9,23 +9,23 @@ import {
 	ChartTooltipContent,
 } from "@/components/ui/chart";
 
-export const description = "An area chart with gradient fill";
+export const description = "带渐变填充的面积图";
 
 const chartConfig = {
 	views: {
-		label: "Views",
+		label: "观看次数",
 		color: "#3b82f6",
 	},
 	comments: {
-		label: "Comments",
+		label: "评论",
 		color: "#ec4899",
 	},
 	reactions: {
-		label: "Reactions",
+		label: "回应",
 		color: "#f97316",
 	},
 	caps: {
-		label: "Caps",
+		label: "录制",
 		color: "var(--gray-12)",
 	},
 } satisfies ChartConfig;
@@ -115,7 +115,7 @@ function ChartArea({ selectedMetrics, data, isLoading }: ChartAreaProps) {
 	if (chartData.length === 0) {
 		return (
 			<div className="flex h-[300px] w-full flex-col items-center justify-center rounded-xl border border-dashed border-gray-5 text-sm text-gray-9">
-				No analytics data yet.
+				暂无分析数据。
 			</div>
 		);
 	}
@@ -123,7 +123,7 @@ function ChartArea({ selectedMetrics, data, isLoading }: ChartAreaProps) {
 	if (selectedMetrics.length === 0) {
 		return (
 			<div className="flex h-[300px] w-full flex-col items-center justify-center rounded-xl border border-dashed border-gray-5 text-sm text-gray-9">
-				Select at least one metric to view.
+				请至少选择一项指标。
 			</div>
 		);
 	}
@@ -243,9 +243,9 @@ const formatBucketLabel = (bucket: string, hourly: boolean) => {
 	const date = new Date(bucket);
 	if (Number.isNaN(date.getTime())) return bucket;
 	if (hourly)
-		return date.toLocaleTimeString([], {
+		return date.toLocaleTimeString("zh-CN", {
 			hour: "numeric",
 			minute: undefined,
 		});
-	return date.toLocaleDateString([], { month: "short", day: "numeric" });
+	return date.toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
 };

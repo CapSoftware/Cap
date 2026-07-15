@@ -36,7 +36,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
 			queryFn: async () => {
 				const resp = await api.notifications.get();
 				if (resp.status !== 200) {
-					toast.error("Failed to fetch notifications");
+					toast.error("获取通知失败");
 					return { notifications: [], count: {} };
 				}
 
@@ -113,13 +113,15 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
 								className="text-gray-10 size-10"
 							/>
 							<p className="text-gray-10 text-[13px]">
-								No notifications{" "}
-								{activeFilter !== "all" && (
+								{activeFilter === "all" ? (
+									"暂无通知"
+								) : (
 									<>
-										for{" "}
+										暂无“
 										<span className="font-medium text-gray-11">
 											{FilterLabels[activeFilter]}
 										</span>
+										”通知
 									</>
 								)}
 							</p>

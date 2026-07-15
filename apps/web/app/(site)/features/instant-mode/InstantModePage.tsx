@@ -8,274 +8,248 @@ const instantModeConfig: FeaturePageConfig = {
 	slug: "instant-mode",
 	content: {
 		hero: {
-			title: "Instant Mode",
-			subtitle: "Record, share, collaborate in seconds",
+			title: "即时模式",
+			subtitle: "数秒内完成录制、分享和协作",
 			description:
-				"Cloud-powered screen recording for instant sharing and team collaboration. Perfect for quick updates, feedback sessions, and async communication that keeps teams moving fast.",
-			primaryCta: "Download for Free",
-			secondaryCta: "Upgrade to Cap Pro",
-			features: [
-				"Instant shareable links",
-				"Upload during recording",
-				"Real-time collaboration",
-			],
+				"由云端驱动的屏幕录制，专为即时分享和团队协作打造。适合快速更新、反馈沟通和异步交流，让团队始终高效推进。",
+			primaryCta: "免费下载",
+			secondaryCta: "升级到 Cap 专业版",
+			features: ["即时分享链接", "录制时同步上传", "实时协作"],
 		},
 		features: {
-			title: "Built for Speed and Collaboration",
-			description:
-				"Everything you need to record, share, and get feedback instantly",
+			title: "为速度与协作而生",
+			description: "即时录制、分享并获取反馈所需的一切功能",
 			items: [
 				{
-					title: "Instant Shareable Links",
-					description:
-						"Share your recording immediately with a link. Your audience can watch instantly in any browser.",
+					title: "即时分享链接",
+					description: "通过链接立即分享录像，观看者可在任意浏览器中即时播放。",
 					icon: "share",
 				},
 				{
-					title: "Upload During Recording",
+					title: "录制时同步上传",
 					description:
-						"Your recording uploads in the background while you record, so there's no export time when you finish. Get your shareable link instantly.",
+						"录制过程中在后台同步上传，结束后无需等待导出，即刻获得分享链接。",
 					icon: "upload",
 				},
 				{
-					title: "Automatic Transcriptions",
+					title: "自动转写",
 					description:
-						"Every recording gets accurate AI-generated transcriptions for accessibility, searchability, and easy reference.",
+						"AI 为每段录像生成准确文字稿，便于无障碍访问、搜索和查阅。",
 					icon: "transcript",
 				},
 				{
-					title: "Collaborative Comments",
+					title: "协作评论",
 					description:
-						"Get contextual feedback with timestamp-linked comments. Create threaded discussions around specific moments in your recording.",
+						"通过关联时间戳的评论获取上下文反馈，并围绕录像中的具体时刻展开讨论。",
 					icon: "comments",
 				},
 				{
-					title: "Team Workspaces",
+					title: "团队工作区",
 					description:
-						"Organize recordings by project, team, or client. Share access with team members and maintain organized collaboration spaces.",
+						"按项目、团队或客户整理录像，与成员共享访问权限，保持协作空间井然有序。",
 					icon: "workspace",
 				},
 				{
-					title: "Real-time Notifications",
+					title: "实时通知",
 					description:
-						"Get notified instantly when someone views, comments, or interacts with your recordings. Stay in the loop without checking back.",
+						"有人观看、评论或与录像互动时立即收到通知，无需反复查看也能掌握动态。",
 					icon: "bell",
 				},
 				{
-					title: "Browser-Based Viewing",
+					title: "浏览器观看",
 					description:
-						"No downloads required for viewers. Recordings play instantly in any modern browser with adaptive streaming for any connection.",
+						"观看者无需下载。录像可在任意现代浏览器中即时播放，并根据网络自适应串流。",
 					icon: "browser",
 				},
 				{
-					title: "Quick Recording Setup",
+					title: "快速开始录制",
 					description:
-						"Start recording in one click. No complex settings or configuration - just click record and Cap handles the rest automatically.",
+						"一键开始录制，无需复杂设置；点击录制，其余工作由 Cap 自动完成。",
 					icon: "record",
 				},
 			],
 		},
 		useCases: {
-			title: "Perfect for Fast-Moving Teams",
-			description:
-				"Instant Mode powers quick communication and rapid feedback cycles",
+			title: "适合快速推进的团队",
+			description: "即时模式助力快速沟通和高效反馈循环",
 			cases: [
 				{
-					title: "Bug Reports & Support",
+					title: "错误报告与支持",
 					description:
-						"Show instead of tell. Record the issue, share instantly, and get faster resolutions with visual context.",
+						"用画面代替描述。录下问题并立即分享，通过直观上下文更快解决。",
 					benefits: [
-						"Visual bug documentation",
-						"Instant sharing with support",
-						"Collaborative troubleshooting",
-						"Faster resolution times",
+						"可视化错误记录",
+						"即时与支持人员分享",
+						"协作排查问题",
+						"更快解决问题",
 					],
 				},
 				{
-					title: "Quick Updates & Standups",
+					title: "快速更新与站会",
 					description:
-						"Replace long meetings with quick video updates. Share progress, blockers, and next steps asynchronously.",
+						"用简短视频更新代替冗长会议，异步分享进展、阻碍和下一步计划。",
 					benefits: [
-						"Async communication",
-						"Visual progress updates",
-						"Time zone friendly",
-						"Searchable history",
+						"异步沟通",
+						"可视化进展更新",
+						"跨时区友好",
+						"可搜索的历史记录",
 					],
 				},
 				{
-					title: "Design & Product Feedback",
+					title: "设计与产品反馈",
 					description:
-						"Get specific feedback on designs, prototypes, and product features with contextual comments and timestamps.",
+						"通过上下文评论和时间戳，获取针对设计、原型和产品功能的具体反馈。",
+					benefits: ["时间戳评论", "设计协作", "版本跟踪", "利益相关者评审"],
+				},
+				{
+					title: "客户沟通",
+					description:
+						"通过快速进展视频让客户随时了解情况，无需安排会议即可收集反馈。",
 					benefits: [
-						"Timestamp comments",
-						"Design collaboration",
-						"Version tracking",
-						"Stakeholder reviews",
+						"客户信息透明",
+						"可视化进展报告",
+						"轻松收集反馈",
+						"专业展示",
 					],
 				},
 				{
-					title: "Client Communication",
-					description:
-						"Keep clients in the loop with quick progress videos and gather feedback without scheduling meetings.",
-					benefits: [
-						"Client transparency",
-						"Visual progress reports",
-						"Easy feedback collection",
-						"Professional presentation",
-					],
+					title: "知识分享",
+					description: "快速记录流程、分享知识，并为团队创建可搜索的视频库。",
+					benefits: ["快速编写文档", "可搜索内容", "团队知识库", "轻松入职"],
 				},
 				{
-					title: "Knowledge Sharing",
+					title: "代码评审与演示",
 					description:
-						"Quickly document processes, share knowledge, and create searchable video libraries for your team.",
-					benefits: [
-						"Quick documentation",
-						"Searchable content",
-						"Team knowledge base",
-						"Easy onboarding",
-					],
-				},
-				{
-					title: "Code Reviews & Demos",
-					description:
-						"Walk through code changes, demo features, and explain complex logic with screen recordings and live feedback.",
-					benefits: [
-						"Visual code walkthroughs",
-						"Feature demonstrations",
-						"Live feedback loops",
-						"Async reviews",
-					],
+						"通过屏幕录像讲解代码变更、演示功能和复杂逻辑，并获得实时反馈。",
+					benefits: ["可视化代码讲解", "功能演示", "实时反馈循环", "异步评审"],
 				},
 			],
 		},
 		comparison: {
-			title: "Instant Mode vs Studio Mode",
-			description: "Choose the right recording mode for your workflow",
+			title: "即时模式与工作室模式",
+			description: "为工作流选择合适的录制模式",
 			modes: [
 				{
-					name: "Instant Mode",
-					description: "For quick sharing & collaboration",
+					name: "即时模式",
+					description: "适合快速分享与协作",
 					features: [
-						"Instant shareable links",
-						"Upload during recording",
-						"Quick turnaround",
-						"Automatic transcriptions",
-						"Comment & feedback tools",
-						"Team collaboration",
-						"5-minute free recordings*",
-						"Browser-based viewing",
+						"即时分享链接",
+						"录制时同步上传",
+						"快速完成",
+						"自动转写",
+						"评论和反馈工具",
+						"团队协作",
+						"免费录制 5 分钟*",
+						"浏览器观看",
 					],
-					bestFor: "Quick updates, feedback, team communication",
+					bestFor: "快速更新、反馈和团队沟通",
 					isPrimary: true,
 				},
 				{
-					name: "Studio Mode",
-					description: "For professional content creation",
+					name: "工作室模式",
+					description: "适合专业内容创作",
 					features: [
-						"Local recording & processing",
-						"4K 60fps quality",
-						"Professional timeline editor",
-						"Custom backgrounds & branding",
-						"MP4, GIF, and link exports",
-						"Advanced audio controls",
-						"Unlimited recording length",
-						"Complete privacy control",
+						"本地录制与处理",
+						"4K 60 帧画质",
+						"专业时间轴编辑器",
+						"自定义背景与品牌",
+						"导出 MP4、GIF 和链接",
+						"高级音频控制",
+						"不限录制时长",
+						"完整隐私控制",
 					],
-					bestFor: "Tutorials, courses, product demos, professional content",
+					bestFor: "教程、课程、产品演示和专业内容",
 					isPrimary: false,
 				},
 			],
 		},
 		workflow: {
-			title: "From Recording to Feedback in Seconds",
-			description:
-				"Instant Mode is designed for speed - get from idea to feedback as fast as possible",
+			title: "数秒内从录制到反馈",
+			description: "即时模式为速度而生，让想法尽快转化为反馈",
 			steps: [
 				{
-					title: "One-Click Recording",
-					description:
-						"Open Cap, click record, and start capturing your screen instantly. No setup, no configuration required.",
+					title: "一键录制",
+					description: "打开 Cap，点击录制即可捕捉屏幕，无需设置或配置。",
 					icon: "play",
 				},
 				{
-					title: "Background Upload",
+					title: "后台上传",
 					description:
-						"While you record, Cap uploads your video in the background. Transcriptions and sharing links are generated automatically.",
+						"录制时 Cap 会在后台上传视频，并自动生成文字稿和分享链接。",
 					icon: "upload",
 				},
 				{
-					title: "Instant Sharing",
+					title: "即时分享",
 					description:
-						"Get a shareable link immediately when recording stops. Copy, paste, and your team can watch instantly in any browser.",
+						"停止录制后立即获得分享链接，复制粘贴后团队即可在浏览器中观看。",
 					icon: "link",
 				},
 				{
-					title: "Real-time Collaboration",
+					title: "实时协作",
 					description:
-						"Receive comments, feedback, and notifications in real-time. Keep the conversation moving with timestamp-linked discussions.",
+						"实时接收评论、反馈和通知，通过关联时间戳的讨论持续推进沟通。",
 					icon: "comments",
 				},
 			],
 		},
 		faq: {
-			title: "Frequently Asked Questions",
+			title: "常见问题",
 			items: [
 				{
-					question:
-						"What's the difference between Instant Mode and Studio Mode?",
+					question: "即时模式和工作室模式有什么区别？",
 					answer:
-						"Instant Mode is cloud-powered for quick sharing and collaboration, while Studio Mode records locally for professional editing. Choose Instant Mode for fast team communication and Studio Mode for polished content creation.",
+						"即时模式由云端驱动，适合快速分享和协作；工作室模式在本地录制，适合专业编辑。快速团队沟通请选择即时模式，精致内容创作请选择工作室模式。",
 				},
 				{
-					question: "How long can I record for free in Instant Mode?",
+					question: "即时模式可以免费录制多长时间？",
 					answer:
-						"Free accounts can record up to 5 minutes per recording in Instant Mode. Upgrade to Cap Pro for unlimited recording length, unlimited storage, and advanced collaboration features.",
+						"免费账户使用即时模式时，每次最长可录制 5 分钟。升级 Cap 专业版可解锁不限录制时长、无限存储和高级协作功能。",
 				},
 				{
-					question: "Are my recordings secure in Instant Mode?",
+					question: "即时模式中的录像安全吗？",
 					answer:
-						"Yes, all recordings are encrypted in transit and at rest. You control who has access to your recordings, and you can delete them anytime. Cap Pro includes additional security features like password protection.",
+						"安全。所有录像在传输和静态存储时都会加密。你可以控制访问权限并随时删除录像，Cap 专业版还提供密码保护等额外安全功能。",
 				},
 				{
-					question: "Can viewers download my recordings?",
+					question: "观看者可以下载我的录像吗？",
 					answer:
-						"By default, viewers can only watch recordings in the browser. Cap Pro allows you to control download permissions and add password protection for sensitive content.",
+						"默认情况下，观看者只能在浏览器中观看。Cap 专业版允许控制下载权限，并为敏感内容添加密码保护。",
 				},
 				{
-					question: "How fast are recordings processed?",
+					question: "录像处理速度有多快？",
 					answer:
-						"Most recordings are processed and ready to share within seconds of stopping the recording. Processing time depends on recording length and current system load.",
+						"大多数录像会在停止录制后的数秒内处理完毕并可分享，具体时间取决于录像长度和当前系统负载。",
 				},
 				{
-					question: "Can I use Instant Mode offline?",
+					question: "即时模式可以离线使用吗？",
 					answer:
-						"Instant Mode requires an internet connection for cloud processing and sharing. For offline recording, use Studio Mode which works completely locally.",
+						"即时模式需要联网进行云端处理和分享。离线录制请使用完全在本地工作的工作室模式。",
 				},
 				{
-					question: "What happens to my recordings if I upgrade to Cap Pro?",
+					question: "升级到 Cap 专业版后，现有录像会怎样？",
 					answer:
-						"All existing recordings remain accessible, and you unlock unlimited recording length, advanced collaboration features, team workspaces, viewer analytics, and priority support.",
+						"所有现有录像仍可访问，同时会解锁不限录制时长、高级协作、团队工作区、观看分析和优先支持。",
 				},
 				{
-					question: "Can I edit recordings made in Instant Mode?",
+					question: "可以编辑即时模式创建的录像吗？",
 					answer:
-						"Basic editing like trimming is available for all recordings. Cap Pro includes advanced editing features and the ability to download recordings for external editing.",
+						"所有录像都支持修剪等基本编辑。Cap 专业版还提供高级编辑功能，并可下载录像交由外部工具编辑。",
 				},
 			],
 		},
 		video: {
-			title: "See Instant Mode in Action",
+			title: "观看即时模式演示",
 			iframe: {
 				src: "https://cap.so/embed/8cq21vmz12tm1zf",
-				title: "See Instant Mode in Action - Cap Screen Recording",
+				title: "观看即时模式演示 - Cap 屏幕录制",
 			},
 		},
 		cta: {
-			title: "Start Recording and Sharing Instantly",
+			title: "立即开始录制和分享",
 			description:
-				"Join thousands of teams using Cap Instant Mode for faster communication and better collaboration. Get started free, upgrade for unlimited features.",
-			primaryButton: "Download for Free",
-			secondaryButton: "Upgrade to Cap Pro",
+				"加入数千个使用 Cap 即时模式实现更快沟通和更好协作的团队。免费开始使用，升级即可解锁无限功能。",
+			primaryButton: "免费下载",
+			secondaryButton: "升级到 Cap 专业版",
 		},
 	},
 	customSections: {

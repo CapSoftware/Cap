@@ -22,11 +22,11 @@ export const AccessEmailDomain = () => {
 				organizationId: activeOrganization?.organization
 					.id as Organisation.OrganisationId,
 			});
-			toast.success("Settings updated successfully");
+			toast.success("设置已更新");
 			router.refresh();
 		} catch (error) {
 			console.error("Error updating settings:", error);
-			toast.error("An error occurred while updating settings");
+			toast.error("更新设置时发生错误");
 		} finally {
 			setSaveLoading(false);
 		}
@@ -35,31 +35,29 @@ export const AccessEmailDomain = () => {
 	return (
 		<div className="flex-1 space-y-4">
 			<div className="space-y-1">
-				<Label htmlFor="allowedEmailDomain">Email access restriction</Label>
+				<Label htmlFor="allowedEmailDomain">邮箱访问限制</Label>
 				<p className="text-sm text-gray-10">
-					Restrict who can access public "anyone with the link" videos. Add
-					email domains (e.g.{" "}
+					限制可访问“任何获得链接的人”公开视频的用户。添加邮箱域名（例如{" "}
 					<code className="text-xs bg-gray-3 px-1 py-0.5 rounded">
 						company.com
 					</code>
-					) or specific email addresses (e.g.{" "}
+					）或指定邮箱地址（例如{" "}
 					<code className="text-xs bg-gray-3 px-1 py-0.5 rounded">
 						larry@google.com
 					</code>
-					), separated by commas.
+					），多个值请用逗号分隔。
 				</p>
 				<p className="text-sm text-gray-10">
-					Members of your organization and spaces can always access videos
-					shared with them, regardless of this setting.{" "}
+					无论此项如何设置，组织和空间成员始终可以访问与他们共享的视频。{" "}
 					<span className="font-medium text-gray-11">
-						Leave blank to allow anyone with the link.
+						留空则允许任何获得链接的人访问。
 					</span>
 				</p>
 			</div>
 			<div className="flex flex-col gap-3 w-full h-fit">
 				<textarea
 					className="flex px-4 py-3 w-full font-thin transition-all duration-200 text-[16px] md:text-[13px] text-gray-12 bg-gray-1 border-gray-4 outline-0 focus:bg-gray-2 rounded-xl hover:bg-gray-2 border-[1px] focus:border-gray-5 placeholder:text-gray-8 ring-0 ring-gray-2 focus:ring-1 focus:ring-gray-12 focus:ring-offset-2 ring-offset-gray-3 hover:placeholder:text-gray-12 placeholder:duration-200 min-h-[72px] resize-y"
-					placeholder="e.g. company.com, partner.org, larry@google.com"
+					placeholder="例如 company.com、partner.org、larry@google.com"
 					value={emailDomain || ""}
 					id="allowedEmailDomain"
 					name="allowedEmailDomain"
@@ -81,7 +79,7 @@ export const AccessEmailDomain = () => {
 						}
 						onClick={handleEmailDomainSave}
 					>
-						{saveLoading ? null : "Save"}
+						{saveLoading ? null : "保存"}
 					</Button>
 				</div>
 			</div>

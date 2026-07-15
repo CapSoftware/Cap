@@ -44,18 +44,15 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
 				<CapAIArt className="w-full max-w-[450px] mx-auto h-[240px]" />
 				<div className="pt-5 space-y-4">
 					<p className="text-base text-gray-11">
-						Cap AI automatically processes your recordings to make them more
-						useful and accessible.
+						Cap AI 会自动处理你的录制内容，让其更实用、更易于访问。
 					</p>
-					<h4 className="text-sm font-medium text-gray-12">
-						Features include:
-					</h4>
+					<h4 className="text-sm font-medium text-gray-12">功能包括：</h4>
 					<ul className="flex flex-wrap gap-2 text-sm text-gray-12">
 						{[
-							"Auto-generated titles",
-							"Recording summaries",
-							"Clickable chapters",
-							"Automatic transcriptions",
+							"自动生成标题",
+							"录制内容摘要",
+							"可点击的章节",
+							"自动生成文字稿",
 						].map((feature) => (
 							<li
 								key={feature}
@@ -80,7 +77,7 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
 							variant="gray"
 							onClick={() => setOpen(false)}
 						>
-							Close
+							关闭
 						</Button>
 						<Button
 							autoFocus={false}
@@ -91,7 +88,7 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
 								setUpgradeModalOpen(true);
 							}}
 						>
-							Upgrade to Pro
+							升级到 Pro
 						</Button>
 					</div>
 				) : (
@@ -101,7 +98,7 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
 						variant="primary"
 						onClick={() => setOpen(false)}
 					>
-						Close
+						关闭
 					</Button>
 				)}
 			</DialogFooter>
