@@ -190,6 +190,13 @@ function resolveResourceUrl(
 	return withQuery(new URL(resource, baseUrl).toString(), query);
 }
 
+function getFetchSignal(timeoutMs: number, abortSignal?: AbortSignal) {
+	const timeoutSignal = AbortSignal.timeout(timeoutMs);
+	return abortSignal
+		? AbortSignal.any([abortSignal, timeoutSignal])
+		: timeoutSignal;
+}
+
 function redactUrl(value: string): string {
 	try {
 		const url = new URL(value);
@@ -227,12 +234,13 @@ export async function materializeHlsPlaylist(
 	playlistUrl: string,
 	dirPath: string,
 	cache = new Map<string, string>(),
+	abortSignal?: AbortSignal,
 ): Promise<string> {
 	const cached = cache.get(playlistUrl);
 	if (cached) return cached;
 
 	const response = await fetch(playlistUrl, {
-		signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
 	});
 
 	if (!response.ok) {
@@ -258,7 +266,7 @@ export async function materializeHlsPlaylist(
 			if (!trimmed.startsWith("#")) {
 				const resolved = resolveResourceUrl(trimmed, baseUrl, query);
 				return isHlsUrl(resolved)
-					? await materializeHlsPlaylist(resolved, dirPath, cache)
+					? await materializeHlsPlaylist(resolved, dirPath, cache, abortSignal)
 					: resolved;
 			}
 
@@ -273,7 +281,7 @@ export async function materializeHlsPlaylist(
 
 				const resolved = resolveResourceUrl(original, baseUrl, query);
 				const replacement = isHlsUrl(resolved)
-					? await materializeHlsPlaylist(resolved, dirPath, cache)
+					? await materializeHlsPlaylist(resolved, dirPath, cache, abortSignal)
 					: resolved;
 
 				rewritten = rewritten.replace(
@@ -293,9 +301,10 @@ export async function materializeHlsPlaylist(
 export async function materializeMpdManifest(
 	manifestUrl: string,
 	dirPath: string,
+	abortSignal?: AbortSignal,
 ): Promise<string> {
 	const response = await fetch(manifestUrl, {
-		signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
 	});
 
 	if (!response.ok) {
@@ -656,9 +665,10 @@ function shouldFallbackToGenericMpd(error: unknown): boolean {
 export async function materializeMpdAsHlsPlaylist(
 	manifestUrl: string,
 	dirPath: string,
+	abortSignal?: AbortSignal,
 ): Promise<string> {
 	const response = await fetch(manifestUrl, {
-		signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
 	});
 
 	if (!response.ok) {
@@ -821,17 +831,23 @@ export async function materializeMpdAsHlsPlaylist(
 export async function materializeStreamingInput(
 	videoUrl: string,
 	dirPath: string,
+	abortSignal?: AbortSignal,
 ): Promise<string> {
 	if (isHlsUrl(videoUrl)) {
-		return await materializeHlsPlaylist(videoUrl, dirPath);
+		return await materializeHlsPlaylist(
+			videoUrl,
+			dirPath,
+			undefined,
+			abortSignal,
+		);
 	}
 
 	if (isMpdUrl(videoUrl)) {
 		try {
-			return await materializeMpdAsHlsPlaylist(videoUrl, dirPath);
+			return await materializeMpdAsHlsPlaylist(videoUrl, dirPath, abortSignal);
 		} catch (err) {
 			if (!shouldFallbackToGenericMpd(err)) throw err;
-			return await materializeMpdManifest(videoUrl, dirPath);
+			return await materializeMpdManifest(videoUrl, dirPath, abortSignal);
 		}
 	}
 
@@ -996,7 +1012,11 @@ async function downloadStreamingVideoToTemp(
 	};
 
 	try {
-		const inputPath = await materializeStreamingInput(videoUrl, manifestDir);
+		const inputPath = await materializeStreamingInput(
+			videoUrl,
+			manifestDir,
+			abortSignal,
+		);
 
 		await runFfmpegCommand(
 			buildStreamingDownloadFfmpegArgs(inputPath, tempFile.path),
@@ -1761,7 +1781,7 @@ async function uploadWithRetry(
 	presignedUrl: string,
 	contentType: string,
 	contentLength: number,
-	bodyFactory: () => Blob | Uint8Array | ArrayBuffer | BunFile,
+	bodyFactory: () => Blob | BunFile,
 ): Promise<void> {
 	let lastError: Error | undefined;
 
