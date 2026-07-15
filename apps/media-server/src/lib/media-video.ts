@@ -336,7 +336,11 @@ export async function materializeMpdManifest(
 	const rewritten = rewrittenElements.replace(
 		/(initialization|media|sourceURL|xlink:href|href)="([^"]+)"/gi,
 		(_, attribute: string, resource: string) => {
-			const resolved = resolveResourceUrl(resource, baseUrl, query);
+			const resolved = resolveResourceUrl(
+				decodeXmlAttribute(resource),
+				baseUrl,
+				query,
+			);
 			return `${attribute}="${escapeXmlAttribute(resolved)}"`;
 		},
 	);

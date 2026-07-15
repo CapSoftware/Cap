@@ -239,7 +239,7 @@ describe("processVideo integration tests", () => {
 
 		globalThis.fetch = (async () =>
 			new Response(
-				'<MPD><Period><AdaptationSet><Representation><SegmentTemplate initialization="init.mp4" media="chunk-$Number$.m4s"/></Representation></AdaptationSet></Period></MPD>',
+				'<MPD><Period><AdaptationSet><Representation><SegmentTemplate initialization="init.mp4" media="chunk-$Number$.m4s"/><Initialization sourceURL="escaped.mp4?part=1&amp;token=x"/></Representation></AdaptationSet></Period></MPD>',
 				{ status: 200, statusText: "OK" },
 			)) as unknown as typeof fetch;
 
@@ -256,6 +256,8 @@ describe("processVideo integration tests", () => {
 			expect(content).toContain(
 				"chunk-$Number$.m4s?Policy=a&amp;Signature=b&amp;Key-Pair-Id=c",
 			);
+			expect(content).toContain("escaped.mp4?part=1&amp;token=x");
+			expect(content).not.toContain("&amp;amp;");
 		} finally {
 			globalThis.fetch = originalFetch;
 			rmSync(manifestDir, { recursive: true, force: true });
