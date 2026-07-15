@@ -16,5 +16,9 @@ describe("GET /health", () => {
 		expect(typeof data.system.containerMemoryLimitMB).toBe("number");
 		expect(typeof data.system.memoryPressure).toBe("number");
 		expect(typeof data.system.processRssMB).toBe("number");
+		expect(typeof data.system.totalMemoryMB).toBe("number");
+		expect(typeof data.system.freeMemoryMB).toBe("number");
+		expect(typeof data.system.memoryUsagePercent).toBe("number");
+		expect(typeof data.system.uptimeSeconds).toBe("number");
 	});
 });

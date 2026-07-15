@@ -7,7 +7,12 @@ const health = new Hono();
 
 health.get("/", (c) => {
 	const mediaEngine = getMediaEngineStatus();
-	const loadAvg = os.loadavg();
+	const [, loadAvg5m, loadAvg15m] = os.loadavg();
+	const totalMemoryMB = Math.round(os.totalmem() / (1024 * 1024));
+	const freeMemoryMB = Math.round(os.freemem() / (1024 * 1024));
+	const memoryUsagePercent = Math.round(
+		(1 - os.freemem() / os.totalmem()) * 100,
+	);
 	const resources = getSystemResources();
 
 	return c.json({
@@ -20,10 +25,12 @@ health.get("/", (c) => {
 		},
 		system: {
 			...resources,
-			loadAvg1m: loadAvg[0],
-			loadAvg5m: loadAvg[1],
-			loadAvg15m: loadAvg[2],
-			uptimeSeconds: Math.round(process.uptime()),
+			loadAvg5m,
+			loadAvg15m,
+			totalMemoryMB,
+			freeMemoryMB,
+			memoryUsagePercent,
+			uptimeSeconds: Math.round(os.uptime()),
 		},
 	});
 });
