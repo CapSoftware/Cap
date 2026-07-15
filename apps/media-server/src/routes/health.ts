@@ -8,10 +8,12 @@ const health = new Hono();
 health.get("/", (c) => {
 	const mediaEngine = getMediaEngineStatus();
 	const [, loadAvg5m, loadAvg15m] = os.loadavg();
-	const totalMemoryMB = Math.round(os.totalmem() / (1024 * 1024));
-	const freeMemoryMB = Math.round(os.freemem() / (1024 * 1024));
+	const totalMemoryBytes = os.totalmem();
+	const freeMemoryBytes = os.freemem();
+	const totalMemoryMB = Math.round(totalMemoryBytes / (1024 * 1024));
+	const freeMemoryMB = Math.round(freeMemoryBytes / (1024 * 1024));
 	const memoryUsagePercent = Math.round(
-		(1 - os.freemem() / os.totalmem()) * 100,
+		(1 - freeMemoryBytes / totalMemoryBytes) * 100,
 	);
 	const resources = getSystemResources();
 
