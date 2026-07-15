@@ -1742,7 +1742,6 @@ async function downloadUrlToFileOnce(
 	const writer = file(destPath).writer();
 	let lastMemoryCheckAt = 0;
 	let failure: unknown;
-	let completed = false;
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
@@ -1756,20 +1755,23 @@ async function downloadUrlToFileOnce(
 				}
 			}
 		}
-		completed = true;
 	} catch (error) {
 		failure = error;
 		abortController.abort();
 		await reader.cancel().catch(() => {});
 	} finally {
 		reader.releaseLock();
-		await writer.end();
+		try {
+			await writer.end();
+		} catch (error) {
+			failure ??= error;
+		}
 	}
 
-	if (!completed) {
+	if (failure !== undefined) {
 		const { rm } = await import("node:fs/promises");
 		await rm(destPath, { force: true }).catch(() => {});
-		throw failure ?? new Error("Download failed while streaming response body");
+		throw failure;
 	}
 }
 
@@ -1819,12 +1821,13 @@ async function downloadSegmentsBatchTracked(
 	const indexWidth = Math.max(3, String(total).length);
 	const outputPaths = new Array<string>(total);
 	const pending = [...urls.entries()];
+	let pendingIndex = 0;
 	const batchAbortController = new AbortController();
 	const CONCURRENCY = 10;
 
 	async function worker() {
-		while (pending.length > 0 && !fatalError) {
-			const entry = pending.shift();
+		while (pendingIndex < pending.length && !fatalError) {
+			const entry = pending[pendingIndex++];
 			if (!entry) break;
 			const [i, url] = entry;
 			try {
@@ -1837,7 +1840,7 @@ async function downloadSegmentsBatchTracked(
 			} catch (err) {
 				if (!fatalError) {
 					fatalError = err instanceof Error ? err : new Error(String(err));
-					pending.length = 0;
+					pendingIndex = pending.length;
 					batchAbortController.abort();
 					console.error(
 						`[mux-segments] Failed to download segment ${i + 1}/${total}:`,
