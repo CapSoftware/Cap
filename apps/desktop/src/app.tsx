@@ -84,6 +84,7 @@ const TargetSelectOverlayPage = lazy(
 const WindowCaptureOccluderPage = lazy(
 	() => import("./routes/window-capture-occluder"),
 );
+const TeleprompterPage = lazy(() => import("./routes/teleprompter"));
 
 const queryClient = new QueryClient({
 	defaultOptions: {
@@ -219,6 +220,11 @@ function Inner() {
 					<Route
 						path="/window-capture-occluder"
 						component={WindowCaptureOccluderPage}
+					/>
+					<Route
+						path="/teleprompter"
+						info={{ AUTO_SHOW_WINDOW: false }}
+						component={TeleprompterPage}
 					/>
 				</Router>
 			</CapErrorBoundary>

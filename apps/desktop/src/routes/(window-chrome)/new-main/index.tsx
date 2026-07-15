@@ -77,6 +77,7 @@ import {
 	type UpdateCheckResult,
 	type UploadProgress,
 } from "~/utils/tauri";
+import { openTeleprompter } from "~/utils/teleprompter";
 import IconCapLogoFull from "~icons/cap/logo-full";
 import IconCapLogoFullDark from "~icons/cap/logo-full-dark";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
@@ -85,6 +86,7 @@ import IconLucideBug from "~icons/lucide/bug";
 import IconLucideCircleHelp from "~icons/lucide/circle-help";
 import IconLucideImage from "~icons/lucide/image";
 import IconLucideImport from "~icons/lucide/import";
+import IconLucideScanText from "~icons/lucide/scan-text";
 import IconLucideSearch from "~icons/lucide/search";
 import IconLucideSettings from "~icons/lucide/settings";
 import IconLucideSquarePlay from "~icons/lucide/square-play";
@@ -2775,6 +2777,16 @@ function Page() {
 								class="flex justify-center items-center size-5 focus:outline-hidden"
 							>
 								<IconLucideSquarePlay class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
+							</button>
+						</Tooltip>
+						<Tooltip content={<span>Teleprompter</span>}>
+							<button
+								type="button"
+								onClick={() => void openTeleprompter()}
+								class="flex justify-center items-center size-5 focus:outline-hidden"
+								aria-label="Open teleprompter"
+							>
+								<IconLucideScanText class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
 						<ChangelogButton />
