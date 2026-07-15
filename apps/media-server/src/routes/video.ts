@@ -1715,13 +1715,14 @@ function isRetryableDownloadStatus(status: number): boolean {
 async function downloadUrlToFileOnce(
 	url: string,
 	destPath: string,
+	abortSignal?: AbortSignal,
 ): Promise<void> {
 	const abortController = new AbortController();
+	const timeoutSignal = AbortSignal.timeout(120_000);
 	const resp = await fetch(url, {
-		signal: AbortSignal.any([
-			abortController.signal,
-			AbortSignal.timeout(120_000),
-		]),
+		signal: abortSignal
+			? AbortSignal.any([abortController.signal, abortSignal, timeoutSignal])
+			: AbortSignal.any([abortController.signal, timeoutSignal]),
 	});
 	if (!resp.ok) {
 		await resp.body?.cancel().catch(() => {});
@@ -1772,14 +1773,20 @@ async function downloadUrlToFileOnce(
 	}
 }
 
-async function downloadUrlToFile(url: string, destPath: string): Promise<void> {
+async function downloadUrlToFile(
+	url: string,
+	destPath: string,
+	abortSignal?: AbortSignal,
+): Promise<void> {
 	let lastError: Error | undefined;
 
 	for (let attempt = 0; attempt < SEGMENT_DOWNLOAD_MAX_ATTEMPTS; attempt++) {
+		abortSignal?.throwIfAborted();
 		try {
-			await downloadUrlToFileOnce(url, destPath);
+			await downloadUrlToFileOnce(url, destPath, abortSignal);
 			return;
 		} catch (error) {
+			if (abortSignal?.aborted) throw error;
 			if (isBusyError(error)) throw error;
 
 			const downloadError =
@@ -1812,6 +1819,7 @@ async function downloadSegmentsBatchTracked(
 	const indexWidth = Math.max(3, String(total).length);
 	const outputPaths = new Array<string>(total);
 	const pending = [...urls.entries()];
+	const batchAbortController = new AbortController();
 	const CONCURRENCY = 10;
 
 	async function worker() {
@@ -1825,14 +1833,17 @@ async function downloadSegmentsBatchTracked(
 					`segment_${String(i + 1).padStart(indexWidth, "0")}.m4s`,
 				);
 				outputPaths[i] = outputPath;
-				await downloadUrlToFile(url, outputPath);
+				await downloadUrlToFile(url, outputPath, batchAbortController.signal);
 			} catch (err) {
-				fatalError = err instanceof Error ? err : new Error(String(err));
-				pending.length = 0;
-				console.error(
-					`[mux-segments] Failed to download segment ${i + 1}/${total}:`,
-					err instanceof Error ? err.message : err,
-				);
+				if (!fatalError) {
+					fatalError = err instanceof Error ? err : new Error(String(err));
+					pending.length = 0;
+					batchAbortController.abort();
+					console.error(
+						`[mux-segments] Failed to download segment ${i + 1}/${total}:`,
+						err instanceof Error ? err.message : err,
+					);
+				}
 				break;
 			}
 			completed++;

@@ -35,6 +35,7 @@ let tempDir = "";
 const uploadedArtifacts = new Map<string, Uint8Array>();
 let transientFixtureFailures = 0;
 let permanentFixtureFailures = 0;
+let slowFixtureCancellations = 0;
 
 function fileUrl(path: string) {
 	return pathToFileURL(path).toString();
@@ -143,6 +144,18 @@ beforeAll(async () => {
 				if (url.pathname === "/fixtures/permanent-unavailable.m4s") {
 					permanentFixtureFailures++;
 					return new Response("Unavailable", { status: 503 });
+				}
+				if (url.pathname === "/fixtures/slow-segment.m4s") {
+					return new Response(
+						new ReadableStream({
+							start(controller) {
+								controller.enqueue(new Uint8Array(1024));
+							},
+							cancel() {
+								slowFixtureCancellations++;
+							},
+						}),
+					);
 				}
 				if (
 					request.method === "GET" &&
@@ -374,7 +387,10 @@ describe("media routes real-world integration tests", () => {
 				userId: "failed-segment-mux-user",
 				outputPresignedUrl: uploadUrl("failed-segment-output.mp4"),
 				videoInitUrl: fixtureUrl("test-no-audio.mp4"),
-				videoSegmentUrls: [`${baseUrl}/fixtures/permanent-unavailable.m4s`],
+				videoSegmentUrls: [
+					`${baseUrl}/fixtures/permanent-unavailable.m4s`,
+					`${baseUrl}/fixtures/slow-segment.m4s`,
+				],
 			}),
 		);
 
@@ -385,6 +401,7 @@ describe("media routes real-world integration tests", () => {
 			expect(job.phase).toBe("error");
 			expect(job.error).toContain("503");
 			expect(permanentFixtureFailures).toBe(3);
+			expect(slowFixtureCancellations).toBe(1);
 			expect(uploadedArtifacts.has("/uploads/failed-segment-output.mp4")).toBe(
 				false,
 			);
