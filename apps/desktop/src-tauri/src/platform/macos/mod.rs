@@ -6,21 +6,6 @@ use objc2_app_kit::NSWindow;
 pub use sc_shareable_content::*;
 use tauri::WebviewWindow;
 
-pub fn set_window_opacity(window: tauri::Window, opacity: f64) {
-    let opacity = opacity.clamp(0.45, 1.0);
-    let c_window = window.clone();
-    _ = window.run_on_main_thread(move || unsafe {
-        use cocoa::base::id;
-        use objc::{msg_send, sel, sel_impl};
-
-        let Ok(ns_win) = c_window.ns_window() else {
-            return;
-        };
-        let ns_win = ns_win as id;
-        let _: () = msg_send![ns_win, setAlphaValue: opacity];
-    });
-}
-
 pub fn apply_squircle_corners(window: &tauri::WebviewWindow, radius: f64) {
     use cocoa::base::{id, nil};
     use cocoa::foundation::NSString;
