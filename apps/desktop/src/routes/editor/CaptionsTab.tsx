@@ -42,6 +42,7 @@ import {
 	mapEditedTimeToSource,
 	PARAKEET_DIR_MODELS,
 	resolveCaptionModel,
+	segmentCaptionsForShortForm,
 	sourceCaptionId,
 	supportsParakeetTranscription,
 	syncCaptionWordsWithText,
@@ -86,32 +87,32 @@ const MODEL_DOWNLOAD_STATUS_POLL_MS = 1000;
 
 const MODEL_OPTIONS: ModelOption[] = [
 	{
-		name: "best",
-		label: "Recommended",
-		modelName: "parakeet-tdt-0.6b-v3 int8",
-		size: "~640MB",
-		description: "Best balance for most recordings",
-	},
-	{
-		name: "best-max",
-		label: "High Accuracy",
-		modelName: "parakeet-tdt-0.6b-v3",
-		size: "~2.4GB",
-		description: "Larger download, higher accuracy",
-	},
-	{
 		name: "small",
 		modelName: "whisper.cpp small",
-		label: "Small",
+		label: "Chinese / Multilingual",
 		size: "466MB",
-		description: "Smallest download",
+		description: "Recommended local model for Chinese captions",
 	},
 	{
 		name: "medium",
 		modelName: "whisper.cpp medium",
-		label: "Medium",
+		label: "Chinese High Accuracy",
 		size: "1.5GB",
-		description: "Slower, more accurate",
+		description: "Slower, more accurate local Chinese transcription",
+	},
+	{
+		name: "best",
+		label: "Fast (Experimental)",
+		modelName: "parakeet-tdt-0.6b-v3 int8",
+		size: "~640MB",
+		description: "Fast local transcription; not the default for Chinese",
+	},
+	{
+		name: "best-max",
+		label: "Fast High Accuracy (Experimental)",
+		modelName: "parakeet-tdt-0.6b-v3",
+		size: "~2.4GB",
+		description: "Larger Parakeet model; not the default for Chinese",
 	},
 ];
 
@@ -723,7 +724,7 @@ export function CaptionsTab(props: {
 					produce((p) => {
 						applyCaptionResultToProject(
 							p,
-							result.segments,
+							segmentCaptionsForShortForm(result.segments),
 							editorInstance.recordings.segments,
 							editorInstance.recordingDuration,
 						);

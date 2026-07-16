@@ -11,8 +11,12 @@ import {
 	type SegmentRecordings,
 	type TimelineSegment,
 } from "~/utils/tauri";
-export const DEFAULT_CAPTION_MODEL = "best";
+
+export { segmentCaptionsForShortForm } from "./short-form-captions";
 export const DEFAULT_WHISPER_CAPTION_MODEL = "small";
+// This product is local-first and Chinese-first. Whisper small is multilingual,
+// while Cap's Parakeet default is retained as an opt-in fast path.
+export const DEFAULT_CAPTION_MODEL = DEFAULT_WHISPER_CAPTION_MODEL;
 export const DEFAULT_CAPTION_LANGUAGE = "auto";
 export const CAPTION_MODEL_FOLDER = "transcription_models";
 export const PARAKEET_DIR_MODELS = new Set(["best", "best-max"]);

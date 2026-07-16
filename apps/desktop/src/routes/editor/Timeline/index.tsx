@@ -30,6 +30,7 @@ import {
 	applyCaptionResultToProject,
 	getCaptionGenerationErrorMessage,
 	getSelectedTranscriptionSettings,
+	segmentCaptionsForShortForm,
 	transcribeEditorCaptions,
 } from "../captions";
 import { FPS, type TimelineTrackType, useEditorContext } from "../context";
@@ -898,7 +899,7 @@ export function Timeline(props: {
 				produce((p) => {
 					applyCaptionResultToProject(
 						p,
-						result.segments,
+						segmentCaptionsForShortForm(result.segments),
 						editorInstance.recordings.segments,
 						duration(),
 					);
