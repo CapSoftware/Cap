@@ -56,7 +56,7 @@ export default function (
 			)}
 			{...otherProps}
 		>
-			<Show when={props.minimizable !== false}>
+			<Show when={local.minimizable !== false}>
 				<ControlButton
 					disabled={!titlebarState.minimizable}
 					onClick={
