@@ -162,13 +162,13 @@ type RecordingDeviceSettingsStore = {
 
 type RecentMediaCandidate =
 	| {
-		kind: "recording";
-		target: RecordingWithPath;
-	}
+			kind: "recording";
+			target: RecordingWithPath;
+	  }
 	| {
-		kind: "screenshot";
-		target: ScreenshotWithPath;
-	};
+			kind: "screenshot";
+			target: ScreenshotWithPath;
+	  };
 
 const listScreenshotsQuery = queryOptions<ScreenshotWithPath[]>({
 	queryKey: ["screenshots"],
@@ -214,13 +214,13 @@ async function resizeMainWindow(expanded: boolean, animate: boolean) {
 		: MAIN_WINDOW_SIZE.compact;
 	const availableWidth = monitor
 		? monitor.workArea.size.width / scaleFactor -
-		frameWidth -
-		MAIN_WINDOW_SCREEN_PADDING * 2
+			frameWidth -
+			MAIN_WINDOW_SCREEN_PADDING * 2
 		: preferredSize.width;
 	const availableHeight = monitor
 		? monitor.workArea.size.height / scaleFactor -
-		frameHeight -
-		MAIN_WINDOW_SCREEN_PADDING * 2
+			frameHeight -
+			MAIN_WINDOW_SCREEN_PADDING * 2
 		: preferredSize.height;
 	const targetWidth = Math.max(
 		MAIN_WINDOW_SIZE.compact.width,
@@ -252,9 +252,9 @@ async function resizeMainWindow(expanded: boolean, animate: boolean) {
 		const maximumY = Math.max(
 			minimumY,
 			workArea.position.y +
-			workArea.size.height -
-			targetPhysicalHeight -
-			padding,
+				workArea.size.height -
+				targetPhysicalHeight -
+				padding,
 		);
 		const targetX = clamp(physicalPosition.x, minimumX, maximumX);
 		const targetY = clamp(physicalPosition.y, minimumY, maximumY);
@@ -401,59 +401,59 @@ type IdleWindow = typeof window & {
 
 type TargetMenuPanelProps =
 	| {
-		variant: "display";
-		targets?: CaptureDisplayWithThumbnail[];
-		onSelect: (target: CaptureDisplayWithThumbnail) => void;
-	}
+			variant: "display";
+			targets?: CaptureDisplayWithThumbnail[];
+			onSelect: (target: CaptureDisplayWithThumbnail) => void;
+	  }
 	| {
-		variant: "window";
-		targets?: CaptureWindowWithThumbnail[];
-		onSelect: (target: CaptureWindowWithThumbnail) => void;
-	}
+			variant: "window";
+			targets?: CaptureWindowWithThumbnail[];
+			onSelect: (target: CaptureWindowWithThumbnail) => void;
+	  }
 	| {
-		variant: "recording";
-		targets?: RecordingWithPath[];
-		onSelect: (target: RecordingWithPath) => void;
-		onViewAll: () => void;
-		uploadProgress?: Record<string, number>;
-		reuploadingPaths?: Set<string>;
-		onReupload?: (path: string) => void;
-		onRefetch?: () => void;
-	}
+			variant: "recording";
+			targets?: RecordingWithPath[];
+			onSelect: (target: RecordingWithPath) => void;
+			onViewAll: () => void;
+			uploadProgress?: Record<string, number>;
+			reuploadingPaths?: Set<string>;
+			onReupload?: (path: string) => void;
+			onRefetch?: () => void;
+	  }
 	| {
-		variant: "screenshot";
-		targets?: ScreenshotWithPath[];
-		onSelect: (target: ScreenshotWithPath) => void;
-		onViewAll: () => void;
-	}
+			variant: "screenshot";
+			targets?: ScreenshotWithPath[];
+			onSelect: (target: ScreenshotWithPath) => void;
+			onViewAll: () => void;
+	  }
 	| {
-		variant: "camera";
-		targets?: CameraWithDetails[];
-		selectedTarget: CameraWithDetails | null;
-		onSelect: (target: CameraWithDetails | null) => void;
-		permissions?: OSPermissionsCheck;
-		deviceSettings?: RecordingDeviceSettingsStore;
-		onCameraSettingsChange: (
-			camera: CameraWithDetails,
-			settings: CameraDeviceSettings,
-		) => void;
-		compatibilityStudioMode: boolean;
-		initialSettingsTarget?: CameraWithDetails | null;
-	}
+			variant: "camera";
+			targets?: CameraWithDetails[];
+			selectedTarget: CameraWithDetails | null;
+			onSelect: (target: CameraWithDetails | null) => void;
+			permissions?: OSPermissionsCheck;
+			deviceSettings?: RecordingDeviceSettingsStore;
+			onCameraSettingsChange: (
+				camera: CameraWithDetails,
+				settings: CameraDeviceSettings,
+			) => void;
+			compatibilityStudioMode: boolean;
+			initialSettingsTarget?: CameraWithDetails | null;
+	  }
 	| {
-		variant: "microphone";
-		targets?: MicrophoneWithDetails[];
-		selectedTarget: MicrophoneWithDetails | null;
-		onSelect: (target: MicrophoneWithDetails | null) => void;
-		permissions?: OSPermissionsCheck;
-		deviceSettings?: RecordingDeviceSettingsStore;
-		onMicrophoneSettingsChange: (
-			key: string,
-			settings: MicrophoneDeviceSettings,
-		) => void;
-		compatibilityStudioMode: boolean;
-		initialSettingsTarget?: MicrophoneWithDetails | null;
-	};
+			variant: "microphone";
+			targets?: MicrophoneWithDetails[];
+			selectedTarget: MicrophoneWithDetails | null;
+			onSelect: (target: MicrophoneWithDetails | null) => void;
+			permissions?: OSPermissionsCheck;
+			deviceSettings?: RecordingDeviceSettingsStore;
+			onMicrophoneSettingsChange: (
+				key: string,
+				settings: MicrophoneDeviceSettings,
+			) => void;
+			compatibilityStudioMode: boolean;
+			initialSettingsTarget?: MicrophoneWithDetails | null;
+	  };
 
 type SharedTargetMenuProps = {
 	isLoading: boolean;
@@ -464,31 +464,31 @@ type SharedTargetMenuProps = {
 
 type DeviceListPanelProps =
 	| {
-		variant: "camera";
-		targets: CameraWithDetails[];
-		selectedTarget: CameraWithDetails | null;
-		onSelect: (target: CameraWithDetails | null) => void;
-		onSettingsRequested: (target: CameraWithDetails) => void;
-		isLoading?: boolean;
-		errorMessage?: string;
-		disabled?: boolean;
-		emptyMessage?: string;
-		permissions?: OSPermissionsCheck;
-		deviceSettings?: RecordingDeviceSettingsStore;
-	}
+			variant: "camera";
+			targets: CameraWithDetails[];
+			selectedTarget: CameraWithDetails | null;
+			onSelect: (target: CameraWithDetails | null) => void;
+			onSettingsRequested: (target: CameraWithDetails) => void;
+			isLoading?: boolean;
+			errorMessage?: string;
+			disabled?: boolean;
+			emptyMessage?: string;
+			permissions?: OSPermissionsCheck;
+			deviceSettings?: RecordingDeviceSettingsStore;
+	  }
 	| {
-		variant: "microphone";
-		targets: MicrophoneWithDetails[];
-		selectedTarget: MicrophoneWithDetails | null;
-		onSelect: (target: MicrophoneWithDetails | null) => void;
-		onSettingsRequested: (target: MicrophoneWithDetails) => void;
-		isLoading?: boolean;
-		errorMessage?: string;
-		disabled?: boolean;
-		emptyMessage?: string;
-		permissions?: OSPermissionsCheck;
-		deviceSettings?: RecordingDeviceSettingsStore;
-	};
+			variant: "microphone";
+			targets: MicrophoneWithDetails[];
+			selectedTarget: MicrophoneWithDetails | null;
+			onSelect: (target: MicrophoneWithDetails | null) => void;
+			onSettingsRequested: (target: MicrophoneWithDetails) => void;
+			isLoading?: boolean;
+			errorMessage?: string;
+			disabled?: boolean;
+			emptyMessage?: string;
+			permissions?: OSPermissionsCheck;
+			deviceSettings?: RecordingDeviceSettingsStore;
+	  };
 
 function CameraListItem(props: {
 	camera: CameraWithDetails;
@@ -715,7 +715,7 @@ function CameraSettingsPanel(props: {
 		props.value?.width === format.width &&
 		props.value?.height === format.height &&
 		Math.round(props.value?.frameRate ?? 0) ===
-		Math.round(format.frameRate ?? 0);
+			Math.round(format.frameRate ?? 0);
 
 	return (
 		<div class="flex flex-col gap-1">
@@ -2172,7 +2172,7 @@ function Page() {
 			await commands.uploadExportedVideo(
 				path,
 				"Reupload",
-				new Channel<UploadProgress>(() => { }),
+				new Channel<UploadProgress>(() => {}),
 				null,
 			);
 		} finally {
@@ -2765,7 +2765,8 @@ function Page() {
 				await commands.stopRecording();
 			} catch (error) {
 				await dialog.message(
-					`Failed to stop recording: ${error instanceof Error ? error.message : String(error)
+					`Failed to stop recording: ${
+						error instanceof Error ? error.message : String(error)
 					}`,
 					{ title: "Stop Recording", kind: "error" },
 				);
@@ -2905,10 +2906,10 @@ function Page() {
 					onOpenSettings={
 						rawOptions.micName
 							? () =>
-								openMicrophoneMenu(
-									options.micName() ?? null,
-									rawOptions.micName != null,
-								)
+									openMicrophoneMenu(
+										options.micName() ?? null,
+										rawOptions.micName != null,
+									)
 							: undefined
 					}
 				/>
@@ -3083,7 +3084,7 @@ function Page() {
 			}
 		}
 
-		await signIn.mutateAsync(abort).catch(() => { });
+		await signIn.mutateAsync(abort).catch(() => {});
 
 		for (const win of await getAllWebviewWindows()) {
 			if (win.label.startsWith("target-select-overlay")) {

@@ -105,12 +105,14 @@ function Header() {
 			{ctx.state()?.items}
 			{/* This is temporary until the re-strcture of window-chrome.
 			    Then we'll use native captions on Windows and GTK-4 window controls on Linux */}
-			{(isWindows || isLinux) && (<CaptionControlsWindows11
-				class="ml-auto!"
-				maximizable={ctx.state()?.onMaximize ? true : undefined}
-				maximized={ctx.state()?.maximized}
-				onMaximize={ctx.state()?.onMaximize}
-			/>)}
+			{(isWindows || isLinux) && (
+				<CaptionControlsWindows11
+					class="ml-auto!"
+					maximizable={ctx.state()?.onMaximize ? true : undefined}
+					maximized={ctx.state()?.maximized}
+					onMaximize={ctx.state()?.onMaximize}
+				/>
+			)}
 			{isMacOS && !isSettings() && <div class="h-full w-[70px]" />}
 		</header>
 	);
