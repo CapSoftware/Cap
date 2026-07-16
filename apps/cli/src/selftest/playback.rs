@@ -902,6 +902,7 @@ mod fixture {
                     timescale: 1.0,
                     name: None,
                 }],
+                transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),

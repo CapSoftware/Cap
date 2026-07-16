@@ -1,8 +1,9 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, Camera, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, CornerStyle,
-    Crop, CursorEvents, CursorType, FrameConfiguration, FrameStyle, MaskKind, ProjectConfiguration,
-    RecordingMeta, SceneMode, StudioRecordingMeta, XY,
+    AspectRatio, Camera, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets,
+    ClipTransitionType, CornerStyle, Crop, CursorEvents, CursorType, FrameConfiguration,
+    FrameStyle, ProjectConfiguration, RecordingMeta, SceneMode, StudioRecordingMeta,
+    TimelineFrameMapping, TimelineSource, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -45,6 +46,7 @@ mod project_recordings;
 mod scene;
 pub mod spring_mass_damper;
 mod text;
+mod transition;
 pub mod yuv_converter;
 mod zoom;
 mod zoom_spring;
@@ -54,6 +56,7 @@ pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
 pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, SharedNv12Buffer};
 pub use layers::{BackgroundTextureCache, clean_background_path};
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
+use transition::{TransitionCompositor, TransitionParameters};
 
 /// Warms the process-wide system-font scan used by the text/captions/keyboard
 /// layers. The first scan is the slow part (hundreds of ms to over a second on
@@ -216,19 +219,11 @@ pub struct RenderOptions {
     pub preserve_screen_alpha: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaskRenderMode {
-    Sensitive,
+    Pixelate,
     Highlight,
-}
-
-impl MaskRenderMode {
-    fn from_kind(kind: MaskKind) -> Self {
-        match kind {
-            MaskKind::Sensitive => MaskRenderMode::Sensitive,
-            MaskKind::Highlight => MaskRenderMode::Highlight,
-        }
-    }
+    Blur,
 }
 
 #[derive(Debug, Clone)]
@@ -237,19 +232,10 @@ pub struct PreparedMask {
     pub size: XY<f32>,
     pub feather: f32,
     pub opacity: f32,
-    pub pixel_size: f32,
+    pub effect_size: f32,
     pub darkness: f32,
     pub mode: MaskRenderMode,
     pub output_size: XY<u32>,
-}
-
-impl PreparedMask {
-    fn mode_value(&self) -> u32 {
-        match self.mode {
-            MaskRenderMode::Sensitive => 0,
-            MaskRenderMode::Highlight => 1,
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -584,15 +570,36 @@ pub async fn render_video_to_channel(
 
     let mut zoom_timelines: Vec<ZoomTransformTimeline> = render_segments
         .iter()
-        .map(|segment| {
-            ZoomTransformTimeline::from_project(
+        .enumerate()
+        .map(|(recording_clip, segment)| {
+            ZoomTransformTimeline::from_project_for_clip(
                 project,
                 &segment.cursor,
                 duration,
                 constants.options.screen_size,
+                recording_clip as u32,
             )
         })
         .collect();
+    let mut outgoing_zoom_timelines = project
+        .timeline
+        .as_ref()
+        .is_some_and(|timeline| !timeline.transitions.is_empty())
+        .then(|| {
+            render_segments
+                .iter()
+                .enumerate()
+                .map(|(recording_clip, segment)| {
+                    ZoomTransformTimeline::from_project_for_outgoing_clip(
+                        project,
+                        &segment.cursor,
+                        duration,
+                        constants.options.screen_size,
+                        recording_clip as u32,
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
 
     let mut frame_number = 0;
 
@@ -628,9 +635,23 @@ pub async fn render_video_to_channel(
             break;
         }
 
-        let Some((segment_time, segment)) =
-            project.get_segment_time(frame_number as f64 / fps as f64)
-        else {
+        let frame_time = frame_number as f64 / fps as f64;
+        let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
+            if timeline.transitions.is_empty() {
+                return None;
+            }
+            match timeline.get_frame_mapping(frame_time) {
+                Some(TimelineFrameMapping::Transition {
+                    outgoing,
+                    kind,
+                    progress,
+                    ..
+                }) => Some((outgoing, kind, progress)),
+                _ => None,
+            }
+        });
+
+        let Some((segment_time, segment)) = project.get_segment_time(frame_time) else {
             break;
         };
 
@@ -650,8 +671,11 @@ pub async fn render_video_to_channel(
 
         let zoom_until = (current_frame_number as f32 + 1.0) / fps as f32;
         zoom_timelines[segment_clip_index].ensure_precomputed_until(zoom_until);
+        if let Some(timelines) = &mut outgoing_zoom_timelines {
+            timelines[segment_clip_index].ensure_precomputed_until(zoom_until);
+        }
 
-        let segment_frames =
+        let incoming_decode = async {
             if let Some((pf_num, _pf_time, pf_clip, pf_result)) = prefetched_decode.take() {
                 if pf_num == current_frame_number && pf_clip == segment_clip_index {
                     pf_result
@@ -680,7 +704,24 @@ pub async fn render_video_to_channel(
                     fps,
                 )
                 .await
-            };
+            }
+        };
+        let (segment_frames, outgoing_frames) = if let Some((outgoing, _, _)) = transition_mapping {
+            tokio::join!(
+                incoming_decode,
+                decode_timeline_source_frames(
+                    project,
+                    &render_segments,
+                    outgoing,
+                    needs_camera,
+                    current_frame_number,
+                    is_initial_frame,
+                    fps,
+                )
+            )
+        } else {
+            (incoming_decode.await, None)
+        };
 
         if let Some(segment_frames) = segment_frames {
             consecutive_failures = 0;
@@ -733,7 +774,44 @@ pub async fn render_video_to_channel(
                 None
             };
 
-            let render_result = if let Some(prefetch) = prefetch_future {
+            let render_result = if let Some((outgoing, kind, progress)) = transition_mapping {
+                let render_future = render_transition_rgba(
+                    TransitionExportContext {
+                        constants,
+                        project,
+                        render_segments: &render_segments,
+                        outgoing_zoom_timelines: outgoing_zoom_timelines
+                            .as_mut()
+                            .expect("transition zoom timelines are initialized"),
+                        precomputed_cursor_timelines: &precomputed_cursor_timelines,
+                        current_frame_number,
+                        fps,
+                        resolution_base,
+                        duration,
+                    },
+                    &mut frame_renderer,
+                    &mut layers,
+                    (outgoing, outgoing_frames),
+                    kind,
+                    progress,
+                    TransitionRenderInput {
+                        segment_frames,
+                        uniforms,
+                        cursor: &render_segment.cursor,
+                        render_display: render_segment.render_display,
+                    },
+                );
+                if let Some(prefetch) = prefetch_future {
+                    let (render, decoded) = tokio::join!(render_future, prefetch);
+                    if let Some((next_seg_time, next_clip_index)) = next_prefetch_meta {
+                        prefetched_decode =
+                            Some((next_frame_number, next_seg_time, next_clip_index, decoded));
+                    }
+                    render
+                } else {
+                    render_future.await
+                }
+            } else if let Some(prefetch) = prefetch_future {
                 let (render, decoded) = tokio::join!(
                     frame_renderer.render(
                         segment_frames,
@@ -928,17 +1006,43 @@ pub async fn render_video_to_channel_nv12(
     let zoom_build_start = Instant::now();
     let mut zoom_timelines: Vec<ZoomTransformTimeline> = render_segments
         .iter()
-        .map(|segment| {
-            ZoomTransformTimeline::from_project(
+        .enumerate()
+        .map(|(recording_clip, segment)| {
+            ZoomTransformTimeline::from_project_for_clip(
                 project,
                 &segment.cursor,
                 duration,
                 constants.options.screen_size,
+                recording_clip as u32,
             )
         })
         .collect();
+    let mut outgoing_zoom_timelines = project
+        .timeline
+        .as_ref()
+        .is_some_and(|timeline| !timeline.transitions.is_empty())
+        .then(|| {
+            render_segments
+                .iter()
+                .enumerate()
+                .map(|(recording_clip, segment)| {
+                    ZoomTransformTimeline::from_project_for_outgoing_clip(
+                        project,
+                        &segment.cursor,
+                        duration,
+                        constants.options.screen_size,
+                        recording_clip as u32,
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
     for timeline in &mut zoom_timelines {
         timeline.precompute();
+    }
+    if let Some(timelines) = &mut outgoing_zoom_timelines {
+        for timeline in timelines {
+            timeline.precompute();
+        }
     }
     let zoom_focus_interpolators_construct_ms = zoom_build_start.elapsed().as_millis() as u64;
 
@@ -984,9 +1088,23 @@ pub async fn render_video_to_channel_nv12(
             break;
         }
 
-        let Some((segment_time, segment)) =
-            project.get_segment_time(frame_number as f64 / fps as f64)
-        else {
+        let frame_time = frame_number as f64 / fps as f64;
+        let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
+            if timeline.transitions.is_empty() {
+                return None;
+            }
+            match timeline.get_frame_mapping(frame_time) {
+                Some(TimelineFrameMapping::Transition {
+                    outgoing,
+                    kind,
+                    progress,
+                    ..
+                }) => Some((outgoing, kind, progress)),
+                _ => None,
+            }
+        });
+
+        let Some((segment_time, segment)) = project.get_segment_time(frame_time) else {
             break;
         };
 
@@ -1007,10 +1125,13 @@ pub async fn render_video_to_channel_nv12(
         let zoom_pre_start = Instant::now();
         let zoom_until = (current_frame_number as f32 + 1.0) / fps as f32;
         zoom_timelines[segment_clip_index].ensure_precomputed_until(zoom_until);
+        if let Some(timelines) = &mut outgoing_zoom_timelines {
+            timelines[segment_clip_index].ensure_precomputed_until(zoom_until);
+        }
         let this_zoom_pre_ms = zoom_pre_start.elapsed().as_millis() as u64;
 
         let decode_wall_start = Instant::now();
-        let segment_frames =
+        let incoming_decode = async {
             if let Some((pf_num, _pf_time, pf_clip, pf_result)) = prefetched_decode.take() {
                 if pf_num == current_frame_number && pf_clip == segment_clip_index {
                     pf_result
@@ -1039,7 +1160,24 @@ pub async fn render_video_to_channel_nv12(
                     fps,
                 )
                 .await
-            };
+            }
+        };
+        let (segment_frames, outgoing_frames) = if let Some((outgoing, _, _)) = transition_mapping {
+            tokio::join!(
+                incoming_decode,
+                decode_timeline_source_frames(
+                    project,
+                    &render_segments,
+                    outgoing,
+                    needs_camera,
+                    current_frame_number,
+                    is_initial_frame,
+                    fps,
+                )
+            )
+        } else {
+            (incoming_decode.await, None)
+        };
         let this_decode_ms = decode_wall_start.elapsed().as_millis() as u64;
 
         if let Some(segment_frames) = segment_frames {
@@ -1098,7 +1236,77 @@ pub async fn render_video_to_channel_nv12(
                 first_phase_render_ms,
                 first_phase_prefetch_ms,
                 first_phase_join_wall_ms,
-            ) = if let Some(prefetch) = prefetch_future {
+            ) = if let Some((outgoing, kind, progress)) = transition_mapping {
+                let render_future = render_transition_nv12_export(
+                    TransitionExportContext {
+                        constants,
+                        project,
+                        render_segments: &render_segments,
+                        outgoing_zoom_timelines: outgoing_zoom_timelines
+                            .as_mut()
+                            .expect("transition zoom timelines are initialized"),
+                        precomputed_cursor_timelines: &precomputed_cursor_timelines,
+                        current_frame_number,
+                        fps,
+                        resolution_base,
+                        duration,
+                    },
+                    &mut frame_renderer,
+                    &mut layers,
+                    (outgoing, outgoing_frames),
+                    kind,
+                    progress,
+                    TransitionRenderInput {
+                        segment_frames,
+                        uniforms,
+                        cursor: &render_segment.cursor,
+                        render_display: render_segment.render_display,
+                    },
+                );
+                if let Some(prefetch) = prefetch_future {
+                    if record_first_frame_nv12_phases {
+                        let join_wall_start = Instant::now();
+                        let render_fut = async {
+                            let started = Instant::now();
+                            let result = render_future.await;
+                            (started.elapsed(), result)
+                        };
+                        let prefetch_fut = async {
+                            let started = Instant::now();
+                            let decoded = prefetch.await;
+                            (started.elapsed(), decoded)
+                        };
+                        let ((render_elapsed, render), (prefetch_elapsed, decoded)) =
+                            tokio::join!(render_fut, prefetch_fut);
+                        if let Some((next_seg_time, next_clip_index)) = next_prefetch_meta {
+                            prefetched_decode =
+                                Some((next_frame_number, next_seg_time, next_clip_index, decoded));
+                        }
+                        (
+                            render,
+                            Some(render_elapsed.as_millis() as u64),
+                            Some(prefetch_elapsed.as_millis() as u64),
+                            Some(join_wall_start.elapsed().as_millis() as u64),
+                        )
+                    } else {
+                        let (render, decoded) = tokio::join!(render_future, prefetch);
+                        if let Some((next_seg_time, next_clip_index)) = next_prefetch_meta {
+                            prefetched_decode =
+                                Some((next_frame_number, next_seg_time, next_clip_index, decoded));
+                        }
+                        (render, None, None, None)
+                    }
+                } else {
+                    let render_start = Instant::now();
+                    let render = render_future.await;
+                    (
+                        render,
+                        Some(render_start.elapsed().as_millis() as u64),
+                        None,
+                        None,
+                    )
+                }
+            } else if let Some(prefetch) = prefetch_future {
                 if record_first_frame_nv12_phases {
                     let join_wall_start = Instant::now();
                     let render_fut = async {
@@ -1350,6 +1558,163 @@ pub async fn render_video_to_channel_nv12(
     );
 
     Ok(())
+}
+
+struct TransitionExportContext<'a> {
+    constants: &'a RenderVideoConstants,
+    project: &'a ProjectConfiguration,
+    render_segments: &'a [RenderSegment],
+    outgoing_zoom_timelines: &'a mut [ZoomTransformTimeline],
+    precomputed_cursor_timelines: &'a [Arc<PrecomputedCursorTimeline>],
+    current_frame_number: u32,
+    fps: u32,
+    resolution_base: XY<u32>,
+    duration: f64,
+}
+
+async fn decode_timeline_source_frames(
+    project: &ProjectConfiguration,
+    render_segments: &[RenderSegment],
+    source: TimelineSource<'_>,
+    needs_camera: bool,
+    current_frame_number: u32,
+    is_initial_frame: bool,
+    fps: u32,
+) -> Option<DecodedSegmentFrames> {
+    let render_segment = &render_segments[source.segment.recording_clip as usize];
+    let clip_config = project
+        .clips
+        .iter()
+        .find(|clip| clip.index == source.segment.recording_clip);
+    decode_segment_frames_with_retry(
+        &render_segment.decoders,
+        source.source_time,
+        needs_camera,
+        render_segment.render_display,
+        clip_config.map(|clip| clip.offsets).unwrap_or_default(),
+        current_frame_number,
+        is_initial_frame,
+        fps,
+    )
+    .await
+}
+
+async fn render_transition_rgba(
+    context: TransitionExportContext<'_>,
+    frame_renderer: &mut FrameRenderer<'_>,
+    layers: &mut RendererLayers,
+    outgoing: (TimelineSource<'_>, Option<DecodedSegmentFrames>),
+    kind: ClipTransitionType,
+    progress: f64,
+    incoming: TransitionRenderInput<'_>,
+) -> Result<Option<RenderedFrame>, RenderingError> {
+    let (outgoing, outgoing_frames) = outgoing;
+    let outgoing_clip_index = outgoing.segment.recording_clip as usize;
+    let outgoing_render_segment = &context.render_segments[outgoing_clip_index];
+    context.outgoing_zoom_timelines[outgoing_clip_index]
+        .ensure_precomputed_until((context.current_frame_number as f32 + 1.0) / context.fps as f32);
+
+    let Some(outgoing_frames) = outgoing_frames else {
+        tracing::warn!(
+            frame_number = context.current_frame_number,
+            "Outgoing transition frame decode failed; rendering incoming frame"
+        );
+        return frame_renderer
+            .render(
+                incoming.segment_frames,
+                incoming.uniforms,
+                incoming.cursor,
+                incoming.render_display,
+                layers,
+            )
+            .await;
+    };
+    let outgoing_uniforms = ProjectUniforms::new_with_precomputed_cursor(
+        context.constants,
+        context.project,
+        context.current_frame_number,
+        context.fps,
+        context.resolution_base,
+        &outgoing_render_segment.cursor,
+        &outgoing_frames,
+        context.duration,
+        &context.outgoing_zoom_timelines[outgoing_clip_index],
+        &context.precomputed_cursor_timelines[outgoing_clip_index],
+    );
+
+    frame_renderer
+        .render_transition(
+            TransitionRenderInput {
+                segment_frames: outgoing_frames,
+                uniforms: outgoing_uniforms,
+                cursor: &outgoing_render_segment.cursor,
+                render_display: outgoing_render_segment.render_display,
+            },
+            incoming,
+            kind,
+            progress as f32,
+            layers,
+        )
+        .await
+}
+
+async fn render_transition_nv12_export(
+    context: TransitionExportContext<'_>,
+    frame_renderer: &mut FrameRenderer<'_>,
+    layers: &mut RendererLayers,
+    outgoing: (TimelineSource<'_>, Option<DecodedSegmentFrames>),
+    kind: ClipTransitionType,
+    progress: f64,
+    incoming: TransitionRenderInput<'_>,
+) -> Result<Option<Nv12RenderedFrame>, RenderingError> {
+    let (outgoing, outgoing_frames) = outgoing;
+    let outgoing_clip_index = outgoing.segment.recording_clip as usize;
+    let outgoing_render_segment = &context.render_segments[outgoing_clip_index];
+    context.outgoing_zoom_timelines[outgoing_clip_index]
+        .ensure_precomputed_until((context.current_frame_number as f32 + 1.0) / context.fps as f32);
+
+    let Some(outgoing_frames) = outgoing_frames else {
+        tracing::warn!(
+            frame_number = context.current_frame_number,
+            "Outgoing transition frame decode failed; rendering incoming NV12 frame"
+        );
+        return frame_renderer
+            .render_nv12(
+                incoming.segment_frames,
+                incoming.uniforms,
+                incoming.cursor,
+                incoming.render_display,
+                layers,
+            )
+            .await;
+    };
+    let outgoing_uniforms = ProjectUniforms::new_with_precomputed_cursor(
+        context.constants,
+        context.project,
+        context.current_frame_number,
+        context.fps,
+        context.resolution_base,
+        &outgoing_render_segment.cursor,
+        &outgoing_frames,
+        context.duration,
+        &context.outgoing_zoom_timelines[outgoing_clip_index],
+        &context.precomputed_cursor_timelines[outgoing_clip_index],
+    );
+
+    frame_renderer
+        .render_transition_nv12(
+            TransitionRenderInput {
+                segment_frames: outgoing_frames,
+                uniforms: outgoing_uniforms,
+                cursor: &outgoing_render_segment.cursor,
+                render_display: outgoing_render_segment.render_display,
+            },
+            incoming,
+            kind,
+            progress as f32,
+            layers,
+        )
+        .await
 }
 
 const DECODE_MAX_RETRIES_INITIAL: u32 = 5;
@@ -4048,6 +4413,14 @@ pub struct DecodedSegmentFrames {
     pub segment_has_camera: bool,
 }
 
+#[derive(Clone)]
+pub struct TransitionRenderInput<'a> {
+    pub segment_frames: DecodedSegmentFrames,
+    pub uniforms: ProjectUniforms,
+    pub cursor: &'a CursorEvents,
+    pub render_display: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameRenderStageTimings {
     pub prepare_duration: std::time::Duration,
@@ -4074,6 +4447,7 @@ pub struct FrameRenderer<'a> {
     session: Option<RenderSession>,
     nv12_converter: Option<frame_pipeline::RgbaToNv12Converter>,
     nv12_buffer_pool: NV12BufferPool,
+    transition_compositor: Option<TransitionCompositor>,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -4085,6 +4459,7 @@ impl<'a> FrameRenderer<'a> {
             session: None,
             nv12_converter: None,
             nv12_buffer_pool: NV12BufferPool::new(6),
+            transition_compositor: None,
         }
     }
 
@@ -4184,6 +4559,107 @@ impl<'a> FrameRenderer<'a> {
         Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
     }
 
+    pub async fn render_transition(
+        &mut self,
+        outgoing: TransitionRenderInput<'_>,
+        incoming: TransitionRenderInput<'_>,
+        kind: ClipTransitionType,
+        progress: f32,
+        layers: &mut RendererLayers,
+    ) -> Result<Option<RenderedFrame>, RenderingError> {
+        let mut last_error = None;
+
+        for attempt in 0..Self::MAX_RENDER_RETRIES {
+            if attempt > 0 {
+                tracing::warn!(
+                    frame_number = incoming.uniforms.frame_number,
+                    attempt = attempt + 1,
+                    "Retrying transition frame render after GPU error"
+                );
+                self.reset_session();
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
+                    .await;
+            }
+
+            let session = self.session.get_or_insert_with(|| {
+                RenderSession::new(
+                    &self.constants.device,
+                    incoming.uniforms.output_size.0,
+                    incoming.uniforms.output_size.1,
+                )
+            });
+            session.update_texture_size(
+                &self.constants.device,
+                incoming.uniforms.output_size.0,
+                incoming.uniforms.output_size.1,
+            );
+            let compositor = self
+                .transition_compositor
+                .get_or_insert_with(|| TransitionCompositor::new(&self.constants.device));
+            compositor.ensure_size(
+                &self.constants.device,
+                incoming.uniforms.output_size.0,
+                incoming.uniforms.output_size.1,
+            );
+
+            let encoder = match produce_transition_texture(
+                self.constants,
+                &outgoing,
+                &incoming,
+                (kind, progress),
+                layers,
+                session,
+                compositor,
+            )
+            .await
+            {
+                Ok(encoder) => encoder,
+                Err(error) => return Err(error),
+            };
+
+            match finish_encoder_timed(
+                session,
+                &self.constants.device,
+                &self.constants.queue,
+                &incoming.uniforms,
+                encoder,
+            )
+            .await
+            {
+                Ok((frame, _)) => return Ok(frame),
+                Err(RenderingError::BufferMapWaitingFailed) => {
+                    last_error = Some(RenderingError::BufferMapWaitingFailed);
+                }
+                Err(RenderingError::BufferMapFailed(error)) => {
+                    last_error = Some(RenderingError::BufferMapFailed(error));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
+    }
+
+    pub async fn render_transition_immediate(
+        &mut self,
+        outgoing: TransitionRenderInput<'_>,
+        incoming: TransitionRenderInput<'_>,
+        kind: ClipTransitionType,
+        progress: f32,
+        layers: &mut RendererLayers,
+    ) -> Result<RenderedFrame, RenderingError> {
+        if let Some(frame) = self
+            .render_transition(outgoing, incoming, kind, progress, layers)
+            .await?
+        {
+            return Ok(frame);
+        }
+
+        self.flush_pipeline()
+            .await
+            .unwrap_or(Err(RenderingError::BufferMapWaitingFailed))
+    }
+
     pub async fn render_immediate(
         &mut self,
         segment_frames: DecodedSegmentFrames,
@@ -4279,6 +4755,94 @@ impl<'a> FrameRenderer<'a> {
             .await
     }
 
+    pub async fn render_transition_nv12(
+        &mut self,
+        outgoing: TransitionRenderInput<'_>,
+        incoming: TransitionRenderInput<'_>,
+        kind: ClipTransitionType,
+        progress: f32,
+        layers: &mut RendererLayers,
+    ) -> Result<Option<frame_pipeline::Nv12RenderedFrame>, RenderingError> {
+        if self.constants.is_software_adapter {
+            let frame = self
+                .render_transition(outgoing, incoming, kind, progress, layers)
+                .await?;
+            return Ok(frame.map(|frame| self.convert_rgba_to_nv12(frame)));
+        }
+
+        let mut last_error = None;
+        for attempt in 0..Self::MAX_RENDER_RETRIES {
+            if attempt > 0 {
+                tracing::warn!(
+                    frame_number = incoming.uniforms.frame_number,
+                    attempt = attempt + 1,
+                    "Retrying NV12 transition frame render after GPU error"
+                );
+                self.reset_session();
+                self.nv12_converter = None;
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
+                    .await;
+            }
+
+            let session = self.session.get_or_insert_with(|| {
+                RenderSession::new(
+                    &self.constants.device,
+                    incoming.uniforms.output_size.0,
+                    incoming.uniforms.output_size.1,
+                )
+            });
+            session.update_texture_size(
+                &self.constants.device,
+                incoming.uniforms.output_size.0,
+                incoming.uniforms.output_size.1,
+            );
+            let compositor = self
+                .transition_compositor
+                .get_or_insert_with(|| TransitionCompositor::new(&self.constants.device));
+            compositor.ensure_size(
+                &self.constants.device,
+                incoming.uniforms.output_size.0,
+                incoming.uniforms.output_size.1,
+            );
+            let encoder = produce_transition_texture(
+                self.constants,
+                &outgoing,
+                &incoming,
+                (kind, progress),
+                layers,
+                session,
+                compositor,
+            )
+            .await?;
+            let nv12_converter = self.nv12_converter.get_or_insert_with(|| {
+                frame_pipeline::RgbaToNv12Converter::new(&self.constants.device)
+            });
+
+            match finish_encoder_nv12_pooled(
+                session,
+                nv12_converter,
+                &self.constants.device,
+                &self.constants.queue,
+                &incoming.uniforms,
+                encoder,
+                Some(&mut self.nv12_buffer_pool),
+            )
+            .await
+            {
+                Ok(frame) => return Ok(frame),
+                Err(RenderingError::BufferMapWaitingFailed) => {
+                    last_error = Some(RenderingError::BufferMapWaitingFailed);
+                }
+                Err(RenderingError::BufferMapFailed(error)) => {
+                    last_error = Some(RenderingError::BufferMapFailed(error));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
+    }
+
     async fn render_nv12_software_path(
         &mut self,
         segment_frames: DecodedSegmentFrames,
@@ -4301,6 +4865,13 @@ impl<'a> FrameRenderer<'a> {
             return Ok(None);
         };
 
+        Ok(Some(self.convert_rgba_to_nv12(rgba_frame)))
+    }
+
+    fn convert_rgba_to_nv12(
+        &mut self,
+        rgba_frame: RenderedFrame,
+    ) -> frame_pipeline::Nv12RenderedFrame {
         let width = rgba_frame.width;
         let height = rgba_frame.height;
         let padded_bytes_per_row = rgba_frame.padded_bytes_per_row;
@@ -4364,7 +4935,7 @@ impl<'a> FrameRenderer<'a> {
             }
         }
 
-        Ok(Some(frame_pipeline::Nv12RenderedFrame {
+        frame_pipeline::Nv12RenderedFrame {
             data: self.nv12_buffer_pool.wrap(nv12_buf),
             width,
             height,
@@ -4372,7 +4943,7 @@ impl<'a> FrameRenderer<'a> {
             frame_number,
             target_time_ns,
             format: frame_pipeline::GpuOutputFormat::Nv12,
-        }))
+        }
     }
 
     async fn render_nv12_gpu_path(
@@ -5093,6 +5664,83 @@ async fn produce_frame_with_timings(
     timings.finish_submit_readback_duration = finish_timings.submit_readback_duration;
 
     Ok((frame, timings))
+}
+
+async fn produce_transition_texture(
+    constants: &RenderVideoConstants,
+    outgoing: &TransitionRenderInput<'_>,
+    incoming: &TransitionRenderInput<'_>,
+    transition: (ClipTransitionType, f32),
+    layers: &mut RendererLayers,
+    session: &mut RenderSession,
+    compositor: &TransitionCompositor,
+) -> Result<wgpu::CommandEncoder, RenderingError> {
+    let mut outgoing_encoder =
+        constants
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Outgoing Transition Render Encoder"),
+            });
+    layers
+        .prepare_with_encoder(
+            constants,
+            &outgoing.uniforms,
+            &outgoing.segment_frames,
+            outgoing.cursor,
+            &mut outgoing_encoder,
+            outgoing.render_display,
+        )
+        .await?;
+    layers.render(
+        &constants.device,
+        &constants.queue,
+        &mut outgoing_encoder,
+        session,
+        &outgoing.uniforms,
+        outgoing.render_display,
+    );
+    compositor.capture_outgoing(&mut outgoing_encoder, session.current_texture());
+    constants
+        .queue
+        .submit(std::iter::once(outgoing_encoder.finish()));
+
+    let mut incoming_encoder =
+        constants
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Incoming Transition Render Encoder"),
+            });
+    layers
+        .prepare_with_encoder(
+            constants,
+            &incoming.uniforms,
+            &incoming.segment_frames,
+            incoming.cursor,
+            &mut incoming_encoder,
+            incoming.render_display,
+        )
+        .await?;
+    layers.render(
+        &constants.device,
+        &constants.queue,
+        &mut incoming_encoder,
+        session,
+        &incoming.uniforms,
+        incoming.render_display,
+    );
+    compositor.capture_incoming_and_render(
+        &constants.queue,
+        &mut incoming_encoder,
+        session.current_texture(),
+        session.current_texture_view(),
+        TransitionParameters {
+            kind: transition.0,
+            progress: transition.1,
+            opaque: outgoing.render_display || incoming.render_display,
+        },
+    );
+
+    Ok(incoming_encoder)
 }
 
 fn blur_mode_from_config(

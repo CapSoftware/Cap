@@ -1042,6 +1042,7 @@ mod tests {
                 end: 202.220711,
                 name: None,
             }],
+            transitions: Vec::new(),
             zoom_segments: vec![ZoomSegment {
                 start: 100.0,
                 end: 150.0,
@@ -1098,6 +1099,7 @@ mod tests {
                     name: None,
                 },
             ],
+            transitions: Vec::new(),
             zoom_segments: vec![ZoomSegment {
                 start: 10.0,
                 end: 20.0,

@@ -2753,8 +2753,13 @@ pub async fn apply_macos_liquid_glass_background(
 
         _window
             .run_on_main_thread(move || {
-                let result =
-                    crate::platform::apply_liquid_glass_background(&window, _enabled, _radius);
+                let result = if window.label() == CapWindowId::Main.label() {
+                    crate::platform::apply_main_window_liquid_glass_background(
+                        &window, _enabled, _radius,
+                    )
+                } else {
+                    crate::platform::apply_liquid_glass_background(&window, _enabled, _radius)
+                };
                 let _ = tx.send(result);
             })
             .map_err(|error| error.to_string())?;

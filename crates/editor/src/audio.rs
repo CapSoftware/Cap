@@ -3,7 +3,10 @@ use cap_audio::{
 };
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
-use cap_project::{AudioConfiguration, ClipOffsets, ProjectConfiguration, TimelineConfiguration};
+use cap_project::{
+    AudioConfiguration, ClipOffsets, ClipTransitionType, ProjectConfiguration,
+    TimelineConfiguration, TimelineFrameMapping, TimelineSource,
+};
 use ffmpeg::{
     ChannelLayout, Dictionary, format as avformat, frame::Audio as FFAudio, software::resampling,
 };
@@ -32,6 +35,8 @@ pub struct AudioRenderer {
     // this * channel count = cursor
     elapsed_samples: usize,
     music: MusicTracks,
+    transition_outgoing: Vec<f32>,
+    transition_incoming: Vec<f32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -120,6 +125,8 @@ impl AudioRenderer {
             },
             elapsed_samples: 0,
             music: MusicTracks::new(),
+            transition_outgoing: Vec::new(),
+            transition_incoming: Vec::new(),
         }
     }
 
@@ -197,6 +204,10 @@ impl AudioRenderer {
         project: &ProjectConfiguration,
         timeline: &TimelineConfiguration,
     ) -> Option<(usize, Vec<f32>)> {
+        if !timeline.transitions.is_empty() {
+            return self.render_timeline_transition_frame_raw(samples, project, timeline);
+        }
+
         if samples == 0 {
             return None;
         }
@@ -235,6 +246,110 @@ impl AudioRenderer {
         } else {
             ret.truncate(written * 2);
             Some((written, ret))
+        }
+    }
+
+    fn render_timeline_transition_frame_raw(
+        &mut self,
+        samples: usize,
+        project: &ProjectConfiguration,
+        timeline: &TimelineConfiguration,
+    ) -> Option<(usize, Vec<f32>)> {
+        if samples == 0 {
+            return None;
+        }
+
+        let mut output = vec![0.0; samples * 2];
+        let mut written = 0usize;
+        'render: while written < samples {
+            let mut mapping_time = self.elapsed_samples_to_playhead();
+            let (mapping, output_end_samples) = loop {
+                let Some(mapping) = timeline.get_frame_mapping(mapping_time) else {
+                    break 'render;
+                };
+                let output_end = match mapping {
+                    TimelineFrameMapping::Single { output_end, .. }
+                    | TimelineFrameMapping::Transition { output_end, .. } => output_end,
+                };
+                let output_end_samples = self.playhead_to_samples(output_end);
+                if output_end_samples > self.elapsed_samples {
+                    break (mapping, output_end_samples);
+                }
+                if output_end <= mapping_time {
+                    break 'render;
+                }
+                mapping_time = output_end;
+            };
+            let chunk_samples = output_end_samples
+                .saturating_sub(self.elapsed_samples)
+                .min(samples - written);
+
+            match mapping {
+                TimelineFrameMapping::Single { source, .. } => {
+                    let source_samples = self.playhead_to_samples(source.source_time);
+                    self.render_segment_chunk(
+                        project,
+                        source,
+                        chunk_samples,
+                        written * 2,
+                        &mut output,
+                    );
+                    self.cursor = source_cursor(source, source_samples + chunk_samples);
+                }
+                TimelineFrameMapping::Transition {
+                    outgoing,
+                    incoming,
+                    kind,
+                    progress,
+                    duration,
+                    ..
+                } => {
+                    let mut outgoing_buffer = std::mem::take(&mut self.transition_outgoing);
+                    let mut incoming_buffer = std::mem::take(&mut self.transition_incoming);
+                    outgoing_buffer.resize(chunk_samples * 2, 0.0);
+                    incoming_buffer.resize(chunk_samples * 2, 0.0);
+                    outgoing_buffer.fill(0.0);
+                    incoming_buffer.fill(0.0);
+                    self.render_segment_chunk(
+                        project,
+                        outgoing,
+                        chunk_samples,
+                        0,
+                        &mut outgoing_buffer,
+                    );
+                    self.render_segment_chunk(
+                        project,
+                        incoming,
+                        chunk_samples,
+                        0,
+                        &mut incoming_buffer,
+                    );
+                    mix_transition_audio(
+                        &outgoing_buffer,
+                        &incoming_buffer,
+                        &mut output[written * 2..(written + chunk_samples) * 2],
+                        kind,
+                        progress,
+                        duration,
+                    );
+                    self.transition_outgoing = outgoing_buffer;
+                    self.transition_incoming = incoming_buffer;
+                    self.cursor = source_cursor(
+                        incoming,
+                        self.playhead_to_samples(incoming.source_time) + chunk_samples,
+                    );
+                }
+            }
+
+            self.elapsed_samples += chunk_samples;
+            written += chunk_samples;
+        }
+
+        if written == 0 {
+            None
+        } else {
+            output.truncate(written * 2);
+            Some((written, output))
         }
     }
 
@@ -301,7 +416,34 @@ impl AudioRenderer {
         out_offset: usize,
         out: &mut [f32],
     ) -> usize {
-        let Some(segment) = self.data.get(self.cursor.clip_index as usize) else {
+        self.render_chunk_at_cursor(project, self.cursor, samples, out_offset, out)
+    }
+
+    fn render_segment_chunk(
+        &self,
+        project: &ProjectConfiguration,
+        source: TimelineSource<'_>,
+        samples: usize,
+        out_offset: usize,
+        out: &mut [f32],
+    ) -> usize {
+        if source.segment.timescale != 1.0 {
+            // Keep the inherited silent behavior until per-segment retiming can supply this chunk.
+            return 0;
+        }
+        let cursor = source_cursor(source, self.playhead_to_samples(source.source_time));
+        self.render_chunk_at_cursor(project, cursor, samples, out_offset, out)
+    }
+
+    fn render_chunk_at_cursor(
+        &self,
+        project: &ProjectConfiguration,
+        cursor: AudioRendererCursor,
+        samples: usize,
+        out_offset: usize,
+        out: &mut [f32],
+    ) -> usize {
+        let Some(segment) = self.data.get(cursor.clip_index as usize) else {
             return 0;
         };
         let tracks = &segment.tracks;
@@ -313,7 +455,7 @@ impl AudioRenderer {
         let offsets = project
             .clips
             .iter()
-            .find(|c| c.index == self.cursor.clip_index)
+            .find(|c| c.index == cursor.clip_index)
             .map(|c| c.offsets)
             .unwrap_or_default();
 
@@ -328,11 +470,11 @@ impl AudioRenderer {
             .max()
             .unwrap_or(0);
 
-        if self.cursor.samples >= max_samples {
+        if cursor.samples >= max_samples {
             return 0;
         }
 
-        let samples = samples.min(max_samples - self.cursor.samples);
+        let samples = samples.min(max_samples - cursor.samples);
 
         let track_datas = tracks
             .iter()
@@ -349,7 +491,48 @@ impl AudioRenderer {
             })
             .collect::<Vec<_>>();
 
-        cap_audio::render_audio(&track_datas, self.cursor.samples, samples, out_offset, out)
+        cap_audio::render_audio(&track_datas, cursor.samples, samples, out_offset, out)
+    }
+}
+
+fn source_cursor(source: TimelineSource<'_>, samples: usize) -> AudioRendererCursor {
+    AudioRendererCursor {
+        clip_index: source.segment.recording_clip,
+        timescale: source.segment.timescale,
+        samples,
+    }
+}
+
+fn mix_transition_audio(
+    outgoing: &[f32],
+    incoming: &[f32],
+    output: &mut [f32],
+    kind: ClipTransitionType,
+    progress: f64,
+    duration: f64,
+) {
+    let progress_per_sample = 1.0 / (duration * AudioData::SAMPLE_RATE as f64);
+    for (sample_index, ((outgoing_frame, incoming_frame), output_frame)) in outgoing
+        .chunks_exact(2)
+        .zip(incoming.chunks_exact(2))
+        .zip(output.chunks_exact_mut(2))
+        .enumerate()
+    {
+        let progress = (progress + sample_index as f64 * progress_per_sample).clamp(0.0, 1.0);
+        let (outgoing_gain, incoming_gain) = match kind {
+            ClipTransitionType::CrossFade => {
+                let angle = progress * std::f64::consts::FRAC_PI_2;
+                (angle.cos() as f32, angle.sin() as f32)
+            }
+            ClipTransitionType::FadeThroughBlack => (
+                (1.0 - progress * 2.0).max(0.0) as f32,
+                (progress * 2.0 - 1.0).max(0.0) as f32,
+            ),
+        };
+        output_frame[0] = (outgoing_frame[0] * outgoing_gain + incoming_frame[0] * incoming_gain)
+            .clamp(-1.0, 1.0);
+        output_frame[1] = (outgoing_frame[1] * outgoing_gain + incoming_frame[1] * incoming_gain)
+            .clamp(-1.0, 1.0);
     }
 }
 
@@ -1172,7 +1355,8 @@ fn spawn_progressive_render(
 mod tests {
     use super::*;
     use cap_project::{
-        ClipConfiguration, ProjectConfiguration, TimelineConfiguration, TimelineSegment,
+        ClipConfiguration, ClipTransition, ProjectConfiguration, TimelineConfiguration,
+        TimelineSegment,
     };
     use std::{path::Path, sync::Arc};
     use tempfile::TempDir;
@@ -1302,6 +1486,7 @@ mod tests {
                         name: None,
                     },
                 ],
+                transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),
@@ -1430,6 +1615,7 @@ mod tests {
         let project = ProjectConfiguration {
             timeline: Some(TimelineConfiguration {
                 segments,
+                transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),
@@ -1505,6 +1691,105 @@ mod tests {
         value as f32 / 32768.0
     }
 
+    fn transition_fixture(
+        kind: ClipTransitionType,
+    ) -> (TempDir, AudioRenderer, ProjectConfiguration) {
+        let _ = ffmpeg::init();
+        let dir = TempDir::new().unwrap();
+        let outgoing_path = dir.path().join("outgoing.wav");
+        let incoming_path = dir.path().join("incoming.wav");
+        write_step_wav(&outgoing_path, &[8000]);
+        write_step_wav(&incoming_path, &[16000]);
+        let audio_segments = vec![
+            AudioSegment {
+                tracks: vec![AudioSegmentTrack::new(
+                    Arc::new(AudioData::from_file(&outgoing_path).unwrap()),
+                    gain,
+                    stereo,
+                    no_offset,
+                )],
+            },
+            AudioSegment {
+                tracks: vec![AudioSegmentTrack::new(
+                    Arc::new(AudioData::from_file(&incoming_path).unwrap()),
+                    gain,
+                    stereo,
+                    no_offset,
+                )],
+            },
+        ];
+        let project = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: vec![segment(0, 0.0, 1.0, 1.0), segment(1, 0.0, 1.0, 1.0)],
+                transitions: vec![ClipTransition {
+                    segment_index: 1,
+                    kind,
+                    duration: 0.5,
+                }],
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+            }),
+            clips: vec![
+                ClipConfiguration {
+                    index: 0,
+                    ..Default::default()
+                },
+                ClipConfiguration {
+                    index: 1,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        (dir, AudioRenderer::new(audio_segments), project)
+    }
+
+    fn left_at_time(stream: &[f32], time: f64) -> f32 {
+        let sample = (time * AudioData::SAMPLE_RATE as f64).round() as usize;
+        stream[sample * 2]
+    }
+
+    #[test]
+    fn crossfade_audio_uses_equal_power_weights() {
+        let (_dir, mut renderer, project) = transition_fixture(ClipTransitionType::CrossFade);
+        let stream = render_export_audio(&mut renderer, &project, 30, 45);
+        let midpoint = left_at_time(&stream, 0.75);
+        let expected_midpoint =
+            (expected(8000) + expected(16000)) * std::f32::consts::FRAC_1_SQRT_2;
+
+        assert!((midpoint - expected_midpoint).abs() < 0.01);
+    }
+
+    #[test]
+    fn fade_through_black_audio_reaches_silence_at_midpoint() {
+        let (_dir, mut renderer, project) =
+            transition_fixture(ClipTransitionType::FadeThroughBlack);
+        let stream = render_export_audio(&mut renderer, &project, 30, 45);
+
+        assert!(left_at_time(&stream, 0.75).abs() < 0.0001);
+    }
+
+    #[test]
+    fn transition_audio_advances_past_fractional_sample_boundaries() {
+        let (_dir, mut renderer, mut project) = transition_fixture(ClipTransitionType::CrossFade);
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments[0].end = 1.100_01;
+        timeline.segments[1].end = 1.100_01;
+        let expected = (timeline.duration() * AudioData::SAMPLE_RATE as f64).round() as usize;
+
+        renderer.set_playhead(0.0, &project);
+        let (written, samples) = renderer.render_frame_raw(expected, &project).unwrap();
+
+        assert_eq!(written, expected);
+        assert_eq!(samples.len(), expected * 2);
+    }
+
     #[test]
     fn export_audio_virtual_negative_timing_offset_inserts_leading_silence() {
         let dir = TempDir::new().unwrap();
@@ -1520,6 +1805,7 @@ mod tests {
         let project = ProjectConfiguration {
             timeline: Some(TimelineConfiguration {
                 segments: vec![segment(0, 0.0, 3.0, 1.0)],
+                transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),
@@ -1558,6 +1844,7 @@ mod tests {
         let project = ProjectConfiguration {
             timeline: Some(TimelineConfiguration {
                 segments: vec![segment(0, 0.0, 3.0, 1.0)],
+                transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),
@@ -1697,6 +1984,7 @@ mod tests {
         ProjectConfiguration {
             timeline: Some(TimelineConfiguration {
                 segments: vec![segment(0, 0.0, 3.0, 1.0)],
+                transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),

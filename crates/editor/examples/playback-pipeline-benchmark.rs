@@ -304,6 +304,7 @@ async fn load_recording(
         if !timeline_segments.is_empty() {
             project.timeline = Some(TimelineConfiguration {
                 segments: timeline_segments,
+                transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),

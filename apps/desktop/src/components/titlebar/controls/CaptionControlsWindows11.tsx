@@ -15,16 +15,23 @@ import { WindowControlButton as ControlButton } from "./WindowControlButton";
 export default function (
 	props: ComponentProps<"div"> & {
 		maximizable?: boolean;
-		minimizable?: boolean;
+		maximized?: boolean;
+		onMaximize?: () => void;
 	},
 ) {
 	const [local, otherProps] = splitProps(props, [
 		"class",
 		"maximizable",
-		"minimizable",
+		"maximized",
+		"onMaximize",
 	]);
 	const currentWindow = getCurrentWindow();
 	const [focused, setFocus] = createSignal(true);
+	const hasCustomMaximize = () => local.onMaximize !== undefined;
+	const maximizable = () =>
+		local.maximizable !== false &&
+		(hasCustomMaximize() || titlebarState.maximizable);
+	const maximized = () => local.maximized ?? titlebarState.maximized;
 
 	let unlisten: (() => void) | undefined;
 	onMount(async () => {
@@ -65,19 +72,16 @@ export default function (
 				</ControlButton>
 			</Show>
 			<Show
-				when={
-					titlebarState.maximizable ||
-					!titlebarState.hideMaximize ||
-					props.maximizable
-				}
+				when={maximizable() || !titlebarState.hideMaximize || local.maximizable}
 			>
 				<ControlButton
-					disabled={!titlebarState.maximizable || props.maximizable === false}
+					disabled={!maximizable()}
 					onClick={
-						titlebarState.maximizable
-							? titlebarState.maximized
-								? currentWindow.unmaximize
-								: currentWindow.maximize
+						maximizable()
+							? (local.onMaximize ??
+								(maximized()
+									? currentWindow.unmaximize
+									: currentWindow.maximize))
 							: undefined
 					}
 					class={cx(
@@ -86,11 +90,7 @@ export default function (
 						"disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40",
 					)}
 				>
-					{titlebarState.maximized ? (
-						<icons.maximizeRestoreWin />
-					) : (
-						<icons.maximizeWin />
-					)}
+					{maximized() ? <icons.maximizeRestoreWin /> : <icons.maximizeWin />}
 				</ControlButton>
 			</Show>
 			<ControlButton

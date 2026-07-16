@@ -40,6 +40,10 @@ export type UserProfileStore = {
 	updatedAt: number;
 };
 
+export type MainWindowUIStore = {
+	expanded: boolean;
+};
+
 let _store: Promise<Store> | undefined;
 const store = () => {
 	if (!_store) {
@@ -96,6 +100,10 @@ export const presetsStore = declareStore<PresetsStore>("presets");
 export const authStore = declareStore<AuthStore>("auth");
 export const automationsStore = declareStore<AutomationsStore>("automations");
 export const userProfileStore = declareStore<UserProfileStore>("user_profile");
+export const mainWindowUIStore = declareStore<MainWindowUIStore>(
+	"main_window_ui",
+	{ expanded: false },
+);
 export const hotkeysStore = declareStore<HotkeysStore>("hotkeys");
 export const generalSettingsStore =
 	declareStore<GeneralSettingsStore>("general_settings");

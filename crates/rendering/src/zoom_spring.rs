@@ -255,6 +255,7 @@ struct TimeMapSegment {
     timeline_end: f64,
     recording_start: f64,
     timescale: f64,
+    recording_clip: u32,
 }
 
 fn build_time_map(timeline: Option<&TimelineConfiguration>) -> Vec<TimeMapSegment> {
@@ -262,9 +263,14 @@ fn build_time_map(timeline: Option<&TimelineConfiguration>) -> Vec<TimeMapSegmen
         return Vec::new();
     };
 
-    let mut accum = 0.0;
     let mut map = Vec::with_capacity(timeline.segments.len());
-    for segment in &timeline.segments {
+    let mut accum = 0.0;
+    for (segment_index, segment) in timeline.segments.iter().enumerate() {
+        if !timeline.transitions.is_empty() {
+            accum -= timeline
+                .effective_transition(segment_index)
+                .map_or(0.0, |transition| transition.duration);
+        }
         let duration = segment.duration();
         if !duration.is_finite() || duration <= 0.0 {
             continue;
@@ -274,6 +280,7 @@ fn build_time_map(timeline: Option<&TimelineConfiguration>) -> Vec<TimeMapSegmen
             timeline_end: accum + duration,
             recording_start: segment.start,
             timescale: segment.timescale,
+            recording_clip: segment.recording_clip,
         });
         accum += duration;
     }
@@ -282,7 +289,12 @@ fn build_time_map(timeline: Option<&TimelineConfiguration>) -> Vec<TimeMapSegmen
 
 /// Maps a timeline timestamp to recording seconds. Identity when no timeline
 /// is configured; clamps to the nearest edit boundary outside the timeline.
-fn map_timeline_to_recording_secs(map: &[TimeMapSegment], timeline_secs: f64) -> f64 {
+fn map_timeline_to_recording_secs(
+    map: &[TimeMapSegment],
+    timeline_secs: f64,
+    recording_clip: Option<u32>,
+    prefer_outgoing: bool,
+) -> f64 {
     let Some(first) = map.first() else {
         return timeline_secs;
     };
@@ -291,11 +303,26 @@ fn map_timeline_to_recording_secs(map: &[TimeMapSegment], timeline_secs: f64) ->
         return first.recording_start;
     }
 
-    for segment in map {
-        if timeline_secs < segment.timeline_end {
-            return segment.recording_start
-                + (timeline_secs - segment.timeline_start) * segment.timescale;
-        }
+    let contains = |segment: &&TimeMapSegment| {
+        timeline_secs >= segment.timeline_start && timeline_secs < segment.timeline_end
+    };
+    let segment = recording_clip
+        .and_then(|recording_clip| {
+            if prefer_outgoing {
+                map.iter()
+                    .filter(contains)
+                    .find(|segment| segment.recording_clip == recording_clip)
+            } else {
+                map.iter()
+                    .rev()
+                    .filter(contains)
+                    .find(|segment| segment.recording_clip == recording_clip)
+            }
+        })
+        .or_else(|| map.iter().rev().find(contains));
+    if let Some(segment) = segment {
+        return segment.recording_start
+            + (timeline_secs - segment.timeline_start) * segment.timescale;
     }
 
     let last = map.last().expect("map is non-empty");
@@ -344,8 +371,15 @@ pub struct ZoomTransformTimeline {
     /// Auto segments, `None` for Manual ones.
     clusters: Vec<Option<Vec<ClickCluster>>>,
     time_map: Vec<TimeMapSegment>,
+    recording_clip: Option<u32>,
+    prefer_outgoing: bool,
     /// Total number of samples covering [0, duration] plus one lerp partner.
     total_samples: usize,
+}
+
+struct RecordingClipSelection {
+    recording_clip: Option<u32>,
+    prefer_outgoing: bool,
 }
 
 impl ZoomTransformTimeline {
@@ -357,6 +391,33 @@ impl ZoomTransformTimeline {
         duration_secs: f64,
         crop: Option<CursorCropMap>,
     ) -> Self {
+        Self::new_for_recording_clip(
+            zoom_segments,
+            timeline,
+            cursor_events,
+            spring,
+            duration_secs,
+            crop,
+            RecordingClipSelection {
+                recording_clip: None,
+                prefer_outgoing: false,
+            },
+        )
+    }
+
+    fn new_for_recording_clip(
+        zoom_segments: &[ZoomSegment],
+        timeline: Option<&TimelineConfiguration>,
+        cursor_events: &CursorEvents,
+        spring: ScreenMovementSpring,
+        duration_secs: f64,
+        crop: Option<CursorCropMap>,
+        selection: RecordingClipSelection,
+    ) -> Self {
+        let RecordingClipSelection {
+            recording_clip,
+            prefer_outgoing,
+        } = selection;
         let mut zoom_segments = zoom_segments.to_vec();
         zoom_segments.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.end.total_cmp(&b.end)));
 
@@ -365,9 +426,19 @@ impl ZoomTransformTimeline {
             .iter()
             .map(|segment| match segment.mode {
                 ZoomMode::Auto => {
-                    let recording_start = map_timeline_to_recording_secs(&time_map, segment.start);
-                    let recording_end =
-                        map_timeline_to_recording_secs(&time_map, segment.end).max(recording_start);
+                    let recording_start = map_timeline_to_recording_secs(
+                        &time_map,
+                        segment.start,
+                        recording_clip,
+                        prefer_outgoing,
+                    );
+                    let recording_end = map_timeline_to_recording_secs(
+                        &time_map,
+                        segment.end,
+                        recording_clip,
+                        prefer_outgoing,
+                    )
+                    .max(recording_start);
                     Some(build_clusters(
                         cursor_events,
                         recording_start,
@@ -388,6 +459,23 @@ impl ZoomTransformTimeline {
         // One sample per step across the duration, plus one trailing sample so
         // a lookup right at the end always has a lerp partner.
         let total_samples = (duration_secs * 1000.0 / STEP_MS).ceil() as usize + 2;
+        if zoom_segments.is_empty() {
+            return Self {
+                samples: vec![TimelineSample {
+                    amount: 1.0,
+                    center: XY::new(0.5, 0.5),
+                    activity: 0.0,
+                    snapped: false,
+                }],
+                state: None,
+                zoom_segments,
+                clusters,
+                time_map,
+                recording_clip,
+                prefer_outgoing,
+                total_samples: 1,
+            };
+        }
 
         let spring_config = SpringMassDamperSimulationConfig {
             tension: spring.stiffness,
@@ -401,6 +489,8 @@ impl ZoomTransformTimeline {
             zoom_segments,
             clusters,
             time_map,
+            recording_clip,
+            prefer_outgoing,
             total_samples,
         };
 
@@ -445,12 +535,64 @@ impl ZoomTransformTimeline {
         duration_secs: f64,
         screen_size: XY<u32>,
     ) -> Self {
+        Self::from_project_for_recording_clip(
+            project,
+            cursor_events,
+            duration_secs,
+            screen_size,
+            None,
+            false,
+        )
+    }
+
+    pub fn from_project_for_clip(
+        project: &ProjectConfiguration,
+        cursor_events: &CursorEvents,
+        duration_secs: f64,
+        screen_size: XY<u32>,
+        recording_clip: u32,
+    ) -> Self {
+        Self::from_project_for_recording_clip(
+            project,
+            cursor_events,
+            duration_secs,
+            screen_size,
+            Some(recording_clip),
+            false,
+        )
+    }
+
+    pub fn from_project_for_outgoing_clip(
+        project: &ProjectConfiguration,
+        cursor_events: &CursorEvents,
+        duration_secs: f64,
+        screen_size: XY<u32>,
+        recording_clip: u32,
+    ) -> Self {
+        Self::from_project_for_recording_clip(
+            project,
+            cursor_events,
+            duration_secs,
+            screen_size,
+            Some(recording_clip),
+            true,
+        )
+    }
+
+    fn from_project_for_recording_clip(
+        project: &ProjectConfiguration,
+        cursor_events: &CursorEvents,
+        duration_secs: f64,
+        screen_size: XY<u32>,
+        recording_clip: Option<u32>,
+        prefer_outgoing: bool,
+    ) -> Self {
         let crop = project
             .background
             .crop
             .as_ref()
             .and_then(|crop| CursorCropMap::from_crop(crop, screen_size));
-        Self::new(
+        Self::new_for_recording_clip(
             project
                 .timeline
                 .as_ref()
@@ -461,6 +603,10 @@ impl ZoomTransformTimeline {
             project.screen_movement_spring,
             duration_secs,
             crop,
+            RecordingClipSelection {
+                recording_clip,
+                prefer_outgoing,
+            },
         )
     }
 
@@ -635,8 +781,12 @@ impl ZoomTransformTimeline {
                         (f64::from(x).clamp(0.0, 1.0), f64::from(y).clamp(0.0, 1.0))
                     }
                     ZoomMode::Auto => {
-                        let recording_ms =
-                            map_timeline_to_recording_secs(&self.time_map, timeline_secs) * 1000.0;
+                        let recording_ms = map_timeline_to_recording_secs(
+                            &self.time_map,
+                            timeline_secs,
+                            self.recording_clip,
+                            self.prefer_outgoing,
+                        ) * 1000.0;
                         let focus = self.clusters[index]
                             .as_deref()
                             .and_then(|clusters| cluster_center_at_time(clusters, recording_ms))
@@ -672,7 +822,8 @@ impl ZoomTransformTimeline {
 #[cfg(test)]
 mod tests {
     use cap_project::{
-        CursorClickEvent, CursorMoveEvent, GlideDirection, TimelineSegment, ZoomMode,
+        ClipTransition, ClipTransitionType, CursorClickEvent, CursorMoveEvent, GlideDirection,
+        TimelineSegment, ZoomMode,
     };
 
     use super::*;
@@ -733,6 +884,16 @@ mod tests {
             duration,
             None,
         )
+    }
+
+    #[test]
+    fn empty_zoom_timeline_stays_constant_without_precompute_work() {
+        let mut timeline = timeline_for(&[], &CursorEvents::default(), 60.0 * 60.0);
+        timeline.ensure_precomputed_until(60.0 * 60.0);
+
+        assert!(timeline.state.is_none());
+        assert_eq!(timeline.samples.len(), 1);
+        assert_eq!(timeline.sample(60.0 * 60.0).display_amount(), 1.0);
     }
 
     /// Max |value delta| and |slope delta| between adjacent 8ms sample
@@ -1331,6 +1492,7 @@ mod tests {
                 end: 20.0,
                 name: None,
             }],
+            transitions: vec![],
             zoom_segments: vec![],
             scene_segments: vec![],
             mask_segments: vec![],
@@ -1371,6 +1533,58 @@ mod tests {
             "expected framing near {:?}, got {:?}",
             toward_bottom_right,
             settled.bounds
+        );
+    }
+
+    #[test]
+    fn timeline_mapping_uses_incoming_source_during_transition() {
+        let timeline = TimelineConfiguration {
+            segments: vec![
+                TimelineSegment {
+                    recording_clip: 0,
+                    timescale: 1.0,
+                    start: 0.0,
+                    end: 4.0,
+                    name: None,
+                },
+                TimelineSegment {
+                    recording_clip: 0,
+                    timescale: 1.0,
+                    start: 10.0,
+                    end: 14.0,
+                    name: None,
+                },
+            ],
+            transitions: vec![ClipTransition {
+                segment_index: 1,
+                kind: ClipTransitionType::CrossFade,
+                duration: 0.5,
+            }],
+            zoom_segments: Vec::new(),
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
+        };
+        let map = build_time_map(Some(&timeline));
+
+        assert_eq!(
+            map_timeline_to_recording_secs(&map, 3.25, None, false),
+            3.25
+        );
+        assert_eq!(
+            map_timeline_to_recording_secs(&map, 3.75, None, false),
+            10.25
+        );
+        assert_eq!(
+            map_timeline_to_recording_secs(&map, 3.75, Some(0), false),
+            10.25
+        );
+        assert_eq!(
+            map_timeline_to_recording_secs(&map, 3.75, Some(0), true),
+            3.75
         );
     }
 

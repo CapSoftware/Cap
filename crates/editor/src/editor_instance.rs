@@ -4,7 +4,7 @@ use cap_audio::AudioData;
 use cap_project::StudioRecordingMeta;
 use cap_project::{
     CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
-    TimelineSegment, XY,
+    TimelineFrameMapping, TimelineSegment, XY,
 };
 use cap_rendering::{
     ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
@@ -211,6 +211,7 @@ impl EditorInstance {
             if !timeline_segments.is_empty() {
                 project.timeline = Some(TimelineConfiguration {
                     segments: timeline_segments,
+                    transitions: Vec::new(),
                     zoom_segments: Vec::new(),
                     scene_segments: Vec::new(),
                     mask_segments: Vec::new(),
@@ -522,10 +523,23 @@ impl EditorInstance {
                     }
 
                     let project = self.project_config.1.borrow().clone();
+                    let frame_time = frame_number as f64 / fps as f64;
+                    let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
+                        if timeline.transitions.is_empty() {
+                            return None;
+                        }
+                        match timeline.get_frame_mapping(frame_time) {
+                            Some(TimelineFrameMapping::Transition {
+                                outgoing,
+                                kind,
+                                progress,
+                                ..
+                            }) => Some((outgoing, kind, progress)),
+                            _ => None,
+                        }
+                    });
 
-                    let Some((segment_time, segment)) =
-                        project.get_segment_time(frame_number as f64 / fps as f64)
-                    else {
+                    let Some((segment_time, segment)) = project.get_segment_time(frame_time) else {
                         warn!(
                             "Preview renderer: no segment found for frame {}",
                             frame_number
@@ -617,14 +631,80 @@ impl EditorInstance {
                             // timeline playback and export use (the old focus
                             // interpolator was never precomputed here and fell
                             // back to a divergent direct interpolation).
-                            let mut zoom_timeline = ZoomTransformTimeline::from_project(
+                            let mut zoom_timeline =
+                                ZoomTransformTimeline::from_project_for_clip(
                                 &project,
                                 &segment_medias.cursor,
                                 total_duration,
                                 self.render_constants.options.screen_size,
+                                segment.recording_clip,
                             );
                             zoom_timeline
                                 .ensure_precomputed_until((frame_number as f32 + 1.0) / fps as f32);
+
+                            let outgoing_transition = if let Some((outgoing, kind, progress)) =
+                                transition_mapping
+                            {
+                                let outgoing_media =
+                                    &self.segment_medias[outgoing.segment.recording_clip as usize];
+                                let outgoing_offsets = project
+                                    .clips
+                                    .iter()
+                                    .find(|clip| clip.index == outgoing.segment.recording_clip)
+                                    .map(|clip| clip.offsets)
+                                    .unwrap_or_default();
+                                let outgoing_frames = tokio::select! {
+                                    biased;
+                                    _ = preview_rx.changed() => {
+                                        continue;
+                                    }
+                                    frames = outgoing_media.decoders.get_frames_initial(
+                                        outgoing.source_time as f32,
+                                        !project.camera.hide,
+                                        true,
+                                        outgoing_offsets,
+                                    ) => frames,
+                                };
+                                if let Some(outgoing_frames) = outgoing_frames {
+                                    let mut outgoing_zoom =
+                                        ZoomTransformTimeline::from_project_for_outgoing_clip(
+                                            &project,
+                                            &outgoing_media.cursor,
+                                            total_duration,
+                                            self.render_constants.options.screen_size,
+                                            outgoing.segment.recording_clip,
+                                        );
+                                    outgoing_zoom.ensure_precomputed_until(
+                                        (frame_number as f32 + 1.0) / fps as f32,
+                                    );
+                                    let outgoing_uniforms = ProjectUniforms::new(
+                                        &self.render_constants,
+                                        &project,
+                                        frame_number,
+                                        fps,
+                                        resolution_base,
+                                        &outgoing_media.cursor,
+                                        &outgoing_frames,
+                                        total_duration,
+                                        &outgoing_zoom,
+                                    );
+                                    Some((
+                                        outgoing_frames,
+                                        outgoing_uniforms,
+                                        outgoing_media.cursor.clone(),
+                                        kind,
+                                        progress as f32,
+                                    ))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            if preview_rx.has_changed().unwrap_or(false) {
+                                continue;
+                            }
 
                             let mut next_segment_frames = segment_frames_opt;
                             let mut rendered = false;
@@ -646,15 +726,40 @@ impl EditorInstance {
                                     &zoom_timeline,
                                 );
 
-                                if self
-                                    .renderer
-                                    .render_frame_confirmed(
-                                        segment_frames,
-                                        uniforms,
-                                        segment_medias.cursor.clone(),
-                                    )
-                                    .await
+                                let render_confirmed = if let Some((
+                                    outgoing_frames,
+                                    outgoing_uniforms,
+                                    outgoing_cursor,
+                                    kind,
+                                    progress,
+                                )) = &outgoing_transition
                                 {
+                                    self.renderer
+                                        .render_transition_frame_confirmed(
+                                            editor::RendererTransitionInput {
+                                                segment_frames: outgoing_frames.clone(),
+                                                uniforms: outgoing_uniforms.clone(),
+                                                cursor: outgoing_cursor.clone(),
+                                            },
+                                            editor::RendererTransitionInput {
+                                                segment_frames,
+                                                uniforms,
+                                                cursor: segment_medias.cursor.clone(),
+                                            },
+                                            *kind,
+                                            *progress,
+                                        )
+                                        .await
+                                } else {
+                                    self.renderer
+                                        .render_frame_confirmed(
+                                            segment_frames,
+                                            uniforms,
+                                            segment_medias.cursor.clone(),
+                                        )
+                                        .await
+                                };
+                                if render_confirmed {
                                     rendered = true;
                                     break;
                                 }

@@ -3,7 +3,7 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
 import { makePersisted } from "@solid-primitives/storage";
 import { useSearchParams } from "@solidjs/router";
-import { useMutation, useQuery } from "@tanstack/solid-query";
+import { createMutation, useQuery } from "@tanstack/solid-query";
 import {
 	LogicalPosition,
 	type PhysicalPosition,
@@ -14,7 +14,7 @@ import {
 	CheckMenuItem,
 	Menu,
 	MenuItem,
-	type PredefinedMenuItemOptions,
+	PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type as ostype } from "@tauri-apps/plugin-os";
@@ -22,6 +22,7 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
+	For,
 	Match,
 	mergeProps,
 	onCleanup,
@@ -57,6 +58,16 @@ import {
 import ModeSelect from "~/components/ModeSelect";
 import SelectionHint from "~/components/selection-hint";
 import { authStore, generalSettingsStore } from "~/store";
+import {
+	AREA_SELECTION_STORAGE_KEY,
+	AREA_SELECTION_STORAGE_SYNC,
+	type AreaSelectionPreferences,
+	createDefaultAreaSelectionPreferences,
+	cropBoundsEqual,
+	getLockedAreaBounds,
+	QUICK_AREA_RATIOS,
+	ratiosEqual,
+} from "~/utils/area-selection";
 import { getCameraWindow } from "~/utils/camera-window";
 import { createDevicesQuery } from "~/utils/devices";
 import {
@@ -78,7 +89,6 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
-import { usePrefersReducedMotion } from "~/utils/use-media-query";
 import { CameraSelectBase } from "./(window-chrome)/new-main/CameraSelect";
 import InfoPill from "./(window-chrome)/new-main/InfoPill";
 import { MicrophoneSelectBase } from "./(window-chrome)/new-main/MicrophoneSelect";
@@ -89,6 +99,9 @@ import {
 
 const MIN_SIZE = { width: 150, height: 150 };
 const MIN_SCREENSHOT_SIZE = { width: 1, height: 1 };
+const LOCKED_AREA_COMMIT_DELAY_MS = 180;
+const LIQUID_GLASS_SURFACE_CLASS =
+	"rounded-2xl border border-gray-12/10 bg-gray-1/82 shadow-xl shadow-black/20 backdrop-blur-xl dark:border-white/10 dark:bg-gray-2/82";
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
@@ -178,6 +191,15 @@ function Inner() {
 		targetMode: "display" | "window" | "area" | "camera";
 	}>();
 	const [options, setOptions] = useOptions();
+	const [areaSelectionPreferences, setAreaSelectionPreferences] = makePersisted(
+		createStore<AreaSelectionPreferences>(
+			createDefaultAreaSelectionPreferences(),
+		),
+		{
+			name: AREA_SELECTION_STORAGE_KEY,
+			sync: AREA_SELECTION_STORAGE_SYNC,
+		},
+	);
 
 	onMount(() => {
 		if (params.targetMode) {
@@ -232,24 +254,10 @@ function Inner() {
 		enabled: params.displayId !== undefined && options.targetMode === "display",
 	}));
 
-	const [lastSelectedCropArea, setLastSelectedCropArea] = makePersisted(
-		createStore<{ screen: DisplayId; bounds: CropBounds }[]>([]),
-		{ name: "capture-area" },
-	);
-
 	const [crop, setCrop] = createSignal<CropBounds>(CROP_ZERO);
-
 	type AreaTarget = Extract<ScreenCaptureTarget, { variant: "area" }>;
 	const [pendingAreaTarget, setPendingAreaTarget] =
 		createSignal<AreaTarget | null>(null);
-
-	const createInitialBounds = () => {
-		const target = options.captureTarget;
-		if (target.variant !== "area") return;
-		return lastSelectedCropArea.find((last) => last.screen === target.screen)
-			?.bounds;
-	};
-
 	const [initialAreaBounds, setInitialAreaBounds] = createSignal<
 		CropBounds | undefined
 	>(undefined);
@@ -305,11 +313,6 @@ function Inner() {
 				setPendingAreaTarget(null);
 				setInitialAreaBounds(undefined);
 			}
-
-			if (!prevMode && mode === "area") {
-				setInitialAreaBounds(createInitialBounds());
-			}
-
 			return mode;
 		},
 	);
@@ -794,10 +797,31 @@ function Inner() {
 						},
 					}));
 
-					const [aspect, setAspect] = createSignal<Ratio | null>(null);
-					const [snapToRatioEnabled, setSnapToRatioEnabled] =
-						createSignal(true);
 					const [isInteracting, setIsInteracting] = createSignal(false);
+					const [screenshotAspect, setScreenshotAspect] =
+						createSignal<Ratio | null>(null);
+					const [screenshotSnapToRatio, setScreenshotSnapToRatio] =
+						createSignal(true);
+					const minSize = () =>
+						options.mode === "screenshot" ? MIN_SCREENSHOT_SIZE : MIN_SIZE;
+					const currentAspect = () =>
+						options.mode === "screenshot"
+							? screenshotAspect()
+							: areaSelectionPreferences.aspectRatio;
+					const currentSnapToRatio = () =>
+						options.mode === "screenshot"
+							? screenshotSnapToRatio()
+							: areaSelectionPreferences.snapToRatio;
+					const effectiveInitialAreaBounds = createMemo(() => {
+						const explicitBounds = initialAreaBounds();
+						if (explicitBounds) return explicitBounds;
+						if (options.mode === "screenshot") return undefined;
+						return getLockedAreaBounds(
+							areaSelectionPreferences,
+							displayId(),
+							minSize(),
+						);
+					});
 					const isActiveDisplay = createMemo(() => {
 						const activeDisplayId = targetUnderCursor.display_id;
 						if (activeDisplayId) {
@@ -809,19 +833,100 @@ function Inner() {
 						() => isInteracting() || isActiveDisplay(),
 					);
 					const shouldShowSelectionHint = createMemo(() => {
-						if (initialAreaBounds() !== undefined) return false;
+						if (effectiveInitialAreaBounds() !== undefined) return false;
 						if (!isActiveDisplay()) return false;
 						const bounds = crop();
 						return bounds.width <= 1 && bounds.height <= 1 && !isInteracting();
 					});
 
-					const minSize = () =>
-						options.mode === "screenshot" ? MIN_SCREENSHOT_SIZE : MIN_SIZE;
-
 					const isValid = createMemo(() => {
 						const b = crop();
 						const min = minSize();
 						return b.width >= min.width && b.height >= min.height;
+					});
+					const isSelectionLocked = createMemo(
+						() =>
+							options.mode !== "screenshot" &&
+							getLockedAreaBounds(
+								areaSelectionPreferences,
+								displayId(),
+								minSize(),
+							) !== undefined,
+					);
+
+					function setAspect(aspect: Ratio | null) {
+						if (options.mode === "screenshot") {
+							setScreenshotAspect(aspect);
+							return;
+						}
+						setAreaSelectionPreferences(
+							"aspectRatio",
+							aspect ? [aspect[0], aspect[1]] : null,
+						);
+					}
+
+					function setSnapToRatio(enabled: boolean) {
+						if (options.mode === "screenshot") {
+							setScreenshotSnapToRatio(enabled);
+							return;
+						}
+						setAreaSelectionPreferences("snapToRatio", enabled);
+					}
+
+					function persistLockedSelection() {
+						if (
+							options.mode === "screenshot" ||
+							!areaSelectionPreferences.locked ||
+							areaSelectionPreferences.screenId !== displayId() ||
+							!isValid()
+						)
+							return;
+
+						const bounds = crop();
+						if (!cropBoundsEqual(areaSelectionPreferences.bounds, bounds))
+							setAreaSelectionPreferences("bounds", { ...bounds });
+					}
+
+					function toggleLockedSelection() {
+						if (isSelectionLocked()) {
+							setAreaSelectionPreferences("locked", false);
+							return;
+						}
+						if (!isValid()) return;
+
+						setAreaSelectionPreferences({
+							locked: true,
+							screenId: displayId(),
+							bounds: { ...crop() },
+						});
+					}
+
+					let lockedSelectionCommitTimer: ReturnType<typeof setTimeout> | null =
+						null;
+					createEffect(() => {
+						const bounds = crop();
+						if (lockedSelectionCommitTimer !== null) {
+							clearTimeout(lockedSelectionCommitTimer);
+							lockedSelectionCommitTimer = null;
+						}
+						if (
+							isInteracting() ||
+							options.mode === "screenshot" ||
+							!areaSelectionPreferences.locked ||
+							areaSelectionPreferences.screenId !== displayId() ||
+							!isValid() ||
+							cropBoundsEqual(areaSelectionPreferences.bounds, bounds)
+						)
+							return;
+
+						lockedSelectionCommitTimer = setTimeout(() => {
+							persistLockedSelection();
+							lockedSelectionCommitTimer = null;
+						}, LOCKED_AREA_COMMIT_DELAY_MS);
+					});
+					onCleanup(() => {
+						if (lockedSelectionCommitTimer !== null)
+							clearTimeout(lockedSelectionCommitTimer);
 					});
 
 					const [targetState, setTargetState] = createSignal<{
@@ -1009,51 +1114,37 @@ function Inner() {
 						revertCamera();
 					});
 
+					function resetSelection() {
+						setAspect(null);
+						setPendingAreaTarget(null);
+						if (areaSelectionPreferences.screenId === displayId()) {
+							setAreaSelectionPreferences({
+								locked: false,
+								screenId: null,
+								bounds: null,
+							});
+						}
+						cropperRef?.reset();
+						revertCamera();
+					}
+
 					async function showCropOptionsMenu(e: UIEvent) {
 						e.preventDefault();
 						e.stopPropagation();
 						const items = [
-							...createCropOptionsMenuItems({
-								aspect: aspect(),
-								snapToRatioEnabled: snapToRatioEnabled(),
-								onAspectSet: setAspect,
-								onSnapToRatioSet: setSnapToRatioEnabled,
-							}),
 							{
+								text: "Reset selection",
+								action: resetSelection,
+							},
+							await PredefinedMenuItem.new({
 								item: "Separator",
-							} satisfies PredefinedMenuItemOptions,
-							{
-								text: "Reset saved selection",
-								action: () => {
-									cropperRef?.reset();
-									setAspect(null);
-									setPendingAreaTarget(null);
-									revertCamera();
-
-									const target = options.captureTarget;
-									if (target.variant === "area") {
-										setLastSelectedCropArea((values) =>
-											values.filter((v) => v.screen !== target.screen),
-										);
-									}
-									setInitialAreaBounds(undefined);
-								},
-							},
-							{
-								text: "Reset all saved selections",
-								action: () => {
-									cropperRef?.reset();
-									setAspect(null);
-									setPendingAreaTarget(null);
-									revertCamera();
-
-									const target = options.captureTarget;
-									if (target.variant === "area") {
-										setLastSelectedCropArea([]);
-									}
-									setInitialAreaBounds(undefined);
-								},
-							},
+							}),
+							...createCropOptionsMenuItems({
+								aspect: currentAspect(),
+								snapToRatioEnabled: currentSnapToRatio(),
+								onAspectSet: setAspect,
+								onSnapToRatioSet: setSnapToRatio,
+							}),
 						];
 						const menu = await Menu.new({ items });
 						await menu.popup();
@@ -1084,18 +1175,16 @@ function Inner() {
 						if (raf) cancelAnimationFrame(raf);
 					});
 
-					const onCropperFrame = (bounds: CropBounds) => {
-						if (!controlsEl) return;
+					const controlsStyle = createMemo(() => {
+						const bounds = crop();
 						const size = controlsSize;
-						if (!size?.width || !size?.height) return;
+						if (!size?.width || !size?.height) return undefined;
 
 						if (size.width === 0 || bounds.width === 0) {
-							controlsEl.style.transform = "translate(-1000px, -1000px)"; // Hide off-screen initially
+							return { transform: "translate(-1000px, -1000px)" }; // Hide off-screen initially
 						}
 
-						const centerX =
-							Math.round(bounds.x + bounds.width / 2 - size.width / 2) +
-							size.width / 2;
+						const centerX = bounds.x + bounds.width / 2;
 						let finalY: number;
 
 						// Try below the crop
@@ -1116,18 +1205,18 @@ function Inner() {
 							}
 						}
 
-						const finalX = Math.round(
-							Math.max(
-								SIDE_MARGIN,
-								Math.min(
-									centerX - size.width / 2,
-									window.innerWidth - size.width - SIDE_MARGIN,
-								),
+						const finalX = Math.max(
+							SIDE_MARGIN,
+							Math.min(
+								centerX - size.width / 2,
+								window.innerWidth - size.width - SIDE_MARGIN,
 							),
 						);
 
-						controlsEl.style.transform = `translate(${finalX}px, ${finalY}px)`;
-					};
+						return {
+							transform: `translate(${finalX}px, ${finalY}px)`,
+						};
+					});
 
 					createEffect(() => {
 						if (isInteracting()) return;
@@ -1153,6 +1242,7 @@ function Inner() {
 						setWasInteracting(interacting);
 
 						if (was && !interacting) {
+							persistLockedSelection();
 							if (options.mode === "screenshot" && isValid()) {
 								const cropBounds = crop();
 								const displayInfo = areaDisplayInfo.data;
@@ -1210,8 +1300,6 @@ function Inner() {
 						}
 					});
 
-					const reducedMotion = usePrefersReducedMotion();
-
 					return (
 						<div
 							class="fixed w-screen h-screen"
@@ -1219,17 +1307,122 @@ function Inner() {
 								"opacity-0 pointer-events-none": !shouldShowOverlay(),
 							}}
 						>
+							<Show when={isActiveDisplay()}>
+								<div
+									class="fixed left-1/2 z-[60] max-w-[calc(100vw-2rem)] -translate-x-1/2"
+									classList={{
+										"top-12": macos,
+										"top-4": !macos,
+									}}
+								>
+									<div
+										class={`${LIQUID_GLASS_SURFACE_CLASS} flex h-12 items-center gap-1.5 p-1.5 text-gray-12`}
+									>
+										<div class="min-w-28 px-2 text-base font-normal leading-none tracking-[-0.01em] tabular-nums">
+											{isValid()
+												? `${Math.round(crop().width)} × ${Math.round(crop().height)}`
+												: "Draw an area"}
+										</div>
+
+										<div class="h-6 w-px bg-gray-5" />
+
+										<div class="flex items-center gap-0.5 rounded-xl bg-gray-12/6 p-0.5">
+											<button
+												type="button"
+												class="h-8 rounded-lg px-2 text-xs font-normal transition-colors"
+												classList={{
+													"bg-gray-12/12 text-gray-12":
+														currentAspect() === null,
+													"text-gray-11 hover:bg-gray-12/8":
+														currentAspect() !== null,
+												}}
+												onClick={() => setAspect(null)}
+												aria-pressed={currentAspect() === null}
+											>
+												Free
+											</button>
+											<For each={QUICK_AREA_RATIOS}>
+												{(ratio) => {
+													const selected = () =>
+														ratiosEqual(currentAspect(), ratio);
+													return (
+														<button
+															type="button"
+															class="h-8 rounded-lg px-2 text-xs font-normal tabular-nums transition-colors"
+															classList={{
+																"bg-gray-12/12 text-gray-12": selected(),
+																"text-gray-11 hover:bg-gray-12/8": !selected(),
+															}}
+															onClick={() => setAspect(ratio)}
+															aria-pressed={selected()}
+														>
+															{ratio[0]}:{ratio[1]}
+														</button>
+													);
+												}}
+											</For>
+										</div>
+
+										<button
+											type="button"
+											class="flex size-9 items-center justify-center rounded-xl text-gray-11 transition-colors hover:bg-gray-12/8 hover:text-gray-12"
+											onClick={showCropOptionsMenu}
+											title="More aspect ratios"
+											aria-label="More aspect ratios"
+										>
+											<IconLucideRatio class="size-4" />
+										</button>
+
+										<div class="h-6 w-px bg-gray-5" />
+
+										<button
+											type="button"
+											class="flex size-9 items-center justify-center rounded-xl text-gray-11 transition-colors hover:bg-gray-12/8 hover:text-gray-12"
+											onClick={resetSelection}
+											title="Reset selection"
+											aria-label="Reset selection"
+										>
+											<IconLucideRotateCcw class="size-4" />
+										</button>
+										<button
+											type="button"
+											class="flex size-9 items-center justify-center rounded-xl text-gray-11 transition-colors hover:bg-gray-12/8 hover:text-gray-12"
+											onClick={() => cropperRef?.fill()}
+											title="Fill display"
+											aria-label="Fill display"
+										>
+											<IconLucideMaximize2 class="size-4" />
+										</button>
+										<Show when={options.mode !== "screenshot"}>
+											<button
+												type="button"
+												class="flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs font-normal transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+												classList={{
+													"bg-blue-9 text-white shadow-sm": isSelectionLocked(),
+													"text-gray-11 hover:bg-gray-12/8 hover:text-gray-12":
+														!isSelectionLocked(),
+												}}
+												disabled={!isValid()}
+												onClick={toggleLockedSelection}
+												aria-pressed={isSelectionLocked()}
+												title={
+													isSelectionLocked()
+														? "Stop reusing this area"
+														: "Reuse this area for future recordings"
+												}
+											>
+												<IconLucideLock class="size-3.5" />
+												{isSelectionLocked() ? "Locked" : "Lock"}
+											</button>
+										</Show>
+									</div>
+								</div>
+							</Show>
+
 							<div
 								ref={controlsEl}
-								style={{ transform: "translate(-1000px, -1000px)" }}
-								class="fixed z-50"
-								classList={{
-									"opacity-0 blur-sm": isInteracting(),
-									"opacity-100 blur-none": !isInteracting(),
-									"transition-[opacity,filter] duration-200 cubic-bezier(0.34, 1.56, 0.64, 1)":
-										!reducedMotion(),
-									hidden: shouldShowSelectionHint(),
-								}}
+								class="fixed z-50 transition-opacity"
+								style={controlsStyle()}
 							>
 								<div class="flex flex-col items-center">
 									<Show when={options.mode !== "screenshot"}>
@@ -1251,27 +1444,9 @@ function Inner() {
 											disabled={!isValid()}
 											showBackground={controllerInside()}
 											onRecordingStart={() => {
+												persistLockedSelection();
 												setOriginalCameraBounds(null);
 												dismissPickerForRecordingStart();
-
-												const target = options.captureTarget;
-												if (target.variant === "area") {
-													const existingIndex = lastSelectedCropArea?.findIndex(
-														(item) => item.screen === target.screen,
-													);
-
-													if (existingIndex >= 0) {
-														setLastSelectedCropArea(existingIndex, {
-															screen: target.screen,
-															bounds: crop(),
-														});
-													} else {
-														setLastSelectedCropArea([
-															...lastSelectedCropArea,
-															{ screen: target.screen, bounds: crop() },
-														]);
-													}
-												}
 											}}
 											onClose={() => {
 												setOptions({
@@ -1309,14 +1484,11 @@ function Inner() {
 								ref={cropperRef}
 								onInteraction={setIsInteracting}
 								onCropChange={setCrop}
-								initialCrop={() => initialAreaBounds() ?? CROP_ZERO}
+								initialCrop={() => effectiveInitialAreaBounds() ?? CROP_ZERO}
 								showBounds={isValid()}
-								aspectRatio={aspect() ?? undefined}
-								snapToRatioEnabled={snapToRatioEnabled()}
+								aspectRatio={currentAspect() ?? undefined}
+								snapToRatioEnabled={currentSnapToRatio()}
 								onContextMenu={(e) => showCropOptionsMenu(e)}
-								enableAnimation={!shouldShowSelectionHint()}
-								hideSelection={shouldShowSelectionHint()}
-								onAnimationFrame={onCropperFrame}
 							/>
 						</div>
 					);
@@ -1691,7 +1863,7 @@ function RecordingControls(props: {
 	const cameras = createMemo(() => devices.data?.cameras ?? []);
 	const mics = createMemo(() => devices.data?.microphones ?? []);
 	const permissions = createMemo(() => devices.data?.permissions);
-	const setMicInput = useMutation(() => ({
+	const setMicInput = createMutation(() => ({
 		mutationFn: async (name: string | null) => {
 			const previous = rawOptions.micName ?? null;
 			if (previous !== name) setOptions("micName", name);
@@ -1818,7 +1990,7 @@ function RecordingControls(props: {
 	return (
 		<>
 			<div class="flex flex-col gap-2.5 items-stretch my-2.5 w-104 max-w-[90vw]">
-				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg contrast-more:bg-gray-1!">
+				<div class={`${LIQUID_GLASS_SURFACE_CLASS} p-3`}>
 					<div class="flex gap-2.5 items-center">
 						<div
 							onClick={() => {
@@ -1995,7 +2167,7 @@ function RecordingControls(props: {
 					</div>
 				</div>
 				<Show when={(rawOptions.mode as string) !== "screenshot"}>
-					<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg contrast-more:bg-gray-2!">
+					<div class={`${LIQUID_GLASS_SURFACE_CLASS} p-3`}>
 						<div class="grid grid-cols-2 gap-2 w-full">
 							<CameraSelectBase
 								disabled={devices.isPending}
@@ -2036,20 +2208,22 @@ function RecordingControls(props: {
 					</div>
 				</Show>
 			</div>
-			<div
-				onClick={() => props.setToggleModeSelect?.(true)}
-				class="flex gap-1 justify-center items-center self-center mb-5 motion-safe:transition-opacity duration-200 w-fit hover:opacity-60 contrast-more:hover:opacity-100"
-				classList={{
-					"bg-black/50 p-2 rounded-lg border border-white/10 hover:bg-black/50 hover:opacity-80 contrast-more:border-white! contrast-more:bg-black!":
-						props.showBackground,
-					"hover:opacity-60": !props.showBackground,
-				}}
-			>
-				<IconCapInfo class="opacity-70 will-change-transform size-3 contrast-more:opacity-100" />
-				<p class="text-sm text-white drop-shadow-md contrast-more:drop-shadow-none">
-					<span class="opacity-70 contrast-more:opacity-100">What is </span>
-					<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
-				</p>
+			<div class="flex justify-center items-center w-full">
+				<div
+					onClick={() => props.setToggleModeSelect?.(true)}
+					class="flex gap-1 justify-center items-center self-center mb-5 transition-opacity duration-200 w-fit hover:opacity-60"
+					classList={{
+						"bg-black/50 p-2 rounded-lg border border-white/10 hover:bg-black/50 hover:opacity-80":
+							props.showBackground,
+						"hover:opacity-60": !props.showBackground,
+					}}
+				>
+					<IconCapInfo class="opacity-70 will-change-transform size-3" />
+					<p class="text-sm text-white drop-shadow-md">
+						<span class="opacity-70">What is </span>
+						<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
+					</p>
+				</div>
 			</div>
 		</>
 	);

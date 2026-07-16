@@ -551,6 +551,7 @@ export function Timeline(props: {
 							textSegments: [],
 							captionSegments: [],
 							keyboardSegments: [],
+							transitions: [],
 						};
 						project.timeline.captionSegments = [];
 					}),
@@ -574,6 +575,7 @@ export function Timeline(props: {
 							textSegments: [],
 							captionSegments: [],
 							keyboardSegments: [],
+							transitions: [],
 						};
 						project.timeline.keyboardSegments = [];
 					}),
@@ -645,6 +647,7 @@ export function Timeline(props: {
 				textSegments: [],
 				captionSegments: [],
 				keyboardSegments: [],
+				transitions: [],
 			});
 			resume();
 		}
@@ -688,6 +691,7 @@ export function Timeline(props: {
 					textSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
+					transitions: [],
 				};
 				project.timeline.sceneSegments ??= [];
 				project.timeline.captionSegments ??= [];
@@ -846,6 +850,8 @@ export function Timeline(props: {
 				projectActions.deleteTextSegments(selection.indices);
 			} else if (selection.type === "audio") {
 				projectActions.deleteAudioSegments(selection.indices);
+			} else if (selection.type === "transition") {
+				projectActions.deleteClipTransition(selection.index);
 			} else if (selection.type === "clip") {
 				// Delete all selected clips in reverse order
 				[...selection.indices]

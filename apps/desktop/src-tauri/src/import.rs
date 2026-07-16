@@ -368,6 +368,7 @@ fn ensure_project_timeline<'a>(
     if config.timeline.is_none() {
         config.timeline = Some(TimelineConfiguration {
             segments: full_timeline_for_segments(project_path, segments)?,
+            transitions: Vec::new(),
             zoom_segments: Vec::new(),
             scene_segments: Vec::new(),
             mask_segments: Vec::new(),

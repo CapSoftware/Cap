@@ -36,6 +36,21 @@ pub fn apply_squircle_corners(window: &tauri::WebviewWindow, radius: f64) {
 
 const TAURI_VIBRANCY_VIEW_TAG: isize = 91376254;
 const LIQUID_GLASS_IDENTIFIER: &str = "so.cap.liquid-glass-background";
+const NS_GLASS_EFFECT_VIEW_STYLE_REGULAR: isize = 0;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LiquidGlassActivity {
+    SystemManaged,
+    AlwaysActive,
+}
+
+pub fn apply_main_window_liquid_glass_background(
+    window: &tauri::Window,
+    enabled: bool,
+    radius: f64,
+) -> Result<bool, String> {
+    apply_liquid_glass_background_inner(window, enabled, radius, LiquidGlassActivity::SystemManaged)
+}
 
 unsafe fn remove_tagged_subview(container: cocoa::base::id, tag: isize) {
     use objc::{msg_send, sel, sel_impl};
@@ -111,6 +126,15 @@ pub fn apply_liquid_glass_background(
     enabled: bool,
     radius: f64,
 ) -> Result<bool, String> {
+    apply_liquid_glass_background_inner(window, enabled, radius, LiquidGlassActivity::AlwaysActive)
+}
+
+fn apply_liquid_glass_background_inner(
+    window: &tauri::Window,
+    enabled: bool,
+    radius: f64,
+    activity: LiquidGlassActivity,
+) -> Result<bool, String> {
     use cocoa::{
         base::{id, nil},
         foundation::{NSRect, NSString},
@@ -183,21 +207,27 @@ pub fn apply_liquid_glass_background(
             let _: () = msg_send![glass_view, setCornerRadius: radius];
         }
 
+        if activity == LiquidGlassActivity::SystemManaged {
+            let _: () = msg_send![glass_view, setStyle: NS_GLASS_EFFECT_VIEW_STYLE_REGULAR];
+        }
+
         // Pin the glass to its "always-active" representation so it keeps re-rendering
         // the live backdrop regardless of which window currently has key state. The
         // default for an NSVisualEffectView-derived view is FollowsWindowActiveState,
         // which dims the material whenever another Cap window (camera, settings, etc.)
         // becomes key and masks the backdrop reactivity that's the whole point of
-        // Liquid Glass. NSGlassEffectView is private SPI introduced in macOS 26, so we
-        // probe multiple state knobs (`setState:`, `setActive:`) instead of assuming a
-        // single inheritance path.
+        // Liquid Glass. The always-active state is private SPI, so we probe multiple
+        // state knobs (`setState:`, `setActive:`) instead of assuming one inheritance
+        // path. The main window does not enter this branch and remains system-managed.
         //
         // macOS 26.3 shipped an NSGlassEffectView that responds to neither selector,
         // so the pin silently fails. In that state the material can't be relied on
         // (it dims whenever another window becomes key), so abandon the private SPI
         // entirely and let the caller fall back to NSVisualEffectView vibrancy
         // (Ok(false)).
-        if !force_glass_view_always_active(glass_view) {
+        if activity == LiquidGlassActivity::AlwaysActive
+            && !force_glass_view_always_active(glass_view)
+        {
             // Never entered the view hierarchy; balance the alloc and bail. The
             // content-layer squircle clip applied above is kept (plain Core Animation,
             // not a WindowServer/occlusion mutation) so the vibrancy fallback still gets
@@ -235,10 +265,12 @@ pub fn apply_liquid_glass_background(
             relativeTo: nil
         ];
 
-        // Re-apply after the view enters the hierarchy: some private AppKit views
-        // reset state machine fields on `viewDidMoveToWindow:`, so the post-add pass
-        // is what actually sticks.
-        force_glass_view_always_active(glass_view);
+        if activity == LiquidGlassActivity::AlwaysActive {
+            // Re-apply after the view enters the hierarchy: some private AppKit views
+            // reset state machine fields on `viewDidMoveToWindow:`, so the post-add pass
+            // is what actually sticks.
+            force_glass_view_always_active(glass_view);
+        }
 
         crate::crash_sentinel::set_liquid_glass_outcome("applied");
         Ok(true)
@@ -400,9 +432,8 @@ unsafe fn enable_webview_occlusion_detection(content_view: cocoa::base::id) {
 }
 
 /// Reverse every WindowServer-visible mutation `apply_liquid_glass_background` makes:
-/// remove the private NSGlassEffectView (the load-bearing step — it synchronously
-/// detaches the private compositor relationship), then restore window/WKWebView
-/// occlusion detection and window opacity. MUST run on the AppKit main thread.
+/// remove the NSGlassEffectView, then restore window/WKWebView occlusion detection and
+/// window opacity. MUST run on the AppKit main thread.
 unsafe fn teardown_liquid_glass_ns(ns_window: cocoa::base::id) {
     use cocoa::{
         base::{id, nil},

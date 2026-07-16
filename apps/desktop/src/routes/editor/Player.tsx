@@ -108,6 +108,7 @@ export function PlayerContent() {
 							sceneSegments: [],
 							maskSegments: [],
 							textSegments: [],
+							transitions: [],
 						}),
 						captionSegments: createCaptionTrackSegments(captionSegments),
 					};
