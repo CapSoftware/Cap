@@ -598,6 +598,15 @@ async function waitForDesktopSegmentsMuxCompletion(
 		}
 
 		if (!upload) {
+			const [currentVideo] = await db()
+				.select({ source: videos.source })
+				.from(videos)
+				.where(eq(videos.id, Video.VideoId.make(videoId)));
+
+			if (currentVideo?.source?.type === "desktopMP4") {
+				return;
+			}
+
 			throw new Error("Segment muxing state disappeared before completion");
 		}
 

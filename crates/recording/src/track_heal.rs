@@ -1033,14 +1033,14 @@ mod tests {
         };
 
         let dir = tempfile::tempdir().unwrap();
-        let mut config = ProjectConfiguration::default();
-        config.timeline = Some(TimelineConfiguration {
+        let timeline = TimelineConfiguration {
             segments: vec![TimelineSegment {
                 recording_clip: 0,
                 timescale: 1.0,
                 start: 0.0,
                 end: 202.220711,
                 name: None,
+                speed_audio_mode: None,
             }],
             transitions: Vec::new(),
             zoom_segments: vec![ZoomSegment {
@@ -1059,7 +1059,11 @@ mod tests {
             caption_segments: vec![],
             keyboard_segments: vec![],
             audio_segments: vec![],
-        });
+        };
+        let config = ProjectConfiguration {
+            timeline: Some(timeline),
+            ..Default::default()
+        };
         config.write(dir.path()).unwrap();
 
         let scale = 0.4468;
@@ -1081,8 +1085,7 @@ mod tests {
         };
 
         let dir = tempfile::tempdir().unwrap();
-        let mut config = ProjectConfiguration::default();
-        config.timeline = Some(TimelineConfiguration {
+        let timeline = TimelineConfiguration {
             segments: vec![
                 TimelineSegment {
                     recording_clip: 0,
@@ -1090,6 +1093,7 @@ mod tests {
                     start: 0.0,
                     end: 100.0,
                     name: None,
+                    speed_audio_mode: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -1097,6 +1101,7 @@ mod tests {
                     start: 0.0,
                     end: 50.0,
                     name: None,
+                    speed_audio_mode: None,
                 },
             ],
             transitions: Vec::new(),
@@ -1116,7 +1121,11 @@ mod tests {
             caption_segments: vec![],
             keyboard_segments: vec![],
             audio_segments: vec![],
-        });
+        };
+        let config = ProjectConfiguration {
+            timeline: Some(timeline),
+            ..Default::default()
+        };
         config.write(dir.path()).unwrap();
 
         let mut scales = HashMap::new();

@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     path::PathBuf,
     rc::Rc,
     sync::{Arc, mpsc},
@@ -24,6 +24,7 @@ use super::{
 
 const MAX_RELAXED_FALLBACK_DISTANCE: u32 = 8;
 const SCRUB_REUSE_THRESHOLD_SECS: f32 = 0.5;
+const DECODER_REQUEST_CLUSTER_GAP_FRAMES: u32 = FRAME_CACHE_SIZE as u32 / 2;
 
 #[derive(Clone)]
 struct FrameData {
@@ -600,24 +601,34 @@ impl AVAssetReaderDecoder {
             sender: oneshot::Sender<DecodedFrame>,
         }
 
-        while let Ok(r) = rx.recv() {
-            let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
+        let mut deferred_requests = VecDeque::<PendingRequest>::new();
 
-            match r {
-                VideoDecoderMessage::GetFrame(requested_time, max_fallback_distance, sender) => {
-                    let frame = (requested_time * fps as f32).floor() as u32;
-                    if !sender.is_closed() {
-                        pending_requests.push(PendingRequest {
-                            frame,
-                            max_fallback_distance,
-                            sender,
-                        });
+        loop {
+            let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
+            let processing_deferred = !deferred_requests.is_empty();
+
+            if let Some(request) = deferred_requests.pop_front() {
+                if request.sender.is_closed() {
+                    continue;
+                }
+                let mut last_frame = request.frame;
+                pending_requests.push(request);
+                while deferred_requests.front().is_some_and(|next| {
+                    next.frame.saturating_sub(last_frame) <= DECODER_REQUEST_CLUSTER_GAP_FRAMES
+                }) {
+                    if let Some(request) = deferred_requests.pop_front() {
+                        if request.sender.is_closed() {
+                            continue;
+                        }
+                        last_frame = request.frame;
+                        pending_requests.push(request);
                     }
                 }
-            }
-
-            while let Ok(msg) = rx.try_recv() {
-                match msg {
+            } else {
+                let Ok(message) = rx.recv() else {
+                    break;
+                };
+                match message {
                     VideoDecoderMessage::GetFrame(
                         requested_time,
                         max_fallback_distance,
@@ -633,9 +644,40 @@ impl AVAssetReaderDecoder {
                         }
                     }
                 }
+
+                while let Ok(message) = rx.try_recv() {
+                    match message {
+                        VideoDecoderMessage::GetFrame(
+                            requested_time,
+                            max_fallback_distance,
+                            sender,
+                        ) => {
+                            let frame = (requested_time * fps as f32).floor() as u32;
+                            if !sender.is_closed() {
+                                pending_requests.push(PendingRequest {
+                                    frame,
+                                    max_fallback_distance,
+                                    sender,
+                                });
+                            }
+                        }
+                    }
+                }
             }
 
             pending_requests.sort_by_key(|r| r.frame);
+
+            if !processing_deferred
+                && let Some(split_index) = pending_requests
+                    .windows(2)
+                    .position(|requests| {
+                        requests[1].frame.saturating_sub(requests[0].frame)
+                            > DECODER_REQUEST_CLUSTER_GAP_FRAMES
+                    })
+                    .map(|index| index + 1)
+            {
+                deferred_requests.extend(pending_requests.drain(split_index..));
+            }
 
             let is_scrubbing = if let Some(first_req) = pending_requests.first() {
                 this.scrub_detector.record_request(first_req.frame)

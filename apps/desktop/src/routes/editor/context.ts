@@ -37,6 +37,7 @@ import {
 	type FrameData,
 } from "~/utils/socket";
 import {
+	type ClipSpeedAudioMode,
 	commands,
 	type EditorPreviewQuality,
 	events,
@@ -957,6 +958,18 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 							keyboardSegment.end += diff(keyboardSegment.end);
 						}
 					}),
+				);
+			},
+			setClipSegmentSpeedAudioMode: (
+				index: number,
+				speedAudioMode: ClipSpeedAudioMode,
+			) => {
+				setProject(
+					"timeline",
+					"segments",
+					index,
+					"speedAudioMode",
+					speedAudioMode,
 				);
 			},
 		};

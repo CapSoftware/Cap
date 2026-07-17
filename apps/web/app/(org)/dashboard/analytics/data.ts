@@ -799,10 +799,15 @@ const queryBrowsers = (
 	`;
 
 	type Row = { name: string; views: number };
-	return fallbackIfEmpty(
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
-	).pipe(
+	const rawEffect = withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql));
+	const effect = pathnameFilter
+		? rawEffect
+		: fallbackIfEmpty(
+				withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
+				rawEffect,
+			);
+
+	return effect.pipe(
 		Effect.map((rows: Row[]) =>
 			rows.map((row: Row) => ({
 				name: row.name,
@@ -848,10 +853,15 @@ const queryDevices = (
 	`;
 
 	type Row = { name: string; views: number };
-	return fallbackIfEmpty(
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
-	).pipe(
+	const rawEffect = withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql));
+	const effect = pathnameFilter
+		? rawEffect
+		: fallbackIfEmpty(
+				withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
+				rawEffect,
+			);
+
+	return effect.pipe(
 		Effect.map((rows: Row[]) =>
 			rows.map((row: Row) => ({
 				name: row.name,
@@ -897,10 +907,15 @@ const queryOperatingSystems = (
 	`;
 
 	type Row = { name: string; views: number };
-	return fallbackIfEmpty(
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
-	).pipe(
+	const rawEffect = withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql));
+	const effect = pathnameFilter
+		? rawEffect
+		: fallbackIfEmpty(
+				withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
+				rawEffect,
+			);
+
+	return effect.pipe(
 		Effect.map((rows: Row[]) =>
 			rows.map((row: Row) => ({
 				name: row.name,

@@ -69,7 +69,6 @@ const OFFSCREEN_MESSAGE_ATTEMPTS = 3;
 const OFFSCREEN_MESSAGE_RETRY_DELAY_MS = 75;
 const OVERLAY_MESSAGE_ATTEMPTS = 10;
 const OVERLAY_MESSAGE_RETRY_DELAY_MS = 100;
-const START_PREVIEW_READY_TIMEOUT_MS = 8000;
 
 let bootstrapCache: BootstrapData | null = null;
 let recordingStatus: RecordingStatus = { phase: "idle" };
@@ -82,18 +81,10 @@ let mediaPermissionsCache: MediaPermissionSnapshot = {
 let uploadProgressTabId: number | null = null;
 let activePreviewTabId: number | null = null;
 let pendingPreviewTabId: number | null = null;
-let readyPreviewTabId: number | null = null;
 let offscreenDocumentCreation: Promise<void> | null = null;
 let browserWindowFocused = true;
 let externalCaptureAutoPipPending = false;
-
-type TabWaiter = {
-	resolve: () => void;
-	reject: (error: Error) => void;
-	timeoutId: ReturnType<typeof globalThis.setTimeout>;
-};
-
-const previewReadyWaiters = new Map<number, Set<TabWaiter>>();
+let recordingStartInFlight: Promise<OffscreenResponse> | null = null;
 
 // Content scripts read the webcam "dismissed" flag and the cached preview
 // frame from chrome.storage.session, which is only exposed to trusted
@@ -365,66 +356,6 @@ const sendOverlay = async (
 	return sendOverlayMessageWithRetries(tabId, message);
 };
 
-const removeTabWaiter = (
-	waiters: Map<number, Set<TabWaiter>>,
-	tabId: number,
-	waiter: TabWaiter,
-) => {
-	const tabWaiters = waiters.get(tabId);
-	if (!tabWaiters) return;
-	tabWaiters.delete(waiter);
-	if (tabWaiters.size === 0) {
-		waiters.delete(tabId);
-	}
-};
-
-const waitForTabSignal = (
-	waiters: Map<number, Set<TabWaiter>>,
-	tabId: number,
-	timeoutMs: number,
-	timeoutMessage: string,
-) =>
-	new Promise<void>((resolve, reject) => {
-		let waiter: TabWaiter;
-		const timeoutId = globalThis.setTimeout(() => {
-			removeTabWaiter(waiters, tabId, waiter);
-			reject(new Error(timeoutMessage));
-		}, timeoutMs);
-
-		waiter = {
-			resolve: () => {
-				globalThis.clearTimeout(timeoutId);
-				resolve();
-			},
-			reject: (error) => {
-				globalThis.clearTimeout(timeoutId);
-				reject(error);
-			},
-			timeoutId,
-		};
-
-		const tabWaiters = waiters.get(tabId) ?? new Set<TabWaiter>();
-		tabWaiters.add(waiter);
-		waiters.set(tabId, tabWaiters);
-	});
-
-const settleTabWaiters = (
-	waiters: Map<number, Set<TabWaiter>>,
-	tabId: number,
-	error?: Error,
-) => {
-	const tabWaiters = waiters.get(tabId);
-	if (!tabWaiters) return;
-	waiters.delete(tabId);
-	for (const waiter of tabWaiters) {
-		if (error) {
-			waiter.reject(error);
-		} else {
-			waiter.resolve();
-		}
-	}
-};
-
 const canInjectIntoTab = (tab: chrome.tabs.Tab) => {
 	if (tab.id === undefined) return false;
 	if (!tab.url) return true;
@@ -572,8 +503,17 @@ const shouldAutoPipCaptureSource = (source: RecordingCaptureSource) =>
 const isWebcamPreviewEnabled = (settings: ExtensionSettings) =>
 	settings.webcam.enabled && Boolean(settings.webcam.deviceId);
 
-const shouldShowWebcamPreview = async (settings: ExtensionSettings) =>
-	isWebcamPreviewEnabled(settings) && !(await loadWebcamPreviewDismissed());
+const shouldShowWebcamPreview = async (
+	settings: ExtensionSettings,
+	recording: boolean,
+	recorderOpen = false,
+) => {
+	if (!isWebcamPreviewEnabled(settings)) return false;
+	const dismissed = await loadWebcamPreviewDismissed();
+	if (dismissed) return false;
+	if (recording || recorderOpen) return true;
+	return (await loadSharedUiState()).panelOpen;
+};
 
 const setActionPopup = (popup: string) =>
 	new Promise<void>((resolve) => {
@@ -656,9 +596,6 @@ const hidePreviewTab = async (tabId: number) => {
 	if (pendingPreviewTabId === tabId) {
 		pendingPreviewTabId = null;
 	}
-	if (readyPreviewTabId === tabId) {
-		readyPreviewTabId = null;
-	}
 };
 
 const hidePreviewTabsExcept = async (activeTabId: number) => {
@@ -682,33 +619,25 @@ const hidePreviewTabsExcept = async (activeTabId: number) => {
 const showOverlayInActiveTab = async (
 	settings: ExtensionSettings,
 	recording: boolean,
+	recorderOpen = false,
 ) => {
-	if (!(await shouldShowWebcamPreview(settings))) {
-		if (activePreviewTabId !== null) {
-			await hidePreviewTab(activePreviewTabId);
-		}
-		if (pendingPreviewTabId !== null) {
-			await hidePreviewTab(pendingPreviewTabId);
-		}
+	if (!(await shouldShowWebcamPreview(settings, recording, recorderOpen))) {
+		await broadcastOverlayHide();
 		return false;
 	}
 
 	const tab = await getActiveTab();
-	return showOverlayInTab(tab, settings, recording);
+	return showOverlayInTab(tab, settings, recording, recorderOpen);
 };
 
 const showOverlayInTab = async (
 	tab: chrome.tabs.Tab | null,
 	settings: ExtensionSettings,
 	recording: boolean,
+	recorderOpen = false,
 ) => {
-	if (!(await shouldShowWebcamPreview(settings))) {
-		if (activePreviewTabId !== null) {
-			await hidePreviewTab(activePreviewTabId);
-		}
-		if (pendingPreviewTabId !== null) {
-			await hidePreviewTab(pendingPreviewTabId);
-		}
+	if (!(await shouldShowWebcamPreview(settings, recording, recorderOpen))) {
+		await broadcastOverlayHide();
 		return false;
 	}
 
@@ -732,6 +661,19 @@ const showOverlayInTab = async (
 };
 
 const closeAllExtensionUi = async () => {
+	const currentStatus = await syncRecordingStatus().catch(
+		() => recordingStatus,
+	);
+	// The panel dismisses itself after a successful start; that dismissal must
+	// not tear down the camera or recording bar that now belong to the capture.
+	if (isRecordingPreviewStatus(currentStatus)) {
+		await updateSharedUiState((current) => ({
+			...current,
+			panelOpen: false,
+			updatedAt: Date.now(),
+		}));
+		return;
+	}
 	await saveWebcamPreviewDismissed(true);
 	// Closing the recorder acknowledges a surfaced failure; otherwise the
 	// error keeps reappearing every time the panel opens.
@@ -759,7 +701,7 @@ const showPreviewForRecorderOpen = async (
 	const [settings, auth] = await Promise.all([loadSettings(), loadAuth()]);
 	if (!auth || !isWebcamPreviewEnabled(settings)) return;
 	await saveWebcamPreviewDismissed(false);
-	await showOverlayInTab(tab, settings, isRecordingPreviewStatus(status));
+	await showOverlayInTab(tab, settings, isRecordingPreviewStatus(status), true);
 };
 
 type InjectableTab = chrome.tabs.Tab & { id: number };
@@ -819,7 +761,14 @@ const openRecorderPanel = async (actionTab?: chrome.tabs.Tab) => {
 
 const getPreviewTabIdForPip = async () => {
 	const settings = await loadSettings();
-	if (!(await shouldShowWebcamPreview(settings))) return null;
+	if (
+		!(await shouldShowWebcamPreview(
+			settings,
+			isRecordingPreviewStatus(recordingStatus),
+		))
+	) {
+		return null;
+	}
 	if (activePreviewTabId !== null) return activePreviewTabId;
 	const tab = await getLastFocusedTab();
 	if (!tab || !canInjectIntoTab(tab) || tab.id === undefined) return null;
@@ -840,16 +789,6 @@ const exitActivePreviewAutoPip = async () => {
 	if (tabId === null) return false;
 	return sendOverlay(tabId, { type: "overlay-exit-auto-pip" }, false).catch(
 		() => false,
-	);
-};
-
-const waitForWebcamPreviewReady = (tabId: number) => {
-	if (readyPreviewTabId === tabId) return Promise.resolve();
-	return waitForTabSignal(
-		previewReadyWaiters,
-		tabId,
-		START_PREVIEW_READY_TIMEOUT_MS,
-		"Camera preview did not become ready before recording started.",
 	);
 };
 
@@ -876,7 +815,6 @@ const broadcastOverlayHide = async () => {
 	);
 	activePreviewTabId = null;
 	pendingPreviewTabId = null;
-	readyPreviewTabId = null;
 };
 
 const broadcastRecordingStatusToTabs = async (status: RecordingStatus) => {
@@ -1219,7 +1157,7 @@ const resolveMicWarning = async (
 	return null;
 };
 
-const startRecording = async (mode: RecordingMode) => {
+const performRecordingStart = async (mode: RecordingMode) => {
 	const { settings, auth, bootstrap } = await requireSignedInState();
 	externalCaptureAutoPipPending = false;
 	const recordingSettings =
@@ -1258,19 +1196,7 @@ const startRecording = async (mode: RecordingMode) => {
 		mode === "tab" && tabId !== undefined
 			? await getTabStreamId(tabId)
 			: undefined;
-	const overlayShown = await showOverlayInTab(
-		tab ?? null,
-		recordingSettings,
-		true,
-	);
-	const readyWaits: Array<Promise<void>> = [];
-	if (overlayShown && tabId !== undefined) {
-		if (isWebcamPreviewEnabled(recordingSettings)) {
-			// The preview is a nice-to-have: never abort the recording because it
-			// did not come up in time.
-			readyWaits.push(waitForWebcamPreviewReady(tabId).catch(() => undefined));
-		}
-	}
+	await showOverlayInTab(tab ?? null, recordingSettings, true);
 
 	const creatingStatus = { phase: "creating" } satisfies RecordingStatus;
 	setRecordingStatusAndBroadcast(creatingStatus);
@@ -1278,12 +1204,7 @@ const startRecording = async (mode: RecordingMode) => {
 	// document_idle and onInstalled covers tabs that predate the extension, so
 	// no blanket re-injection is needed here; sendOverlay still injects
 	// per-tab on demand and the bootstrap lazy-loads the overlay UI.
-	if (overlayShown) {
-		await showOverlayInTab(tab ?? null, recordingSettings, true);
-	}
-
 	try {
-		await Promise.all(readyWaits);
 		return await sendOffscreen({
 			target: "offscreen",
 			type: "start-recording",
@@ -1307,13 +1228,28 @@ const startRecording = async (mode: RecordingMode) => {
 	}
 };
 
+const startRecording = (mode: RecordingMode) => {
+	if (recordingStartInFlight) return recordingStartInFlight;
+	const pending = performRecordingStart(mode);
+	const tracked = pending.finally(() => {
+		if (recordingStartInFlight === tracked) {
+			recordingStartInFlight = null;
+		}
+	});
+	recordingStartInFlight = tracked;
+	return tracked;
+};
+
 const forwardToOffscreen = (type: OffscreenRequest["type"]) =>
 	sendOffscreen({ target: "offscreen", type } as OffscreenRequest);
 
 const syncRecordingStatus = async () => {
 	const hasDocument = await hasOffscreenDocument();
 	if (!hasDocument) {
-		if (isActiveRecordingStatus(recordingStatus)) {
+		if (
+			isActiveRecordingStatus(recordingStatus) ||
+			(recordingStatus.phase === "creating" && !recordingStartInFlight)
+		) {
 			setRecordingStatusAndBroadcast({ phase: "idle" });
 		} else {
 			// A restarted service worker boots as "idle" while session storage may
@@ -1336,7 +1272,8 @@ const syncRecordingStatus = async () => {
 	if (response.ok && response.status) {
 		if (
 			recordingStatus.phase === "creating" &&
-			response.status.phase === "idle"
+			response.status.phase === "idle" &&
+			recordingStartInFlight
 		) {
 			return recordingStatus;
 		}
@@ -1359,7 +1296,7 @@ const stopRecordingAndOpenDestination = async () => {
 		if (!isCapturingRecordingStatus(response.status)) {
 			externalCaptureAutoPipPending = false;
 			await saveWebcamPreviewDismissed(true);
-			void broadcastOverlayHide();
+			await broadcastOverlayHide();
 		}
 		void openRecordingDestination(response.status).catch(() => undefined);
 	}
@@ -1378,13 +1315,13 @@ const syncActivePreview = async (tabId?: number) => {
 			settings,
 			recording,
 		);
-		if (!shown && (await shouldShowWebcamPreview(settings))) {
+		if (!shown && (await shouldShowWebcamPreview(settings, recording))) {
 			await enterActivePreviewAutoPip();
 		}
 		return;
 	}
 	const shown = await showOverlayInActiveTab(settings, recording);
-	if (!shown && (await shouldShowWebcamPreview(settings))) {
+	if (!shown && (await shouldShowWebcamPreview(settings, recording))) {
 		await enterActivePreviewAutoPip();
 	}
 };
@@ -1470,8 +1407,6 @@ const handlePreviewReady = async (tabId?: number) => {
 	if (pendingPreviewTabId !== null && pendingPreviewTabId !== tabId) return;
 	activePreviewTabId = tabId;
 	pendingPreviewTabId = null;
-	readyPreviewTabId = tabId;
-	settleTabWaiters(previewReadyWaiters, tabId);
 	await hidePreviewTabsExcept(tabId);
 	if (!browserWindowFocused || externalCaptureAutoPipPending) {
 		await enterActivePreviewAutoPip();
@@ -1486,14 +1421,6 @@ const handlePreviewError = async (
 	if (pendingPreviewTabId === tabId) {
 		pendingPreviewTabId = null;
 	}
-	if (readyPreviewTabId === tabId) {
-		readyPreviewTabId = null;
-	}
-	settleTabWaiters(
-		previewReadyWaiters,
-		tabId,
-		new Error("Camera preview did not become ready."),
-	);
 
 	const fallbackTabId =
 		activePreviewTabId !== null && activePreviewTabId !== tabId
@@ -1566,14 +1493,7 @@ const handleRequest = async (
 
 	if (message.type === "bootstrap") {
 		const state = await loadSignedInState();
-		await saveWebcamPreviewDismissed(false);
 		await syncRecordingStatus().catch(() => recordingStatus);
-		if (state.auth) {
-			void showOverlayInActiveTab(
-				state.settings,
-				isRecordingPreviewStatus(recordingStatus),
-			).catch(() => undefined);
-		}
 		return {
 			ok: true,
 			auth: state.auth,
@@ -1639,8 +1559,9 @@ const handleRequest = async (
 				message: response.error,
 			});
 		} else {
-			// The user dismissed the capture picker; quietly return to idle.
 			setRecordingStatusAndBroadcast({ phase: "idle" });
+			await saveWebcamPreviewDismissed(true);
+			await broadcastOverlayHide();
 		}
 		return response.ok
 			? { ok: true, status: response.status }
@@ -1830,6 +1751,11 @@ const handleRequest = async (
 		return { ok: true };
 	}
 
+	if (message.type === "hide-recording-start-overlays") {
+		await broadcastOverlayHide();
+		return { ok: true };
+	}
+
 	if (message.type === "recording-capture-source") {
 		await handleCaptureSource(message.source);
 		return { ok: true };
@@ -1846,23 +1772,21 @@ const handleRequest = async (
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 	if (isRecordingStatusBroadcast(message)) {
 		setRecordingStatusAndBroadcast(message.status);
-		if (!isCapturingRecordingStatus(message.status)) {
-			externalCaptureAutoPipPending = false;
-			void saveWebcamPreviewDismissed(true)
-				.then(() => broadcastOverlayHide())
-				.catch(() => undefined);
-		}
-		if (message.status.phase === "completed") {
-			const shareUrl = message.status.shareUrl;
-			void getUploadProgressTabId()
-				.then((tabId) => {
-					if (tabId === null) return undefined;
-					setUploadProgressTabId(null);
-					return updateTab(tabId, shareUrl);
-				})
-				.catch(() => undefined);
-		}
-		return false;
+		if (isCapturingRecordingStatus(message.status)) return false;
+
+		externalCaptureAutoPipPending = false;
+		void (async () => {
+			await saveWebcamPreviewDismissed(true);
+			await broadcastOverlayHide();
+			if (message.status.phase !== "completed") return;
+			const tabId = await getUploadProgressTabId();
+			if (tabId === null) return;
+			setUploadProgressTabId(null);
+			await updateTab(tabId, message.status.shareUrl);
+		})()
+			.then(() => sendResponse({ ok: true }))
+			.catch(() => sendResponse({ ok: false }));
+		return true;
 	}
 
 	if (!isServiceWorkerRequest(message)) return false;
@@ -1940,8 +1864,5 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 	}
 	if (pendingPreviewTabId === tabId) {
 		pendingPreviewTabId = null;
-	}
-	if (readyPreviewTabId === tabId) {
-		readyPreviewTabId = null;
 	}
 });

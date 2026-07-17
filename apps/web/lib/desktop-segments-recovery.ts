@@ -5,9 +5,12 @@ import { type User, Video } from "@cap/web-domain";
 import {
 	and,
 	asc,
+	desc,
 	eq,
+	gte,
 	inArray,
 	isNull,
+	like,
 	lte,
 	notLike,
 	or,
@@ -20,11 +23,13 @@ import {
 } from "@/lib/desktop-segments-finalization";
 import {
 	buildDesktopSegmentsRecoveryMarker,
+	DESKTOP_SEGMENTS_RECOVERY_MARKER_PREFIX,
 	getDesktopSegmentsManifestSignature,
 	parseDesktopSegmentsRecoveryMarker,
 } from "@/lib/desktop-segments-recovery-marker";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { WORKFLOW_UPGRADE_ERROR_FRAGMENT } from "@/lib/workflow-recovery";
 
 const MINUTE = 60 * 1000;
 
@@ -233,6 +238,7 @@ async function markCandidateObserved({
 	await db()
 		.update(videoUploads)
 		.set({
+			updatedAt: now,
 			processingMessage: buildDesktopSegmentsRecoveryMarker(
 				signature,
 				now.getTime(),
@@ -396,6 +402,9 @@ export async function recoverStaleDesktopSegments({
 	const staleBefore = new Date(
 		now.getTime() - DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS,
 	);
+	const stabilityBefore = new Date(
+		now.getTime() - DESKTOP_SEGMENTS_RECOVERY_STABILITY_MS,
+	);
 	const candidates = await db()
 		.select({
 			videoId: videos.id,
@@ -406,8 +415,18 @@ export async function recoverStaleDesktopSegments({
 		.where(
 			and(
 				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'desktopSegments'`,
+				gte(videoUploads.startedAt, sql`UTC_TIMESTAMP() - INTERVAL 28 HOUR`),
 				lte(videos.createdAt, staleBefore),
-				lte(videoUploads.updatedAt, staleBefore),
+				or(
+					lte(videoUploads.updatedAt, staleBefore),
+					and(
+						like(
+							videoUploads.processingMessage,
+							`${DESKTOP_SEGMENTS_RECOVERY_MARKER_PREFIX}%`,
+						),
+						lte(videoUploads.updatedAt, stabilityBefore),
+					),
+				),
 				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
 				or(
 					isNull(videoUploads.processingError),
@@ -418,7 +437,12 @@ export async function recoverStaleDesktopSegments({
 				),
 			),
 		)
-		.orderBy(asc(videoUploads.updatedAt))
+		.orderBy(
+			desc(
+				sql<number>`CASE WHEN ${videoUploads.processingError} LIKE ${`%${WORKFLOW_UPGRADE_ERROR_FRAGMENT}%`} THEN 1 ELSE 0 END`,
+			),
+			asc(videoUploads.updatedAt),
+		)
 		.limit(limit);
 
 	const summary: StaleDesktopSegmentsRecoverySummary = {

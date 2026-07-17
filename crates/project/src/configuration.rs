@@ -691,6 +691,17 @@ pub struct TimelineSegment {
     pub end: f64,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_audio_mode: Option<ClipSpeedAudioMode>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ClipSpeedAudioMode {
+    #[default]
+    Mute,
+    MaintainPitch,
+    MatchSpeed,
 }
 
 impl TimelineSegment {
@@ -1817,6 +1828,7 @@ mod tests {
                     start: 0.0,
                     end: 4.0,
                     name: None,
+                    speed_audio_mode: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -1824,6 +1836,7 @@ mod tests {
                     start: 10.0,
                     end: 16.0,
                     name: None,
+                    speed_audio_mode: None,
                 },
             ],
             transitions,
@@ -1886,6 +1899,34 @@ mod tests {
                 && incoming.source_time == 10.5
                 && progress == 0.5
         ));
+    }
+
+    #[test]
+    fn timeline_segment_speed_audio_mode_is_backward_compatible() {
+        let legacy: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 2.0,
+            "start": 0.0,
+            "end": 4.0
+        }))
+        .unwrap();
+        assert_eq!(legacy.speed_audio_mode, None);
+
+        let serialized = serde_json::to_value(&legacy).unwrap();
+        assert!(serialized.get("speedAudioMode").is_none());
+
+        let maintain_pitch: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 2.0,
+            "start": 0.0,
+            "end": 4.0,
+            "speedAudioMode": "maintainPitch"
+        }))
+        .unwrap();
+        assert_eq!(
+            maintain_pitch.speed_audio_mode,
+            Some(ClipSpeedAudioMode::MaintainPitch)
+        );
     }
 
     #[test]

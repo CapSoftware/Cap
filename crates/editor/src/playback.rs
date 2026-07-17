@@ -31,8 +31,6 @@ const PREFETCH_BUFFER_SIZE: usize = 90;
 const PARALLEL_DECODE_TASKS: usize = 4;
 const INITIAL_PARALLEL_DECODE_TASKS: usize = 4;
 const MAX_PREFETCH_AHEAD: u32 = 90;
-#[cfg(not(target_os = "windows"))]
-const PREFETCH_BEHIND: u32 = 10;
 const FRAME_CACHE_SIZE: usize = 90;
 const RAMP_UP_FRAME_COUNT: u32 = 15;
 
@@ -398,11 +396,6 @@ impl Playback {
             let mut next_prefetch_frame = *frame_request_rx.borrow();
             let mut in_flight: FuturesUnordered<PrefetchFuture> = FuturesUnordered::new();
             let mut frames_decoded: u32 = 0;
-            let mut prefetched_behind: HashSet<u32> = HashSet::new();
-            #[cfg(target_os = "windows")]
-            let prefetch_behind = 0u32;
-            #[cfg(not(target_os = "windows"))]
-            let prefetch_behind = PREFETCH_BEHIND;
             let mut cached_project = prefetch_project.borrow().clone();
 
             loop {
@@ -427,7 +420,6 @@ impl Playback {
 
                         next_prefetch_frame = requested;
                         frames_decoded = 0;
-                        prefetched_behind.clear();
 
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.clear();
@@ -514,71 +506,6 @@ impl Playback {
                     }
 
                     next_prefetch_frame += 1;
-                }
-
-                if in_flight.len() < effective_parallel {
-                    for behind_offset in 1..=prefetch_behind {
-                        if in_flight.len() >= effective_parallel {
-                            break;
-                        }
-                        let behind_frame = current_playback_frame.saturating_sub(behind_offset);
-                        if behind_frame == 0 || prefetched_behind.contains(&behind_frame) {
-                            continue;
-                        }
-
-                        let prefetch_time = behind_frame as f64 / fps_f64;
-                        if prefetch_time >= prefetch_duration || prefetch_time < 0.0 {
-                            continue;
-                        }
-
-                        let already_in_flight = prefetch_in_flight
-                            .read()
-                            .map(|guard| guard.contains(&behind_frame))
-                            .unwrap_or(false);
-                        if already_in_flight {
-                            continue;
-                        }
-
-                        if let Some((segment_time, segment)) =
-                            cached_project.get_segment_time(prefetch_time)
-                            && let Some(segment_media) =
-                                prefetch_segment_medias.get(segment.recording_clip as usize)
-                        {
-                            let clip_offsets = cached_project
-                                .clips
-                                .iter()
-                                .find(|v| v.index == segment.recording_clip)
-                                .map(|v| v.offsets)
-                                .unwrap_or_default();
-
-                            let decoders = segment_media.decoders.clone();
-                            let hide_camera = cached_project.camera.hide;
-                            let segment_index = segment.recording_clip;
-                            let transition = transition_decode_request(
-                                &cached_project,
-                                &prefetch_segment_medias,
-                                prefetch_time,
-                            );
-
-                            if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
-                                in_flight_guard.insert(behind_frame);
-                            }
-
-                            prefetched_behind.insert(behind_frame);
-                            in_flight.push(Box::pin(decode_prefetched_frame(
-                                PrefetchDecodeRequest {
-                                    frame_number: behind_frame,
-                                    decoders,
-                                    segment_time,
-                                    segment_index,
-                                    offsets: clip_offsets,
-                                    hide_camera,
-                                    is_initial: false,
-                                    transition,
-                                },
-                            )));
-                        }
-                    }
                 }
 
                 tokio::select! {

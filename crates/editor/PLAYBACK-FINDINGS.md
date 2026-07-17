@@ -695,6 +695,41 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-07-16 (Scrub and Transition Decoder Scheduling)
+
+**Goal**: Reduce decoder work during rapid preview requests and keep 60fps playback stable through scrubbing, jumps, timeline restarts, and transitions without changing export behavior.
+
+**What was done**:
+1. Traced preview, playback prefetch, renderer, and AVAssetReader pool activity during repeated scrubs, transition restarts, forward jumps, and a return to frame zero.
+2. Replaced 15 concurrent preview-prefetch tasks with one sequential, cancellable task that begins only after the requested preview frame renders.
+3. Removed playback prefetch work behind the playhead after runtime traces showed it caused unnecessary decode traffic and false scrub behavior.
+4. Split discontinuous AVAssetReader request batches into contiguous clusters and kept deferred clusters for the next decoder selection.
+5. Changed reset selection to use an untouched decoder first, then the least-recently-used decoder once every pool member has been used.
+
+**Changes Made**:
+- `crates/editor/src/editor_instance.rs`: Preview prefetch is sequential, cancellable, and starts after confirmed rendering.
+- `crates/editor/src/playback.rs`: Removed behind-playhead prefetch.
+- `crates/rendering/src/decoder/avassetreader.rs`: Discontinuous request batches are processed as separate contiguous clusters.
+- `crates/rendering/src/decoder/multi_position.rs`: Repositioning preserves active decoder work when an unused pool member is available.
+
+**Results**:
+- Transition playback sustained 60.38fps with 119 rendered frames and zero skipped frames.
+- Two additional sustained samples measured 60.47fps and 60.19fps with zero skipped frames.
+- Decoder traces showed transition source ranges separated into clusters and assigned to stable decoder positions instead of repeatedly resetting one active decoder.
+- Repeated scrubbing, forward jumps, timeline restarts, and returning to frame zero were visually smooth.
+- Debug instrumentation was removed after the successful verification run.
+
+**Validation**:
+- `cargo fmt --all`
+- `cargo test -p cap-rendering decoder::multi_position::tests::test_reposition_preserves_accessed_decoder_when_unused_decoder_is_available`
+- `cargo test -p cap-rendering` (118 passed, 1 ignored)
+- `cargo check -p cap-rendering -p cap-editor`
+- `cargo check -p cap-export`
+
+**Stopping point**: The reproduced transition and seek workload is smooth at 60fps with zero measured playback skips. The final implementation retains only the measured scheduling changes and their decoder-pool regression test.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

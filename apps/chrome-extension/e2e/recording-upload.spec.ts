@@ -451,6 +451,13 @@ const configureExtension = async (
 							sounds: {
 								enabled: false,
 							},
+							countdown: {
+								enabled: false,
+								seconds: 3,
+							},
+							microphoneWarning: {
+								enabled: false,
+							},
 						},
 					},
 					() => {

@@ -8,7 +8,6 @@ import { buildEnv, serverEnv } from "@cap/env";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
 import { Comment, User, Video } from "@cap/web-domain";
 import { and, eq, gte, isNull, ne, or, sql } from "drizzle-orm";
-import { revalidatePath } from "next/cache";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { getSessionHash } from "@/lib/anonymous-names";
 
@@ -157,7 +156,6 @@ export async function createNotification(
 				videoId: notification.videoId,
 			});
 
-			revalidatePath("/dashboard");
 			return { success: true, notificationId };
 		}
 
@@ -232,8 +230,6 @@ export async function createNotification(
 			data,
 			videoId: notification.videoId,
 		});
-
-		revalidatePath("/dashboard");
 
 		if (type === "comment") {
 			await sendNewCommentEmail({
@@ -400,7 +396,6 @@ export async function createAnonymousViewNotification({
 			videoId,
 			dedupKey,
 		});
-		revalidatePath("/dashboard");
 	} catch (error) {
 		if (isDuplicateEntryError(error)) return;
 		throw error;

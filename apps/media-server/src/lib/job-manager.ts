@@ -1,5 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
+import {
+	getContainerCpuLimit,
+	getContainerCpuUsageMicros,
+} from "./container-cpu";
+import { getContainerMemoryMetrics } from "./container-memory";
 import type { MediaOperationHandle } from "./media-operations";
 import type { TempFileHandle } from "./temp-files";
 import { getActiveDirectVideoProcessCount } from "./video-capacity";
@@ -73,48 +77,52 @@ const configuredMaxProcesses =
 		10,
 	) || 0;
 
-const cpuCount = os.cpus().length;
+const hostCpuCount = os.cpus().length;
 
 const CPU_LOAD_THRESHOLD = 0.8;
+const CPU_REJECT_THRESHOLD = 0.95;
 const DEFAULT_MAX_CONCURRENT_VIDEO_PROCESSES = 4;
-const CGROUP_MEMORY_LIMIT_PATHS = [
-	"/sys/fs/cgroup/memory.max",
-	"/sys/fs/cgroup/memory/memory.limit_in_bytes",
-];
-const MAX_PLAUSIBLE_CONTAINER_LIMIT_BYTES = 1024 ** 5;
 const MEMORY_THROTTLE_THRESHOLD = 0.85;
-const MEMORY_REJECT_THRESHOLD = 0.95;
+const MEMORY_REJECT_THRESHOLD = 0.9;
 const VIDEO_PROCESS_MEMORY_BUDGET_MB = 768;
+const CPU_SAMPLE_MIN_INTERVAL_MS = 250;
 
-function readContainerMemoryLimitMB(): number {
-	for (const path of CGROUP_MEMORY_LIMIT_PATHS) {
-		if (!existsSync(path)) continue;
+let previousContainerCpuUsageMicros = 0;
+let previousContainerCpuSampleAt = 0;
+let containerCpuPressure = 0;
 
-		let rawValue: string;
-		try {
-			rawValue = readFileSync(path, "utf8").trim();
-		} catch {
-			continue;
-		}
-
-		if (!rawValue || rawValue === "max") continue;
-
-		const bytes = Number.parseInt(rawValue, 10);
-		if (
-			Number.isFinite(bytes) &&
-			bytes > 0 &&
-			bytes < MAX_PLAUSIBLE_CONTAINER_LIMIT_BYTES
-		) {
-			return Math.floor(bytes / (1024 * 1024));
-		}
-	}
-
-	return 0;
+function getCpuCapacity(): number {
+	return getContainerCpuLimit() || hostCpuCount;
 }
 
-const PROCESS_RSS_LIMIT_MB =
-	Number.parseInt(process.env.MEDIA_SERVER_MEMORY_LIMIT_MB ?? "0", 10) ||
-	readContainerMemoryLimitMB();
+function getCpuPressure(cpuCapacity: number, loadAvg1m: number): number {
+	const usageMicros = getContainerCpuUsageMicros();
+	const now = performance.now();
+
+	if (usageMicros > 0) {
+		if (
+			previousContainerCpuUsageMicros > 0 &&
+			now - previousContainerCpuSampleAt >= CPU_SAMPLE_MIN_INTERVAL_MS
+		) {
+			const elapsedSeconds = (now - previousContainerCpuSampleAt) / 1000;
+			const usedCpuSeconds =
+				(usageMicros - previousContainerCpuUsageMicros) / 1_000_000;
+			containerCpuPressure =
+				usedCpuSeconds >= 0
+					? Math.max(0, usedCpuSeconds / elapsedSeconds / cpuCapacity)
+					: 0;
+			previousContainerCpuUsageMicros = usageMicros;
+			previousContainerCpuSampleAt = now;
+		} else if (previousContainerCpuUsageMicros === 0) {
+			previousContainerCpuUsageMicros = usageMicros;
+			previousContainerCpuSampleAt = now;
+		}
+
+		return containerCpuPressure;
+	}
+
+	return loadAvg1m / cpuCapacity;
+}
 
 function isActivePhase(phase: JobPhase): boolean {
 	return phase !== "complete" && phase !== "error" && phase !== "cancelled";
@@ -134,12 +142,13 @@ export function getMaxConcurrentVideoProcesses(): number {
 	if (configuredMaxProcesses > 0) {
 		return configuredMaxProcesses;
 	}
+	const containerMemoryLimitMB = getContainerMemoryMetrics().limitMB;
 	const memoryBoundMax =
-		PROCESS_RSS_LIMIT_MB > 0
+		containerMemoryLimitMB > 0
 			? Math.max(
 					1,
 					Math.floor(
-						(PROCESS_RSS_LIMIT_MB * MEMORY_THROTTLE_THRESHOLD) /
+						(containerMemoryLimitMB * MEMORY_THROTTLE_THRESHOLD) /
 							VIDEO_PROCESS_MEMORY_BUDGET_MB,
 					),
 				)
@@ -148,7 +157,7 @@ export function getMaxConcurrentVideoProcesses(): number {
 		1,
 		Math.min(
 			DEFAULT_MAX_CONCURRENT_VIDEO_PROCESSES,
-			Math.floor(cpuCount / 2),
+			Math.floor(getCpuCapacity() / 2),
 			memoryBoundMax,
 		),
 	);
@@ -156,11 +165,15 @@ export function getMaxConcurrentVideoProcesses(): number {
 
 export interface SystemResources {
 	cpuCount: number;
+	hostCpuCount: number;
 	loadAvg1m: number;
 	cpuPressure: number;
 	processRssMB: number;
 	processHeapMB: number;
 	processRssLimitMB: number;
+	containerMemoryUsageMB: number;
+	containerMemoryLimitMB: number;
+	memoryPressure: number;
 	configuredMax: number;
 	effectiveMax: number;
 	throttleReason: string | null;
@@ -168,49 +181,61 @@ export interface SystemResources {
 
 export function getSystemResources(): SystemResources {
 	const loadAvg1m = os.loadavg()[0];
-	const cpuPressure = loadAvg1m / cpuCount;
+	const cpuCount = getCpuCapacity();
+	const cpuPressure = getCpuPressure(cpuCount, loadAvg1m);
 	const mem = process.memoryUsage();
 	const processRssMB = Math.round(mem.rss / (1024 * 1024));
 	const processHeapMB = Math.round(mem.heapUsed / (1024 * 1024));
+	const containerMemory = getContainerMemoryMetrics();
+	const memoryUsageMB = containerMemory.usageMB || processRssMB;
+	const memoryLimitMB = containerMemory.limitMB;
+	const memoryPressure = memoryLimitMB > 0 ? memoryUsageMB / memoryLimitMB : 0;
 	const max = getMaxConcurrentVideoProcesses();
 
 	let effectiveMax = max;
 	let throttleReason: string | null = null;
 
 	if (cpuPressure > CPU_LOAD_THRESHOLD) {
-		effectiveMax = Math.max(
-			1,
-			Math.floor(max * (1 - (cpuPressure - CPU_LOAD_THRESHOLD))),
-		);
-		throttleReason = `CPU load ${cpuPressure.toFixed(2)} exceeds ${CPU_LOAD_THRESHOLD} threshold`;
+		effectiveMax =
+			cpuPressure >= CPU_REJECT_THRESHOLD
+				? 0
+				: Math.max(
+						1,
+						Math.floor(max * (1 - (cpuPressure - CPU_LOAD_THRESHOLD))),
+					);
+		throttleReason = `CPU utilization ${cpuPressure.toFixed(2)} exceeds ${CPU_LOAD_THRESHOLD} threshold`;
 	}
 
-	if (
-		PROCESS_RSS_LIMIT_MB > 0 &&
-		processRssMB > PROCESS_RSS_LIMIT_MB * MEMORY_THROTTLE_THRESHOLD
-	) {
-		const memPressure = processRssMB / PROCESS_RSS_LIMIT_MB;
+	if (memoryPressure > MEMORY_THROTTLE_THRESHOLD) {
 		const memMax =
-			memPressure >= MEMORY_REJECT_THRESHOLD
+			memoryPressure >= MEMORY_REJECT_THRESHOLD
 				? 0
-				: Math.max(1, Math.floor(max * (1 - memPressure)));
+				: Math.max(1, Math.floor(max * (1 - memoryPressure)));
 		if (memMax < effectiveMax) {
 			effectiveMax = memMax;
-			throttleReason = `Process RSS ${processRssMB}MB exceeds ${Math.round(MEMORY_THROTTLE_THRESHOLD * 100)}% of ${PROCESS_RSS_LIMIT_MB}MB limit`;
+			throttleReason = `Container memory ${memoryUsageMB}MB exceeds ${Math.round(MEMORY_THROTTLE_THRESHOLD * 100)}% of ${memoryLimitMB}MB limit`;
 		}
 	}
 
 	return {
 		cpuCount,
+		hostCpuCount,
 		loadAvg1m,
 		cpuPressure,
 		processRssMB,
 		processHeapMB,
-		processRssLimitMB: PROCESS_RSS_LIMIT_MB,
+		processRssLimitMB: memoryLimitMB,
+		containerMemoryUsageMB: containerMemory.usageMB,
+		containerMemoryLimitMB: containerMemory.limitMB,
+		memoryPressure,
 		configuredMax: configuredMaxProcesses,
 		effectiveMax,
 		throttleReason,
 	};
+}
+
+export function hasCriticalMemoryPressure(): boolean {
+	return getSystemResources().memoryPressure >= MEMORY_REJECT_THRESHOLD;
 }
 
 export function canAcceptNewVideoProcess(): boolean {

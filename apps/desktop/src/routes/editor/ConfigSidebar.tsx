@@ -61,6 +61,7 @@ import {
 	type CameraYPosition,
 	type CaptionTrackSegment,
 	type ClipOffsets,
+	type ClipSpeedAudioMode,
 	type CursorAnimationStyle,
 	type CursorType,
 	commands,
@@ -4418,6 +4419,19 @@ function ClipSegmentConfig(props: {
 		);
 	}
 
+	function setSpeedAudioMode(value: string) {
+		if (
+			value === "mute" ||
+			value === "maintainPitch" ||
+			value === "matchSpeed"
+		) {
+			projectActions.setClipSegmentSpeedAudioMode(
+				props.segmentIndex,
+				value satisfies ClipSpeedAudioMode,
+			);
+		}
+	}
+
 	return (
 		<>
 			<div class="flex flex-row justify-between items-center">
@@ -4449,10 +4463,6 @@ function ClipSegmentConfig(props: {
 			</div>
 
 			<Field name="Speed" icon={<IconLucideFastForward class="size-4" />}>
-				<p class="text-gray-11 -mt-3">
-					Modifying speed will mute this segment's audio.
-				</p>
-
 				<KRadioGroup
 					class="flex flex-row gap-1.5 -mt-1"
 					value={props.segment.timescale.toString()}
@@ -4473,6 +4483,36 @@ function ClipSegmentConfig(props: {
 						)}
 					</For>
 				</KRadioGroup>
+
+				<Show when={props.segment.timescale !== 1}>
+					<div class="space-y-2 pt-2">
+						<p class="text-gray-11">
+							Mute is fastest. Maintain pitch keeps voices natural, while Match
+							speed raises or lowers pitch with playback speed.
+						</p>
+						<KRadioGroup
+							class="grid grid-cols-3 gap-1.5"
+							value={props.segment.speedAudioMode ?? "mute"}
+							onChange={setSpeedAudioMode}
+						>
+							<For
+								each={[
+									{ value: "mute", label: "Mute" },
+									{ value: "maintainPitch", label: "Maintain pitch" },
+									{ value: "matchSpeed", label: "Match speed" },
+								]}
+							>
+								{(option) => (
+									<KRadioGroup.Item value={option.value}>
+										<KRadioGroup.ItemControl class="w-full px-2 py-1.5 text-xs text-gray-11 hover:text-gray-12 bg-gray-1 border border-gray-3 rounded-md data-checked:bg-gray-3 data-checked:border-gray-4 data-checked:text-gray-12">
+											{option.label}
+										</KRadioGroup.ItemControl>
+									</KRadioGroup.Item>
+								)}
+							</For>
+						</KRadioGroup>
+					</div>
+				</Show>
 			</Field>
 
 			<div class="space-y-0.5 pt-2">

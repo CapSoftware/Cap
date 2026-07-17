@@ -4,6 +4,10 @@
 		{
 			"path": "/api/cron/finalize-stale-desktop-segments",
 			"schedule": "*/15 * * * *"
+		},
+		{
+			"path": "/api/cron/recover-failed-video-processing",
+			"schedule": "7,22,37,52 * * * *"
 		}
 	],
 	"functions": {

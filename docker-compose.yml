@@ -49,7 +49,7 @@ services:
       PORT: 3456
       MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:-fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210}
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3456/health"]
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3456/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3

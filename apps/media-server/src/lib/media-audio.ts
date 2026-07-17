@@ -1,5 +1,7 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { type Subprocess, spawn } from "bun";
-import { createMediaInput, withTimeout } from "./media-common";
+import { withTimeout } from "./media-common";
 import {
 	canAcceptNewAudioOperation,
 	getActiveAudioOperationCount,
@@ -7,8 +9,9 @@ import {
 	unregisterMediaOperation,
 	withMediaOperation,
 } from "./media-operations";
-import { checkVideoAccessible } from "./media-probe";
+import { materializeStreamingInput } from "./media-video";
 import { registerSubprocess, terminateProcess } from "./subprocess";
+import { ensureTempDir, getTempDir } from "./temp-files";
 
 export interface AudioExtractionOptions {
 	format?: "mp3";
@@ -26,6 +29,8 @@ const CHECK_TIMEOUT_MS = 30_000;
 const EXTRACT_TIMEOUT_MS = 120_000;
 const MAX_AUDIO_SIZE_BYTES = 100 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
+const AUDIO_PROBE_MAX_ATTEMPTS = 3;
+const AUDIO_PROBE_RETRY_BASE_MS = 250;
 
 const DEFAULT_OPTIONS: Required<AudioExtractionOptions> = {
 	format: "mp3",
@@ -98,7 +103,10 @@ function redactUrl(value: string): string {
 }
 
 function redactProcessOutput(output: string, url: string): string {
-	return output.split(url).join(redactUrl(url));
+	return output
+		.split(url)
+		.join(redactUrl(url))
+		.replace(/https?:\/\/[^\s"'<>]+/g, redactUrl);
 }
 
 function getAudioExtractArgs(
@@ -120,34 +128,168 @@ function getAudioExtractArgs(
 	];
 }
 
+function getAudioProbeArgs(inputPath: string): string[] {
+	const normalizedPath = (inputPath.split("?")[0] ?? "").toLowerCase();
+	const args = ["ffprobe", "-v", "error"];
+	if (normalizedPath.endsWith(".m3u8") || normalizedPath.endsWith(".mpd")) {
+		args.push("-protocol_whitelist", "file,http,https,tcp,tls,crypto,data");
+	}
+	if (normalizedPath.endsWith(".m3u8")) {
+		args.push(
+			"-allowed_extensions",
+			"ALL",
+			"-allowed_segment_extensions",
+			"ALL",
+			"-extension_picky",
+			"0",
+		);
+	}
+	args.push("-show_entries", "stream=codec_type", "-of", "csv=p=0", inputPath);
+	return args;
+}
+
+function isRemoteStreamingUrl(value: string): boolean {
+	try {
+		const url = new URL(value);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+		const pathname = url.pathname.toLowerCase();
+		return pathname.endsWith(".m3u8") || pathname.endsWith(".mpd");
+	} catch {
+		return false;
+	}
+}
+
+async function prepareAudioProbeInput(
+	videoUrl: string,
+	abortSignal: AbortSignal,
+): Promise<{ inputPath: string; cleanup: () => Promise<void> }> {
+	if (!isRemoteStreamingUrl(videoUrl)) {
+		return { inputPath: videoUrl, cleanup: async () => {} };
+	}
+
+	await ensureTempDir();
+	const dirPath = await mkdtemp(join(getTempDir(), "audio-probe-"));
+	try {
+		const inputPath = await materializeStreamingInput(
+			videoUrl,
+			dirPath,
+			abortSignal,
+		);
+		return {
+			inputPath,
+			cleanup: async () => {
+				await rm(dirPath, { recursive: true, force: true });
+			},
+		};
+	} catch (error) {
+		await rm(dirPath, { recursive: true, force: true }).catch(() => {});
+		throw error;
+	}
+}
+
+async function probeAudioTracks(
+	inputPath: string,
+	sourceUrl: string,
+	setCurrentCancel: (cancel: () => Promise<void> | void) => void,
+	isCancelled: () => boolean,
+): Promise<boolean> {
+	let lastError: Error | undefined;
+
+	for (let attempt = 0; attempt < AUDIO_PROBE_MAX_ATTEMPTS; attempt++) {
+		if (isCancelled()) {
+			throw new Error("Audio probe cancelled");
+		}
+
+		const proc = registerSubprocess(
+			spawn({
+				cmd: getAudioProbeArgs(inputPath),
+				stdout: "pipe",
+				stderr: "pipe",
+			}),
+		);
+		setCurrentCancel(() => terminateProcess(proc));
+
+		try {
+			const [stdoutText, stderrText, exitCode] = await Promise.all([
+				readStreamWithLimit(
+					proc.stdout as ReadableStream<Uint8Array>,
+					MAX_STDERR_BYTES,
+				),
+				readStreamWithLimit(
+					proc.stderr as ReadableStream<Uint8Array>,
+					MAX_STDERR_BYTES,
+				),
+				proc.exited,
+			]);
+			const safeStderrText = redactProcessOutput(stderrText, sourceUrl);
+
+			if (exitCode === 0) {
+				const trackTypes = stdoutText
+					.split(/\r?\n/)
+					.map((value) => value.trim())
+					.filter(Boolean);
+				if (!trackTypes.includes("video")) {
+					throw new Error("No video stream found");
+				}
+				return trackTypes.includes("audio");
+			}
+
+			lastError = new Error(
+				`FFprobe exited with code ${exitCode}: ${safeStderrText}`,
+			);
+		} finally {
+			await terminateProcess(proc);
+		}
+
+		if (attempt < AUDIO_PROBE_MAX_ATTEMPTS - 1) {
+			await Bun.sleep(AUDIO_PROBE_RETRY_BASE_MS * 2 ** attempt);
+		}
+	}
+
+	throw lastError ?? new Error("FFprobe could not inspect the video");
+}
+
 export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 	if (!canAcceptNewAudioOperation()) {
 		throw new Error("Server is busy, please try again later");
 	}
 
-	return await withMediaOperation("audio", () =>
-		withTimeout(
+	return await withMediaOperation("audio", async (setCancel) => {
+		let cancelled = false;
+		let cancelCurrent: () => Promise<void> | void = () => {};
+		let cleanupInput: () => Promise<void> = async () => {};
+		const abortController = new AbortController();
+		const cancel = async () => {
+			cancelled = true;
+			abortController.abort();
+			await cancelCurrent();
+			await cleanupInput();
+		};
+		setCancel(cancel);
+		return await withTimeout(
 			(async () => {
-				const input = createMediaInput(videoUrl);
+				const preparedInput = await prepareAudioProbeInput(
+					videoUrl,
+					abortController.signal,
+				);
+				cleanupInput = preparedInput.cleanup;
 				try {
-					const videoTrack = await input.getPrimaryVideoTrack();
-					if (!videoTrack) {
-						if (!(await checkVideoAccessible(videoUrl))) {
-							throw new Error(
-								"Media engine could not read video file: no streams detected",
-							);
-						}
-						throw new Error("No video stream found");
-					}
-					const audioTrack = await input.getPrimaryAudioTrack();
-					return Boolean(audioTrack);
+					return await probeAudioTracks(
+						preparedInput.inputPath,
+						videoUrl,
+						(nextCancel) => {
+							cancelCurrent = nextCancel;
+						},
+						() => cancelled,
+					);
 				} finally {
-					input.dispose();
+					await cleanupInput();
 				}
 			})(),
 			CHECK_TIMEOUT_MS,
-		),
-	);
+			cancel,
+		);
+	});
 }
 
 export async function extractAudio(

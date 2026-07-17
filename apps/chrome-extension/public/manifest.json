@@ -3,7 +3,7 @@
 	"name": "Cap - Screen Recorder & Screen Capture",
 	"short_name": "Cap",
 	"description": "Free, open source screen recorder. Capture your screen, tab, camera & mic in Chrome and share a video link the moment you stop.",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"homepage_url": "https://cap.so",
 	"minimum_chrome_version": "116",
 	"icons": {
