@@ -15,6 +15,7 @@ import { WindowControlButton as ControlButton } from "./WindowControlButton";
 export default function (
 	props: ComponentProps<"div"> & {
 		maximizable?: boolean;
+		minimizable?: boolean;
 		maximized?: boolean;
 		onMaximize?: () => void;
 	},
@@ -22,6 +23,7 @@ export default function (
 	const [local, otherProps] = splitProps(props, [
 		"class",
 		"maximizable",
+		"minimizable",
 		"maximized",
 		"onMaximize",
 	]);
