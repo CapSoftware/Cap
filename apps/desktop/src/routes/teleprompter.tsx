@@ -132,6 +132,7 @@ export default function Teleprompter() {
 			.then(async () => {
 				await commands.setWindowAlwaysOnTop(true, TELEPROMPTER_NSWINDOW_LEVEL);
 				await currentWindow.show();
+				if (isWindows) await commands.refreshWindowContentProtection();
 				await currentWindow.setFocus();
 			})
 			.catch((error) => {

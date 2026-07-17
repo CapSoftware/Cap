@@ -2369,10 +2369,16 @@ impl CapWindow {
 
         #[cfg(windows)]
         {
+            let browser_args = windows_webview2_browser_args();
+            let browser_args_json = serde_json::to_string(&browser_args)
+                .expect("Failed to serialize Windows WebView2 browser arguments");
             builder = builder
                 .decorations(false)
                 .zoom_hotkeys_enabled(false)
-                .additional_browser_args(&windows_webview2_browser_args());
+                .additional_browser_args(&browser_args)
+                .initialization_script(format!(
+                    "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.windowsWebview2BrowserArgs = {browser_args_json};"
+                ));
         }
 
         // Linux has no native macOS-style traffic lights, so we drop the window

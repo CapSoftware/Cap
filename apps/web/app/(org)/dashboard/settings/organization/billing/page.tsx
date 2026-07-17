@@ -30,7 +30,9 @@ export default function BillingAndMembersPage() {
 				(canManageBilling ? (
 					<>
 						<BillingSummaryCard />
-						<SeatManagementCard />
+						{activeOrganization?.hasActiveProSeatProvider && (
+							<SeatManagementCard />
+						)}
 					</>
 				) : (
 					<Card>
