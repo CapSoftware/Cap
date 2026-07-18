@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { createResource, createSignal, Show } from "solid-js";
+import { createMemo, createResource, createSignal, Show } from "solid-js";
 import toast from "solid-toast";
 import { Section, SectionCard, SettingsPageContent } from "./Setting";
 
@@ -17,12 +17,29 @@ type CliInstallStatus = {
 	pathConfigured: boolean;
 };
 
+type McpServerConfig = {
+	enabled: boolean;
+	endpoint: string | null;
+	token: string | null;
+};
+
+type McpTransport = "local" | "http";
+
 const getCliInstallStatus = () =>
 	invoke<CliInstallStatus>("get_cli_install_status");
 
 const installCli = () => invoke<CliInstallStatus>("install_cli");
 
 const uninstallCli = () => invoke<CliInstallStatus>("uninstall_cli");
+
+const getMcpServerConfig = () =>
+	invoke<McpServerConfig>("get_mcp_server_config");
+
+const setMcpServerEnabled = (enabled: boolean) =>
+	invoke<McpServerConfig>("set_mcp_server_enabled", { enabled });
+
+const rotateMcpServerToken = () =>
+	invoke<McpServerConfig>("rotate_mcp_server_token");
 
 function errorMessage(error: unknown, fallback: string) {
 	if (error instanceof Error) return error.message;
@@ -32,8 +49,49 @@ function errorMessage(error: unknown, fallback: string) {
 
 export default function CliSettings() {
 	const [status, { refetch, mutate }] = createResource(getCliInstallStatus);
+	const [mcpConfig, { refetch: refetchMcpConfig, mutate: mutateMcpConfig }] =
+		createResource(getMcpServerConfig);
 	const [isInstalling, setIsInstalling] = createSignal(false);
 	const [isUninstalling, setIsUninstalling] = createSignal(false);
+	const [isUpdatingMcp, setIsUpdatingMcp] = createSignal(false);
+	const [isRotatingMcpToken, setIsRotatingMcpToken] = createSignal(false);
+	const [mcpTransport, setMcpTransport] = createSignal<McpTransport>("local");
+	const mcpCommand = createMemo(
+		() =>
+			(status()?.installed ? status()?.shimPath : status()?.targetPath) ??
+			"cap",
+	);
+	const localMcpClientConfig = createMemo(() => {
+		const command = mcpCommand();
+
+		return JSON.stringify(
+			{
+				cap: {
+					command,
+					args: ["mcp"],
+				},
+			},
+			null,
+			2,
+		);
+	});
+	const httpMcpClientConfig = (config: McpServerConfig) =>
+		JSON.stringify(
+			{
+				cap: {
+					url: config.endpoint,
+					headers: {
+						Authorization: `Bearer ${config.token}`,
+					},
+				},
+			},
+			null,
+			2,
+		);
+	const selectedMcpClientConfig = (config: McpServerConfig) =>
+		mcpTransport() === "local"
+			? localMcpClientConfig()
+			: httpMcpClientConfig(config);
 
 	const installButtonLabel = () => {
 		if (isInstalling())
@@ -72,6 +130,42 @@ export default function CliSettings() {
 	const copyPathCommand = async (command: string) => {
 		await writeText(command);
 		toast.success("Copied to clipboard");
+	};
+
+	const handleMcpEnabledChange = async (enabled: boolean) => {
+		setIsUpdatingMcp(true);
+
+		try {
+			mutateMcpConfig(await setMcpServerEnabled(enabled));
+			toast.success(enabled ? "MCP server enabled" : "MCP server disabled");
+		} catch (error) {
+			toast.error(errorMessage(error, "Failed to update MCP server"));
+			await refetchMcpConfig();
+		} finally {
+			setIsUpdatingMcp(false);
+		}
+	};
+
+	const handleRotateMcpToken = async () => {
+		setIsRotatingMcpToken(true);
+
+		try {
+			mutateMcpConfig(await rotateMcpServerToken());
+			toast.success("MCP token rotated");
+		} catch (error) {
+			toast.error(errorMessage(error, "Failed to rotate MCP token"));
+			await refetchMcpConfig();
+		} finally {
+			setIsRotatingMcpToken(false);
+		}
+	};
+
+	const copyMcpClientConfig = async () => {
+		const config = mcpConfig();
+		if (!config) return;
+
+		await writeText(selectedMcpClientConfig(config));
+		toast.success("Copied MCP config");
 	};
 
 	return (
@@ -201,6 +295,126 @@ export default function CliSettings() {
 											</div>
 										</div>
 									</Show>
+								</div>
+							)}
+						</Show>
+					</SectionCard>
+				</Section>
+
+				<Section title="Model Context Protocol">
+					<SectionCard padded>
+						<Show
+							when={!mcpConfig.error && mcpConfig()}
+							fallback={
+								<Show
+									when={mcpConfig.error}
+									fallback={
+										<div class="h-24 rounded-lg bg-gray-3 animate-pulse" />
+									}
+								>
+									<div class="flex flex-col gap-2">
+										<p class="text-xs leading-relaxed text-red-11">
+											Couldn't load MCP status:{" "}
+											{errorMessage(mcpConfig.error, "unknown error")}
+										</p>
+										<Button
+											size="sm"
+											variant="gray"
+											class="self-start"
+											onClick={() => refetchMcpConfig()}
+										>
+											Retry
+										</Button>
+									</div>
+								</Show>
+							}
+						>
+							{(config) => (
+								<div class="flex flex-col gap-4">
+									<div class="flex items-start justify-between gap-4">
+										<div class="flex flex-col gap-1 min-w-0">
+											<p class="text-[13px] text-gray-12">
+												{config().enabled ? "Enabled" : "Disabled"}
+											</p>
+										</div>
+										<Button
+											size="sm"
+											variant={config().enabled ? "gray" : "dark"}
+											disabled={isUpdatingMcp()}
+											onClick={() => handleMcpEnabledChange(!config().enabled)}
+										>
+											{isUpdatingMcp()
+												? "Updating..."
+												: config().enabled
+													? "Disable"
+													: "Enable"}
+										</Button>
+									</div>
+
+									<div class="grid grid-cols-2 self-start rounded-lg border border-gray-4 bg-gray-3 p-0.5">
+										<button
+											type="button"
+											class="rounded-md px-3 py-1.5 text-xs text-gray-10 transition-colors"
+											classList={{
+												"bg-gray-1 text-gray-12": mcpTransport() === "local",
+											}}
+											onClick={() => setMcpTransport("local")}
+										>
+											Local
+										</button>
+										<button
+											type="button"
+											class="rounded-md px-3 py-1.5 text-xs text-gray-10 transition-colors"
+											classList={{
+												"bg-gray-1 text-gray-12": mcpTransport() === "http",
+											}}
+											onClick={() => setMcpTransport("http")}
+										>
+											HTTP
+										</button>
+									</div>
+
+									<div class="grid gap-2 text-xs">
+										<Show
+											when={mcpTransport() === "local"}
+											fallback={
+												<PathRow
+													label="Endpoint"
+													value={config().endpoint ?? "Not running"}
+												/>
+											}
+										>
+											<PathRow label="Command" value={mcpCommand()} />
+										</Show>
+									</div>
+
+									<div class="flex flex-col gap-2 rounded-lg border border-gray-4 bg-gray-3 px-3 py-3">
+										<pre class="max-h-40 overflow-auto rounded-md bg-gray-1 px-3 py-2 font-mono text-[11px] leading-relaxed text-gray-12">
+											{selectedMcpClientConfig(config())}
+										</pre>
+										<div class="flex justify-end gap-2">
+											<Button
+												size="sm"
+												variant="gray"
+												disabled={!config().enabled}
+												onClick={copyMcpClientConfig}
+											>
+												Copy config
+											</Button>
+											<Show when={config().enabled}>
+												<Button
+													size="sm"
+													variant="gray"
+													disabled={isRotatingMcpToken()}
+													onClick={handleRotateMcpToken}
+												>
+													{isRotatingMcpToken()
+														? "Rotating..."
+														: "Rotate token"}
+												</Button>
+											</Show>
+										</div>
+									</div>
 								</div>
 							)}
 						</Show>

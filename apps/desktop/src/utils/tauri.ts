@@ -32,6 +32,15 @@ async installCli() : Promise<CliInstallStatus> {
 async uninstallCli() : Promise<CliInstallStatus> {
     return await TAURI_INVOKE("uninstall_cli");
 },
+async getMcpServerConfig() : Promise<McpServerConfig> {
+    return await TAURI_INVOKE("get_mcp_server_config");
+},
+async setMcpServerEnabled(enabled: boolean) : Promise<McpServerConfig> {
+    return await TAURI_INVOKE("set_mcp_server_enabled", { enabled });
+},
+async rotateMcpServerToken() : Promise<McpServerConfig> {
+    return await TAURI_INVOKE("rotate_mcp_server_token");
+},
 async startRecording(inputs: StartRecordingInputs) : Promise<RecordingAction> {
     return await TAURI_INVOKE("start_recording", { inputs });
 },
@@ -699,7 +708,7 @@ export type CommercialLicense = { licenseKey: string; expiryDate: number | null;
 export type Condition = { type: "captureTargetIs"; target: CaptureTargetKind } | { type: "recordingModeIs"; mode: AutomationRecordingMode } | { type: "durationAtLeast"; secs: number } | { type: "durationAtMost"; secs: number } | { type: "windowTitleContains"; pattern: string } | { type: "organizationIs"; id: string }
 export type CornerStyle = "squircle" | "rounded"
 export type Crop = { position: XY<number>; size: XY<number> }
-export type CurrentRecording = { target: CurrentRecordingTarget; mode: RecordingMode; status: RecordingStatus }
+export type CurrentRecording = { target: CurrentRecordingTarget; mode: RecordingMode; status: RecordingStatus; paused: boolean }
 export type CurrentRecordingChanged = null
 export type CurrentRecordingTarget = { window: { id: WindowId; bounds: LogicalBounds | null } } | { screen: { id: DisplayId } } | { area: { screen: DisplayId; bounds: LogicalBounds } } | "camera"
 export type CursorAnimationStyle = "slow" | "smooth" | "mellow" | "fast" | "custom"
@@ -823,6 +832,7 @@ export type MaskSegment = { start: number; end: number; track?: number; enabled?
 export type MaskType = "blur" | "pixelate"
 export type MaskVectorKeyframe = { time: number; x: number; y: number }
 export type MatchMode = "all" | "any"
+export type McpServerConfig = { enabled: boolean; endpoint: string | null; token: string | null }
 export type MicrophoneDeviceSettings = { sampleRate: number | null; channels: number | null }
 export type MicrophoneFormatInfo = { sampleRate: number; channels: number }
 export type MicrophoneInfo = { name: string; sampleRate: number; channels: number; formats: MicrophoneFormatInfo[] }

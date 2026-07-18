@@ -3,6 +3,7 @@ mod credentials;
 mod doctor;
 mod export;
 mod guide;
+mod mcp;
 mod project;
 mod record;
 mod recordings;
@@ -205,6 +206,8 @@ enum Commands {
     Desktop(DesktopArgs),
     /// Print the machine-readable capability & JSON-schema manifest for agents
     Guide(FormatArgs),
+    /// Run the MCP stdio shim for a running Cap Desktop app
+    Mcp(mcp::McpArgs),
     /// List automation rules shared with Cap Desktop
     Automations(AutomationsArgs),
     /// Generate shell completion scripts
@@ -569,6 +572,7 @@ async fn run(cli: Cli) -> Result<(), String> {
             let format = resolve_format(json, args.format);
             finish_json(format, guide::run(format))
         }
+        Commands::Mcp(args) => args.run().await,
         Commands::Automations(args) => match args.command {
             AutomationsCommands::List(a) => {
                 let format = resolve_format(json, a.format);

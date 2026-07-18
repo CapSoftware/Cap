@@ -26,6 +26,7 @@ mod hotkeys;
 mod http_client;
 mod import;
 mod logging;
+mod mcp;
 mod notifications;
 mod panel_manager;
 mod permissions;
@@ -2467,6 +2468,7 @@ struct CurrentRecording {
     target: CurrentRecordingTarget,
     mode: RecordingMode,
     status: RecordingStatus,
+    paused: bool,
 }
 
 #[tauri::command]
@@ -2477,15 +2479,18 @@ async fn get_current_recording(
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
 
-    let (mode, capture_target, status) = match &state.recording_state {
+    let (mode, capture_target, status, paused) = match &state.recording_state {
         RecordingState::None => {
             return Ok(JsonValue::new(&None));
         }
-        RecordingState::Pending { mode, target } => (*mode, target, RecordingStatus::Pending),
+        RecordingState::Pending { mode, target } => {
+            (*mode, target, RecordingStatus::Pending, false)
+        }
         RecordingState::Active(inner) => (
             inner.mode(),
             inner.capture_target(),
             RecordingStatus::Recording,
+            inner.is_paused().await.map_err(|_| ())?,
         ),
     };
 
@@ -2510,6 +2515,7 @@ async fn get_current_recording(
         target,
         mode,
         status,
+        paused,
     })))
 }
 
@@ -4835,6 +4841,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             cli::get_cli_install_status,
             cli::install_cli,
             cli::uninstall_cli,
+            mcp::get_mcp_server_config,
+            mcp::set_mcp_server_enabled,
+            mcp::rotate_mcp_server_token,
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,
@@ -5344,6 +5353,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 app.manage(Arc::new(RwLock::new(
                     ClipboardContext::new().expect("Failed to create clipboard context"),
                 )));
+
+                mcp::init(&app);
             }
 
             app.listen_any("main-window-ready", {
