@@ -12,6 +12,7 @@ import {
 import type { Folder, Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { getSpaceAccess } from "@/actions/organization/space-authorization";
 
 export async function addVideosToFolder(
 	folderId: Folder.FolderId,
@@ -30,12 +31,30 @@ export async function addVideosToFolder(
 		}
 
 		const [folder] = await db()
-			.select({ id: folders.id, spaceId: folders.spaceId })
+			.select({
+				id: folders.id,
+				spaceId: folders.spaceId,
+				createdById: folders.createdById,
+			})
 			.from(folders)
 			.where(eq(folders.id, folderId));
 
 		if (!folder) {
 			throw new Error("Folder not found");
+		}
+
+		// Verify the caller can edit the destination folder. Mirrors
+		// FoldersPolicy.canEdit: personal folders (no space) are creator-only,
+		// space folders require space-admin or org admin/owner access.
+		if (folder.spaceId === null) {
+			if (folder.createdById !== user.id) {
+				throw new Error("Folder not found");
+			}
+		} else {
+			const access = await getSpaceAccess(user.id, folder.spaceId);
+			if (!access?.canManage) {
+				throw new Error("Folder not found");
+			}
 		}
 
 		const userVideos = await db()

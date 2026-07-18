@@ -11,6 +11,9 @@ import {
 import type { Folder, Space, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { requireOrganizationSettingsManager } from "@/actions/organization/authorization";
+import { getSpaceAccess } from "@/actions/organization/space-authorization";
+
 export async function moveVideoToFolder({
 	videoId,
 	folderId,
@@ -36,10 +39,18 @@ export async function moveVideoToFolder({
 
 	const isAllSpacesEntry = spaceId === user.activeOrganizationId;
 
-	// If folderId is provided, verify it exists and belongs to the same organization
+	// If a destination folder is provided, load it once (scoped to the caller's
+	// org) so each branch can also verify the caller may WRITE to that specific
+	// folder — not just that the source space/folder is manageable.
+	let destinationFolder:
+		| { spaceId: string | null; createdById: string }
+		| undefined;
 	if (folderId) {
-		const [folder] = await db()
-			.select()
+		[destinationFolder] = await db()
+			.select({
+				spaceId: folders.spaceId,
+				createdById: folders.createdById,
+			})
 			.from(folders)
 			.where(
 				and(
@@ -48,12 +59,22 @@ export async function moveVideoToFolder({
 				),
 			);
 
-		if (!folder) {
+		if (!destinationFolder) {
 			throw new Error("Folder not found or not accessible");
 		}
 	}
 
 	if (spaceId && !isAllSpacesEntry) {
+		const access = await getSpaceAccess(user.id, spaceId);
+		if (!access?.canManage) {
+			throw new Error("You don't have permission to manage this space");
+		}
+
+		// The destination folder must belong to the same space being managed.
+		if (destinationFolder && destinationFolder.spaceId !== spaceId) {
+			throw new Error("Folder not found or not accessible");
+		}
+
 		await db()
 			.update(spaceVideos)
 			.set({
@@ -63,6 +84,16 @@ export async function moveVideoToFolder({
 				and(eq(spaceVideos.videoId, videoId), eq(spaceVideos.spaceId, spaceId)),
 			);
 	} else if (spaceId && isAllSpacesEntry) {
+		await requireOrganizationSettingsManager(
+			user.id,
+			user.activeOrganizationId,
+		);
+
+		// The destination must be an org-level (non-space) folder.
+		if (destinationFolder && destinationFolder.spaceId !== null) {
+			throw new Error("Folder not found or not accessible");
+		}
+
 		await db()
 			.update(sharedVideos)
 			.set({
@@ -75,12 +106,21 @@ export async function moveVideoToFolder({
 				),
 			);
 	} else {
+		// Personal move: the destination must be the caller's own personal folder.
+		if (
+			destinationFolder &&
+			(destinationFolder.spaceId !== null ||
+				destinationFolder.createdById !== user.id)
+		) {
+			throw new Error("Folder not found or not accessible");
+		}
+
 		await db()
 			.update(videos)
 			.set({
 				folderId: folderId === null ? null : folderId,
 			})
-			.where(eq(videos.id, videoId));
+			.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 	}
 
 	// Always revalidate the main caps page

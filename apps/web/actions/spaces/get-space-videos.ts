@@ -5,6 +5,8 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { sharedVideos, spaceVideos } from "@cap/database/schema";
 import type { Space } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
+import { getOrganizationAccess } from "@/actions/organization/authorization";
+import { getSpaceAccess } from "@/actions/organization/space-authorization";
 
 export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {
 	try {
@@ -19,6 +21,25 @@ export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {
 		}
 
 		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
+
+		// Only members/owner of the space (or organization) may see its videos.
+		if (isAllSpacesEntry) {
+			const access = await getOrganizationAccess(user.id, spaceId);
+			if (!access) {
+				throw new Error("Space not found");
+			}
+		} else {
+			// getSpaceAccess returns a non-null object even for non-members (with
+			// both roles null), so a bare `!access` check would NOT block them.
+			// Require an actual org or space role to view the space's videos.
+			const access = await getSpaceAccess(user.id, spaceId);
+			if (
+				!access ||
+				(access.organizationRole === null && access.spaceRole === null)
+			) {
+				throw new Error("Space not found");
+			}
+		}
 
 		const videoIds = isAllSpacesEntry
 			? await db()
