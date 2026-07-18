@@ -97,6 +97,10 @@ export const authOptions = (): NextAuthOptions => {
 					},
 				}),
 				EmailProvider({
+					// Verification codes expire after 15 minutes (NextAuth defaults to
+					// 24h). Combined with the per-email rate limit on the callback route
+					// this bounds OTP brute-force to a few guesses per code lifetime.
+					maxAge: 15 * 60,
 					async generateVerificationToken() {
 						return crypto.randomInt(100000, 1000000).toString();
 					},
@@ -112,7 +116,7 @@ export const authOptions = (): NextAuthOptions => {
 							);
 							console.log(`📧 Email: ${identifier}`);
 							console.log(`🔢 Code: ${token}`);
-							console.log(`⏱  Expires in: 10 minutes`);
+							console.log(`⏱  Expires in: 15 minutes`);
 							console.log(
 								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 							);
