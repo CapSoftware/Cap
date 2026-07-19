@@ -3201,8 +3201,7 @@ function Page() {
 							<button
 								type="button"
 								onClick={async () => {
-									const current =
-										generalSettings.data?.mainWindowAlwaysOnTop ?? true;
+									const current = !!generalSettings.data?.mainWindowAlwaysOnTop;
 									try {
 										await commands.setWindowAlwaysOnTop(
 											!current,
@@ -3218,17 +3217,15 @@ function Page() {
 								}}
 								class="flex justify-center items-center size-5 focus:outline-hidden"
 								aria-label="Always on Top"
-								aria-pressed={
-									generalSettings.data?.mainWindowAlwaysOnTop ?? true
-								}
+								aria-pressed={!!generalSettings.data?.mainWindowAlwaysOnTop}
 							>
 								<Show
-									when={generalSettings.data?.mainWindowAlwaysOnTop ?? true}
+									when={!!generalSettings.data?.mainWindowAlwaysOnTop}
 									fallback={
 										<IconLucidePinOff class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 									}
 								>
-									<IconLucidePin class="transition-colors text-blue-11 size-4 hover:text-gray-12" />
+									<IconLucidePin class="transition-colors text-blue-11 size-4 hover:text-blue-12" />
 								</Show>
 							</button>
 						</Tooltip>
