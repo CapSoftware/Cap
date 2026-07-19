@@ -180,17 +180,23 @@ app.post(
 
 			if (videoIdToUse) {
 				const videoId = Video.VideoId.make(videoIdToUse);
-				await db()
-					.update(Db.videos)
-					.set({
-						duration: updateIfDefined(durationInSecs, Db.videos.duration),
-						width: updateIfDefined(width, Db.videos.width),
-						height: updateIfDefined(height, Db.videos.height),
-						fps: updateIfDefined(fps, Db.videos.fps),
-					})
-					.where(
-						and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)),
-					);
+				if (
+					durationInSecs !== undefined ||
+					width !== undefined ||
+					height !== undefined ||
+					fps !== undefined
+				)
+					await db()
+						.update(Db.videos)
+						.set({
+							duration: updateIfDefined(durationInSecs, Db.videos.duration),
+							width: updateIfDefined(width, Db.videos.width),
+							height: updateIfDefined(height, Db.videos.height),
+							fps: updateIfDefined(fps, Db.videos.fps),
+						})
+						.where(
+							and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)),
+						);
 
 				const clientSupportsUploadProgress = isFromDesktopSemver(
 					c.req,

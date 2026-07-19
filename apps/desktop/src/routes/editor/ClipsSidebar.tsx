@@ -7,6 +7,7 @@ import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	type Component,
@@ -63,6 +64,7 @@ import {
 	serializeProjectConfiguration,
 	useEditorContext,
 } from "./context";
+import { getExistingRecordingPickerOptions } from "./existing-recording-picker";
 import { Input } from "./ui";
 
 const findCamera = (cameras: CameraInfo[], id?: DeviceOrModelID | null) => {
@@ -530,11 +532,9 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 
 	const pickCapRecording = async () => {
 		const recordingsPath = await join(await appDataDir(), "recordings");
-		const path = await open({
-			defaultPath: recordingsPath,
-			filters: [{ name: "Cap Recording", extensions: ["cap"] }],
-			multiple: false,
-		});
+		const path = await open(
+			getExistingRecordingPickerOptions(ostype(), recordingsPath),
+		);
 		if (typeof path === "string") await importRecordingPath(path);
 	};
 
