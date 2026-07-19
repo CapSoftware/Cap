@@ -441,7 +441,6 @@ async function importLoomVideoForOwner({
 			userId: ownerId,
 			rawFileKey,
 			bucketId: Option.getOrNull(writable.bucketId),
-			loomDownloadUrl: downloadUrl,
 			loomVideoId,
 		},
 	]);

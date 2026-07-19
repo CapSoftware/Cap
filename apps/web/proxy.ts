@@ -45,6 +45,7 @@ export async function proxy(request: NextRequest) {
 			!(
 				path.startsWith("/s/") ||
 				path.startsWith("/c/") ||
+				path.startsWith("/cli/") ||
 				path.startsWith("/middleware") ||
 				path.startsWith("/dashboard") ||
 				path.startsWith("/onboarding") ||

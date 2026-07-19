@@ -10,6 +10,7 @@
 		"start": "cross-env NODE_OPTIONS=--disable-warning=DEP0169 next start",
 		"compress-images": "bash tools/compress-images.sh",
 		"test": "vitest run",
+		"test:agent-e2e": "CAP_AGENT_E2E=1 vitest run __tests__/e2e/agent-local-e2e.test.ts",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
 		"test:ui": "vitest --ui"

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
-import { videos, videoUploads } from "@cap/database/schema";
+import { agentApiOperations, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
@@ -14,8 +14,9 @@ interface ImportLoomPayload {
 	userId: string;
 	rawFileKey: string;
 	bucketId: string | null;
-	loomDownloadUrl: string;
 	loomVideoId: string;
+	loomDownloadUrl?: string;
+	agentOperationId?: string;
 }
 
 const MINIMUM_VIDEO_SIZE = 1024;
@@ -143,17 +144,86 @@ interface LoomProcessingInput {
 	inputExtension?: string;
 }
 
+async function claimAgentImport(operationId: string | undefined) {
+	"use step";
+
+	if (!operationId) return true;
+	return db().transaction(async (tx) => {
+		const [operation] = await tx
+			.select({
+				kind: agentApiOperations.kind,
+				state: agentApiOperations.state,
+			})
+			.from(agentApiOperations)
+			.where(eq(agentApiOperations.id, operationId))
+			.limit(1)
+			.for("update");
+		if (!operation || operation.kind !== "import_loom") {
+			throw new FatalError("Agent Loom import operation not found");
+		}
+		if (operation.state !== "queued") return false;
+		await tx
+			.update(agentApiOperations)
+			.set({ state: "running", updatedAt: new Date() })
+			.where(eq(agentApiOperations.id, operationId));
+		return true;
+	});
+}
+
+async function completeAgentImport(
+	operationId: string | undefined,
+	videoId: string,
+) {
+	"use step";
+
+	if (!operationId) return;
+	const now = new Date();
+	await db()
+		.update(agentApiOperations)
+		.set({
+			state: "succeeded",
+			result: { videoId },
+			updatedAt: now,
+			completedAt: now,
+		})
+		.where(eq(agentApiOperations.id, operationId));
+}
+
+async function failAgentImport(
+	operationId: string | undefined,
+	message: string,
+) {
+	"use step";
+
+	if (!operationId) return;
+	const now = new Date();
+	await db()
+		.update(agentApiOperations)
+		.set({
+			state: "failed",
+			errorCode: "LOOM_IMPORT_FAILED",
+			errorMessage: message.slice(0, 2_000),
+			updatedAt: now,
+			completedAt: now,
+		})
+		.where(eq(agentApiOperations.id, operationId));
+}
+
 export async function importLoomVideoWorkflow(
 	payload: ImportLoomPayload,
 ): Promise<VideoProcessingResult> {
 	"use workflow";
 
+	if (!(await claimAgentImport(payload.agentOperationId))) {
+		return { success: true, message: "Loom import is already running" };
+	}
 	try {
 		const processingInput = await downloadLoomToS3(payload);
 
 		const result = await processVideoOnMediaServer(payload, processingInput);
 
 		await saveMetadataAndComplete(payload.videoId, result.metadata);
+		await completeAgentImport(payload.agentOperationId, payload.videoId);
 
 		return {
 			success: true,
@@ -163,6 +233,7 @@ export async function importLoomVideoWorkflow(
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		await setProcessingError(payload.videoId, errorMessage);
+		await failAgentImport(payload.agentOperationId, errorMessage);
 		throw new FatalError(errorMessage);
 	}
 }

@@ -57,6 +57,10 @@ export async function isRateLimited(
  * corresponding protection to take effect (see `isRateLimited`).
  */
 export const RATE_LIMIT_IDS = {
+	AGENT_TOKEN_EXCHANGE: "rl_agent_token_exchange",
+	AGENT_AUTHORIZATION: "rl_agent_authorization",
+	AGENT_UNLOCK: "rl_agent_unlock",
+	AGENT_LOOM_IMPORT: "rl_loom_import_per_user",
 	/** Email OTP verification attempts (brute-force guard). Suggested: 10 / 10m per key (email). */
 	AUTH_OTP_VERIFY: "rl_auth_otp_verify",
 	/** Email OTP / magic-link send (mailbomb + token-reseed guard). Suggested: 5 / 10m per key (email). */

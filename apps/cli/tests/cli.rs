@@ -1,6 +1,15 @@
 use std::{
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpListener,
     path::Path,
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
+    thread,
+    time::Duration,
 };
 
 use serde_json::Value;
@@ -50,6 +59,16 @@ fn help_succeeds_and_lists_commands() {
         "upload",
         "update",
         "screenshot",
+        "caps",
+        "account",
+        "organizations",
+        "library",
+        "notifications",
+        "analytics",
+        "developers",
+        "jobs",
+        "mcp",
+        "agents",
     ] {
         assert!(text.contains(command), "help missing '{command}':\n{text}");
     }
@@ -89,6 +108,16 @@ fn subcommand_help_succeeds() {
         "upload",
         "update",
         "screenshot",
+        "caps",
+        "account",
+        "organizations",
+        "library",
+        "notifications",
+        "analytics",
+        "developers",
+        "jobs",
+        "mcp",
+        "agents",
     ] {
         let output = run(&[command, "--help"]);
         assert!(
@@ -554,10 +583,489 @@ fn guide_json_is_parseable_and_self_describing() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json = parse_json(&output);
     assert_eq!(json["binary"], "cap");
-    assert!(json["schemaVersion"].is_number());
+    assert_eq!(json["schemaVersion"], 3);
     assert!(json["commands"].is_array());
     assert!(json["env"].is_array());
     assert!(json["outputConvention"].is_object());
+    let commands = serde_json::to_string(&json["commands"]).unwrap();
+    assert!(commands.contains("caps unlock"));
+    assert!(commands.contains("caps comments|reactions|update|sharing"));
+    assert!(commands.contains("caps import loom"));
+    assert!(commands.contains("account get|update|image|referrals|sign-out-all"));
+    assert!(commands.contains(
+        "organizations create|update|icon|shareable-icon|settings|invite|member|domain|delete"
+    ));
+    assert!(commands.contains("organizations billing get|checkout|portal"));
+    assert!(commands.contains("organizations storage list|s3|provider|google-drive"));
+    assert!(commands.contains("developers list|get|create|update|delete"));
+}
+
+#[test]
+fn dashboard_parity_help_exposes_secure_command_trees() {
+    for args in [
+        &["account", "image", "--help"][..],
+        &["account", "referrals", "--help"][..],
+        &["organizations", "billing", "--help"][..],
+        &["organizations", "storage", "--help"][..],
+        &["organizations", "storage", "s3", "--help"][..],
+        &["organizations", "storage", "google-drive", "--help"][..],
+        &["organizations", "invite", "add", "--help"][..],
+        &["developers", "credits", "--help"][..],
+        &["developers", "videos", "--help"][..],
+        &["developers", "transactions", "--help"][..],
+        &["library", "folders", "public-page", "--help"][..],
+        &["library", "folders", "logo", "--help"][..],
+        &["library", "spaces", "public-page", "--help"][..],
+        &["library", "spaces", "logo", "--help"][..],
+        &["caps", "import", "loom", "--help"][..],
+    ] {
+        let output = run(args);
+        assert!(output.status.success(), "stderr: {}", stderr(&output));
+    }
+
+    let output = run(&["organizations", "storage", "s3", "set", "--help"]);
+    let help = stdout(&output).to_lowercase();
+    assert!(!help.contains("access-key"));
+    assert!(!help.contains("secret-access"));
+
+    let output = run(&["organizations", "invite", "add", "--help"]);
+    assert!(stdout(&output).contains("--no-email"));
+}
+
+#[test]
+fn non_interactive_s3_requires_secure_credential_input() {
+    let output = cap()
+        .args([
+            "organizations",
+            "storage",
+            "s3",
+            "set",
+            "org_synthetic",
+            "--bucket",
+            "synthetic",
+            "--yes",
+            "--format",
+            "json",
+        ])
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("--credentials-stdin or --reuse-credentials"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn caps_help_lists_the_agent_interface() {
+    let output = run(&["caps", "--help"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    for command in [
+        "list",
+        "get",
+        "context",
+        "status",
+        "wait",
+        "transcript",
+        "download",
+        "process",
+        "transcript-replace",
+        "duplicate",
+        "delete",
+        "password",
+        "unlock",
+        "comments",
+        "reactions",
+        "update",
+        "sharing",
+    ] {
+        assert!(
+            text.contains(command),
+            "caps help missing {command}:\n{text}"
+        );
+    }
+    for args in [
+        &["caps", "comments", "--help"][..],
+        &["caps", "reactions", "--help"][..],
+        &["caps", "sharing", "--help"][..],
+    ] {
+        let output = run(args);
+        assert!(output.status.success(), "stderr: {}", stderr(&output));
+    }
+}
+
+#[test]
+fn agent_content_mutations_require_explicit_confirmation() {
+    for args in [
+        vec!["caps", "comments", "add", "cap_synthetic", "hello"],
+        vec![
+            "caps",
+            "comments",
+            "reply",
+            "cap_synthetic",
+            "comment_synthetic",
+            "hello",
+        ],
+        vec!["caps", "reactions", "add", "cap_synthetic", "thumbs-up"],
+        vec![
+            "caps",
+            "update",
+            "cap_synthetic",
+            "--title",
+            "Synthetic title",
+        ],
+        vec!["caps", "sharing", "set", "cap_synthetic", "--public"],
+    ] {
+        let output = cap()
+            .args(args)
+            .arg("--format")
+            .arg("json")
+            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(parse_json(&output)["code"], "INVALID_REQUEST");
+    }
+}
+
+#[test]
+fn sharing_requires_one_visibility_flag() {
+    let output = run(&["caps", "sharing", "set", "cap_synthetic"]);
+    assert_eq!(output.status.code(), Some(2));
+    let output = run(&[
+        "caps",
+        "sharing",
+        "set",
+        "cap_synthetic",
+        "--public",
+        "--private",
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn agent_installer_dry_run_is_machine_readable() {
+    let output = run(&[
+        "agents",
+        "install",
+        "--target",
+        "codex",
+        "--component",
+        "all",
+        "--dry-run",
+        "--yes",
+        "--format",
+        "json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let json = parse_json(&output);
+    assert_eq!(json["target"], "codex");
+    assert_eq!(json["dryRun"], true);
+    assert_eq!(json["applied"], false);
+    assert_eq!(json["changes"].as_array().map(Vec::len), Some(2));
+}
+
+#[test]
+fn new_commands_emit_json_errors_for_local_format_flag() {
+    let caps_output = cap()
+        .args(["caps", "get", "!", "--format", "json"])
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+        .output()
+        .unwrap();
+    assert_eq!(caps_output.status.code(), Some(1));
+    assert_eq!(parse_json(&caps_output)["code"], "INVALID_REQUEST");
+
+    let auth_output = run(&["auth", "login", "--timeout", "0", "--format", "json"]);
+    assert_eq!(auth_output.status.code(), Some(1));
+    assert!(parse_json(&auth_output)["error"].is_string());
+
+    let home = tempfile::tempdir().unwrap();
+    let installer_output = cap()
+        .args([
+            "agents",
+            "install",
+            "--target",
+            "codex",
+            "--component",
+            "skill",
+            "--format",
+            "json",
+        ])
+        .env("HOME", home.path())
+        .env("CODEX_HOME", home.path().join(".codex"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(installer_output.status.code(), Some(1));
+    assert!(parse_json(&installer_output)["error"].is_string());
+}
+
+#[test]
+fn mcp_stdout_is_protocol_only_and_exposes_expected_tools() {
+    let mut command = cap();
+    command
+        .args(["mcp", "serve"])
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+        .env("CAP_SERVER_URL", "http://127.0.0.1:9")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("failed to start MCP server");
+    let stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": { "name": "cap-test", "version": "1" }
+            }
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let initialize = receiver.recv_timeout(Duration::from_secs(10));
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {}
+        })
+    )
+    .unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let tools = receiver.recv_timeout(Duration::from_secs(10));
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let initialize: Value = serde_json::from_str(&initialize.unwrap().unwrap()).unwrap();
+    assert_eq!(initialize["id"], 1);
+    assert_eq!(initialize["result"]["serverInfo"]["name"], "cap");
+    let tools: Value = serde_json::from_str(&tools.unwrap().unwrap()).unwrap();
+    assert_eq!(tools["id"], 2);
+    let tool_list = tools["result"]["tools"].as_array().unwrap();
+    let tool = |name: &str| {
+        tool_list
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing MCP tool {name}"))
+    };
+    assert_eq!(tool("caps_list")["annotations"]["idempotentHint"], true);
+    assert_eq!(
+        tool("caps_import_loom")["annotations"]["idempotentHint"],
+        false
+    );
+    for tool in tool_list {
+        if tool["annotations"]["readOnlyHint"] == false {
+            assert_eq!(
+                tool["annotations"]["idempotentHint"], false,
+                "mutating MCP tool {} must not claim cross-invocation idempotency",
+                tool["name"]
+            );
+        }
+    }
+    let serialized = serde_json::to_string(tool_list).unwrap();
+    for name in [
+        "caps_list",
+        "caps_get",
+        "caps_context",
+        "caps_wait",
+        "caps_import_loom",
+        "caps_comment",
+        "caps_reply",
+        "caps_react",
+        "caps_update_title",
+        "caps_set_visibility",
+        "account_referrals_open",
+        "organizations_list",
+        "organization_create",
+        "organization_billing_checkout",
+        "organization_billing_portal",
+        "organization_storage_provider_set",
+        "organization_google_drive_connect",
+        "organization_google_drive_folders",
+        "organization_google_drive_location_set",
+        "organization_google_drive_disconnect",
+        "organization_update",
+        "organization_settings_update",
+        "organization_invite_add",
+        "organization_member_role",
+        "organization_member_seat",
+        "organization_delete",
+        "organization_domain_set",
+        "organization_domain_remove",
+        "organization_domain_verify",
+        "collection_public_page_update",
+        "developer_apps_list",
+        "developer_videos_list",
+        "developer_transactions_list",
+        "developer_video_delete",
+        "developer_app_update",
+        "developer_domain_add",
+        "developer_auto_top_up_update",
+        "developer_credits_checkout",
+    ] {
+        assert!(serialized.contains(name), "missing MCP tool {name}");
+    }
+    assert!(!serialized.to_lowercase().contains("password"));
+    assert!(!serialized.contains("access_key_id"));
+    assert!(!serialized.contains("secret_access_key"));
+    assert!(!serialized.contains("image_data"));
+}
+
+#[test]
+fn mcp_cancellation_stops_wait_polling() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let server_url = format!("http://{}", listener.local_addr().unwrap());
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let server_request_count = request_count.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request);
+            server_request_count.fetch_add(1, Ordering::SeqCst);
+            let body = r#"{"transcript":{"status":"processing"},"ai":{"status":"processing"}}"#;
+            write!(
+				stream,
+				"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+				body.len(),
+				body
+			)
+			.unwrap();
+            stream.flush().unwrap();
+        }
+    });
+
+    let mut command = cap();
+    command
+        .args(["mcp", "serve"])
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+        .env("CAP_SERVER_URL", server_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("failed to start MCP server");
+    let stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut stdin = child.stdin.take().unwrap();
+    for message in [
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": { "name": "cap-test", "version": "1" }
+            }
+        }),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {}
+        }),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "caps_wait",
+                "arguments": { "cap": "cap_synthetic", "timeout_seconds": 60 }
+            }
+        }),
+    ] {
+        writeln!(stdin, "{message}").unwrap();
+    }
+    stdin.flush().unwrap();
+    let initialize: Value = serde_json::from_str(
+        &receiver
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(initialize["id"], 1);
+    for _ in 0..50 {
+        if request_count.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+    for message in [
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": { "requestId": 3, "reason": "test" }
+        }),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/list",
+            "params": {}
+        }),
+    ] {
+        writeln!(stdin, "{message}").unwrap();
+    }
+    stdin.flush().unwrap();
+    let mut list_response = None;
+    for _ in 0..3 {
+        let response: Value = serde_json::from_str(
+            &receiver
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        if response["id"] == 4 {
+            list_response = Some(response);
+            break;
+        }
+    }
+    thread::sleep(Duration::from_millis(750));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(list_response.is_some());
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -642,6 +1150,82 @@ fn auth_status_json_reports_source() {
     // source is one of env|desktop|none; server is always reported.
     assert!(json["source"].is_string());
     assert!(json["server"].is_string());
+}
+
+#[test]
+fn auth_status_recognizes_agent_environment_credentials() {
+    let output = cap()
+        .args(["auth", "status", "--json"])
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_agent_status")
+        .env("CAP_SERVER_URL", "http://127.0.0.1:9876")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let json = parse_json(&output);
+    assert_eq!(json["authenticated"], false);
+    assert_eq!(json["credentialPresent"], true);
+    assert_eq!(json["serverVerified"], false);
+    assert_eq!(json["verificationStatus"], "unavailable");
+    assert_eq!(json["source"], "env");
+    assert_eq!(json["server"], "http://127.0.0.1:9876");
+    assert!(!stdout(&output).contains("cap_cli_synthetic_agent_status"));
+}
+
+#[test]
+fn auth_status_verifies_agent_credentials_with_the_server() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let server_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0_u8; 4096];
+        let length = stream.read(&mut request).unwrap();
+        let request = String::from_utf8_lossy(&request[..length]);
+        assert!(request.starts_with("GET /api/v1/auth/status HTTP/1.1"));
+        assert!(request.contains("authorization: Bearer cap_cli_synthetic_agent_status"));
+        let body = r#"{"authenticated":true,"tokenKind":"agent","expiresAt":"2027-01-01T00:00:00.000Z","scopes":["caps:read"],"requestId":"request-test"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+    let output = cap()
+        .args(["auth", "status", "--json"])
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_agent_status")
+        .env("CAP_SERVER_URL", server_url)
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let json = parse_json(&output);
+    assert_eq!(json["authenticated"], true);
+    assert_eq!(json["credentialPresent"], true);
+    assert_eq!(json["serverVerified"], true);
+    assert_eq!(json["verificationStatus"], "verified");
+    assert_eq!(json["expiresAt"], "2027-01-01T00:00:00.000Z");
+    assert_eq!(json["scopes"], serde_json::json!(["caps:read"]));
+    assert!(!stdout(&output).contains("cap_cli_synthetic_agent_status"));
+}
+
+#[test]
+fn agent_credentials_reject_insecure_remote_servers() {
+    let output = cap()
+        .args(["caps", "list", "--json"])
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_agent_status")
+        .env("CAP_SERVER_URL", "http://example.com")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("require HTTPS"));
+}
+
+#[test]
+fn auth_login_defaults_to_the_creator_profile() {
+    let output = run(&["auth", "login", "--help"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("[default: creator]"));
 }
 
 fn write_single_segment_meta(project: &Path) {

@@ -246,6 +246,20 @@
 			"when": 1782854064505,
 			"tag": "0034_fluffy_falcon",
 			"breakpoints": true
+		},
+		{
+			"idx": 35,
+			"version": "5",
+			"when": 1784393810560,
+			"tag": "0035_agent_api",
+			"breakpoints": true
+		},
+		{
+			"idx": 36,
+			"version": "5",
+			"when": 1784402487715,
+			"tag": "0036_premium_master_chief",
+			"breakpoints": true
 		}
 	]
 }

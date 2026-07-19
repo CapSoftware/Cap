@@ -2,6 +2,10 @@
 	"$schema": "https://openapi.vercel.sh/vercel.json",
 	"crons": [
 		{
+			"path": "/api/cron/cleanup-agent-api",
+			"schedule": "17 3 * * *"
+		},
+		{
 			"path": "/api/cron/finalize-stale-desktop-segments",
 			"schedule": "*/15 * * * *"
 		},

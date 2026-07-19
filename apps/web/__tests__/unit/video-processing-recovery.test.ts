@@ -9,6 +9,11 @@ vi.mock("@cap/database", () => ({
 }));
 
 vi.mock("@cap/database/schema", () => ({
+	importedVideos: {
+		id: "importedVideos.id",
+		source: "importedVideos.source",
+		sourceId: "importedVideos.sourceId",
+	},
 	videos: {
 		id: "videos.id",
 		ownerId: "videos.ownerId",
@@ -19,6 +24,7 @@ vi.mock("@cap/database/schema", () => ({
 		videoId: "videoUploads.videoId",
 		phase: "videoUploads.phase",
 		processingError: "videoUploads.processingError",
+		processingMessage: "videoUploads.processingMessage",
 		rawFileKey: "videoUploads.rawFileKey",
 		updatedAt: "videoUploads.updatedAt",
 	},
@@ -29,7 +35,9 @@ vi.mock("drizzle-orm", () => ({
 	asc: vi.fn((value: unknown) => value),
 	eq: vi.fn((left: unknown, right: unknown) => ({ left, right })),
 	isNotNull: vi.fn((value: unknown) => value),
+	isNull: vi.fn((value: unknown) => value),
 	like: vi.fn((left: unknown, right: unknown) => ({ left, right })),
+	lte: vi.fn((left: unknown, right: unknown) => ({ left, right })),
 	sql: vi.fn(),
 }));
 
@@ -43,6 +51,10 @@ vi.mock("@/lib/video-processing", () => ({
 
 vi.mock("@/workflows/process-video", () => ({
 	processVideoWorkflow: vi.fn(),
+}));
+
+vi.mock("@/workflows/import-loom-video", () => ({
+	importLoomVideoWorkflow: vi.fn(),
 }));
 
 type Candidate = {
@@ -98,6 +110,7 @@ beforeEach(() => {
 describe("recoverFailedVideoProcessing", () => {
 	it("atomically claims and restarts an affected upload", async () => {
 		mockDb
+			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([candidate]))
 			.mockReturnValueOnce(makeUpdateChain(1));
 		const { recoverFailedVideoProcessing } = await import(
@@ -112,6 +125,7 @@ describe("recoverFailedVideoProcessing", () => {
 
 	it("does not start a duplicate workflow when another run owns the claim", async () => {
 		mockDb
+			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([candidate]))
 			.mockReturnValueOnce(makeUpdateChain(0));
 		const { recoverFailedVideoProcessing } = await import(
@@ -126,6 +140,7 @@ describe("recoverFailedVideoProcessing", () => {
 
 	it("keeps a transient start failure eligible for the next recovery run", async () => {
 		mockDb
+			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([candidate]))
 			.mockReturnValueOnce(makeUpdateChain(1));
 		mockStart.mockRejectedValueOnce(new Error("temporary failure"));

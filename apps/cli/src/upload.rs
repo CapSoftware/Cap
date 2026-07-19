@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 
 use cap_project::RecordingMeta;
 use clap::Args;
-use reqwest::Client;
+use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::io::ReaderStream;
 
-use crate::{OutputFormat, credentials, export, resolve_format, write_json};
+use crate::{OutputFormat, caps::AgentClient, credentials, export, resolve_format, write_json};
 
 #[derive(Args)]
 pub struct UploadArgs {
@@ -39,6 +39,56 @@ struct VideoMeta {
     fps: f64,
 }
 
+fn prefer_agent_upload_sources(
+    agent: credentials::AgentCredentialSource,
+    legacy: Option<credentials::CredentialSource>,
+) -> bool {
+    match agent {
+        credentials::AgentCredentialSource::Env => true,
+        credentials::AgentCredentialSource::Keyring | credentials::AgentCredentialSource::File => {
+            legacy != Some(credentials::CredentialSource::Env)
+        }
+        credentials::AgentCredentialSource::LegacyEnv
+        | credentials::AgentCredentialSource::Desktop => false,
+    }
+}
+
+fn prefer_agent_upload() -> bool {
+    let Ok(agent) = credentials::resolve_agent() else {
+        return false;
+    };
+    prefer_agent_upload_sources(
+        agent.source,
+        credentials::resolve().ok().map(|legacy| legacy.source),
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum AgentUploadTarget {
+    Put {
+        url: String,
+        headers: std::collections::BTreeMap<String, String>,
+    },
+    DriveResumable {
+        url: String,
+        headers: std::collections::BTreeMap<String, String>,
+    },
+    S3Post {
+        url: String,
+        fields: std::collections::BTreeMap<String, String>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentUploadResponse {
+    id: String,
+    share_url: String,
+    raw_file_key: String,
+    upload: AgentUploadTarget,
+}
+
 fn rational_fps(rate: ffmpeg::Rational) -> Option<f64> {
     (rate.denominator() != 0 && rate.numerator() > 0)
         .then(|| f64::from(rate.numerator()) / f64::from(rate.denominator()))
@@ -64,23 +114,46 @@ impl UploadArgs {
     }
 
     async fn run_inner(self, format: OutputFormat) -> Result<(), String> {
-        // Resolves CAP_API_KEY, else the login Cap Desktop already stored, so an agent never has to
-        // fetch or paste a key when the user is signed in.
-        let creds = credentials::resolve()?;
-        let server = creds.server.clone();
-
         let file_path = self.resolve_upload_file().await?;
         let meta = probe_video_meta(&file_path)?;
-
-        let http = Client::new();
-        let auth = format!("Bearer {}", creds.api_key);
-
-        let video_id =
-            create_video(&http, &server, &auth, &self.name, self.video_id, &meta).await?;
-        let put_url = presign_put(&http, &server, &auth, &video_id, &meta).await?;
-        upload_file(&http, &put_url, &file_path).await?;
-
-        let link = format!("{server}/s/{video_id}");
+        let (video_id, link) = if prefer_agent_upload() {
+            upload_file_with_agent(&file_path, self.name.as_deref(), &meta)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "{error} Run `cap auth login` or sign in to Cap Desktop, or set CAP_API_KEY/CAP_AGENT_TOKEN."
+                    )
+                })?
+        } else {
+            match credentials::resolve() {
+                Ok(creds) => {
+                    let server = creds.server.clone();
+                    let http = Client::new();
+                    let auth = format!("Bearer {}", creds.api_key);
+                    let video_id =
+                        create_video(&http, &server, &auth, &self.name, self.video_id, &meta)
+                            .await?;
+                    let put_url = presign_put(&http, &server, &auth, &video_id, &meta).await?;
+                    upload_file(&http, &put_url, &file_path).await?;
+                    let link = format!("{server}/s/{video_id}");
+                    (video_id, link)
+                }
+                Err(legacy_error) => {
+                    if self.video_id.is_some() {
+                        return Err(format!(
+                            "{legacy_error} --video-id currently requires Cap Desktop or CAP_API_KEY authentication"
+                        ));
+                    }
+                    upload_file_with_agent(&file_path, self.name.as_deref(), &meta)
+                        .await
+                        .map_err(|error| {
+                            format!(
+                                "{error} Run `cap auth login` or sign in to Cap Desktop, or set CAP_API_KEY/CAP_AGENT_TOKEN."
+                            )
+                        })?
+                }
+            }
+        };
 
         let is_project = self.file.is_dir()
             || self
@@ -153,18 +226,109 @@ pub async fn upload_video_path(file_path: &Path, name: Option<String>) -> Result
         ));
     }
 
-    let creds = credentials::resolve()?;
-    let server = creds.server.clone();
     let meta = probe_video_meta(file_path)?;
+    if prefer_agent_upload() {
+        return upload_file_with_agent(file_path, name.as_deref(), &meta)
+            .await
+            .map(|(_, link)| link);
+    }
+    match credentials::resolve() {
+        Ok(creds) => {
+            let server = creds.server.clone();
+            let http = Client::new();
+            let auth = format!("Bearer {}", creds.api_key);
+            let video_id = create_video(&http, &server, &auth, &name, None, &meta).await?;
+            let put_url = presign_put(&http, &server, &auth, &video_id, &meta).await?;
+            upload_file(&http, &put_url, file_path).await?;
+            Ok(format!("{server}/s/{video_id}"))
+        }
+        Err(_) => upload_file_with_agent(file_path, name.as_deref(), &meta)
+            .await
+            .map(|(_, link)| link),
+    }
+}
 
-    let http = Client::new();
-    let auth = format!("Bearer {}", creds.api_key);
+async fn upload_file_with_agent(
+    file_path: &Path,
+    name: Option<&str>,
+    meta: &VideoMeta,
+) -> Result<(String, String), String> {
+    let content_length = tokio::fs::metadata(file_path)
+        .await
+        .map_err(|error| format!("Failed to read {}: {error}", file_path.display()))?
+        .len();
+    let file_name = file_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("upload.mp4");
+    let client = AgentClient::from_credentials().map_err(|error| error.to_string())?;
+    let response = client
+        .mutate_json(
+            Method::POST,
+            "/uploads",
+            &json!({
+                "fileName": file_name,
+                "contentType": "video/mp4",
+                "contentLength": content_length,
+                "durationSeconds": meta.duration_in_secs,
+                "width": meta.width,
+                "height": meta.height,
+                "fps": meta.fps,
+                "title": name,
+            }),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let upload: AgentUploadResponse = serde_json::from_value(response)
+        .map_err(|error| format!("Unexpected agent upload response: {error}"))?;
+    upload_agent_target(&Client::new(), &upload.upload, file_path, content_length).await?;
+    client
+        .mutate_json(
+            Method::POST,
+            &format!("/uploads/{}/complete", upload.id),
+            &json!({
+                "rawFileKey": upload.raw_file_key,
+                "contentLength": content_length,
+            }),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok((upload.id, upload.share_url))
+}
 
-    let video_id = create_video(&http, &server, &auth, &name, None, &meta).await?;
-    let put_url = presign_put(&http, &server, &auth, &video_id, &meta).await?;
-    upload_file(&http, &put_url, file_path).await?;
-
-    Ok(format!("{server}/s/{video_id}"))
+async fn upload_agent_target(
+    http: &Client,
+    target: &AgentUploadTarget,
+    path: &Path,
+    content_length: u64,
+) -> Result<(), String> {
+    let (url, headers) = match target {
+        AgentUploadTarget::Put { url, headers }
+        | AgentUploadTarget::DriveResumable { url, headers } => (url, headers),
+        AgentUploadTarget::S3Post { url, fields } => {
+            let _ = (url, fields);
+            return Err("Cap returned an unsupported S3 POST upload target".to_string());
+        }
+    };
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| format!("Failed to open {}: {error}", path.display()))?;
+    let mut request = http
+        .put(url)
+        .header(reqwest::header::CONTENT_LENGTH, content_length)
+        .body(reqwest::Body::wrap_stream(ReaderStream::new(file)));
+    for (name, value) in headers {
+        request = request.header(name, value);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("Upload failed: {error}"))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("Storage upload failed ({})", response.status()))
+    }
 }
 
 fn probe_video_meta(path: &Path) -> Result<VideoMeta, String> {
@@ -351,4 +515,42 @@ async fn upload_file(http: &Client, put_url: &str, path: &Path) -> Result<(), St
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefer_agent_upload_sources;
+    use crate::credentials::{AgentCredentialSource, CredentialSource};
+
+    #[test]
+    fn explicit_agent_environment_credential_has_highest_upload_priority() {
+        assert!(prefer_agent_upload_sources(
+            AgentCredentialSource::Env,
+            Some(CredentialSource::Env),
+        ));
+    }
+
+    #[test]
+    fn explicit_legacy_environment_credential_precedes_stored_agent_credential() {
+        assert!(!prefer_agent_upload_sources(
+            AgentCredentialSource::Keyring,
+            Some(CredentialSource::Env),
+        ));
+    }
+
+    #[test]
+    fn stored_agent_credential_precedes_desktop_credential() {
+        assert!(prefer_agent_upload_sources(
+            AgentCredentialSource::File,
+            Some(CredentialSource::Desktop),
+        ));
+    }
+
+    #[test]
+    fn legacy_agent_resolution_uses_legacy_upload() {
+        assert!(!prefer_agent_upload_sources(
+            AgentCredentialSource::Desktop,
+            Some(CredentialSource::Desktop),
+        ));
+    }
 }
