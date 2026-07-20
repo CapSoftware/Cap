@@ -1,7 +1,7 @@
 pub mod menu;
 mod sc_shareable_content;
 
-use objc2::{MainThreadMarker, msg_send, sel};
+use objc2::MainThreadMarker;
 use objc2_app_kit::NSWindow;
 pub use sc_shareable_content::*;
 use tauri::WebviewWindow;
