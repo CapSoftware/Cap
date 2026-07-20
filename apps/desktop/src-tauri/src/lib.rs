@@ -5672,14 +5672,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     constrained_position.to_logical::<f64>(scale_factor);
                                 let display_id = display_for_position(logical_pos.x, logical_pos.y)
                                     .map(|display| display.id());
-                                window_position_persistence::queue_main_position(
-                                    app,
-                                    general_settings::WindowPosition {
-                                        x: logical_pos.x,
-                                        y: logical_pos.y,
-                                        display_id,
-                                    },
-                                );
                                 return;
                             }
                             Err(error) => warn!(
