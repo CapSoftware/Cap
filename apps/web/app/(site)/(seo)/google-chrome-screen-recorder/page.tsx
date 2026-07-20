@@ -3,10 +3,16 @@ import {
 	GoogleChromeScreenRecorderPage,
 	googleChromeScreenRecorderContent,
 } from "@/components/pages/seo/GoogleChromeScreenRecorderPage";
+import { ogImageUrl } from "@/lib/og/url";
 import {
 	createFAQSchema,
 	createSoftwareApplicationSchema,
 } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Screen recorder for Google Chrome",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title: "Google Chrome Screen Recorder: Record & Share Free | Cap",
@@ -31,7 +37,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Google Chrome Screen Recorder",
@@ -45,7 +51,7 @@ export const metadata: Metadata = {
 		title: "Google Chrome Screen Recorder | Cap",
 		description:
 			"Record your screen from Google Chrome with Cap's free, open-source extension. Instant sharing, no watermarks.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 

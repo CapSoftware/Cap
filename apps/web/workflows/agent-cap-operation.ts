@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import * as Db from "@cap/database/schema";
-import { userIsPro } from "@cap/utils";
-import { Organisations, Storage } from "@cap/web-backend";
+import { Organisations } from "@cap/web-backend/src/Organisations/index";
+import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	CurrentUser,
 	Folder,
@@ -19,7 +19,8 @@ import {
 	checkDomainStatus,
 	getDomainResponse,
 } from "@/actions/organization/domain-utils";
-import { runPromise } from "@/lib/server";
+import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 type CapSnapshot = {
 	id: string;
@@ -113,7 +114,7 @@ async function claimOperation(operationId: string) {
 
 async function listOperationObjects(snapshot: CapSnapshot) {
 	const [bucket] = await Storage.getAccessForVideo(storageVideo(snapshot)).pipe(
-		runPromise,
+		runWorkflowPromise,
 	);
 	const prefix = `${snapshot.ownerId}/${snapshot.id}/`;
 	const keys: string[] = [];
@@ -121,7 +122,7 @@ async function listOperationObjects(snapshot: CapSnapshot) {
 	do {
 		const page = await bucket
 			.listObjects({ prefix, maxKeys: 1_000, continuationToken })
-			.pipe(runPromise);
+			.pipe(runWorkflowPromise);
 		for (const object of page.Contents ?? []) {
 			if (object.Key) keys.push(object.Key);
 		}
@@ -147,7 +148,7 @@ async function copyCapObjects(payload: OperationPayload) {
 				key.replace(prefix, destinationPrefix),
 			),
 		{ concurrency: 4 },
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 }
 
 async function createDuplicate(operationId: string, payload: OperationPayload) {
@@ -225,7 +226,7 @@ async function deleteCapObjects(payload: OperationPayload) {
 			.deleteObjects(
 				keys.slice(index, index + 1_000).map((key) => ({ Key: key })),
 			)
-			.pipe(runPromise);
+			.pipe(runWorkflowPromise);
 	}
 }
 
@@ -295,7 +296,7 @@ async function deleteOrganization(
 			),
 			iconUrlOrKey: Option.fromNullable(user.image),
 		}),
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 	const [remainingOrganization] = await db()
 		.select({ id: Db.organizations.id })
 		.from(Db.organizations)
@@ -470,7 +471,7 @@ async function updateOrganizationDomain(
 	const context = await getOrganizationDomainContext(operationId, payload);
 	if (kind === "set_organization_domain") {
 		if (!payload.domain) throw new FatalError("Organization domain is missing");
-		if (!userIsPro(context)) {
+		if (!isAiGenerationEnabledForUser(context)) {
 			throw new FatalError("Cap Pro is required for custom domains");
 		}
 		const status = await addOrganizationDomain(payload.domain);

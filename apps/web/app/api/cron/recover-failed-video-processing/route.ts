@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import { recoverStalledVideoPipeline } from "@/lib/video-pipeline-recovery";
 import { recoverFailedVideoProcessing } from "@/lib/video-processing-recovery";
 
 export const dynamic = "force-dynamic";
@@ -23,10 +24,14 @@ export async function GET(request: Request) {
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const summary = await recoverFailedVideoProcessing();
+	const [summary, stalledPipeline] = await Promise.all([
+		recoverFailedVideoProcessing(),
+		recoverStalledVideoPipeline(),
+	]);
 
 	return NextResponse.json({
 		success: true,
 		...summary,
+		stalledPipeline,
 	});
 }

@@ -5653,7 +5653,43 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     }
                 }
                 WindowEvent::Moved(position) => {
-                    if let Ok(window_id) = CapWindowId::from_str(label) {
+                    let window_id = CapWindowId::from_str(label);
+
+                    #[cfg(target_os = "macos")]
+                    if matches!(&window_id, Ok(CapWindowId::Main))
+                        && let Some(constrained_position) =
+                            platform::constrain_main_window_to_visible_top(window, *position)
+                    {
+                        match window.set_position(constrained_position) {
+                            Ok(()) => {
+                                let scale_factor = window
+                                    .current_monitor()
+                                    .ok()
+                                    .flatten()
+                                    .map(|monitor| monitor.scale_factor())
+                                    .unwrap_or_else(|| window.scale_factor().unwrap_or(1.0));
+                                let logical_pos =
+                                    constrained_position.to_logical::<f64>(scale_factor);
+                                let display_id = display_for_position(logical_pos.x, logical_pos.y)
+                                    .map(|display| display.id());
+                                window_position_persistence::queue_main_position(
+                                    app,
+                                    general_settings::WindowPosition {
+                                        x: logical_pos.x,
+                                        y: logical_pos.y,
+                                        display_id,
+                                    },
+                                );
+                                return;
+                            }
+                            Err(error) => warn!(
+                                %error,
+                                "Failed to constrain main window to the visible screen area"
+                            ),
+                        }
+                    }
+
+                    if let Ok(window_id) = window_id {
                         let scale_factor = window.scale_factor().unwrap_or(1.0);
                         let logical_pos = position.to_logical::<f64>(scale_factor);
 

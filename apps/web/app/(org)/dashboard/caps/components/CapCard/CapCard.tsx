@@ -47,6 +47,10 @@ import {
 } from "@/components/VideoThumbnail";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
+import {
+	copyRichVideoLink,
+	videoPreviewImageUrl,
+} from "@/lib/video-share-clipboard";
 import { usePublicEnv } from "@/utils/public-env";
 
 import { PasswordDialog } from "../PasswordDialog";
@@ -314,7 +318,11 @@ export const CapCard = ({
 	};
 
 	const handleCopy = (text: string) => {
-		navigator.clipboard.writeText(text);
+		copyRichVideoLink({
+			url: text,
+			title: cap.name || "Cap Recording",
+			previewImageUrl: videoPreviewImageUrl(webUrl, cap.id),
+		});
 		setCopyPressed(true);
 		setTimeout(() => {
 			setCopyPressed(false);

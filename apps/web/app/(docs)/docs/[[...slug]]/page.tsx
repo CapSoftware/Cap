@@ -2,8 +2,12 @@ import { buildEnv } from "@cap/env";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { CustomMDX } from "@/components/mdx";
+import { ogImageUrl } from "@/lib/og/url";
 import { extractHeadings, getDocBySlug } from "@/utils/docs";
+import { CopyablePrompt } from "../_components/CopyablePrompt";
+import { DocsAskCta } from "../_components/DocsAskCta";
 import { DocsBreadcrumbs } from "../_components/DocsBreadcrumbs";
+import { DocsCodeBlock } from "../_components/DocsCodeBlock";
 import { DocsPrevNext } from "../_components/DocsPrevNext";
 import { DocsTableOfContents } from "../_components/DocsTableOfContents";
 
@@ -20,7 +24,9 @@ export async function generateMetadata(
 	if (!doc) return;
 
 	const { title, summary: description, image } = doc.metadata;
-	const ogImage = image ? `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}` : undefined;
+	const ogImage = image
+		? `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}`
+		: ogImageUrl({ title, tag: "Docs", description: description || undefined });
 
 	return {
 		title: `${title} - Cap Docs`,
@@ -30,10 +36,40 @@ export async function generateMetadata(
 			description: description || title,
 			type: "article",
 			url: `${buildEnv.NEXT_PUBLIC_WEB_URL}/docs/${slug}`,
-			...(ogImage && { images: [{ url: ogImage }] }),
+			images: [{ url: ogImage, width: 1200, height: 630, alt: title }],
+		},
+		twitter: {
+			card: "summary_large_image",
+			title: `${title} - Cap Docs`,
+			description: description || title,
+			images: [ogImage],
 		},
 	};
 }
+
+const proseClassName = [
+	"prose prose-sm max-w-none",
+	"prose-headings:scroll-mt-24 prose-headings:font-medium prose-headings:tracking-[-0.01em] prose-headings:text-gray-12",
+	"prose-h2:mb-4 prose-h2:mt-12 prose-h2:text-xl prose-h2:leading-7",
+	"prose-h3:mb-3 prose-h3:mt-8 prose-h3:text-[17px] prose-h3:leading-6",
+	"prose-p:my-4 prose-p:text-[15px] prose-p:leading-[1.75] prose-p:text-gray-11",
+	"prose-a:font-medium prose-a:text-blue-11 prose-a:no-underline prose-a:underline-offset-[3px] hover:prose-a:underline",
+	"prose-strong:font-medium prose-strong:text-gray-12",
+	"prose-ul:my-4 prose-ol:my-4 prose-li:my-1.5 prose-li:text-[15px] prose-li:leading-[1.75] prose-li:text-gray-11",
+	"prose-blockquote:my-5 prose-blockquote:border-l-2 prose-blockquote:border-gray-6 prose-blockquote:pl-4 prose-blockquote:font-normal prose-blockquote:not-italic prose-blockquote:text-gray-11",
+	"prose-code:before:content-none prose-code:after:content-none",
+	"[&_:not(pre)>code]:rounded-md [&_:not(pre)>code]:border [&_:not(pre)>code]:border-gray-4 [&_:not(pre)>code]:bg-gray-2 [&_:not(pre)>code]:px-[0.35em] [&_:not(pre)>code]:py-[0.12em] [&_:not(pre)>code]:text-[13px] [&_:not(pre)>code]:font-normal [&_:not(pre)>code]:text-gray-12",
+	"prose-figure:my-6",
+	"prose-hr:border-gray-3",
+	"prose-table:my-6 prose-table:w-full",
+	"prose-thead:border-b prose-thead:border-gray-4",
+	"prose-th:px-3.5 prose-th:py-2 prose-th:text-left prose-th:text-[13px] prose-th:font-medium prose-th:text-gray-12",
+	"prose-tr:border-b prose-tr:border-gray-3",
+	"prose-td:px-3.5 prose-td:py-2.5 prose-td:align-top prose-td:text-sm prose-td:leading-6 prose-td:text-gray-11",
+	"[&_th:first-child]:pl-0 [&_td:first-child]:pl-0",
+	"prose-img:rounded-xl prose-img:border prose-img:border-gray-3",
+	"[&_iframe]:w-full [&_iframe]:max-w-full [&_iframe]:rounded-xl",
+].join(" ");
 
 export default async function DocPage(props: DocPageProps) {
 	const params = await props.params;
@@ -47,25 +83,29 @@ export default async function DocPage(props: DocPageProps) {
 	const headings = extractHeadings(doc.content);
 
 	return (
-		<div className="flex">
-			<div className="flex-1 min-w-0 max-w-3xl mx-auto px-6 sm:px-8 py-10">
-				<DocsBreadcrumbs currentSlug={slug} />
-				<article className="mt-4">
-					<h1 className="text-3xl font-bold tracking-tight text-gray-900 mb-2">
-						{doc.metadata.title}
-					</h1>
-					{doc.metadata.summary && (
-						<p className="text-lg text-gray-500 mb-8">{doc.metadata.summary}</p>
-					)}
-					<div className="prose prose-gray max-w-none prose-headings:scroll-mt-20 prose-headings:font-semibold prose-a:text-blue-600 prose-code:before:content-none prose-code:after:content-none prose-code:bg-gray-100 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-sm [&_pre]:rounded-lg [&_pre]:p-4 [&_pre]:overflow-x-auto [&_pre]:text-[13px] [&_pre]:leading-relaxed [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-[inherit] [&_iframe]:max-w-full [&_iframe]:w-full">
-						<CustomMDX source={doc.content} />
-					</div>
+		<div className="flex gap-10">
+			<div className="mx-auto w-full min-w-0 max-w-3xl py-10 sm:px-6 lg:px-10">
+				<DocsBreadcrumbs currentSlug={slug} pageTitle={doc.metadata.title} />
+				<h1 className="text-[28px] font-medium leading-9 tracking-[-0.02em] text-gray-12 sm:text-[32px] sm:leading-10">
+					{doc.metadata.title}
+				</h1>
+				{doc.metadata.summary && (
+					<p className="mt-3 text-base leading-7 text-gray-10">
+						{doc.metadata.summary}
+					</p>
+				)}
+				<article className={`mt-8 ${proseClassName}`}>
+					<CustomMDX
+						source={doc.content}
+						components={{ CopyablePrompt, pre: DocsCodeBlock }}
+					/>
 				</article>
+				<DocsAskCta />
 				<DocsPrevNext currentSlug={slug} />
 			</div>
-			<div className="hidden xl:block w-[200px] shrink-0">
+			<aside className="hidden w-[240px] shrink-0 xl:block">
 				<DocsTableOfContents headings={headings} />
-			</div>
+			</aside>
 		</div>
 	);
 }

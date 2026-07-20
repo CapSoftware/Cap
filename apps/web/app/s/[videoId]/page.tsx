@@ -53,6 +53,7 @@ import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
+import { getSharePlayerUrl } from "@/lib/share-player-url";
 import {
 	isSocialCrawlerUserAgent,
 	SOCIAL_REFERRER_DOMAINS,
@@ -295,10 +296,7 @@ export async function generateMetadata(
 								},
 							],
 							players: {
-								playerUrl: new URL(
-									`/s/${videoId}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
+								playerUrl: getSharePlayerUrl(videoId),
 								streamUrl: playlistUrl,
 								width: 1280,
 								height: 720,

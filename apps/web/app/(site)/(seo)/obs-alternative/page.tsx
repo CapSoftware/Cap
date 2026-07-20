@@ -3,7 +3,13 @@ import {
 	ObsAlternativePage,
 	obsAlternativeContent,
 } from "@/components/pages/seo/ObsAlternativePage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "The simple OBS alternative",
+	tag: "Compare",
+});
 
 export const metadata: Metadata = {
 	title: "OBS Alternative — Easier Screen Recording with Instant Sharing | Cap",
@@ -21,7 +27,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: OBS Alternative for Async Screen Recording",
@@ -36,7 +42,7 @@ export const metadata: Metadata = {
 			"OBS Alternative — Easier Screen Recording with Instant Sharing | Cap",
 		description:
 			"Cap is the modern OBS alternative for async screen sharing. Record in 4K, get a shareable link in seconds, and collaborate with timestamped comments. No configuration required.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 

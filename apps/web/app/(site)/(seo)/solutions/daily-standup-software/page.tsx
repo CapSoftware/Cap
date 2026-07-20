@@ -1,5 +1,11 @@
 import type { Metadata } from "next";
 import { DailyStandupSoftwarePage } from "@/components/pages/seo/DailyStandupSoftwarePage";
+import { ogImageUrl } from "@/lib/og/url";
+
+const ogImage = ogImageUrl({
+	title: "Async daily standups with video",
+	tag: "Solutions",
+});
 
 export const metadata: Metadata = {
 	title: "Daily Standup Software: Streamline Your Agile Meetings with Cap",
@@ -13,7 +19,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Daily Standup Software",
@@ -27,7 +33,7 @@ export const metadata: Metadata = {
 		title: "Daily Standup Software: Streamline Your Agile Meetings with Cap",
 		description:
 			"Looking for daily standup software? Discover how Cap helps remote or hybrid teams run async standups efficiently—no more timezone conflicts!",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/solutions/daily-standup-software",

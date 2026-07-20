@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Script from "next/script";
 import { AgenciesPage } from "@/components/pages/seo/AgenciesPage";
+import { ogImageUrl } from "@/lib/og/url";
 
 // Create FAQ structured data for SEO
 const createFaqStructuredData = () => {
@@ -83,6 +84,11 @@ const createSoftwareStructuredData = () => {
 	return JSON.stringify(softwareStructuredData);
 };
 
+const ogImage = ogImageUrl({
+	title: "Cap for agencies",
+	tag: "Solutions",
+});
+
 export const metadata: Metadata = {
 	title: "Cap for Agencies — Faster Client Updates with Instant Video Links",
 	description:
@@ -95,7 +101,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap for Agencies",
@@ -109,7 +115,7 @@ export const metadata: Metadata = {
 		title: "Cap for Agencies — Faster Client Updates with Instant Video Links",
 		description:
 			"Send clearer client updates in minutes. Share instant links with comments, or craft polished walkthroughs. Cap for Agencies on macOS & Windows.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/solutions/agencies",

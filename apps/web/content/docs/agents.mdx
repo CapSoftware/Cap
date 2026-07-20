@@ -1,0 +1,84 @@
+---
+title: "Cap for Agents"
+summary: "Record, understand, share, and manage Cap through Codex, Claude Code, OpenCode, Cursor, or any shell-capable agent"
+tags: "Agents"
+---
+
+Cap can be used end to end from an AI agent. Your agent can record your screen, upload and share recordings, read transcripts and AI summaries, search your library, collaborate in comments, inspect analytics, organize team content, and manage advanced Cap features without depending on the dashboard.
+
+<CopyablePrompt />
+
+## The fastest way to start
+
+1. Select **Copy Agent Setup Prompt** above.
+2. Paste it into Codex, Claude Code, Cursor, OpenCode, or another agent that can run shell commands.
+3. Review the exact CLI and agent-configuration changes it proposes, then approve them.
+4. Complete the focused Cap browser login when prompted and tell the agent what you want to do.
+
+The prompt handles CLI discovery or installation, least-privilege authentication, the full Cap skill, local MCP configuration, and setup verification. It then teaches the agent to use Cap as an ongoing recording, video-understanding, collaboration, and organization helper. If you prefer to configure each piece yourself, follow [Set Up Your Agent](/docs/agents/setup).
+
+## What your agent can do
+
+| Goal | Examples |
+| --- | --- |
+| Understand recordings | Read the title, AI title, summary, chapters, transcript, comments, reactions, views, sharing state, permissions, and processing state |
+| Find information | Search all, owned, or shared Caps; filter by organization or folder; inspect notifications |
+| Collaborate | Draft and, after confirmation, post timestamped comments, replies, reactions, title changes, and visibility changes |
+| Record and share | Check capture readiness, select a screen or window, record, validate, export, upload, and return the share link |
+| Manage a library | Create and organize folders and spaces, move Caps, manage public collection pages, and download recordings or transcripts |
+| Run a team | Inspect members, invites, billing, storage, analytics, domains, and settings; perform confirmed admin changes |
+| Migrate and build | Run durable Loom imports, wait for jobs, and manage Cap developer apps, videos, domains, usage, and credits |
+
+See [Agent Workflows](/docs/agents/workflows) for ready-to-use scenarios and success checks.
+
+## How agents connect to Cap
+
+### Direct CLI
+
+This is the universal path. Any agent that can run terminal commands can use Cap. Every command supports machine-readable output through `--json`, while recording and export stream newline-delimited JSON events.
+
+The installed binary is self-describing:
+
+```sh
+cap guide --json
+cap <command> --help
+```
+
+Agents should discover the current contract from those commands instead of guessing flags or relying on a copied command list.
+
+### Cap skill
+
+The Cap skill teaches a compatible agent when to reach for Cap and how to handle confirmation, secrets, passwords, and long-running jobs. It deliberately delegates command details to `cap guide --json`, so the instructions stay aligned with the installed version.
+
+### Local MCP
+
+`cap mcp serve` exposes structured Cap tools over local stdio. MCP works well for library reads, safe writes, resources, and browser handoffs. Secure input and local file actions intentionally stay in the CLI.
+
+[Set up your agent](/docs/agents/setup) covers Codex, Claude Code, OpenCode, Cursor, and generic MCP clients.
+
+## Why this is safe to hand to an agent
+
+Cap's agent surface is designed around explicit boundaries:
+
+- Read operations and waits do not start AI, transcription, or paid processing.
+- Mutations require the agent to show the proposed action and get your confirmation.
+- Passwords, storage credentials, API keys, image files, and newly issued developer credentials stay out of MCP and chat.
+- Browser approval uses a focused Cap or provider handoff; the agent re-reads state afterward.
+- Durable operations return an operation ID, and the agent waits for the terminal state instead of treating “accepted” as success.
+- Permissions remain server-enforced. Installing an integration does not grant it access to your Cap account.
+
+Read [Safety & Troubleshooting](/docs/agents/safety) before giving an agent administrative, billing, storage, developer, or destructive work.
+
+## Your first task
+
+Try one of these after setup:
+
+- “Summarize this Cap, list every decision and action item, and cite the relevant timestamps: `<Cap URL>`.”
+- “Find my Caps about onboarding from the last month and give me a concise project brief.”
+- “Record a short reproduction of this bug, upload it, and give me the link. Ask before recording and before uploading.”
+- “Show me this month's organization analytics and explain the biggest changes. Do not modify anything.”
+- “Draft a timestamped reply to this comment, show it to me, and only post it after I approve.”
+- “Inspect our organization storage and propose a Google Drive rollout. Do not connect or change anything yet.”
+- “Audit this Loom migration CSV, propose owner and space mappings, and do not import anything until I approve the first batch.”
+
+The dedicated [Google Drive](/docs/teams/google-drive) and [Migrating to Cap](/docs/migrating-to-cap) guides include the full boundaries and copyable agent prompts.

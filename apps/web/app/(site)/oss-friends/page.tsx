@@ -1,11 +1,15 @@
 import { ExternalLink } from "lucide-react";
 import type { Metadata } from "next";
+import { buildMarketingMetadata } from "@/lib/og/url";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = buildMarketingMetadata({
 	title: "OSS Friends — Cap",
 	description:
 		"Discover amazing open source projects and tools built by our friends in the community.",
-};
+	path: "/oss-friends",
+	ogTitle: "Our open source friends",
+	ogTag: "Open Source",
+});
 
 interface OSSFriend {
 	name: string;

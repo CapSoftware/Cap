@@ -1,15 +1,16 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { buildMarketingMetadata } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = buildMarketingMetadata({
 	title: "File Conversion Tools | Free Online Converters",
 	description:
 		"Free online file conversion tools. Convert between various file formats directly in your browser with no uploads needed.",
-	alternates: {
-		canonical: "https://cap.so/tools/convert",
-	},
-};
+	path: "/tools/convert",
+	ogTitle: "Free file converters, right in your browser",
+	ogTag: "Tools",
+});
 
 interface ConversionTool {
 	title: string;

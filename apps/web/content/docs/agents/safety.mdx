@@ -1,0 +1,145 @@
+---
+title: "Safety & Troubleshooting"
+summary: "The confirmation, secret-handling, permission, and verification rules for Cap agents"
+tags: "Agents"
+---
+
+> **Agent-readable page:** Treat every rule here as part of the task. If a requested action conflicts with these boundaries, stop and ask the user instead of finding a workaround.
+
+## Read first, then propose changes
+
+An agent should begin with `cap guide --json`, current state, and the narrowest relevant read command. Reads and waits do not need confirmation. Everything that changes state does.
+
+Before a mutation, the agent must show:
+
+- the exact Cap, organization, folder, space, member, developer app, or file involved;
+- the current state when it can be read;
+- the exact proposed new state or content;
+- whether the action uploads data, starts paid work, opens a provider handoff, or is destructive;
+- how success will be verified.
+
+Only after explicit approval may it pass `--yes` to the CLI or `confirmed=true` to MCP.
+
+## Actions that require confirmation
+
+| Category | Examples |
+| --- | --- |
+| Content | Post or delete a comment, reply, or reaction; replace a transcript; change a title |
+| Processing | Start or retry transcription, AI generation, imports, duplication, or another paid or durable job |
+| Recording and upload | Begin screen, camera, microphone, or system-audio capture; upload local content |
+| Sharing | Change visibility, passwords, public pages, locations, domains, or access |
+| Library | Create, rename, move, or delete Caps, folders, and spaces |
+| Organization | Invite or remove members, change roles or seats, update settings or storage, delete an organization |
+| Billing and developer | Create checkout links, change auto top-up, issue or rotate credentials, delete videos or apps |
+| Account | Change profile data or sign out all devices and agent sessions |
+
+Confirmation applies even when a command does not have a `--yes` flag. The agent obtains approval before running it.
+
+## Keep secrets out of chat and MCP
+
+Never ask the user to paste any of these into an agent conversation or MCP tool call:
+
+- Cap passwords;
+- `CAP_AGENT_TOKEN`, `CAP_API_KEY`, or another API key;
+- S3 access keys or secret keys;
+- newly issued developer credentials;
+- sensitive image or local credential files.
+
+Use the exact secure CLI flow instead. Password and S3 commands accept hidden interactive input or stdin where supported. MCP intentionally does not expose those secret fields.
+
+For a password-protected Cap, the agent should ask the user to run:
+
+```sh
+cap caps unlock <id-or-url>
+```
+
+The short-lived unlock grant can then be used by subsequent Cap commands without putting the password into chat, arguments, JSON, or logs.
+
+## Use the least-privileged login
+
+Start with the default `creator` profile. Use `admin` only for organization, member, billing, or storage work. Use `full` only for developer tasks that require developer scopes.
+
+```sh
+cap auth login --json
+cap auth login --profile admin --json
+cap auth login --profile full --json
+```
+
+Installing a skill or MCP server does not authenticate it or increase its server-side permissions.
+
+## Distinguish observation from paid work
+
+These commands observe existing state and never start processing:
+
+```sh
+cap caps context <id-or-url> --json
+cap caps status <id-or-url> --json
+cap caps wait <id-or-url> --for all --json
+cap jobs get <operation-id> --json
+cap jobs wait <operation-id> --json
+```
+
+Commands such as `cap caps process`, Loom import, duplication, and some developer or billing operations change state and require confirmation.
+
+## Wait for terminal results
+
+An accepted, pending, processing, or queued response is not completion. Preserve the returned operation ID, run `cap jobs wait <operation-id> --json`, and inspect the terminal result. Re-read the affected resource when practical.
+
+For recording, require the stopped event to report `recordingMetaExists: true`, then run `cap project validate` before export or upload.
+
+## Treat JSON and exit codes correctly
+
+- Use `--json` for machine-readable stdout.
+- Treat stdout as the authoritative result and stderr as diagnostics.
+- Recording and export emit newline-delimited JSON events, not one JSON document.
+- Exit code `1` is a runtime failure; inspect the JSON `error` field or the structured `code` and `message` fields returned by Cap's account API.
+- Exit code `2` is invalid command usage; inspect `cap <command> --help` instead of retrying guessed flags.
+- Diagnostic commands may exit successfully while reporting an unavailable capability. Branch on fields such as `ok`, `captureReady`, or `valid`.
+
+## Browser handoffs
+
+CLI login, Stripe checkout and billing portal flows, Google Drive authorization, and referrals can return a URL or open a browser. The agent should:
+
+1. explain which provider flow is opening;
+2. let the user complete it directly;
+3. never ask for provider credentials;
+4. re-read Cap state afterward to verify the result.
+
+## Troubleshooting checklist
+
+### `cap` is not found
+
+Install it from [Set Up Your Agent](/docs/agents/setup#install-the-cap-cli), open a new terminal, and run `cap version --json`.
+
+### Authentication fails
+
+Run `cap auth status --json`. If needed, use `cap auth login --json` and complete the browser approval. For self-hosted Cap, make sure `CAP_SERVER_URL` points to the intended server before login.
+
+### The agent guesses a flag or output shape
+
+Stop and run:
+
+```sh
+cap guide --json
+cap <command> --help
+```
+
+The installed binary is the source of truth.
+
+### MCP is unavailable
+
+Verify that the client launches the local command `cap mcp serve`, that `cap` is on the client's PATH, and that stdout is not wrapped or logged by another process. Use direct CLI commands as a fallback.
+
+### A Cap is password protected
+
+Do not put the password in the prompt. Complete `cap caps unlock <id-or-url>` in a secure terminal, then retry the read.
+
+### Processing does not finish
+
+Keep the operation or Cap ID, use the relevant wait command with a bounded timeout, and report the last verified state. Do not start duplicate work unless the user explicitly approves a retry.
+
+### A command is forbidden
+
+Read the returned permissions or capabilities. Re-authenticate with a broader profile only if the task truly needs it and the user agrees. Do not work around a server-enforced denial.
+
+Return to the [Cap for Agents overview](/docs/agents) or choose a tested [Agent Workflow](/docs/agents/workflows).

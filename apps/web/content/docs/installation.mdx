@@ -1,116 +1,58 @@
 ---
 title: "Installation"
-summary: "Download and install Cap Desktop on macOS or Windows"
+summary: "Install Cap Desktop and grant recording permissions"
 tags: "Getting Started, Desktop"
 ---
 
-Cap Desktop is available for macOS and Windows. This guide walks you through downloading, installing, and granting the necessary permissions so you can start recording right away.
+Cap Desktop release builds are available for Apple Silicon and Intel Macs, 64-bit Windows, and 64-bit Linux through a Debian package.
 
-## Download
-
-Head to [Cap.so/download](https://cap.so/download) to grab the latest version of Cap Desktop for your platform. The download page automatically detects your operating system and offers the correct installer.
+Download the current build from [cap.so/download](https://cap.so/download). The download page detects common platforms, and the [versions page](https://cap.so/download/versions) lists the available installers directly.
 
 ## macOS
 
-### System Requirements
+1. Download the correct `.dmg` for Apple Silicon or Intel.
+2. Open it and drag **Cap** into **Applications**.
+3. Open Cap from Applications or Spotlight.
+4. Approve the standard downloaded-application prompt if macOS shows it.
 
-- **macOS 13 (Ventura) or later**
-- Apple Silicon (M1/M2/M3/M4) or Intel processor
-- At least 4 GB of RAM
-- 200 MB of available disk space
+Cap requests system permissions when a feature first needs them:
 
-### Installation Steps
+- **Screen & System Audio Recording** for display, window, and area capture
+- **Microphone** for microphone audio
+- **Camera** for camera capture or an overlay
 
-1. Download the `.dmg` file from [Cap.so/download](https://cap.so/download).
-2. Open the downloaded `.dmg` file.
-3. Drag the **Cap** icon into the **Applications** folder.
-4. Open Cap from your Applications folder or Spotlight search.
-5. If macOS shows a warning that Cap was downloaded from the internet, click **Open** to proceed.
+If a permission was denied, open **System Settings > Privacy & Security**, enable Cap in the corresponding section, then restart Cap if the operating system asks you to.
 
-### Granting Permissions
-
-Cap needs a few system permissions to record your screen, camera, and microphone. macOS will prompt you for these when you first try to use each feature.
-
-**Screen Recording**
-
-1. When you first start a recording, macOS will ask you to grant Screen Recording permission.
-2. Click **Open System Settings** when prompted.
-3. Navigate to **Privacy & Security** > **Screen Recording**.
-4. Toggle the switch next to **Cap** to enable it.
-5. You may need to restart Cap for the change to take effect.
-
-**Microphone**
-
-1. When you first enable microphone recording, macOS will prompt for Microphone access.
-2. Click **Allow** in the dialog.
-3. You can manage this later in **System Settings** > **Privacy & Security** > **Microphone**.
-
-**Camera**
-
-1. When you first enable the camera overlay, macOS will prompt for Camera access.
-2. Click **Allow** in the dialog.
-3. You can manage this later in **System Settings** > **Privacy & Security** > **Camera**.
-
-**Accessibility (Optional)**
-
-Some features, like global keyboard shortcuts, may require Accessibility access. If prompted:
-
-1. Open **System Settings** > **Privacy & Security** > **Accessibility**.
-2. Click the **+** button and add Cap from your Applications folder.
+System-audio support can depend on the macOS version and selected capture path. Keep Cap and macOS current if an audio source is unavailable.
 
 ## Windows
 
-### System Requirements
+1. Download the 64-bit `.exe` installer.
+2. Run it and follow the installer prompts.
+3. Open Cap from the Start menu.
 
-- **Windows 10 (version 1903 or later) or Windows 11**
-- 64-bit processor
-- At least 4 GB of RAM
-- 200 MB of available disk space
+Windows manages camera and microphone access under **Settings > Privacy** on Windows 10 or **Settings > Privacy & security** on Windows 11. Make sure desktop applications can access the selected device. Screen capture uses the native Windows capture path and does not present the same separate Screen Recording permission used by macOS.
 
-### Installation Steps
+## Linux
 
-1. Download the `.exe` installer from [Cap.so/download](https://cap.so/download).
-2. Run the downloaded installer.
-3. Follow the on-screen prompts to complete the installation.
-4. Cap will be added to your Start menu and optionally to your desktop.
-5. Launch Cap from the Start menu or desktop shortcut.
+Cap's release workflow currently publishes an x86_64 `.deb` package for Debian-compatible distributions. Install the package with your system's package manager, then launch Cap from the application menu.
 
-### Granting Permissions
+The package declares the GTK, WebKit, app-indicator, VA, PipeWire, and ALSA runtime dependencies it needs. Linux environments vary, so capture source and audio availability can depend on the desktop session and installed system services.
 
-**Microphone and Camera**
+## Updates
 
-1. Windows will prompt you to allow microphone and camera access when you first use these features.
-2. Click **Yes** or **Allow** when prompted.
-3. You can manage these permissions in **Settings** > **Privacy** > **Microphone** and **Camera**.
+Cap checks its signed update channel in production builds. macOS and Windows can install supported application updates from Cap. Linux `.deb` updates require the package-manager installation flow rather than an automatic privileged install.
 
-**Screen Recording**
+## Verify the installation
 
-Windows does not require a separate screen recording permission. Cap uses native Windows APIs to capture your screen without additional setup.
+1. Sign in to Cap Desktop.
+2. Choose a non-sensitive display, window, or area.
+3. Record a short test.
+4. Stop and confirm the result plays.
+5. If using Instant Mode, wait for the share link to finish processing and open it in a browser.
 
-## Auto-Updates
+## Uninstall
 
-Cap Desktop automatically checks for updates and will notify you when a new version is available. When an update is ready:
+On macOS, move Cap from Applications to the Trash. Production settings and the default recordings directory are under `~/Library/Application Support/so.cap.desktop`. A custom recordings folder stays wherever you selected it.
 
-1. You will see a notification in the Cap app.
-2. Click to download and install the update.
-3. Cap will restart with the latest version.
-
-Updates include new features, performance improvements, and bug fixes. We recommend keeping Cap up to date to get the best experience.
-
-## Verifying Your Installation
-
-After installing Cap, verify everything is working:
-
-1. Open Cap Desktop.
-2. Sign in with your Cap account or create a new one.
-3. Click the record button and select a screen or window.
-4. Record a few seconds and stop the recording.
-5. If the recording plays back successfully, you are all set.
-
-If you run into issues, check the permissions sections above or visit the [Cap community Discord](https://discord.gg/y8gdQ3WRN3) for help.
-
-## Uninstalling
-
-**macOS**: Drag Cap from the Applications folder to the Trash. To remove preferences and data, also delete `~/Library/Application Support/so.cap.desktop`.
-
-**Windows**: Open **Settings** > **Apps** > **Installed Apps**, find Cap, and click **Uninstall**. Follow the prompts to remove it.
+On Windows or Linux, remove Cap through the operating system's installed-app or package-management interface. Back up any local Studio projects you want to keep before removing application data.

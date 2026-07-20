@@ -51,7 +51,22 @@ export const metadata: Metadata = {
 			"Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.",
 		type: "website",
 		url: "https://cap.so",
-		images: ["https://cap.so/og.png"],
+		siteName: "Cap",
+		images: [
+			{
+				url: "/api/og",
+				width: 1200,
+				height: 630,
+				alt: "Cap — Beautiful screen recordings, owned by you.",
+			},
+		],
+	},
+	twitter: {
+		card: "summary_large_image",
+		title: "Cap — Beautiful screen recordings, owned by you.",
+		description:
+			"Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.",
+		images: ["/api/og"],
 	},
 };
 

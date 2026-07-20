@@ -6,6 +6,49 @@ use objc2_app_kit::NSWindow;
 pub use sc_shareable_content::*;
 use tauri::WebviewWindow;
 
+fn constrain_position_to_visible_top(
+    position: tauri::PhysicalPosition<i32>,
+    monitor_top: i32,
+    scale_factor: f64,
+    visible_frame_top_inset: f64,
+    safe_area_top_inset: f64,
+) -> Option<tauri::PhysicalPosition<i32>> {
+    let top_inset = visible_frame_top_inset.max(safe_area_top_inset).max(0.0);
+    let minimum_y = monitor_top.saturating_add((top_inset * scale_factor).round() as i32);
+
+    (position.y < minimum_y).then(|| tauri::PhysicalPosition::new(position.x, minimum_y))
+}
+
+pub fn constrain_main_window_to_visible_top(
+    window: &tauri::Window,
+    position: tauri::PhysicalPosition<i32>,
+) -> Option<tauri::PhysicalPosition<i32>> {
+    use objc2::{runtime::NSObjectProtocol, sel};
+    use objc2_app_kit::NSWindow;
+
+    let monitor = window.current_monitor().ok().flatten()?;
+    let ns_window = window.ns_window().ok()? as *const NSWindow;
+    let screen = unsafe { (*ns_window).screen() }?;
+    let frame = screen.frame();
+    let visible_frame = screen.visibleFrame();
+    let safe_area_top_inset = if screen.respondsToSelector(sel!(safeAreaInsets)) {
+        unsafe { screen.safeAreaInsets().top }
+    } else {
+        0.0
+    };
+    // Tauri runtime 2.8 omits this macOS top offset from Monitor::work_area().position.
+    let visible_frame_top_inset =
+        frame.origin.y + frame.size.height - visible_frame.origin.y - visible_frame.size.height;
+
+    constrain_position_to_visible_top(
+        position,
+        monitor.position().y,
+        monitor.scale_factor(),
+        visible_frame_top_inset,
+        safe_area_top_inset,
+    )
+}
+
 pub fn apply_squircle_corners(window: &tauri::WebviewWindow, radius: f64) {
     use cocoa::base::{id, nil};
     use cocoa::foundation::NSString;
@@ -529,5 +572,51 @@ impl WebviewWindowExt for WebviewWindow {
                 f(mtm, nswindow);
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::constrain_position_to_visible_top;
+    use tauri::PhysicalPosition;
+
+    #[test]
+    fn moves_a_window_below_a_notched_visible_frame() {
+        let position = PhysicalPosition::new(640, 0);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, 0, 2.0, 19.0, 18.0),
+            Some(PhysicalPosition::new(640, 38))
+        );
+    }
+
+    #[test]
+    fn uses_the_safe_area_when_the_menu_bar_is_hidden() {
+        let position = PhysicalPosition::new(200, 0);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, 0, 2.0, 0.0, 37.0),
+            Some(PhysicalPosition::new(200, 74))
+        );
+    }
+
+    #[test]
+    fn preserves_negative_coordinates_on_a_monitor_above_the_primary() {
+        let position = PhysicalPosition::new(-600, -1800);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, -1800, 1.5, 25.0, 0.0),
+            Some(PhysicalPosition::new(-600, -1762))
+        );
+    }
+
+    #[test]
+    fn leaves_an_accessible_position_unchanged() {
+        let position = PhysicalPosition::new(300, 100);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, 0, 2.0, 19.0, 18.0),
+            None
+        );
     }
 }

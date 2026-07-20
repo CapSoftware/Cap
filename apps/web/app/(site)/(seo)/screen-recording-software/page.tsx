@@ -1,5 +1,11 @@
 import type { Metadata } from "next";
 import { ScreenRecordingSoftwarePage } from "@/components/pages/seo/ScreenRecordingSoftwarePage";
+import { ogImageUrl } from "@/lib/og/url";
+
+const ogImage = ogImageUrl({
+	title: "Screen recording software for Mac & Windows",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title: "Screen Recording Software — Free HD Screen Capture | Cap",
@@ -16,7 +22,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Screen Recording Software",
@@ -30,7 +36,7 @@ export const metadata: Metadata = {
 		title: "Screen Recording Software — Free HD Screen Capture | Cap",
 		description:
 			"Free, open-source screen recording software for Mac and Windows. Capture HD video with audio, share instantly, and own your data.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 

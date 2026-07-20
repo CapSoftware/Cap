@@ -1,5 +1,6 @@
 "use client";
 
+import { AlignLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 
 interface Heading {
@@ -18,9 +19,8 @@ export function DocsTableOfContents({ headings }: DocsTableOfContentsProps) {
 	useEffect(() => {
 		if (headings.length === 0) return;
 
-		const slugs = headings.map((h) => h.slug);
-		const elements = slugs
-			.map((slug) => document.getElementById(slug))
+		const elements = headings
+			.map((h) => document.getElementById(h.slug))
 			.filter(Boolean) as HTMLElement[];
 
 		if (elements.length === 0) return;
@@ -38,7 +38,7 @@ export function DocsTableOfContents({ headings }: DocsTableOfContentsProps) {
 				}
 			},
 			{
-				rootMargin: "-80px 0px -60% 0px",
+				rootMargin: "-72px 0px -65% 0px",
 				threshold: 0,
 			},
 		);
@@ -57,21 +57,25 @@ export function DocsTableOfContents({ headings }: DocsTableOfContentsProps) {
 	if (filteredHeadings.length === 0) return null;
 
 	return (
-		<div className="hidden xl:block sticky top-[80px] w-[200px] shrink-0 max-h-[calc(100vh-100px)] overflow-y-auto">
-			<h4 className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-3">
+		<nav
+			aria-label="On this page"
+			className="sticky top-14 max-h-[calc(100vh-3.5rem)] overflow-y-auto py-10 [scrollbar-width:thin]"
+		>
+			<p className="mb-3 flex items-center gap-1.5 text-[13px] font-medium text-gray-12">
+				<AlignLeft className="size-3.5 text-gray-9" />
 				On this page
-			</h4>
-			<ul className="flex flex-col gap-1">
+			</p>
+			<ul className="flex flex-col">
 				{filteredHeadings.map((heading, index) => (
 					<li key={`${heading.slug}-${index}`}>
 						<a
 							href={`#${heading.slug}`}
-							className={`block text-[13px] py-1 transition-colors ${
-								heading.level === 3 ? "pl-3" : ""
+							className={`block py-[5px] text-[13px] leading-5 transition-colors ${
+								heading.level === 3 ? "pl-3.5" : ""
 							} ${
 								activeSlug === heading.slug
-									? "text-blue-500 font-medium"
-									: "text-gray-500 hover:text-gray-700"
+									? "font-medium text-blue-11"
+									: "text-gray-10 hover:text-gray-12"
 							}`}
 						>
 							{heading.text}
@@ -79,6 +83,6 @@ export function DocsTableOfContents({ headings }: DocsTableOfContentsProps) {
 					</li>
 				))}
 			</ul>
-		</div>
+		</nav>
 	);
 }

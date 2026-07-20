@@ -18,6 +18,10 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
+import {
+	queueVideoTranscription,
+	shouldQueueTranscriptionAfterMultipartComplete,
+} from "@/lib/queue-video-transcription";
 import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
@@ -590,6 +594,7 @@ app.post(
 					);
 
 					const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
+					let mediaProcessingPending = false;
 					if (
 						bucket.provider === "s3" &&
 						video.source.type === "webMP4" &&
@@ -622,7 +627,7 @@ app.post(
 								{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 							);
 
-						yield* Effect.tryPromise({
+						mediaProcessingPending = yield* Effect.tryPromise({
 							try: async () => {
 								const response = await fetch(
 									`${mediaServerUrl}/video/process`,
@@ -651,14 +656,42 @@ app.post(
 										`Media server remux failed: ${response.status} ${errorText}`,
 									);
 								}
+
+								return true;
 							},
 							catch: (cause) =>
 								cause instanceof Error ? cause : new Error(String(cause)),
 						}).pipe(
 							Effect.catchAll((error) => {
 								console.error("Failed to queue faststart remux:", error);
-								return Effect.succeed(null);
+								return Effect.succeed(false);
 							}),
+						);
+					}
+
+					if (
+						shouldQueueTranscriptionAfterMultipartComplete(
+							video.source.type,
+							mediaProcessingPending,
+						)
+					) {
+						yield* Effect.tryPromise(() =>
+							queueVideoTranscription(Video.VideoId.make(videoId)),
+						).pipe(
+							Effect.tap((result) =>
+								result.success
+									? Effect.succeed(undefined)
+									: Effect.logWarning(
+											"Failed to queue transcription after multipart upload",
+											{ videoId, message: result.message },
+										),
+							),
+							Effect.catchAll((error) =>
+								Effect.logWarning(
+									"Failed to queue transcription after multipart upload",
+									{ videoId, error },
+								),
+							),
 						);
 					}
 

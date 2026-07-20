@@ -1,0 +1,166 @@
+---
+title: "Set Up Your Agent"
+summary: "Install Cap, authenticate with least privilege, and connect your preferred agent"
+tags: "Agents"
+---
+
+> **Agent-readable page:** You can send this URL to your agent. It should follow the verification and confirmation rules below, never overwrite an existing agent configuration blindly, and stop for you when a browser or secure terminal handoff is required.
+
+<CopyablePrompt />
+
+The prompt above can perform this setup with you. The rest of this page documents every step for manual installation and troubleshooting.
+
+## Install the Cap CLI
+
+The CLI ships with Cap Desktop, so both stay on the same version.
+
+### From Cap Desktop
+
+Open **Settings → Command Line → Install CLI**.
+
+### macOS or Linux
+
+```sh
+curl -fsSL https://cap.so/install-cli.sh | sh
+```
+
+### Windows PowerShell
+
+```powershell
+irm https://cap.so/install-cli.ps1 | iex
+```
+
+The installer adds `cap` to your PATH and installs Cap Desktop when it is missing. Open a new terminal after installation, then verify the binary:
+
+```sh
+cap version --json
+cap guide --json
+```
+
+## Authenticate with least privilege
+
+First inspect the current state:
+
+```sh
+cap auth status --json
+```
+
+If authentication is required, authorize Cap in your browser:
+
+```sh
+cap auth login --json
+```
+
+Login uses the `creator` profile by default. Request a broader profile only when the task needs it:
+
+| Profile | Use it for |
+| --- | --- |
+| `creator` | Caps, uploads, comments, library, analytics, notifications, and profile tasks |
+| `admin` | Creator access plus organization members, settings, billing, and storage integrations |
+| `full` | Admin access plus developer apps, credentials, videos, and credits |
+
+```sh
+cap auth login --profile admin --json
+cap auth login --profile full --json
+```
+
+Cap CLI credentials are stored by the operating system when available. `CAP_AGENT_TOKEN` is supported for headless environments, but do not paste tokens into an agent conversation or commit them to a project.
+
+## Codex
+
+Preview exactly what Cap will change:
+
+```sh
+cap agents install --target codex --component all --dry-run --json
+```
+
+After reviewing the paths and values, apply the integration:
+
+```sh
+cap agents install --target codex --component all --yes --json
+```
+
+This installs the Cap skill and adds a local `cap mcp serve` entry to Codex's configuration. Restart Codex so it reloads the integration.
+
+## Claude Code
+
+```sh
+cap agents install --target claude --component all --dry-run --json
+cap agents install --target claude --component all --yes --json
+```
+
+Review the preview first, then restart Claude Code after applying it.
+
+## Cursor
+
+```sh
+cap agents install --target cursor --component all --dry-run --json
+cap agents install --target cursor --component all --yes --json
+```
+
+Review the preview first, then restart Cursor after applying it.
+
+## OpenCode
+
+OpenCode can use Cap immediately through its shell tools: paste the [agent prompt](/docs/agents#the-fastest-way-to-start) and let it call `cap guide --json`.
+
+To use Cap as a local MCP server too, merge this entry into your `opencode.json` configuration:
+
+```json
+{
+	"$schema": "https://opencode.ai/config.json",
+	"mcp": {
+		"cap": {
+			"type": "local",
+			"command": ["cap", "mcp", "serve"],
+			"enabled": true
+		}
+	}
+}
+```
+
+Do not replace unrelated OpenCode settings. After merging the entry, restart OpenCode and check the server:
+
+```sh
+opencode mcp list
+```
+
+See OpenCode's [local MCP documentation](https://opencode.ai/docs/mcp-servers/#local) for configuration details.
+
+## Any other agent or MCP client
+
+If the agent can run shell commands, no integration is required. Give it the [copyable prompt](/docs/agents#the-fastest-way-to-start).
+
+For an MCP client that supports local stdio servers, configure:
+
+```json
+{
+	"command": "cap",
+	"args": ["mcp", "serve"]
+}
+```
+
+Keep `cap mcp serve` on stdio. Its stdout is reserved for MCP protocol messages.
+
+## Verify the full setup
+
+Ask the agent to run these read-only checks:
+
+```sh
+cap version --json
+cap guide --json
+cap auth status --json
+cap caps list --limit 1 --json
+```
+
+A correct setup has:
+
+- valid JSON on stdout;
+- a successful authenticated status before account-backed work;
+- either a Cap result or an empty list from the library check, not a guessed answer;
+- no secret value printed by `cap auth status`;
+- no changes made during verification.
+
+If MCP is installed, also ask the agent to list the available Cap tools. It should find read tools such as `caps_list` and `caps_context`. Passwords and storage credentials should not appear as MCP inputs.
+
+Continue with [Agent Workflows](/docs/agents/workflows).

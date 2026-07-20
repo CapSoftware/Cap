@@ -3,7 +3,13 @@ import {
 	HipaaCompliantScreenRecordingPage,
 	hipaaCompliantScreenRecordingContent,
 } from "@/components/pages/seo/HipaaCompliantScreenRecordingPage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "HIPAA-compliant screen recording",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title:
@@ -22,7 +28,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: HIPAA-Compliant Screen Recording for Healthcare",
@@ -37,7 +43,7 @@ export const metadata: Metadata = {
 			"HIPAA-Compliant Screen Recording — Secure Healthcare Recordings | Cap",
 		description:
 			"Cap enables HIPAA-compliant screen recording for healthcare teams. Self-host recordings on your own AWS S3 bucket, keep PHI off third-party servers.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 

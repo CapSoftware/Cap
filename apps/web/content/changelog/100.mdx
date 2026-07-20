@@ -1,0 +1,33 @@
+---
+title: Cap for Agents, Built-In Teleprompter, Clip Transitions & Recents
+app: Cap Desktop
+publishedAt: "2026-07-20"
+version: 0.5.7
+image:
+---
+
+This release makes Cap work end to end with AI agents without depending on the dashboard. It also adds a built-in teleprompter, clip transitions, an expandable capture window with recent media, reusable area selections, improved privacy masks, and better audio control for retimed clips.
+
+## Features
+
+- **Cap works end to end with AI agents** - Codex, Claude Code, Cursor, OpenCode, and any shell-capable agent can now use Cap through the expanded CLI, installable Cap skill, and local MCP server. After a secure browser login, your agent can record, export, upload, and share; read titles, transcripts, AI summaries, chapters, comments, reactions, views, permissions, and processing state; search and organize your library; inspect analytics; and manage collaboration, teams, storage, migrations, and developer workflows without using the dashboard. Commands return machine-readable JSON, changes require your confirmation, and secrets stay out of chat and MCP. [Set up Cap for your agent](/docs/agents) with one copy-paste prompt.
+- **Built-in teleprompter** - Open a dedicated teleprompter from the main window, paste or type your script, and control auto-scroll speed, text size, opacity, cue markers, and mirrored text. Your script and settings are saved between sessions, the window stays above other apps, and Cap keeps it out of recordings on macOS and Windows.
+- **Clip transitions** - Add crossfades or fades through black between clips, then adjust the transition length directly from the timeline. Transitions are included in editor playback and final exports.
+- **Expandable capture window with Recents** - Expand the main window for a roomier capture setup with clearer camera, microphone, and system-audio controls, plus a carousel of recent recordings and screenshots that open in one click. Cap remembers your preferred window size, and macOS 26 uses the native Liquid Glass appearance.
+- **Reusable area capture** - Area recording now includes quick aspect-ratio presets, fill and reset controls, and the option to lock a region for future recordings. The controls stay outside the selected area so they do not cover what you are capturing.
+- **Blur and pixelate masks** - Sensitive-area masks can now use either a smooth blur or pixelation, with adjustable strength for each effect.
+- **Audio controls for retimed clips** - When slowing down or speeding up a clip, choose whether to mute its audio, preserve natural voice pitch, or let the pitch follow the playback speed.
+- **Copyable app version** - Click the version number in Settings to copy it when reporting an issue or checking which build is installed.
+
+## Fixes
+
+- **Windows pause and resume reliability** - Pausing a recording for more than a few seconds no longer triggers a false hardware-encoder timeout when you resume.
+- **Camera background blur startup** - Packaged desktop builds now locate the bundled background-blur runtime correctly, making camera blur initialize more reliably.
+- **Existing recording imports on Windows** - The clips sidebar can now select Cap recording folders correctly when importing an existing recording.
+- **Safer macOS window positioning** - The main window is kept below the menu bar and display notch so its controls remain reachable.
+- **Clearer crop editing** - Crop guides have stronger contrast against both light and dark recording backgrounds.
+
+## Performance
+
+- **Smoother playback and scrubbing** - The editor cancels outdated frame work sooner, keeps active decoders ready across seeks, and avoids prefetching frames that are already behind the playhead.
+- **Faster media lists** - Recordings and screenshots reuse their calculated sort times, reducing repeated filesystem work when loading the library and Recents.

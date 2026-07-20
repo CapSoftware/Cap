@@ -1,16 +1,40 @@
 "use client";
 
 import { buildEnv, NODE_ENV } from "@cap/env";
-import { Button, Logo } from "@cap/ui";
+import {
+	Button,
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+	Logo,
+} from "@cap/ui";
 import type { ViewerSettingKey } from "@cap/web-backend";
 import {
 	faChartSimple,
 	faChevronDown,
+	faCopy,
+	faEllipsis,
+	faGear,
 	faLock,
+	faShare,
+	faTrash,
+	faUnlock,
+	faVideo,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Clock, Copy, Globe2, Pencil, Scissors, X } from "lucide-react";
+import {
+	Check,
+	Clock,
+	Copy,
+	Globe2,
+	LayoutDashboard,
+	Pencil,
+	Scissors,
+	X,
+} from "lucide-react";
 import moment from "moment";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -22,12 +46,20 @@ import {
 } from "@/actions/organization/shareable-link-icon";
 import { editTitle } from "@/actions/videos/edit-title";
 import type { VideoStatusResult } from "@/actions/videos/get-status";
+import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { PasswordDialog } from "@/app/(org)/dashboard/caps/components/PasswordDialog";
+import { SettingsDialog } from "@/app/(org)/dashboard/caps/components/SettingsDialog";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import {
+	copyRichVideoLink,
+	videoPreviewImageUrl,
+} from "@/lib/video-share-clipboard";
 import { usePublicEnv } from "@/utils/public-env";
 import { navigateWithTransition } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
@@ -85,6 +117,12 @@ export const ShareHeader = ({
 	const [isTitleRevealing, setIsTitleRevealing] = useState(false);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
+	const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+	const [passwordProtected, setPasswordProtected] = useState(
+		Boolean(data.hasPassword),
+	);
 	const [linkCopied, setLinkCopied] = useState(false);
 	const [showCopyOptions, setShowCopyOptions] = useState(false);
 	const [capturedTime, setCapturedTime] = useState(0);
@@ -119,10 +157,41 @@ export const ShareHeader = ({
 	const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
 	const isOwner = user && user.id === data.owner.id;
+	const rpc = useRpcClient();
+
+	const duplicateMutation = useEffectMutation({
+		mutationFn: () => rpc.VideoDuplicate(data.id),
+		onSuccess: () => {
+			toast.success("Cap duplicated successfully");
+		},
+		onError: () => {
+			toast.error("Failed to duplicate Cap");
+		},
+	});
+
+	const deleteMutation = useEffectMutation({
+		mutationFn: () => rpc.VideoDelete(data.id),
+		onSuccess: () => {
+			toast.success("Cap deleted successfully");
+			push("/dashboard/caps?page=1");
+		},
+		onError: () => {
+			toast.error("Failed to delete Cap");
+		},
+		onSettled: () => {
+			setIsDeleteDialogOpen(false);
+		},
+	});
 
 	const { webUrl } = usePublicEnv();
 
 	const resolvedTitle = videoStatus?.name ?? data.name;
+	const effectivePasswordProtected =
+		passwordProtected || Boolean(data.hasInheritedPassword);
+
+	useEffect(() => {
+		setPasswordProtected(Boolean(data.hasPassword));
+	}, [data.hasPassword]);
 
 	useEffect(() => {
 		if (isEditing) return;
@@ -244,6 +313,13 @@ export const ShareHeader = ({
 		return `${m}:${String(s).padStart(2, "0")}`;
 	};
 
+	const copyShareLink = (url: string) =>
+		copyRichVideoLink({
+			url,
+			title: displayTitle || "Cap Recording",
+			previewImageUrl: videoPreviewImageUrl(webUrl, data.id),
+		});
+
 	const handleCopyClick = () => {
 		const video = document.querySelector("video");
 		const currentTime = video ? Math.floor(video.currentTime) : 0;
@@ -252,7 +328,7 @@ export const ShareHeader = ({
 			setCapturedTime(currentTime);
 			setShowCopyOptions(true);
 		} else {
-			navigator.clipboard.writeText(getVideoLink());
+			copyShareLink(getVideoLink());
 			setLinkCopied(true);
 			setTimeout(() => setLinkCopied(false), 2000);
 		}
@@ -262,13 +338,18 @@ export const ShareHeader = ({
 		const link = withTimestamp
 			? `${getVideoLink()}?t=${capturedTime}`
 			: getVideoLink();
-		navigator.clipboard.writeText(link);
+		copyShareLink(link);
 		setShowCopyOptions(false);
 		setLinkCopied(true);
 		setTimeout(() => setLinkCopied(false), 2000);
 	};
 
 	const handleSharingUpdated = () => {
+		refresh();
+	};
+
+	const handlePasswordUpdated = (protectedStatus: boolean) => {
+		setPasswordProtected(protectedStatus);
 		refresh();
 	};
 
@@ -459,12 +540,44 @@ export const ShareHeader = ({
 				onSharingUpdated={handleSharingUpdated}
 				isPublic={data.public}
 				spacesData={spacesData}
-				hasPassword={!!data.hasPassword}
+				hasPassword={passwordProtected}
 				inheritedPasswordSources={data.inheritedPasswordSources}
-				onPasswordUpdated={() => refresh()}
+				onPasswordUpdated={handlePasswordUpdated}
 				user={user}
 				onUpgradeRequest={setUpgradeModalOpen}
 			/>
+			{isOwner && (
+				<>
+					<SettingsDialog
+						isOpen={isSettingsDialogOpen}
+						onClose={() => setIsSettingsDialogOpen(false)}
+						capId={data.id}
+						settingsData={data.videoSettings ?? undefined}
+						inheritedSpaceSettings={data.inheritedSpaceSettings}
+						user={user}
+						organizationSettings={data.orgSettings}
+						onSaved={refresh}
+					/>
+					<PasswordDialog
+						isOpen={isPasswordDialogOpen}
+						onClose={() => setIsPasswordDialogOpen(false)}
+						videoId={data.id}
+						hasPassword={passwordProtected}
+						onPasswordUpdated={handlePasswordUpdated}
+					/>
+					<ConfirmationDialog
+						open={isDeleteDialogOpen}
+						icon={<FontAwesomeIcon icon={faVideo} />}
+						title="Delete Cap"
+						description={`Are you sure you want to delete the cap "${displayTitle}"? This action cannot be undone.`}
+						confirmLabel={deleteMutation.isPending ? "Deleting..." : "Delete"}
+						confirmVariant="destructive"
+						loading={deleteMutation.isPending}
+						onConfirm={() => deleteMutation.mutate()}
+						onCancel={() => setIsDeleteDialogOpen(false)}
+					/>
+				</>
+			)}
 			<div className="mt-8">
 				<div className="flex flex-col gap-4">
 					<div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -625,17 +738,102 @@ export const ShareHeader = ({
 											/>
 											View analytics
 										</Button>
+										<DropdownMenu modal={false}>
+											<DropdownMenuTrigger asChild>
+												<Button
+													variant="dark"
+													size="xs"
+													className="h-8 gap-1.5 rounded-full px-3 text-xs"
+												>
+													<FontAwesomeIcon
+														className="size-3.5"
+														icon={faEllipsis}
+													/>
+													Manage Cap
+												</Button>
+											</DropdownMenuTrigger>
+											<DropdownMenuContent align="end" sideOffset={5}>
+												<DropdownMenuItem
+													onClick={() => setIsSharingDialogOpen(true)}
+													className="flex items-center gap-2 rounded-lg"
+												>
+													<FontAwesomeIcon className="size-3" icon={faShare} />
+													<p className="text-sm text-gray-12">
+														Sharing & access
+													</p>
+												</DropdownMenuItem>
+												<DropdownMenuItem
+													onClick={() => setIsSettingsDialogOpen(true)}
+													className="flex items-center gap-2 rounded-lg"
+												>
+													<FontAwesomeIcon className="size-3" icon={faGear} />
+													<p className="text-sm text-gray-12">Video settings</p>
+												</DropdownMenuItem>
+												<DropdownMenuItem
+													onClick={() => {
+														if (!user.isPro) setUpgradeModalOpen(true);
+														else setIsPasswordDialogOpen(true);
+													}}
+													className="flex items-center gap-2 rounded-lg"
+												>
+													<FontAwesomeIcon
+														className="size-3"
+														icon={
+															effectivePasswordProtected ? faLock : faUnlock
+														}
+													/>
+													<p className="text-sm text-gray-12">
+														{passwordProtected
+															? "Edit password"
+															: "Add password"}
+													</p>
+												</DropdownMenuItem>
+												<DropdownMenuItem
+													onClick={() => duplicateMutation.mutate()}
+													disabled={
+														duplicateMutation.isPending || data.hasActiveUpload
+													}
+													className="flex items-center gap-2 rounded-lg"
+												>
+													<FontAwesomeIcon className="size-3" icon={faCopy} />
+													<p className="text-sm text-gray-12">
+														{duplicateMutation.isPending
+															? "Duplicating..."
+															: "Duplicate Cap"}
+													</p>
+												</DropdownMenuItem>
+												<DropdownMenuSeparator />
+												<DropdownMenuItem
+													onClick={() => push("/dashboard/caps?page=1")}
+													className="flex items-center gap-2 rounded-lg"
+												>
+													<LayoutDashboard className="size-3.5" />
+													<p className="text-sm text-gray-12">
+														Go to dashboard
+													</p>
+												</DropdownMenuItem>
+												<DropdownMenuItem
+													onClick={() => setIsDeleteDialogOpen(true)}
+													className="flex items-center gap-2 rounded-lg text-red-500 focus:text-red-600"
+												>
+													<FontAwesomeIcon className="size-3" icon={faTrash} />
+													<p className="text-sm text-inherit">Delete Cap</p>
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
 									</>
 								)}
-								<Button
-									size="xs"
-									className="h-8 rounded-full px-2.5 text-xs"
-									onClick={() => {
-										push("/dashboard/caps?page=1");
-									}}
-								>
-									Go to dashboard
-								</Button>
+								{!isOwner && (
+									<Button
+										size="xs"
+										className="h-8 rounded-full px-2.5 text-xs"
+										onClick={() => {
+											push("/dashboard/caps?page=1");
+										}}
+									>
+										Go to dashboard
+									</Button>
+								)}
 							</div>
 						)}
 					</div>

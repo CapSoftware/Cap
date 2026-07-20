@@ -1,16 +1,16 @@
 import { db } from "@cap/database";
 import { users, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import { Storage } from "@cap/web-backend/src/Storage/index";
 import { type User, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 import { FatalError } from "workflow";
-import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
-import { runPromise } from "@/lib/server";
+import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota-cache";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
-import { isAiGenerationEnabled } from "@/utils/flags";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 interface FinalizeDesktopRecordingWorkflowPayload {
 	videoId: string;
@@ -321,7 +321,7 @@ async function buildDesktopSegmentsMuxBody(
 
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 
 	const segSource = new Video.SegmentsSource({
 		videoId,
@@ -330,7 +330,7 @@ async function buildDesktopSegmentsMuxBody(
 
 	const manifestContent = await bucket
 		.getObject(segSource.getManifestKey())
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 	const manifestJson = Option.getOrNull(manifestContent);
 
 	if (!manifestJson) {
@@ -346,7 +346,7 @@ async function buildDesktopSegmentsMuxBody(
 
 	let manifest = await Schema.decodeUnknown(Video.SegmentManifest)(parsed)
 		.pipe(Effect.mapError(() => new Error("Invalid segment manifest format")))
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	if (!manifest.video_init_uploaded || manifest.video_segments.length === 0) {
 		throw new Error("No video segments found in manifest");
@@ -363,14 +363,14 @@ async function buildDesktopSegmentsMuxBody(
 				contentType: "application/json",
 				contentLength: Buffer.byteLength(body),
 			})
-			.pipe(runPromise);
+			.pipe(runWorkflowPromise);
 	}
 
 	const videoInitUrl = await bucket
 		.getSignedObjectUrl(segSource.getVideoInitKey(), {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 		})
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const videoSegmentUrls = await Effect.all(
 		manifest.video_segments.map((seg) => {
@@ -383,7 +383,7 @@ async function buildDesktopSegmentsMuxBody(
 			);
 		}),
 		{ concurrency: "unbounded" },
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 
 	let audioInitUrl: string | undefined;
 	let audioSegmentUrls: string[] | undefined;
@@ -393,7 +393,7 @@ async function buildDesktopSegmentsMuxBody(
 			.getSignedObjectUrl(segSource.getAudioInitKey(), {
 				expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 			})
-			.pipe(runPromise);
+			.pipe(runWorkflowPromise);
 		audioSegmentUrls = await Effect.all(
 			manifest.audio_segments.map((seg) => {
 				const entry = Video.normalizeSegmentEntry(seg);
@@ -405,7 +405,7 @@ async function buildDesktopSegmentsMuxBody(
 				);
 			}),
 			{ concurrency: "unbounded" },
-		).pipe(runPromise);
+		).pipe(runWorkflowPromise);
 	}
 
 	const outputKey = `${userId}/${videoId}/result.mp4`;
@@ -423,7 +423,7 @@ async function buildDesktopSegmentsMuxBody(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 	let outputUpload: DesktopSegmentsOutputUpload = {
 		type: "put",
 		url: outputPresignedUrl,
@@ -436,7 +436,7 @@ async function buildDesktopSegmentsMuxBody(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 	const previewGifPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
 			previewGifKey,
@@ -446,7 +446,7 @@ async function buildDesktopSegmentsMuxBody(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	if (bucket.provider === "s3" && webhookSecret) {
 		try {
@@ -464,7 +464,7 @@ async function buildDesktopSegmentsMuxBody(
 			);
 			const multipartUpload = await bucket.multipart
 				.create(outputKey, { ContentType: "video/mp4" })
-				.pipe(runPromise);
+				.pipe(runWorkflowPromise);
 			if (!multipartUpload.UploadId) {
 				throw new Error("Storage did not return a multipart upload id");
 			}
@@ -651,9 +651,7 @@ async function queueFinalizedRecordingTranscription(
 		.from(users)
 		.where(eq(users.id, userId));
 
-	const aiGenerationEnabled = owner
-		? await isAiGenerationEnabled(owner)
-		: false;
+	const aiGenerationEnabled = isAiGenerationEnabledForUser(owner);
 
 	const result = await transcribeVideo(
 		Video.VideoId.make(videoId),

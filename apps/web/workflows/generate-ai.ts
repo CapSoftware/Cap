@@ -2,7 +2,7 @@ import { db } from "@cap/database";
 import { organizations, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	type AiGenerationLanguage,
@@ -10,12 +10,12 @@ import {
 	parseAiGenerationLanguage,
 	type Video,
 } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
-import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 interface GenerateAiWorkflowPayload {
 	videoId: string;
@@ -46,7 +46,7 @@ interface AiResult {
 
 const MAX_CHARS_PER_CHUNK = 24000;
 const GENERATED_TITLE_PATTERN =
-	/^(Cap (Recording|Upload) - .+|Untitled|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}|.+ \((Display|Window|Area|Camera)\) \d{4}-\d{2}-\d{2} \d{2}:\d{2} [AP]M)$/;
+	/^(Cap (Recording|Upload) - .+|Cap \d{4}-\d{2}-\d{2} at \d{2}[.:]\d{2}[.:]\d{2}|Untitled|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}|.+ \((Display|Window|Area|Camera)\) \d{4}-\d{2}-\d{2} \d{2}:\d{2} [AP]M)$/;
 
 export function shouldReplaceVideoTitle({
 	currentTitle,
@@ -77,24 +77,35 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 
 	const { videoId, userId } = payload;
 
-	const videoData = await validateAndSetProcessing(videoId);
-
-	const transcript = await fetchTranscript(videoId, userId, videoData.video);
-
-	if (!transcript) {
-		await markSkipped(videoId, videoData.metadata);
-		return {
-			success: true,
-			message: "Transcript empty or too short - skipped",
-		};
+	let videoData: VideoData;
+	try {
+		videoData = await validateAndSetProcessing(videoId);
+	} catch (error) {
+		await markError(videoId);
+		throw error;
 	}
 
-	const result = await generateWithAi(
-		transcript,
-		videoData.aiGenerationLanguage,
-	);
+	try {
+		const transcript = await fetchTranscript(videoId, userId, videoData.video);
 
-	await saveResults(videoId, videoData, result);
+		if (!transcript) {
+			await markSkipped(videoId, videoData.metadata);
+			return {
+				success: true,
+				message: "Transcript empty or too short - skipped",
+			};
+		}
+
+		const result = await generateWithAi(
+			transcript,
+			videoData.aiGenerationLanguage,
+		);
+
+		await saveResults(videoId, videoData, result);
+	} catch (error) {
+		await markError(videoId);
+		throw error;
+	}
 
 	return { success: true, message: "AI generation completed successfully" };
 }
@@ -159,7 +170,7 @@ async function fetchTranscript(
 			decodeStorageVideo(video),
 		);
 		return yield* bucket.getObject(`${userId}/${videoId}/transcription.vtt`);
-	}).pipe(runPromise);
+	}).pipe(runWorkflowPromise);
 
 	if (Option.isNone(vtt)) {
 		return null;
@@ -176,6 +187,26 @@ async function fetchTranscript(
 	}
 
 	return { segments, text };
+}
+
+async function markError(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videos)
+		.set({
+			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'ERROR')`,
+		})
+		.where(
+			and(
+				eq(videos.id, videoId as Video.VideoId),
+				sql`NOT (
+					COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')), '') = 'COMPLETE'
+					AND JSON_EXTRACT(${videos.metadata}, '$.summary') IS NOT NULL
+					AND JSON_EXTRACT(${videos.metadata}, '$.chapters') IS NOT NULL
+				)`,
+			),
+		);
 }
 
 async function markSkipped(
@@ -241,6 +272,44 @@ export function getAiLanguageInstruction(
 	}
 
 	return `Write the title, summary, chapter titles, section summaries, and key points in ${getAiGenerationLanguageName(language)}.`;
+}
+
+export function getAiContentGuidelines(videoDuration: number): {
+	summary: string;
+	chapters: string;
+} {
+	let lengthInstruction: string;
+	if (videoDuration < 60) {
+		lengthInstruction = "Use no more than 35 words and one or two sentences.";
+	} else if (videoDuration < 180) {
+		lengthInstruction =
+			"Aim for 50-90 words in one concise paragraph, but use fewer when that fully communicates the video.";
+	} else if (videoDuration < 600) {
+		lengthInstruction =
+			"Aim for 80-150 words in one concise paragraph, but use fewer when that fully communicates the video.";
+	} else if (videoDuration < 1800) {
+		lengthInstruction =
+			"Aim for 150-250 words. Use short paragraphs or Markdown bullets only when they materially improve clarity.";
+	} else {
+		lengthInstruction =
+			"Aim for 250-400 words. Exceed 400 only when necessary to preserve important decisions, responsibilities, or next steps.";
+	}
+
+	return {
+		summary: `- Write a standalone summary that lets someone understand the video without watching it.
+- State the subject and the speaker's intention first: what the video is about and why it was recorded. If the intention is not explicit, describe only what the transcript supports.
+- Then include only the essential explanation, outcomes, decisions, action items, and next steps needed to understand or act on the video.
+- Prioritize meaning and useful information over chronological retelling.
+- Omit filler, greetings, reactions, apologies, repetition, incidental conversation, minor UI actions, and timestamps unless a timestamp is essential to the viewer.
+- Use the speaker's perspective when it is clear, but do not invent intent, outcomes, or actions.
+- Be concise, but never omit information required to understand or act on the video. Do not pad the summary to reach a target length.
+- For example, summarize a short drawing-feature test as "I test the drawing and highlighting tools, including how highlights behave on moving elements" rather than enumerating every utterance and interaction.
+- ${lengthInstruction}`,
+		chapters:
+			videoDuration < 120
+				? 'Return an empty "chapters" array because videos shorter than two minutes do not need chapters.'
+				: "Create the fewest chapters needed to identify meaningful topic or phase changes. Do not create chapters for filler, minor UI actions, or every transcript segment.",
+	};
 }
 
 function getVideoDuration(segments: VttSegment[]): number {
@@ -471,24 +540,27 @@ async function generateSingleChunk(
 				`[${Math.floor(s.start / 60)}:${String(s.start % 60).padStart(2, "0")}] ${s.text}`,
 		)
 		.join("\n");
+	const contentGuidelines = getAiContentGuidelines(videoDuration);
 
-	const prompt = `You are Cap AI, an expert at analyzing video content and creating comprehensive summaries.
+	const prompt = `You are Cap AI, an expert at turning video transcripts into useful, concise summaries.
 
-The video is ${videoDuration} seconds long (${Math.floor(videoDuration / 60)}:${String(Math.floor(videoDuration % 60)).padStart(2, "0")} total). Analyze this timestamped transcript and provide a detailed JSON response:
+The video is ${videoDuration} seconds long (${Math.floor(videoDuration / 60)}:${String(Math.floor(videoDuration % 60)).padStart(2, "0")} total). Analyze this timestamped transcript and provide JSON:
 {
   "title": "string (concise but descriptive title that captures the main topic)",
-  "summary": "string (detailed summary that covers ALL key points discussed. For meetings: include decisions made, action items, and key discussion points. For tutorials: cover all steps and concepts explained. For presentations: summarize all main arguments and supporting points. Write from 1st person perspective if the speaker is teaching/presenting, e.g. 'In this video, I walk through...'. Make it comprehensive enough that someone could understand the full content without watching.)",
+  "summary": "string (standalone summary of the subject, intention, essential information, outcome, and next steps)",
   "chapters": [{"title": "string (descriptive chapter title)", "start": number (seconds from start)}]
 }
 
-Guidelines:
+Summary requirements:
+${contentGuidelines.summary}
+
+Chapter requirements:
+${contentGuidelines.chapters}
+
+Additional requirements:
 - ${languageInstruction}
-- Keep JSON property names exactly as shown
-- The summary should be detailed and comprehensive, not a brief overview
-- Capture ALL important topics, not just the main theme
-- For longer content, organize the summary by topic or chronologically
-- Include specific details, names, numbers, and conclusions mentioned
-- Chapters should mark distinct topic changes or sections
+- Keep JSON property names exactly as shown.
+- Include specific names, numbers, decisions, and conclusions only when they help someone understand or act on the video.
 - IMPORTANT: All chapter "start" values MUST be between 0 and ${videoDuration} seconds. Use the timestamps from the transcript to determine accurate chapter start times.
 
 Return ONLY valid JSON without any markdown formatting or code blocks.
@@ -512,24 +584,28 @@ async function generateMultipleChunks(
 		startTime: number;
 		endTime: number;
 	}[] = [];
+	const contentGuidelines = getAiContentGuidelines(videoDuration);
 
 	for (let i = 0; i < chunks.length; i++) {
 		const chunk = chunks[i];
 		if (!chunk) continue;
 
-		const chunkPrompt = `You are Cap AI, an expert at analyzing video content. This is section ${i + 1} of ${chunks.length} from a video that is ${videoDuration} seconds long (${Math.floor(videoDuration / 60)}:${String(Math.floor(videoDuration % 60)).padStart(2, "0")} total). This section covers timestamp ${Math.floor(chunk.startTime / 60)}:${String(chunk.startTime % 60).padStart(2, "0")} to ${Math.floor(chunk.endTime / 60)}:${String(chunk.endTime % 60).padStart(2, "0")}.
+		const chunkPrompt = `You are Cap AI, analyzing one section of a video for a later final summary. This is section ${i + 1} of ${chunks.length} from a video that is ${videoDuration} seconds long (${Math.floor(videoDuration / 60)}:${String(Math.floor(videoDuration % 60)).padStart(2, "0")} total). This section covers timestamp ${Math.floor(chunk.startTime / 60)}:${String(chunk.startTime % 60).padStart(2, "0")} to ${Math.floor(chunk.endTime / 60)}:${String(chunk.endTime % 60).padStart(2, "0")}.
 
-Analyze this section thoroughly and provide JSON:
+Extract only the information needed to understand this section's contribution to the full video and provide JSON:
 {
-  "summary": "string (detailed summary of this section - capture ALL key points, topics discussed, decisions made, or concepts explained. Include specific details like names, numbers, action items, and conclusions. This should be 3-6 sentences minimum.)",
-  "keyPoints": ["string (specific key point or takeaway)", ...],
+  "summary": "string (concise factual notes about the subject, intention, essential explanation, outcomes, decisions, or next steps in this section)",
+  "keyPoints": ["string (essential key point or takeaway, or an empty array when there is none)", ...],
   "chapters": [{"title": "string (descriptive title for this topic/section)", "start": number (seconds from video start)}]
 }
 
-${languageInstruction}
-Keep JSON property names exactly as shown.
+- Preserve specific names, numbers, decisions, responsibilities, and conclusions that matter to the final summary.
+- Omit filler, greetings, reactions, apologies, repetition, incidental conversation, and minor UI actions.
+- Do not narrate the transcript chronologically or pad the section analysis.
+- ${contentGuidelines.chapters}
+- ${languageInstruction}
+- Keep JSON property names exactly as shown.
 IMPORTANT: All chapter "start" values MUST be between ${chunk.startTime} and ${chunk.endTime} seconds. The total video is only ${videoDuration} seconds long.
-Be thorough - this summary will be combined with other sections to create a comprehensive overview.
 Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript section:
 ${chunk.text}`;
@@ -570,9 +646,9 @@ ${chunk.text}`;
 		})
 		.join("\n\n");
 
-	const finalPrompt = `You are Cap AI, an expert at synthesizing information into comprehensive, well-organized summaries.
+	const finalPrompt = `You are Cap AI, an expert at turning video analyses into useful, concise summaries.
 
-Based on these detailed section analyses of a video, create a thorough final summary that captures EVERYTHING important.
+Using these section analyses, create a standalone final summary that lets someone understand the video without watching it.
 
 Section analyses:
 ${sectionDetails}
@@ -582,12 +658,15 @@ ${allKeyPoints.length > 0 ? `All key points identified:\n${allKeyPoints.map((p, 
 Provide JSON in the following format:
 {
   "title": "string (concise but descriptive title that captures the main topic/purpose)",
-  "summary": "string (COMPREHENSIVE summary that covers the entire video thoroughly. This should be detailed enough that someone could understand all the important content without watching. Include: main topics covered, key decisions or conclusions, important details mentioned, action items if any. Organize it logically - for meetings use topics/agenda items, for tutorials use steps/concepts, for presentations use main arguments. Write from 1st person perspective if appropriate. This should be several paragraphs for longer content.)"
+  "summary": "string (standalone summary of the subject, intention, essential information, outcome, and next steps)"
 }
 
-The summary must be detailed and comprehensive - not a brief overview. Capture all the important information from every section.
-${languageInstruction}
-Keep JSON property names exactly as shown.
+Summary requirements:
+${contentGuidelines.summary}
+
+Additional requirements:
+- ${languageInstruction}
+- Keep JSON property names exactly as shown.
 Return ONLY valid JSON without any markdown formatting or code blocks.`;
 
 	const finalContent = await callAiApi(finalPrompt, groqClient);

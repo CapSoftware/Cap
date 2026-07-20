@@ -2,12 +2,12 @@ import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { agentApiOperations, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError } from "workflow";
-import { runPromise } from "@/lib/server";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 interface ImportLoomPayload {
 	videoId: string;
@@ -319,7 +319,7 @@ async function downloadLoomToS3(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		);
-	}).pipe(runPromise);
+	}).pipe(runWorkflowPromise);
 
 	const videoBuffer = await downloadVideoContent(freshDownloadUrl);
 
@@ -512,7 +512,7 @@ async function processVideoOnMediaServer(
 			thumbnailPresignedUrl,
 			previewGifPresignedUrl,
 		};
-	}).pipe(runPromise);
+	}).pipe(runWorkflowPromise);
 
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
