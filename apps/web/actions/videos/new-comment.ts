@@ -3,10 +3,11 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { comments } from "@cap/database/schema";
+import { comments, videos } from "@cap/database/schema";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import type { ImageUpload } from "@cap/web-domain";
 import { Comment, Policy, type Video } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "@/lib/Notification";
@@ -41,16 +42,20 @@ export async function newComment(data: {
 		throw new Error("Content and videoId are required");
 	}
 
-	// Authentication alone isn't authorization: without this, any logged-in
-	// user could comment on someone else's private video (CVE-worthy IDOR).
+	// Authentication alone isn't authorization: without this, any logged-in user could
+	// comment on someone else's private video by guessing its id.
+	//
+	// This also fetches the video row (rather than gating a no-op) because
+	// canView returns true for a nonexistent videoId by design, so a bogus id
+	// would otherwise reach the insert below.
 	const accessExit = await Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
-		return yield* Effect.void.pipe(
-			Policy.withPublicPolicy(videosPolicy.canView(videoId)),
-		);
+		return yield* Effect.promise(() =>
+			db().select({ id: videos.id }).from(videos).where(eq(videos.id, videoId)),
+		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
-	if (Exit.isFailure(accessExit)) {
+	if (Exit.isFailure(accessExit) || accessExit.value.length === 0) {
 		throw new Error("Video not found");
 	}
 
