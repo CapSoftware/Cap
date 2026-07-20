@@ -51,7 +51,11 @@ export async function newComment(data: {
 	const accessExit = await Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
 		return yield* Effect.promise(() =>
-			db().select({ id: videos.id }).from(videos).where(eq(videos.id, videoId)),
+			db()
+				.select({ id: videos.id })
+				.from(videos)
+				.where(eq(videos.id, videoId))
+				.limit(1),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
