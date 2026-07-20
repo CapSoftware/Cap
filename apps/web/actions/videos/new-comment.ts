@@ -55,7 +55,12 @@ export async function newComment(data: {
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
-	if (Exit.isFailure(accessExit) || accessExit.value.length === 0) {
+	if (Exit.isFailure(accessExit)) {
+		console.error("Video access check failed:", accessExit);
+		throw new Error("Video not found");
+	}
+
+	if (accessExit.value.length === 0) {
 		throw new Error("Video not found");
 	}
 
