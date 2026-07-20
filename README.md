@@ -106,6 +106,8 @@ For production, configure public URLs and replace the default secrets before exp
 ```bash
 CAP_URL=https://cap.yourdomain.com
 S3_PUBLIC_URL=https://s3.yourdomain.com
+# Chrome Web Store extension ID allowed to receive auth keys
+CAP_CHROME_EXTENSION_ID=fefjaffcodfiogbbngmjkcjpbpclbdcp
 ```
 
 See the [self-hosting guide](https://cap.so/docs/self-hosting) for email setup, AI providers, SSL, storage, production hardening, and troubleshooting.
