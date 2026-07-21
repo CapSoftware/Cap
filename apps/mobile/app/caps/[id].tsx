@@ -1,4 +1,5 @@
 import * as Clipboard from "expo-clipboard";
+import { Image } from "expo-image";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { type SFSymbol, SymbolView } from "expo-symbols";
 import { useVideoPlayer, VideoView } from "expo-video";
@@ -6,8 +7,8 @@ import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
 	ActionSheetIOS,
+	ActivityIndicator,
 	Alert,
-	KeyboardAvoidingView,
 	Linking,
 	Platform,
 	Pressable,
@@ -69,6 +70,8 @@ const showPhotosSettingsAlert = () => {
 const getCapDetailErrorMessage = (error: unknown) =>
 	error instanceof Error ? error.message : "Unable to load this Cap";
 
+const reactionOptions = ["😂", "😍", "😮", "🙌", "👍", "👎", "👏", "🔥"];
+
 type CapDetailOperation = "comment" | "save" | "visibility";
 
 type AnalyticsMetricProps = {
@@ -103,6 +106,8 @@ export default function CapDetailScreen() {
 	const [copied, setCopied] = useState(false);
 	const [saved, setSaved] = useState(false);
 	const [settingsVisible, setSettingsVisible] = useState(false);
+	const [playbackLoading, setPlaybackLoading] = useState(false);
+	const [playbackError, setPlaybackError] = useState<string | null>(null);
 	const player = useVideoPlayer(null);
 
 	const load = useCallback(async () => {
@@ -130,9 +135,33 @@ export default function CapDetailScreen() {
 	}, [load]);
 
 	useEffect(() => {
-		if (!playback?.url) return;
-		player.replace(playback.url);
-	}, [playback?.url, player]);
+		if (!playback?.url) {
+			setPlaybackLoading(false);
+			setPlaybackError(null);
+			return;
+		}
+
+		let active = true;
+		setPlaybackLoading(true);
+		setPlaybackError(null);
+		player
+			.replaceAsync({
+				uri: playback.url,
+				contentType: playback.kind === "hls" ? "hls" : "progressive",
+			})
+			.then(() => {
+				if (active) setPlaybackLoading(false);
+			})
+			.catch((error: unknown) => {
+				if (!active) return;
+				setPlaybackLoading(false);
+				setPlaybackError(getCapDetailErrorMessage(error));
+			});
+
+		return () => {
+			active = false;
+		};
+	}, [playback, player]);
 
 	useEffect(() => {
 		if (!copied) return;
@@ -216,14 +245,18 @@ export default function CapDetailScreen() {
 				content: trimmed,
 				timestamp: null,
 			});
-			setDetail({
-				...detail,
-				comments: [...detail.comments, created],
-				cap: {
-					...detail.cap,
-					commentCount: detail.cap.commentCount + 1,
-				},
-			});
+			setDetail((current) =>
+				current
+					? {
+							...current,
+							comments: [...current.comments, created],
+							cap: {
+								...current.cap,
+								commentCount: current.cap.commentCount + 1,
+							},
+						}
+					: current,
+			);
 			setComment("");
 		} catch (error) {
 			Alert.alert(
@@ -242,14 +275,18 @@ export default function CapDetailScreen() {
 				content: emoji,
 				timestamp: null,
 			});
-			setDetail({
-				...detail,
-				comments: [...detail.comments, created],
-				cap: {
-					...detail.cap,
-					reactionCount: detail.cap.reactionCount + 1,
-				},
-			});
+			setDetail((current) =>
+				current
+					? {
+							...current,
+							comments: [...current.comments, created],
+							cap: {
+								...current.cap,
+								reactionCount: current.cap.reactionCount + 1,
+							},
+						}
+					: current,
+			);
 		} catch (error) {
 			Alert.alert(
 				"Reaction failed",
@@ -400,10 +437,7 @@ export default function CapDetailScreen() {
 	}
 
 	return (
-		<KeyboardAvoidingView
-			style={styles.keyboard}
-			behavior={Platform.OS === "ios" ? "padding" : undefined}
-		>
+		<View style={styles.container}>
 			<Stack.Screen
 				options={{
 					headerShown: true,
@@ -446,7 +480,12 @@ export default function CapDetailScreen() {
 					title: detail?.cap.title ?? "Cap",
 				}}
 			/>
-			<Screen loading={loading} scroll safeEdges={["left", "right"]}>
+			<Screen
+				automaticallyAdjustKeyboardInsets
+				loading={loading}
+				scroll
+				safeEdges={["left", "right"]}
+			>
 				{loadError ? (
 					<View
 						accessibilityLabel={`Cap detail error: ${loadError}`}
@@ -476,12 +515,52 @@ export default function CapDetailScreen() {
 					<>
 						<View style={styles.videoFrame}>
 							{playback?.url ? (
-								<VideoView
-									player={player}
-									style={styles.video}
-									fullscreenOptions={{ enable: true }}
-									allowsPictureInPicture
-								/>
+								<>
+									<VideoView
+										allowsPictureInPicture
+										contentFit="contain"
+										fullscreenOptions={{ enable: true }}
+										nativeControls
+										player={player}
+										style={styles.video}
+									/>
+									{playbackLoading ? (
+										<View style={styles.videoLoadingOverlay}>
+											{detail.cap.thumbnailUrl ? (
+												<Image
+													cachePolicy="memory-disk"
+													contentFit="cover"
+													source={{ uri: detail.cap.thumbnailUrl }}
+													style={StyleSheet.absoluteFillObject}
+												/>
+											) : null}
+											<View style={styles.videoLoadingIndicator}>
+												<ActivityIndicator color={colors.white} />
+											</View>
+										</View>
+									) : null}
+									{playbackError ? (
+										<View
+											accessibilityRole="alert"
+											style={styles.videoErrorOverlay}
+										>
+											<Text style={styles.videoErrorText}>
+												Unable to play this video
+											</Text>
+											<ActionButton
+												accessibilityHint="Reloads this video"
+												label="Try again"
+												onPress={() =>
+													setPlayback((current) =>
+														current ? { ...current } : current,
+													)
+												}
+												symbol="arrow.clockwise"
+												variant="secondary"
+											/>
+										</View>
+									) : null}
+								</>
 							) : (
 								<View style={styles.videoPlaceholder}>
 									<Text style={styles.placeholderText}>Processing video</Text>
@@ -665,10 +744,11 @@ export default function CapDetailScreen() {
 								<Text style={styles.countText}>{reactions.length}</Text>
 							</View>
 							<View style={styles.reactions}>
-								{["👍", "👏", "🔥", "💙"].map((emoji) => (
+								{reactionOptions.map((emoji) => (
 									<ActionButton
 										key={emoji}
 										label={emoji}
+										accessibilityLabel={`React with ${emoji}`}
 										accessibilityHint="Adds this reaction"
 										variant="secondary"
 										onPress={() => createReaction(emoji)}
@@ -778,12 +858,12 @@ export default function CapDetailScreen() {
 				visibilityDisabledHint={sharingStatusHint}
 				visibilityDisabledAccessibilityValue={sharingStatusAccessibilityValue}
 			/>
-		</KeyboardAvoidingView>
+		</View>
 	);
 }
 
 const styles = StyleSheet.create({
-	keyboard: {
+	container: {
 		flex: 1,
 	},
 	headerAction: {
@@ -813,6 +893,33 @@ const styles = StyleSheet.create({
 	video: {
 		width: "100%",
 		height: "100%",
+	},
+	videoLoadingOverlay: {
+		...StyleSheet.absoluteFillObject,
+		alignItems: "center",
+		justifyContent: "center",
+		backgroundColor: colors.black,
+	},
+	videoLoadingIndicator: {
+		width: 44,
+		height: 44,
+		borderRadius: radius.full,
+		alignItems: "center",
+		justifyContent: "center",
+		backgroundColor: "rgba(0, 0, 0, 0.62)",
+	},
+	videoErrorOverlay: {
+		...StyleSheet.absoluteFillObject,
+		alignItems: "center",
+		justifyContent: "center",
+		gap: 10,
+		backgroundColor: "rgba(0, 0, 0, 0.86)",
+		padding: 16,
+	},
+	videoErrorText: {
+		fontFamily: fonts.medium,
+		fontSize: 15,
+		color: colors.white,
 	},
 	videoPlaceholder: {
 		flex: 1,
@@ -1035,10 +1142,13 @@ const styles = StyleSheet.create({
 	},
 	reactions: {
 		flexDirection: "row",
+		flexWrap: "wrap",
 		gap: 8,
 	},
 	reactionButton: {
-		width: 52,
+		flexBasis: "21%",
+		flexGrow: 1,
+		maxWidth: 80,
 	},
 	commentInputRow: {
 		flexDirection: "row",

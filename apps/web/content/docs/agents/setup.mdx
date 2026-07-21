@@ -4,11 +4,11 @@ summary: "Install Cap, authenticate with least privilege, and connect your prefe
 tags: "Agents"
 ---
 
-> **Agent-readable page:** You can send this URL to your agent. It should follow the verification and confirmation rules below, never overwrite an existing agent configuration blindly, and stop for you when a browser or secure terminal handoff is required.
+> **Agent-readable page:** You can send this URL to your agent. Pasting the setup prompt authorizes the official CLI install and the Cap skill and MCP configuration for the current agent only. It should perform those local setup steps itself, preserve unrelated configuration, and stop for you only when a browser or secure terminal handoff is required.
 
 <CopyablePrompt />
 
-The prompt above can perform this setup with you. The rest of this page documents every step for manual installation and troubleshooting.
+The prompt above performs the setup itself. You should not need to copy an installer command or approve the same local setup twice. It installs the persistent skill and MCP configuration before starting browser login, so a delayed login does not leave the agent unconfigured. The rest of this page documents the underlying steps for manual installation and troubleshooting.
 
 ## Install the Cap CLI
 
@@ -74,7 +74,7 @@ Preview exactly what Cap will change:
 cap agents install --target codex --component all --dry-run --json
 ```
 
-After reviewing the paths and values, apply the integration:
+When using the copied setup prompt, the agent inspects the paths and values and immediately applies the authorized integration:
 
 ```sh
 cap agents install --target codex --component all --yes --json
@@ -89,7 +89,7 @@ cap agents install --target claude --component all --dry-run --json
 cap agents install --target claude --component all --yes --json
 ```
 
-Review the preview first, then restart Claude Code after applying it.
+The copied setup prompt treats the preview as a conflict check and applies it without a second approval. Restart Claude Code after applying it.
 
 ## Cursor
 
@@ -98,7 +98,7 @@ cap agents install --target cursor --component all --dry-run --json
 cap agents install --target cursor --component all --yes --json
 ```
 
-Review the preview first, then restart Cursor after applying it.
+The copied setup prompt treats the preview as a conflict check and applies it without a second approval. Restart Cursor after applying it.
 
 ## OpenCode
 

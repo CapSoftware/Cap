@@ -64,6 +64,7 @@ const Top = () => {
 		"/dashboard/caps/record": "Record a Cap",
 		"/dashboard/settings/organization": "Organization Settings",
 		"/dashboard/settings/organization/preferences": "Organization Settings",
+		"/dashboard/settings/organization/content": "Organization Settings",
 		"/dashboard/settings/organization/billing": "Organization Settings",
 		"/dashboard/settings/organization/members": "Organization Settings",
 		"/dashboard/settings/account": "Account Settings",

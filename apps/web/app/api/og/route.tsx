@@ -5,6 +5,8 @@ import { verifyOgSignature } from "@/lib/og/signature";
 import {
 	CapWordmark,
 	OG_HEIGHT,
+	OG_INK,
+	OG_INK_SOFT,
 	OG_WIDTH,
 	RecorderCard,
 	SkyBackground,
@@ -75,7 +77,7 @@ export async function GET(req: NextRequest) {
 						justifyContent: "space-between",
 					}}
 				>
-					<CapWordmark height={60} />
+					<CapWordmark height={60} color={OG_INK} />
 					<div
 						style={{
 							display: "flex",
@@ -89,10 +91,10 @@ export async function GET(req: NextRequest) {
 							style={{
 								display: "block",
 								fontSize: titleFontSize(title),
-								fontWeight: 700,
-								color: "white",
+								fontWeight: 500,
+								color: OG_INK,
 								lineHeight: 1.1,
-								letterSpacing: -1.5,
+								letterSpacing: -0.5,
 								lineClamp: 4,
 							}}
 						>
@@ -104,7 +106,7 @@ export async function GET(req: NextRequest) {
 									display: "block",
 									fontSize: 27,
 									fontWeight: 400,
-									color: "rgba(255,255,255,0.92)",
+									color: OG_INK_SOFT,
 									lineHeight: 1.4,
 									lineClamp: 2,
 								}}
@@ -117,7 +119,7 @@ export async function GET(req: NextRequest) {
 						style={{
 							fontSize: 24,
 							fontWeight: 500,
-							color: "rgba(255,255,255,0.85)",
+							color: OG_INK_SOFT,
 						}}
 					>
 						Cap.so

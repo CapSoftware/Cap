@@ -7,6 +7,7 @@ const associatedDomains =
 					.filter(Boolean)
 			: ["applinks:cap.so"];
 const bundleIdentifier = "so.cap.mobile";
+const projectId = process.env.EXPO_PROJECT_ID;
 const ios = {
 	bundleIdentifier,
 	supportsTablet: false,
@@ -33,25 +34,46 @@ module.exports = ({ config }) => ({
 	platforms: ["ios"],
 	userInterfaceStyle: "light",
 	icon: "./assets/icon.png",
-	splash: {
-		image: "./assets/splash-icon.png",
-		resizeMode: "contain",
-		backgroundColor: "#f9f9f9",
-	},
 	ios,
+	runtimeVersion: {
+		policy: "appVersion",
+	},
+	updates: projectId
+		? {
+				url: `https://u.expo.dev/${projectId}`,
+			}
+		: undefined,
 	experiments: {
 		typedRoutes: true,
 	},
 	plugins: [
 		"expo-router",
 		[
+			"expo-camera",
+			{
+				barcodeScannerEnabled: false,
+				cameraPermission: "Allow Cap to use your camera to record videos.",
+				microphonePermission:
+					"Allow Cap to use your microphone while recording videos.",
+			},
+		],
+		[
 			"expo-font",
 			{
 				fonts: [
-					"../web/public/fonts/NeueMontreal-Regular.otf",
-					"../web/public/fonts/NeueMontreal-Medium.otf",
-					"../web/public/fonts/NeueMontreal-Bold.otf",
+					"./assets/fonts/NeueMontreal-Regular.otf",
+					"./assets/fonts/NeueMontreal-Medium.otf",
+					"./assets/fonts/NeueMontreal-Bold.otf",
 				],
+			},
+		],
+		[
+			"expo-splash-screen",
+			{
+				backgroundColor: "#f9f9f9",
+				image: "./assets/splash-icon.png",
+				imageWidth: 200,
+				resizeMode: "contain",
 			},
 		],
 		[
@@ -60,8 +82,12 @@ module.exports = ({ config }) => ({
 				faceIDPermission: "Allow Cap to protect your account key.",
 			},
 		],
+		"expo-sharing",
+		"expo-video",
+		"expo-web-browser",
 	],
 	extra: {
 		apiBaseUrl: process.env.EXPO_PUBLIC_CAP_WEB_URL ?? "https://cap.so",
+		eas: projectId ? { projectId } : undefined,
 	},
 });

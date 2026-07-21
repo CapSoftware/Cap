@@ -102,6 +102,14 @@ const FolderPage = async (props: {
 						organizationRole: orgAccess?.role,
 						spaceRole: null,
 					}));
+		const moveLocation =
+			spaceOrOrg.variant === "space"
+				? ({ type: "space", spaceId: spaceOrOrg.space.id } as const)
+				: ({ type: "organization" } as const);
+		const moveRootLabel =
+			spaceOrOrg.variant === "space"
+				? spaceOrOrg.space.name
+				: spaceOrOrg.organization.name;
 
 		return (
 			<div>
@@ -158,6 +166,8 @@ const FolderPage = async (props: {
 									id={folder.id}
 									parentId={folder.parentId}
 									videoCount={folder.videoCount}
+									canMove={canManageCollection}
+									moveRootLabel={moveRootLabel}
 								/>
 							))}
 						</div>
@@ -165,6 +175,10 @@ const FolderPage = async (props: {
 				)}
 				<FolderVideosSection
 					initialVideos={videosData}
+					location={moveLocation}
+					rootLabel={moveRootLabel}
+					currentFolderId={params.folderId}
+					canMove={canManageCollection}
 					analyticsEnabled={Boolean(
 						serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST,
 					)}

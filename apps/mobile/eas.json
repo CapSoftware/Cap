@@ -1,0 +1,30 @@
+{
+	"cli": {
+		"appVersionSource": "remote",
+		"version": ">= 21.0.2"
+	},
+	"build": {
+		"development": {
+			"channel": "development",
+			"developmentClient": true,
+			"distribution": "internal",
+			"environment": "development",
+			"ios": {
+				"simulator": true
+			}
+		},
+		"preview": {
+			"channel": "preview",
+			"distribution": "internal",
+			"environment": "preview"
+		},
+		"production": {
+			"autoIncrement": true,
+			"channel": "production",
+			"environment": "production"
+		}
+	},
+	"submit": {
+		"production": {}
+	}
+}

@@ -96,6 +96,10 @@ const authState = vi.hoisted((): { value: AuthStub | null } => ({
 	value: null,
 }));
 
+const videoPlayerState = vi.hoisted(() => ({
+	replaceAsync: vi.fn(() => Promise.resolve()),
+}));
+
 const renderComponent = async (
 	node: ReactElement,
 ): Promise<ReactTestRenderer> => {
@@ -162,7 +166,7 @@ vi.mock("react-native", async () => {
 		Alert: {
 			alert: vi.fn(),
 		},
-		KeyboardAvoidingView: createHost("KeyboardAvoidingView"),
+		ActivityIndicator: createHost("ActivityIndicator"),
 		Linking: {
 			openSettings: vi.fn(),
 		},
@@ -194,6 +198,14 @@ vi.mock("expo-clipboard", () => ({
 	setStringAsync: vi.fn(),
 }));
 
+vi.mock("expo-image", async () => {
+	const React = await import("react");
+	return {
+		Image: (props: Record<string, unknown>) =>
+			React.createElement("Image", props),
+	};
+});
+
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	return {
@@ -224,9 +236,7 @@ vi.mock("expo-video", async () => {
 	return {
 		VideoView: (props: Record<string, unknown>) =>
 			React.createElement("VideoView", props),
-		useVideoPlayer: () => ({
-			replace: vi.fn(),
-		}),
+		useVideoPlayer: () => videoPlayerState,
 	};
 });
 
@@ -308,15 +318,17 @@ vi.mock("@/components/Screen", async () => {
 	const React = await import("react");
 	return {
 		Screen: ({
+			automaticallyAdjustKeyboardInsets,
 			children,
 			loading,
 		}: {
+			automaticallyAdjustKeyboardInsets?: boolean;
 			children?: ReactNode;
 			loading?: boolean;
 		}) =>
 			React.createElement(
 				"Screen",
-				null,
+				{ automaticallyAdjustKeyboardInsets },
 				loading ? React.createElement("Text", null, "Loading") : children,
 			),
 	};
@@ -325,6 +337,7 @@ vi.mock("@/components/Screen", async () => {
 describe("Cap detail screen", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		videoPlayerState.replaceAsync.mockResolvedValue(undefined);
 		authState.value = createAuth();
 	});
 
@@ -405,6 +418,53 @@ describe("Cap detail screen", () => {
 		expect(
 			hasProp(tree, "accessibilityHint", "Opens analytics in a browser sheet"),
 		).toBe(true);
+	});
+
+	it("loads segmented playback explicitly as HLS with native controls", async () => {
+		const auth = createAuth();
+		auth.client.getPlayback = vi.fn(() =>
+			Promise.resolve({
+				kind: "hls" as const,
+				transcriptUrl: null,
+				url: "https://cap.so/api/playlist?videoId=video_123",
+			}),
+		);
+		authState.value = auth;
+
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+
+		expect(videoPlayerState.replaceAsync).toHaveBeenCalledWith({
+			contentType: "hls",
+			uri: "https://cap.so/api/playlist?videoId=video_123",
+		});
+		const video = renderer.root.find(
+			(node) => String(node.type) === "VideoView",
+		);
+		expect(video.props).toMatchObject({
+			allowsPictureInPicture: true,
+			contentFit: "contain",
+			nativeControls: true,
+		});
+		const screen = renderer.root.find((node) => String(node.type) === "Screen");
+		expect(screen.props.automaticallyAdjustKeyboardInsets).toBe(true);
+	});
+
+	it("offers a full reaction set without clipping it to one row", async () => {
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+
+		for (const emoji of ["😂", "😍", "😮", "🙌", "👍", "👎", "👏", "🔥"]) {
+			expect(
+				renderer.root.findAll(
+					(node) =>
+						String(node.type) === "ActionButton" &&
+						node.props.accessibilityLabel === `React with ${emoji}`,
+				),
+			).toHaveLength(1);
+		}
 	});
 
 	it("uses native affordances for the header menu and comment composer", async () => {

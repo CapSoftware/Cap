@@ -34,8 +34,36 @@ vi.mock("server-only", () => ({}));
 import {
 	getAiContentGuidelines,
 	getAiLanguageInstruction,
+	parseAiResponse,
 	shouldReplaceVideoTitle,
 } from "@/workflows/generate-ai";
+
+describe("parseAiResponse", () => {
+	it("parses JSON wrapped in model prose", () => {
+		expect(
+			parseAiResponse(
+				'Here is the requested JSON:\n{"title":"Workflow review","summary":"I explain the workflow.","chapters":[]}',
+			),
+		).toEqual({
+			title: "Workflow review",
+			summary: "I explain the workflow.",
+			chapters: [],
+		});
+	});
+
+	it("rejects malformed or incomplete AI output", () => {
+		expect(() => parseAiResponse("I could not produce JSON")).toThrow();
+		expect(() =>
+			parseAiResponse('{"title":"Workflow review","summary":"'),
+		).toThrow();
+	});
+
+	it("rejects empty required fields instead of inventing fallbacks", () => {
+		expect(() =>
+			parseAiResponse('{"title":"Generated Title","summary":"","chapters":[]}'),
+		).toThrow();
+	});
+});
 
 describe("shouldReplaceVideoTitle", () => {
 	it("replaces default Cap titles", () => {
@@ -71,6 +99,15 @@ describe("shouldReplaceVideoTitle", () => {
 				currentTitle: "Old Generated Title",
 				previousAiTitle: "Old Generated Title",
 				nextAiTitle: "New Generated Title",
+			}),
+		).toBe(true);
+	});
+
+	it("replaces the legacy fallback after retry metadata is cleared", () => {
+		expect(
+			shouldReplaceVideoTitle({
+				currentTitle: "Generated Title",
+				nextAiTitle: "Quarterly Roadmap Review",
 			}),
 		).toBe(true);
 	});
@@ -113,6 +150,13 @@ describe("shouldReplaceVideoTitle", () => {
 				titleManuallyEdited: true,
 			}),
 		).toBe(false);
+		expect(
+			shouldReplaceVideoTitle({
+				currentTitle: "Generated Title",
+				nextAiTitle: "New Generated Title",
+				titleManuallyEdited: true,
+			}),
+		).toBe(false);
 	});
 
 	it("does not replace with a blank generated title", () => {
@@ -149,7 +193,22 @@ describe("getAiContentGuidelines", () => {
 		expect(summary).toContain("meaning and useful information");
 		expect(summary).toContain("minor UI actions");
 		expect(summary).toContain("never omit information required");
-		expect(summary).toContain("rather than enumerating every utterance");
+	});
+
+	it("uses a personal voice for the primary speaker", () => {
+		const { summary } = getAiContentGuidelines(300);
+
+		expect(summary).toContain('use "I" and "my"');
+		expect(summary).toContain(
+			'Never describe the primary voice as "the speaker"',
+		);
+		expect(summary).toContain("use names only when the transcript identifies");
+		expect(summary).toContain('write "I review the proposal"');
+		expect(summary).toContain('instead of "The speaker reviews the proposal"');
+		expect(summary).toContain(
+			"Do not introduce names, projects, or personal details",
+		);
+		expect(summary).not.toContain("robot-dealer");
 	});
 
 	it("scales summary length without padding", () => {

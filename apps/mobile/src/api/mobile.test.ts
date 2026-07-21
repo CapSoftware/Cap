@@ -282,6 +282,67 @@ describe("createMobileApiClient", () => {
 		}
 	});
 
+	it("requests segmented recording targets and completes separate media tracks", async () => {
+		const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (
+			input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			calls.push({ input, init });
+			if (String(input).endsWith("/segments/targets")) {
+				return new Response(
+					JSON.stringify({
+						uploads: {
+							"segments/video/init.mp4": {
+								type: "put",
+								url: "https://uploads.example/video-init",
+								headers: { "Content-Type": "video/mp4" },
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			return new Response(JSON.stringify({ success: true }), { status: 200 });
+		}) as typeof fetch;
+
+		try {
+			const client = createMobileApiClient({
+				baseUrl: "https://cap.so/",
+				getToken: () => "api-key",
+			});
+			const targets = await client.createRecordingUploadTargets("video_123", [
+				"segments/video/init.mp4",
+			]);
+			await client.completeRecording("video_123", {
+				durationSeconds: 2,
+				totalBytes: 650_500,
+				videoSegments: [{ index: 1, duration: 2 }],
+				audioSegments: [{ index: 1, duration: 2 }],
+			});
+
+			expect(targets.uploads["segments/video/init.mp4"]?.type).toBe("put");
+			expect(String(calls[0]?.input)).toBe(
+				"https://cap.so/api/mobile/recordings/video_123/segments/targets",
+			);
+			expect(JSON.parse(calls[0]?.init?.body as string)).toEqual({
+				subpaths: ["segments/video/init.mp4"],
+			});
+			expect(String(calls[1]?.input)).toBe(
+				"https://cap.so/api/mobile/recordings/video_123/complete",
+			);
+			expect(JSON.parse(calls[1]?.init?.body as string)).toEqual({
+				durationSeconds: 2,
+				totalBytes: 650_500,
+				videoSegments: [{ index: 1, duration: 2 }],
+				audioSegments: [{ index: 1, duration: 2 }],
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	it("updates Cap passwords with the authenticated PATCH endpoint", async () => {
 		const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
 		const originalFetch = globalThis.fetch;

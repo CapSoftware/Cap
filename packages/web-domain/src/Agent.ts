@@ -1259,6 +1259,7 @@ export const AgentOperationResponse = Schema.Struct({
 		"set_organization_domain",
 		"remove_organization_domain",
 		"verify_organization_domain",
+		"transfer_org_content",
 	),
 	state: Schema.Literal("queued", "running", "succeeded", "failed"),
 	resourceId: Schema.String,

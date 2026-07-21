@@ -152,6 +152,9 @@ export function CapCard({
 }: CapCardProps) {
 	const viewModel = getCapCardViewModel(cap, now);
 	const [copyPressed, setCopyPressed] = useState(false);
+	const [failedThumbnailUrl, setFailedThumbnailUrl] = useState<string | null>(
+		null,
+	);
 	const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const hasCopyAction = Boolean(onCopyPress);
 	const hasShareAction = Boolean(onSharePress);
@@ -267,11 +270,18 @@ export function CapCard({
 						) : null}
 					</View>
 				) : null}
-				{cap.thumbnailUrl ? (
-					<Image source={{ uri: cap.thumbnailUrl }} style={styles.thumbnail} />
-				) : (
-					<CapThumbnailPlaceholder />
-				)}
+				<CapThumbnailPlaceholder />
+				{cap.thumbnailUrl && cap.thumbnailUrl !== failedThumbnailUrl ? (
+					<Image
+						cachePolicy="memory-disk"
+						contentFit="cover"
+						onError={() => setFailedThumbnailUrl(cap.thumbnailUrl)}
+						recyclingKey={cap.id}
+						source={{ uri: cap.thumbnailUrl }}
+						style={styles.thumbnail}
+						transition={160}
+					/>
+				) : null}
 				{viewModel.uploadStatusText ? (
 					<View pointerEvents="none" style={styles.uploadOverlay}>
 						<View style={styles.uploadStatusRow}>
@@ -446,8 +456,7 @@ const styles = StyleSheet.create({
 		borderBottomColor: colors.gray3,
 	},
 	thumbnail: {
-		width: "100%",
-		height: "100%",
+		...StyleSheet.absoluteFillObject,
 	},
 	emptyThumbnail: {
 		flex: 1,

@@ -5,6 +5,8 @@ import {
 	CapWordmark,
 	OG_BLUE,
 	OG_HEIGHT,
+	OG_INK,
+	OG_INK_SOFT,
 	OG_WIDTH,
 	SkyBackground,
 } from "@/lib/og/template";
@@ -106,7 +108,7 @@ const VideoCard = ({
 				width,
 				borderRadius: 20,
 				background: "white",
-				boxShadow: "0 30px 60px rgba(20,52,120,0.4)",
+				boxShadow: "0 30px 60px rgba(20,52,120,0.25)",
 			}}
 		>
 			<div
@@ -273,7 +275,7 @@ const videoLayout = (video: VideoOgData) => (
 					justifyContent: "space-between",
 				}}
 			>
-				<CapWordmark height={52} />
+				<CapWordmark height={52} color={OG_INK} />
 				<div
 					style={{
 						display: "flex",
@@ -286,10 +288,10 @@ const videoLayout = (video: VideoOgData) => (
 						style={{
 							display: "block",
 							fontSize: video.title.length <= 40 ? 52 : 42,
-							fontWeight: 700,
-							color: "white",
+							fontWeight: 500,
+							color: OG_INK,
 							lineHeight: 1.15,
-							letterSpacing: -1,
+							letterSpacing: -0.5,
 							lineClamp: 3,
 						}}
 					>
@@ -309,7 +311,7 @@ const videoLayout = (video: VideoOgData) => (
 									style={{
 										fontSize: 24,
 										fontWeight: 500,
-										color: "rgba(255,255,255,0.95)",
+										color: OG_INK_SOFT,
 									}}
 								>
 									{video.ownerName}
@@ -321,8 +323,8 @@ const videoLayout = (video: VideoOgData) => (
 										display: "flex",
 										alignItems: "center",
 										gap: 8,
-										background: "rgba(255,255,255,0.16)",
-										border: "1px solid rgba(255,255,255,0.38)",
+										background: "rgba(255,255,255,0.42)",
+										border: "1px solid rgba(255,255,255,0.7)",
 										borderRadius: 999,
 										padding: "6px 16px",
 									}}
@@ -333,12 +335,12 @@ const videoLayout = (video: VideoOgData) => (
 										width="14"
 										height="14"
 										viewBox="0 0 24 24"
-										fill="white"
+										fill={OG_INK}
 									>
 										<path d="M7 4.5 L19.5 12 L7 19.5 Z" />
 									</svg>
 									<span
-										style={{ fontSize: 20, fontWeight: 500, color: "white" }}
+										style={{ fontSize: 20, fontWeight: 500, color: OG_INK }}
 									>
 										{formatDuration(video.duration)}
 									</span>
@@ -351,7 +353,7 @@ const videoLayout = (video: VideoOgData) => (
 					style={{
 						fontSize: 23,
 						fontWeight: 500,
-						color: "rgba(255,255,255,0.85)",
+						color: OG_INK_SOFT,
 					}}
 				>
 					Watch on Cap.so
@@ -386,7 +388,7 @@ const statusLayout = ({
 				flexDirection: "column",
 			}}
 		>
-			<CapWordmark height={52} />
+			<CapWordmark height={52} color={OG_INK} />
 			<div
 				style={{
 					display: "flex",
@@ -409,10 +411,10 @@ const statusLayout = ({
 						style={{
 							display: "block",
 							fontSize: 56,
-							fontWeight: 700,
-							color: "white",
+							fontWeight: 500,
+							color: OG_INK,
 							lineHeight: 1.12,
-							letterSpacing: -1,
+							letterSpacing: -0.5,
 							lineClamp: 3,
 						}}
 					>
@@ -423,7 +425,7 @@ const statusLayout = ({
 							display: "block",
 							fontSize: 26,
 							fontWeight: 400,
-							color: "rgba(255,255,255,0.92)",
+							color: OG_INK_SOFT,
 							lineHeight: 1.4,
 							lineClamp: 2,
 						}}

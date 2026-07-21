@@ -1,7 +1,6 @@
 import "react-native-gesture-handler";
 import "react-native-reanimated";
 
-import { useFonts } from "expo-font";
 import { Stack, useSegments } from "expo-router";
 import {
 	ActivityIndicator,
@@ -17,7 +16,9 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
 import { SignInPanel } from "@/auth/SignInPanel";
 import { signInTitleForSegments } from "@/auth/signInDestination";
+import { RecordingUploadStatus } from "@/components/recording-upload-status";
 import { colors } from "@/theme";
+import { RecordingUploadProvider } from "@/uploads/recording-upload-provider";
 
 function AppShell() {
 	const auth = useAuth();
@@ -59,25 +60,20 @@ function AppShell() {
 }
 
 export default function RootLayout() {
-	const [fontsLoaded] = useFonts({
-		"NeueMontreal-Regular": require("../../web/public/fonts/NeueMontreal-Regular.otf"),
-		"NeueMontreal-Medium": require("../../web/public/fonts/NeueMontreal-Medium.otf"),
-		"NeueMontreal-Bold": require("../../web/public/fonts/NeueMontreal-Bold.otf"),
-	});
-
-	if (!fontsLoaded) return null;
-
 	return (
 		<GestureHandlerRootView
 			style={{ flex: 1, backgroundColor: colors.appBackground }}
 		>
 			<SafeAreaProvider>
 				<AuthProvider>
-					<StatusBar
-						backgroundColor={colors.appBackground}
-						barStyle="dark-content"
-					/>
-					<AppShell />
+					<RecordingUploadProvider>
+						<StatusBar
+							backgroundColor={colors.appBackground}
+							barStyle="dark-content"
+						/>
+						<AppShell />
+						<RecordingUploadStatus />
+					</RecordingUploadProvider>
 				</AuthProvider>
 			</SafeAreaProvider>
 		</GestureHandlerRootView>

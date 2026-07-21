@@ -202,13 +202,23 @@ describe("Cap for Agents docs", () => {
 			overview.indexOf("## The fastest way to start"),
 		);
 		for (const marker of [
+			"explicitly authorize these local setup actions",
+			"Do not ask me to run or copy setup commands",
 			"curl -fsSL https://cap.so/install-cli.sh | sh",
 			"irm https://cap.so/install-cli.ps1 | iex",
 			"cap guide --json",
 			"cap auth login --json",
 			"--component all --dry-run --json",
+			"--component all --yes --json",
+			"exactly one concrete current target",
+			"Never pass the angle-bracket placeholder",
+			"immediately apply",
+			"dry run is a transparency and conflict check",
+			"A delayed or cancelled login must not undo or postpone",
 			"full Cap skill",
 			"cap mcp serve",
+			"before browser automation, computer use",
+			"persist for future sessions",
 			"cap doctor --json",
 			"cap record start",
 			"cap caps context",
@@ -219,6 +229,7 @@ describe("Cap for Agents docs", () => {
 			"cap project",
 			"cap automations",
 			"Treat every command listed by cap guide --json as supported",
+			"bootstrap above is already approved",
 			"explicit confirmation",
 			"cap jobs wait",
 			"Clearly separate what you verified",
@@ -228,6 +239,10 @@ describe("Cap for Agents docs", () => {
 		expect(CAP_AGENT_PROMPT).not.toContain(
 			"If it does not, stop and direct me",
 		);
+		expect(CAP_AGENT_PROMPT).not.toContain(
+			"wait for my confirmation before running it",
+		);
+		expect(CAP_AGENT_PROMPT).not.toContain("After I approve");
 
 		const setup = getDocBySlug("agents/setup")?.content ?? "";
 		expect(setup).toContain("<CopyablePrompt />");
@@ -235,9 +250,27 @@ describe("Cap for Agents docs", () => {
 			expect(setup).toContain(`--target ${target}`);
 		}
 		expect(setup).toContain('"command": ["cap", "mcp", "serve"]');
+		expect(setup).toContain("without a second approval");
 
 		const safety = getDocBySlug("agents/safety")?.content ?? "";
 		expect(safety).toContain("structured `code` and `message` fields");
+		expect(safety).toContain(
+			"Pasting Cap's official setup prompt is explicit approval",
+		);
+		expect(safety).toContain("not browser automation or computer-use tools");
+
+		const skill = fs.readFileSync(
+			path.join(process.cwd(), "../cli/skill/cap/SKILL.md"),
+			"utf8",
+		);
+		expect(skill).toContain("## Cap-first routing");
+		expect(skill).toContain("persistent routing rule for future sessions");
+		expect(skill).toContain(
+			"control the Cap dashboard, a Cap browser tab, or Cap Desktop",
+		);
+		expect(skill).toContain(
+			"apply the reviewed `--component all` plan with `--yes`",
+		);
 	});
 
 	it("renders a prominent one-prompt setup action", () => {

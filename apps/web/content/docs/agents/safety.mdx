@@ -8,7 +8,9 @@ tags: "Agents"
 
 ## Read first, then propose changes
 
-An agent should begin with `cap guide --json`, current state, and the narrowest relevant read command. Reads and waits do not need confirmation. Everything that changes state does.
+Pasting Cap's official setup prompt is explicit approval for the agent to install the official Cap CLI and add or update the Cap skill and local MCP entry for the current agent only. The agent should perform that local bootstrap itself after checking the dry-run output. It must not ask the user to run the installer manually, request the same setup approval again, install into other detected agents, or replace unrelated agent configuration.
+
+That one-time setup approval does not authorize changes to Cap data or account state. After setup, an agent should begin with `cap guide --json`, current state, and the narrowest relevant read command. Reads and waits do not need confirmation. Everything that changes Cap content, processing, recording, uploads, sharing, library state, organizations, billing, storage, developer resources, credentials, or account state does.
 
 Before a mutation, the agent must show:
 
@@ -109,7 +111,7 @@ CLI login, Stripe checkout and billing portal flows, Google Drive authorization,
 
 ### `cap` is not found
 
-Install it from [Set Up Your Agent](/docs/agents/setup#install-the-cap-cli), open a new terminal, and run `cap version --json`.
+When running the official setup prompt, the agent should select and run the platform installer from [Set Up Your Agent](/docs/agents/setup#install-the-cap-cli), refresh the shell environment, and run `cap version --json`. It should not switch to browser automation or ask the user to copy the installer command. Outside the setup flow, show the user the official installer and obtain approval before changing the local machine.
 
 ### Authentication fails
 
@@ -128,7 +130,7 @@ The installed binary is the source of truth.
 
 ### MCP is unavailable
 
-Verify that the client launches the local command `cap mcp serve`, that `cap` is on the client's PATH, and that stdout is not wrapped or logged by another process. Use direct CLI commands as a fallback.
+Verify that the client launches the local command `cap mcp serve`, that `cap` is on the client's PATH, and that stdout is not wrapped or logged by another process. Use direct CLI commands as the fallback, not browser automation or computer-use tools. A newly installed MCP server may require an agent restart before it appears in the current process.
 
 ### A Cap is password protected
 

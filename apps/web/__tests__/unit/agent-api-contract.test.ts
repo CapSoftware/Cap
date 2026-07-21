@@ -97,7 +97,7 @@ describe("agent API contract", () => {
 		);
 		const unlockSource = source.slice(
 			source.indexOf("const unlockCap"),
-			source.indexOf("const requireAgentWrites"),
+			source.indexOf("const capabilityFailure"),
 		);
 
 		expect(unlockSource.indexOf("getViewableVideo(videoId)")).toBeGreaterThan(

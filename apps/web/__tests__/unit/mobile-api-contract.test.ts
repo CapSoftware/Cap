@@ -204,4 +204,36 @@ describe("mobile API contract schemas", () => {
 		expect(playback.url).toContain("signed.example");
 		expect(upload.upload.type).toBe("put");
 	});
+
+	it("decodes segmented mobile recording contracts", () => {
+		const targets = Schema.decodeUnknownSync(
+			Mobile.MobileRecordingUploadTargetsResponse,
+		)({
+			uploads: {
+				"segments/video/init.mp4": {
+					type: "put",
+					url: "https://signed.example/init",
+					headers: { "Content-Type": "video/mp4" },
+				},
+			},
+		});
+		const complete = Schema.decodeUnknownSync(
+			Mobile.MobileRecordingCompleteInput,
+		)({
+			durationSeconds: 12.4,
+			totalBytes: 4_000_000,
+			videoSegments: [
+				{ index: 1, duration: 2.02 },
+				{ index: 2, duration: 1.98 },
+			],
+			audioSegments: [
+				{ index: 1, duration: 2 },
+				{ index: 2, duration: 2 },
+			],
+		});
+
+		expect(targets.uploads["segments/video/init.mp4"]?.type).toBe("put");
+		expect(complete.videoSegments).toHaveLength(2);
+		expect(complete.audioSegments).toHaveLength(2);
+	});
 });

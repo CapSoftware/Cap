@@ -24,6 +24,12 @@ export type MobileUploadCreateInput =
 	typeof Mobile.MobileUploadCreateInput.Type;
 export type MobileUploadCreateResponse =
 	typeof Mobile.MobileUploadCreateResponse.Type;
+export type MobileRecordingCreateInput =
+	typeof Mobile.MobileRecordingCreateInput.Type;
+export type MobileRecordingCreateResponse =
+	typeof Mobile.MobileRecordingCreateResponse.Type;
+export type MobileRecordingCompleteInput =
+	typeof Mobile.MobileRecordingCompleteInput.Type;
 
 export type MobileApiClient = ReturnType<typeof createMobileApiClient>;
 
@@ -291,6 +297,29 @@ export const createMobileApiClient = ({ baseUrl, getToken }: ClientOptions) => {
 		) =>
 			request(
 				`/api/mobile/uploads/${id}/complete`,
+				Mobile.MobileSuccessResponse,
+				{
+					method: "POST",
+					body: input,
+				},
+			),
+		createRecording: (input: MobileRecordingCreateInput) =>
+			request("/api/mobile/recordings", Mobile.MobileRecordingCreateResponse, {
+				method: "POST",
+				body: input,
+			}),
+		createRecordingUploadTargets: (id: string, subpaths: string[]) =>
+			request(
+				`/api/mobile/recordings/${id}/segments/targets`,
+				Mobile.MobileRecordingUploadTargetsResponse,
+				{
+					method: "POST",
+					body: { subpaths },
+				},
+			),
+		completeRecording: (id: string, input: MobileRecordingCompleteInput) =>
+			request(
+				`/api/mobile/recordings/${id}/complete`,
 				Mobile.MobileSuccessResponse,
 				{
 					method: "POST",

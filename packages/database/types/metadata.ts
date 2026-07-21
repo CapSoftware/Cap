@@ -35,6 +35,10 @@ export interface VideoMetadata {
 		| "ERROR"
 		| "SKIPPED";
 	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+	agentUpload?: {
+		state: "pending" | "accepted" | "rejected";
+		rawFileKey?: string;
+	};
 }
 
 export type VideoEditRange = {

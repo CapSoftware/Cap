@@ -526,6 +526,16 @@ export default function CapsScreen() {
 			) : null}
 			<View style={styles.actions}>
 				<ActionButton
+					label="Record Video"
+					accessibilityHint="Opens the camera recorder"
+					onPress={() => router.push("./record")}
+					disabled={creatingFolder}
+					size="sm"
+					style={styles.actionButton}
+					symbol="video.fill"
+					variant="blue"
+				/>
+				<ActionButton
 					label="New Folder"
 					accessibilityLabel={folderCreationAccessibilityLabel}
 					accessibilityHint={folderCreationHint}

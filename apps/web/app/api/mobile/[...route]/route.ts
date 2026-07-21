@@ -32,6 +32,8 @@ import {
 import { and, count, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { Effect, Exit, Layer, Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
+import { resolveMobileRequestOrigin } from "@/lib/mobile-request-origin";
 import { createNotification } from "@/lib/Notification";
 import { apiToHandler } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
@@ -72,6 +74,10 @@ type MobileFolder = (typeof Mobile.MobileFolder)["Type"];
 type MobileOrganization = (typeof Mobile.MobileOrganization)["Type"];
 type MobileFolderCreateInput = (typeof Mobile.MobileFolderCreateInput)["Type"];
 type MobileUploadCreateInput = (typeof Mobile.MobileUploadCreateInput)["Type"];
+type MobileRecordingCreateInput =
+	(typeof Mobile.MobileRecordingCreateInput)["Type"];
+type MobileRecordingCompleteInput =
+	(typeof Mobile.MobileRecordingCompleteInput)["Type"];
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const emailCodePattern = /^\d{6}$/;
@@ -220,6 +226,9 @@ const getDeploymentOrigin = () => {
 	return webUrl;
 };
 
+const getMobilePublicOrigin = (requestUrl: string) =>
+	resolveMobileRequestOrigin(getDeploymentOrigin(), requestUrl);
+
 const getFileExtension = (input: MobileUploadCreateInput) => {
 	const fileNameExtension = input.fileName.split(".").at(-1)?.toLowerCase();
 	if (
@@ -247,9 +256,10 @@ const toMobileCapSummary = (
 	row: CapRow,
 	thumbnailUrl: string | null,
 	viewCount: number,
+	publicOrigin: string,
 ): MobileCapSummary => ({
 	id: row.id,
-	shareUrl: `${serverEnv().WEB_URL}/s/${row.id}`,
+	shareUrl: `${publicOrigin}/s/${row.id}`,
 	title: row.name,
 	createdAt: toIsoString(row.createdAt),
 	updatedAt: toIsoString(row.updatedAt),
@@ -718,6 +728,7 @@ const getCapRows = Effect.fn("Mobile.getCapRows")(function* ({
 
 const getCapsList = Effect.fn("Mobile.getCapsList")(function* (
 	params: (typeof Mobile.MobileCapsListParams)["Type"],
+	publicOrigin: string,
 ) {
 	const page = parsePositiveInteger(params.page, 1, 10_000);
 	const limit = parsePositiveInteger(params.limit, 20, 50);
@@ -751,7 +762,12 @@ const getCapsList = Effect.fn("Mobile.getCapsList")(function* (
 				Effect.map(Option.getOrNull),
 				Effect.catchAll(() => Effect.succeed(null)),
 				Effect.map((thumbnailUrl) =>
-					toMobileCapSummary(row, thumbnailUrl, viewCounts.get(row.id) ?? 0),
+					toMobileCapSummary(
+						row,
+						thumbnailUrl,
+						viewCounts.get(row.id) ?? 0,
+						publicOrigin,
+					),
 				),
 			),
 		{ concurrency: 5 },
@@ -808,6 +824,7 @@ const createMobileFolder = Effect.fn("Mobile.createFolder")(function* (
 
 const getCapById = Effect.fn("Mobile.getCapById")(function* (
 	videoId: Video.VideoId,
+	publicOrigin: string,
 ) {
 	const user = yield* CurrentUser;
 	const database = yield* Database;
@@ -877,7 +894,10 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 		Effect.catchAll(() => Effect.succeed(0)),
 	);
 
-	return { row, cap: toMobileCapSummary(row, thumbnailUrl, analytics) };
+	return {
+		row,
+		cap: toMobileCapSummary(row, thumbnailUrl, analytics, publicOrigin),
+	};
 });
 
 const assertCanCreateFeedback = Effect.fn("Mobile.assertCanCreateFeedback")(
@@ -974,8 +994,9 @@ const getComments = Effect.fn("Mobile.getComments")(function* (
 
 const getCapDetail = Effect.fn("Mobile.getCapDetail")(function* (
 	videoId: Video.VideoId,
+	publicOrigin: string,
 ) {
-	const { row, cap } = yield* getCapById(videoId);
+	const { row, cap } = yield* getCapById(videoId, publicOrigin);
 	const metadata = getMetadataRecord(row.metadata);
 	const comments = yield* getComments(videoId);
 
@@ -985,7 +1006,7 @@ const getCapDetail = Effect.fn("Mobile.getCapDetail")(function* (
 		chapters: getMetadataChapters(metadata),
 		transcriptionStatus: row.transcriptionStatus,
 		comments,
-		shareUrl: `${serverEnv().WEB_URL}/s/${videoId}`,
+		shareUrl: `${publicOrigin}/s/${videoId}`,
 	};
 });
 
@@ -1052,6 +1073,7 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 
 const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 	videoId: Video.VideoId,
+	publicOrigin: string,
 ) {
 	const user = yield* CurrentUser;
 	const videos = yield* Videos;
@@ -1089,7 +1111,7 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 	if (source instanceof Video.SegmentsSource) {
 		return {
 			kind: "hls" as const,
-			url: `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=segments-master`,
+			url: `${publicOrigin}/api/playlist?videoId=${video.id}&videoType=segments-master`,
 			transcriptUrl,
 		};
 	}
@@ -1099,6 +1121,7 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 
 const createUpload = Effect.fn("Mobile.createUpload")(function* (
 	input: MobileUploadCreateInput,
+	publicOrigin: string,
 ) {
 	const user = yield* CurrentUser;
 	const organizationId = input.organizationId ?? user.activeOrganizationId;
@@ -1168,15 +1191,241 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 			"x-amz-meta-source": "cap-mobile-ios",
 		},
 	});
-	const { cap } = yield* getCapById(videoId);
+	const { cap } = yield* getCapById(videoId, publicOrigin);
 
 	return {
 		id: videoId,
-		shareUrl: `${serverEnv().WEB_URL}/s/${videoId}`,
+		shareUrl: `${publicOrigin}/s/${videoId}`,
 		rawFileKey,
 		upload,
 		cap,
 	};
+});
+
+const mobileRecordingSegmentPattern =
+	/^segments\/(?:video|audio)\/(?:init\.mp4|segment_[0-9]{3,6}\.m4s)$/;
+
+const createRecording = Effect.fn("Mobile.createRecording")(function* (
+	input: MobileRecordingCreateInput,
+	publicOrigin: string,
+) {
+	const user = yield* CurrentUser;
+	const organizationId = input.organizationId ?? user.activeOrganizationId;
+	yield* assertOrganizationAccess(organizationId);
+
+	if (
+		input.fileName.trim().length === 0 ||
+		input.fileName.length > 255 ||
+		!Number.isInteger(input.width) ||
+		input.width < 1 ||
+		input.width > 7680 ||
+		!Number.isInteger(input.height) ||
+		input.height < 1 ||
+		input.height > 7680 ||
+		!Number.isInteger(input.fps) ||
+		input.fps < 1 ||
+		input.fps > 120
+	) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
+
+	const database = yield* Database;
+	const storage = yield* Storage;
+	const repo = yield* VideosRepo;
+	const folderId = input.folderId;
+
+	if (folderId) {
+		const [folder] = yield* database.use((db) =>
+			db
+				.select({ id: Db.folders.id })
+				.from(Db.folders)
+				.where(
+					and(
+						eq(Db.folders.id, folderId),
+						eq(Db.folders.organizationId, organizationId),
+						eq(Db.folders.createdById, user.id),
+						isNull(Db.folders.spaceId),
+					),
+				),
+		);
+		if (!folder) return yield* Effect.fail(new HttpApiError.NotFound());
+	}
+
+	const writable = yield* storage.getWritableAccessForUser(
+		user.id,
+		organizationId,
+	);
+	const videoId = yield* repo.create({
+		ownerId: user.id,
+		orgId: organizationId,
+		name: getUploadTitle(input.fileName),
+		public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+		source: { type: "desktopSegments" },
+		bucketId: writable.bucketId,
+		storageIntegrationId: writable.storageIntegrationId,
+		folderId: Option.fromNullable(folderId),
+		width: Option.some(input.width),
+		height: Option.some(input.height),
+		duration: Option.none(),
+		metadata: Option.some({ source: "mobileCamera", fps: input.fps }),
+		transcriptionStatus: Option.none(),
+	});
+
+	yield* database.use((db) =>
+		db.insert(Db.videoUploads).values({
+			videoId,
+			total: 0,
+			mode: "singlepart",
+		}),
+	);
+
+	const { cap } = yield* getCapById(videoId, publicOrigin);
+	return {
+		id: videoId,
+		shareUrl: `${publicOrigin}/s/${videoId}`,
+		cap,
+	};
+});
+
+const getOwnedRecording = Effect.fn("Mobile.getOwnedRecording")(function* (
+	videoId: Video.VideoId,
+) {
+	const user = yield* CurrentUser;
+	const repo = yield* VideosRepo;
+	const maybeVideo = yield* repo.getById(videoId);
+	if (Option.isNone(maybeVideo)) {
+		return yield* Effect.fail(new HttpApiError.NotFound());
+	}
+	const [video] = maybeVideo.value;
+	if (video.ownerId !== user.id) {
+		return yield* Effect.fail(new HttpApiError.NotFound());
+	}
+	return video;
+});
+
+const createRecordingUploadTargets = Effect.fn(
+	"Mobile.createRecordingUploadTargets",
+)(function* (videoId: Video.VideoId, rawSubpaths: readonly string[]) {
+	const subpaths = Array.from(new Set(rawSubpaths));
+	if (
+		subpaths.length === 0 ||
+		subpaths.length > 25 ||
+		subpaths.some((subpath) => !mobileRecordingSegmentPattern.test(subpath))
+	) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
+
+	const video = yield* getOwnedRecording(videoId);
+	if (video.source.type !== "desktopSegments") {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
+
+	const storage = yield* Storage;
+	const [bucket] = yield* storage.getAccessForVideo(video);
+	const entries = yield* Effect.all(
+		subpaths.map((subpath) =>
+			bucket
+				.createUploadTarget(`${video.ownerId}/${video.id}/${subpath}`, {
+					contentType: "video/mp4",
+					method: "put",
+				})
+				.pipe(Effect.map((upload) => [subpath, upload] as const)),
+		),
+		{ concurrency: 6 },
+	);
+
+	return { uploads: Object.fromEntries(entries) };
+});
+
+const completeRecording = Effect.fn("Mobile.completeRecording")(function* (
+	videoId: Video.VideoId,
+	input: MobileRecordingCompleteInput,
+) {
+	const user = yield* CurrentUser;
+	const video = yield* getOwnedRecording(videoId);
+	if (video.source.type === "desktopMP4") {
+		return { success: true as const };
+	}
+	if (video.source.type !== "desktopSegments") {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
+
+	const videoSegments = [...input.videoSegments].sort(
+		(a, b) => a.index - b.index,
+	);
+	const audioSegments = [...input.audioSegments].sort(
+		(a, b) => a.index - b.index,
+	);
+	const validTrack = (segments: typeof videoSegments, required: boolean) =>
+		(!required || segments.length > 0) &&
+		segments.length <= 18_000 &&
+		segments.every(
+			(segment, position) =>
+				Number.isInteger(segment.index) &&
+				segment.index === position + 1 &&
+				Number.isFinite(segment.duration) &&
+				segment.duration > 0 &&
+				segment.duration <= 10,
+		);
+	if (
+		!validTrack(videoSegments, true) ||
+		!validTrack(audioSegments, false) ||
+		!Number.isFinite(input.durationSeconds) ||
+		input.durationSeconds <= 0 ||
+		input.durationSeconds > 43_200 ||
+		!Number.isSafeInteger(input.totalBytes) ||
+		input.totalBytes < 0 ||
+		input.totalBytes > 2_000_000_000_000
+	) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
+
+	const storage = yield* Storage;
+	const database = yield* Database;
+	const [bucket] = yield* storage.getAccessForVideo(video);
+	const source = new Video.SegmentsSource({
+		videoId: video.id,
+		ownerId: video.ownerId,
+	});
+	const manifest = JSON.stringify({
+		version: 2,
+		video_init_uploaded: true,
+		audio_init_uploaded: audioSegments.length > 0,
+		video_segments: videoSegments,
+		audio_segments: audioSegments,
+		is_complete: true,
+	});
+
+	yield* bucket.putObject(source.getManifestKey(), manifest, {
+		contentType: "application/json",
+		contentLength: Buffer.byteLength(manifest),
+	});
+	yield* database.use(async (db) => {
+		await db
+			.update(Db.videos)
+			.set({ duration: input.durationSeconds })
+			.where(and(eq(Db.videos.id, video.id), eq(Db.videos.ownerId, user.id)));
+		await db
+			.update(Db.videoUploads)
+			.set({
+				uploaded: Math.trunc(input.totalBytes),
+				total: Math.trunc(input.totalBytes),
+				updatedAt: new Date(),
+			})
+			.where(eq(Db.videoUploads.videoId, video.id));
+	});
+
+	yield* Effect.tryPromise({
+		try: () =>
+			queueDesktopSegmentsFinalization({ videoId: video.id, userId: user.id }),
+		catch: () => new HttpApiError.InternalServerError(),
+	});
+
+	yield* Effect.sync(() => {
+		revalidatePath("/dashboard/caps");
+		revalidatePath(`/s/${video.id}`);
+	});
+	return { success: true as const };
 });
 
 const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
@@ -1283,20 +1532,28 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("listCaps", ({ urlParams }) =>
-						withMappedErrors(getCapsList(urlParams)),
+					.handle("listCaps", ({ request, urlParams }) =>
+						withMappedErrors(
+							getCapsList(
+								urlParams,
+								getMobilePublicOrigin(request.originalUrl),
+							),
+						),
 					)
 					.handle("createFolder", ({ payload }) =>
 						withMappedErrors(createMobileFolder(payload)),
 					)
-					.handle("getCap", ({ path }) =>
-						withMappedErrors(getCapDetail(path.id)),
+					.handle("getCap", ({ path, request }) =>
+						withMappedErrors(
+							getCapDetail(path.id, getMobilePublicOrigin(request.originalUrl)),
+						),
 					)
-					.handle("updateCapSharing", ({ path, payload }) =>
+					.handle("updateCapSharing", ({ path, payload, request }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
+								const publicOrigin = getMobilePublicOrigin(request.originalUrl);
 								const user = yield* CurrentUser;
-								yield* getCapById(path.id);
+								yield* getCapById(path.id, publicOrigin);
 								yield* database.use((db) =>
 									db
 										.update(Db.videos)
@@ -1308,16 +1565,17 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											),
 										),
 								);
-								const { cap } = yield* getCapById(path.id);
+								const { cap } = yield* getCapById(path.id, publicOrigin);
 								return cap;
 							}),
 						),
 					)
-					.handle("updateCapTitle", ({ path, payload }) =>
+					.handle("updateCapTitle", ({ path, payload, request }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
+								const publicOrigin = getMobilePublicOrigin(request.originalUrl);
 								const user = yield* CurrentUser;
-								yield* getCapById(path.id);
+								yield* getCapById(path.id, publicOrigin);
 								const title = payload.title.trim();
 								if (!title) {
 									return yield* Effect.fail(new HttpApiError.BadRequest());
@@ -1339,16 +1597,17 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 									revalidatePath("/dashboard/shared-caps");
 									revalidatePath(`/s/${path.id}`);
 								});
-								const { cap } = yield* getCapById(path.id);
+								const { cap } = yield* getCapById(path.id, publicOrigin);
 								return cap;
 							}),
 						),
 					)
-					.handle("updateCapPassword", ({ path, payload }) =>
+					.handle("updateCapPassword", ({ path, payload, request }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
+								const publicOrigin = getMobilePublicOrigin(request.originalUrl);
 								const user = yield* CurrentUser;
-								yield* getCapById(path.id);
+								yield* getCapById(path.id, publicOrigin);
 								const trimmedPassword = payload.password?.trim() ?? null;
 								const nextPassword = trimmedPassword
 									? yield* Effect.tryPromise({
@@ -1368,7 +1627,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											),
 										),
 								);
-								const { cap } = yield* getCapById(path.id);
+								const { cap } = yield* getCapById(path.id, publicOrigin);
 								return cap;
 							}),
 						),
@@ -1380,8 +1639,10 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								.pipe(Effect.map(() => ({ success: true as const }))),
 						),
 					)
-					.handle("getPlayback", ({ path }) =>
-						withMappedErrors(getPlayback(path.id)),
+					.handle("getPlayback", ({ path, request }) =>
+						withMappedErrors(
+							getPlayback(path.id, getMobilePublicOrigin(request.originalUrl)),
+						),
 					)
 					.handle("getDownload", ({ path }) =>
 						withMappedErrors(
@@ -1456,8 +1717,10 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("createUpload", ({ payload }) =>
-						withMappedErrors(createUpload(payload)),
+					.handle("createUpload", ({ payload, request }) =>
+						withMappedErrors(
+							createUpload(payload, getMobilePublicOrigin(request.originalUrl)),
+						),
 					)
 					.handle("updateUploadProgress", ({ path, payload }) =>
 						withMappedErrors(
@@ -1551,6 +1814,22 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								return { success: true as const };
 							}),
 						),
+					)
+					.handle("createRecording", ({ payload, request }) =>
+						withMappedErrors(
+							createRecording(
+								payload,
+								getMobilePublicOrigin(request.originalUrl),
+							),
+						),
+					)
+					.handle("createRecordingUploadTargets", ({ path, payload }) =>
+						withMappedErrors(
+							createRecordingUploadTargets(path.id, payload.subpaths),
+						),
+					)
+					.handle("completeRecording", ({ path, payload }) =>
+						withMappedErrors(completeRecording(path.id, payload)),
 					);
 			}),
 		),

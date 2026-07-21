@@ -11,7 +11,7 @@ import {
 } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
-import type { ImageUpload, Video } from "@cap/web-domain";
+import type { Folder, ImageUpload, Video } from "@cap/web-domain";
 import { HttpClient } from "@effect/platform";
 import {
 	faChartSimple,
@@ -33,6 +33,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
+import { FolderInput } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type PropsWithChildren, useEffect, useRef, useState } from "react";
@@ -46,13 +47,14 @@ import {
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import type { MoveLocation } from "@/lib/move-items";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
 } from "@/lib/video-share-clipboard";
 import { usePublicEnv } from "@/utils/public-env";
-
+import { MoveItemsDialog } from "../MoveItemsDialog";
 import { PasswordDialog } from "../PasswordDialog";
 import { SettingsDialog } from "../SettingsDialog";
 import { SharingDialog } from "../SharingDialog";
@@ -131,6 +133,10 @@ export interface CapCardProps extends PropsWithChildren {
 	isDeleting?: boolean;
 	onDragStart?: () => void;
 	onDragEnd?: () => void;
+	canMove?: boolean;
+	moveLocation?: MoveLocation;
+	moveRootLabel?: string;
+	currentFolderId?: Folder.FolderId | null;
 }
 
 export const CapCard = ({
@@ -146,6 +152,10 @@ export const CapCard = ({
 	onSelectToggle,
 	anyCapSelected = false,
 	isDeleting = false,
+	canMove = false,
+	moveLocation,
+	moveRootLabel,
+	currentFolderId = null,
 }: CapCardProps) => {
 	const { activeOrganization } = useDashboardContext();
 	const customDomain = activeOrganization?.organization.customDomain;
@@ -164,6 +174,7 @@ export const CapCard = ({
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
+	const [isMoveDialogOpen, setIsMoveDialogOpen] = useState(false);
 	const { user, setUpgradeModalOpen } = useDashboardContext();
 	const [editUpgradeModalOpen, setEditUpgradeModalOpen] = useState(false);
 
@@ -229,6 +240,7 @@ export const CapCard = ({
 	};
 
 	const isOwner = userId === cap.ownerId;
+	const moveEnabled = Boolean(canMove && moveLocation && moveRootLabel);
 
 	const queryClient = useQueryClient();
 	const uploadProgress = useUploadProgress(
@@ -284,7 +296,7 @@ export const CapCard = ({
 	};
 
 	const handleDragStart = (e: React.DragEvent<HTMLElement>) => {
-		if (anyCapSelected || !isOwner) return;
+		if (anyCapSelected || !moveEnabled) return;
 
 		// Set the data transfer
 		e.dataTransfer.setData(
@@ -411,9 +423,22 @@ export const CapCard = ({
 				hasPassword={passwordProtected}
 				onPasswordUpdated={handlePasswordUpdated}
 			/>
+			{moveEnabled && moveLocation && moveRootLabel && (
+				<MoveItemsDialog
+					open={isMoveDialogOpen}
+					onOpenChange={setIsMoveDialogOpen}
+					location={moveLocation}
+					rootLabel={moveRootLabel}
+					item={{
+						type: "videos",
+						videoIds: [cap.id],
+						currentFolderId,
+					}}
+				/>
+			)}
 			<fieldset
 				aria-label={cap.name}
-				draggable={isOwner && !anyCapSelected}
+				draggable={moveEnabled && !anyCapSelected}
 				onDragStart={handleDragStart}
 				onDragEnd={handleDragEnd}
 				className={clsx(
@@ -424,7 +449,9 @@ export const CapCard = ({
 							? "border-blue-10 hover:border-blue-10"
 							: "hover:border-blue-10",
 					isDragging && "opacity-50",
-					isOwner && !anyCapSelected && "cursor-grab active:cursor-grabbing",
+					moveEnabled &&
+						!anyCapSelected &&
+						"cursor-grab active:cursor-grabbing",
 				)}
 			>
 				{anyCapSelected && !sharedCapCard && (
@@ -552,6 +579,18 @@ export const CapCard = ({
 								<FontAwesomeIcon className="size-3" icon={faLink} />
 								<p className="text-sm text-gray-12">Copy link</p>
 							</DropdownMenuItem>
+							{moveEnabled && (
+								<DropdownMenuItem
+									onClick={(event) => {
+										event.stopPropagation();
+										setIsMoveDialogOpen(true);
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FolderInput className="size-3" />
+									<p className="text-sm text-gray-12">Move</p>
+								</DropdownMenuItem>
+							)}
 							{isOwner && (
 								<>
 									<DropdownMenuItem

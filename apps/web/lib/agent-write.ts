@@ -53,11 +53,6 @@ export const isAgentIdempotencyKey = (value: string | undefined) =>
 	value.length <= 128 &&
 	/^[A-Za-z0-9._-]+$/.test(value);
 
-export const isAgentWriteAccessEnabled = (input: {
-	nodeEnv: string | undefined;
-	enabled: string | undefined;
-}) => input.nodeEnv !== "production" || input.enabled === "true";
-
 const acquireIdempotency = async (tx: Transaction, input: IdempotencyInput) => {
 	const keyHash = hash(input.key);
 	const candidateId = nanoId();

@@ -293,6 +293,41 @@ export const MobileUploadCompleteInput = Schema.Struct({
 	contentLength: Schema.optional(Schema.Number),
 });
 
+export const MobileRecordingCreateInput = Schema.Struct({
+	organizationId: Schema.optional(OrganisationId),
+	folderId: Schema.optional(FolderId),
+	fileName: Schema.String,
+	width: Schema.Number,
+	height: Schema.Number,
+	fps: Schema.Number,
+});
+
+export const MobileRecordingCreateResponse = Schema.Struct({
+	id: VideoId,
+	shareUrl: Schema.String,
+	cap: MobileCapSummary,
+});
+
+export const MobileRecordingUploadTargetsInput = Schema.Struct({
+	subpaths: Schema.Array(Schema.String),
+});
+
+export const MobileRecordingUploadTargetsResponse = Schema.Struct({
+	uploads: Schema.Record({ key: Schema.String, value: UploadTarget }),
+});
+
+export const MobileRecordingSegment = Schema.Struct({
+	index: Schema.Number,
+	duration: Schema.Number,
+});
+
+export const MobileRecordingCompleteInput = Schema.Struct({
+	durationSeconds: Schema.Number,
+	totalBytes: Schema.Number,
+	videoSegments: Schema.Array(MobileRecordingSegment),
+	audioSegments: Schema.Array(MobileRecordingSegment),
+});
+
 export class MobileHttpApi extends HttpApiGroup.make("mobile")
 	.add(
 		HttpApiEndpoint.get("getAuthConfig", "/session/config").addSuccess(
@@ -476,6 +511,38 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.setPayload(MobileUploadCompleteInput)
 			.addSuccess(MobileSuccessResponse)
 			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("createRecording", "/recordings")
+			.setPayload(MobileRecordingCreateInput)
+			.addSuccess(MobileRecordingCreateResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post(
+			"createRecordingUploadTargets",
+			"/recordings/:id/segments/targets",
+		)
+			.setPath(MobileUploadPath)
+			.setPayload(MobileRecordingUploadTargetsInput)
+			.addSuccess(MobileRecordingUploadTargetsResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("completeRecording", "/recordings/:id/complete")
+			.setPath(MobileUploadPath)
+			.setPayload(MobileRecordingCompleteInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
 	) {}

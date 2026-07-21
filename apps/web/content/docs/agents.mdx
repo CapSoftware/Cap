@@ -12,10 +12,10 @@ Cap can be used end to end from an AI agent. Your agent can record your screen, 
 
 1. Select **Copy Agent Setup Prompt** above.
 2. Paste it into Codex, Claude Code, Cursor, OpenCode, or another agent that can run shell commands.
-3. Review the exact CLI and agent-configuration changes it proposes, then approve them.
-4. Complete the focused Cap browser login when prompted and tell the agent what you want to do.
+3. Let the agent install the official CLI and the persistent integration for the current agent. The copied prompt is your authorization for those local setup changes, so you do not need to copy commands or approve the same setup again.
+4. Complete the focused Cap browser login when prompted. Restart the agent if it cannot hot-load the new skill or MCP server, then tell it what you want to do.
 
-The prompt handles CLI discovery or installation, least-privilege authentication, the full Cap skill, local MCP configuration, and setup verification. It then teaches the agent to use Cap as an ongoing recording, video-understanding, collaboration, and organization helper. If you prefer to configure each piece yourself, follow [Set Up Your Agent](/docs/agents/setup).
+The prompt handles CLI discovery or installation, least-privilege authentication, the full Cap skill, local MCP configuration, and setup verification. The installed skill is the durable memory that routes future Cap tasks through Cap CLI or MCP first. The browser is reserved for focused authentication and provider handoffs returned by Cap, not for reading or managing Cap through dashboard automation. If you prefer to configure each piece yourself, follow [Set Up Your Agent](/docs/agents/setup).
 
 ## What your agent can do
 
@@ -48,7 +48,7 @@ Agents should discover the current contract from those commands instead of guess
 
 ### Cap skill
 
-The Cap skill teaches a compatible agent when to reach for Cap and how to handle confirmation, secrets, passwords, and long-running jobs. It deliberately delegates command details to `cap guide --json`, so the instructions stay aligned with the installed version.
+The Cap skill teaches a compatible agent to reach for Cap CLI or MCP before browser automation or computer-use tools, and how to handle confirmation, secrets, passwords, and long-running jobs. Because it is installed in the agent's global skill directory, this routing persists across conversations. It deliberately delegates command details to `cap guide --json`, so the instructions stay aligned with the installed version.
 
 ### Local MCP
 

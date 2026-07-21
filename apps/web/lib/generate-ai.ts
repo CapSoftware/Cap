@@ -12,6 +12,9 @@ type GenerateAiResult = {
 	message: string;
 };
 
+const LEGACY_AI_SUMMARY_FALLBACK =
+	"The AI was unable to generate a proper summary for this content.";
+
 const getAffectedRows = (result: unknown) => {
 	if (Array.isArray(result)) {
 		return (
@@ -73,6 +76,7 @@ export async function startAiGeneration(
 	if (
 		metadata.aiGenerationStatus === "COMPLETE" &&
 		metadata.summary &&
+		metadata.summary !== LEGACY_AI_SUMMARY_FALLBACK &&
 		metadata.chapters
 	) {
 		return {

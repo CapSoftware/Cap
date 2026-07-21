@@ -17,11 +17,16 @@ type JsonNode = ReactTestRendererJSON | ReactTestRendererJSON[] | string | null;
 	globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const renderTree = async (): Promise<JsonNode> => {
+const renderTree = async (node?: React.ReactElement): Promise<JsonNode> => {
 	let renderer: TestRenderer.ReactTestRenderer | null = null;
 	await act(async () => {
 		renderer = TestRenderer.create(
-			<Screen title="Import" subtitle="Import videos from external sources." />,
+			node ?? (
+				<Screen
+					title="Import"
+					subtitle="Import videos from external sources."
+				/>
+			),
 		);
 	});
 	return (renderer as TestRenderer.ReactTestRenderer | null)?.toJSON() ?? null;
@@ -105,5 +110,21 @@ describe("Screen", () => {
 			lineHeight: 20,
 		});
 		expect(hasStyle(tree, { paddingBottom: 32 })).toBe(true);
+	});
+
+	it("can keep focused inputs visible above the keyboard", async () => {
+		const tree = await renderTree(
+			<Screen automaticallyAdjustKeyboardInsets scroll />,
+		);
+
+		expect(tree).toMatchObject({
+			type: "SafeAreaView",
+			children: [
+				{
+					type: "ScrollView",
+					props: { automaticallyAdjustKeyboardInsets: true },
+				},
+			],
+		});
 	});
 });

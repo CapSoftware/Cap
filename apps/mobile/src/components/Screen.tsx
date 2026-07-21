@@ -20,6 +20,7 @@ type ScreenProps = {
 	loading?: boolean;
 	footer?: ReactNode;
 	safeEdges?: Edge[];
+	automaticallyAdjustKeyboardInsets?: boolean;
 };
 
 const defaultSafeEdges: Edge[] = ["top", "left", "right"];
@@ -34,6 +35,7 @@ export function Screen({
 	loading = false,
 	footer,
 	safeEdges = defaultSafeEdges,
+	automaticallyAdjustKeyboardInsets = false,
 }: ScreenProps) {
 	const content = (
 		<>
@@ -58,6 +60,7 @@ export function Screen({
 		<SafeAreaView style={styles.safeArea} edges={safeEdges}>
 			{scroll ? (
 				<ScrollView
+					automaticallyAdjustKeyboardInsets={automaticallyAdjustKeyboardInsets}
 					contentInsetAdjustmentBehavior="automatic"
 					contentContainerStyle={styles.scrollContent}
 					keyboardDismissMode="interactive"

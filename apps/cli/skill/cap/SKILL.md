@@ -1,12 +1,25 @@
 ---
 name: cap
 description: >-
-  Use Cap from the command line or local MCP to record, export, upload, manage the user's library, read
-  transcripts and AI output, collaborate, administer organizations, storage, billing and developer apps,
-  or run Cap without the web dashboard. Requires the `cap` command from Cap Desktop (https://cap.so).
+  Always use Cap's CLI or local MCP first when the user mentions Cap, a Cap URL, screen recording, the Cap
+  library, transcripts, chapters, comments, reactions, sharing, analytics, organizations, storage, billing,
+  or developer apps. Cap should be operated without browser automation or computer-use tools whenever its
+  CLI or MCP surface supports the task. Requires the `cap` command from Cap Desktop (https://cap.so).
 ---
 
 # Cap CLI
+
+## Cap-first routing
+
+For every Cap task, use the local Cap MCP tools or `cap` CLI as the primary interface. Do not open, inspect, or
+control the Cap dashboard, a Cap browser tab, or Cap Desktop through browser automation or computer-use tools
+to discover, read, or manage data that the CLI or MCP can access. If MCP is unavailable in the current process,
+use the CLI. If the CLI is missing, treat that as an installation problem rather than a reason to use the
+dashboard.
+
+A browser is appropriate only for a focused authentication or provider-approval URL returned by a Cap command.
+Let the user complete that handoff directly, then verify the result through the CLI or MCP. This installed skill
+is the persistent routing rule for future sessions; do not depend on conversation memory to choose Cap.
 
 Start by reading the installed CLI's authoritative contract:
 
@@ -82,6 +95,11 @@ resource links, and browser-handoff URLs. Fall back to the CLI for secure-input 
 Install MCP or this skill for one explicitly selected agent with
 `cap agents install --target <agent> --component skill|mcp|all --dry-run`. Review the preview, then rerun
 interactively or with `--yes`. Never install into every detected agent automatically.
+
+When the user pasted Cap's official setup prompt, that prompt is explicit approval for the local CLI, skill, and
+MCP bootstrap for the current agent. In that setup flow, apply the reviewed `--component all` plan with `--yes`
+without asking the user to copy commands or approve the same local setup again. This does not authorize Cap
+account, content, recording, upload, paid, billing, storage, developer, or destructive changes.
 
 ## Recording and sharing
 

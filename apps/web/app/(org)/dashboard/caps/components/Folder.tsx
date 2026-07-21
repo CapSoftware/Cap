@@ -9,12 +9,14 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { resolveMoveLocation } from "@/lib/move-items";
 import { useCopyCollectionLink } from "@/lib/public-collection-client";
 import { Fit, Layout, useRive } from "@/lib/rive";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";
 import { FoldersDropdown } from "./FoldersDropdown";
+import { MoveItemsDialog } from "./MoveItemsDialog";
 
 export type FolderDataType = {
 	name: string;
@@ -24,6 +26,8 @@ export type FolderDataType = {
 	videoCount: number;
 	spaceId?: Space.SpaceIdOrOrganisationId | null;
 	parentId: Folder.FolderId | null;
+	canMove?: boolean;
+	moveRootLabel?: string;
 };
 
 const FolderCard = ({
@@ -34,6 +38,8 @@ const FolderCard = ({
 	parentId,
 	videoCount,
 	spaceId,
+	canMove,
+	moveRootLabel,
 }: FolderDataType) => {
 	const router = useRouter();
 	const { theme } = useTheme();
@@ -45,11 +51,20 @@ const FolderCard = ({
 	const folderRef = useRef<HTMLFieldSetElement>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMovingVideo, setIsMovingVideo] = useState(false);
+	const [isMoveDialogOpen, setIsMoveDialogOpen] = useState(false);
 	const { activeOrganization, setUpgradeModalOpen } = useDashboardContext();
 	const ownerIsPro = Boolean(activeOrganization?.ownerIsPro);
 	const folderHref = spaceId
 		? `/dashboard/spaces/${spaceId}/folder/${id}`
 		: `/dashboard/folder/${id}`;
+	const moveEnabled = canMove ?? !spaceId;
+	const effectiveMoveRootLabel =
+		moveRootLabel ??
+		(!spaceId ? "My Caps" : (activeOrganization?.organization.name ?? "Space"));
+	const moveLocation = resolveMoveLocation(
+		spaceId,
+		activeOrganization?.organization.id,
+	);
 
 	const dragStateRef = useRef({
 		isDragging: false,
@@ -115,7 +130,7 @@ const FolderCard = ({
 	}, [isPublic]);
 
 	useEffect(() => {
-		if (!folderRef.current) return;
+		if (!folderRef.current || !moveEnabled) return;
 
 		const unregister = registerDropTarget(
 			folderRef.current,
@@ -127,9 +142,10 @@ const FolderCard = ({
 					await moveVideoToFolder({
 						videoId: data.id,
 						folderId: id,
-						spaceId: spaceId ?? activeOrganization?.organization.id,
+						spaceId,
 					});
 					toast.success(`"${data.name}" moved to "${name}" folder`);
+					router.refresh();
 				} catch (error) {
 					console.error("Error moving video to folder:", error);
 					toast.error("Failed to move video to folder");
@@ -196,16 +212,10 @@ const FolderCard = ({
 			unregister();
 			document.removeEventListener("dragend", handleDragEnd);
 		};
-	}, [
-		id,
-		name,
-		rive,
-		isDragOver,
-		activeOrganization?.organization.id,
-		spaceId,
-	]);
+	}, [id, name, rive, isDragOver, spaceId, moveEnabled, router]);
 
 	const handleDragOver = (e: React.DragEvent<HTMLFieldSetElement>) => {
+		if (!moveEnabled) return;
 		e.preventDefault();
 		e.stopPropagation();
 
@@ -253,6 +263,7 @@ const FolderCard = ({
 	};
 
 	const handleDrop = async (e: React.DragEvent<HTMLFieldSetElement>) => {
+		if (!moveEnabled) return;
 		e.preventDefault();
 		e.stopPropagation();
 		setIsDragOver(false);
@@ -280,6 +291,7 @@ const FolderCard = ({
 			setIsMovingVideo(true);
 			await moveVideoToFolder({ videoId: capData.id, folderId: id, spaceId });
 			toast.success(`"${capData.name}" moved to "${name}" folder`);
+			router.refresh();
 		} catch (error) {
 			console.error("Error moving video to folder:", error);
 			toast.error("Failed to move video to folder");
@@ -328,6 +340,19 @@ const FolderCard = ({
 				isMovingVideo && "opacity-70",
 			)}
 		>
+			{moveEnabled && (
+				<MoveItemsDialog
+					open={isMoveDialogOpen}
+					onOpenChange={setIsMoveDialogOpen}
+					location={moveLocation}
+					rootLabel={effectiveMoveRootLabel}
+					item={{
+						type: "folder",
+						folderId: id,
+						currentParentId: parentId,
+					}}
+				/>
+			)}
 			<div className="flex flex-1 gap-3 items-center">
 				<Link href={folderHref} prefetch={false} className="shrink-0">
 					<FolderRive
@@ -423,6 +448,8 @@ const FolderCard = ({
 				onCopyPublicLink={async () => {
 					await copyPublicLink();
 				}}
+				canMove={moveEnabled}
+				onMove={() => setIsMoveDialogOpen(true)}
 			/>
 		</fieldset>
 	);

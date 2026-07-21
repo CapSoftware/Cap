@@ -6,6 +6,9 @@ export const OG_HEIGHT = 630;
 export const OG_BLUE = "#4785FF";
 export const OG_BLUE_DEEP = "#2E6FF2";
 export const OG_BLUE_LIGHT = "#ADC9FF";
+/** Dark ink for text on the light sky — deep navy so it stays on-palette. */
+export const OG_INK = "#122142";
+export const OG_INK_SOFT = "rgba(18,33,66,0.74)";
 
 // Light-mode UI palette approximating the desktop app's gray scale.
 const UI = {
@@ -54,35 +57,79 @@ const CloudPuff = ({
 	/>
 );
 
-const Sparkle = ({
+/** A soft glowing star — a point of light with falloff, not a clip-art shape. */
+const Star = ({
 	size,
 	left,
 	top,
-	opacity = 0.9,
+	opacity = 0.7,
 }: {
 	size: number;
 	left: number;
 	top: number;
 	opacity?: number;
 }) => (
-	<svg
-		role="img"
-		aria-label="Sparkle"
-		width={size}
-		height={size}
-		viewBox="0 0 24 24"
-		style={{ position: "absolute", left, top, opacity }}
+	<div
+		style={flex({
+			position: "absolute",
+			left,
+			top,
+			width: size,
+			height: size,
+			opacity,
+			background:
+				"radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.4) 28%, rgba(255,255,255,0) 62%)",
+		})}
+	/>
+);
+
+/** A brighter star with thin lens-flare points and its own halo. */
+const Twinkle = ({
+	size,
+	left,
+	top,
+	opacity = 0.8,
+}: {
+	size: number;
+	left: number;
+	top: number;
+	opacity?: number;
+}) => (
+	<div
+		style={flex({
+			position: "absolute",
+			left,
+			top,
+			width: size,
+			height: size,
+			opacity,
+			alignItems: "center",
+			justifyContent: "center",
+			background:
+				"radial-gradient(circle, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.18) 34%, rgba(255,255,255,0) 62%)",
+		})}
 	>
-		<path
-			d="M12 0 C13.2 8, 16 10.8, 24 12 C16 13.2, 13.2 16, 12 24 C10.8 16, 8 13.2, 0 12 C8 10.8, 10.8 8, 12 0 Z"
-			fill="white"
-		/>
-	</svg>
+		<svg
+			role="img"
+			aria-label="Star"
+			width={Math.round(size * 0.72)}
+			height={Math.round(size * 0.72)}
+			viewBox="0 0 24 24"
+		>
+			<path
+				d="M12 0 Q12.7 10.6 24 12 Q12.7 13.4 12 24 Q11.3 13.4 0 12 Q11.3 10.6 12 0 Z"
+				fill="white"
+			/>
+		</svg>
+	</div>
 );
 
 /**
- * The signature Cap sky — blue gradient, soft cloud banks and glints,
- * recreated as pure vectors so the image needs no remote assets.
+ * The signature Cap sky — dusk blue gradient, a natural drift of stars high
+ * in the sky, soft cloud banks at the horizon. Pure vectors, no remote assets.
+ * Star/cloud placement assumes the shared layout: wordmark top-left, text
+ * column on the left, app card on the right — the upper band (y < 110,
+ * x > 330) and the horizon stay clear of both.
  */
 export const SkyBackground = ({ children }: { children: ReactNode }) => (
 	<div
@@ -91,10 +138,10 @@ export const SkyBackground = ({ children }: { children: ReactNode }) => (
 			height: "100%",
 			position: "relative",
 			fontFamily: "Neue Montreal",
-			background: `linear-gradient(178deg, ${OG_BLUE_DEEP} 0%, ${OG_BLUE} 54%, #86B2FF 100%)`,
+			background: `linear-gradient(172deg, #9DBEFF 0%, ${OG_BLUE_LIGHT} 44%, #C6D9FF 76%, #E1ECFF 100%)`,
 		})}
 	>
-		{/* horizon glow */}
+		{/* horizon glow, behind the card */}
 		<div
 			style={flex({
 				position: "absolute",
@@ -103,7 +150,55 @@ export const SkyBackground = ({ children }: { children: ReactNode }) => (
 				width: "100%",
 				height: "100%",
 				background:
-					"radial-gradient(circle at 18% 118%, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0) 55%)",
+					"radial-gradient(circle at 80% 118%, rgba(255,255,255,0.42) 0%, rgba(255,255,255,0) 52%)",
+			})}
+		/>
+		{/* high atmosphere haze */}
+		<div
+			style={flex({
+				position: "absolute",
+				top: 0,
+				left: 0,
+				width: "100%",
+				height: "100%",
+				background:
+					"radial-gradient(circle at 62% -30%, rgba(120,165,255,0.4) 0%, rgba(120,165,255,0) 55%)",
+			})}
+		/>
+		{/* cloud bank at the horizon, mostly behind the card */}
+		<CloudPuff size={560} left={760} top={440} opacity={0.85} />
+		<CloudPuff size={420} left={980} top={390} opacity={0.8} />
+		<CloudPuff size={360} left={640} top={520} opacity={0.65} />
+		<CloudPuff size={380} left={-150} top={540} opacity={0.35} />
+		{/* distant drift, high and faint */}
+		<CloudPuff size={280} left={310} top={-190} opacity={0.28} />
+		<CloudPuff size={300} left={950} top={-200} opacity={0.3} />
+		{/* stars — denser toward the top of the sky, fading out lower down */}
+		<Star size={12} left={352} top={38} opacity={0.6} />
+		<Star size={7} left={432} top={92} opacity={0.4} />
+		<Star size={15} left={520} top={26} opacity={0.75} />
+		<Star size={8} left={606} top={74} opacity={0.5} />
+		<Star size={6} left={672} top={20} opacity={0.45} />
+		<Star size={12} left={766} top={54} opacity={0.65} />
+		<Star size={8} left={864} top={22} opacity={0.5} />
+		<Star size={6} left={938} top={68} opacity={0.4} />
+		<Star size={9} left={1096} top={88} opacity={0.5} />
+		<Star size={11} left={1152} top={36} opacity={0.6} />
+		<Star size={6} left={288} top={26} opacity={0.35} />
+		<Star size={7} left={36} top={168} opacity={0.35} />
+		<Twinkle size={26} left={478} top={48} opacity={0.7} />
+		<Twinkle size={20} left={702} top={30} opacity={0.55} />
+		<Twinkle size={30} left={1032} top={18} opacity={0.8} />
+		{/* readability scrims — over the scenery, under the content */}
+		<div
+			style={flex({
+				position: "absolute",
+				top: 0,
+				left: 0,
+				width: "100%",
+				height: "100%",
+				background:
+					"linear-gradient(97deg, rgba(255,255,255,0.36) 0%, rgba(255,255,255,0.12) 40%, rgba(255,255,255,0) 62%)",
 			})}
 		/>
 		<div
@@ -114,25 +209,9 @@ export const SkyBackground = ({ children }: { children: ReactNode }) => (
 				width: "100%",
 				height: "100%",
 				background:
-					"radial-gradient(circle at 88% -12%, rgba(211,229,255,0.42) 0%, rgba(211,229,255,0) 48%)",
+					"linear-gradient(0deg, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0) 28%)",
 			})}
 		/>
-		{/* cloud bank, bottom right */}
-		<CloudPuff size={560} left={760} top={430} />
-		<CloudPuff size={420} left={980} top={380} />
-		<CloudPuff size={360} left={640} top={510} opacity={0.9} />
-		{/* wisps, top left */}
-		<CloudPuff size={300} left={-110} top={-150} opacity={0.85} />
-		<CloudPuff size={220} left={130} top={-140} opacity={0.6} />
-		{/* mid drift */}
-		<CloudPuff size={260} left={430} top={-190} opacity={0.4} />
-		<CloudPuff size={300} left={-170} top={420} opacity={0.5} />
-		{/* glints */}
-		<Sparkle size={34} left={210} top={128} opacity={0.95} />
-		<Sparkle size={18} left={306} top={86} opacity={0.7} />
-		<Sparkle size={22} left={1096} top={148} opacity={0.85} />
-		<Sparkle size={14} left={1042} top={220} opacity={0.6} />
-		<Sparkle size={16} left={648} top={64} opacity={0.55} />
 		{children}
 	</div>
 );
@@ -691,7 +770,7 @@ export const RecorderCard = ({ width = 380 }: { width?: number }) => (
 			borderRadius: 16,
 			padding: "14px 16px 16px",
 			gap: 11,
-			boxShadow: "0 30px 60px rgba(20,52,120,0.35)",
+			boxShadow: "0 30px 60px rgba(20,52,120,0.22)",
 		})}
 	>
 		{/* window chrome */}
@@ -783,22 +862,36 @@ export const RecorderCard = ({ width = 380 }: { width?: number }) => (
 	</div>
 );
 
-/** Pill chip used for page categories ("Pricing", "Blog", …). */
+/**
+ * Pill chip used for page categories ("Pricing", "Blog", …), rendered as
+ * Liquid Glass: a mostly-transparent body over the sky with a bright
+ * refracted edge (inset highlights top and bottom) and a soft lift shadow.
+ * Single layer — a translucent fill over a nested "rim" gradient just shows
+ * the rim through the fill and reads as frosted plastic.
+ */
 export const TagChip = ({ label }: { label: string }) => (
 	<div
 		style={flex({
 			alignItems: "center",
 			alignSelf: "flex-start",
-			background: "rgba(255,255,255,0.16)",
-			border: "1px solid rgba(255,255,255,0.38)",
 			borderRadius: 999,
-			padding: "7px 20px",
-			fontSize: 21,
-			fontWeight: 500,
-			color: "white",
+			padding: "8px 21px",
+			background:
+				"linear-gradient(180deg, rgba(255,255,255,0.34) 0%, rgba(255,255,255,0.1) 100%)",
+			border: "1px solid rgba(255,255,255,0.65)",
+			boxShadow:
+				"inset 0 2px 4px rgba(255,255,255,0.7), inset 0 -3px 6px rgba(255,255,255,0.35), 0 8px 20px rgba(46,80,160,0.18)",
 		})}
 	>
-		{label}
+		<span
+			style={{
+				fontSize: 21,
+				fontWeight: 500,
+				color: OG_INK,
+			}}
+		>
+			{label}
+		</span>
 	</div>
 );
 

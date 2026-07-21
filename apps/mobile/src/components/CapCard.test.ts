@@ -271,6 +271,38 @@ describe("CapCard", () => {
 		expect(hasProp(tree, "name", "play.fill")).toBe(false);
 	});
 
+	it("caches thumbnails and falls back cleanly when loading fails", async () => {
+		const renderer = await renderComponent(
+			React.createElement(CapCard, {
+				cap: {
+					...cap,
+					thumbnailUrl: "https://cap.so/thumbnail.png",
+				},
+				onPress: vi.fn(),
+			}),
+		);
+		const [image] = renderer.root.findAll(
+			(node) => String(node.type) === "Image",
+		);
+		if (!image) throw new Error("Thumbnail was not rendered");
+
+		expect(image.props).toMatchObject({
+			cachePolicy: "memory-disk",
+			contentFit: "cover",
+			recyclingKey: cap.id,
+			source: { uri: "https://cap.so/thumbnail.png" },
+		});
+
+		await act(async () => {
+			image.props.onError();
+		});
+
+		expect(
+			renderer.root.findAll((node) => String(node.type) === "Image"),
+		).toHaveLength(0);
+		expect(hasProp(renderer.toJSON(), "fill", "#cecece")).toBe(true);
+	});
+
 	it("exposes active upload progress as a native progressbar", async () => {
 		const renderer = await renderComponent(
 			React.createElement(CapCard, {

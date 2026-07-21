@@ -104,14 +104,19 @@ import {
 	revokeAgentAccessToken,
 } from "@/lib/agent-token";
 import {
+	isAgentUploadAllowedForMeasuredDuration,
+	isAgentUploadAllowedForPlan,
+} from "@/lib/agent-upload-entitlement";
+import {
 	createAgentFeedback,
-	isAgentWriteAccessEnabled,
+	isAgentIdempotencyKey,
 	runAgentExternalMutation,
 	runAgentMutation,
 	updateAgentCap,
 } from "@/lib/agent-write";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import {
 	canChangeOrganizationMemberRole,
@@ -277,6 +282,28 @@ const commonError = (requestId: string, message: string) => ({
 	retryAfterMs: null,
 	requestId,
 });
+
+const AGENT_UPLOAD_PLAN_LIMIT_MESSAGE =
+	"Free plan uploads require a recording duration of 5 minutes or less. Upgrade to Cap Pro to upload longer recordings.";
+const AGENT_UPLOAD_PENDING_FILE_NAME = "agent-upload.mp4";
+const AGENT_UPLOAD_REJECTION_ERROR = "AGENT_UPLOAD_DURATION_LIMIT_EXCEEDED";
+
+const agentUploadPendingRawFileKey = (
+	ownerId: string,
+	videoId: Video.VideoId,
+) => `${ownerId}/${videoId}/${AGENT_UPLOAD_PENDING_FILE_NAME}`;
+
+const agentUploadVerifiedRawFileKey = (
+	ownerId: string,
+	videoId: Video.VideoId,
+	verificationId: string,
+) =>
+	`${ownerId}/${videoId}/verified-upload-${deterministicAgentId(
+		"agent-upload-completion",
+		ownerId,
+		videoId,
+		verificationId,
+	)}.mp4`;
 
 const badRequest = (requestId: string, message: string) =>
 	new Agent.AgentBadRequestError({
@@ -1101,18 +1128,7 @@ const unlockCap = Effect.fn("Agent.unlockCap")(function* (
 	};
 });
 
-const requireAgentWrites = (requestId: string) =>
-	isAgentWriteAccessEnabled({
-		nodeEnv: process.env.NODE_ENV,
-		enabled: process.env.CAP_AGENT_API_WRITE_ENABLED,
-	})
-		? Effect.void
-		: Effect.fail(
-				temporarilyUnavailable(
-					requestId,
-					"Cap agent mutations are currently disabled",
-				),
-			);
+const requireAgentWrites = (_requestId: string) => Effect.void;
 
 const capabilityFailure = (
 	requestId: string,
@@ -6524,13 +6540,39 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								return yield* forbidden(requestId);
 							}
 						}
+						const database = yield* Database;
+						const [account] = yield* database.use((db) =>
+							db
+								.select({
+									stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
+									thirdPartyStripeSubscriptionId:
+										Db.users.thirdPartyStripeSubscriptionId,
+								})
+								.from(Db.users)
+								.where(eq(Db.users.id, principal.id))
+								.limit(1),
+						);
+						if (
+							!isAgentUploadAllowedForPlan({
+								durationSeconds: payload.durationSeconds,
+								isPro: userIsPro(account),
+							})
+						) {
+							return yield* forbidden(
+								requestId,
+								AGENT_UPLOAD_PLAN_LIMIT_MESSAGE,
+							);
+						}
 						const storage = yield* Storage;
 						const writable = yield* storage.getWritableAccessForUser(
 							principal.id,
 							organizationId,
 						);
 						const videoId = Video.VideoId.make(nanoId());
-						const rawFileKey = `${principal.id}/${videoId}/raw-upload.mp4`;
+						const rawFileKey = agentUploadPendingRawFileKey(
+							principal.id,
+							videoId,
+						);
 						const fileTitle = payload.fileName.replace(/\.[^/.]+$/, "").trim();
 						const title = payload.title?.trim() || fileTitle || "Cap Upload";
 						if (title.length > 255) {
@@ -6561,7 +6603,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									width: payload.width,
 									height: payload.height,
 									fps: payload.fps,
-									metadata: { sourceName: payload.fileName },
+									metadata: {
+										sourceName: payload.fileName,
+										agentUpload: { state: "pending" },
+									},
 									createdAt: now,
 									updatedAt: now,
 								});
@@ -6612,9 +6657,14 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireAgentWrites(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "caps:upload", requestId);
-						const expectedRawFileKey = `${principal.id}/${path.id}/raw-upload.mp4`;
+						const expectedRawFileKey = agentUploadPendingRawFileKey(
+							principal.id,
+							path.id,
+						);
+						const legacyRawFileKey = `${principal.id}/${path.id}/raw-upload.mp4`;
 						if (
-							payload.rawFileKey !== expectedRawFileKey ||
+							(payload.rawFileKey !== expectedRawFileKey &&
+								payload.rawFileKey !== legacyRawFileKey) ||
 							(payload.contentLength !== undefined && payload.contentLength < 0)
 						) {
 							return yield* badRequest(
@@ -6622,10 +6672,378 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								"Upload completion is invalid",
 							);
 						}
+						const idempotencyKey = yield* requestIdempotencyKey;
+						if (!isAgentIdempotencyKey(idempotencyKey)) {
+							return yield* badRequest(
+								requestId,
+								"A valid Idempotency-Key header is required",
+							);
+						}
+						const database = yield* Database;
+						const [account] = yield* database.use((db) =>
+							db
+								.select({
+									stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
+									thirdPartyStripeSubscriptionId:
+										Db.users.thirdPartyStripeSubscriptionId,
+								})
+								.from(Db.users)
+								.where(eq(Db.users.id, principal.id))
+								.limit(1),
+						);
+						const [completedUploadRecord] = yield* database.use((db) =>
+							db
+								.select({ id: Db.agentApiIdempotency.id })
+								.from(Db.agentApiIdempotency)
+								.where(
+									and(
+										eq(Db.agentApiIdempotency.userId, principal.id),
+										eq(Db.agentApiIdempotency.operation, "complete_upload"),
+										eq(Db.agentApiIdempotency.state, "complete"),
+										sql`JSON_UNQUOTE(JSON_EXTRACT(${Db.agentApiIdempotency.response}, '$.id')) = ${path.id}`,
+										sql`JSON_UNQUOTE(JSON_EXTRACT(${Db.agentApiIdempotency.response}, '$.rawFileKey')) = ${payload.rawFileKey}`,
+									),
+								)
+								.limit(1),
+						);
+						const isPro = userIsPro(account);
+						const [createUploadRecord] = yield* database.use((db) =>
+							db
+								.select({ id: Db.agentApiIdempotency.id })
+								.from(Db.agentApiIdempotency)
+								.where(
+									and(
+										eq(Db.agentApiIdempotency.userId, principal.id),
+										eq(Db.agentApiIdempotency.operation, "create_upload"),
+										sql`JSON_UNQUOTE(JSON_EXTRACT(${Db.agentApiIdempotency.response}, '$.id')) = ${path.id}`,
+										sql`JSON_UNQUOTE(JSON_EXTRACT(${Db.agentApiIdempotency.response}, '$.rawFileKey')) = ${payload.rawFileKey}`,
+									),
+								)
+								.limit(1),
+						);
+						const [uploadVideo] = yield* database.use((db) =>
+							db
+								.select({
+									id: Db.videos.id,
+									ownerId: Db.videos.ownerId,
+									metadata: Db.videos.metadata,
+								})
+								.from(Db.videos)
+								.where(eq(Db.videos.id, path.id))
+								.limit(1),
+						);
+						if (!uploadVideo) return yield* notFound(requestId);
+						if (uploadVideo.ownerId !== principal.id) {
+							return yield* forbidden(requestId);
+						}
+						const initialAgentUpload =
+							uploadVideo.metadata?.agentUpload ??
+							(completedUploadRecord
+								? ({
+										state: "accepted",
+										rawFileKey: payload.rawFileKey,
+									} as const)
+								: createUploadRecord
+									? ({ state: "pending" } as const)
+									: undefined);
+						if (!initialAgentUpload) return yield* notFound(requestId);
+						if (completedUploadRecord && !uploadVideo.metadata?.agentUpload) {
+							yield* database.use((db) =>
+								db.transaction(async (tx) => {
+									const [lockedVideo] = await tx
+										.select({ metadata: Db.videos.metadata })
+										.from(Db.videos)
+										.where(
+											and(
+												eq(Db.videos.id, path.id),
+												eq(Db.videos.ownerId, principal.id),
+											),
+										)
+										.limit(1)
+										.for("update");
+									if (!lockedVideo || lockedVideo.metadata?.agentUpload) return;
+									await tx
+										.update(Db.videos)
+										.set({
+											metadata: {
+												...(lockedVideo.metadata ?? {}),
+												agentUpload: {
+													state: "accepted",
+													rawFileKey: payload.rawFileKey,
+												},
+											},
+										})
+										.where(eq(Db.videos.id, path.id));
+								}),
+							);
+						}
+						const video = yield* getViewableVideo(path.id);
+						const storage = yield* Storage;
+						const [bucket] = yield* storage.getAccessForVideo(video);
+						const deleteStoredKeyIfPresent = (key: string) =>
+							bucket.listObjects({ prefix: key, maxKeys: 2 }).pipe(
+								Effect.flatMap((page) => {
+									const objects = (page.Contents ?? [])
+										.filter((object) => object.Key === key)
+										.map((object) => ({ Key: object.Key }));
+									return objects.length > 0
+										? bucket.deleteObjects(objects)
+										: Effect.void;
+								}),
+							);
+						const deleteRejectedUpload = () =>
+							Effect.gen(function* () {
+								const prefix = `${principal.id}/${path.id}/`;
+								const keys: string[] = [];
+								let continuationToken: string | undefined;
+								do {
+									const page = yield* bucket.listObjects({
+										prefix,
+										maxKeys: 1_000,
+										continuationToken,
+									});
+									for (const object of page.Contents ?? []) {
+										if (object.Key) keys.push(object.Key);
+									}
+									continuationToken = page.IsTruncated
+										? page.NextContinuationToken
+										: undefined;
+								} while (continuationToken);
+								for (let index = 0; index < keys.length; index += 1_000) {
+									yield* bucket.deleteObjects(
+										keys
+											.slice(index, index + 1_000)
+											.map((key) => ({ Key: key })),
+									);
+								}
+								yield* database.use((db) =>
+									db.transaction(async (tx) => {
+										await tx
+											.delete(Db.comments)
+											.where(eq(Db.comments.videoId, path.id));
+										await tx
+											.delete(Db.notifications)
+											.where(eq(Db.notifications.videoId, path.id));
+										await tx
+											.delete(Db.videoUploads)
+											.where(eq(Db.videoUploads.videoId, path.id));
+										await tx
+											.delete(Db.importedVideos)
+											.where(eq(Db.importedVideos.id, path.id));
+										await tx
+											.delete(Db.sharedVideos)
+											.where(eq(Db.sharedVideos.videoId, path.id));
+										await tx
+											.delete(Db.spaceVideos)
+											.where(eq(Db.spaceVideos.videoId, path.id));
+										await tx
+											.delete(Db.videoEdits)
+											.where(eq(Db.videoEdits.videoId, path.id));
+										await tx
+											.delete(Db.videos)
+											.where(
+												and(
+													eq(Db.videos.id, path.id),
+													eq(Db.videos.ownerId, principal.id),
+												),
+											);
+										await tx
+											.delete(Db.agentApiIdempotency)
+											.where(
+												and(
+													eq(Db.agentApiIdempotency.userId, principal.id),
+													eq(Db.agentApiIdempotency.operation, "create_upload"),
+													sql`JSON_UNQUOTE(JSON_EXTRACT(${Db.agentApiIdempotency.response}, '$.id')) = ${path.id}`,
+												),
+											);
+									}),
+								);
+							});
+						if (initialAgentUpload.state === "rejected") {
+							yield* deleteRejectedUpload();
+							return yield* forbidden(
+								requestId,
+								AGENT_UPLOAD_PLAN_LIMIT_MESSAGE,
+							);
+						}
+						let acceptedRawFileKey =
+							initialAgentUpload.state === "accepted"
+								? initialAgentUpload.rawFileKey
+								: undefined;
+						if (
+							initialAgentUpload.state === "accepted" &&
+							!acceptedRawFileKey
+						) {
+							return yield* temporarilyUnavailable(
+								requestId,
+								"The upload completion state is unavailable",
+							);
+						}
+						if (initialAgentUpload.state === "pending") {
+							const candidateRawFileKey = agentUploadVerifiedRawFileKey(
+								principal.id,
+								path.id,
+								requestId,
+							);
+							yield* bucket.copyObject(
+								`${bucket.bucketName}/${payload.rawFileKey}`,
+								candidateRawFileKey,
+							);
+							let measuredDuration: number | undefined;
+							if (!isPro) {
+								const candidateUrl = yield* bucket.getInternalSignedObjectUrl(
+									candidateRawFileKey,
+									{ expiresIn: 5 * 60 },
+								);
+								const measured = yield* Effect.tryPromise(() =>
+									probeVideoViaMediaServer(candidateUrl, { maxRetries: 0 }),
+								).pipe(
+									Effect.catchAll(() =>
+										deleteStoredKeyIfPresent(candidateRawFileKey).pipe(
+											Effect.zipRight(
+												Effect.fail(
+													temporarilyUnavailable(
+														requestId,
+														"Cap could not verify the uploaded recording duration. Retry the completion request.",
+													),
+												),
+											),
+										),
+									),
+								);
+								measuredDuration = measured.duration;
+							}
+							const allowed = isAgentUploadAllowedForMeasuredDuration({
+								durationSeconds: measuredDuration ?? Number.NaN,
+								isPro,
+							});
+							const decision = yield* database.use((db) =>
+								db.transaction(async (tx) => {
+									const [lockedVideo] = await tx
+										.select({
+											id: Db.videos.id,
+											ownerId: Db.videos.ownerId,
+											metadata: Db.videos.metadata,
+										})
+										.from(Db.videos)
+										.where(eq(Db.videos.id, path.id))
+										.limit(1)
+										.for("update");
+									if (!lockedVideo || lockedVideo.ownerId !== principal.id) {
+										return { state: "not_found" as const };
+									}
+									const agentUpload =
+										lockedVideo.metadata?.agentUpload ??
+										(createUploadRecord
+											? ({ state: "pending" } as const)
+											: undefined);
+									if (!agentUpload) return { state: "not_found" as const };
+									if (agentUpload.state === "accepted") {
+										return agentUpload.rawFileKey
+											? {
+													state: "accepted" as const,
+													rawFileKey: agentUpload.rawFileKey,
+												}
+											: { state: "invalid" as const };
+									}
+									if (agentUpload.state === "rejected") {
+										return { state: "rejected" as const };
+									}
+									const [upload] = await tx
+										.select({ videoId: Db.videoUploads.videoId })
+										.from(Db.videoUploads)
+										.where(eq(Db.videoUploads.videoId, path.id))
+										.limit(1)
+										.for("update");
+									if (!upload) return { state: "not_found" as const };
+									if (!allowed) {
+										await tx
+											.update(Db.videos)
+											.set({
+												metadata: {
+													...(lockedVideo.metadata ?? {}),
+													agentUpload: { state: "rejected" },
+												},
+											})
+											.where(eq(Db.videos.id, path.id));
+										await tx
+											.update(Db.videoUploads)
+											.set({
+												phase: "error",
+												processingMessage: "Upload rejected",
+												processingError: AGENT_UPLOAD_REJECTION_ERROR,
+												updatedAt: new Date(),
+											})
+											.where(eq(Db.videoUploads.videoId, path.id));
+										return { state: "rejected" as const };
+									}
+									await tx
+										.update(Db.videos)
+										.set({
+											...(measuredDuration === undefined
+												? {}
+												: { duration: measuredDuration }),
+											metadata: {
+												...(lockedVideo.metadata ?? {}),
+												agentUpload: {
+													state: "accepted",
+													rawFileKey: candidateRawFileKey,
+												},
+											},
+										})
+										.where(eq(Db.videos.id, path.id));
+									if (payload.contentLength !== undefined) {
+										await tx
+											.update(Db.videoUploads)
+											.set({
+												uploaded: payload.contentLength,
+												total: payload.contentLength,
+												updatedAt: new Date(),
+											})
+											.where(eq(Db.videoUploads.videoId, path.id));
+									}
+									return {
+										state: "accepted" as const,
+										rawFileKey: candidateRawFileKey,
+									};
+								}),
+							);
+							if (decision.state === "not_found") {
+								yield* deleteStoredKeyIfPresent(candidateRawFileKey);
+								return yield* notFound(requestId);
+							}
+							if (decision.state === "invalid") {
+								yield* deleteStoredKeyIfPresent(candidateRawFileKey);
+								return yield* temporarilyUnavailable(
+									requestId,
+									"The upload completion state is unavailable",
+								);
+							}
+							if (decision.state === "rejected") {
+								yield* deleteRejectedUpload();
+								return yield* forbidden(
+									requestId,
+									AGENT_UPLOAD_PLAN_LIMIT_MESSAGE,
+								);
+							}
+							acceptedRawFileKey = decision.rawFileKey;
+							if (acceptedRawFileKey !== candidateRawFileKey) {
+								yield* deleteStoredKeyIfPresent(candidateRawFileKey);
+							}
+						}
+						if (!acceptedRawFileKey) {
+							return yield* temporarilyUnavailable(
+								requestId,
+								"The upload completion state is unavailable",
+							);
+						}
+						if (payload.rawFileKey !== acceptedRawFileKey) {
+							yield* deleteStoredKeyIfPresent(payload.rawFileKey);
+						}
 						const state = yield* runAgentMutation({
 							principal,
 							operation: "complete_upload",
-							idempotencyKey: yield* requestIdempotencyKey,
+							idempotencyKey,
 							request: { path, payload },
 							requestId,
 							decodeReplay: Schema.decodeUnknownSync(
@@ -6637,6 +7055,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										id: Db.videos.id,
 										ownerId: Db.videos.ownerId,
 										bucketId: Db.videos.bucket,
+										metadata: Db.videos.metadata,
 									})
 									.from(Db.videos)
 									.where(
@@ -6648,6 +7067,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (!video) return { state: "not_found" };
+								const agentUpload = video.metadata?.agentUpload;
+								if (
+									agentUpload?.state !== "accepted" ||
+									agentUpload.rawFileKey !== acceptedRawFileKey
+								) {
+									return { state: "conflict" };
+								}
 								const [upload] = await tx
 									.select({ videoId: Db.videoUploads.videoId })
 									.from(Db.videoUploads)
@@ -6655,23 +7081,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (!upload) return { state: "not_found" };
-								if (payload.contentLength !== undefined) {
-									await tx
-										.update(Db.videoUploads)
-										.set({
-											uploaded: payload.contentLength,
-											total: payload.contentLength,
-											updatedAt: new Date(),
-										})
-										.where(eq(Db.videoUploads.videoId, path.id));
-								}
 								return {
 									state: "success",
 									response: {
 										id: video.id,
 										ownerId: video.ownerId,
 										bucketId: video.bucketId,
-										rawFileKey: expectedRawFileKey,
+										rawFileKey: agentUpload.rawFileKey,
 										requestId,
 									},
 								};

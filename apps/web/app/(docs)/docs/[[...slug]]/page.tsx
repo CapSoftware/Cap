@@ -23,25 +23,36 @@ export async function generateMetadata(
 	const doc = getDocBySlug(slug);
 	if (!doc) return;
 
-	const { title, summary: description, image } = doc.metadata;
+	const { title, summary, image } = doc.metadata;
+	// "/docs" resolves to the Introduction doc, but "Introduction" makes a
+	// meaningless share card — present the landing page as the docs home.
+	const isDocsHome = slug === "introduction";
+	const pageTitle = isDocsHome ? "Cap Documentation" : `${title} - Cap Docs`;
+	const description = summary || title;
 	const ogImage = image
 		? `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}`
-		: ogImageUrl({ title, tag: "Docs", description: description || undefined });
+		: ogImageUrl({
+				title: isDocsHome ? "Cap Documentation" : title,
+				tag: "Docs",
+				description: isDocsHome
+					? "Guides for recording, editing, sharing, and self-hosting Cap."
+					: summary || undefined,
+			});
 
 	return {
-		title: `${title} - Cap Docs`,
-		description: description || title,
+		title: pageTitle,
+		description,
 		openGraph: {
-			title: `${title} - Cap Docs`,
-			description: description || title,
+			title: pageTitle,
+			description,
 			type: "article",
 			url: `${buildEnv.NEXT_PUBLIC_WEB_URL}/docs/${slug}`,
-			images: [{ url: ogImage, width: 1200, height: 630, alt: title }],
+			images: [{ url: ogImage, width: 1200, height: 630, alt: pageTitle }],
 		},
 		twitter: {
 			card: "summary_large_image",
-			title: `${title} - Cap Docs`,
-			description: description || title,
+			title: pageTitle,
+			description,
 			images: [ogImage],
 		},
 	};

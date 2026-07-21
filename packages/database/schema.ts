@@ -869,6 +869,7 @@ export const agentApiOperations = mysqlTable(
 				"set_organization_domain",
 				"remove_organization_domain",
 				"verify_organization_domain",
+				"transfer_org_content",
 			],
 		}).notNull(),
 		resourceId: nanoId("resourceId").notNull(),

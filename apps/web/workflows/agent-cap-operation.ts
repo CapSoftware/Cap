@@ -546,6 +546,11 @@ export async function agentCapOperationWorkflow(input: {
 		if (operation.kind === "import_loom") {
 			throw new FatalError("Loom imports use the Loom import workflow");
 		}
+		if (operation.kind === "transfer_org_content") {
+			throw new FatalError(
+				"Content transfers use the content transfer workflow",
+			);
+		}
 		const payload = operation.payload as OrganizationOperationPayload;
 		if (operation.kind === "delete_organization") {
 			await deleteOrganization(input.operationId, payload);

@@ -4,30 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	agentMutationRequestHash,
 	isAgentIdempotencyKey,
-	isAgentWriteAccessEnabled,
 } from "@/lib/agent-write";
 
 vi.mock("server-only", () => ({}));
 
 describe("agent write safety", () => {
-	it("requires a separate production write switch", () => {
-		expect(
-			isAgentWriteAccessEnabled({
-				nodeEnv: "production",
-				enabled: undefined,
-			}),
-		).toBe(false);
-		expect(
-			isAgentWriteAccessEnabled({
-				nodeEnv: "production",
-				enabled: "true",
-			}),
-		).toBe(true);
-		expect(
-			isAgentWriteAccessEnabled({ nodeEnv: "test", enabled: undefined }),
-		).toBe(true);
-	});
-
 	it("accepts bounded opaque idempotency keys", () => {
 		expect(isAgentIdempotencyKey("0f64ed31-88d5-48bf-b364-a2af210dfa90")).toBe(
 			true,
