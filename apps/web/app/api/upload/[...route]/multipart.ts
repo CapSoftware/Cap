@@ -4,6 +4,7 @@ import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import {
 	Database,
+	MAX_UPLOAD_BYTES,
 	makeCurrentUserLayer,
 	provideOptionalAuth,
 	Storage,
@@ -294,7 +295,10 @@ app.post(
 					z.object({
 						partNumber: z.number(),
 						etag: z.string(),
-						size: z.number(),
+						// A non-negative integer (bytes) so neither a negative nor a
+						// fractional size can drag the summed total below the cap and
+						// bypass the upload-size limit.
+						size: z.number().int().nonnegative(),
 					}),
 				),
 				durationInSecs: stringOrNumberOptional,
@@ -401,6 +405,63 @@ app.post(
 							: "Recording exceeds the free plan duration limit. Upgrade to Cap Pro to upload longer recordings.",
 					);
 				}
+			}
+
+			// Server-side backstop for the maximum upload size. Presigned POST URLs
+			// enforce a content-length-range policy, but presigned PUT part URLs
+			// cannot enforce a total size, so reject an oversized assembled upload
+			// here before persisting (and before paying to assemble it). Part sizes
+			// are client-reported, so this raises the bar rather than enforcing
+			// authoritatively.
+			let totalUploadSize = 0;
+			for (const part of parts) {
+				totalUploadSize += part.size;
+				if (totalUploadSize > MAX_UPLOAD_BYTES) break;
+			}
+			if (totalUploadSize > MAX_UPLOAD_BYTES) {
+				// Avoid leaving the parts as incomplete-MPU storage and a stale
+				// videoUploads row, mirroring the free-plan rejection cleanup. Each
+				// step is caught independently so a failed abort doesn't skip the DB
+				// cleanup (and vice versa). The 413 stands regardless of either.
+				yield* Effect.gen(function* () {
+					const [bucket] = yield* Storage.getAccessForVideo(video);
+					yield* bucket.multipart
+						.abort(fileKey, uploadId)
+						.pipe(
+							Effect.catchAll((error) =>
+								Effect.logError(
+									"Failed to abort rejected oversized multipart upload",
+									error,
+								),
+							),
+						);
+					yield* db
+						.use((db) =>
+							db
+								.delete(Db.videoUploads)
+								.where(eq(Db.videoUploads.videoId, videoId)),
+						)
+						.pipe(
+							Effect.catchAll((error) =>
+								Effect.logError(
+									"Failed to delete videoUploads row for rejected upload",
+									error,
+								),
+							),
+						);
+				}).pipe(
+					Effect.catchAll((error) =>
+						Effect.logError(
+							"Failed to clean up rejected oversized multipart upload",
+							error,
+						),
+					),
+				);
+
+				c.status(413);
+				return c.text(
+					"Upload exceeds the maximum allowed size and cannot be completed.",
+				);
 			}
 
 			return yield* Effect.gen(function* () {

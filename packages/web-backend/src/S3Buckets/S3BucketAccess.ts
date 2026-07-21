@@ -14,6 +14,11 @@ import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 const DEFAULT_PRESIGNED_GET_EXPIRES_SECONDS = 3600;
 const DEFAULT_PRESIGNED_PUT_EXPIRES_SECONDS = 3600;
 
+// Upper bound on a single upload to prevent unbounded storage abuse. Generous
+// on purpose so legitimate long/high-bitrate recordings are never blocked;
+// tune here if the product ever needs a larger ceiling.
+export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024 * 1024; // 100 GiB
+
 type NodeReadableWebStream = Parameters<typeof Readable.fromWeb>[0];
 
 const wrapS3Promise = <T>(
@@ -268,13 +273,49 @@ export const createS3BucketAccess = Effect.gen(function* () {
 		) =>
 			wrapS3Promise(
 				provider.getPublic.pipe(
-					Effect.map((client) =>
-						createPresignedPost(client, {
+					Effect.map((client) => {
+						// Enforce an upper bound on the uploaded object size. The POST
+						// policy rejects the upload at S3 if the body exceeds this,
+						// closing the unbounded-storage hole for presigned POSTs. We emit
+						// exactly one content-length-range whose max never exceeds
+						// MAX_UPLOAD_BYTES, even if a caller supplied a looser one, so a
+						// caller can tighten but never raise/disable the cap.
+						const callerConditions = args.Conditions ?? [];
+						const isLengthRange = (condition: unknown): boolean =>
+							Array.isArray(condition) &&
+							condition[0] === "content-length-range";
+						const callerRange = callerConditions.find(isLengthRange) as
+							| [unknown, unknown, unknown]
+							| undefined;
+						const callerMin =
+							callerRange &&
+							typeof callerRange[1] === "number" &&
+							Number.isFinite(callerRange[1])
+								? Math.max(0, callerRange[1])
+								: 0;
+						const callerMax =
+							callerRange &&
+							typeof callerRange[2] === "number" &&
+							Number.isFinite(callerRange[2])
+								? Math.max(0, callerRange[2])
+								: MAX_UPLOAD_BYTES;
+						const otherConditions = callerConditions.filter(
+							(condition) => !isLengthRange(condition),
+						);
+						return createPresignedPost(client, {
 							...args,
+							Conditions: [
+								[
+									"content-length-range",
+									callerMin,
+									Math.min(callerMax, MAX_UPLOAD_BYTES),
+								],
+								...otherConditions,
+							],
 							Bucket: provider.bucket,
 							Key: key,
-						}),
-					),
+						});
+					}),
 				),
 			),
 		multipart: {

@@ -12,6 +12,7 @@ export { Organisations } from "./Organisations/index.ts";
 export { OrganisationsPolicy } from "./Organisations/OrganisationsPolicy.ts";
 export * from "./Rpcs.ts";
 export { S3Buckets } from "./S3Buckets/index.ts";
+export { MAX_UPLOAD_BYTES } from "./S3Buckets/S3BucketAccess.ts";
 export { Spaces } from "./Spaces/index.ts";
 export { SpacesPolicy } from "./Spaces/SpacesPolicy.ts";
 export * from "./Storage/GoogleDrive.ts";
