@@ -30,6 +30,11 @@ const BOOTSTRAP_FLAG = "__capExtensionContentBootstrap";
 const INSTALLED_ATTRIBUTE = "data-cap-chrome-extension-installed";
 const READY_EVENT = "cap-chrome-extension-ready";
 const OPEN_EVENT = "cap-chrome-extension-open";
+// Mirrors of the overlay module's own constants (the bootstrap must stay a
+// few KB, so it cannot import them): the root the overlay mounts under and
+// the DOM event that makes a previous generation unmount cleanly.
+const OVERLAY_ROOT_ID = "cap-extension-recorder-overlay";
+const OVERLAY_TEARDOWN_EVENT = "cap-extension-overlay-teardown";
 
 const isCapWebOrigin = () => {
 	const { hostname, protocol } = window.location;
@@ -170,6 +175,18 @@ const bootstrap = (isCurrent: () => boolean) => {
 
 	chrome.runtime.onMessage.addListener(handleRuntimeMessage);
 	chrome.storage.onChanged.addListener(handleStorageChange);
+
+	// A previous generation's UI may still be in the DOM: its embedded
+	// extension iframes died with the old instance (a black camera bubble, a
+	// dead panel), the extension reload wiped the session state that would
+	// have triggered a fresh mount, and the old watcher sees a revived
+	// chrome object so it never self-destructs. Sweep it here — the wake
+	// checks below remount fresh UI whenever current state warrants it.
+	const staleRoot = document.getElementById(OVERLAY_ROOT_ID);
+	if (staleRoot) {
+		staleRoot.dispatchEvent(new Event(OVERLAY_TEARDOWN_EVENT));
+		staleRoot.remove();
+	}
 
 	if (isCapWebOrigin()) {
 		document.documentElement.setAttribute(INSTALLED_ATTRIBUTE, "true");
