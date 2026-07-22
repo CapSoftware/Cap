@@ -31,26 +31,55 @@
 		"identity",
 		"offscreen",
 		"scripting",
+		"sidePanel",
 		"storage",
 		"tabCapture"
 	],
-	"host_permissions": ["http://*/*", "https://*/*", "file:///*"],
+	"host_permissions": [
+		"http://*/*",
+		"https://*/*",
+		"file:///*"
+	],
 	"content_scripts": [
 		{
-			"matches": ["http://*/*", "https://*/*", "file:///*"],
-			"js": ["assets/content-bootstrap.js"],
+			"matches": [
+				"http://*/*",
+				"https://*/*",
+				"file:///*"
+			],
+			"js": [
+				"assets/content-bootstrap.js"
+			],
 			"run_at": "document_idle"
 		}
 	],
 	"web_accessible_resources": [
 		{
-			"resources": ["icons/*", "content/overlay.js", "welcome.html"],
-			"matches": ["http://*/*", "https://*/*", "file:///*"]
+			"resources": [
+				"icons/*",
+				"content/overlay.js",
+				"welcome.html"
+			],
+			"matches": [
+				"http://*/*",
+				"https://*/*",
+				"file:///*"
+			]
 		},
 		{
-			"resources": ["camera-preview.html", "popup.html"],
-			"matches": ["http://*/*", "https://*/*", "file:///*"],
+			"resources": [
+				"camera-preview.html",
+				"popup.html"
+			],
+			"matches": [
+				"http://*/*",
+				"https://*/*",
+				"file:///*"
+			],
 			"use_dynamic_url": true
 		}
-	]
+	],
+	"side_panel": {
+		"default_path": "popup-window.html"
+	}
 }
