@@ -371,6 +371,29 @@ const sendOverlay = async (
 	return sendOverlayMessageWithRetries(tabId, message);
 };
 
+// Delivery for paths that may still need sidePanel.open afterwards: awaits
+// on chrome.* callbacks carry the user's click gesture through, but a single
+// setTimeout voids it — so this variant skips the timed retry loop. The
+// bootstrap content script acknowledges synchronously once injected, making
+// one direct send, one inject, and one post-inject send sufficient.
+const sendOverlayGestureSafe = async (
+	tabId: number,
+	message: OverlayMessage,
+) => {
+	if (await sendOverlayMessage(tabId, message)) return true;
+
+	const injected = await new Promise<boolean>((resolve) => {
+		chrome.scripting.executeScript(
+			{ target: { tabId }, files: ["assets/content-bootstrap.js"] },
+			() => resolve(!chrome.runtime.lastError),
+		);
+	});
+
+	if (!injected) return false;
+
+	return sendOverlayMessage(tabId, message);
+};
+
 const canInjectIntoTab = (tab: chrome.tabs.Tab) => {
 	if (tab.id === undefined) return false;
 	if (!tab.url) return true;
@@ -748,12 +771,19 @@ const openRecorderPanel = async (actionTab?: chrome.tabs.Tab) => {
 		await closeAllExtensionUi();
 		return;
 	}
+	if (standalonePanelOpen) {
+		closeStandalonePanel();
+		return;
+	}
 
 	const currentStatus = await syncRecordingStatus().catch(
 		() => recordingStatus,
 	);
 	for (const tab of await getRecorderPanelTabs(actionTab)) {
-		const delivered = await sendOverlay(tab.id, {
+		// Gesture-safe delivery: if this tab cannot take the panel the side
+		// panel below still needs the click gesture, which a timed retry
+		// would void.
+		const delivered = await sendOverlayGestureSafe(tab.id, {
 			type: "overlay-panel-toggle",
 		});
 		if (delivered) {
@@ -768,13 +798,14 @@ const openRecorderPanel = async (actionTab?: chrome.tabs.Tab) => {
 		}
 	}
 
-	// Pages we cannot inject into (chrome://, the Web Store, etc.) still get a
-	// recorder — docked in the browser's side panel so it stays attached to
-	// the window the user is looking at instead of floating as a separate
-	// popup. sidePanel.open consumes the user gesture that reached this
-	// handler; every await above it is a chrome.* call, which preserves that
-	// gesture. If Chrome still rejects (gesture expired, API missing), fall
-	// back to the standalone window.
+	// No tab could take the panel — chrome:// pages, the Web Store, or an
+	// injectable page whose content script is not answering. Dock the
+	// recorder in the browser's side panel so it stays attached to the window
+	// the user is looking at instead of floating as a separate popup.
+	// sidePanel.open consumes the user gesture that reached this handler;
+	// every await above it is a chrome.* call, which preserves that gesture.
+	// If Chrome still rejects (gesture expired, API missing), fall back to
+	// the standalone window.
 	try {
 		const windowId =
 			actionTab?.windowId ?? (await getActiveTab())?.windowId;
