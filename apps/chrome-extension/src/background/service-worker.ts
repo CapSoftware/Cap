@@ -750,7 +750,22 @@ const openRecorderPanel = async (actionTab?: chrome.tabs.Tab) => {
 	}
 
 	// Pages we cannot inject into (chrome://, the Web Store, etc.) still get a
-	// recorder via a standalone popup window.
+	// recorder — docked in the browser's side panel so it stays attached to
+	// the window the user is looking at instead of floating as a separate
+	// popup. sidePanel.open consumes the user gesture that reached this
+	// handler; every await above it is a chrome.* call, which preserves that
+	// gesture. If Chrome still rejects (gesture expired, API missing), fall
+	// back to the standalone window.
+	try {
+		const windowId =
+			actionTab?.windowId ?? (await getActiveTab())?.windowId;
+		if (windowId !== undefined && chrome.sidePanel) {
+			await chrome.sidePanel.open({ windowId });
+			return;
+		}
+	} catch {
+		// Fall through to the popup window.
+	}
 	chrome.windows.create({
 		url: chrome.runtime.getURL(POPUP_URL),
 		type: "popup",
