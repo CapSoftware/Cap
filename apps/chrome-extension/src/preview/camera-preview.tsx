@@ -25,6 +25,9 @@ const CONNECT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
 // Remote tracks mute briefly during renegotiation; only a sustained mute
 // means the sender's camera stream is gone.
 const REMOTE_TRACK_MUTE_GRACE_MS = 2000;
+// "disconnected" can be a transient blip that recovers to "connected" on its
+// own; only a sustained loss warrants tearing the session down to reconnect.
+const PEER_DISCONNECT_GRACE_MS = 2000;
 
 type ParentMessage =
 	| {
@@ -448,6 +451,7 @@ function App() {
 		let disposed = false;
 		let retryTimer: number | null = null;
 		let muteTimer: number | null = null;
+		let disconnectTimer: number | null = null;
 
 		const clearRetryTimer = () => {
 			if (retryTimer !== null) {
@@ -460,6 +464,13 @@ function App() {
 			if (muteTimer !== null) {
 				window.clearTimeout(muteTimer);
 				muteTimer = null;
+			}
+		};
+
+		const clearDisconnectTimer = () => {
+			if (disconnectTimer !== null) {
+				window.clearTimeout(disconnectTimer);
+				disconnectTimer = null;
 			}
 		};
 
@@ -486,6 +497,9 @@ function App() {
 		) => {
 			const reconnect = () => {
 				if (disposed || peerRef.current !== peer) return;
+				clearRetryTimer();
+				clearMuteTimer();
+				clearDisconnectTimer();
 				stopPreview();
 				void startPreview(0);
 			};
@@ -502,12 +516,25 @@ function App() {
 				track.addEventListener("unmute", clearMuteTimer);
 			}
 			peer.addEventListener("connectionstatechange", () => {
+				if (peer.connectionState === "connected") {
+					clearDisconnectTimer();
+					return;
+				}
 				if (
 					peer.connectionState === "failed" ||
-					peer.connectionState === "disconnected" ||
 					peer.connectionState === "closed"
 				) {
 					reconnect();
+					return;
+				}
+				if (peer.connectionState === "disconnected") {
+					clearDisconnectTimer();
+					disconnectTimer = window.setTimeout(() => {
+						disconnectTimer = null;
+						if (peer.connectionState === "disconnected") {
+							reconnect();
+						}
+					}, PEER_DISCONNECT_GRACE_MS);
 				}
 			});
 		};
@@ -594,6 +621,7 @@ function App() {
 			disposed = true;
 			clearRetryTimer();
 			clearMuteTimer();
+			clearDisconnectTimer();
 		};
 	}, [
 		previewEnabled,
