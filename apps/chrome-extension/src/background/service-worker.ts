@@ -91,7 +91,9 @@ let recordingStartInFlight: Promise<OffscreenResponse> | null = null;
 let standalonePanelOpen = false;
 
 const closeStandalonePanel = () => {
-	if (!standalonePanelOpen) return;
+	// Unconditional: the flag is best-effort (a restarted worker boots with
+	// false while the panel survives), and a close broadcast with no panel
+	// listening is harmless.
 	standalonePanelOpen = false;
 	chrome.runtime.sendMessage(
 		{ target: "standalone-panel", type: "close" },
@@ -100,6 +102,30 @@ const closeStandalonePanel = () => {
 		},
 	);
 };
+
+// Rebuild the flag after a worker restart: the panel outlives this worker's
+// memory, and without the flag the next icon click would re-open instead of
+// toggling the visible recorder closed.
+const refreshStandalonePanelFlag = () => {
+	try {
+		chrome.runtime.getContexts(
+			{
+				contextTypes: [
+					"SIDE_PANEL",
+					"TAB",
+				] as chrome.runtime.ContextType[],
+				documentUrls: [chrome.runtime.getURL(POPUP_URL)],
+			},
+			(contexts) => {
+				if (chrome.runtime.lastError) return;
+				standalonePanelOpen = (contexts ?? []).length > 0;
+			},
+		);
+	} catch {
+		// Fall back to the message-driven flag alone.
+	}
+};
+refreshStandalonePanelFlag();
 
 // Content scripts read the webcam "dismissed" flag and the cached preview
 // frame from chrome.storage.session, which is only exposed to trusted
@@ -811,6 +837,9 @@ const openRecorderPanel = async (actionTab?: chrome.tabs.Tab) => {
 			actionTab?.windowId ?? (await getActiveTab())?.windowId;
 		if (windowId !== undefined && chrome.sidePanel) {
 			await chrome.sidePanel.open({ windowId });
+			// Set eagerly: the panel page pings standalone-panel-opened on load,
+			// but the toggle must work even if that message loses a race.
+			standalonePanelOpen = true;
 			return;
 		}
 	} catch (error) {
@@ -1905,7 +1934,9 @@ chrome.action.onClicked.addListener((tab) => {
 			return;
 		}
 		chrome.sidePanel.open({ windowId: tab.windowId }).then(
-			() => undefined,
+			() => {
+				standalonePanelOpen = true;
+			},
 			(error) => {
 				console.warn("sidePanel.open failed, using popup window", error);
 				return openRecorderPanel(tab);
