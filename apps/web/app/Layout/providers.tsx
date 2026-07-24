@@ -10,7 +10,7 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
-import { type PropsWithChildren, useState } from "react";
+import { type PropsWithChildren, useEffect, useState } from "react";
 
 export function ReactQueryProvider({
 	children,
