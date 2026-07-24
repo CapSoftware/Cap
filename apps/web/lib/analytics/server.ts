@@ -2,9 +2,8 @@ import {
 	PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE,
 	sendProductAnalyticsRows,
 } from "@cap/analytics";
-import { buildEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { after, type NextRequest } from "next/server";
-import { PostHog } from "posthog-node";
 import {
 	createServerProductEventRows,
 	normalizeServerIdentifier,
@@ -31,30 +30,6 @@ export function scheduleServerProductEvent(event: ServerProductEvent) {
 			await captureServerProductEvent(event);
 		} catch (error) {
 			console.error(`Failed to capture ${event.eventName}`, error);
-		}
-	});
-}
-
-export function scheduleLegacyPostHogEvent(event: {
-	distinctId: string;
-	eventName: string;
-	properties?: Record<string, unknown>;
-}) {
-	scheduleAfterResponse(async () => {
-		try {
-			const key = buildEnv.NEXT_PUBLIC_POSTHOG_KEY;
-			const host = buildEnv.NEXT_PUBLIC_POSTHOG_HOST;
-			if (!key || !host) return;
-
-			const client = new PostHog(key, { host });
-			client.capture({
-				distinctId: event.distinctId,
-				event: event.eventName,
-				properties: event.properties,
-			});
-			await client.shutdown();
-		} catch (error) {
-			console.error(`Failed to capture ${event.eventName} in PostHog`, error);
 		}
 	});
 }

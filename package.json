@@ -7,7 +7,6 @@
 		"cap-setup": "dotenv -e .env -- node scripts/setup.js",
 		"analytics:migrate-dub": "dotenv -e .env -- node scripts/analytics/migrate-dub-to-tinybird.js --dry-run",
 		"analytics:migrate-dub:apply": "dotenv -e .env -- node scripts/analytics/migrate-dub-to-tinybird.js --apply",
-		"analytics:posthog-growth": "dotenv -e .env -- node scripts/analytics/posthog-growth-audit.mjs",
 		"analytics:setup": "pnpm analytics:deploy",
 		"analytics:validate": "node scripts/analytics/analytics-cli.js validate",
 		"analytics:test": "pnpm --filter @cap/analytics test && pnpm --filter @cap/web test --run __tests__/unit/product-analytics-browser-token.test.ts __tests__/unit/product-analytics-queue.test.ts __tests__/unit/product-analytics-scheduler.test.ts __tests__/unit/product-analytics-request.test.ts __tests__/unit/product-analytics-transport.test.ts __tests__/unit/product-analytics-server.test.ts __tests__/unit/guest-checkout-analytics.test.ts __tests__/unit/subscription-analytics-webhook.test.ts __tests__/unit/developer-credits-webhook.test.ts && pnpm --dir apps/desktop exec vitest run src/utils/analytics.test.ts src/utils/product-analytics.test.ts && node scripts/analytics/analytics-cli.js test",

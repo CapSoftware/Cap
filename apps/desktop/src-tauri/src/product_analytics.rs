@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use std::{
     future::Future,
     sync::{
-        OnceLock, PoisonError, RwLock,
+        OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -28,7 +28,7 @@ const PRODUCT_EVENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const PRODUCT_EVENT_SESSION_STORE_KEY: &str = "product_analytics_session_id";
 
 #[derive(Debug)]
-pub enum PostHogEvent {
+pub enum ProductAnalyticsEvent {
     MultipartUploadComplete {
         duration: Duration,
         length: Duration,
@@ -72,51 +72,9 @@ pub enum PostHogEvent {
         audio_degraded_count: u64,
         dropped_mic_messages: u64,
     },
-    RecordingMuxerCrashed {
-        mode: &'static str,
-        reason: String,
-        seconds_into_recording: f64,
-    },
-    RecordingAudioDegraded {
-        mode: &'static str,
-        reason: String,
-        seconds_into_recording: f64,
-    },
-    RecordingRecovered {
-        trigger: &'static str,
-        recovered_duration_secs: u64,
-        segments_recovered: u32,
-        validation_took_ms: u64,
-    },
     RecordingRecoveryFailed {
         trigger: &'static str,
         reason: String,
-    },
-    RecordingDiskSpaceLow {
-        mode: &'static str,
-        bytes_remaining: u64,
-    },
-    RecordingDiskSpaceExhausted {
-        mode: &'static str,
-        bytes_remaining: u64,
-    },
-    RecordingDeviceLost {
-        mode: &'static str,
-        subsystem: String,
-    },
-    RecordingEncoderRebuilt {
-        mode: &'static str,
-        backend: String,
-        attempt: u32,
-    },
-    RecordingSourceAudioReset {
-        mode: &'static str,
-        source: String,
-        starvation_ms: u64,
-    },
-    RecordingCaptureTargetLost {
-        mode: &'static str,
-        target: String,
     },
 }
 
@@ -157,9 +115,9 @@ impl EventData {
     }
 }
 
-fn event_data(event: PostHogEvent) -> EventData {
+fn event_data(event: ProductAnalyticsEvent) -> EventData {
     match event {
-        PostHogEvent::MultipartUploadComplete {
+        ProductAnalyticsEvent::MultipartUploadComplete {
             duration,
             length,
             size,
@@ -170,13 +128,13 @@ fn event_data(event: PostHogEvent) -> EventData {
             data.set("size", size);
             data
         }
-        PostHogEvent::MultipartUploadFailed { duration, error } => {
+        ProductAnalyticsEvent::MultipartUploadFailed { duration, error } => {
             let mut data = EventData::new("multipart_upload_failed");
             data.set("duration", duration.as_secs());
             data.set("error", truncate_reason(error));
             data
         }
-        PostHogEvent::RecordingStarted {
+        ProductAnalyticsEvent::RecordingStarted {
             mode,
             target_kind,
             has_camera,
@@ -201,7 +159,7 @@ fn event_data(event: PostHogEvent) -> EventData {
             data.set("custom_cursor_capture", custom_cursor_capture);
             data
         }
-        PostHogEvent::RecordingCompleted {
+        ProductAnalyticsEvent::RecordingCompleted {
             mode,
             status,
             duration_secs,
@@ -248,127 +206,13 @@ fn event_data(event: PostHogEvent) -> EventData {
             data.set("dropped_mic_messages", dropped_mic_messages);
             data
         }
-        PostHogEvent::RecordingMuxerCrashed {
-            mode,
-            reason,
-            seconds_into_recording,
-        } => {
-            let mut data = EventData::new("recording_muxer_crashed");
-            data.set("mode", mode);
-            data.set("reason", truncate_reason(reason));
-            data.set(
-                "seconds_into_recording",
-                (seconds_into_recording * 1000.0).round() / 1000.0,
-            );
-            data
-        }
-        PostHogEvent::RecordingAudioDegraded {
-            mode,
-            reason,
-            seconds_into_recording,
-        } => {
-            let mut data = EventData::new("recording_audio_degraded");
-            data.set("mode", mode);
-            data.set("reason", truncate_reason(reason));
-            data.set(
-                "seconds_into_recording",
-                (seconds_into_recording * 1000.0).round() / 1000.0,
-            );
-            data
-        }
-        PostHogEvent::RecordingRecovered {
-            trigger,
-            recovered_duration_secs,
-            segments_recovered,
-            validation_took_ms,
-        } => {
-            let mut data = EventData::new("recording_recovered");
-            data.set("trigger", trigger);
-            data.set("recovered_duration_secs", recovered_duration_secs);
-            data.set("segments_recovered", segments_recovered);
-            data.set("validation_took_ms", validation_took_ms);
-            data
-        }
-        PostHogEvent::RecordingRecoveryFailed { trigger, reason } => {
+        ProductAnalyticsEvent::RecordingRecoveryFailed { trigger, reason } => {
             let mut data = EventData::new("recording_recovery_failed");
             data.set("trigger", trigger);
             data.set("reason", truncate_reason(reason));
             data
         }
-        PostHogEvent::RecordingDiskSpaceLow {
-            mode,
-            bytes_remaining,
-        } => {
-            let mut data = EventData::new("recording_disk_space_low");
-            data.set("mode", mode);
-            data.set("bytes_remaining", bytes_remaining);
-            data
-        }
-        PostHogEvent::RecordingDiskSpaceExhausted {
-            mode,
-            bytes_remaining,
-        } => {
-            let mut data = EventData::new("recording_disk_space_exhausted");
-            data.set("mode", mode);
-            data.set("bytes_remaining", bytes_remaining);
-            data
-        }
-        PostHogEvent::RecordingDeviceLost { mode, subsystem } => {
-            let mut data = EventData::new("recording_device_lost");
-            data.set("mode", mode);
-            data.set("subsystem", subsystem);
-            data
-        }
-        PostHogEvent::RecordingEncoderRebuilt {
-            mode,
-            backend,
-            attempt,
-        } => {
-            let mut data = EventData::new("recording_encoder_rebuilt");
-            data.set("mode", mode);
-            data.set("backend", backend);
-            data.set("attempt", attempt);
-            data
-        }
-        PostHogEvent::RecordingSourceAudioReset {
-            mode,
-            source,
-            starvation_ms,
-        } => {
-            let mut data = EventData::new("recording_source_audio_reset");
-            data.set("mode", mode);
-            data.set("source", source);
-            data.set("starvation_ms", starvation_ms);
-            data
-        }
-        PostHogEvent::RecordingCaptureTargetLost { mode, target } => {
-            let mut data = EventData::new("recording_capture_target_lost");
-            data.set("mode", mode);
-            data.set("target", target);
-            data
-        }
     }
-}
-
-fn posthog_event(
-    data: &EventData,
-    distinct_id: &str,
-    process_person_profile: bool,
-) -> posthog_rs::Event {
-    let mut event = posthog_rs::Event::new(data.name, distinct_id);
-    if !process_person_profile {
-        event
-            .insert_prop("$process_person_profile", false)
-            .map_err(|err| error!("Error disabling PostHog person profile: {err:?}"))
-            .ok();
-    }
-    for (key, value) in &data.properties {
-        event
-            .insert_prop(key, value)
-            .map_err(|err| error!("Error adding PostHog property {key}: {err:?}"))
-            .ok();
-    }
-    event
 }
 
 fn is_core_product_event(name: &str) -> bool {
@@ -555,17 +399,6 @@ fn enqueue_product_event(app: &AppHandle, event: ProductEvent) {
     }
 }
 
-pub fn init() {
-    if let Some(env) = option_env!("VITE_POSTHOG_KEY") {
-        tokio::spawn(async move {
-            posthog_rs::init_global(env)
-                .await
-                .map_err(|err| error!("Error initializing PostHog: {err}"))
-                .ok();
-        });
-    }
-}
-
 pub fn init_product_session(app: &AppHandle) {
     let session_id = PRODUCT_EVENT_SESSION_ID
         .get_or_init(Uuid::new_v4)
@@ -581,15 +414,6 @@ pub fn init_product_session(app: &AppHandle) {
     }
 }
 
-pub fn set_server_url(url: &str) {
-    *API_SERVER_IS_CAP_CLOUD
-        .get_or_init(Default::default)
-        .write()
-        .unwrap_or_else(PoisonError::into_inner) = Some(url == "https://cap.so");
-}
-
-static API_SERVER_IS_CAP_CLOUD: OnceLock<RwLock<Option<bool>>> = OnceLock::new();
-
 static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(true);
 static PRODUCT_EVENT_SESSION_ID: OnceLock<Uuid> = OnceLock::new();
 static PRODUCT_EVENT_SENDER: OnceLock<mpsc::Sender<ProductEvent>> = OnceLock::new();
@@ -603,7 +427,7 @@ pub fn telemetry_enabled() -> bool {
     TELEMETRY_ENABLED.load(Ordering::Acquire)
 }
 
-pub fn async_capture_event(app: &AppHandle, event: PostHogEvent) {
+pub fn capture_event(app: &AppHandle, event: ProductAnalyticsEvent) {
     if !live_telemetry_enabled(app) {
         return;
     }
@@ -617,50 +441,14 @@ pub fn async_capture_event(app: &AppHandle, event: PostHogEvent) {
                 .get_or_init(Uuid::new_v4)
                 .to_string()
         });
-    let user_id = AuthStore::get(app)
-        .ok()
-        .flatten()
-        .and_then(|auth| auth.user_id);
-    let process_person_profile = user_id.is_some();
-    let distinct_id = user_id.unwrap_or_else(|| anonymous_id.clone());
     let mut data = event_data(event);
     data.set("cap_version", env!("CARGO_PKG_VERSION"));
-    data.set(
-        "cap_backend",
-        match *API_SERVER_IS_CAP_CLOUD
-            .get_or_init(Default::default)
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-        {
-            Some(true) => "cloud",
-            Some(false) => "self_hosted",
-            None => "unknown",
-        },
-    );
     data.set("os", std::env::consts::OS);
     data.set("arch", std::env::consts::ARCH);
 
     if let Some(event) = product_event(&data, anonymous_id) {
         enqueue_product_event(app, event);
     }
-
-    if option_env!("VITE_POSTHOG_KEY").is_none() {
-        return;
-    }
-
-    let app = app.clone();
-    tokio::spawn(async move {
-        if !live_telemetry_enabled(&app) {
-            return;
-        }
-
-        let event = posthog_event(&data, &distinct_id, process_person_profile);
-
-        posthog_rs::capture(event)
-            .await
-            .map_err(|err| error!("Error sending event to PostHog: {err:?}"))
-            .ok();
-    });
 }
 
 #[cfg(test)]
@@ -669,8 +457,8 @@ mod tests {
 
     use super::*;
 
-    fn recording_started() -> PostHogEvent {
-        PostHogEvent::RecordingStarted {
+    fn recording_started() -> ProductAnalyticsEvent {
+        ProductAnalyticsEvent::RecordingStarted {
             mode: "studio",
             target_kind: "screen",
             has_camera: true,
@@ -681,13 +469,6 @@ mod tests {
             target_height: 1080,
             fragmented: true,
             custom_cursor_capture: true,
-        }
-    }
-
-    fn granular_health_event() -> PostHogEvent {
-        PostHogEvent::RecordingDeviceLost {
-            mode: "studio",
-            subsystem: "camera".to_string(),
         }
     }
 
@@ -743,25 +524,8 @@ mod tests {
     }
 
     #[test]
-    fn stable_anonymous_posthog_event_remains_personless() {
-        let data = event_data(recording_started());
-        let event = posthog_event(&data, "install-id", false);
-        let json = serde_json::to_value(event).unwrap();
-
-        assert_eq!(json["$distinct_id"], "install-id");
-        assert_eq!(json["properties"]["$process_person_profile"], false);
-    }
-
-    #[test]
-    fn granular_health_event_stays_out_of_product_analytics() {
-        let data = event_data(granular_health_event());
-
-        assert!(product_event(&data, "install-id".to_string()).is_none());
-    }
-
-    #[test]
     fn product_events_remove_raw_error_details_before_networking() {
-        let data = event_data(PostHogEvent::MultipartUploadFailed {
+        let data = event_data(ProductAnalyticsEvent::MultipartUploadFailed {
             duration: Duration::from_secs(2),
             error: "/Users/private/recording.cap failed".to_string(),
         });

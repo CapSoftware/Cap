@@ -53,7 +53,7 @@ const PRODUCT_COLUMNS = [
 	["properties", "String"],
 ];
 const PRODUCT_SOURCES = new Set(["client", "server"]);
-const PRODUCT_PLATFORMS = new Set(["web", "desktop", "server"]);
+const PRODUCT_PLATFORMS = new Set(["web", "desktop", "mobile", "server"]);
 const SERVER_ONLY_EVENTS = new Set([
 	"user_signed_up",
 	"checkout_started",

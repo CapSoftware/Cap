@@ -7,25 +7,14 @@ import {
 import { getVersion } from "@tauri-apps/api/app";
 import { fetch } from "@tauri-apps/plugin-http";
 import { Store } from "@tauri-apps/plugin-store";
-import posthog from "posthog-js";
 import { v4 as uuid } from "uuid";
 
 import { generalSettingsStore } from "~/store";
 import { ProductAnalyticsQueue } from "./product-analytics";
 import { getConfiguredServerUrl, maybeProtectedHeaders } from "./web-api";
 
-const key = import.meta.env.VITE_POSTHOG_KEY as string;
-const host = import.meta.env.VITE_POSTHOG_HOST as string;
-const POSTHOG_QUEUE_CAPACITY = 100;
 const PRODUCT_ANALYTICS_REQUEST_TIMEOUT_MS = 3000;
 
-type PendingPostHogEvent = {
-	eventName: string;
-	properties: Record<string, unknown>;
-};
-
-let isPostHogInitialized = false;
-let isPostHogInitializationStarted = false;
 let telemetryEnabledCache = true;
 let telemetryStateReady = false;
 let telemetryStatePromise: Promise<void> | undefined;
@@ -33,7 +22,6 @@ let anonymousIdPromise: Promise<string> | undefined;
 let appVersionPromise: Promise<string | undefined> | undefined;
 let productSessionIdPromise: Promise<string> | undefined;
 let fallbackAnonymousIdValue: string | undefined;
-let pendingPostHogEvents: PendingPostHogEvent[] = [];
 let activeProductRequest: AbortController | undefined;
 
 const productAnalyticsQueue = new ProductAnalyticsQueue({
@@ -44,16 +32,8 @@ const productAnalyticsQueue = new ProductAnalyticsQueue({
 function applyTelemetryState(enabled: boolean) {
 	telemetryEnabledCache = enabled;
 	if (!enabled) {
-		pendingPostHogEvents = [];
 		productAnalyticsQueue.clear();
 		activeProductRequest?.abort();
-		if (isPostHogInitializationStarted) posthog.opt_out_capturing();
-		return;
-	}
-
-	initializePostHog();
-	if (isPostHogInitializationStarted && posthog.has_opted_out_capturing()) {
-		posthog.opt_in_capturing({ captureEventName: false });
 	}
 }
 
@@ -208,92 +188,6 @@ async function enqueueProductEvent(
 	});
 }
 
-function capturePostHogEvent(event: PendingPostHogEvent) {
-	try {
-		posthog.capture(event.eventName, event.properties);
-	} catch (error) {
-		console.error(`Error capturing event ${event.eventName}:`, error);
-	}
-}
-
-function enqueuePostHogEvent(event: PendingPostHogEvent) {
-	if (pendingPostHogEvents.length >= POSTHOG_QUEUE_CAPACITY) {
-		pendingPostHogEvents.shift();
-	}
-	pendingPostHogEvents.push(event);
-}
-
-async function flushPendingPostHogEvents() {
-	if (!(await isTelemetryEnabled())) {
-		pendingPostHogEvents = [];
-		return;
-	}
-
-	const events = pendingPostHogEvents;
-	pendingPostHogEvents = [];
-	for (const event of events) capturePostHogEvent(event);
-}
-
-function initializePostHog() {
-	if (isPostHogInitializationStarted || !key || !host) return;
-	isPostHogInitializationStarted = true;
-
-	try {
-		posthog.init(key, {
-			api_host: host,
-			autocapture: false,
-			capture_pageleave: false,
-			capture_pageview: false,
-			disable_session_recording: true,
-			loaded: () => {
-				isPostHogInitialized = true;
-				void flushPendingPostHogEvents();
-			},
-		});
-	} catch (error) {
-		console.error("Failed to initialize PostHog:", error);
-	}
-}
-
-export function initAnonymousUser() {
-	if (!key || !host) return;
-
-	void Promise.all([isTelemetryEnabled(), getAnonymousId()])
-		.then(([enabled, anonymousId]) => {
-			if (enabled) posthog.identify(anonymousId);
-		})
-		.catch((error) =>
-			console.error("Error initializing anonymous user:", error),
-		);
-}
-
-export function identifyUser(
-	userId: string,
-	properties?: Record<string, unknown>,
-) {
-	if (!key || !host) return;
-
-	void isTelemetryEnabled().then((enabled) => {
-		if (!enabled) return;
-
-		try {
-			const currentId = posthog.get_distinct_id();
-			const storage = getAnalyticsStorage();
-			const anonymousId = storage?.getItem("anonymous_id");
-
-			if (currentId === userId) return;
-			if (anonymousId && currentId === anonymousId) {
-				posthog.alias(userId, anonymousId);
-			}
-			posthog.identify(userId);
-			if (properties) posthog.people.set(properties);
-			storage?.removeItem("anonymous_id");
-		} catch (error) {
-			console.error("Error identifying user:", error);
-		}
-	});
-}
-
 export function trackEvent(
 	eventName: string,
 	properties?: Record<string, unknown>,
@@ -305,14 +199,6 @@ export function trackEvent(
 		if (!enabled) return;
 
 		void enqueueProductEvent(eventId, eventName, occurredAt, properties);
-
-		if (!key || !host) return;
-		const event = {
-			eventName,
-			properties: { ...properties, platform: "desktop" },
-		};
-		if (isPostHogInitialized) capturePostHogEvent(event);
-		else enqueuePostHogEvent(event);
 	});
 }
 

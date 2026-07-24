@@ -8,7 +8,6 @@ import type { NextRequest } from "next/server";
 import type Stripe from "stripe";
 import {
 	readAnalyticsAnonymousId,
-	scheduleLegacyPostHogEvent,
 	scheduleServerProductEvent,
 } from "@/lib/analytics/server";
 
@@ -100,17 +99,6 @@ export async function POST(request: NextRequest) {
 					price_id: priceId,
 					quantity: quantity ?? 1,
 					is_onboarding: Boolean(isOnBoarding),
-				},
-			});
-
-			scheduleLegacyPostHogEvent({
-				distinctId: user.id,
-				eventName: "checkout_started",
-				properties: {
-					$insert_id: `checkout:${checkoutSession.id}`,
-					price_id: priceId,
-					quantity,
-					platform: "web",
 				},
 			});
 

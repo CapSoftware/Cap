@@ -27,7 +27,7 @@ on:
       - "apps/desktop/src/utils/analytics.ts"
       - "apps/desktop/src/utils/product-analytics.ts"
       - "apps/desktop/src/utils/*analytics*.test.ts"
-      - "apps/desktop/src-tauri/src/posthog.rs"
+      - "apps/desktop/src-tauri/src/product_analytics.rs"
       - "scripts/analytics/**"
   push:
     branches:
@@ -57,7 +57,7 @@ on:
       - "apps/desktop/src/utils/analytics.ts"
       - "apps/desktop/src/utils/product-analytics.ts"
       - "apps/desktop/src/utils/*analytics*.test.ts"
-      - "apps/desktop/src-tauri/src/posthog.rs"
+      - "apps/desktop/src-tauri/src/product_analytics.rs"
       - "scripts/analytics/**"
   workflow_dispatch:
     inputs:

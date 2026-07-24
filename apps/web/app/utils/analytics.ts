@@ -1,81 +1,29 @@
-import posthog from "posthog-js";
-import * as uuid from "uuid";
 import { trackMetaEvent } from "../Layout/MetaPixel";
-import { captureProductEvent } from "./product-analytics";
-
-export function initAnonymousUser() {
-	try {
-		const anonymousId = localStorage.getItem("anonymous_id") ?? uuid.v4();
-		localStorage.setItem("anonymous_id", anonymousId);
-		posthog.identify(anonymousId);
-	} catch (error) {
-		console.error("Error initializing anonymous user:", error);
-	}
-}
-
-export function identifyUser(
-	userId: string,
-	properties?: Record<string, unknown>,
-) {
-	try {
-		const currentId = posthog.get_distinct_id();
-		const anonymousId = localStorage.getItem("anonymous_id");
-
-		if (currentId !== userId) {
-			if (anonymousId && currentId === anonymousId) {
-				posthog.alias(userId, anonymousId);
-			}
-			posthog.identify(userId);
-			if (properties) {
-				posthog.people.set(properties);
-			}
-			localStorage.removeItem("anonymous_id");
-		}
-	} catch (error) {
-		console.error("Error identifying user:", error);
-	}
-}
+import {
+	captureProductEvent,
+	getProductAnalyticsAnonymousId,
+} from "./product-analytics";
 
 export function trackEvent(
 	eventName: string,
 	properties?: Record<string, unknown>,
 ) {
 	captureProductEvent(eventName, properties);
-	trackExternalEvent(eventName, properties);
-}
+	const metaEventMap: Record<string, string> = {
+		purchase_completed: "Purchase",
+		subscription_purchased: "Purchase",
+		user_signed_up: "CompleteRegistration",
+	};
+	const metaEventName = metaEventMap[eventName];
+	if (!metaEventName) return;
 
-export function trackExternalEvent(
-	eventName: string,
-	properties?: Record<string, unknown>,
-) {
-	try {
-		if (!posthog || typeof posthog.capture !== "function") {
-			console.warn(`PostHog not available for event: ${eventName}`);
-			return;
-		}
-
-		posthog.capture(eventName, { ...properties, platform: "web" });
-
-		const metaEventMap: Record<string, string> = {
-			purchase_completed: "Purchase",
-			subscription_purchased: "Purchase",
-			user_signed_up: "CompleteRegistration",
-		};
-
-		const metaEventName = metaEventMap[eventName];
-		if (metaEventName) {
-			const isSignup = eventName === "user_signed_up";
-			const metaParameters = isSignup ? undefined : properties;
-			const eventId = isSignup
-				? `signup_${posthog.get_distinct_id?.() ?? "unknown"}`
-				: undefined;
-			trackMetaEvent(
-				metaEventName,
-				metaParameters,
-				eventId ? { eventId } : undefined,
-			);
-		}
-	} catch (error) {
-		console.error(`Error tracking event ${eventName}:`, error);
-	}
+	const isSignup = eventName === "user_signed_up";
+	const eventId = isSignup
+		? `signup_${getProductAnalyticsAnonymousId()}`
+		: undefined;
+	trackMetaEvent(
+		metaEventName,
+		isSignup ? undefined : properties,
+		eventId ? { eventId } : undefined,
+	);
 }

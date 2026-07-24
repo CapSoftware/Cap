@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	createSession: vi.fn(),
 	product: vi.fn(),
-	posthog: vi.fn(),
 	readAnonymousId: vi.fn(),
 }));
 
@@ -18,7 +17,6 @@ vi.mock("@cap/utils", () => ({
 }));
 vi.mock("@/lib/analytics/server", () => ({
 	readAnalyticsAnonymousId: mocks.readAnonymousId,
-	scheduleLegacyPostHogEvent: mocks.posthog,
 	scheduleServerProductEvent: mocks.product,
 }));
 
@@ -52,14 +50,6 @@ describe("guest checkout analytics", () => {
 			expect.objectContaining({
 				eventId: "checkout:cs_guest_1",
 				anonymousId: metadata.analyticsAnonymousId,
-			}),
-		);
-		expect(mocks.posthog).toHaveBeenCalledWith(
-			expect.objectContaining({
-				distinctId: metadata.analyticsAnonymousId,
-				properties: expect.objectContaining({
-					$insert_id: "checkout:cs_guest_1",
-				}),
 			}),
 		);
 	});

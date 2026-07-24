@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	product: vi.fn(),
-	posthog: vi.fn(),
 	constructEvent: vi.fn(),
 	retrieveCustomer: vi.fn(),
 	retrieveSubscription: vi.fn(),
@@ -18,7 +17,6 @@ const dbChain = {
 };
 
 vi.mock("@/lib/analytics/server", () => ({
-	scheduleLegacyPostHogEvent: mocks.posthog,
 	scheduleServerProductEvent: mocks.product,
 }));
 vi.mock("@/lib/developer-credits", () => ({ addCreditsToAccount: vi.fn() }));
@@ -164,14 +162,6 @@ describe("Stripe subscription analytics", () => {
 				}),
 			}),
 		);
-		expect(mocks.posthog).toHaveBeenCalledWith(
-			expect.objectContaining({
-				properties: expect.objectContaining({
-					$insert_id:
-						"stripe:evt_checkout.session.completed:purchase_completed",
-				}),
-			}),
-		);
 	});
 
 	it("keeps first-purchase attribution stable on duplicate delivery", async () => {
@@ -201,7 +191,6 @@ describe("Stripe subscription analytics", () => {
 		);
 		expect((await POST(request())).status).toBe(200);
 		expect(mocks.product).not.toHaveBeenCalled();
-		expect(mocks.posthog).not.toHaveBeenCalled();
 	});
 
 	it("emits when an asynchronous subscription payment settles", async () => {

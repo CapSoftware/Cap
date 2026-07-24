@@ -180,7 +180,7 @@ export function captureProductEvent(
 			eventId: createProductEventId(),
 			eventName,
 			occurredAt: new Date().toISOString(),
-			anonymousId: getAnonymousId(),
+			anonymousId: getProductAnalyticsAnonymousId(),
 			sessionId: getSessionId(),
 			platform: "web",
 			pathname: window.location.pathname,
@@ -289,7 +289,7 @@ function getBrowserQueue() {
 	return browserQueue;
 }
 
-function getAnonymousId() {
+export function getProductAnalyticsAnonymousId() {
 	if (!anonymousId) {
 		const storage = getBrowserStorage("localStorage");
 		const cookieId = Cookies.get(PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE);

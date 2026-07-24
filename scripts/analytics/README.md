@@ -49,10 +49,6 @@ Tinybird exposes published endpoints through its hosted MCP server. Copy `script
 
 Agents should use `product_events_daily` for funnels and trends, and `product_events_health` for delivery checks. The daily endpoint defaults to the latest 30 days, caps results at 1,000 groups, returns newest dates first, and exposes payment and subscription status so paid purchases are not conflated with trials. Health is hourly and rejects windows over 31 days.
 
-## PostHog migration gate
-
-Cap dual-writes explicit events during the rollout, with PostHog autocapture, page-leave capture, and session recording disabled. Keep the explicit PostHog path until Tinybird has matched signup, checkout, and paid-purchase totals for at least 14 days and a durable purchase replay or outbox exists. Tinybird event IDs are deterministic, so replay is safe; the current post-response delivery path is intentionally fail-open and is not a durable queue.
-
 The Analytics GitHub workflow runs static tests, Docker Compose validation, a complete Tinybird Local build, and fixture tests on relevant pull requests. Merges to `main` deploy only after those gates pass.
 
 ## Performance boundaries

@@ -7,7 +7,7 @@ import * as shell from "@tauri-apps/plugin-shell";
 import { z } from "zod";
 import callbackTemplate from "~/components/callback.template";
 import { authStore, generalSettingsStore } from "~/store";
-import { identifyUser, trackEvent } from "./analytics";
+import { trackEvent } from "./analytics";
 import { clientEnv } from "./env";
 import { shouldUseLocalServerSessionForUrl } from "./server-url-routing";
 import { commands } from "./tauri";
@@ -216,7 +216,6 @@ function parseAuthParams(url: URL) {
 }
 
 async function processAuthData(data: AuthParams) {
-	identifyUser(data.user_id);
 	trackEvent("user_signed_in", { platform: "desktop" });
 
 	await authStore.set({

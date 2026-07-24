@@ -37,7 +37,7 @@ export const SERVER_ONLY_EVENT_NAMES = [
 ] as const satisfies readonly CoreEventName[];
 
 export type CoreEventName = (typeof CORE_EVENT_NAMES)[number];
-export type ProductEventPlatform = "web" | "desktop" | "server";
+export type ProductEventPlatform = "web" | "desktop" | "mobile" | "server";
 export type ProductEventProperty = string | number | boolean | null;
 export type ProductEventProperties = Record<string, ProductEventProperty>;
 

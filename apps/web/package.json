@@ -117,8 +117,6 @@
 		"next": "16.2.1",
 		"next-auth": "^4.24.5",
 		"next-mdx-remote": "^6.0.0",
-		"posthog-js": "^1.215.3",
-		"posthog-node": "^4.11.2",
 		"prettier": "^3.7.4",
 		"react": "19.2.4",
 		"react-dom": "19.2.4",

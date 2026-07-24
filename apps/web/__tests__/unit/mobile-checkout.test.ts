@@ -7,16 +7,12 @@ import {
 } from "@/lib/mobile-checkout";
 
 const checkoutMocks = vi.hoisted(() => ({
-	capture: vi.fn(),
 	create: vi.fn(),
-	shutdown: vi.fn(() => Promise.resolve()),
+	product: vi.fn(),
+	readAnonymousId: vi.fn(),
 }));
 
 vi.mock("@cap/env", () => ({
-	buildEnv: {
-		NEXT_PUBLIC_POSTHOG_HOST: "https://posthog.test",
-		NEXT_PUBLIC_POSTHOG_KEY: "test-key",
-	},
 	serverEnv: () => ({ WEB_URL: "https://cap.so" }),
 }));
 
@@ -28,11 +24,9 @@ vi.mock("@cap/utils", () => ({
 	}),
 }));
 
-vi.mock("posthog-node", () => ({
-	PostHog: class {
-		capture = checkoutMocks.capture;
-		shutdown = checkoutMocks.shutdown;
-	},
+vi.mock("@/lib/analytics/server", () => ({
+	readAnalyticsAnonymousId: checkoutMocks.readAnonymousId,
+	scheduleServerProductEvent: checkoutMocks.product,
 }));
 
 const makeGuestCheckoutRequest = (body: Record<string, unknown>) =>
@@ -82,6 +76,8 @@ describe("checkout redirects", () => {
 			metadata: {
 				platform: "web",
 				guestCheckout: "true",
+				analyticsIsFirstPurchase: "true",
+				analyticsAnonymousId: expect.stringMatching(/^guest:/),
 			},
 		});
 	});
@@ -111,6 +107,8 @@ describe("checkout redirects", () => {
 				metadata: {
 					platform: "mobile",
 					guestCheckout: "true",
+					analyticsIsFirstPurchase: "true",
+					analyticsAnonymousId: expect.stringMatching(/^guest:/),
 				},
 			}),
 		);

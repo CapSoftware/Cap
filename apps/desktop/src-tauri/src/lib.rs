@@ -30,9 +30,9 @@ mod notifications;
 mod panel_manager;
 mod permissions;
 mod platform;
-mod posthog;
 mod power_observer;
 mod presets;
+mod product_analytics;
 mod recording;
 mod recording_settings;
 mod recording_telemetry;
@@ -4459,7 +4459,6 @@ async fn check_notification_permissions(app: AppHandle) {
 #[instrument(skip(app))]
 async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Result<(), ()> {
     let mut app = app.write().await;
-    posthog::set_server_url(&server_url);
     app.server_url = server_url;
 
     Ok(())
@@ -4819,8 +4818,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         system.refresh_memory();
         camera::init_preview_profile(system.total_memory());
     }
-
-    posthog::init();
 
     let tauri_context = tauri::generate_context!();
 
@@ -5201,7 +5198,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);
-            posthog::init_product_session(&app);
+            product_analytics::init_product_session(&app);
             configure_camera_blur_recovery(&app, previous_termination);
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
@@ -5304,8 +5301,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     .map_err(|err| warn!("Error updating server URL into settings store: {err}"))
                     .ok();
                 }
-
-                posthog::set_server_url(&server_url);
 
                 let camera_preview = CameraPreviewManager::new(&app);
                 let camera_session_id_handle = camera_preview.session_id_handle();

@@ -45,10 +45,6 @@ vi.mock("@cap/database/schema", () => ({
 }));
 
 vi.mock("@cap/env", () => ({
-	buildEnv: {
-		NEXT_PUBLIC_POSTHOG_KEY: "",
-		NEXT_PUBLIC_POSTHOG_HOST: "",
-	},
 	serverEnv: () => ({
 		STRIPE_WEBHOOK_SECRET: "whsec_test",
 	}),
@@ -84,13 +80,6 @@ vi.mock("@cap/utils", () => ({
 vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
-}));
-
-vi.mock("posthog-node", () => ({
-	PostHog: vi.fn().mockImplementation(() => ({
-		capture: vi.fn(),
-		shutdown: vi.fn().mockResolvedValue(undefined),
-	})),
 }));
 
 function makeWebhookRequest(body = "{}") {
