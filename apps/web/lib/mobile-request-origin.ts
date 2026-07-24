@@ -45,31 +45,66 @@ const isPrivateHostname = (hostname: string) => {
 	);
 };
 
+const getOrigin = (url: string) => {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return url.replace(/\/+$/, "");
+	}
+};
+
 export const resolveMobileRequestOrigin = (
 	configuredWebUrl: string,
 	requestUrl: string,
+	requestHost?: string,
 ) => {
-	const configuredOrigin = (() => {
-		try {
-			return new URL(configuredWebUrl).origin;
-		} catch {
-			return configuredWebUrl.replace(/\/+$/, "");
-		}
-	})();
+	const configuredOrigin = getOrigin(configuredWebUrl);
 
 	try {
 		const configured = new URL(configuredOrigin);
 		const request = new URL(requestUrl);
+		if (!isLoopbackHostname(configured.hostname)) return configuredOrigin;
+		const isHttpRequest =
+			request.protocol === "http:" || request.protocol === "https:";
+
 		if (
-			isLoopbackHostname(configured.hostname) &&
+			!isLoopbackHostname(request.hostname) &&
 			isPrivateHostname(request.hostname) &&
-			(request.protocol === "http:" || request.protocol === "https:")
-		) {
+			isHttpRequest
+		)
 			return request.origin;
+
+		if (requestHost && isHttpRequest) {
+			const host = requestHost.split(",")[0]?.trim();
+			if (host) {
+				const hostUrl = new URL(`${request.protocol}//${host}`);
+				if (isPrivateHostname(hostUrl.hostname)) return hostUrl.origin;
+			}
 		}
+
+		if (isPrivateHostname(request.hostname) && isHttpRequest)
+			return request.origin;
 	} catch {
 		return configuredOrigin;
 	}
 
 	return configuredOrigin;
+};
+
+export const resolveMobileWebResourceUrl = (
+	resourceUrl: string,
+	configuredWebUrl: string,
+	publicOrigin: string,
+) => {
+	try {
+		const resource = new URL(resourceUrl);
+		if (resource.origin !== getOrigin(configuredWebUrl)) return resourceUrl;
+
+		const destination = new URL(publicOrigin);
+		resource.protocol = destination.protocol;
+		resource.host = destination.host;
+		return resource.toString();
+	} catch {
+		return resourceUrl;
+	}
 };

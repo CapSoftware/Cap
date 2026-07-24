@@ -4,9 +4,16 @@ import {
 	useMicrophonePermissions,
 } from "expo-camera";
 import * as Device from "expo-device";
+import * as Haptics from "expo-haptics";
 import { router, Stack } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	type RefObject,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import {
 	ActionSheetIOS,
 	ActivityIndicator,
@@ -22,10 +29,17 @@ import {
 	TextInput,
 	View,
 } from "react-native";
+import Animated, {
+	useAnimatedStyle,
+	useSharedValue,
+	withSpring,
+} from "react-native-reanimated";
 import {
 	SafeAreaView,
 	useSafeAreaInsets,
 } from "react-native-safe-area-context";
+import { apiBaseUrl, useAuth } from "@/auth/AuthContext";
+import { getProPlan } from "@/billing/pro";
 import { TeleprompterOverlay } from "@/recording/TeleprompterOverlay";
 import {
 	clamp,
@@ -35,16 +49,28 @@ import {
 	teleprompterLimits,
 } from "@/recording/teleprompter";
 import { colors, fonts, radius, squircle } from "@/theme";
-import { useRecordingUploads } from "@/uploads/recording-upload-provider";
+import { useRecordingUploadActions } from "@/uploads/recording-upload-provider";
 import CapRecorderView, {
 	type CapRecorderErrorEvent,
 	type CapRecorderSegmentEvent,
 } from "../modules/cap-recorder";
+import {
+	type CapScreenRecorderAvailability,
+	CapScreenRecorderView,
+	cancelScreenRecording,
+	getScreenRecordingAvailability,
+	getScreenRecordingUpdates,
+	prepareScreenRecording,
+} from "../modules/cap-screen-recorder";
 
 type RecorderPhase = "ready" | "starting" | "recording" | "finishing";
+type RecordingMode = "camera" | "screen";
 
 const recordingVideoBitrate = 2_500_000;
+const screenRecordingVideoBitrate = 1_800_000;
 const recordingSegmentDurationSeconds = 2;
+const freeRecordingDurationSeconds = 5 * 60;
+const capturePressSpring = { damping: 18, stiffness: 320, mass: 0.7 } as const;
 const recordingMonthNames = [
 	"Jan",
 	"Feb",
@@ -66,6 +92,133 @@ const createRecordingFileName = (recordedAt: Date) => {
 	const minutes = String(recordedAt.getMinutes()).padStart(2, "0");
 	return `Cap Recording - ${recordedAt.getDate()} ${month} ${recordedAt.getFullYear()} at ${hours}.${minutes}.mp4`;
 };
+
+const screenModeContent = (
+	phase: RecorderPhase,
+	availability: CapScreenRecorderAvailability | null,
+	prepared: boolean,
+) => {
+	if (availability?.available === false) {
+		return {
+			title: "Screen recording unavailable",
+			text:
+				availability.reason ??
+				"Screen recording is unavailable on this iPhone.",
+		};
+	}
+	if (phase === "recording") {
+		return {
+			title: "Recording your screen",
+			text: "Cap is returning Home. Stop from the red screen-sharing indicator or Control Center.",
+		};
+	}
+	if (phase === "finishing") {
+		return {
+			title: "Finishing up",
+			text: "Your recording will upload from Home.",
+		};
+	}
+	if (phase === "starting") {
+		return {
+			title: "Getting your recording ready",
+			text: "Cap is preparing a smooth, upload-ready screen recording.",
+		};
+	}
+	if (prepared) {
+		return {
+			title: "Ready to record",
+			text: "Tap record, then confirm Start Broadcast. Cap returns Home as soon as recording begins.",
+		};
+	}
+	return {
+		title: "Record your screen",
+		text: "Cap records your screen and microphone, then uploads automatically when you stop.",
+	};
+};
+
+type ModeSwitcherProps = {
+	disabled: boolean;
+	mode: RecordingMode;
+	onChange: (mode: RecordingMode) => void;
+};
+
+function ModeSwitcher({ disabled, mode, onChange }: ModeSwitcherProps) {
+	const selection = useSharedValue(mode === "camera" ? 0 : 1);
+
+	useEffect(() => {
+		selection.value = withSpring(mode === "camera" ? 0 : 1, {
+			damping: 20,
+			stiffness: 260,
+			mass: 0.75,
+		});
+	}, [mode, selection]);
+
+	const indicatorStyle = useAnimatedStyle(() => ({
+		transform: [{ translateX: selection.value * 112 }],
+	}));
+
+	return (
+		<View
+			accessibilityRole="tablist"
+			style={[
+				styles.modeSwitcher,
+				disabled ? styles.modeSwitcherDisabled : null,
+			]}
+		>
+			<Animated.View style={[styles.modeIndicator, indicatorStyle]} />
+			<Pressable
+				accessibilityRole="tab"
+				accessibilityLabel="Camera recording"
+				accessibilityState={{ disabled, selected: mode === "camera" }}
+				disabled={disabled}
+				onPress={() => onChange("camera")}
+				style={styles.modeOption}
+			>
+				<SymbolView
+					name="camera.fill"
+					size={15}
+					tintColor={
+						mode === "camera" ? colors.gray12 : "rgba(255,255,255,0.58)"
+					}
+					weight="semibold"
+				/>
+				<Text
+					style={[
+						styles.modeLabel,
+						mode === "camera" ? styles.modeLabelSelected : null,
+					]}
+				>
+					Camera
+				</Text>
+			</Pressable>
+			<Pressable
+				accessibilityRole="tab"
+				accessibilityLabel="Screen recording"
+				accessibilityState={{ disabled, selected: mode === "screen" }}
+				disabled={disabled}
+				onPress={() => onChange("screen")}
+				style={styles.modeOption}
+			>
+				<SymbolView
+					name="rectangle.on.rectangle"
+					size={15}
+					tintColor={
+						mode === "screen" ? colors.gray12 : "rgba(255,255,255,0.58)"
+					}
+					weight="semibold"
+				/>
+				<Text
+					style={[
+						styles.modeLabel,
+						mode === "screen" ? styles.modeLabelSelected : null,
+					]}
+				>
+					Screen
+				</Text>
+			</Pressable>
+		</View>
+	);
+}
 
 type CircleButtonProps = {
 	accessibilityLabel: string;
@@ -171,14 +324,73 @@ function StepperRow({
 	);
 }
 
+type RecorderTimerPillProps = {
+	phase: RecorderPhase;
+	startedAt: RefObject<number | null>;
+	durationLimitSeconds: number | null;
+};
+
+function RecorderTimerPill({
+	phase,
+	startedAt,
+	durationLimitSeconds,
+}: RecorderTimerPillProps) {
+	const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+	useEffect(() => {
+		if (phase === "ready") {
+			setElapsedSeconds(0);
+			return;
+		}
+		if (phase !== "recording") return;
+		const updateElapsed = () => {
+			if (startedAt.current === null) return;
+			setElapsedSeconds((Date.now() - startedAt.current) / 1000);
+		};
+		updateElapsed();
+		const interval = setInterval(updateElapsed, 500);
+		return () => clearInterval(interval);
+	}, [phase, startedAt]);
+
+	return (
+		<View
+			accessibilityLabel={
+				durationLimitSeconds === null
+					? `Recording time ${formatRecordingDuration(elapsedSeconds)}`
+					: `Recording time ${formatRecordingDuration(elapsedSeconds)} of ${formatRecordingDuration(durationLimitSeconds)}`
+			}
+			style={styles.timerPill}
+		>
+			{phase === "recording" || phase === "finishing" ? (
+				<View style={styles.recordingDot} />
+			) : null}
+			<Text style={styles.timerText}>
+				{formatRecordingDuration(elapsedSeconds)}
+				{durationLimitSeconds === null
+					? ""
+					: ` / ${formatRecordingDuration(durationLimitSeconds)}`}
+			</Text>
+		</View>
+	);
+}
+
 export default function RecordScreen() {
-	const recordingUploads = useRecordingUploads();
+	const auth = useAuth();
+	const recordingUploads = useRecordingUploadActions();
 	const insets = useSafeAreaInsets();
+	const captureScale = useSharedValue(1);
+	const captureAnimatedStyle = useAnimatedStyle(() => ({
+		transform: [{ scale: captureScale.value }],
+	}));
 	const cameraRef = useRef<CapRecorderView>(null);
 	const permissionRequestStarted = useRef(false);
 	const discardRecording = useRef(false);
 	const activeRecordingId = useRef<string | null>(null);
 	const recordingStartedAt = useRef<number | null>(null);
+	const automaticStopStarted = useRef(false);
+	const screenCompletionStarted = useRef(false);
+	const screenPreparationAttempted = useRef(false);
+	const screenUpdateInFlight = useRef(false);
 	const [cameraPermission, requestCameraPermission, getCameraPermission] =
 		useCameraPermissions();
 	const [
@@ -188,10 +400,16 @@ export default function RecordScreen() {
 	] = useMicrophonePermissions();
 	const [permissionRequestFinished, setPermissionRequestFinished] =
 		useState(false);
+	const [mode, setMode] = useState<RecordingMode>("camera");
 	const [phase, setPhase] = useState<RecorderPhase>("ready");
+	const [screenAvailability, setScreenAvailability] =
+		useState<CapScreenRecorderAvailability | null>(null);
+	const [screenPrepared, setScreenPrepared] = useState(false);
+	const [recordingDurationLimit, setRecordingDurationLimit] = useState<
+		number | null
+	>(freeRecordingDurationSeconds);
 	const [cameraReady, setCameraReady] = useState(false);
 	const [facing, setFacing] = useState<CameraType>("front");
-	const [elapsedSeconds, setElapsedSeconds] = useState(0);
 	const [error, setError] = useState<string | null>(null);
 	const [script, setScript] = useState("");
 	const [fontSize, setFontSize] = useState<number>(
@@ -214,10 +432,28 @@ export default function RecordScreen() {
 	const isPhysicalDevice = Device.isDevice;
 	const permissionStateLoaded =
 		cameraPermission !== null && microphonePermission !== null;
-	const cameraActive = permissionsGranted;
+	const cameraActive = mode === "camera" && permissionsGranted;
 	const hasScript = script.trim().length > 0;
 	const waitingForPermission =
 		!permissionStateLoaded || !permissionRequestFinished;
+	const loadRecordingDurationLimit = useCallback(async () => {
+		if (!auth.apiKey) {
+			setRecordingDurationLimit(freeRecordingDurationSeconds);
+			return freeRecordingDurationSeconds;
+		}
+		try {
+			const plan = await getProPlan({
+				apiKey: auth.apiKey,
+				baseUrl: apiBaseUrl,
+			});
+			const limit = plan.upgraded ? null : freeRecordingDurationSeconds;
+			setRecordingDurationLimit(limit);
+			return limit;
+		} catch {
+			setRecordingDurationLimit(freeRecordingDurationSeconds);
+			return freeRecordingDurationSeconds;
+		}
+	}, [auth.apiKey]);
 	const requestPermissions = useCallback(async () => {
 		setPermissionRequestFinished(false);
 		const nextCameraPermission = cameraPermission?.granted
@@ -266,24 +502,38 @@ export default function RecordScreen() {
 	}, [getCameraPermission, getMicrophonePermission, isPhysicalDevice]);
 
 	useEffect(() => {
-		if (phase !== "recording" || recordingStartedAt.current === null) return;
-		const updateElapsed = () => {
-			if (recordingStartedAt.current === null) return;
-			setElapsedSeconds((Date.now() - recordingStartedAt.current) / 1000);
-		};
-		updateElapsed();
-		const interval = setInterval(updateElapsed, 500);
-		return () => clearInterval(interval);
-	}, [phase]);
+		void loadRecordingDurationLimit();
+	}, [loadRecordingDurationLimit]);
+
+	useEffect(() => {
+		if (!isPhysicalDevice) {
+			setScreenAvailability({
+				available: false,
+				minimumSystemVersion: "15.1",
+				reason: "Screen recording requires a physical iPhone.",
+			});
+			return;
+		}
+		void getScreenRecordingAvailability()
+			.then(setScreenAvailability)
+			.catch(() =>
+				setScreenAvailability({
+					available: false,
+					minimumSystemVersion: "15.1",
+					reason: "Screen recording is unavailable in this build.",
+				}),
+			);
+	}, [isPhysicalDevice]);
 
 	const startRecording = useCallback(async () => {
 		if (!cameraRef.current || !cameraReady || phase !== "ready") return;
 		discardRecording.current = false;
-		setElapsedSeconds(0);
+		automaticStopStarted.current = false;
 		setError(null);
 		setPhase("starting");
 		let createdId: string | null = null;
 		try {
+			await loadRecordingDurationLimit();
 			const created = await recordingUploads.beginRecording({
 				fileName: createRecordingFileName(new Date()),
 				width: 720,
@@ -299,6 +549,7 @@ export default function RecordScreen() {
 			});
 			recordingStartedAt.current = Date.now();
 			setPhase("recording");
+			void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 			setTeleprompterRestartKey((current) => current + 1);
 			setTeleprompterPlaying(hasScript);
 		} catch (recordingError) {
@@ -315,7 +566,235 @@ export default function RecordScreen() {
 			);
 			setPhase("ready");
 		}
-	}, [cameraReady, hasScript, phase, recordingUploads]);
+	}, [
+		cameraReady,
+		hasScript,
+		loadRecordingDurationLimit,
+		phase,
+		recordingUploads,
+	]);
+
+	const prepareScreenCapture = useCallback(async () => {
+		if (
+			mode !== "screen" ||
+			phase !== "ready" ||
+			screenPrepared ||
+			screenPreparationAttempted.current ||
+			!auth.apiKey ||
+			screenAvailability?.available !== true
+		) {
+			return;
+		}
+		screenPreparationAttempted.current = true;
+		setError(null);
+		setPhase("starting");
+		screenCompletionStarted.current = false;
+		let createdId: string | null = null;
+		try {
+			const durationLimit = await loadRecordingDurationLimit();
+			const created = await recordingUploads.beginRecording({
+				fileName: createRecordingFileName(new Date()),
+				width: 720,
+				height: 1280,
+				fps: 30,
+				uploadOwner: "external",
+			});
+			createdId = created.id;
+			activeRecordingId.current = created.id;
+			await prepareScreenRecording({
+				recordingId: created.id,
+				width: 720,
+				height: 1280,
+				videoBitrate: screenRecordingVideoBitrate,
+				segmentDurationSeconds: recordingSegmentDurationSeconds,
+				maximumDurationSeconds: durationLimit,
+			});
+			setScreenPrepared(true);
+			setPhase("ready");
+		} catch (recordingError) {
+			if (createdId) {
+				await cancelScreenRecording(createdId).catch(() => undefined);
+				await recordingUploads.discardRecording(createdId);
+			}
+			activeRecordingId.current = null;
+			setScreenPrepared(false);
+			setPhase("ready");
+			setError(
+				recordingError instanceof Error
+					? recordingError.message
+					: "Cap could not start the screen recording.",
+			);
+		}
+	}, [
+		auth.apiKey,
+		loadRecordingDurationLimit,
+		mode,
+		phase,
+		recordingUploads,
+		screenAvailability?.available,
+		screenPrepared,
+	]);
+
+	const finishScreenCaptureUI = useCallback(() => {
+		activeRecordingId.current = null;
+		recordingStartedAt.current = null;
+		setScreenPrepared(false);
+		setPhase("ready");
+		router.dismissAll();
+		router.replace("/(tabs)");
+	}, []);
+
+	const reconcileScreenCapture = useCallback(async () => {
+		const id = activeRecordingId.current;
+		if (
+			!id ||
+			screenUpdateInFlight.current ||
+			screenCompletionStarted.current
+		) {
+			return;
+		}
+		screenUpdateInFlight.current = true;
+		try {
+			const updates = await getScreenRecordingUpdates(id);
+			if (updates.status === "prepared") {
+				setScreenPrepared(true);
+				return;
+			}
+			if (updates.status === "recording") {
+				if (recordingStartedAt.current === null) {
+					recordingStartedAt.current = Date.now();
+				}
+				screenCompletionStarted.current = true;
+				void Haptics.notificationAsync(
+					Haptics.NotificationFeedbackType.Success,
+				);
+				finishScreenCaptureUI();
+				return;
+			}
+			if (updates.status === "uploading") {
+				screenCompletionStarted.current = true;
+				finishScreenCaptureUI();
+				return;
+			}
+			if (updates.status === "uploaded") {
+				screenCompletionStarted.current = true;
+				finishScreenCaptureUI();
+				return;
+			}
+			if (updates.status === "finished") {
+				screenCompletionStarted.current = true;
+				for (const segment of updates.segments) {
+					recordingUploads.addSegment(id, segment);
+				}
+				recordingUploads.finishRecording(id, {
+					durationSeconds: updates.durationSeconds ?? 0.1,
+					totalBytes: updates.totalBytes,
+				});
+				finishScreenCaptureUI();
+				return;
+			}
+			if (updates.status === "cancelled") {
+				screenCompletionStarted.current = true;
+				await cancelScreenRecording(id).catch(() => undefined);
+				await recordingUploads.discardRecording(id);
+				activeRecordingId.current = null;
+				recordingStartedAt.current = null;
+				screenCompletionStarted.current = false;
+				screenPreparationAttempted.current = false;
+				setScreenPrepared(false);
+				setPhase("ready");
+				return;
+			}
+			if (updates.status === "failed" || updates.status === "missing") {
+				screenCompletionStarted.current = true;
+				await cancelScreenRecording(id).catch(() => undefined);
+				await recordingUploads.discardRecording(id);
+				activeRecordingId.current = null;
+				recordingStartedAt.current = null;
+				screenCompletionStarted.current = false;
+				setScreenPrepared(false);
+				setPhase("ready");
+				setError(
+					updates.error ??
+						(updates.status === "missing"
+							? "The screen recording could not be recovered."
+							: "The screen recording stopped unexpectedly."),
+				);
+			}
+		} catch (recordingError) {
+			setError(
+				recordingError instanceof Error
+					? recordingError.message
+					: "Cap could not read the screen recording.",
+			);
+		} finally {
+			screenUpdateInFlight.current = false;
+		}
+	}, [finishScreenCaptureUI, recordingUploads]);
+
+	useEffect(() => {
+		if (mode !== "screen" || !screenPrepared || !activeRecordingId.current) {
+			return;
+		}
+		void reconcileScreenCapture();
+		const interval = setInterval(() => {
+			void reconcileScreenCapture();
+		}, 750);
+		return () => clearInterval(interval);
+	}, [mode, reconcileScreenCapture, screenPrepared]);
+
+	useEffect(() => {
+		if (
+			mode !== "screen" ||
+			phase !== "ready" ||
+			screenPrepared ||
+			screenAvailability?.available !== true
+		) {
+			return;
+		}
+		void prepareScreenCapture();
+	}, [
+		mode,
+		phase,
+		prepareScreenCapture,
+		screenAvailability?.available,
+		screenPrepared,
+	]);
+
+	const cancelPreparedScreenCapture = useCallback(async () => {
+		const id = activeRecordingId.current;
+		if (!id) return true;
+		const updates = await getScreenRecordingUpdates(id).catch(() => null);
+		if (updates?.status === "recording") {
+			finishScreenCaptureUI();
+			return false;
+		}
+		await cancelScreenRecording(id).catch(() => undefined);
+		await recordingUploads.discardRecording(id);
+		activeRecordingId.current = null;
+		recordingStartedAt.current = null;
+		screenCompletionStarted.current = false;
+		screenPreparationAttempted.current = false;
+		setScreenPrepared(false);
+		setPhase("ready");
+		return true;
+	}, [finishScreenCaptureUI, recordingUploads]);
+
+	const changeMode = useCallback(
+		async (nextMode: RecordingMode) => {
+			if (nextMode === mode || phase !== "ready") return;
+			if (mode === "screen" && activeRecordingId.current) {
+				const cancelled = await cancelPreparedScreenCapture();
+				if (!cancelled) return;
+			}
+			setError(null);
+			setCameraReady(false);
+			screenPreparationAttempted.current = false;
+			setMode(nextMode);
+			void Haptics.selectionAsync();
+		},
+		[cancelPreparedScreenCapture, mode, phase],
+	);
 
 	const stopRecording = useCallback(async () => {
 		if (phase !== "recording") return;
@@ -336,8 +815,11 @@ export default function RecordScreen() {
 			recordingUploads.finishRecording(id, result);
 			activeRecordingId.current = null;
 			recordingStartedAt.current = null;
-			setElapsedSeconds(0);
 			setPhase("ready");
+			void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+			router.dismissAll();
+			router.replace("/(tabs)");
+			return;
 		} catch (recordingError) {
 			if (id) {
 				await recordingUploads.discardRecording(id);
@@ -353,7 +835,56 @@ export default function RecordScreen() {
 		}
 	}, [phase, recordingUploads]);
 
+	useEffect(() => {
+		if (
+			mode !== "camera" ||
+			phase !== "recording" ||
+			recordingDurationLimit === null
+		) {
+			return;
+		}
+		const stopAtLimit = () => {
+			if (
+				recordingStartedAt.current === null ||
+				automaticStopStarted.current ||
+				Date.now() - recordingStartedAt.current < recordingDurationLimit * 1000
+			) {
+				return;
+			}
+			automaticStopStarted.current = true;
+			void stopRecording();
+		};
+		stopAtLimit();
+		const interval = setInterval(stopAtLimit, 250);
+		return () => clearInterval(interval);
+	}, [mode, phase, recordingDurationLimit, stopRecording]);
+
 	const closeRecorder = useCallback(() => {
+		if (mode === "screen") {
+			if (phase === "recording") {
+				ActionSheetIOS.showActionSheetWithOptions(
+					{
+						cancelButtonIndex: 0,
+						message:
+							"Use the red screen-sharing indicator or Control Center to stop. Cap will finish the upload in the background.",
+						options: ["Keep recording"],
+						title: "Screen recording is active",
+						userInterfaceStyle: "dark",
+					},
+					() => undefined,
+				);
+				return;
+			}
+			if (phase === "starting" || phase === "finishing") return;
+			if (activeRecordingId.current) {
+				void cancelPreparedScreenCapture().then((cancelled) => {
+					if (cancelled) router.back();
+				});
+				return;
+			}
+			router.back();
+			return;
+		}
 		if (phase === "recording") {
 			ActionSheetIOS.showActionSheetWithOptions(
 				{
@@ -374,7 +905,7 @@ export default function RecordScreen() {
 		}
 		if (phase === "starting" || phase === "finishing") return;
 		router.back();
-	}, [phase, stopRecording]);
+	}, [cancelPreparedScreenCapture, mode, phase, stopRecording]);
 
 	const openEditor = useCallback(() => {
 		if (phase !== "ready") return;
@@ -415,7 +946,6 @@ export default function RecordScreen() {
 			}
 			activeRecordingId.current = null;
 			recordingStartedAt.current = null;
-			setElapsedSeconds(0);
 			setTeleprompterPlaying(false);
 			setPhase("ready");
 			void recordingUploads.discardRecording(id);
@@ -463,28 +993,23 @@ export default function RecordScreen() {
 		);
 	}
 
-	if (!permissionsGranted) {
-		const missingAccess = cameraPermission?.granted
-			? "microphone"
-			: "camera and microphone";
-		return (
-			<View style={styles.permissionScreen}>
-				<Stack.Screen options={recorderScreenOptions} />
-				<StatusBar barStyle="light-content" />
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel="Close recorder"
-					onPress={() => router.back()}
-					style={[styles.permissionClose, { top: insets.top + 8 }]}
-				>
-					<SymbolView
-						name="xmark"
-						size={18}
-						tintColor={colors.white}
-						weight="semibold"
-					/>
-				</Pressable>
-				<View style={styles.permissionContent}>
+	return (
+		<View style={styles.screen}>
+			<Stack.Screen options={recorderScreenOptions} />
+			<StatusBar barStyle="light-content" />
+			{mode === "camera" && permissionsGranted ? (
+				<CapRecorderView
+					active={cameraActive}
+					facing={facing}
+					onCameraReady={handleCameraReady}
+					onRecordingError={handleRecordingError}
+					onRecordingSegment={handleRecordingSegment}
+					ref={cameraRef}
+					style={StyleSheet.absoluteFill}
+				/>
+			) : null}
+			{mode === "camera" && !permissionsGranted ? (
+				<View style={styles.inlinePermissionContent}>
 					<View style={styles.permissionIcon}>
 						<SymbolView
 							name="video.fill"
@@ -495,8 +1020,8 @@ export default function RecordScreen() {
 					</View>
 					<Text style={styles.permissionTitle}>Camera and microphone</Text>
 					<Text style={styles.permissionText}>
-						Cap needs {missingAccess} access to record your video. Your
-						teleprompter stays on screen and is not recorded.
+						Cap needs camera and microphone access for camera recordings. You
+						can still switch to Screen below.
 					</Text>
 					{waitingForPermission ? (
 						<ActivityIndicator color={colors.white} />
@@ -514,23 +1039,29 @@ export default function RecordScreen() {
 						</Pressable>
 					)}
 				</View>
-			</View>
-		);
-	}
-
-	return (
-		<View style={styles.screen}>
-			<Stack.Screen options={recorderScreenOptions} />
-			<StatusBar barStyle="light-content" />
-			<CapRecorderView
-				active={cameraActive}
-				facing={facing}
-				onCameraReady={handleCameraReady}
-				onRecordingError={handleRecordingError}
-				onRecordingSegment={handleRecordingSegment}
-				ref={cameraRef}
-				style={StyleSheet.absoluteFill}
-			/>
+			) : null}
+			{mode === "screen" ? (
+				<View style={styles.screenCanvas}>
+					<View style={styles.permissionIcon}>
+						<SymbolView
+							name={
+								phase === "recording"
+									? "record.circle.fill"
+									: "rectangle.on.rectangle"
+							}
+							size={32}
+							tintColor={phase === "recording" ? "#ff453a" : colors.white}
+							weight="medium"
+						/>
+					</View>
+					<Text style={styles.permissionTitle}>
+						{screenModeContent(phase, screenAvailability, screenPrepared).title}
+					</Text>
+					<Text style={styles.permissionText}>
+						{screenModeContent(phase, screenAvailability, screenPrepared).text}
+					</Text>
+				</View>
+			) : null}
 			<View
 				pointerEvents="box-none"
 				style={[styles.topBar, { paddingTop: insets.top + 8 }]}
@@ -541,20 +1072,14 @@ export default function RecordScreen() {
 					onPress={closeRecorder}
 					symbol="xmark"
 				/>
-				<View
-					accessibilityLabel={`Recording time ${formatRecordingDuration(elapsedSeconds)}`}
-					style={styles.timerPill}
-				>
-					{phase === "recording" || phase === "finishing" ? (
-						<View style={styles.recordingDot} />
-					) : null}
-					<Text style={styles.timerText}>
-						{formatRecordingDuration(elapsedSeconds)}
-					</Text>
-				</View>
+				<RecorderTimerPill
+					durationLimitSeconds={recordingDurationLimit}
+					phase={phase}
+					startedAt={recordingStartedAt}
+				/>
 				<View style={styles.topBarSpacer} />
 			</View>
-			{hasScript ? (
+			{mode === "camera" && hasScript && permissionsGranted ? (
 				<TeleprompterOverlay
 					fontSize={fontSize}
 					onTogglePlayback={() => setTeleprompterPlaying((current) => !current)}
@@ -573,53 +1098,128 @@ export default function RecordScreen() {
 				pointerEvents="box-none"
 				style={[styles.bottomControls, { paddingBottom: insets.bottom + 18 }]}
 			>
-				<CircleButton
-					accessibilityLabel={
-						hasScript ? "Edit teleprompter" : "Add teleprompter"
-					}
-					disabled={phase !== "ready"}
-					onPress={openEditor}
-					symbol="text.alignleft"
-				/>
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel={
-						phase === "recording" ? "Stop recording" : "Start recording"
-					}
-					accessibilityState={{
-						disabled:
-							!cameraReady || phase === "starting" || phase === "finishing",
-					}}
-					disabled={
-						!cameraReady || phase === "starting" || phase === "finishing"
-					}
-					onPress={() => {
-						if (phase === "recording") void stopRecording();
-						else void startRecording();
-					}}
-					style={({ pressed }) => [
-						styles.captureButton,
-						pressed ? styles.captureButtonPressed : null,
-					]}
-				>
-					{phase === "starting" || phase === "finishing" ? (
-						<ActivityIndicator color={colors.white} />
-					) : (
-						<View
-							style={
-								phase === "recording" ? styles.captureStop : styles.captureStart
+				<View style={styles.captureRow}>
+					{mode === "camera" ? (
+						<CircleButton
+							accessibilityLabel={
+								hasScript ? "Edit teleprompter" : "Add teleprompter"
 							}
+							disabled={phase !== "ready" || !permissionsGranted}
+							onPress={openEditor}
+							symbol="text.alignleft"
 						/>
+					) : (
+						<View style={styles.topBarSpacer} />
 					)}
-				</Pressable>
-				<CircleButton
-					accessibilityLabel="Switch camera"
+					{mode === "camera" ? (
+						<Animated.View style={captureAnimatedStyle}>
+							<Pressable
+								accessibilityRole="button"
+								accessibilityLabel={
+									phase === "recording" ? "Stop recording" : "Start recording"
+								}
+								accessibilityState={{
+									disabled:
+										!cameraReady ||
+										phase === "starting" ||
+										phase === "finishing",
+								}}
+								disabled={
+									!cameraReady || phase === "starting" || phase === "finishing"
+								}
+								onPressIn={() => {
+									void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+									captureScale.value = withSpring(0.92, capturePressSpring);
+								}}
+								onPressOut={() => {
+									captureScale.value = withSpring(1, capturePressSpring);
+								}}
+								onPress={() => {
+									if (phase === "recording") void stopRecording();
+									else void startRecording();
+								}}
+								style={styles.captureButton}
+							>
+								{phase === "starting" || phase === "finishing" ? (
+									<ActivityIndicator color={colors.white} />
+								) : (
+									<View
+										style={
+											phase === "recording"
+												? styles.captureStop
+												: styles.captureStart
+										}
+									/>
+								)}
+							</Pressable>
+						</Animated.View>
+					) : (
+						<Animated.View style={captureAnimatedStyle}>
+							{screenPrepared ? (
+								<View style={styles.captureButton}>
+									<CapScreenRecorderView
+										enabled
+										style={styles.screenSystemPicker}
+									/>
+									<View
+										pointerEvents="none"
+										style={[styles.captureStart, styles.screenCaptureGlyph]}
+									/>
+								</View>
+							) : (
+								<Pressable
+									accessibilityRole="button"
+									accessibilityLabel={
+										screenPreparationAttempted.current
+											? "Retry screen recording setup"
+											: "Prepare screen recording"
+									}
+									accessibilityState={{
+										disabled:
+											phase !== "ready" ||
+											!auth.apiKey ||
+											screenAvailability?.available !== true,
+									}}
+									disabled={
+										phase !== "ready" ||
+										!auth.apiKey ||
+										screenAvailability?.available !== true
+									}
+									onPress={() => {
+										screenPreparationAttempted.current = false;
+										void prepareScreenCapture();
+									}}
+									style={styles.captureButton}
+								>
+									{phase !== "ready" ? (
+										<ActivityIndicator color={colors.white} />
+									) : (
+										<View style={styles.captureStart} />
+									)}
+								</Pressable>
+							)}
+						</Animated.View>
+					)}
+					{mode === "camera" ? (
+						<CircleButton
+							accessibilityLabel="Switch camera"
+							disabled={phase !== "ready" || !permissionsGranted}
+							onPress={() => {
+								setCameraReady(false);
+								setFacing((current) =>
+									current === "front" ? "back" : "front",
+								);
+							}}
+							symbol="camera.rotate"
+						/>
+					) : (
+						<View style={styles.topBarSpacer} />
+					)}
+				</View>
+				<ModeSwitcher
 					disabled={phase !== "ready"}
-					onPress={() => {
-						setCameraReady(false);
-						setFacing((current) => (current === "front" ? "back" : "front"));
-					}}
-					symbol="camera.rotate"
+					mode={mode}
+					onChange={(nextMode) => void changeMode(nextMode)}
 				/>
 			</View>
 			<Modal
@@ -811,12 +1411,58 @@ const styles = StyleSheet.create({
 		right: 0,
 		bottom: 0,
 		zIndex: 5,
-		paddingHorizontal: 28,
+		paddingHorizontal: 20,
 		paddingTop: 24,
+		alignItems: "center",
+		gap: 18,
+		backgroundColor: "rgba(0,0,0,0.18)",
+	},
+	captureRow: {
+		width: "100%",
 		flexDirection: "row",
 		alignItems: "center",
 		justifyContent: "space-between",
-		backgroundColor: "rgba(0,0,0,0.12)",
+		paddingHorizontal: 8,
+	},
+	modeSwitcher: {
+		width: 232,
+		height: 48,
+		padding: 4,
+		borderRadius: radius.full,
+		flexDirection: "row",
+		backgroundColor: "rgba(12,14,18,0.78)",
+		borderWidth: StyleSheet.hairlineWidth,
+		borderColor: "rgba(255,255,255,0.18)",
+	},
+	modeSwitcherDisabled: {
+		opacity: 0.58,
+	},
+	modeIndicator: {
+		position: "absolute",
+		top: 4,
+		left: 4,
+		width: 112,
+		height: 40,
+		borderRadius: radius.full,
+		backgroundColor: colors.white,
+	},
+	modeOption: {
+		zIndex: 1,
+		width: 112,
+		height: 40,
+		borderRadius: radius.full,
+		flexDirection: "row",
+		alignItems: "center",
+		justifyContent: "center",
+		gap: 7,
+	},
+	modeLabel: {
+		fontFamily: fonts.medium,
+		fontSize: 14,
+		color: "rgba(255,255,255,0.58)",
+	},
+	modeLabelSelected: {
+		color: colors.gray12,
 	},
 	captureButton: {
 		width: 82,
@@ -827,14 +1473,18 @@ const styles = StyleSheet.create({
 		alignItems: "center",
 		justifyContent: "center",
 	},
-	captureButtonPressed: {
-		transform: [{ scale: 0.95 }],
-	},
 	captureStart: {
 		width: 62,
 		height: 62,
 		borderRadius: radius.full,
 		backgroundColor: "#ff3b30",
+	},
+	screenSystemPicker: {
+		...StyleSheet.absoluteFillObject,
+		zIndex: 1,
+	},
+	screenCaptureGlyph: {
+		zIndex: 2,
 	},
 	captureStop: {
 		width: 31,
@@ -848,7 +1498,7 @@ const styles = StyleSheet.create({
 		zIndex: 6,
 		left: 24,
 		right: 24,
-		bottom: 146,
+		bottom: 224,
 		borderRadius: radius.md,
 		backgroundColor: "rgba(102,15,20,0.86)",
 		borderWidth: StyleSheet.hairlineWidth,
@@ -884,6 +1534,14 @@ const styles = StyleSheet.create({
 		alignItems: "center",
 		justifyContent: "center",
 		paddingHorizontal: 34,
+	},
+	inlinePermissionContent: {
+		...StyleSheet.absoluteFillObject,
+		alignItems: "center",
+		justifyContent: "center",
+		paddingHorizontal: 34,
+		paddingBottom: 174,
+		backgroundColor: "#08090c",
 	},
 	permissionIcon: {
 		width: 72,
@@ -927,6 +1585,14 @@ const styles = StyleSheet.create({
 		fontFamily: fonts.medium,
 		fontSize: 16,
 		color: colors.gray12,
+	},
+	screenCanvas: {
+		...StyleSheet.absoluteFillObject,
+		alignItems: "center",
+		justifyContent: "center",
+		paddingHorizontal: 34,
+		paddingBottom: 174,
+		backgroundColor: "#08090c",
 	},
 	editorSafeArea: {
 		flex: 1,

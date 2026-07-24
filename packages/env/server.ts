@@ -67,6 +67,9 @@ function createServerEnv() {
 			GOOGLE_CLIENT_ID: z.string().optional(),
 			GOOGLE_CLIENT_SECRET: z.string().optional(),
 
+			APPLE_CLIENT_ID: z.string().optional(),
+			APPLE_CLIENT_SECRET: z.string().optional(),
+
 			/// WorkOS SSO
 			// Provide these to use WorkOS for enterprise SSO
 			WORKOS_CLIENT_ID: z.string().optional(),

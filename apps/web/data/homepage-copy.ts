@@ -299,7 +299,7 @@ export const homepageCopy: HomePageCopy = {
 		title: "Simple, Honest Pricing",
 		subtitle:
 			"Start free, upgrade when you need more. Early adopter pricing locked in forever.",
-		lovedBy: "Trusted by 40,000+ users",
+		lovedBy: "Trusted by 50,000+ users",
 		commercial: {
 			title: "Desktop License",
 			description:

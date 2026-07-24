@@ -1,6 +1,6 @@
 import { Image } from "expo-image";
 import { SymbolView } from "expo-symbols";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Pressable,
@@ -15,17 +15,18 @@ import { getCapCardViewModel } from "./capCardViewModel";
 
 type CapCardProps = {
 	cap: MobileCapSummary;
-	onPress: () => void;
-	onCopyPress?: () => void;
-	onSharePress?: () => void;
-	onVisibilityPress?: () => void;
-	onAnalyticsPress?: () => void;
-	onMenuPress?: () => void;
+	onPress: (cap: MobileCapSummary) => void;
+	onCopyPress?: (cap: MobileCapSummary) => void;
+	onSharePress?: (cap: MobileCapSummary) => void;
+	onVisibilityPress?: (cap: MobileCapSummary) => void;
+	onAnalyticsPress?: (cap: MobileCapSummary) => void;
+	onMenuPress?: (cap: MobileCapSummary) => void;
 	visibilityBusy?: boolean;
 	visibilityDisabled?: boolean;
 	visibilityDisabledHint?: string;
 	visibilityValue?: string;
 	visibilityAccessibilityValue?: string;
+	thumbnailAuthorization?: string;
 	now?: Date;
 };
 
@@ -135,7 +136,7 @@ function UploadProgressIndicator({
 	);
 }
 
-export function CapCard({
+export const CapCard = memo(function CapCard({
 	cap,
 	onPress,
 	onCopyPress,
@@ -148,6 +149,7 @@ export function CapCard({
 	visibilityDisabledHint,
 	visibilityValue,
 	visibilityAccessibilityValue,
+	thumbnailAuthorization,
 	now,
 }: CapCardProps) {
 	const viewModel = getCapCardViewModel(cap, now);
@@ -179,7 +181,7 @@ export function CapCard({
 
 	const copyLink = () => {
 		if (!onCopyPress) return;
-		onCopyPress();
+		onCopyPress(cap);
 		setCopyPressed(true);
 		if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
 		copyResetTimer.current = setTimeout(() => {
@@ -192,8 +194,8 @@ export function CapCard({
 		<Pressable
 			accessibilityRole="button"
 			accessibilityLabel={viewModel.accessibilityLabel}
-			onPress={onPress}
-			onLongPress={onMenuPress}
+			onPress={() => onPress(cap)}
+			onLongPress={onMenuPress ? () => onMenuPress(cap) : undefined}
 			style={({ pressed }) => [styles.card, pressed && styles.pressed]}
 		>
 			<View style={styles.thumbnailWrap}>
@@ -230,7 +232,7 @@ export function CapCard({
 								hitSlop={compactHitSlop}
 								onPress={(event) => {
 									event.stopPropagation();
-									onSharePress();
+									onSharePress(cap);
 								}}
 								style={({ pressed }) => [
 									styles.actionIconButton,
@@ -253,7 +255,7 @@ export function CapCard({
 								hitSlop={compactHitSlop}
 								onPress={(event) => {
 									event.stopPropagation();
-									onMenuPress();
+									onMenuPress(cap);
 								}}
 								style={({ pressed }) => [
 									styles.actionIconButton,
@@ -277,7 +279,13 @@ export function CapCard({
 						contentFit="cover"
 						onError={() => setFailedThumbnailUrl(cap.thumbnailUrl)}
 						recyclingKey={cap.id}
-						source={{ uri: cap.thumbnailUrl }}
+						source={{
+							uri: cap.thumbnailUrl,
+							cacheKey: cap.thumbnailCacheKey ?? `cap-thumbnail:${cap.id}`,
+							headers: thumbnailAuthorization
+								? { Authorization: thumbnailAuthorization }
+								: undefined,
+						}}
 						style={styles.thumbnail}
 						transition={160}
 					/>
@@ -342,7 +350,7 @@ export function CapCard({
 							hitSlop={compactHitSlop}
 							onPress={(event) => {
 								event.stopPropagation();
-								onVisibilityPress();
+								onVisibilityPress(cap);
 							}}
 							style={({ pressed }) => [
 								styles.shareStateButton,
@@ -383,13 +391,13 @@ export function CapCard({
 					accessibilityRole="button"
 					accessibilityLabel={`View analytics for ${cap.title}`}
 					accessibilityHint={
-						onAnalyticsPress ? "Opens analytics in a browser sheet" : undefined
+						onAnalyticsPress ? "Opens native analytics" : undefined
 					}
 					accessibilityState={{ disabled: !onAnalyticsPress }}
 					disabled={!onAnalyticsPress}
 					onPress={(event) => {
 						event.stopPropagation();
-						onAnalyticsPress?.();
+						onAnalyticsPress?.(cap);
 					}}
 					style={({ pressed }) => [
 						styles.metricsRow,
@@ -431,7 +439,7 @@ export function CapCard({
 			</View>
 		</Pressable>
 	);
-}
+});
 
 const styles = StyleSheet.create({
 	card: {

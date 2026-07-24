@@ -2,10 +2,12 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
 import { PostHog } from "posthog-node";
+import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 
 export async function POST(request: NextRequest) {
 	console.log("Starting guest checkout process");
-	const { priceId, quantity } = await request.json();
+	const { priceId, quantity, platform } = await request.json();
+	const checkoutPlatform = platform === "mobile" ? "mobile" : "web";
 
 	console.log("Received guest checkout request:", { priceId, quantity });
 
@@ -16,14 +18,18 @@ export async function POST(request: NextRequest) {
 
 	try {
 		console.log("Creating guest checkout session");
+		const redirects = getCheckoutRedirectUrls(
+			checkoutPlatform,
+			serverEnv().WEB_URL,
+		);
 		const checkoutSession = await stripe().checkout.sessions.create({
 			line_items: [{ price: priceId, quantity: quantity || 1 }],
 			mode: "subscription",
-			success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&guest=true&session_id={CHECKOUT_SESSION_ID}`,
-			cancel_url: `${serverEnv().WEB_URL}/pricing`,
+			success_url: redirects.successUrl,
+			cancel_url: redirects.cancelUrl,
 			allow_promotion_codes: true,
 			metadata: {
-				platform: "web",
+				platform: checkoutPlatform,
 				guestCheckout: "true",
 			},
 		});
@@ -42,7 +48,7 @@ export async function POST(request: NextRequest) {
 					properties: {
 						price_id: priceId,
 						quantity: quantity || 1,
-						platform: "web",
+						platform: checkoutPlatform,
 						session_id: checkoutSession.id,
 					},
 				});

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TeleprompterOverlay } from "@/recording/TeleprompterOverlay";
 import RecordScreen from "../../app/record";
 import CapRecorderView from "../../modules/cap-recorder";
+import { CapScreenRecorderView } from "../../modules/cap-screen-recorder";
 
 type HostProps = {
 	children?: ReactNode;
@@ -14,6 +15,19 @@ type HostProps = {
 const cameraState = vi.hoisted(() => ({
 	startRecording: vi.fn(() => Promise.resolve()),
 	stopRecording: vi.fn(),
+}));
+
+const screenRecordingState = vi.hoisted(() => ({
+	availability: vi.fn(() =>
+		Promise.resolve({
+			available: true,
+			minimumSystemVersion: "15.1",
+			reason: null as string | null,
+		}),
+	),
+	cancelRecording: vi.fn(() => Promise.resolve()),
+	getUpdates: vi.fn(),
+	prepareRecording: vi.fn(() => Promise.resolve()),
 }));
 
 const permissionState = vi.hoisted(() => ({
@@ -27,6 +41,8 @@ const permissionState = vi.hoisted(() => ({
 
 const routerState = vi.hoisted(() => ({
 	back: vi.fn(),
+	dismissAll: vi.fn(),
+	replace: vi.fn(),
 }));
 
 const stackState = vi.hoisted(() => ({
@@ -35,6 +51,19 @@ const stackState = vi.hoisted(() => ({
 
 const deviceState = vi.hoisted(() => ({
 	isDevice: true,
+}));
+
+const authState = vi.hoisted(() => ({
+	apiKey: "mobile-key" as string | null,
+}));
+
+const billingState = vi.hoisted(() => ({
+	getProPlan: vi.fn(() =>
+		Promise.resolve({
+			upgraded: false,
+			stripeSubscriptionStatus: null as string | null,
+		}),
+	),
 }));
 
 const uploadState = vi.hoisted(() => ({
@@ -135,11 +164,44 @@ vi.mock("../../modules/cap-recorder", async () => {
 	return { default: CapRecorderView };
 });
 
+vi.mock("../../modules/cap-screen-recorder", async () => {
+	const React = await import("react");
+	return {
+		CapScreenRecorderView: (props: HostProps) =>
+			React.createElement("CapScreenRecorderView", props),
+		cancelScreenRecording: screenRecordingState.cancelRecording,
+		getScreenRecordingAvailability: screenRecordingState.availability,
+		getScreenRecordingUpdates: screenRecordingState.getUpdates,
+		prepareScreenRecording: screenRecordingState.prepareRecording,
+	};
+});
+
 vi.mock("expo-device", () => ({
 	get isDevice() {
 		return deviceState.isDevice;
 	},
 }));
+
+vi.mock("expo-haptics", () => ({
+	impactAsync: vi.fn(() => Promise.resolve()),
+	notificationAsync: vi.fn(() => Promise.resolve()),
+	selectionAsync: vi.fn(() => Promise.resolve()),
+	ImpactFeedbackStyle: { Light: "light", Medium: "medium", Heavy: "heavy" },
+	NotificationFeedbackType: { Success: "success" },
+}));
+
+vi.mock("react-native-reanimated", async () => {
+	const React = await import("react");
+	return {
+		default: {
+			View: ({ children, ...props }: HostProps) =>
+				React.createElement("Animated.View", props, children),
+		},
+		useAnimatedStyle: (factory: () => unknown) => factory(),
+		useSharedValue: (value: unknown) => ({ value }),
+		withSpring: (value: unknown) => value,
+	};
+});
 
 vi.mock("expo-router", async () => {
 	const React = await import("react");
@@ -170,8 +232,15 @@ vi.mock("@/recording/TeleprompterOverlay", async () => {
 });
 
 vi.mock("@/uploads/recording-upload-provider", () => ({
-	useRecordingUploads: () => uploadState,
+	useRecordingUploadActions: () => uploadState,
 }));
+
+vi.mock("@/auth/AuthContext", () => ({
+	apiBaseUrl: "https://cap.so",
+	useAuth: () => authState,
+}));
+
+vi.mock("@/billing/pro", () => billingState);
 
 const renderComponent = async (
 	node: ReactElement,
@@ -183,8 +252,31 @@ const renderComponent = async (
 	return renderer as unknown as ReactTestRenderer;
 };
 
+const flushMicrotasks = async () => {
+	await Promise.resolve();
+	await Promise.resolve();
+	await Promise.resolve();
+	await Promise.resolve();
+};
+
+const selectAndPrepareScreenRecording = async (renderer: ReactTestRenderer) => {
+	await act(async () => {
+		await flushMicrotasks();
+		renderer.root
+			.findByProps({ accessibilityLabel: "Screen recording" })
+			.props.onPress();
+		await flushMicrotasks();
+	});
+};
+
 describe("RecordScreen", () => {
 	beforeEach(() => {
+		authState.apiKey = "mobile-key";
+		billingState.getProPlan.mockReset();
+		billingState.getProPlan.mockResolvedValue({
+			upgraded: false,
+			stripeSubscriptionStatus: null,
+		});
 		cameraState.startRecording.mockReset();
 		cameraState.startRecording.mockResolvedValue(undefined);
 		cameraState.stopRecording.mockReset();
@@ -194,6 +286,8 @@ describe("RecordScreen", () => {
 			totalBytes: 1_400_000,
 		});
 		routerState.back.mockReset();
+		routerState.dismissAll.mockReset();
+		routerState.replace.mockReset();
 		stackState.options.length = 0;
 		uploadState.beginRecording.mockReset();
 		uploadState.beginRecording.mockResolvedValue({
@@ -221,6 +315,24 @@ describe("RecordScreen", () => {
 		permissionState.requestCamera.mockResolvedValue(grantedPermission);
 		permissionState.requestMicrophone.mockReset();
 		permissionState.requestMicrophone.mockResolvedValue(grantedPermission);
+		screenRecordingState.cancelRecording.mockReset();
+		screenRecordingState.cancelRecording.mockResolvedValue(undefined);
+		screenRecordingState.availability.mockReset();
+		screenRecordingState.availability.mockResolvedValue({
+			available: true,
+			minimumSystemVersion: "15.1",
+			reason: null,
+		});
+		screenRecordingState.prepareRecording.mockReset();
+		screenRecordingState.prepareRecording.mockResolvedValue(undefined);
+		screenRecordingState.getUpdates.mockReset();
+		screenRecordingState.getUpdates.mockResolvedValue({
+			status: "prepared",
+			segments: [],
+			durationSeconds: null,
+			totalBytes: 0,
+			error: null,
+		});
 	});
 
 	it("renders the native segmented iOS camera preview", async () => {
@@ -233,6 +345,11 @@ describe("RecordScreen", () => {
 		});
 		expect(
 			renderer.root.findByProps({ accessibilityLabel: "Add teleprompter" }),
+		).toBeTruthy();
+		expect(
+			renderer.root.findByProps({
+				accessibilityLabel: "Recording time 0:00 of 5:00",
+			}),
 		).toBeTruthy();
 	});
 
@@ -307,6 +424,166 @@ describe("RecordScreen", () => {
 		expect(Linking.openSettings).toHaveBeenCalledTimes(1);
 	});
 
+	it("prepares ReplayKit and exposes one native record control", async () => {
+		permissionState.cameraGranted = false;
+		permissionState.microphoneGranted = false;
+		permissionState.requestCamera.mockResolvedValueOnce({
+			canAskAgain: false,
+			expires: "never",
+			granted: false,
+			status: "denied",
+		});
+		const renderer = await renderComponent(React.createElement(RecordScreen));
+
+		await act(async () => {
+			await flushMicrotasks();
+			renderer.root
+				.findByProps({ accessibilityLabel: "Screen recording" })
+				.props.onPress();
+			await flushMicrotasks();
+		});
+
+		expect(renderer.root.findAllByType(CapRecorderView)).toHaveLength(0);
+		expect(uploadState.beginRecording).toHaveBeenCalledWith({
+			fileName: expect.stringMatching(
+				/^Cap Recording - \d{1,2} [A-Z][a-z]{2} \d{4} at \d{2}\.\d{2}\.mp4$/,
+			),
+			width: 720,
+			height: 1280,
+			fps: 30,
+			uploadOwner: "external",
+		});
+		expect(screenRecordingState.prepareRecording).toHaveBeenCalledWith({
+			recordingId: "cap_123",
+			width: 720,
+			height: 1280,
+			videoBitrate: 1_800_000,
+			segmentDurationSeconds: 2,
+			maximumDurationSeconds: 300,
+		});
+		expect(renderer.root.findByType(CapScreenRecorderView)).toBeTruthy();
+	});
+
+	it("disables screen capture with a clear system requirement", async () => {
+		screenRecordingState.availability.mockResolvedValueOnce({
+			available: false,
+			minimumSystemVersion: "15.1",
+			reason: "Screen recording is unavailable on this iPhone.",
+		});
+		const renderer = await renderComponent(React.createElement(RecordScreen));
+
+		await act(async () => {
+			await flushMicrotasks();
+			renderer.root
+				.findByProps({ accessibilityLabel: "Screen recording" })
+				.props.onPress();
+			await flushMicrotasks();
+		});
+
+		expect(
+			renderer.root.findByProps({
+				accessibilityLabel: "Prepare screen recording",
+			}).props.accessibilityState,
+		).toEqual({ disabled: true });
+		expect(uploadState.beginRecording).not.toHaveBeenCalled();
+	});
+
+	it("cancels a prepared ReplayKit recording when the recorder closes", async () => {
+		const renderer = await renderComponent(React.createElement(RecordScreen));
+		await selectAndPrepareScreenRecording(renderer);
+
+		await act(async () => {
+			renderer.root
+				.findByProps({ accessibilityLabel: "Close recorder" })
+				.props.onPress();
+			await flushMicrotasks();
+		});
+
+		expect(screenRecordingState.cancelRecording).toHaveBeenCalledWith(
+			"cap_123",
+		);
+		expect(uploadState.discardRecording).toHaveBeenCalledWith("cap_123");
+		expect(routerState.back).toHaveBeenCalledTimes(1);
+		expect(routerState.replace).not.toHaveBeenCalled();
+	});
+
+	it("returns home while the provider reconciles a native screen upload", async () => {
+		vi.useFakeTimers();
+		try {
+			const renderer = await renderComponent(React.createElement(RecordScreen));
+			await selectAndPrepareScreenRecording(renderer);
+			screenRecordingState.getUpdates.mockResolvedValue({
+				status: "uploaded",
+				segments: [],
+				durationSeconds: 8,
+				totalBytes: 1_900_000,
+				error: null,
+			});
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(750);
+				await flushMicrotasks();
+			});
+
+			expect(screenRecordingState.cancelRecording).not.toHaveBeenCalled();
+			expect(routerState.replace).toHaveBeenCalledWith("/(tabs)");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("returns home as soon as the native screen upload starts finishing", async () => {
+		vi.useFakeTimers();
+		try {
+			const renderer = await renderComponent(React.createElement(RecordScreen));
+			await selectAndPrepareScreenRecording(renderer);
+			screenRecordingState.getUpdates.mockResolvedValue({
+				status: "uploading",
+				segments: [],
+				durationSeconds: 8,
+				totalBytes: 1_900_000,
+				error: null,
+			});
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(750);
+				await flushMicrotasks();
+			});
+
+			expect(uploadState.addSegment).not.toHaveBeenCalled();
+			expect(uploadState.finishRecording).not.toHaveBeenCalled();
+			expect(routerState.dismissAll).toHaveBeenCalledTimes(1);
+			expect(routerState.replace).toHaveBeenCalledWith("/(tabs)");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("returns home once ReplayKit starts recording", async () => {
+		vi.useFakeTimers();
+		try {
+			const renderer = await renderComponent(React.createElement(RecordScreen));
+			await selectAndPrepareScreenRecording(renderer);
+			screenRecordingState.getUpdates.mockResolvedValue({
+				status: "recording",
+				segments: [],
+				durationSeconds: null,
+				totalBytes: 0,
+				error: null,
+			});
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(750);
+				await flushMicrotasks();
+			});
+
+			expect(routerState.dismissAll).toHaveBeenCalledTimes(1);
+			expect(routerState.replace).toHaveBeenCalledWith("/(tabs)");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("streams optimized segments and returns to a ready camera after stop", async () => {
 		const renderer = await renderComponent(React.createElement(RecordScreen));
 
@@ -334,7 +611,7 @@ describe("RecordScreen", () => {
 			renderer.root
 				.findByProps({ accessibilityLabel: "Start recording" })
 				.props.onPress();
-			await Promise.resolve();
+			await flushMicrotasks();
 		});
 		expect(uploadState.beginRecording).toHaveBeenCalledWith({
 			fileName: expect.stringMatching(
@@ -381,10 +658,63 @@ describe("RecordScreen", () => {
 			segmentCount: 2,
 			totalBytes: 1_400_000,
 		});
-		expect(
-			renderer.root.findByProps({ accessibilityLabel: "Start recording" }),
-		).toBeTruthy();
+		expect(routerState.dismissAll).toHaveBeenCalledTimes(1);
+		expect(routerState.replace).toHaveBeenCalledWith("/(tabs)");
 		expect(routerState.back).not.toHaveBeenCalled();
+	});
+
+	it("automatically stops Free plan recordings at five minutes", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-07-23T10:00:00.000Z"));
+		try {
+			const renderer = await renderComponent(React.createElement(RecordScreen));
+
+			await act(async () => {
+				renderer.root
+					.findByProps({ accessibilityLabel: "Start recording" })
+					.props.onPress();
+				await flushMicrotasks();
+			});
+			expect(cameraState.stopRecording).not.toHaveBeenCalled();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(299_999);
+			});
+			expect(cameraState.stopRecording).not.toHaveBeenCalled();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(1);
+				await flushMicrotasks();
+			});
+
+			expect(cameraState.stopRecording).toHaveBeenCalledTimes(1);
+			expect(uploadState.finishRecording).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("shows existing Pro recordings as unlimited", async () => {
+		billingState.getProPlan.mockResolvedValue({
+			upgraded: true,
+			stripeSubscriptionStatus: "active",
+		});
+		const renderer = await renderComponent(React.createElement(RecordScreen));
+
+		await act(async () => {
+			await flushMicrotasks();
+		});
+
+		expect(
+			renderer.root.findByProps({
+				accessibilityLabel: "Recording time 0:00",
+			}),
+		).toBeTruthy();
+		expect(
+			renderer.root.findAllByProps({
+				accessibilityLabel: "Recording time 0:00 of 5:00",
+			}),
+		).toHaveLength(0);
 	});
 
 	it("cleans up a failed native recording without disabling the preview", async () => {
@@ -394,7 +724,7 @@ describe("RecordScreen", () => {
 			renderer.root
 				.findByProps({ accessibilityLabel: "Start recording" })
 				.props.onPress();
-			await Promise.resolve();
+			await flushMicrotasks();
 		});
 		await act(async () => {
 			renderer.root.findByType(CapRecorderView).props.onRecordingError({

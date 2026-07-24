@@ -516,9 +516,7 @@ describe("CapCard", () => {
 		if (!metricsRow) throw new Error("Analytics action was not rendered");
 		const stopPropagation = vi.fn();
 
-		expect(metricsRow.props.accessibilityHint).toBe(
-			"Opens analytics in a browser sheet",
-		);
+		expect(metricsRow.props.accessibilityHint).toBe("Opens native analytics");
 		expect(metricsRow.props.accessibilityState).toEqual({
 			disabled: false,
 		});

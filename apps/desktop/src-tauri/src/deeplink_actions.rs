@@ -8,11 +8,31 @@ use tracing::trace;
 
 use crate::{App, ArcLock, recording::StartRecordingInputs, windows::CapWindow};
 
+#[cfg(debug_assertions)]
+use tauri::Emitter;
+
+#[cfg(debug_assertions)]
+use crate::camera::CameraPreviewState;
+
+#[cfg(debug_assertions)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CaptureArea {
+    screen: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureMode {
     Screen(String),
     Window(String),
+    #[cfg(debug_assertions)]
+    Area(Box<CaptureArea>),
+    #[cfg(debug_assertions)]
+    CameraOnly,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -26,6 +46,18 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    #[cfg(debug_assertions)]
+    PauseRecording,
+    #[cfg(debug_assertions)]
+    ResumeRecording,
+    #[cfg(debug_assertions)]
+    OpenCamera {
+        camera: DeviceOrModelID,
+    },
+    #[cfg(debug_assertions)]
+    SetCameraPreviewState {
+        state: CameraPreviewState,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -176,6 +208,26 @@ impl DeepLinkAction {
                         .find(|(w, _)| w.name == name)
                         .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
                         .ok_or(format!("No window with name \"{}\"", &name))?,
+                    #[cfg(debug_assertions)]
+                    CaptureMode::Area(area) => {
+                        if area.width <= 0.0 || area.height <= 0.0 {
+                            return Err("Area width and height must be positive".to_string());
+                        }
+                        let screen = cap_recording::screen_capture::list_displays()
+                            .into_iter()
+                            .find(|(display, _)| display.name == area.screen)
+                            .map(|(display, _)| display.id)
+                            .ok_or(format!("No screen with name \"{}\"", &area.screen))?;
+                        ScreenCaptureTarget::Area {
+                            screen,
+                            bounds: scap_targets::bounds::LogicalBounds::new(
+                                scap_targets::bounds::LogicalPosition::new(area.x, area.y),
+                                scap_targets::bounds::LogicalSize::new(area.width, area.height),
+                            ),
+                        }
+                    }
+                    #[cfg(debug_assertions)]
+                    CaptureMode::CameraOnly => ScreenCaptureTarget::CameraOnly,
                 };
 
                 let inputs = StartRecordingInputs {
@@ -191,6 +243,48 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            #[cfg(debug_assertions)]
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            #[cfg(debug_assertions)]
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            #[cfg(debug_assertions)]
+            DeepLinkAction::OpenCamera { camera } => {
+                crate::set_camera_input(
+                    app.clone(),
+                    app.state::<ArcLock<App>>(),
+                    Some(camera),
+                    None,
+                )
+                .await?;
+
+                if crate::general_settings::GeneralSettingsStore::native_camera_preview_enabled(app)
+                {
+                    crate::set_native_camera_preview_enabled(
+                        app.clone(),
+                        app.state::<ArcLock<App>>(),
+                        true,
+                    )
+                    .await?;
+                }
+
+                app.emit("instant-mode-harness-camera-opened", ())
+                    .map_err(|err| err.to_string())?;
+                for delay_ms in [250, 750, 1500] {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    app.emit("instant-mode-harness-camera-opened", ())
+                        .map_err(|err| err.to_string())?;
+                }
+
+                Ok(())
+            }
+            #[cfg(debug_assertions)]
+            DeepLinkAction::SetCameraPreviewState { state } => {
+                crate::set_camera_preview_state(app.state(), state).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
@@ -213,6 +307,138 @@ mod tests {
         assert_eq!(
             DeepLinkAction::try_from(&url),
             Ok(DeepLinkAction::StopRecording)
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn parses_open_camera_action_url() {
+        let value = serde_json::json!({
+            "open_camera": {
+                "camera": { "DeviceID": "camera-1" }
+            }
+        })
+        .to_string();
+        let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&url),
+            Ok(DeepLinkAction::OpenCamera {
+                camera: DeviceOrModelID::DeviceID("camera-1".to_string())
+            })
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn parses_camera_preview_state_action_url() {
+        let value = serde_json::json!({
+            "set_camera_preview_state": {
+                "state": {
+                    "size": 400.0,
+                    "shape": "full",
+                    "mirrored": true,
+                    "background_blur": "heavy"
+                }
+            }
+        })
+        .to_string();
+        let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&url),
+            Ok(DeepLinkAction::SetCameraPreviewState {
+                state: CameraPreviewState {
+                    size: 400.0,
+                    shape: crate::camera::CameraPreviewShape::Full,
+                    mirrored: true,
+                    background_blur: cap_project::BackgroundBlurMode::Heavy,
+                }
+            })
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn parses_pause_and_resume_action_urls() {
+        let pause_url = Url::parse("cap-desktop://action?value=%22pause_recording%22").unwrap();
+        let resume_url = Url::parse("cap-desktop://action?value=%22resume_recording%22").unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&pause_url),
+            Ok(DeepLinkAction::PauseRecording)
+        );
+        assert_eq!(
+            DeepLinkAction::try_from(&resume_url),
+            Ok(DeepLinkAction::ResumeRecording)
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn parses_area_recording_action_url() {
+        let value = serde_json::json!({
+            "start_recording": {
+                "capture_mode": {
+                    "area": {
+                        "screen": "Built-in Retina Display",
+                        "x": 10.0,
+                        "y": 20.0,
+                        "width": 800.0,
+                        "height": 600.0
+                    }
+                },
+                "camera": { "DeviceID": "camera-1" },
+                "mic_label": "microphone-1",
+                "capture_system_audio": false,
+                "mode": "instant"
+            }
+        })
+        .to_string();
+        let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&url),
+            Ok(DeepLinkAction::StartRecording {
+                capture_mode: CaptureMode::Area(Box::new(CaptureArea {
+                    screen: "Built-in Retina Display".to_string(),
+                    x: 10.0,
+                    y: 20.0,
+                    width: 800.0,
+                    height: 600.0,
+                })),
+                camera: Some(DeviceOrModelID::DeviceID("camera-1".to_string())),
+                mic_label: Some("microphone-1".to_string()),
+                capture_system_audio: false,
+                mode: RecordingMode::Instant,
+            })
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn parses_camera_only_recording_action_url() {
+        let value = serde_json::json!({
+            "start_recording": {
+                "capture_mode": "camera_only",
+                "camera": { "DeviceID": "camera-1" },
+                "mic_label": "microphone-1",
+                "capture_system_audio": false,
+                "mode": "studio"
+            }
+        })
+        .to_string();
+        let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&url),
+            Ok(DeepLinkAction::StartRecording {
+                capture_mode: CaptureMode::CameraOnly,
+                camera: Some(DeviceOrModelID::DeviceID("camera-1".to_string())),
+                mic_label: Some("microphone-1".to_string()),
+                capture_system_audio: false,
+                mode: RecordingMode::Studio,
+            })
         );
     }
 

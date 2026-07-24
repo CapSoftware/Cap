@@ -10,11 +10,26 @@ import { HttpAuthMiddleware } from "./Authentication.ts";
 import { CommentId } from "./Comment.ts";
 import { FolderColor, FolderId } from "./Folder.ts";
 import { OrganisationId } from "./Organisation.ts";
+import { SpaceIdOrOrganisationId } from "./Space.ts";
 import { UploadTarget } from "./Storage.ts";
 import { UserId } from "./User.ts";
 import { UploadPhase, VideoId } from "./Video.ts";
 
 const isExpoAuthPath = (pathname: string) => pathname === "/--/auth";
+export const mobileFreeRecordingDurationSeconds = 5 * 60;
+export const mobileRecordingDurationToleranceSeconds = 5;
+
+export const isMobileRecordingDurationAllowed = ({
+	durationSeconds,
+	isPro,
+}: {
+	durationSeconds: number;
+	isPro: boolean;
+}) =>
+	isPro ||
+	durationSeconds <=
+		mobileFreeRecordingDurationSeconds +
+			mobileRecordingDurationToleranceSeconds;
 
 export const isMobileAuthRedirectUri = (redirectUri: string) => {
 	try {
@@ -62,6 +77,38 @@ export const isMobileAuthRedirectUri = (redirectUri: string) => {
 	}
 };
 
+export const createMobileSessionLoginRedirectUrl = ({
+	deploymentOrigin,
+	requestUrl,
+	provider,
+	organizationId,
+}: {
+	deploymentOrigin: string;
+	requestUrl: string;
+	provider?: "apple" | "google" | "workos";
+	organizationId?: string;
+}) => {
+	const canonicalOrigin = new URL(deploymentOrigin).origin;
+	const incomingUrl = new URL(requestUrl, canonicalOrigin);
+	const continuationUrl = new URL(
+		`${incomingUrl.pathname}${incomingUrl.search}`,
+		canonicalOrigin,
+	);
+	const loginRedirectUrl = new URL("/login", canonicalOrigin);
+	loginRedirectUrl.searchParams.set("next", continuationUrl.toString());
+
+	if (provider === "apple" || provider === "google") {
+		loginRedirectUrl.searchParams.set("mobileProvider", provider);
+	} else if (provider === "workos") {
+		loginRedirectUrl.searchParams.set("mobileProvider", "workos");
+		if (organizationId) {
+			loginRedirectUrl.searchParams.set("organizationId", organizationId);
+		}
+	}
+
+	return loginRedirectUrl;
+};
+
 const MobileAuthRedirectUri = Schema.String.pipe(
 	Schema.filter(
 		(redirectUri) =>
@@ -81,13 +128,14 @@ export const MobileSuccessResponse = Schema.Struct({
 });
 
 export const MobileAuthConfigResponse = Schema.Struct({
+	appleAuthAvailable: Schema.Boolean,
 	googleAuthAvailable: Schema.Boolean,
 	workosAuthAvailable: Schema.Boolean,
 });
 
 export const MobileSessionRequestParams = Schema.Struct({
 	redirectUri: Schema.optional(MobileAuthRedirectUri),
-	provider: Schema.optional(Schema.Literal("google", "workos")),
+	provider: Schema.optional(Schema.Literal("apple", "google", "workos")),
 	organizationId: Schema.optional(Schema.String),
 });
 
@@ -100,6 +148,25 @@ export const MobileEmailSessionVerifyInput = Schema.Struct({
 	code: Schema.String,
 });
 
+export const MobileAccountDeletionInput = Schema.Struct({
+	confirmation: Schema.Literal("DELETE"),
+});
+
+export const MobileUserBlockInput = Schema.Struct({
+	userId: UserId,
+});
+
+export const MobileContentReportInput = Schema.Struct({
+	reason: Schema.Literal(
+		"harassment",
+		"hate",
+		"sexual",
+		"violence",
+		"copyright",
+		"other",
+	),
+});
+
 export const MobileAuthHeaders = Schema.Struct({
 	authorization: Schema.optional(Schema.String),
 });
@@ -107,6 +174,7 @@ export const MobileAuthHeaders = Schema.Struct({
 export const MobileUser = Schema.Struct({
 	id: UserId,
 	name: Schema.NullOr(Schema.String),
+	lastName: Schema.optional(Schema.NullOr(Schema.String)),
 	email: Schema.String,
 	imageUrl: Schema.NullOr(Schema.String),
 	activeOrganizationId: OrganisationId,
@@ -117,6 +185,17 @@ export const MobileOrganization = Schema.Struct({
 	name: Schema.String,
 	iconUrl: Schema.NullOr(Schema.String),
 	role: Schema.Literal("owner", "admin", "member"),
+});
+
+export const MobileSpace = Schema.Struct({
+	id: SpaceIdOrOrganisationId,
+	name: Schema.String,
+	iconUrl: Schema.NullOr(Schema.String),
+	kind: Schema.Literal("organization", "space"),
+	privacy: Schema.Literal("Public", "Private"),
+	role: Schema.NullOr(Schema.Literal("owner", "admin", "member")),
+	canManage: Schema.Boolean,
+	hasPassword: Schema.Boolean,
 });
 
 export const MobileFolder = Schema.Struct({
@@ -142,9 +221,11 @@ export const MobileCapSummary = Schema.Struct({
 	title: Schema.String,
 	createdAt: Schema.String,
 	updatedAt: Schema.String,
+	ownerId: Schema.optional(UserId),
 	ownerName: Schema.String,
 	durationSeconds: Schema.NullOr(Schema.Number),
 	thumbnailUrl: Schema.NullOr(Schema.String),
+	thumbnailCacheKey: Schema.optional(Schema.NullOr(Schema.String)),
 	folderId: Schema.NullOr(FolderId),
 	public: Schema.Boolean,
 	protected: Schema.Boolean,
@@ -152,6 +233,7 @@ export const MobileCapSummary = Schema.Struct({
 	commentCount: Schema.Number,
 	reactionCount: Schema.Number,
 	upload: Schema.NullOr(MobileUploadProgress),
+	ownedByCurrentUser: Schema.optional(Schema.Boolean),
 });
 
 export const MobileComment = Schema.Struct({
@@ -188,6 +270,7 @@ export const MobileCapDetail = Schema.Struct({
 
 export const MobileCapsListParams = Schema.Struct({
 	folderId: Schema.optional(Schema.String),
+	spaceId: Schema.optional(Schema.String),
 	page: Schema.optional(Schema.String),
 	limit: Schema.optional(Schema.String),
 });
@@ -198,7 +281,21 @@ export const MobileCapsListResponse = Schema.Struct({
 	page: Schema.Number,
 	limit: Schema.Number,
 	total: Schema.Number,
+	collectionTotal: Schema.optional(Schema.Number),
 	hasMore: Schema.Boolean,
+});
+
+export const MobileCapStatus = Schema.Struct({
+	id: VideoId,
+	upload: Schema.NullOr(MobileUploadProgress),
+});
+
+export const MobileCapStatusesInput = Schema.Struct({
+	ids: Schema.Array(VideoId),
+});
+
+export const MobileCapStatusesResponse = Schema.Struct({
+	caps: Schema.Array(MobileCapStatus),
 });
 
 export const MobileBootstrapResponse = Schema.Struct({
@@ -206,10 +303,22 @@ export const MobileBootstrapResponse = Schema.Struct({
 	organizations: Schema.Array(MobileOrganization),
 	activeOrganizationId: Schema.NullOr(OrganisationId),
 	rootFolders: Schema.Array(MobileFolder),
+	spaces: Schema.optional(Schema.Array(MobileSpace)),
 });
 
 export const MobileActiveOrganizationInput = Schema.Struct({
 	organizationId: OrganisationId,
+});
+
+export const MobileProfileInput = Schema.Struct({
+	name: Schema.String,
+	lastName: Schema.NullOr(Schema.String),
+});
+
+export const MobileProfileImageInput = Schema.Struct({
+	data: Schema.String,
+	contentType: Schema.String,
+	fileName: Schema.String,
 });
 
 export const MobileCapSharingInput = Schema.Struct({
@@ -227,6 +336,7 @@ export const MobileCapPasswordInput = Schema.Struct({
 export const MobileFolderCreateInput = Schema.Struct({
 	name: Schema.String,
 	color: Schema.optional(FolderColor),
+	spaceId: Schema.optional(SpaceIdOrOrganisationId),
 });
 
 export const MobileVideoPath = Schema.Struct({
@@ -263,6 +373,91 @@ export const MobileDownloadResponse = Schema.Struct({
 	url: Schema.String,
 });
 
+export const MobileAnalyticsRange = Schema.Literal(
+	"24h",
+	"7d",
+	"30d",
+	"lifetime",
+);
+
+export const MobileAnalyticsParams = Schema.Struct({
+	range: Schema.optional(MobileAnalyticsRange),
+});
+
+export const MobileAnalyticsBreakdown = Schema.Struct({
+	name: Schema.String,
+	subtitle: Schema.optional(Schema.NullOr(Schema.String)),
+	views: Schema.Number,
+	percentage: Schema.Number,
+});
+
+export const MobileAnalyticsData = Schema.Struct({
+	capName: Schema.String,
+	counts: Schema.Struct({
+		caps: Schema.Number,
+		views: Schema.Number,
+		comments: Schema.Number,
+		reactions: Schema.Number,
+	}),
+	chart: Schema.Array(
+		Schema.Struct({
+			bucket: Schema.String,
+			caps: Schema.Number,
+			views: Schema.Number,
+			comments: Schema.Number,
+			reactions: Schema.Number,
+		}),
+	),
+	breakdowns: Schema.Struct({
+		countries: Schema.Array(MobileAnalyticsBreakdown),
+		cities: Schema.Array(MobileAnalyticsBreakdown),
+		browsers: Schema.Array(MobileAnalyticsBreakdown),
+		operatingSystems: Schema.Array(MobileAnalyticsBreakdown),
+		devices: Schema.Array(MobileAnalyticsBreakdown),
+		topCaps: Schema.Array(
+			MobileAnalyticsBreakdown.pipe(
+				Schema.extend(Schema.Struct({ id: VideoId })),
+			),
+		),
+	}),
+});
+
+export const MobileAnalyticsResponse = Schema.Struct({
+	available: Schema.Boolean,
+	data: Schema.NullOr(MobileAnalyticsData),
+});
+
+export const MobileOrganizationSettings = Schema.Struct({
+	id: OrganisationId,
+	name: Schema.String,
+	role: Schema.Literal("owner", "admin", "member"),
+	canManage: Schema.Boolean,
+	iconUrl: Schema.NullOr(Schema.String),
+	allowedEmailDomain: Schema.NullOr(Schema.String),
+	customDomain: Schema.NullOr(Schema.String),
+	domainVerified: Schema.Boolean,
+});
+
+export const MobileOrganizationSettingsInput = Schema.Struct({
+	name: Schema.String,
+	allowedEmailDomain: Schema.NullOr(Schema.String),
+});
+
+export const MobileOrganizationIconInput = Schema.Struct({
+	data: Schema.String,
+	contentType: Schema.String,
+	fileName: Schema.String,
+});
+
+export const MobileLoomImportInput = Schema.Struct({
+	loomUrl: Schema.String,
+});
+
+export const MobileLoomImportResponse = Schema.Struct({
+	id: VideoId,
+	shareUrl: Schema.String,
+});
+
 export const MobileUploadCreateInput = Schema.Struct({
 	organizationId: Schema.optional(OrganisationId),
 	folderId: Schema.optional(FolderId),
@@ -280,7 +475,6 @@ export const MobileUploadCreateResponse = Schema.Struct({
 	shareUrl: Schema.String,
 	rawFileKey: Schema.String,
 	upload: UploadTarget,
-	cap: MobileCapSummary,
 });
 
 export const MobileUploadProgressInput = Schema.Struct({
@@ -305,7 +499,6 @@ export const MobileRecordingCreateInput = Schema.Struct({
 export const MobileRecordingCreateResponse = Schema.Struct({
 	id: VideoId,
 	shareUrl: Schema.String,
-	cap: MobileCapSummary,
 });
 
 export const MobileRecordingUploadTargetsInput = Schema.Struct({
@@ -370,6 +563,25 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.NotFound),
 	)
 	.add(
+		HttpApiEndpoint.post("requestAccountDeletion", "/user/account-deletion")
+			.setPayload(MobileAccountDeletionInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.InternalServerError)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("blockUser", "/user/blocks")
+			.setPayload(MobileUserBlockInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
 		HttpApiEndpoint.get("bootstrap", "/bootstrap")
 			.addSuccess(MobileBootstrapResponse)
 			.middleware(HttpAuthMiddleware)
@@ -385,10 +597,44 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.NotFound),
 	)
 	.add(
+		HttpApiEndpoint.patch("updateProfile", "/user/profile")
+			.setPayload(MobileProfileInput)
+			.addSuccess(MobileUser)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.put("updateProfileImage", "/user/profile/image")
+			.setPayload(MobileProfileImageInput)
+			.addSuccess(MobileUser)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.del("removeProfileImage", "/user/profile/image")
+			.addSuccess(MobileUser)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
 		HttpApiEndpoint.get("listCaps", "/caps")
 			.setUrlParams(MobileCapsListParams)
 			.addSuccess(MobileCapsListResponse)
 			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("getCapStatuses", "/caps/statuses")
+			.setPayload(MobileCapStatusesInput)
+			.addSuccess(MobileCapStatusesResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
 	)
@@ -405,6 +651,25 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 		HttpApiEndpoint.get("getCap", "/caps/:id")
 			.setPath(MobileVideoPath)
 			.addSuccess(MobileCapDetail)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("reportCap", "/caps/:id/report")
+			.setPath(MobileVideoPath)
+			.setPayload(MobileContentReportInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.InternalServerError)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.get("getCapThumbnail", "/caps/:id/thumbnail")
+			.setPath(MobileVideoPath)
+			.addSuccess(Schema.String)
 			.middleware(HttpAuthMiddleware)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
@@ -461,6 +726,61 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.middleware(HttpAuthMiddleware)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.get("getCapAnalytics", "/caps/:id/analytics")
+			.setPath(MobileVideoPath)
+			.setUrlParams(MobileAnalyticsParams)
+			.addSuccess(MobileAnalyticsResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.InternalServerError),
+	)
+	.add(
+		HttpApiEndpoint.get("getOrganizationSettings", "/organization/settings")
+			.addSuccess(MobileOrganizationSettings)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.patch(
+			"updateOrganizationSettings",
+			"/organization/settings",
+		)
+			.setPayload(MobileOrganizationSettingsInput)
+			.addSuccess(MobileOrganizationSettings)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.put("updateOrganizationIcon", "/organization/settings/icon")
+			.setPayload(MobileOrganizationIconInput)
+			.addSuccess(MobileOrganizationSettings)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.del("removeOrganizationIcon", "/organization/settings/icon")
+			.addSuccess(MobileOrganizationSettings)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("importLoom", "/imports/loom")
+			.setPayload(MobileLoomImportInput)
+			.addSuccess(MobileLoomImportResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.InternalServerError),
 	)
 	.add(
 		HttpApiEndpoint.post("createComment", "/caps/:id/comments")

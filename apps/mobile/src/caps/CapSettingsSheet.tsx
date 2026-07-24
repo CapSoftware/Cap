@@ -245,7 +245,7 @@ export function CapSettingsSheet({
 						<>
 							<View style={styles.separator} />
 							<SettingsRow
-								accessibilityHint="Opens analytics in a browser sheet"
+								accessibilityHint="Opens native analytics"
 								label="View analytics"
 								onPress={() => onViewAnalytics(cap)}
 								symbol="chart.bar"
